@@ -7,6 +7,8 @@ import re
 import json
 import base64
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import logging
 import qrcode
 import uuid
@@ -4103,9 +4105,11 @@ def get_xui_session(server):
             XUI_SESSION_CACHE.pop(server.id, None)
 
     session_obj = requests.Session()
-    # Explicitly disable proxies for X-UI connections as requested
     session_obj.trust_env = False
     session_obj.proxies = {'http': None, 'https': None}
+    # Disable SSL verification at session level so redirects also skip cert checks
+    # (self-signed certs on remote panels are supported this way)
+    session_obj.verify = False
 
     try:
         base, webpath = extract_base_and_webpath(server.host)
@@ -4113,20 +4117,49 @@ def get_xui_session(server):
         panel_api = get_panel_api(normalized_type)
         login_ep = (getattr(panel_api, 'login_endpoint', None) if panel_api else None) or '/login'
         login_url = login_ep if login_ep.startswith('http') else f"{base}{webpath}{login_ep}"
-        # Keep login timeout short so refresh endpoints stay responsive.
         panel_password = get_server_password(server)
-        login_resp = session_obj.post(login_url, data={"username": server.username, "password": panel_password}, verify=False, timeout=3)
-        login_json, login_err = _safe_response_json(login_resp)
-        if login_err:
-            return None, f"Login failed: {login_err}. Check server Panel URL / webpath and panel type."
+        credentials = {"username": server.username, "password": panel_password}
+
+        login_resp = None
+        login_json = None
+        last_err = None
+
+        # Try JSON body first (3x-ui v3.0.0+), then form-encoded (older panels)
+        for use_json in (True, False):
+            try:
+                if use_json:
+                    resp = session_obj.post(
+                        login_url,
+                        json=credentials,
+                        timeout=8,
+                        headers={"Accept": "application/json"},
+                    )
+                else:
+                    resp = session_obj.post(login_url, data=credentials, timeout=8)
+
+                j, err = _safe_response_json(resp)
+                if err:
+                    last_err = err
+                    continue
+                login_resp = resp
+                login_json = j
+                last_err = None
+                if isinstance(j, dict) and j.get('success'):
+                    break
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+
+        if login_resp is None:
+            return None, f"Login failed: {last_err}. Check Panel URL / webpath and panel type."
 
         if login_resp.status_code == 200 and isinstance(login_json, dict) and login_json.get('success'):
-            # Cache the successful session
             XUI_SESSION_CACHE[server.id] = {
                 'session': session_obj,
                 'expiry': now + XUI_SESSION_TTL
             }
             return session_obj, None
+
         msg = None
         if isinstance(login_json, dict):
             msg = login_json.get('msg') or login_json.get('message')
@@ -11623,10 +11656,24 @@ def telegram_backup_job_status(job_id):
 def get_ssl_settings():
     cert = db.session.get(SystemSetting, 'ssl_cert_path')
     key = db.session.get(SystemSetting, 'ssl_key_path')
+    cert_path = cert.value if cert else ''
+    key_path = key.value if key else ''
+
+    cert_ok = bool(cert_path) and os.path.isfile(cert_path) and os.access(cert_path, os.R_OK)
+    key_ok = bool(key_path) and os.path.isfile(key_path) and os.access(key_path, os.R_OK)
+
+    if cert_path or key_path:
+        ssl_status = 'active' if (cert_ok and key_ok) else 'error'
+    else:
+        ssl_status = 'not_configured'
+
     return jsonify({
         'success': True,
-        'cert_path': cert.value if cert else '',
-        'key_path': key.value if key else ''
+        'cert_path': cert_path,
+        'key_path': key_path,
+        'cert_ok': cert_ok,
+        'key_ok': key_ok,
+        'ssl_status': ssl_status
     })
 
 @app.route('/api/settings/ssl', methods=['POST'])
@@ -11635,25 +11682,43 @@ def save_ssl_settings():
     data = request.json
     cert_path = data.get('cert_path', '').strip()
     key_path = data.get('key_path', '').strip()
-    
-    # Save cert path
+
+    # Both must be provided together or both empty
+    if bool(cert_path) != bool(key_path):
+        missing = 'Private key path' if cert_path else 'Certificate path'
+        return jsonify({'success': False, 'error': f'{missing} is required'}), 400
+
+    if cert_path:
+        if not os.path.isfile(cert_path):
+            return jsonify({'success': False, 'error': f'Certificate file not found: {cert_path}'}), 400
+        if not os.access(cert_path, os.R_OK):
+            return jsonify({'success': False, 'error': f'Certificate file is not readable (check permissions): {cert_path}'}), 400
+
+    if key_path:
+        if not os.path.isfile(key_path):
+            return jsonify({'success': False, 'error': f'Private key file not found: {key_path}'}), 400
+        if not os.access(key_path, os.R_OK):
+            return jsonify({'success': False, 'error': f'Private key file is not readable (check permissions): {key_path}'}), 400
+
     cert_setting = db.session.get(SystemSetting, 'ssl_cert_path')
     if not cert_setting:
         cert_setting = SystemSetting(key='ssl_cert_path', value=cert_path)
         db.session.add(cert_setting)
     else:
         cert_setting.value = cert_path
-        
-    # Save key path
+
     key_setting = db.session.get(SystemSetting, 'ssl_key_path')
     if not key_setting:
         key_setting = SystemSetting(key='ssl_key_path', value=key_path)
         db.session.add(key_setting)
     else:
         key_setting.value = key_path
-    
+
     db.session.commit()
-    return jsonify({'success': True, 'message': 'SSL settings saved'})
+
+    if cert_path and key_path:
+        return jsonify({'success': True, 'message': 'SSL settings saved. Certificate and key files verified.'})
+    return jsonify({'success': True, 'message': 'SSL configuration cleared.'})
 
 @app.route('/api/settings/session', methods=['GET'])
 @login_required

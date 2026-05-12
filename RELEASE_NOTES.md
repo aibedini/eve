@@ -1,3 +1,21 @@
+# Eve - Xui Manager v1.9.0
+
+## [1.9.0] - 2026-05-12
+
+English:
+- Feature: Multi-version X-UI panel compatibility - auto-detect and support both JSON-body (v3.0.0+) and form-encoded login methods for better cross-version compatibility
+- Feature: Self-signed SSL certificate support in setup with improved validation
+- Improvement: Extended panel connection timeout from 3s to 8s for more reliable authentication across diverse deployments
+- Improvement: SSL session verification consistency across all request types and redirects
+- Fix: SSL settings validation now checks file existence and read permissions before saving
+- Fix: Prevented partial cert/key configuration saves with better error handling
+- Tweak: Suppressed urllib3 SSL warnings for cleaner logs
+
+Notes:
+- Panel connection logic is more resilient to different deployment scenarios
+- SSL configuration validation prevents common setup mistakes upfront
+- All changes maintain backward compatibility
+
 # Eve - Xui Manager v1.5.1
 
 ## [1.5.1] - 2025-12-18

@@ -133,6 +133,7 @@ PYTHON_VERSION="3.11"
 APP_PORT="5000"
 ENV_FILE="$APP_DIR/.env"
 LOG_DIR="/var/log/$SERVICE_NAME"
+SELF_SIGNED_SSL_DIR="/etc/ssl/eve-manager"
 DOMAIN="${1:-}"
 ENVIRONMENT="${2:-production}"
 
@@ -433,8 +434,11 @@ setup_nginx() {
     rm -f /etc/nginx/sites-enabled/default
     SSL_FULLCHAIN="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
     SSL_PRIVKEY="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+    SELF_SIGNED_CERT="${SELF_SIGNED_SSL_DIR}/cert.pem"
+    SELF_SIGNED_KEY="${SELF_SIGNED_SSL_DIR}/privkey.pem"
 
     if [ -f "$SSL_FULLCHAIN" ] && [ -f "$SSL_PRIVKEY" ]; then
+        # --- Let's Encrypt SSL ---
         cat > /etc/nginx/sites-available/${SERVICE_NAME} <<EOF
 server {
     listen 80;
@@ -523,7 +527,102 @@ server {
     }
 }
 EOF
+    elif [ -f "$SELF_SIGNED_CERT" ] && [ -f "$SELF_SIGNED_KEY" ]; then
+        # --- Self-Signed SSL ---
+        cat > /etc/nginx/sites-available/${SERVICE_NAME} <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    # --- Gzip Compression Settings ---
+    gzip on;
+    gzip_disable "msie6";
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
+    gzip_min_length 256;
+    gzip_types
+        application/atom+xml
+        application/geo+json
+        application/javascript
+        application/x-javascript
+        application/json
+        application/ld+json
+        application/manifest+json
+        application/rdf+xml
+        application/rss+xml
+        application/xhtml+xml
+        application/xml
+        font/eot
+        font/otf
+        font/ttf
+        image/svg+xml
+        text/css
+        text/javascript
+        text/plain
+        text/xml;
+    # ---------------------------------
+
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name ${DOMAIN};
+
+    ssl_certificate ${SELF_SIGNED_CERT};
+    ssl_certificate_key ${SELF_SIGNED_KEY};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    ssl_session_tickets off;
+
+    # --- Gzip Compression Settings ---
+    gzip on;
+    gzip_disable "msie6";
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
+    gzip_min_length 256;
+    gzip_types
+        application/atom+xml
+        application/geo+json
+        application/javascript
+        application/x-javascript
+        application/json
+        application/ld+json
+        application/manifest+json
+        application/rdf+xml
+        application/rss+xml
+        application/xhtml+xml
+        application/xml
+        font/eot
+        font/otf
+        font/ttf
+        image/svg+xml
+        text/css
+        text/javascript
+        text/plain
+        text/xml;
+    # ---------------------------------
+
+    location / {
+        proxy_pass http://127.0.0.1:${APP_PORT};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
     else
+        # --- HTTP only (no SSL) ---
         cat > /etc/nginx/sites-available/${SERVICE_NAME} <<EOF
 server {
     listen 80;
@@ -576,13 +675,79 @@ EOF
 }
 
 setup_certbot_ssl() {
-    print_header "Step 11: SSL Configuration"
+    print_header "Step 11: SSL Configuration (Let's Encrypt)"
     if [ -z "$DOMAIN" ]; then
         ask_domain
     fi
     print_warning "Requesting SSL for $DOMAIN..."
     certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "admin@$DOMAIN" --redirect
     print_success "SSL Certificate installed!"
+}
+
+setup_self_signed_ssl() {
+    print_header "Step 11: SSL Configuration (Self-Signed)"
+    if [ -z "$DOMAIN" ]; then
+        ask_domain
+    fi
+
+    local CERT_FILE="${SELF_SIGNED_SSL_DIR}/cert.pem"
+    local KEY_FILE="${SELF_SIGNED_SSL_DIR}/privkey.pem"
+
+    mkdir -p "$SELF_SIGNED_SSL_DIR"
+    chmod 700 "$SELF_SIGNED_SSL_DIR"
+
+    print_warning "Generating self-signed certificate for ${DOMAIN} (valid 10 years)..."
+
+    # Build a temp OpenSSL config to support SAN (works for both domain names and IPs)
+    local TMPCONF
+    TMPCONF="$(mktemp /tmp/openssl_san_XXXXXX.cnf)"
+
+    cat > "$TMPCONF" <<SSLCONF
+[req]
+prompt = no
+distinguished_name = req_dn
+x509_extensions = v3_req
+
+[req_dn]
+CN = ${DOMAIN}
+O  = Eve X-UI Manager
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment, digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+SSLCONF
+
+    # Detect if DOMAIN is an IP address; add IP SAN or DNS SAN accordingly
+    if [[ "${DOMAIN}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "IP.1 = ${DOMAIN}" >> "$TMPCONF"
+    else
+        echo "DNS.1 = ${DOMAIN}" >> "$TMPCONF"
+    fi
+
+    openssl req -x509 -nodes -days 3650 \
+        -newkey rsa:2048 \
+        -keyout "$KEY_FILE" \
+        -out "$CERT_FILE" \
+        -config "$TMPCONF" 2>/dev/null
+
+    rm -f "$TMPCONF"
+
+    chmod 600 "$KEY_FILE"
+    chmod 644 "$CERT_FILE"
+
+    print_success "Self-signed certificate generated: ${CERT_FILE}"
+    print_warning "Updating Nginx to use self-signed certificate..."
+    setup_nginx
+    print_success "Nginx configured with self-signed SSL."
+    echo
+    print_warning "IMPORTANT: Browsers will show a security warning because the certificate is not issued"
+    print_warning "by a trusted CA. Click 'Advanced' → 'Accept the risk' to proceed."
+    echo -e "  Domain : ${DOMAIN}"
+    echo -e "  Cert   : ${CERT_FILE}"
+    echo -e "  Key    : ${KEY_FILE}"
 }
 
 # -------------------------------------------------------------
@@ -955,13 +1120,14 @@ show_menu() {
     echo -e "${BLUE}Eve X-UI Manager Installer (Fixed)${NC}"
     echo "1) Install / Re-install (Full)"
     echo "2) Update Application Code"
-    echo "3) Configure SSL (Certbot)"
+    echo "3) Configure SSL (Let's Encrypt / Certbot)"
     echo "4) Update this script"
     echo "5) Uninstall Project"
     echo -e "${YELLOW}6) Install + Migrate from Remote Server (SSH)${NC}"
     echo -e "${YELLOW}7) Migrate to PostgreSQL (Automatic)${NC}"
     echo -e "${YELLOW}9) Import Remote PostgreSQL into This Server (SSH)${NC}"
     echo -e "${YELLOW}10) Import SSL from Remote Server (SSH)${NC}"
+    echo -e "${YELLOW}11) Configure SSL (Self-Signed Certificate)${NC}"
     echo "8) Exit"
     read -rp "Select an option: " choice
     case $choice in
@@ -1019,6 +1185,11 @@ show_menu() {
             ;;
         10)
             import_ssl_from_remote
+            ;;
+        11)
+            require_root
+            detect_os
+            setup_self_signed_ssl
             ;;
         8) exit 0 ;;
         *) print_error "Invalid option" ;;

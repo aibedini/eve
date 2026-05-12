@@ -489,15 +489,26 @@
                         Save Settings
                     </button>
                 </div>
+
+                <div id="ssl-status-panel" style="display:none; padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 0.875rem; display: flex; align-items: center; gap: 8px;"></div>
+
                 <div class="form-group">
                     <label>Public Key Path (Certificate)</label>
-                    <input type="text" id="ssl-cert-path" class="form-control" placeholder="/etc/ssl/certs/your_cert.crt">
+                    <div style="position:relative;">
+                        <input type="text" id="ssl-cert-path" class="form-control" placeholder="/etc/ssl/certs/your_cert.crt">
+                        <span id="ssl-cert-icon" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:1rem;display:none;"></span>
+                    </div>
                     <small class="text-secondary">Absolute path to your .crt or .pem file</small>
+                    <small id="ssl-cert-feedback" style="display:none; margin-top:2px;"></small>
                 </div>
                 <div class="form-group">
                     <label>Private Key Path</label>
-                    <input type="text" id="ssl-key-path" class="form-control" placeholder="/etc/ssl/private/your_key.key">
+                    <div style="position:relative;">
+                        <input type="text" id="ssl-key-path" class="form-control" placeholder="/etc/ssl/private/your_key.key">
+                        <span id="ssl-key-icon" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:1rem;display:none;"></span>
+                    </div>
                     <small class="text-secondary">Absolute path to your .key file</small>
+                    <small id="ssl-key-feedback" style="display:none; margin-top:2px;"></small>
                 </div>
             </div>
         </div>
@@ -1667,6 +1678,45 @@
         }
     }
 
+    function renderSSLStatus(data) {
+        const panel = document.getElementById('ssl-status-panel');
+        const certIcon = document.getElementById('ssl-cert-icon');
+        const keyIcon = document.getElementById('ssl-key-icon');
+        const certFeedback = document.getElementById('ssl-cert-feedback');
+        const keyFeedback = document.getElementById('ssl-key-feedback');
+
+        const statusStyles = {
+            active:         { bg: 'rgba(34,197,94,0.12)',  border: '1px solid rgba(34,197,94,0.3)',  color: '#22c55e', icon: '🔒', text: 'SSL Active — certificate and key files found and readable.' },
+            error:          { bg: 'rgba(239,68,68,0.1)',   border: '1px solid rgba(239,68,68,0.3)',   color: '#ef4444', icon: '⚠️', text: 'SSL Error — one or more files could not be found or read. Check paths and permissions.' },
+            not_configured: { bg: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.25)', color: '#94a3b8', icon: '🔓', text: 'SSL not configured — running in HTTP mode.' }
+        };
+
+        const s = statusStyles[data.ssl_status] || statusStyles.not_configured;
+        panel.style.cssText = `display:flex; align-items:center; gap:8px; padding:10px 14px; border-radius:8px; margin-bottom:16px; font-size:0.875rem; background:${s.bg}; border:${s.border}; color:${s.color};`;
+        panel.innerHTML = `<span>${s.icon}</span><span>${s.text}</span>`;
+
+        // Per-field feedback
+        const setFieldStatus = (ok, hasPath, icon, feedback) => {
+            if (!hasPath) { icon.style.display = 'none'; feedback.style.display = 'none'; return; }
+            icon.style.display = 'inline';
+            feedback.style.display = 'block';
+            if (ok) {
+                icon.textContent = '✓';
+                icon.style.color = '#22c55e';
+                feedback.textContent = 'File found and readable.';
+                feedback.style.color = '#22c55e';
+            } else {
+                icon.textContent = '✗';
+                icon.style.color = '#ef4444';
+                feedback.textContent = 'File not found or not readable.';
+                feedback.style.color = '#ef4444';
+            }
+        };
+
+        setFieldStatus(data.cert_ok, !!data.cert_path, certIcon, certFeedback);
+        setFieldStatus(data.key_ok,  !!data.key_path,  keyIcon,  keyFeedback);
+    }
+
     async function loadSSLSettings() {
         try {
             const res = await fetch('/api/settings/ssl');
@@ -1674,6 +1724,7 @@
             if (data.success) {
                 document.getElementById('ssl-cert-path').value = data.cert_path || '';
                 document.getElementById('ssl-key-path').value = data.key_path || '';
+                renderSSLStatus(data);
             }
         } catch (e) {
             console.error('Error loading SSL settings', e);
@@ -1681,23 +1732,21 @@
     }
 
     async function saveSSLSettings() {
-        const certPath = document.getElementById('ssl-cert-path').value;
-        const keyPath = document.getElementById('ssl-key-path').value;
+        const certPath = document.getElementById('ssl-cert-path').value.trim();
+        const keyPath = document.getElementById('ssl-key-path').value.trim();
 
         try {
             const res = await fetch('/api/settings/ssl', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ 
-                    cert_path: certPath,
-                    key_path: keyPath
-                })
+                body: JSON.stringify({ cert_path: certPath, key_path: keyPath })
             });
             const data = await res.json();
             if (data.success) {
-                showToast('SSL settings saved');
+                showToast(data.message || 'SSL settings saved');
+                loadSSLSettings();
             } else {
-                showToast(data.error || 'Error saving settings', 'error');
+                showToast(data.error || 'Error saving SSL settings', 'error');
             }
         } catch (e) {
             showToast('Network error', 'error');
