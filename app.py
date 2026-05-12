@@ -3204,6 +3204,77 @@ def build_panel_url(host, template, replacements):
     endpoint_clean = endpoint if endpoint.startswith('/') else f"/{endpoint}"
     return f"{base}{webpath}{endpoint_clean}"
 
+
+# ── SSL auto-detection (defined early so startup context block can use it) ──
+
+_SSL_KNOWN_PATHS = [
+    # Self-signed via setup.sh option 11
+    ('/etc/ssl/eve-manager/cert.pem', '/etc/ssl/eve-manager/privkey.pem'),
+]
+
+def _autodetect_ssl_paths():
+    """Return (cert_path, key_path) from well-known locations, or ('', '').
+
+    Detection order:
+    1. Known static paths (self-signed from setup.sh)
+    2. Nginx config (ssl_certificate directive) — most reliable
+    3. Let's Encrypt glob (may fail if /etc/letsencrypt/live has 711 perms)
+    4. Archive directory listing fallback
+    """
+    for cert_cand, key_cand in _SSL_KNOWN_PATHS:
+        if os.path.isfile(cert_cand) and os.path.isfile(key_cand):
+            return cert_cand, key_cand
+
+    try:
+        import re as _re
+        _nginx_candidates = [
+            '/etc/nginx/sites-available/eve-xui-manager',
+            '/etc/nginx/sites-enabled/eve-xui-manager',
+            '/etc/nginx/conf.d/eve-xui-manager.conf',
+        ]
+        for _nc in _nginx_candidates:
+            if not os.path.isfile(_nc):
+                continue
+            try:
+                with open(_nc, 'r', errors='ignore') as _nf:
+                    _conf = _nf.read()
+                _cm = _re.search(r'ssl_certificate\s+([^;]+);', _conf)
+                _km = _re.search(r'ssl_certificate_key\s+([^;]+);', _conf)
+                if _cm and _km:
+                    _det_cert = _cm.group(1).strip()
+                    _det_key = _km.group(1).strip()
+                    if os.path.isfile(_det_cert) and os.path.isfile(_det_key):
+                        return _det_cert, _det_key
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    try:
+        import glob as _glob
+        le_certs = sorted(_glob.glob('/etc/letsencrypt/live/*/fullchain.pem'))
+        for le_cert in le_certs:
+            le_key = os.path.join(os.path.dirname(le_cert), 'privkey.pem')
+            if os.path.isfile(le_key):
+                return le_cert, le_key
+    except Exception:
+        pass
+
+    try:
+        import glob as _glob
+        _archive_dirs = sorted(_glob.glob('/etc/letsencrypt/archive/*/'))
+        for _adir in _archive_dirs:
+            _domain = os.path.basename(_adir.rstrip('/'))
+            _live_cert = f'/etc/letsencrypt/live/{_domain}/fullchain.pem'
+            _live_key = f'/etc/letsencrypt/live/{_domain}/privkey.pem'
+            if os.path.isfile(_live_cert) and os.path.isfile(_live_key):
+                return _live_cert, _live_key
+    except Exception:
+        pass
+
+    return '', ''
+
+
 with app.app_context():
     db.create_all()
     
@@ -11925,78 +11996,6 @@ def get_settings_overview():
     result['ssl_issuer'] = ssl_issuer
 
     return jsonify({'success': True, **result})
-
-
-_SSL_KNOWN_PATHS = [
-    # Self-signed via setup.sh option 11
-    ('/etc/ssl/eve-manager/cert.pem', '/etc/ssl/eve-manager/privkey.pem'),
-]
-
-def _autodetect_ssl_paths():
-    """Return (cert_path, key_path) from well-known locations, or ('', '').
-
-    Detection order:
-    1. Known static paths (self-signed from setup.sh)
-    2. Nginx config (most reliable — nginx already has the cert path written in it)
-    3. Let's Encrypt glob (may fail if /etc/letsencrypt/live has 711 perms)
-    4. Let's Encrypt archive direct listing (fallback for restricted envs)
-    """
-    # 1. Known static paths
-    for cert_cand, key_cand in _SSL_KNOWN_PATHS:
-        if os.path.isfile(cert_cand) and os.path.isfile(key_cand):
-            return cert_cand, key_cand
-
-    # 2. Read nginx config — setup.sh writes ssl_certificate directives there
-    try:
-        import re as _re
-        _nginx_candidates = [
-            '/etc/nginx/sites-available/eve-xui-manager',
-            '/etc/nginx/sites-enabled/eve-xui-manager',
-            '/etc/nginx/conf.d/eve-xui-manager.conf',
-        ]
-        for _nc in _nginx_candidates:
-            if not os.path.isfile(_nc):
-                continue
-            try:
-                with open(_nc, 'r', errors='ignore') as _nf:
-                    _conf = _nf.read()
-                _cm = _re.search(r'ssl_certificate\s+([^;]+);', _conf)
-                _km = _re.search(r'ssl_certificate_key\s+([^;]+);', _conf)
-                if _cm and _km:
-                    _det_cert = _cm.group(1).strip()
-                    _det_key = _km.group(1).strip()
-                    if os.path.isfile(_det_cert) and os.path.isfile(_det_key):
-                        return _det_cert, _det_key
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    # 3. Let's Encrypt glob (works unless directory has 711 execute-only perms)
-    try:
-        import glob as _glob
-        le_certs = sorted(_glob.glob('/etc/letsencrypt/live/*/fullchain.pem'))
-        for le_cert in le_certs:
-            le_key = os.path.join(os.path.dirname(le_cert), 'privkey.pem')
-            if os.path.isfile(le_key):
-                return le_cert, le_key
-    except Exception:
-        pass
-
-    # 4. Let's Encrypt archive — try listing archive dir instead (sometimes more permissive)
-    try:
-        import glob as _glob
-        _archive_dirs = sorted(_glob.glob('/etc/letsencrypt/archive/*/'))
-        for _adir in _archive_dirs:
-            _domain = os.path.basename(_adir.rstrip('/'))
-            _live_cert = f'/etc/letsencrypt/live/{_domain}/fullchain.pem'
-            _live_key = f'/etc/letsencrypt/live/{_domain}/privkey.pem'
-            if os.path.isfile(_live_cert) and os.path.isfile(_live_key):
-                return _live_cert, _live_key
-    except Exception:
-        pass
-
-    return '', ''
 
 
 @app.route('/api/settings/ssl', methods=['GET'])
