@@ -13426,6 +13426,7 @@ def _take_usage_snapshots():
     try:
         inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
         if not inbounds:
+            print("[UsageSnapshot] _take_usage_snapshots: no inbounds in cache, skipping.")
             return
         now = datetime.utcnow()
         new_snapshots = []
@@ -13502,59 +13503,100 @@ def _take_usage_snapshots():
             db.session.bulk_save_objects(renewals)
         if new_snapshots or renewals:
             db.session.commit()
+            print(f"[UsageSnapshot] Saved {len(new_snapshots)} snapshots, {len(renewals)} renewals.")
+        else:
+            print("[UsageSnapshot] No snapshots to save (all clients may lack sub_id).")
 
         # Prune old snapshots
         cutoff = now - timedelta(days=_USAGE_SNAPSHOT_RETENTION_DAYS)
         deleted = UsageSnapshot.query.filter(UsageSnapshot.recorded_at < cutoff).delete()
         if deleted:
             db.session.commit()
+            print(f"[UsageSnapshot] Pruned {deleted} old snapshots.")
     except Exception as exc:
         try:
             db.session.rollback()
         except Exception:
             pass
-        print(f"[UsageSnapshot] Error: {exc}")
+        print(f"[UsageSnapshot] Error in _take_usage_snapshots: {exc}")
 
 
 def usage_snapshot_worker():
-    """Background daemon: takes periodic usage snapshots."""
-    with app.app_context():
-        print(f"[UsageSnapshot] Worker started, waiting for server data...")
-        # Wait until GLOBAL_SERVER_DATA is populated (up to 10 minutes)
-        _waited = 0
-        while _waited < 600:
-            if GLOBAL_SERVER_DATA.get('inbounds'):
-                break
-            time.sleep(30)
-            _waited += 30
+    """Background daemon: takes periodic usage snapshots.
 
-        # Take first snapshot immediately once data is available
+    Each DB operation uses a fresh app_context() so SQLAlchemy never
+    works with a stale/timed-out connection from a long-lived context.
+    A dedup guard prevents multiple gunicorn workers from double-writing
+    when they all wake up at roughly the same time.
+    """
+    print("[UsageSnapshot] Worker started, waiting for initial server data...")
+    _waited = 0
+    while _waited < 600:
         if GLOBAL_SERVER_DATA.get('inbounds'):
-            print("[UsageSnapshot] Taking initial snapshot...")
-            _take_usage_snapshots()
-        else:
-            print("[UsageSnapshot] No server data after 10 min wait, will retry on next cycle.")
+            break
+        time.sleep(30)
+        _waited += 30
 
-        while True:
+    if GLOBAL_SERVER_DATA.get('inbounds'):
+        print("[UsageSnapshot] Taking initial snapshot...")
+        try:
+            with app.app_context():
+                _take_usage_snapshots()
+            print("[UsageSnapshot] Initial snapshot done.")
+        except Exception as exc:
+            print(f"[UsageSnapshot] Initial snapshot error: {exc}")
+    else:
+        print("[UsageSnapshot] No server data after 10 min wait, will retry on next cycle.")
+
+    while True:
+        try:
+            # Read interval in a fresh context — avoids stale session issues
+            interval_min = _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN
             try:
-                # Read interval dynamically so Settings changes take effect
-                try:
+                with app.app_context():
                     _raw = _get_or_create_system_setting(
                         USAGE_SNAPSHOT_INTERVAL_KEY,
                         str(_USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN)
                     )
-                    interval_min = int(_raw or _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN)
-                    interval_min = max(5, min(120, interval_min))
-                except Exception:
-                    interval_min = _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN
-                time.sleep(interval_min * 60)
-                _take_usage_snapshots()
-            except Exception as exc:
-                print(f"[UsageSnapshot] Worker error: {exc}")
+                    interval_min = max(5, min(120, int(_raw or _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN)))
+            except Exception:
+                pass
+
+            time.sleep(interval_min * 60)
+
+            # Auto-fetch fresh data if cache is empty (e.g. this worker never received a web request)
+            if not GLOBAL_SERVER_DATA.get('inbounds'):
+                print("[UsageSnapshot] Cache empty before snapshot, fetching fresh server data...")
                 try:
-                    time.sleep(60)
-                except Exception:
-                    pass
+                    with app.app_context():
+                        fetch_and_update_global_data(force=True)
+                except Exception as exc:
+                    print(f"[UsageSnapshot] Auto-fetch error: {exc}")
+
+            # Dedup guard: if another worker already snapshotted in the last 2 minutes, skip
+            try:
+                with app.app_context():
+                    cutoff_dedup = datetime.utcnow() - timedelta(minutes=2)
+                    already = db.session.query(UsageSnapshot.id).filter(
+                        UsageSnapshot.recorded_at >= cutoff_dedup
+                    ).limit(1).scalar()
+                    if already:
+                        print("[UsageSnapshot] Recent snapshot found (another worker beat us), skipping.")
+                        continue
+            except Exception as exc:
+                print(f"[UsageSnapshot] Dedup check error: {exc}")
+
+            # Take snapshot in a fresh context
+            with app.app_context():
+                _take_usage_snapshots()
+            print(f"[UsageSnapshot] Cycle complete (interval={interval_min}m).")
+
+        except Exception as exc:
+            print(f"[UsageSnapshot] Worker error: {exc}")
+            try:
+                time.sleep(60)
+            except Exception:
+                pass
 
 
 def ensure_background_threads_started():
