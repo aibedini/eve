@@ -46,6 +46,10 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
             System Logs
         </button>
+        <button class="settings-tab" onclick="switchTab('traffic_check')">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Traffic Check
+        </button>
         <!-- Add more tabs here later -->
     </div>
 
@@ -644,6 +648,42 @@
 
                 <!-- Pagination -->
                 <div id="hl-pagination" style="display:flex;justify-content:center;gap:8px;margin-top:14px;flex-wrap:wrap;"></div>
+            </div>
+        </div>
+
+        <!-- Traffic Check tab -->
+        <div id="tab-traffic_check" class="tab-pane">
+            <div class="panel-card">
+                <div class="panel-card-header">
+                    <div class="header-content">
+                        <h2>Traffic Check</h2>
+                        <p class="text-secondary">Traffic usage per server and inbound — based on usage snapshots.</p>
+                    </div>
+                    <button class="btn btn-primary" onclick="loadTrafficCheck()" id="tc-refresh-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg>
+                        Refresh
+                    </button>
+                </div>
+
+                <!-- Filters -->
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px;">
+                    <div style="display:flex;gap:4px;">
+                        <button class="tc-period-btn active" data-period="today" onclick="setTcPeriod('today')">Today</button>
+                        <button class="tc-period-btn" data-period="yesterday" onclick="setTcPeriod('yesterday')">Yesterday</button>
+                        <button class="tc-period-btn" data-period="7d" onclick="setTcPeriod('7d')">7 Days</button>
+                        <button class="tc-period-btn" data-period="30d" onclick="setTcPeriod('30d')">30 Days</button>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;flex:1;min-width:220px;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-secondary);flex-shrink:0;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" id="tc-search" placeholder="Search server or inbound…" class="form-input" style="padding:6px 10px;font-size:0.85rem;" oninput="tcRender()">
+                    </div>
+                    <span id="tc-period-label" style="font-size:0.82rem;color:var(--text-secondary);white-space:nowrap;"></span>
+                </div>
+
+                <!-- Results -->
+                <div id="tc-body">
+                    <div style="text-align:center;color:var(--text-secondary);padding:40px 0;">Select a period and press Refresh.</div>
+                </div>
             </div>
         </div>
 
@@ -1341,6 +1381,82 @@
             flex: 1;
         }
     }
+
+    /* Traffic Check */
+    .tc-period-btn {
+        padding: 5px 13px;
+        border-radius: 6px;
+        border: 1px solid var(--border-color);
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 0.82rem;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .tc-period-btn:hover { background: var(--hover-bg); color: var(--text-primary); }
+    .tc-period-btn.active { background: var(--accent-color); border-color: var(--accent-color); color: #fff; }
+
+    .tc-server-card {
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 14px;
+        transition: border-color 0.15s;
+    }
+    .tc-server-card:hover { border-color: var(--accent-color); }
+
+    .tc-server-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        background: var(--card-bg);
+        cursor: pointer;
+        user-select: none;
+        gap: 10px;
+    }
+    .tc-server-name {
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .tc-server-stats {
+        display: flex;
+        gap: 14px;
+        font-size: 0.82rem;
+        color: var(--text-secondary);
+        flex-wrap: wrap;
+    }
+    .tc-badge-total { color: #f59e0b; font-weight: 600; }
+    .tc-badge-dl { color: #60a5fa; }
+    .tc-badge-ul { color: #a78bfa; }
+
+    .tc-inbounds {
+        border-top: 1px solid var(--border-color);
+        display: none;
+    }
+    .tc-inbounds.open { display: block; }
+
+    .tc-inbound-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 9px 16px 9px 28px;
+        border-bottom: 1px solid var(--border-color);
+        font-size: 0.85rem;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .tc-inbound-row:last-child { border-bottom: none; }
+    .tc-inbound-name { color: var(--text-primary); font-weight: 500; flex:1; min-width:120px; }
+    .tc-inbound-meta { display:flex; gap:14px; color:var(--text-secondary); flex-wrap:wrap; }
+    .tc-bar-wrap { width: 120px; height: 5px; background: var(--border-color); border-radius: 3px; overflow: hidden; flex-shrink:0; }
+    .tc-bar { height: 100%; background: linear-gradient(90deg, #3b82f6, #8b5cf6); border-radius: 3px; transition: width 0.4s; }
+    .tc-chevron { transition: transform 0.2s; color: var(--text-secondary); flex-shrink:0; }
+    .tc-chevron.open { transform: rotate(180deg); }
 </style>
 {% endblock %}
 
@@ -3121,5 +3237,142 @@
         div.textContent = str;
         return div.innerHTML;
     }
+
+    /* ── Traffic Check ─────────────────────────────── */
+    let _tcPeriod = 'today';
+    let _tcData = null;
+
+    function setTcPeriod(p) {
+        _tcPeriod = p;
+        document.querySelectorAll('.tc-period-btn').forEach(b => b.classList.toggle('active', b.dataset.period === p));
+        loadTrafficCheck();
+    }
+
+    function fmtTcBytes(b) {
+        if (!b || b <= 0) return '0 B';
+        const u = ['B','KB','MB','GB','TB'];
+        let i = 0, v = b;
+        while (v >= 1024 && i < 4) { v /= 1024; i++; }
+        return `${v.toFixed(2)} ${u[i]}`;
+    }
+
+    function jalaliFromUtcIso(isoStr) {
+        if (!isoStr) return '';
+        try {
+            const d = new Date(isoStr);
+            const tehOffset = 3.5 * 3600000;
+            const tehDate = new Date(d.getTime() + tehOffset);
+            const [y, m, day] = gregorianToJalali(tehDate.getFullYear(), tehDate.getMonth()+1, tehDate.getDate());
+            const hh = String(tehDate.getUTCHours()).padStart(2,'0');
+            const mm = String(tehDate.getUTCMinutes()).padStart(2,'0');
+            const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+            return `${day} ${monthNames[m-1]} ${y}، ${hh}:${mm}`;
+        } catch(e) { return isoStr; }
+    }
+
+    function gregorianToJalali(gy, gm, gd) {
+        const g_d_no = [0,31,59,90,120,151,181,212,243,273,304,334];
+        let jy, jm, jd;
+        let gy2 = (gm > 2) ? gy+1 : gy;
+        let g_no = 365*gy + Math.floor((gy2+3)/4) - Math.floor((gy2+99)/100) + Math.floor((gy2+399)/400) - 80 + gd + g_d_no[gm-1];
+        jy = -1595;
+        let j_no = g_no - (365*jy + Math.floor(jy/4) - Math.floor(jy/100) + Math.floor(jy/400));
+        jy = Math.floor(j_no/365.2422);
+        let j_np = Math.floor(jy*365.2422);
+        if (j_no - j_np >= 366) { jy++; j_np = Math.floor(jy*365.2422); }
+        j_no -= j_np;
+        const j_mi = [31,31,31,31,31,31,30,30,30,30,30,29];
+        for (jm=0; jm<12 && j_no > j_mi[jm]; jm++) j_no -= j_mi[jm];
+        jd = j_no+1;
+        return [jy+979, jm+1, jd];
+    }
+
+    async function loadTrafficCheck() {
+        const body = document.getElementById('tc-body');
+        const label = document.getElementById('tc-period-label');
+        body.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:40px 0;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;display:inline-block;"><path d="M21 12a9 9 0 1 1-6-8.5"/></svg>
+            Loading…</div>`;
+
+        try {
+            const res = await fetch(`/api/traffic-check?period=${_tcPeriod}`);
+            const d = await res.json();
+            if (!d.success) { body.innerHTML = `<p style="color:#ef4444">Error: ${escapeHtml(d.error)}</p>`; return; }
+            _tcData = d;
+            label.textContent = `${jalaliFromUtcIso(d.from)} ← → ${jalaliFromUtcIso(d.to)}`;
+            tcRender();
+        } catch(e) {
+            body.innerHTML = `<p style="color:#ef4444">Network error: ${escapeHtml(e.message)}</p>`;
+        }
+    }
+
+    function tcRender() {
+        if (!_tcData) return;
+        const body = document.getElementById('tc-body');
+        const q = (document.getElementById('tc-search')?.value || '').toLowerCase().trim();
+        const servers = _tcData.servers || [];
+
+        const filtered = servers.map(srv => {
+            const inbounds = (srv.inbounds || []).filter(ib =>
+                !q || srv.server_name.toLowerCase().includes(q) || ib.inbound_tag.toLowerCase().includes(q)
+            );
+            return {...srv, inbounds};
+        }).filter(srv => !q || srv.server_name.toLowerCase().includes(q) || srv.inbounds.length > 0);
+
+        if (!filtered.length) {
+            body.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:40px 0;">No traffic data for this period.</div>`;
+            return;
+        }
+
+        const maxTotal = Math.max(...filtered.map(s => s.total), 1);
+
+        body.innerHTML = filtered.map((srv, si) => {
+            const pct = Math.round((srv.total / maxTotal) * 100);
+            const ibRows = srv.inbounds.map(ib => {
+                const ibPct = srv.total > 0 ? Math.round((ib.total / srv.total) * 100) : 0;
+                return `<div class="tc-inbound-row">
+                    <span class="tc-inbound-name">${escapeHtml(ib.inbound_tag)}</span>
+                    <div class="tc-inbound-meta">
+                        <span style="color:#60a5fa;">DL ${fmtTcBytes(ib.download)}</span>
+                        <span style="color:#a78bfa;">UL ${fmtTcBytes(ib.upload)}</span>
+                        <span style="color:#f59e0b;font-weight:600;">${fmtTcBytes(ib.total)}</span>
+                        <span style="color:var(--text-secondary);font-size:0.78rem;">${ib.clients} client${ib.clients !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div class="tc-bar-wrap" title="${ibPct}%"><div class="tc-bar" style="width:${ibPct}%"></div></div>
+                </div>`;
+            }).join('');
+
+            return `<div class="tc-server-card">
+                <div class="tc-server-header" onclick="tcToggle(${si})">
+                    <div class="tc-server-name">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                        ${escapeHtml(srv.server_name)}
+                        <span style="font-size:0.72rem;color:var(--text-secondary);font-weight:400;">${srv.inbounds.length} inbound${srv.inbounds.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div class="tc-server-stats">
+                        <span class="tc-badge-dl">DL ${fmtTcBytes(srv.download)}</span>
+                        <span class="tc-badge-ul">UL ${fmtTcBytes(srv.upload)}</span>
+                        <span class="tc-badge-total">${fmtTcBytes(srv.total)}</span>
+                        <div class="tc-bar-wrap" style="width:80px;" title="${pct}%"><div class="tc-bar" style="width:${pct}%"></div></div>
+                    </div>
+                    <svg class="tc-chevron" id="tc-chev-${si}" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
+                <div class="tc-inbounds open" id="tc-ibs-${si}">${ibRows}</div>
+            </div>`;
+        }).join('');
+    }
+
+    function tcToggle(i) {
+        const el = document.getElementById(`tc-ibs-${i}`);
+        const chev = document.getElementById(`tc-chev-${i}`);
+        if (el) { el.classList.toggle('open'); chev && chev.classList.toggle('open'); }
+    }
+
+    // Auto-load when tab is activated
+    const _origSwitchTab = window.switchTab;
+    window.switchTab = function(name) {
+        _origSwitchTab(name);
+        if (name === 'traffic_check' && !_tcData) loadTrafficCheck();
+    };
 </script>
 {% endblock %}

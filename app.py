@@ -2342,6 +2342,7 @@ class UsageSnapshot(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=False, index=True)
     sub_id = db.Column(db.String(128), nullable=False, index=True)
+    inbound_tag = db.Column(db.String(256), nullable=True, index=True)
     recorded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     upload_bytes = db.Column(db.BigInteger, nullable=False, default=0)
     download_bytes = db.Column(db.BigInteger, nullable=False, default=0)
@@ -2351,6 +2352,7 @@ class UsageSnapshot(db.Model):
 
     __table_args__ = (
         db.Index('ix_usage_snapshots_server_sub', 'server_id', 'sub_id'),
+        db.Index('ix_usage_snapshots_server_inbound', 'server_id', 'inbound_tag'),
     )
 
 
@@ -3473,6 +3475,19 @@ with app.app_context():
                         _conn.commit()
     except Exception as _pe:
         print(f"Migration error (packages extended columns): {_pe}")
+
+    # Add inbound_tag to usage_snapshots (older DBs)
+    try:
+        inspector = inspect(db.engine)
+        if 'usage_snapshots' in set(inspector.get_table_names()):
+            _snap_cols = [c['name'] for c in inspector.get_columns('usage_snapshots')]
+            if 'inbound_tag' not in _snap_cols:
+                with db.engine.connect() as _conn:
+                    _conn.execute(text('ALTER TABLE usage_snapshots ADD COLUMN inbound_tag VARCHAR(256)'))
+                    _conn.commit()
+                print("Added inbound_tag column to usage_snapshots table")
+    except Exception as _spe:
+        print(f"Migration error (usage_snapshots.inbound_tag): {_spe}")
 
     # Initialize PanelAPI data
     if not PanelAPI.query.first():
@@ -12651,6 +12666,145 @@ def snapshot_progress():
     return jsonify(_read_snap_progress())
 
 
+@app.route('/api/traffic-check', methods=['GET'])
+@superadmin_required
+def traffic_check():
+    """Aggregate snapshot traffic deltas by server → inbound for a given period."""
+    _TEHRAN_OFFSET = timedelta(hours=3, minutes=30)
+
+    period = (request.args.get('period') or 'today').strip().lower()
+    from_ts = request.args.get('from_ts')
+    to_ts = request.args.get('to_ts')
+
+    now_utc = datetime.utcnow()
+    now_teh = now_utc + _TEHRAN_OFFSET
+
+    if period == 'custom' and from_ts and to_ts:
+        try:
+            from_dt = datetime.utcfromtimestamp(int(from_ts) / 1000)
+            to_dt = datetime.utcfromtimestamp(int(to_ts) / 1000)
+        except Exception:
+            return jsonify({'success': False, 'error': 'Invalid timestamps'}), 400
+    elif period == 'today':
+        teh_midnight = now_teh.replace(hour=0, minute=0, second=0, microsecond=0)
+        from_dt = teh_midnight - _TEHRAN_OFFSET
+        to_dt = now_utc
+    elif period == 'yesterday':
+        teh_midnight = now_teh.replace(hour=0, minute=0, second=0, microsecond=0)
+        from_dt = (teh_midnight - timedelta(days=1)) - _TEHRAN_OFFSET
+        to_dt = teh_midnight - _TEHRAN_OFFSET
+    elif period == '7d':
+        from_dt = now_utc - timedelta(days=7)
+        to_dt = now_utc
+    elif period == '30d':
+        from_dt = now_utc - timedelta(days=30)
+        to_dt = now_utc
+    else:
+        from_dt = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        to_dt = now_utc
+
+    try:
+        # Fetch all servers for name lookup
+        servers_map = {s.id: s.name for s in Server.query.all()}
+
+        # For each (server_id, inbound_tag, sub_id): get first snap before/at from_dt and last snap at/before to_dt
+        # Use two subqueries then merge
+        from sqlalchemy import func as _func
+
+        # All sub_ids active in the period
+        active_subs = (db.session.query(
+                UsageSnapshot.server_id,
+                UsageSnapshot.inbound_tag,
+                UsageSnapshot.sub_id
+            )
+            .filter(UsageSnapshot.recorded_at <= to_dt)
+            .distinct()
+            .all()
+        )
+
+        result_map = {}  # server_id -> {inbound_tag -> {dl, ul, total, clients}}
+
+        for server_id, inbound_tag, sub_id in active_subs:
+            tag = inbound_tag or '(unknown)'
+
+            # Latest snapshot at or before from_dt (baseline)
+            baseline = (UsageSnapshot.query
+                .filter_by(server_id=server_id, sub_id=sub_id)
+                .filter(UsageSnapshot.recorded_at <= from_dt)
+                .order_by(UsageSnapshot.recorded_at.desc())
+                .first())
+
+            # Latest snapshot at or before to_dt (endpoint)
+            endpoint = (UsageSnapshot.query
+                .filter_by(server_id=server_id, sub_id=sub_id)
+                .filter(UsageSnapshot.recorded_at <= to_dt)
+                .order_by(UsageSnapshot.recorded_at.desc())
+                .first())
+
+            if not endpoint:
+                continue
+
+            base_dl = baseline.download_bytes if baseline else 0
+            base_ul = baseline.upload_bytes if baseline else 0
+            end_dl = endpoint.download_bytes
+            end_ul = endpoint.upload_bytes
+
+            # Handle traffic reset (counter went backwards = renewal/reset)
+            delta_dl = end_dl - base_dl if end_dl >= base_dl else end_dl
+            delta_ul = end_ul - base_ul if end_ul >= base_ul else end_ul
+            delta_total = delta_dl + delta_ul
+
+            if delta_total <= 0:
+                continue
+
+            if server_id not in result_map:
+                result_map[server_id] = {}
+            if tag not in result_map[server_id]:
+                result_map[server_id][tag] = {'download': 0, 'upload': 0, 'total': 0, 'clients': 0}
+
+            result_map[server_id][tag]['download'] += delta_dl
+            result_map[server_id][tag]['upload'] += delta_ul
+            result_map[server_id][tag]['total'] += delta_total
+            result_map[server_id][tag]['clients'] += 1
+
+        servers_out = []
+        for server_id, inbounds_map in sorted(result_map.items(), key=lambda x: -sum(v['total'] for v in x[1].values())):
+            inbounds_out = sorted([
+                {
+                    'inbound_tag': tag,
+                    'download': data['download'],
+                    'upload': data['upload'],
+                    'total': data['total'],
+                    'clients': data['clients'],
+                }
+                for tag, data in inbounds_map.items()
+            ], key=lambda x: -x['total'])
+
+            srv_total = sum(i['total'] for i in inbounds_out)
+            srv_dl = sum(i['download'] for i in inbounds_out)
+            srv_ul = sum(i['upload'] for i in inbounds_out)
+
+            servers_out.append({
+                'server_id': server_id,
+                'server_name': servers_map.get(server_id, f'Server {server_id}'),
+                'total': srv_total,
+                'download': srv_dl,
+                'upload': srv_ul,
+                'inbounds': inbounds_out,
+            })
+
+        return jsonify({
+            'success': True,
+            'period': period,
+            'from': from_dt.isoformat() + 'Z',
+            'to': to_dt.isoformat() + 'Z',
+            'servers': servers_out,
+        })
+    except Exception as e:
+        app.logger.exception("traffic_check error")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/settings/ssl', methods=['GET'])
 @login_required
 def get_ssl_settings():
@@ -13533,6 +13687,7 @@ def _take_usage_snapshots():
             server_id = inbound.get('server_id')
             if not server_id:
                 continue
+            inbound_tag = (inbound.get('remark') or inbound.get('tag') or '').strip() or f"inbound-{inbound.get('id', '')}"
             for client in inbound.get('clients', []):
                 sub_id = str(client.get('subId') or '').strip()
                 if not sub_id:
@@ -13592,6 +13747,7 @@ def _take_usage_snapshots():
                 new_snapshots.append(UsageSnapshot(
                     server_id=server_id,
                     sub_id=sub_id,
+                    inbound_tag=inbound_tag,
                     recorded_at=now,
                     upload_bytes=up,
                     download_bytes=down,
