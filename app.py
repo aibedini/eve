@@ -10165,9 +10165,11 @@ def sub_usage_history(server_id, sub_id):
             snapshots = [baseline] + list(snapshots)
 
     # Compute per-snapshot deltas
+    # has_baseline = True when snapshots[0] came from outside the window (prepended baseline)
+    has_baseline = len(snapshots) > 1 and snapshots[0].recorded_at < since
     delta_rows = []
     if len(snapshots) == 1:
-        # Only one snapshot (no baseline before the window) — show cumulative totals
+        # Only one snapshot, no baseline — show cumulative totals, mark as such
         snap = snapshots[0]
         delta_rows.append({
             'ts': snap.recorded_at,
@@ -10177,6 +10179,7 @@ def sub_usage_history(server_id, sub_id):
             'remaining': snap.remaining_bytes,
             'volume_limit': snap.volume_limit_bytes,
             'cumulative': snap.total_bytes,
+            'is_cumulative': True,
         })
     else:
         for i in range(1, len(snapshots)):
@@ -10184,6 +10187,8 @@ def sub_usage_history(server_id, sub_id):
             curr = snapshots[i]
             delta_up = max(curr.upload_bytes - prev.upload_bytes, 0)
             delta_down = max(curr.download_bytes - prev.download_bytes, 0)
+            # The very first delta row is cumulative when prev had no baseline before it
+            is_cum = (i == 1 and not has_baseline)
             delta_rows.append({
                 'ts': curr.recorded_at,
                 'delta_upload': delta_up,
@@ -10192,6 +10197,7 @@ def sub_usage_history(server_id, sub_id):
                 'remaining': curr.remaining_bytes,
                 'volume_limit': curr.volume_limit_bytes,
                 'cumulative': curr.total_bytes,
+                'is_cumulative': is_cum,
             })
 
     # Aggregate by period using Tehran timezone label (UTC+3:30)
@@ -10217,12 +10223,15 @@ def sub_usage_history(server_id, sub_id):
             k = key_fn(r['ts'])
             if k not in bucket:
                 bucket[k] = {'delta_upload': 0, 'delta_download': 0, 'delta_total': 0,
-                              'remaining': None, 'volume_limit': None, 'ts_example': r['ts']}
+                              'remaining': None, 'volume_limit': None, 'ts_example': r['ts'],
+                              'is_cumulative': False}
             bucket[k]['delta_upload'] += r['delta_upload']
             bucket[k]['delta_download'] += r['delta_download']
             bucket[k]['delta_total'] += r['delta_total']
-            bucket[k]['remaining'] = r['remaining']      # keep latest value
+            bucket[k]['remaining'] = r['remaining']
             bucket[k]['volume_limit'] = r['volume_limit']
+            if r.get('is_cumulative'):
+                bucket[k]['is_cumulative'] = True
         return bucket
 
     if period == 'hour':
@@ -10242,6 +10251,7 @@ def sub_usage_history(server_id, sub_id):
             'delta_total': v['delta_total'],
             'remaining': v['remaining'],
             'volume_limit': v['volume_limit'],
+            'is_cumulative': v.get('is_cumulative', False),
         })
     # Most recent first
     history_rows.reverse()
