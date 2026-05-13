@@ -12094,6 +12094,20 @@ def get_settings_overview():
     return jsonify({'success': True, **result})
 
 
+@app.route('/api/usage-snapshot/trigger', methods=['POST'])
+@superadmin_required
+def trigger_usage_snapshot():
+    """Manually trigger a usage snapshot for testing."""
+    inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+    if not inbounds:
+        return jsonify({'success': False, 'error': 'No server data in cache yet. Wait for the background fetcher to run first.'}), 400
+    try:
+        _take_usage_snapshots()
+        return jsonify({'success': True, 'message': f'Snapshot taken for {len(inbounds)} inbound(s).'})
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
 @app.route('/api/settings/ssl', methods=['GET'])
 @login_required
 def get_ssl_settings():
