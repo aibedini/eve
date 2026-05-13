@@ -13546,23 +13546,35 @@ def _take_usage_snapshots():
         if deleted:
             db.session.commit()
             print(f"[UsageSnapshot] Pruned {deleted} old snapshots.")
+        return True
     except Exception as exc:
         try:
             db.session.rollback()
         except Exception:
             pass
         print(f"[UsageSnapshot] Error in _take_usage_snapshots: {exc}")
+        raise  # re-raise so the caller (worker) knows this cycle failed
 
 
 def usage_snapshot_worker():
     """Background daemon: takes periodic usage snapshots.
 
-    Each DB operation uses a fresh app_context() so SQLAlchemy never
-    works with a stale/timed-out connection from a long-lived context.
-    A dedup guard prevents multiple gunicorn workers from double-writing
-    when they all wake up at roughly the same time.
+    Root-cause fix for multi-worker gunicorn: all workers start simultaneously
+    and sleep the same duration, so they always wake up together → SQLite lock
+    contention → all fail → re-sync → repeat forever.
+
+    Fix: stagger workers at startup using PID, then add random jitter every
+    cycle so they can never re-converge. Dedup window = half the interval so
+    it reliably catches same-cycle collisions even with jitter.
     """
-    print("[UsageSnapshot] Worker started, waiting for initial server data...")
+    import random as _random
+
+    # Per-process startup stagger: workers started at the same time get spread
+    # across 0-59 seconds based on PID so they never wake up simultaneously.
+    _startup_stagger = os.getpid() % 60
+    print(f"[UsageSnapshot] Worker started (PID={os.getpid()}, stagger={_startup_stagger}s), waiting for initial server data...")
+    time.sleep(_startup_stagger)
+
     _waited = 0
     while _waited < 600:
         if GLOBAL_SERVER_DATA.get('inbounds'):
@@ -13583,7 +13595,7 @@ def usage_snapshot_worker():
 
     while True:
         try:
-            # Read interval in a fresh context — avoids stale session issues
+            # Read interval in a fresh context
             interval_min = _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN
             try:
                 with app.app_context():
@@ -13595,9 +13607,13 @@ def usage_snapshot_worker():
             except Exception:
                 pass
 
-            time.sleep(interval_min * 60)
+            # Random jitter 10-45s prevents re-convergence across cycles.
+            # Even if workers start in sync, they drift apart within 1-2 cycles.
+            jitter = _random.uniform(10, 45)
+            print(f"[UsageSnapshot] Sleeping {interval_min}m + {jitter:.0f}s jitter...")
+            time.sleep(interval_min * 60 + jitter)
 
-            # Auto-fetch fresh data if cache is empty (e.g. this worker never received a web request)
+            # Auto-fetch fresh data if cache is empty
             if not GLOBAL_SERVER_DATA.get('inbounds'):
                 print("[UsageSnapshot] Cache empty before snapshot, fetching fresh server data...")
                 try:
@@ -13606,18 +13622,25 @@ def usage_snapshot_worker():
                 except Exception as exc:
                     print(f"[UsageSnapshot] Auto-fetch error: {exc}")
 
-            # Dedup guard: if another worker already snapshotted in the last 2 minutes, skip
+            # Dedup guard: window = half the interval (min 3 minutes).
+            # With jitter, workers wake at different times so one commits before
+            # the next checks — the wider window makes this bulletproof.
+            dedup_min = max(interval_min // 2, 3)
+            skipped = False
             try:
                 with app.app_context():
-                    cutoff_dedup = datetime.utcnow() - timedelta(minutes=2)
+                    cutoff_dedup = datetime.utcnow() - timedelta(minutes=dedup_min)
                     already = db.session.query(UsageSnapshot.id).filter(
                         UsageSnapshot.recorded_at >= cutoff_dedup
                     ).limit(1).scalar()
                     if already:
-                        print("[UsageSnapshot] Recent snapshot found (another worker beat us), skipping.")
-                        continue
+                        print(f"[UsageSnapshot] Recent snapshot found (within {dedup_min}m), skipping.")
+                        skipped = True
             except Exception as exc:
                 print(f"[UsageSnapshot] Dedup check error: {exc}")
+
+            if skipped:
+                continue
 
             # Take snapshot in a fresh context
             with app.app_context():
@@ -13627,7 +13650,8 @@ def usage_snapshot_worker():
         except Exception as exc:
             print(f"[UsageSnapshot] Worker error: {exc}")
             try:
-                time.sleep(60)
+                # Random sleep on error to break re-sync after failures
+                time.sleep(_random.uniform(30, 90))
             except Exception:
                 pass
 
