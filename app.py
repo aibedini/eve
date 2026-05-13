@@ -3429,12 +3429,14 @@ with app.app_context():
         inspector = inspect(db.engine)
         if 'packages' in set(inspector.get_table_names()):
             _pkg_cols = [c['name'] for c in inspector.get_columns('packages')]
+            # TIMESTAMP works in both PostgreSQL and SQLite; DATETIME is SQLite-only
+            _ts_type = 'TIMESTAMP' if db.engine.dialect.name == 'postgresql' else 'DATETIME'
             _pkg_new = [
                 ('scope', "VARCHAR(20) DEFAULT 'global'"),
                 ('assigned_reseller_ids', "TEXT DEFAULT '[]'"),
                 ('created_by', 'INTEGER'),
                 ('display_order', 'INTEGER DEFAULT 0'),
-                ('created_at', 'DATETIME'),
+                ('created_at', _ts_type),
             ]
             for _cn, _cd in _pkg_new:
                 if _cn not in _pkg_cols:
