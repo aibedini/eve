@@ -121,6 +121,8 @@ BULK_JOBS_LOCK = threading.Lock()
 BULK_MAX_JOBS = 50
 
 # Manual snapshot progress tracking
+# Written to a shared file so all gunicorn workers see the same state.
+_SNAPSHOT_PROGRESS_FILE = '/tmp/eve_snapshot_progress.json'
 _SNAPSHOT_PROGRESS = {
     'status': 'idle',   # idle | running | done | error
     'step': 0,
@@ -132,6 +134,26 @@ _SNAPSHOT_PROGRESS = {
     'fetched_fresh': False,
     'error': None,
 }
+
+def _set_snap_progress(updates):
+    """Update _SNAPSHOT_PROGRESS and persist to shared file for cross-worker visibility."""
+    global _SNAPSHOT_PROGRESS
+    _SNAPSHOT_PROGRESS.update(updates)
+    try:
+        import json as _json
+        with open(_SNAPSHOT_PROGRESS_FILE, 'w') as _f:
+            _json.dump(_SNAPSHOT_PROGRESS, _f)
+    except Exception:
+        pass
+
+def _read_snap_progress():
+    """Read progress from shared file; fall back to in-memory dict."""
+    try:
+        import json as _json
+        with open(_SNAPSHOT_PROGRESS_FILE) as _f:
+            return _json.load(_f)
+    except Exception:
+        return _SNAPSHOT_PROGRESS
 
 # Telegram backup job tracking (in-memory; per-process)
 TELEGRAM_BACKUP_JOBS = {}  # job_id -> job dict
@@ -10144,11 +10166,13 @@ def sub_usage_history(server_id, sub_id):
         return jsonify({'success': False, 'error': 'Server not found'}), 404
 
     period = (request.args.get('period') or 'day').strip().lower()
-    if period not in ('hour', 'day', 'month'):
+    if period not in ('5min', 'hour', 'day', 'month'):
         period = 'day'
 
     now_utc = datetime.utcnow()
-    if period == 'hour':
+    if period == '5min':
+        since = now_utc - timedelta(hours=3)    # last 3h at 5-min granularity
+    elif period == 'hour':
         since = now_utc - timedelta(hours=48)   # 48h window so daily boundary is visible
     elif period == 'month':
         since = now_utc - timedelta(days=366)
@@ -10239,6 +10263,11 @@ def sub_usage_history(server_id, sub_id):
         local = ts + _TEHRAN_OFFSET
         return local.strftime('%Y-%m-%dT%H')
 
+    def _tehran_5min_key(ts):
+        local = ts + _TEHRAN_OFFSET
+        bucket_min = (local.minute // 5) * 5
+        return local.strftime('%Y-%m-%dT%H:') + str(bucket_min).zfill(2)
+
     def _tehran_month_key(ts):
         local = ts + _TEHRAN_OFFSET
         return local.strftime('%Y-%m')
@@ -10262,7 +10291,9 @@ def sub_usage_history(server_id, sub_id):
                 bucket[k]['is_cumulative'] = True
         return bucket
 
-    if period == 'hour':
+    if period == '5min':
+        bucket = _aggregate(_tehran_5min_key)
+    elif period == 'hour':
         bucket = _aggregate(_tehran_hour_key)
     elif period == 'month':
         bucket = _aggregate(_tehran_month_key)
@@ -12451,7 +12482,7 @@ def _run_snapshot_with_progress():
         with app.app_context():
             servers = Server.query.filter_by(enabled=True).all()
             total = len(servers)
-            _SNAPSHOT_PROGRESS.update({
+            _set_snap_progress({
                 'step': 0, 'total': total,
                 'message': _msg(f'Fetching {total} server(s)…', f'در حال دریافت {total} سرور…'),
                 'message_fa': f'در حال دریافت {total} سرور…',
@@ -12467,7 +12498,7 @@ def _run_snapshot_with_progress():
                 admin_user = SimpleNamespace(role='superadmin', id=0, is_superadmin=True)
 
             for i, srv in enumerate(servers, 1):
-                _SNAPSHOT_PROGRESS.update({
+                _set_snap_progress({
                     'step': i,
                     'current_server': srv.name,
                     'message': _msg(
@@ -12494,7 +12525,7 @@ def _run_snapshot_with_progress():
 
             inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
             if not inbounds:
-                _SNAPSHOT_PROGRESS.update({
+                _set_snap_progress({
                     'status': 'error',
                     'error': _msg(
                         'Fetched all servers but got no inbounds. Check that servers are online and enabled.',
@@ -12503,14 +12534,14 @@ def _run_snapshot_with_progress():
                 })
                 return
 
-            _SNAPSHOT_PROGRESS.update({
+            _set_snap_progress({
                 'step': total,
                 'message': _msg('Taking usage snapshot…', 'در حال ثبت اسنپ‌شات مصرف…'),
             })
             _take_usage_snapshots()
 
             inbound_count = len(inbounds)
-            _SNAPSHOT_PROGRESS.update({
+            _set_snap_progress({
                 'status': 'done',
                 'inbound_count': inbound_count,
                 'fetched_fresh': cache_was_empty,
@@ -12521,7 +12552,7 @@ def _run_snapshot_with_progress():
                 'error': None,
             })
     except Exception as exc:
-        _SNAPSHOT_PROGRESS.update({
+        _set_snap_progress({
             'status': 'error',
             'error': str(exc),
         })
@@ -12531,10 +12562,10 @@ def _run_snapshot_with_progress():
 @superadmin_required
 def trigger_usage_snapshot():
     """Start a background snapshot task and return immediately."""
-    global _SNAPSHOT_PROGRESS
-    if _SNAPSHOT_PROGRESS.get('status') == 'running':
+    current = _read_snap_progress()
+    if current.get('status') == 'running':
         return jsonify({'success': False, 'error': 'A snapshot task is already running.'}), 409
-    _SNAPSHOT_PROGRESS = {
+    _set_snap_progress({
         'status': 'running',
         'step': 0, 'total': 0,
         'current_server': '',
@@ -12542,7 +12573,7 @@ def trigger_usage_snapshot():
         'inbound_count': 0,
         'fetched_fresh': False,
         'error': None,
-    }
+    })
     t = threading.Thread(target=_run_snapshot_with_progress, daemon=True)
     t.start()
     return jsonify({'success': True, 'status': 'started'})
@@ -12551,8 +12582,8 @@ def trigger_usage_snapshot():
 @app.route('/api/usage-snapshot/progress', methods=['GET'])
 @superadmin_required
 def snapshot_progress():
-    """Return current progress of the running/last snapshot task."""
-    return jsonify(_SNAPSHOT_PROGRESS)
+    """Return current progress of the running/last snapshot task (cross-worker via shared file)."""
+    return jsonify(_read_snap_progress())
 
 
 @app.route('/api/settings/ssl', methods=['GET'])
