@@ -13570,24 +13570,15 @@ def _take_usage_snapshots():
 
 
 def usage_snapshot_worker():
-    """Background daemon: takes periodic usage snapshots.
+    """Singleton background daemon: takes periodic usage snapshots.
 
-    Root-cause fix for multi-worker gunicorn: all workers start simultaneously
-    and sleep the same duration, so they always wake up together → SQLite lock
-    contention → all fail → re-sync → repeat forever.
-
-    Fix: stagger workers at startup using PID, then add random jitter every
-    cycle so they can never re-converge. Dedup window = half the interval so
-    it reliably catches same-cycle collisions even with jitter.
+    Runs in exactly ONE gunicorn worker (whichever wins _claim_singleton).
+    No dedup guard needed — only one writer exists.
+    Errors are written to the health log so admins can see them.
     """
-    import random as _random
+    print(f"[UsageSnapshot] Singleton worker started (PID={os.getpid()}), waiting for server data...")
 
-    # Per-process startup stagger: workers started at the same time get spread
-    # across 0-59 seconds based on PID so they never wake up simultaneously.
-    _startup_stagger = os.getpid() % 60
-    print(f"[UsageSnapshot] Worker started (PID={os.getpid()}, stagger={_startup_stagger}s), waiting for initial server data...")
-    time.sleep(_startup_stagger)
-
+    # Wait up to 10 minutes for background_data_fetcher to populate cache
     _waited = 0
     while _waited < 600:
         if GLOBAL_SERVER_DATA.get('inbounds'):
@@ -13595,20 +13586,34 @@ def usage_snapshot_worker():
         time.sleep(30)
         _waited += 30
 
-    if GLOBAL_SERVER_DATA.get('inbounds'):
-        print("[UsageSnapshot] Taking initial snapshot...")
+    if not GLOBAL_SERVER_DATA.get('inbounds'):
+        # Cache still empty — fetch once before starting cycles
+        print("[UsageSnapshot] Cache empty after 10 min, fetching now...")
         try:
             with app.app_context():
-                _take_usage_snapshots()
-            print("[UsageSnapshot] Initial snapshot done.")
+                fetch_and_update_global_data(force=True)
         except Exception as exc:
-            print(f"[UsageSnapshot] Initial snapshot error: {exc}")
-    else:
-        print("[UsageSnapshot] No server data after 10 min wait, will retry on next cycle.")
+            print(f"[UsageSnapshot] Initial fetch error: {exc}")
+
+    # Take initial snapshot immediately on startup
+    try:
+        with app.app_context():
+            print("[UsageSnapshot] Taking initial snapshot...")
+            _take_usage_snapshots()
+            print("[UsageSnapshot] Initial snapshot done.")
+    except Exception as exc:
+        print(f"[UsageSnapshot] Initial snapshot error: {exc}")
+        try:
+            with app.app_context():
+                _add_health_log('warning', 'snapshot',
+                                'Initial usage snapshot failed',
+                                details={'error': str(exc)})
+        except Exception:
+            pass
 
     while True:
         try:
-            # Read interval in a fresh context
+            # Read interval from DB in a fresh context
             interval_min = _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN
             try:
                 with app.app_context():
@@ -13620,51 +13625,50 @@ def usage_snapshot_worker():
             except Exception:
                 pass
 
-            # Random jitter 10-45s prevents re-convergence across cycles.
-            # Even if workers start in sync, they drift apart within 1-2 cycles.
-            jitter = _random.uniform(10, 45)
-            print(f"[UsageSnapshot] Sleeping {interval_min}m + {jitter:.0f}s jitter...")
-            time.sleep(interval_min * 60 + jitter)
+            print(f"[UsageSnapshot] Next snapshot in {interval_min} min...")
+            time.sleep(interval_min * 60)
 
-            # Auto-fetch fresh data if cache is empty
+            # Refresh cache if empty (singleton worker may not serve HTTP requests)
             if not GLOBAL_SERVER_DATA.get('inbounds'):
-                print("[UsageSnapshot] Cache empty before snapshot, fetching fresh server data...")
+                print("[UsageSnapshot] Cache empty, fetching fresh server data...")
                 try:
                     with app.app_context():
                         fetch_and_update_global_data(force=True)
                 except Exception as exc:
-                    print(f"[UsageSnapshot] Auto-fetch error: {exc}")
+                    print(f"[UsageSnapshot] Fetch error: {exc}")
 
-            # Dedup guard: window = half the interval (min 3 minutes).
-            # With jitter, workers wake at different times so one commits before
-            # the next checks — the wider window makes this bulletproof.
-            dedup_min = max(interval_min // 2, 3)
-            skipped = False
+            # Take snapshot
             try:
                 with app.app_context():
-                    cutoff_dedup = datetime.utcnow() - timedelta(minutes=dedup_min)
-                    already = db.session.query(UsageSnapshot.id).filter(
-                        UsageSnapshot.recorded_at >= cutoff_dedup
-                    ).limit(1).scalar()
-                    if already:
-                        print(f"[UsageSnapshot] Recent snapshot found (within {dedup_min}m), skipping.")
-                        skipped = True
+                    _take_usage_snapshots()
+                print(f"[UsageSnapshot] Cycle complete (interval={interval_min}m).")
+                # Log success to system logs every cycle
+                try:
+                    with app.app_context():
+                        n_clients = len([
+                            c for ib in (GLOBAL_SERVER_DATA.get('inbounds') or [])
+                            for c in ib.get('clients', [])
+                            if str(c.get('subId') or c.get('id') or '').strip()
+                        ])
+                        _add_health_log('info', 'snapshot',
+                                        f'Usage snapshot saved ({n_clients} clients)',
+                                        details={'interval_min': interval_min})
+                except Exception:
+                    pass
             except Exception as exc:
-                print(f"[UsageSnapshot] Dedup check error: {exc}")
-
-            if skipped:
-                continue
-
-            # Take snapshot in a fresh context
-            with app.app_context():
-                _take_usage_snapshots()
-            print(f"[UsageSnapshot] Cycle complete (interval={interval_min}m).")
+                print(f"[UsageSnapshot] Snapshot error: {exc}")
+                try:
+                    with app.app_context():
+                        _add_health_log('warning', 'snapshot',
+                                        'Usage snapshot failed',
+                                        details={'error': str(exc), 'interval_min': interval_min})
+                except Exception:
+                    pass
 
         except Exception as exc:
-            print(f"[UsageSnapshot] Worker error: {exc}")
+            print(f"[UsageSnapshot] Worker loop error: {exc}")
             try:
-                # Random sleep on error to break re-sync after failures
-                time.sleep(_random.uniform(30, 90))
+                time.sleep(60)
             except Exception:
                 pass
 
@@ -13738,11 +13742,14 @@ def ensure_background_threads_started():
     else:
         print("[Singleton] health_watchdog already owned by another worker, skipping.")
 
-    # Per-worker with jitter+dedup: each worker runs but only one writes per cycle
-    try:
-        threading.Thread(target=usage_snapshot_worker, daemon=True).start()
-    except Exception as e:
-        print(f"Failed to start usage snapshot thread: {e}")
+    # Singleton: only one worker runs usage snapshots — no race conditions, no dedup needed
+    if _claim_singleton('snapshot_worker'):
+        try:
+            threading.Thread(target=usage_snapshot_worker, daemon=True).start()
+        except Exception as e:
+            print(f"Failed to start usage snapshot thread: {e}")
+    else:
+        print("[Singleton] snapshot_worker already owned by another worker, skipping.")
 
 if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
     # Start threads on module import (works under gunicorn as well)
