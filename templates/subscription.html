@@ -703,16 +703,18 @@
                     tbody.innerHTML = rows.map(row => {
                         const leftColor = (row.remaining!=null && row.volume_limit && (row.remaining/row.volume_limit)<0.1)
                             ? 'text-red-400' : 'text-success';
-                        const usedColor = row.delta_total > 0 ? 'text-white font-medium' : 'text-muted';
+                        const noUsage = !row.delta_total || row.delta_total === 0;
+                        const usedColor = !noUsage ? 'text-white font-medium' : 'text-muted';
+                        const dash = `<span class="text-muted" style="opacity:.35;">—</span>`;
                         const dateFmt = fmtJalali(row.recorded_at, _historyPeriod);
                         const dateLabel = row.is_cumulative
                             ? `<span style="font-size:.72rem;opacity:.6;">${IS_FA?'تا':'Until'}</span> ${dateFmt}`
                             : dateFmt;
                         return `<tr class="hover:bg-white/5 transition-colors" style="direction:rtl;">
                             <td class="px-3 py-2 text-muted whitespace-nowrap text-right">${dateLabel}</td>
-                            <td class="px-3 py-2 text-right text-blue-400">${fmtBytes(row.delta_download)}</td>
-                            <td class="px-3 py-2 text-right text-purple-400">${fmtBytes(row.delta_upload)}</td>
-                            <td class="px-3 py-2 text-right ${usedColor}">${fmtBytes(row.delta_total)}</td>
+                            <td class="px-3 py-2 text-right text-blue-400">${noUsage ? dash : fmtBytes(row.delta_download)}</td>
+                            <td class="px-3 py-2 text-right text-purple-400">${noUsage ? dash : fmtBytes(row.delta_upload)}</td>
+                            <td class="px-3 py-2 text-right ${usedColor}">${noUsage ? dash : fmtBytes(row.delta_total)}</td>
                             <td class="px-3 py-2 text-right ${leftColor}">${fmtBytes(row.remaining)}</td>
                         </tr>`;
                     }).join('');
