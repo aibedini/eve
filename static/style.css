@@ -110,6 +110,9 @@ body {
 #inbounds-container.filter-hide-disabled tr.disabled-row {
     display: none;
 }
+#inbounds-container.filter-hide-disabled .inbound-card.disabled {
+    display: none;
+}
 
 #inbounds-container.filter-disabled-only tr:not(.disabled-row) {
     display: none;

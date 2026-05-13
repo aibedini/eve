@@ -86,7 +86,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.9.1"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5314,17 +5314,22 @@ def save_monitor_settings():
         payload = {}
 
     timezone_name = (payload.get('timezone') or '').strip()
-    if timezone_name:
-        if not _is_valid_timezone_name(timezone_name):
-            return jsonify({'success': False, 'error': 'Invalid timezone. Example: Asia/Tehran'}), 400
-        _set_system_setting_value(GENERAL_TIMEZONE_SETTING_KEY, timezone_name)
+    if timezone_name and not _is_valid_timezone_name(timezone_name):
+        return jsonify({'success': False, 'error': 'Invalid timezone. Example: Asia/Tehran'}), 400
 
     normalized = _normalize_monitor_settings(payload)
-    _set_system_setting_value(
-        MONITOR_SETTINGS_KEY,
-        json.dumps(normalized, ensure_ascii=False)
-    )
-    db.session.commit()
+    try:
+        if timezone_name:
+            _set_system_setting_value(GENERAL_TIMEZONE_SETTING_KEY, timezone_name)
+        _set_system_setting_value(
+            MONITOR_SETTINGS_KEY,
+            json.dumps(normalized, ensure_ascii=False)
+        )
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.error('save_monitor_settings: DB commit failed: %s', exc)
+        return jsonify({'success': False, 'error': f'Database error: {exc}'}), 500
     return jsonify({
         'success': True,
         'settings': normalized,

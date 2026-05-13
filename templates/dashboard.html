@@ -224,7 +224,7 @@
 
             <!-- Hide Disabled Filter -->
             <label class="filter-toggle" title="Hide Disabled Clients">
-                <input type="checkbox" id="hide-disabled-filter" onchange="applyDisabledVisibility()">
+                <input type="checkbox" id="hide-disabled-filter" checked onchange="applyDisabledVisibility()">
                 <span class="toggle-track"></span>
                 <span class="toggle-text">Hide Disabled</span>
             </label>
@@ -1178,6 +1178,7 @@
         updateExpiryFilterLabel();
         updateExpiryFilterCount();
         syncExpiryFilterCheckboxes();
+        applyDisabledVisibility();
         // Load servers first to know if we have any
         loadServers().then(() => {
             // Kick off a background refresh (non-blocking) and render cached data immediately.
@@ -3548,7 +3549,7 @@
     }
 
     let selectedServerIds = new Set();
-    let hideDisabledClients = false;
+    let hideDisabledClients = true;
 
     async function loadServers() {
         try {
@@ -3974,6 +3975,9 @@
             }).filter(i => i !== null);
         }
         
+        // Active inbounds first, inactive last (stable within each group)
+        filtered.sort((a, b) => (b.enable ? 1 : 0) - (a.enable ? 1 : 0));
+
         return filtered;
     }
 

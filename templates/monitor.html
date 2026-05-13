@@ -272,9 +272,17 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload)
             });
-            const data = await resp.json();
+            let data;
+            try {
+                data = await resp.json();
+            } catch (_) {
+                const text = await resp.text().catch(() => '');
+                const snippet = text ? ': ' + text.replace(/<[^>]+>/g, ' ').trim().slice(0, 160) : '';
+                showToast(`Save failed (HTTP ${resp.status})${snippet}`, 'error');
+                return;
+            }
             if (!data.success) {
-                showToast(data.error || 'Failed to save settings', 'error');
+                showToast(data.error || `Save failed (HTTP ${resp.status})`, 'error');
                 return;
             }
             monitorSettings = data.settings || payload;
@@ -283,7 +291,7 @@
             showToast('Settings saved', 'success');
             renderAlerts();
         } catch (err) {
-            showToast('Failed to save settings', 'error');
+            showToast(err.message || 'Failed to save settings', 'error');
         }
     }
 
