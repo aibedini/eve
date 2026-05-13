@@ -145,6 +145,8 @@ SERVER_PASSWORD_KEY="$(generate_fernet_key)"
 ADMIN_USERNAME_DEFAULT="admin"
 ADMIN_USERNAME="$ADMIN_USERNAME_DEFAULT"
 ADMIN_PASS="$(generate_secret 12 alnum)"
+DB_TYPE="postgres"      # default recommendation; set by ask_database_type()
+DATABASE_URL=""         # set by setup_postgresql_for_install() when DB_TYPE=postgres
 
 reset_admin_defaults() {
     ADMIN_USERNAME="$ADMIN_USERNAME_DEFAULT"
@@ -196,6 +198,66 @@ prompt_admin_credentials() {
         ADMIN_PASS="$pass1"
         break
     done
+}
+
+ask_database_type() {
+    echo
+    print_header "Database Selection"
+    echo
+    echo -e "  ${GREEN}1) PostgreSQL${NC}  ${YELLOW}← Recommended by Eve${NC}"
+    echo    "     ✅ Handles concurrent users and high traffic without locking"
+    echo    "     ✅ Safe for production — supports multiple resellers simultaneously"
+    echo    "     ✅ Advanced backup, point-in-time recovery & monitoring tools"
+    echo    "     ✅ Better performance as data grows over time"
+    echo    "     ✅ Future-proof: supports read replicas and connection pooling"
+    echo    "     ⚠  Requires installing PostgreSQL server on this machine"
+    echo
+    echo -e "  ${BLUE}2) SQLite${NC}"
+    echo    "     ✅ Zero configuration — works immediately out of the box"
+    echo    "     ✅ Lightweight, no separate database process needed"
+    echo    "     ✅ Fine for testing or a small single-user setup"
+    echo    "     ⚠  Can lock under concurrent writes (multiple resellers)"
+    echo    "     ⚠  Not recommended for production with heavy traffic"
+    echo
+    echo -e "  ${YELLOW}💡 Our recommendation: PostgreSQL — more reliable and scalable for production.${NC}"
+    echo    "     You can always migrate later via the installer menu (option 7)."
+    echo
+    read -rp "  Use PostgreSQL? [Y/n]: " _db_choice
+    _db_choice="${_db_choice:-Y}"
+    if [[ "$_db_choice" =~ ^[Yy]$ ]]; then
+        DB_TYPE="postgres"
+        print_success "PostgreSQL selected ✓"
+    else
+        DB_TYPE="sqlite"
+        print_warning "SQLite selected — suitable for testing / single-user only"
+    fi
+    echo
+}
+
+setup_postgresql_for_install() {
+    print_header "Installing & Configuring PostgreSQL"
+    apt-get install -y postgresql postgresql-contrib libpq-dev
+
+    # Ensure service is running
+    systemctl enable postgresql >/dev/null 2>&1 || true
+    systemctl start  postgresql >/dev/null 2>&1 || true
+
+    # Regenerate a fresh password for this install
+    DB_PASS="$(generate_secret 20 alnum)"
+
+    print_warning "Creating database '${DB_NAME}' and user '${DB_USER}'..."
+    sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME};"                                                                    || true
+    sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';"                                            || true
+    sudo -u postgres psql -c "ALTER  USER ${DB_USER} WITH PASSWORD '${DB_PASS}';"                                            || true
+    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"                                    || true
+    sudo -u postgres psql -c "ALTER DATABASE ${DB_NAME} OWNER TO ${DB_USER};"                                                || true
+    sudo -u postgres psql -d "${DB_NAME}" -c "ALTER SCHEMA public OWNER TO ${DB_USER};"                                      || true
+    sudo -u postgres psql -d "${DB_NAME}" -c "GRANT USAGE, CREATE ON SCHEMA public TO ${DB_USER};"                          || true
+    sudo -u postgres psql -d "${DB_NAME}" -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES    TO ${DB_USER};" || true
+    sudo -u postgres psql -d "${DB_NAME}" -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${DB_USER};" || true
+
+    DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@localhost/${DB_NAME}"
+    print_success "PostgreSQL ready: ${DB_NAME}"
 }
 
 detect_os() {
@@ -385,6 +447,10 @@ INITIAL_ADMIN_USERNAME=${ADMIN_USERNAME}
 INITIAL_ADMIN_PASSWORD=${ADMIN_PASS}
 API_PORT=${APP_PORT}
 EOF
+    # Append DATABASE_URL only when PostgreSQL was selected
+    if [ -n "${DATABASE_URL:-}" ]; then
+        echo "DATABASE_URL=${DATABASE_URL}" >> "$ENV_FILE"
+    fi
     chown "$APP_USER:$APP_USER" "$ENV_FILE"
     chmod 600 "$ENV_FILE"
     print_success "Environment file created"
@@ -1136,12 +1202,14 @@ show_menu() {
             detect_os
             ask_domain
             prompt_admin_credentials
+            ask_database_type
             update_system
             ensure_python_pkg
             install_dependencies
             create_app_user
             prepare_directories
             clone_or_update_repo
+            [ "$DB_TYPE" = "postgres" ] && setup_postgresql_for_install
             create_env_file
             ensure_server_password_key
             setup_python_env
@@ -1152,6 +1220,7 @@ show_menu() {
             echo -e "URL:      http://${DOMAIN}"
             echo -e "Admin:    ${ADMIN_USERNAME}"
             echo -e "Password: ${ADMIN_PASS}"
+            [ "$DB_TYPE" = "postgres" ] && echo -e "DB URL:   ${DATABASE_URL}"
             echo -e "Logs:     journalctl -u ${SERVICE_NAME} -f"
             ;;
         2)
@@ -1214,12 +1283,14 @@ if [ $# -gt 0 ]; then
     require_root
     detect_os
     reset_admin_defaults
+    ask_database_type
     update_system
     ensure_python_pkg
     install_dependencies
     create_app_user
     prepare_directories
     clone_or_update_repo
+    [ "$DB_TYPE" = "postgres" ] && setup_postgresql_for_install
     create_env_file
     ensure_server_password_key
     setup_python_env
@@ -1230,6 +1301,7 @@ if [ $# -gt 0 ]; then
     echo -e "URL:      http://${DOMAIN}"
     echo -e "Admin:    ${ADMIN_USERNAME}"
     echo -e "Password: ${ADMIN_PASS}"
+    [ "$DB_TYPE" = "postgres" ] && echo -e "DB URL:   ${DATABASE_URL}"
 else
     show_menu
 fi
