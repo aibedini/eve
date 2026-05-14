@@ -1,0 +1,446 @@
+{% extends "base.html" %}
+{% block title %}Traffic Check{% endblock %}
+{% block page_title %}Traffic Check{% endblock %}
+
+{% block content %}
+<style>
+.tc-filter-card { margin-bottom: 16px; }
+
+.tc-period-btns { display:flex; gap:4px; flex-wrap:wrap; }
+.tc-period-btn {
+    padding: 6px 14px; border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: transparent; color: var(--text-secondary);
+    font-size: 0.83rem; cursor: pointer; transition: all 0.15s;
+}
+.tc-period-btn:hover { background: var(--hover-bg); color: var(--text-primary); }
+.tc-period-btn.active { background: var(--accent-color); border-color: var(--accent-color); color: #fff; }
+
+.tc-jalali-picker {
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+.tc-jalali-picker label { font-size: 0.8rem; color: var(--text-secondary); min-width: 30px; }
+.tc-jalali-picker select {
+    padding: 4px 6px; border-radius: 5px;
+    border: 1px solid var(--border-color);
+    background: var(--input-bg, var(--card-bg));
+    color: var(--text-primary); font-size: 0.83rem;
+}
+.tc-jalali-picker select:focus { outline: none; border-color: var(--accent-color); }
+
+.tc-server-card {
+    border: 1px solid var(--border-color); border-radius: 10px;
+    overflow: hidden; margin-bottom: 14px; transition: border-color 0.15s;
+}
+.tc-server-card:hover { border-color: var(--accent-color); }
+
+.tc-server-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 14px 16px; background: var(--card-bg);
+    cursor: pointer; user-select: none; gap: 12px; flex-wrap: wrap;
+}
+.tc-server-left { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tc-server-name {
+    font-weight: 600; font-size: 1rem; color: var(--text-primary);
+    display: flex; align-items: center; gap: 8px;
+}
+.tc-server-meta { font-size: 0.76rem; color: var(--text-secondary); display: flex; gap: 12px; flex-wrap: wrap; }
+.tc-server-stats {
+    display: flex; gap: 16px; font-size: 0.85rem; flex-wrap: wrap; align-items: center;
+}
+.tc-badge-dl  { color: #60a5fa; }
+.tc-badge-ul  { color: #a78bfa; }
+.tc-badge-tot { color: #f59e0b; font-weight: 700; font-size: 0.95rem; }
+.tc-chevron { transition: transform 0.2s; color: var(--text-secondary); flex-shrink: 0; margin-top: 4px; }
+.tc-chevron.open { transform: rotate(180deg); }
+
+.tc-effective-note {
+    margin: 0 16px 10px;
+    padding: 8px 12px; border-radius: 6px;
+    background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.25);
+    font-size: 0.8rem; color: #f59e0b; display: none;
+}
+
+.tc-inbounds { border-top: 1px solid var(--border-color); display: none; }
+.tc-inbounds.open { display: block; }
+
+.tc-inbound-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px 10px 28px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.85rem; gap: 12px; flex-wrap: wrap;
+}
+.tc-inbound-row:last-child { border-bottom: none; }
+.tc-inbound-name { color: var(--text-primary); font-weight: 500; flex: 1; min-width: 120px; }
+.tc-inbound-stats { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.tc-pct { font-size: 0.75rem; color: var(--text-secondary); background: var(--hover-bg); padding: 2px 6px; border-radius: 4px; }
+.tc-client-rows { border-top: 1px solid var(--border-color); }
+.tc-client-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px 8px 44px; border-bottom: 1px solid var(--border-color);
+    font-size: 0.82rem; gap: 10px; flex-wrap: wrap; color: var(--text-secondary);
+}
+.tc-client-row:last-child { border-bottom: none; }
+.tc-email { color: var(--text-primary); font-weight: 500; }
+</style>
+
+<div class="page-header" style="margin-bottom:20px;">
+    <h1 style="font-size:1.4rem;font-weight:700;margin:0;">Traffic Check</h1>
+    <p style="color:var(--text-secondary);font-size:0.88rem;margin:4px 0 0;">Usage per server and inbound — delta calculated from snapshots</p>
+</div>
+
+<!-- Filter Panel -->
+<div class="panel-card tc-filter-card">
+    <div style="display:flex;flex-direction:column;gap:14px;">
+
+        <!-- Period presets -->
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span style="font-size:0.82rem;color:var(--text-secondary);width:56px;flex-shrink:0;">Period</span>
+            <div class="tc-period-btns">
+                <button class="tc-period-btn active" data-period="today"      onclick="setPeriod('today')">Today</button>
+                <button class="tc-period-btn"        data-period="yesterday"  onclick="setPeriod('yesterday')">Yesterday</button>
+                <button class="tc-period-btn"        data-period="7d"         onclick="setPeriod('7d')">7 Days</button>
+                <button class="tc-period-btn"        data-period="30d"        onclick="setPeriod('30d')">30 Days</button>
+                <button class="tc-period-btn"        data-period="custom"     onclick="setPeriod('custom')">Custom…</button>
+            </div>
+        </div>
+
+        <!-- Custom Jalali datetime range (hidden by default) -->
+        <div id="tc-custom-range" style="display:none;flex-direction:column;gap:10px;padding:12px 14px;border-radius:8px;border:1px solid var(--border-color);background:var(--hover-bg,rgba(255,255,255,.03));">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <span style="font-size:0.8rem;color:var(--text-secondary);width:32px;">From</span>
+                <div class="tc-jalali-picker" id="picker-from"></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <span style="font-size:0.8rem;color:var(--text-secondary);width:32px;">To</span>
+                <div class="tc-jalali-picker" id="picker-to"></div>
+            </div>
+        </div>
+
+        <!-- Client email search -->
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span style="font-size:0.82rem;color:var(--text-secondary);width:56px;flex-shrink:0;">Client</span>
+            <input type="text" id="tc-email-input"
+                   placeholder="Filter by account email (leave blank for all)"
+                   class="form-input" style="flex:1;max-width:360px;padding:6px 10px;font-size:0.85rem;"
+                   onkeydown="if(event.key==='Enter') loadTrafficCheck()">
+        </div>
+
+        <!-- Search within results + Run button -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span style="font-size:0.82rem;color:var(--text-secondary);width:56px;flex-shrink:0;">Search</span>
+            <input type="text" id="tc-search"
+                   placeholder="Filter servers / inbounds…"
+                   class="form-input" style="flex:1;max-width:280px;padding:6px 10px;font-size:0.85rem;"
+                   oninput="tcRender()">
+            <button class="btn btn-primary" onclick="loadTrafficCheck()" id="tc-run-btn" style="margin-left:auto;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg>
+                Load
+            </button>
+        </div>
+
+        <!-- Result period label -->
+        <div id="tc-period-label" style="font-size:0.8rem;color:var(--text-secondary);display:none;"></div>
+    </div>
+</div>
+
+<!-- Results -->
+<div id="tc-results">
+    <div style="text-align:center;color:var(--text-secondary);padding:60px 0;font-size:0.9rem;">
+        Select a period and press Load.
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Jalali helpers ──────────────────────────────────────────────
+const J_MONTHS = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+const J_DAYS_IN_MONTH = [31,31,31,31,31,31,30,30,30,30,30,29];
+
+function gregorianToJalali(gy, gm, gd) {
+    const g_d_no = [0,31,59,90,120,151,181,212,243,273,304,334];
+    let gy2 = (gm > 2) ? gy+1 : gy;
+    let g_no = 365*gy + Math.floor((gy2+3)/4) - Math.floor((gy2+99)/100) + Math.floor((gy2+399)/400) - 80 + gd + g_d_no[gm-1];
+    let jy = -1595;
+    let j_no = g_no - (365*jy + Math.floor(jy/4) - Math.floor(jy/100) + Math.floor(jy/400));
+    jy = Math.floor(j_no/365.2422);
+    let j_np = Math.floor(jy*365.2422);
+    if (j_no - j_np >= 366) { jy++; j_np = Math.floor(jy*365.2422); }
+    j_no -= j_np;
+    const j_mi = [31,31,31,31,31,31,30,30,30,30,30,29];
+    let jm = 0;
+    for (; jm < 12 && j_no > j_mi[jm]; jm++) j_no -= j_mi[jm];
+    return [jy+979, jm+1, j_no+1];
+}
+
+function jalaliToGregorian(jy, jm, jd) {
+    jy -= 979; jm--; jd--;
+    let j_day_no = 365*jy + Math.floor((jy/4)) + j_day_no_of_month(jm) + jd;
+    function j_day_no_of_month(m) {
+        let n = 0;
+        for (let i = 0; i < m; i++) n += J_DAYS_IN_MONTH[i];
+        return n;
+    }
+    let g_day_no = j_day_no + 79;
+    let gy = 1600 + 400*Math.floor(g_day_no/146097); g_day_no %= 146097;
+    let leap = true;
+    if (g_day_no >= 36525) { g_day_no--; gy += 100*Math.floor(g_day_no/36524); g_day_no %= 36524; if (g_day_no >= 365) g_day_no++; else leap = false; }
+    gy += 4*Math.floor(g_day_no/1461); g_day_no %= 1461;
+    if (g_day_no >= 366) { leap = false; g_day_no--; gy += Math.floor(g_day_no/365); g_day_no %= 365; }
+    const g_days_in_month = [31, (leap?29:28), 31,30,31,30,31,31,30,31,30,31];
+    let gm = 0;
+    for (; gm < 12 && g_day_no >= g_days_in_month[gm]; gm++) g_day_no -= g_days_in_month[gm];
+    return [gy, gm+1, g_day_no+1];
+}
+
+function jalaliFromUtcIso(isoStr) {
+    if (!isoStr) return '—';
+    try {
+        const d = new Date(isoStr);
+        const teh = new Date(d.getTime() + 3.5*3600000);
+        const [jy, jm, jd] = gregorianToJalali(teh.getUTCFullYear(), teh.getUTCMonth()+1, teh.getUTCDate());
+        const hh = String(teh.getUTCHours()).padStart(2,'0');
+        const mm = String(teh.getUTCMinutes()).padStart(2,'0');
+        return `${jd} ${J_MONTHS[jm-1]} ${jy}، ${hh}:${mm}`;
+    } catch(e) { return isoStr; }
+}
+
+function jalaliDateOnly(isoStr) {
+    if (!isoStr) return '—';
+    try {
+        const d = new Date(isoStr);
+        const teh = new Date(d.getTime() + 3.5*3600000);
+        const [jy, jm, jd] = gregorianToJalali(teh.getUTCFullYear(), teh.getUTCMonth()+1, teh.getUTCDate());
+        return `${jd} ${J_MONTHS[jm-1]} ${jy}`;
+    } catch(e) { return isoStr; }
+}
+
+// ── Jalali datetime picker builder ─────────────────────────────
+function buildPicker(containerId, defaultIsFrom) {
+    const now = new Date(Date.now() + 3.5*3600000);
+    const [jy, jm, jd] = gregorianToJalali(now.getUTCFullYear(), now.getUTCMonth()+1, now.getUTCDate());
+    const curH = now.getUTCHours(), curM = now.getUTCMinutes();
+
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    // Year select (1400–1410)
+    let yHtml = `<select id="${containerId}-y" onchange="updateDayOptions('${containerId}')">`;
+    for (let y = 1400; y <= 1410; y++) yHtml += `<option value="${y}" ${y===jy?'selected':''}>${y}</option>`;
+    yHtml += '</select>';
+
+    // Month select
+    let mHtml = `<select id="${containerId}-m" onchange="updateDayOptions('${containerId}')">`;
+    J_MONTHS.forEach((mn, i) => mHtml += `<option value="${i+1}" ${i+1===jm?'selected':''}>${mn}</option>`);
+    mHtml += '</select>';
+
+    // Day select (1–31 initial, will be trimmed by updateDayOptions)
+    let dHtml = `<select id="${containerId}-d">`;
+    for (let d = 1; d <= J_DAYS_IN_MONTH[jm-1]; d++) dHtml += `<option value="${d}" ${d===(defaultIsFrom?1:jd)?'selected':''}>${d}</option>`;
+    dHtml += '</select>';
+
+    // Hour select (0-23)
+    let hHtml = `<select id="${containerId}-h">`;
+    for (let h = 0; h < 24; h++) hHtml += `<option value="${h}" ${h===(defaultIsFrom?0:curH)?'selected':''}>${String(h).padStart(2,'0')}</option>`;
+    hHtml += '</select>';
+
+    // Minute select (0,15,30,45)
+    let minHtml = `<select id="${containerId}-min">`;
+    for (let mn = 0; mn < 60; mn += 5) minHtml += `<option value="${mn}" ${mn===(defaultIsFrom?0:Math.round(curM/5)*5%60)?'selected':''}>${String(mn).padStart(2,'0')}</option>`;
+    minHtml += '</select>';
+
+    container.innerHTML = `
+        <span style="font-size:0.75rem;color:var(--text-secondary);">سال</span>${yHtml}
+        <span style="font-size:0.75rem;color:var(--text-secondary);">ماه</span>${mHtml}
+        <span style="font-size:0.75rem;color:var(--text-secondary);">روز</span>${dHtml}
+        <span style="font-size:0.75rem;color:var(--text-secondary);">ساعت</span>${hHtml}
+        <span style="font-size:0.75rem;color:var(--text-secondary);">دقیقه</span>${minHtml}`;
+}
+
+function updateDayOptions(containerId) {
+    const y = parseInt(document.getElementById(`${containerId}-y`)?.value || 1405);
+    const m = parseInt(document.getElementById(`${containerId}-m`)?.value || 1);
+    const daysSel = document.getElementById(`${containerId}-d`);
+    if (!daysSel) return;
+    const curD = parseInt(daysSel.value || 1);
+    let days = J_DAYS_IN_MONTH[m-1];
+    // Adjust last month for leap year (simplified: if year%4==1 in Jalali, last month=30)
+    if (m === 12 && (y % 4 === 1 || y % 4 === 2)) days = 30;
+    daysSel.innerHTML = '';
+    for (let d = 1; d <= days; d++) daysSel.innerHTML += `<option value="${d}" ${d===Math.min(curD,days)?'selected':''}>${d}</option>`;
+}
+
+function pickerToUtcMs(containerId) {
+    const y = parseInt(document.getElementById(`${containerId}-y`)?.value || 1405);
+    const m = parseInt(document.getElementById(`${containerId}-m`)?.value || 1);
+    const d = parseInt(document.getElementById(`${containerId}-d`)?.value || 1);
+    const h = parseInt(document.getElementById(`${containerId}-h`)?.value || 0);
+    const mn = parseInt(document.getElementById(`${containerId}-min`)?.value || 0);
+    const [gy, gm, gd] = jalaliToGregorian(y, m, d);
+    // Tehran = UTC+3:30, so subtract 3:30 to get UTC
+    const tehMs = Date.UTC(gy, gm-1, gd, h, mn, 0, 0);
+    return tehMs - (3.5 * 3600000);
+}
+
+// ── Period management ───────────────────────────────────────────
+let _period = 'today';
+
+function setPeriod(p) {
+    _period = p;
+    document.querySelectorAll('.tc-period-btn').forEach(b => b.classList.toggle('active', b.dataset.period === p));
+    const custom = document.getElementById('tc-custom-range');
+    if (p === 'custom') {
+        custom.style.display = 'flex';
+        if (!document.getElementById('picker-from-y')) {
+            buildPicker('picker-from', true);
+            buildPicker('picker-to', false);
+        }
+    } else {
+        custom.style.display = 'none';
+        loadTrafficCheck();
+    }
+}
+
+// ── Formatting ─────────────────────────────────────────────────
+function fmtBytes(b) {
+    if (!b || b <= 0) return '0 B';
+    const u = ['B','KB','MB','GB','TB']; let i = 0, v = b;
+    while (v >= 1024 && i < 4) { v /= 1024; i++; }
+    return `${v.toFixed(2)} ${u[i]}`;
+}
+
+function esc(s) {
+    if (!s) return '';
+    const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+}
+
+// ── Main load ───────────────────────────────────────────────────
+let _tcData = null;
+
+async function loadTrafficCheck() {
+    const results = document.getElementById('tc-results');
+    const runBtn = document.getElementById('tc-run-btn');
+    const label = document.getElementById('tc-period-label');
+    results.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:60px 0;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;display:inline-block;vertical-align:middle;margin-right:8px;"><path d="M21 12a9 9 0 1 1-6-8.5"/></svg>
+        Loading…</div>`;
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Loading…'; }
+
+    let url = `/api/traffic-check?period=${_period}`;
+    if (_period === 'custom') {
+        const fromMs = pickerToUtcMs('picker-from');
+        const toMs   = pickerToUtcMs('picker-to');
+        url += `&from_ts=${fromMs}&to_ts=${toMs}`;
+    }
+    const email = (document.getElementById('tc-email-input')?.value || '').trim();
+    if (email) url += `&sub_email=${encodeURIComponent(email)}`;
+
+    try {
+        const res = await fetch(url);
+        const d = await res.json();
+        if (!d.success) {
+            results.innerHTML = `<div style="color:#ef4444;padding:20px;">Error: ${esc(d.error)}</div>`;
+            return;
+        }
+        _tcData = d;
+        label.style.display = 'block';
+        label.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            ${jalaliFromUtcIso(d.from)} ← → ${jalaliFromUtcIso(d.to)}
+            ${d.sub_email ? `&nbsp;·&nbsp; <span style="color:#60a5fa;">client: ${esc(d.sub_email)}</span>` : ''}`;
+        tcRender();
+    } catch(e) {
+        results.innerHTML = `<div style="color:#ef4444;padding:20px;">Network error: ${esc(e.message)}</div>`;
+    } finally {
+        if (runBtn) { runBtn.disabled = false; runBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg> Load`; }
+    }
+}
+
+// ── Render ──────────────────────────────────────────────────────
+function tcRender() {
+    if (!_tcData) return;
+    const results = document.getElementById('tc-results');
+    const q = (document.getElementById('tc-search')?.value || '').toLowerCase().trim();
+    const requestedFrom = new Date(_tcData.from);
+
+    const filtered = (_tcData.servers || []).map(srv => {
+        const inbounds = (srv.inbounds || []).filter(ib =>
+            !q || srv.server_name.toLowerCase().includes(q) || (ib.inbound_tag||'').toLowerCase().includes(q)
+        );
+        return {...srv, inbounds};
+    }).filter(srv => !q || srv.server_name.toLowerCase().includes(q) || srv.inbounds.length > 0);
+
+    if (!filtered.length) {
+        results.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:60px 0;">No traffic data for this period.</div>`;
+        return;
+    }
+
+    results.innerHTML = filtered.map((srv, si) => {
+        // Effective from note (Task 3)
+        let effectiveNote = '';
+        if (srv.effective_from) {
+            const effDate = new Date(srv.effective_from);
+            if (effDate > requestedFrom) {
+                effectiveNote = `<div class="tc-effective-note" style="display:block;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    Report based on snapshots from <strong>${jalaliFromUtcIso(srv.effective_from)}</strong> — no older data available for this server.
+                </div>`;
+            }
+        }
+
+        // First snapshot date for header (Task 6)
+        const firstSnapLabel = srv.first_snapshot_at
+            ? `<span>اولین snapshot: ${jalaliFromUtcIso(srv.first_snapshot_at)}</span>`
+            : '';
+
+        const ibRows = srv.inbounds.map(ib => {
+            const pctOfSrv = srv.total > 0 ? ((ib.total / srv.total) * 100).toFixed(1) : 0;
+            return `<div class="tc-inbound-row">
+                <span class="tc-inbound-name">${esc(ib.inbound_tag)}</span>
+                <div class="tc-inbound-stats">
+                    <span class="tc-badge-dl">DL ${fmtBytes(ib.download)}</span>
+                    <span class="tc-badge-ul">UL ${fmtBytes(ib.upload)}</span>
+                    <span style="color:#f59e0b;font-weight:600;">${fmtBytes(ib.total)}</span>
+                    <span class="tc-pct">${pctOfSrv}% of server</span>
+                    <span style="color:var(--text-secondary);font-size:0.78rem;">${ib.clients} client${ib.clients!==1?'s':''}</span>
+                </div>
+            </div>`;
+        }).join('');
+
+        return `<div class="tc-server-card">
+            <div class="tc-server-header" onclick="tcToggle(${si})">
+                <div class="tc-server-left">
+                    <div class="tc-server-name">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                        ${esc(srv.server_name)}
+                        <span style="font-size:0.74rem;color:var(--text-secondary);font-weight:400;">${srv.inbounds.length} inbound${srv.inbounds.length!==1?'s':''}</span>
+                    </div>
+                    <div class="tc-server-meta">
+                        ${firstSnapLabel}
+                    </div>
+                </div>
+                <div class="tc-server-stats">
+                    <span class="tc-badge-dl">DL ${fmtBytes(srv.download)}</span>
+                    <span class="tc-badge-ul">UL ${fmtBytes(srv.upload)}</span>
+                    <span class="tc-badge-tot">${fmtBytes(srv.total)}</span>
+                </div>
+                <svg class="tc-chevron open" id="tc-chev-${si}" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            ${effectiveNote}
+            <div class="tc-inbounds open" id="tc-ibs-${si}">${ibRows}</div>
+        </div>`;
+    }).join('');
+}
+
+function tcToggle(i) {
+    const el = document.getElementById(`tc-ibs-${i}`);
+    const ch = document.getElementById(`tc-chev-${i}`);
+    if (el) { el.classList.toggle('open'); ch?.classList.toggle('open'); }
+}
+
+// Auto-load today on page load
+document.addEventListener('DOMContentLoaded', () => loadTrafficCheck());
+</script>
+{% endblock %}

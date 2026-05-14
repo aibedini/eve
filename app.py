@@ -12666,15 +12666,26 @@ def snapshot_progress():
     return jsonify(_read_snap_progress())
 
 
+@app.route('/traffic-check')
+@login_required
+def traffic_check_page():
+    return render_template('traffic_check.html',
+                           admin_username=session.get('admin_username'),
+                           is_superadmin=session.get('is_superadmin', False),
+                           role=session.get('role', 'admin'))
+
+
 @app.route('/api/traffic-check', methods=['GET'])
-@superadmin_required
+@login_required
 def traffic_check():
-    """Aggregate snapshot traffic deltas by server → inbound for a given period."""
+    """Aggregate snapshot traffic deltas by server → inbound for a given period.
+    Optional ?sub_email=x filters to a single client's usage."""
     _TEHRAN_OFFSET = timedelta(hours=3, minutes=30)
 
     period = (request.args.get('period') or 'today').strip().lower()
     from_ts = request.args.get('from_ts')
     to_ts = request.args.get('to_ts')
+    sub_email = (request.args.get('sub_email') or '').strip().lower()
 
     now_utc = datetime.utcnow()
     now_teh = now_utc + _TEHRAN_OFFSET
@@ -12700,41 +12711,59 @@ def traffic_check():
         from_dt = now_utc - timedelta(days=30)
         to_dt = now_utc
     else:
-        from_dt = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        from_dt = now_teh.replace(hour=0, minute=0, second=0, microsecond=0) - _TEHRAN_OFFSET
         to_dt = now_utc
 
     try:
-        # Fetch all servers for name lookup
         servers_map = {s.id: s.name for s in Server.query.all()}
 
-        # For each (server_id, inbound_tag, sub_id): get first snap before/at from_dt and last snap at/before to_dt
-        # Use two subqueries then merge
-        from sqlalchemy import func as _func
+        # Optional: filter by email → find matching sub_ids from cache
+        email_sub_ids = None
+        email_resolved_name = None
+        if sub_email:
+            email_sub_ids = set()
+            for _inb in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                for _cli in _inb.get('clients', []):
+                    if (_cli.get('email') or '').strip().lower() == sub_email:
+                        _sid = str(_cli.get('subId') or _cli.get('id') or '').strip()
+                        if _sid:
+                            email_sub_ids.add(_sid)
+                            email_resolved_name = (_cli.get('email') or sub_email)
+            if not email_sub_ids:
+                return jsonify({'success': True, 'servers': [], 'period': period,
+                                'from': from_dt.isoformat() + 'Z', 'to': to_dt.isoformat() + 'Z',
+                                'message': f'No client found with email: {sub_email}'})
 
-        # All sub_ids active in the period
-        active_subs = (db.session.query(
+        # All (server_id, inbound_tag, sub_id) combos with data at or before to_dt
+        q = (db.session.query(
                 UsageSnapshot.server_id,
                 UsageSnapshot.inbound_tag,
                 UsageSnapshot.sub_id
             )
             .filter(UsageSnapshot.recorded_at <= to_dt)
-            .distinct()
-            .all()
         )
+        if email_sub_ids is not None:
+            q = q.filter(UsageSnapshot.sub_id.in_(list(email_sub_ids)))
+        active_subs = q.distinct().all()
 
-        result_map = {}  # server_id -> {inbound_tag -> {dl, ul, total, clients}}
+        # Aggregate per (server_id, inbound_tag)
+        result_map = {}
+        # Track first snapshot time per server (for Task 6 display)
+        server_first_snap = {}
+        # Track effective_from per server (may differ from from_dt if no baseline)
+        server_effective_from = {}
 
         for server_id, inbound_tag, sub_id in active_subs:
             tag = inbound_tag or '(unknown)'
 
-            # Latest snapshot at or before from_dt (baseline)
+            # Latest snapshot strictly before the period (baseline)
             baseline = (UsageSnapshot.query
                 .filter_by(server_id=server_id, sub_id=sub_id)
                 .filter(UsageSnapshot.recorded_at <= from_dt)
                 .order_by(UsageSnapshot.recorded_at.desc())
                 .first())
 
-            # Latest snapshot at or before to_dt (endpoint)
+            # Latest snapshot at or before to_dt (endpoint value)
             endpoint = (UsageSnapshot.query
                 .filter_by(server_id=server_id, sub_id=sub_id)
                 .filter(UsageSnapshot.recorded_at <= to_dt)
@@ -12744,12 +12773,25 @@ def traffic_check():
             if not endpoint:
                 continue
 
+            # If no baseline before the period, use the earliest snapshot in the period as reference
+            # (so delta = usage since first snapshot, not since account creation)
+            effective_baseline_at = from_dt
+            if baseline is None:
+                first_in_range = (UsageSnapshot.query
+                    .filter_by(server_id=server_id, sub_id=sub_id)
+                    .filter(UsageSnapshot.recorded_at >= from_dt, UsageSnapshot.recorded_at <= to_dt)
+                    .order_by(UsageSnapshot.recorded_at.asc())
+                    .first())
+                if first_in_range:
+                    baseline = first_in_range
+                    effective_baseline_at = first_in_range.recorded_at
+
             base_dl = baseline.download_bytes if baseline else 0
             base_ul = baseline.upload_bytes if baseline else 0
             end_dl = endpoint.download_bytes
             end_ul = endpoint.upload_bytes
 
-            # Handle traffic reset (counter went backwards = renewal/reset)
+            # Handle traffic reset (counter went backwards = renewal)
             delta_dl = end_dl - base_dl if end_dl >= base_dl else end_dl
             delta_ul = end_ul - base_ul if end_ul >= base_ul else end_ul
             delta_total = delta_dl + delta_ul
@@ -12757,15 +12799,37 @@ def traffic_check():
             if delta_total <= 0:
                 continue
 
+            # Track first-ever snapshot for this server (for header display)
+            all_first = (UsageSnapshot.query
+                .filter_by(server_id=server_id, sub_id=sub_id)
+                .order_by(UsageSnapshot.recorded_at.asc())
+                .with_entities(UsageSnapshot.recorded_at)
+                .first())
+            if all_first:
+                cur = server_first_snap.get(server_id)
+                if cur is None or all_first.recorded_at < cur:
+                    server_first_snap[server_id] = all_first.recorded_at
+
+            # Track effective_from (earliest baseline used across all sub_ids in this server)
+            cur_eff = server_effective_from.get(server_id)
+            if cur_eff is None or effective_baseline_at < cur_eff:
+                server_effective_from[server_id] = effective_baseline_at
+
             if server_id not in result_map:
                 result_map[server_id] = {}
             if tag not in result_map[server_id]:
-                result_map[server_id][tag] = {'download': 0, 'upload': 0, 'total': 0, 'clients': 0}
+                result_map[server_id][tag] = {'download': 0, 'upload': 0, 'total': 0, 'clients': 0,
+                                               'first_snap_at': None}
 
             result_map[server_id][tag]['download'] += delta_dl
             result_map[server_id][tag]['upload'] += delta_ul
             result_map[server_id][tag]['total'] += delta_total
             result_map[server_id][tag]['clients'] += 1
+            # Track earliest snapshot for this inbound
+            if baseline and baseline.recorded_at:
+                ib_first = result_map[server_id][tag]['first_snap_at']
+                if ib_first is None or baseline.recorded_at < ib_first:
+                    result_map[server_id][tag]['first_snap_at'] = baseline.recorded_at
 
         servers_out = []
         for server_id, inbounds_map in sorted(result_map.items(), key=lambda x: -sum(v['total'] for v in x[1].values())):
@@ -12776,6 +12840,7 @@ def traffic_check():
                     'upload': data['upload'],
                     'total': data['total'],
                     'clients': data['clients'],
+                    'first_snap_at': (data['first_snap_at'].isoformat() + 'Z') if data['first_snap_at'] else None,
                 }
                 for tag, data in inbounds_map.items()
             ], key=lambda x: -x['total'])
@@ -12783,6 +12848,8 @@ def traffic_check():
             srv_total = sum(i['total'] for i in inbounds_out)
             srv_dl = sum(i['download'] for i in inbounds_out)
             srv_ul = sum(i['upload'] for i in inbounds_out)
+            first_at = server_first_snap.get(server_id)
+            eff_from = server_effective_from.get(server_id)
 
             servers_out.append({
                 'server_id': server_id,
@@ -12791,6 +12858,8 @@ def traffic_check():
                 'download': srv_dl,
                 'upload': srv_ul,
                 'inbounds': inbounds_out,
+                'first_snapshot_at': (first_at.isoformat() + 'Z') if first_at else None,
+                'effective_from': (eff_from.isoformat() + 'Z') if eff_from else None,
             })
 
         return jsonify({
@@ -12799,6 +12868,8 @@ def traffic_check():
             'from': from_dt.isoformat() + 'Z',
             'to': to_dt.isoformat() + 'Z',
             'servers': servers_out,
+            'sub_email': sub_email or None,
+            'email_resolved_name': email_resolved_name,
         })
     except Exception as e:
         app.logger.exception("traffic_check error")
