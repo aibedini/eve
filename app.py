@@ -12715,7 +12715,63 @@ def traffic_check():
         to_dt = now_utc
 
     try:
-        servers_map = {s.id: s.name for s in Server.query.all()}
+        # RBAC: determine what servers/clients this user is allowed to see
+        _rbac_role = session.get('role', 'admin')
+        _rbac_is_superadmin = session.get('is_superadmin', False)
+        _rbac_admin_id = session.get('admin_id')
+        _rbac_server_ids = None  # None = no restriction (admin/superadmin)
+        _rbac_sub_ids = None     # None = no restriction
+
+        if not _rbac_is_superadmin and _rbac_role == 'reseller':
+            _rbac_user = Admin.query.get(_rbac_admin_id)
+            if not _rbac_user:
+                return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+            _allowed_map, _assignments = get_reseller_access_maps(_rbac_user)
+
+            if _allowed_map != '*':
+                _rbac_server_ids = set()
+                for _sk in list(_allowed_map.keys()) + list(_assignments.keys()):
+                    try:
+                        _rbac_server_ids.add(int(_sk))
+                    except Exception:
+                        pass
+
+            _ownerships = ClientOwnership.query.filter_by(reseller_id=_rbac_admin_id).all()
+            _owned_emails = {(o.client_email or '').lower() for o in _ownerships if o.client_email}
+            _owned_uuids = {(o.client_uuid or '').lower() for o in _ownerships if o.client_uuid}
+            _rbac_sub_ids = set()
+            for _inb in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                _inb_srv_id = _inb.get('server_id')
+                if _rbac_server_ids is not None and _inb_srv_id not in _rbac_server_ids:
+                    continue
+                _inb_id_val = None
+                try:
+                    _inb_id_val = int(_inb.get('id'))
+                except Exception:
+                    pass
+                if _allowed_map != '*' and not is_inbound_accessible(_inb_srv_id, _inb_id_val, _allowed_map, _assignments):
+                    continue
+                for _cli in _inb.get('clients', []):
+                    _email = (_cli.get('email') or '').lower()
+                    _uuid = (_cli.get('id') or '').lower()
+                    if _email in _owned_emails or _uuid in _owned_uuids:
+                        _sid = str(_cli.get('subId') or _cli.get('id') or '').strip()
+                        if _sid:
+                            _rbac_sub_ids.add(_sid)
+
+        servers_map = {s.id: s.name for s in Server.query.all()
+                       if _rbac_server_ids is None or s.id in _rbac_server_ids}
+
+        # Build inbound port lookup from live cache
+        _inbound_port_map = {}  # {server_id: {remark: {'port': str, 'id': str}}}
+        for _inb in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+            _srv_id = _inb.get('server_id')
+            if _srv_id is None:
+                continue
+            _remark = (_inb.get('remark') or '').strip()
+            _port = str(_inb.get('port') or '')
+            _inb_id = str(_inb.get('id') or '')
+            _inbound_port_map.setdefault(_srv_id, {})[_remark] = {'port': _port, 'id': _inb_id}
 
         # Optional: filter by email → find matching sub_ids from cache
         email_sub_ids = None
@@ -12723,10 +12779,15 @@ def traffic_check():
         if sub_email:
             email_sub_ids = set()
             for _inb in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                _inb_srv_id = _inb.get('server_id')
+                if _rbac_server_ids is not None and _inb_srv_id not in _rbac_server_ids:
+                    continue
                 for _cli in _inb.get('clients', []):
                     if (_cli.get('email') or '').strip().lower() == sub_email:
                         _sid = str(_cli.get('subId') or _cli.get('id') or '').strip()
                         if _sid:
+                            if _rbac_sub_ids is not None and _sid not in _rbac_sub_ids:
+                                continue
                             email_sub_ids.add(_sid)
                             email_resolved_name = (_cli.get('email') or sub_email)
             if not email_sub_ids:
@@ -12744,6 +12805,10 @@ def traffic_check():
         )
         if email_sub_ids is not None:
             q = q.filter(UsageSnapshot.sub_id.in_(list(email_sub_ids)))
+        elif _rbac_sub_ids is not None:
+            q = q.filter(UsageSnapshot.sub_id.in_(list(_rbac_sub_ids)))
+        if _rbac_server_ids is not None:
+            q = q.filter(UsageSnapshot.server_id.in_(list(_rbac_server_ids)))
         active_subs = q.distinct().all()
 
         # Aggregate per (server_id, inbound_tag)
@@ -12818,8 +12883,13 @@ def traffic_check():
             if server_id not in result_map:
                 result_map[server_id] = {}
             if tag not in result_map[server_id]:
-                result_map[server_id][tag] = {'download': 0, 'upload': 0, 'total': 0, 'clients': 0,
-                                               'first_snap_at': None}
+                _port_info = _inbound_port_map.get(server_id, {}).get(inbound_tag or '', {})
+                result_map[server_id][tag] = {
+                    'download': 0, 'upload': 0, 'total': 0, 'clients': 0,
+                    'first_snap_at': None,
+                    'port': _port_info.get('port', ''),
+                    'inbound_id': _port_info.get('id', ''),
+                }
 
             result_map[server_id][tag]['download'] += delta_dl
             result_map[server_id][tag]['upload'] += delta_ul
@@ -12836,6 +12906,8 @@ def traffic_check():
             inbounds_out = sorted([
                 {
                     'inbound_tag': tag,
+                    'port': data['port'],
+                    'inbound_id': data['inbound_id'],
                     'download': data['download'],
                     'upload': data['upload'],
                     'total': data['total'],
