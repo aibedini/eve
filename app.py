@@ -86,7 +86,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5115,9 +5115,15 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
             client_stats = inbound.get('clientStats', [])
             
             processed_clients = []
+            seen_client_keys = set()
             for client in clients:
                 email = client.get('email', '')
                 email_l = (str(email or '').strip().lower())
+                client_uuid = (client.get('id') or '').strip().lower()
+                dedup_key = (email_l, client_uuid)
+                if dedup_key != ('', '') and dedup_key in seen_client_keys:
+                    continue
+                seen_client_keys.add(dedup_key)
                 
                 if user.role == 'reseller' and email.lower() not in owned_emails:
                     continue 

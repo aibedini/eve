@@ -526,7 +526,7 @@
             <div id="reseller-fields">
                 <div class="form-group">
                     <label>Credit (Amount)</label>
-                    <input type="number" id="admin-credit" placeholder="0" value="0">
+                    <input type="text" id="admin-credit" placeholder="0" value="0" inputmode="numeric" oninput="formatSignedNumberInput(this)">
                     <small style="color: var(--text-secondary);">Initial credit for new user (can be negative)</small>
                 </div>
 
@@ -1255,7 +1255,7 @@
         document.getElementById('admin-support-whatsapp').value = admin.support_whatsapp || '';
         document.getElementById('admin-channel-telegram').value = admin.channel_telegram || '';
         document.getElementById('admin-channel-whatsapp').value = admin.channel_whatsapp || '';
-        document.getElementById('admin-credit').value = admin.credit || 0;
+        document.getElementById('admin-credit').value = Number(admin.credit || 0).toLocaleString('en-US');
         document.getElementById('admin-allow-negative').checked = !!admin.allow_negative_credit;
         document.getElementById('admin-negative-limit').value = (admin.negative_credit_limit || 0).toLocaleString();
         toggleNegativeLimitField();
@@ -1376,7 +1376,7 @@
             allowedServers = normalizeAllowedInput(allowedServers);
         }
 
-        const creditRaw = document.getElementById('admin-credit').value;
+        const creditRaw = document.getElementById('admin-credit').value.replace(/,/g, '');
         const negLimitRaw = document.getElementById('admin-negative-limit').value.replace(/,/g, '');
         const costDayRaw = document.getElementById('admin-cost-day').value.replace(/,/g, '');
         const costGbRaw = document.getElementById('admin-cost-gb').value.replace(/,/g, '');
