@@ -1105,6 +1105,7 @@
     let currentClientRemainingVolume = '';
     const BASE_COST_DAY = {{ base_cost_day|default(0) }};
     const BASE_COST_GB = {{ base_cost_gb|default(0) }};
+    const BASE_COST_DAY_UNLIMITED = {{ base_cost_day_unlimited|default(0) }};
 
     function showDashboardSkeleton(count = 3) {
         const container = document.getElementById('inbounds-container');
@@ -3196,8 +3197,8 @@
         let vol = parseInt(document.getElementById('renew-custom-volume').value) || 0;
         if (days < 0) days = 0;
         if (vol < 0) vol = 0;
-        // 0 days or 0 volume means unlimited (no charge for unlimited)
-        return (days * BASE_COST_DAY) + (vol * BASE_COST_GB);
+        const daysCost = days === 0 ? BASE_COST_DAY_UNLIMITED : days * BASE_COST_DAY;
+        return daysCost + (vol * BASE_COST_GB);
     }
 
     function calculateRenewCustomPrice() {
@@ -3223,8 +3224,8 @@
         let vol = parseInt(document.getElementById('custom-volume').value) || 0;
         if (days < 0) days = 0;
         if (vol < 0) vol = 0;
-        // BASE_COST_DAY and BASE_COST_GB are now user-specific (calculated in backend)
-        return (days * BASE_COST_DAY) + (vol * BASE_COST_GB);
+        const daysCost = days === 0 ? BASE_COST_DAY_UNLIMITED : days * BASE_COST_DAY;
+        return daysCost + (vol * BASE_COST_GB);
     }
 
     function calculateCustomPrice() {
@@ -3416,7 +3417,7 @@
         } else {
             const customDays = parseInt(document.getElementById('custom-days').value) || 0;
             const customVolume = parseInt(document.getElementById('custom-volume').value) || 0;
-            if (customDays <= 0) return showToast('Duration must be greater than 0', 'error');
+            if (customDays < 0 || customVolume < 0) return showToast('Duration and volume cannot be negative', 'error');
             payload.days = customDays;
             payload.volume = customVolume;
         }

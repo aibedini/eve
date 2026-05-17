@@ -76,7 +76,7 @@
                     </div>
                     <button class="btn btn-primary" onclick="saveBaseConfig()">Save</button>
                 </div>
-                <div style="padding: 0 20px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div style="padding: 0 20px 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
                     <div class="form-group">
                         <label>Price per GB (Toman)</label>
                         <input type="text" id="conf-cost-gb" class="form-input" value="{{ '{:,}'.format(base_cost_gb) }}" oninput="formatNumberInput(this)">
@@ -84,6 +84,11 @@
                     <div class="form-group">
                         <label>Price per Day (Toman)</label>
                         <input type="text" id="conf-cost-day" class="form-input" value="{{ '{:,}'.format(base_cost_day) }}" oninput="formatNumberInput(this)">
+                    </div>
+                    <div class="form-group">
+                        <label>Unlimited Days — Flat Fee (Toman)</label>
+                        <input type="text" id="conf-cost-day-unlimited" class="form-input" value="{{ '{:,}'.format(base_cost_day_unlimited) }}" oninput="formatNumberInput(this)">
+                        <small style="color: var(--text-secondary);">Charged once when days = 0 (∞)</small>
                     </div>
                 </div>
             </div>
@@ -640,8 +645,9 @@ async function toggleResellerPkg(pkgId, resId, currentlyAssigned) {
 /* ─── Base Config ──────────────────────────────────────────── */
 async function saveBaseConfig() {
     const data = {
-        cost_per_gb:  unformatNumber(document.getElementById('conf-cost-gb').value),
-        cost_per_day: unformatNumber(document.getElementById('conf-cost-day').value)
+        cost_per_gb:           unformatNumber(document.getElementById('conf-cost-gb').value),
+        cost_per_day:          unformatNumber(document.getElementById('conf-cost-day').value),
+        cost_per_day_unlimited: unformatNumber(document.getElementById('conf-cost-day-unlimited').value)
     };
     try {
         const res = await fetch('/admin/config', {

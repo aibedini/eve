@@ -5333,16 +5333,18 @@ def dashboard():
     
     base_cost_day = get_config('cost_per_day', 0)
     base_cost_gb = get_config('cost_per_gb', 0)
-    
+    base_cost_day_unlimited = get_config('cost_per_day_unlimited', 0)
+
     # Calculate user-specific costs
     user_cost_day = calculate_reseller_price(user, base_price=base_cost_day, cost_type='day')
     user_cost_gb = calculate_reseller_price(user, base_price=base_cost_gb, cost_type='gb')
-    
+    user_cost_day_unlimited = calculate_reseller_price(user, base_price=base_cost_day_unlimited, cost_type='day')
+
     # Get active bank cards for payment forms
     bank_cards = BankCard.query.filter_by(is_active=True).all()
-        
-    return render_template('dashboard.html', 
-                         servers=servers, 
+
+    return render_template('dashboard.html',
+                         servers=servers,
                          server_count=len(servers),
                          admin_username=user.username,
                          is_superadmin=(user.role == 'superadmin' or user.is_superadmin),
@@ -5350,6 +5352,7 @@ def dashboard():
                          credit=user.credit,
                          base_cost_day=user_cost_day,
                          base_cost_gb=user_cost_gb,
+                         base_cost_day_unlimited=user_cost_day_unlimited,
                          bank_cards=bank_cards)
 
 @app.route('/servers')
@@ -8422,15 +8425,22 @@ def add_client(server_id, inbound_id):
     else:
         days = int(data.get('days', 30))
         volume_gb = int(data.get('volume', 0))
-        
+
         base_cost_day = get_config('cost_per_day', 0)
         base_cost_gb = get_config('cost_per_gb', 0)
-        
+        base_cost_day_unlimited = get_config('cost_per_day_unlimited', 0)
+
         user_cost_day = calculate_reseller_price(user, base_price=base_cost_day, cost_type='day')
         user_cost_gb = calculate_reseller_price(user, base_price=base_cost_gb, cost_type='gb')
-        
-        price = (days * user_cost_day) + (volume_gb * user_cost_gb)
-        description = f"Custom Plan: {days} Days, {volume_gb} GB - {email}"
+        user_cost_day_unlimited = calculate_reseller_price(user, base_price=base_cost_day_unlimited, cost_type='day')
+
+        if days == 0:
+            price = user_cost_day_unlimited + (volume_gb * user_cost_gb)
+        else:
+            price = (days * user_cost_day) + (volume_gb * user_cost_gb)
+        days_label = 'Unlimited' if days == 0 else str(days)
+        vol_label  = 'Unlimited' if volume_gb == 0 else str(volume_gb)
+        description = f"Custom Plan: {days_label} Days, {vol_label} GB - {email}"
 
     if is_free:
         price = 0
@@ -8849,7 +8859,14 @@ def _calculate_minimum_price(volume_gb, days, reseller_id=None, server_id=None):
         except Exception:
             cpd = 0
 
-    min_price = int(volume_gb * cpg + days * cpd)
+    if days == 0:
+        try:
+            cpd_unlimited = int((db.session.get(SystemConfig, 'cost_per_day_unlimited') or SystemConfig()).value or 0)
+        except Exception:
+            cpd_unlimited = 0
+        min_price = int(volume_gb * cpg + cpd_unlimited)
+    else:
+        min_price = int(volume_gb * cpg + days * cpd)
     return min_price, cpg, cpd
 
 
@@ -12016,10 +12033,12 @@ def auto_configure_whatsapp_gateway():
 def packages_page():
     cost_gb = db.session.get(SystemConfig, 'cost_per_gb')
     cost_day = db.session.get(SystemConfig, 'cost_per_day')
-    
-    return render_template('packages.html', 
+    cost_day_unlimited = db.session.get(SystemConfig, 'cost_per_day_unlimited')
+
+    return render_template('packages.html',
                          base_cost_gb=int(cost_gb.value) if cost_gb else 0,
                          base_cost_day=int(cost_day.value) if cost_day else 0,
+                         base_cost_day_unlimited=int(cost_day_unlimited.value) if cost_day_unlimited else 0,
                          admin_username=session.get('admin_username'),
                          is_superadmin=session.get('is_superadmin', False),
                          role=session.get('role', 'admin'))
