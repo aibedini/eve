@@ -986,6 +986,7 @@
     async function loadApps() {
         try {
             const response = await fetch('/api/sub-apps');
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             apps = await response.json();
             renderApps();
         } catch (error) {
@@ -1214,6 +1215,7 @@
     async function loadAnnouncements() {
         try {
             const response = await fetch('/api/announcements');
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             announcements = await response.json();
             renderAnnouncements();
         } catch (error) {
@@ -1950,6 +1952,7 @@
     async function loadFAQs() {
         try {
             const response = await fetch('/api/faqs');
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             faqs = await response.json();
             renderFAQs();
         } catch (error) {

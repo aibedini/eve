@@ -340,6 +340,7 @@ let _resellerCache = [];  // [{id, username}]
 let _editPkgId  = null;
 let _editTierId = null;
 let _minPriceDebounce = null;
+let _cachedMinPrice = null;
 
 /* ─── Tab switching ────────────────────────────────────────── */
 function pkgSwitchTab(name, evt) {
@@ -366,6 +367,7 @@ async function loadPackages() {
     const body = document.getElementById('pkg-list-body');
     try {
         const res  = await fetch('/api/packages');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         _pkgCache  = await res.json();
         renderPackages(body);
     } catch(e) {
@@ -427,6 +429,7 @@ function openPkgModal(pkg) {
     document.getElementById('pkg-vol').value   = pkg ? pkg.volume : '';
     document.getElementById('pkg-price').value = pkg ? Number(pkg.price).toLocaleString() : '';
     document.getElementById('pkg-scope').value = pkg ? (pkg.scope || 'global') : 'global';
+    _cachedMinPrice = null;
     document.getElementById('pkg-price-hint').style.display = 'none';
     document.getElementById('pkg-price-warn').style.display = 'none';
     toggleScopeFields();
@@ -437,6 +440,7 @@ function openPkgModal(pkg) {
 
 function closePkgModal() {
     _editPkgId = null;
+    _cachedMinPrice = null;
     document.getElementById('pkg-modal').classList.add('hidden');
     document.getElementById('pkg-price-hint').style.display = 'none';
     document.getElementById('pkg-price-warn').style.display = 'none';
@@ -484,24 +488,26 @@ async function _fetchMinPrice() {
     const days    = daysRaw !== '' ? parseInt(daysRaw)   : null;
     const hint    = document.getElementById('pkg-price-hint');
     // Empty or unlimited (0) — hide hint
-    if (vol === null && days === null) { hint.style.display = 'none'; return; }
-    if (vol === 0 || days === 0)       { hint.style.display = 'none'; return; }
+    if (vol === null && days === null) { hint.style.display = 'none'; _cachedMinPrice = null; return; }
+    if (vol === 0 || days === 0)       { hint.style.display = 'none'; _cachedMinPrice = null; return; }
     try {
         const res  = await fetch(`/api/packages/min-price?volume_gb=${vol}&days=${days}`);
+        if (!res.ok) return;
         const data = await res.json();
         if (data.success) {
+            _cachedMinPrice = data.min_price;
             hint.style.display = '';
             hint.textContent   = `حداقل هزینه: ${Number(data.min_price).toLocaleString()} تومان`;
-            checkPriceWarning(data.min_price);
+            checkPriceWarning();
         }
     } catch(e) {}
 }
 
-function checkPriceWarning(minPrice) {
+function checkPriceWarning() {
     const warn  = document.getElementById('pkg-price-warn');
     const price = unformatNumber(document.getElementById('pkg-price').value);
-    if (!minPrice) return;
-    warn.style.display = (price > 0 && price < minPrice) ? '' : 'none';
+    if (!_cachedMinPrice) { warn.style.display = 'none'; return; }
+    warn.style.display = (price > 0 && price < _cachedMinPrice) ? '' : 'none';
 }
 
 async function submitPackage() {
@@ -652,6 +658,7 @@ async function loadTiers() {
     const body = document.getElementById('tier-list-body');
     try {
         const res   = await fetch('/api/price-tiers');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data  = await res.json();
         _tierCache  = data.tiers || [];
         renderTiers(body);
