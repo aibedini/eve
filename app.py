@@ -86,7 +86,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "1.9.4"
+APP_VERSION = "1.9.5"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -7656,7 +7656,7 @@ def renew_client(server_id, inbound_id, email):
                 # - If reset_traffic: show the package/custom amount (volume_gb_to_add)
                 # - Otherwise: show remaining_before + added (days/GB)
                 if days_to_add <= 0:
-                    msg_days = 0
+                    msg_days = '♾️'
                     days_label = "♾️"
                 elif start_after_first_use:
                     msg_days = days_to_add
@@ -7668,20 +7668,20 @@ def renew_client(server_id, inbound_id, email):
                 if not volume_provided:
                     # No volume change: show remaining (or unlimited)
                     if not has_limited_volume:
-                        msg_volume = 0
+                        msg_volume = '♾️'
                         volume_label = "♾️"
                     else:
                         msg_volume = int(remaining_gb_before)
                         volume_label = f"{remaining_gb_before_exact:.2f}GB"
                 elif volume_gb_to_add == 0:
-                    msg_volume = 0
+                    msg_volume = '♾️'
                     volume_label = "♾️"
                 elif reset_traffic:
                     msg_volume = int(volume_gb_to_add)
                     volume_label = f"{msg_volume}GB"
                 else:
                     if not has_limited_volume:
-                        msg_volume = 0
+                        msg_volume = '♾️'
                         volume_label = "♾️"
                     else:
                         msg_volume = int(remaining_gb_before) + int(volume_gb_to_add)

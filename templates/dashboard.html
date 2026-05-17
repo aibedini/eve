@@ -3532,24 +3532,24 @@
 اطلاعات سرویس
 📡 پروتکل: {protocol}
 🔮 نام سرویس: {service_name}
-🔋حجم سرویس: {volume} گیگ
-⏰ مدت سرویس: {days} روز⁮⁮ ⁮⁮
+🔋 حجم: {volume}
+⏰ مدت: {days}
 
 لینک های اتصال
- 
-🌐 subscription Direct:
+
+🌐 Subscription:
 {sub_link}
 
-🌐 Account Dashboard : 
+🌐 Dashboard:
 {dashboard_link}`;
         }
 
-        // Replace variables
+        // Replace variables (0 = unlimited → ♾️)
         const text = templateContent
             .replace(/{protocol}/g, client.protocol || 'vless')
             .replace(/{service_name}/g, client.email)
-            .replace(/{volume}/g, client.volume)
-            .replace(/{days}/g, client.days)
+            .replace(/{volume}/g, (client.volume == 0 || client.volume == null) ? '♾️' : client.volume)
+            .replace(/{days}/g,   (client.days   == 0 || client.days   == null) ? '♾️' : client.days)
             .replace(/{sub_link}/g, client.sub_link || '')
             .replace(/{dashboard_link}/g, client.dashboard_link || '');
 
