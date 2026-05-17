@@ -681,6 +681,11 @@
             </div>
 
             <div class="form-group">
+                <label>Comment <small style="color: var(--text-secondary); font-weight: normal;">(optional — name, phone number, etc.)</small></label>
+                <input type="text" id="add-client-comment" class="form-input" placeholder="">
+            </div>
+
+            <div class="form-group">
                 <label>Packages (Optional)</label>
                 <div id="packages-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-height: 200px; overflow-y: auto;">
                     <div style="padding: 20px; text-align: center; color: var(--text-secondary);">Loading packages...</div>
@@ -825,6 +830,11 @@
             <div class="form-group">
                 <label>Email</label>
                 <input type="text" id="edit-client-new-email" class="form-input" placeholder="New Email">
+            </div>
+
+            <div class="form-group">
+                <label>Comment</label>
+                <input type="text" id="edit-client-comment" class="form-input" placeholder="e.g. name, phone number...">
             </div>
 
             {% if is_superadmin %}
@@ -988,6 +998,20 @@
     #edit-client-expiry {
         font-family: 'Vazirmatn', sans-serif !important;
     }
+
+    .client-comment {
+        display: block;
+        font-size: 0.73rem;
+        color: var(--text-secondary);
+        font-weight: 300;
+        line-height: 1.3;
+        margin-top: 2px;
+        opacity: 0.7;
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 </style>
 <div class="modal-overlay hidden" id="delete-client-modal">
     <div class="modal modal-md">
@@ -1049,6 +1073,10 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
+    function escHtml(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
     let autoRefreshInterval = null;
     let currentLink = '';
     let inboundsData = [];
@@ -1550,6 +1578,10 @@
             }
             if (patch && Object.prototype.hasOwnProperty.call(patch, 'service_state_tag')) {
                 client.service_state_tag = patch.service_state_tag;
+                changed = true;
+            }
+            if (patch && Object.prototype.hasOwnProperty.call(patch, 'comment')) {
+                client.comment = patch.comment;
                 changed = true;
             }
 
@@ -2174,7 +2206,7 @@
                                                 <span class="checkmark"></span>
                                             </label>
                                         </td>
-                                        <td class="email-cell"><span class="email-with-online">${client.is_online ? '<span class="online-pulse" title="Online"></span>' : ''}<span class="email-text">${client.email}</span></span></td>
+                                        <td class="email-cell"><span class="email-with-online">${client.is_online ? '<span class="online-pulse" title="Online"></span>' : ''}<span class="email-text">${client.email}</span>${client.comment ? `<span class="client-comment">${escHtml(client.comment)}</span>` : ''}</span></td>
                                         <td class="owner-cell">${renderOwnerCell(client)}</td>
                                         <td>${renderClientServiceState(client)}</td>
                                         <td>
@@ -3041,6 +3073,8 @@
         }
         
         document.getElementById('add-client-email').value = '';
+        const addCommentInput = document.getElementById('add-client-comment');
+        if (addCommentInput) addCommentInput.value = '';
         document.getElementById('custom-days').value = 30;
         document.getElementById('custom-volume').value = 10;
         document.getElementById('add-client-start-after-first-use').checked = false;
@@ -3405,6 +3439,7 @@
         const usePackage = Boolean(selectedPackageId);
         const payload = {
             email: email,
+            comment: document.getElementById('add-client-comment')?.value?.trim() || '',
             mode: usePackage ? 'package' : 'custom',
             free: Boolean(document.getElementById('add-client-free-toggle')?.checked),
             start_after_first_use: startAfterFirstUse,
@@ -3908,8 +3943,8 @@
                 const clients = Array.isArray(inbound?.clients) ? inbound.clients : [];
                 for (const client of clients) {
                     const em = String(client?.email || '').toLowerCase();
-                    if (!em) continue;
-                    if (!em.includes(q)) continue;
+                    const cm = String(client?.comment || '').toLowerCase();
+                    if (!em.includes(q) && !cm.includes(q)) continue;
                     out.push({
                         server_id: inbound.server_id,
                         inbound_id: inbound.id,
@@ -4400,7 +4435,7 @@
                                                 <span class="checkmark"></span>
                                             </label>
                                         </td>
-                                        <td class="email-cell"><span class="email-with-online">${client.is_online ? '<span class="online-pulse" title="Online"></span>' : ''}<span class="email-text">${client.email}</span></span></td>
+                                        <td class="email-cell"><span class="email-with-online">${client.is_online ? '<span class="online-pulse" title="Online"></span>' : ''}<span class="email-text">${client.email}</span>${client.comment ? `<span class="client-comment">${escHtml(client.comment)}</span>` : ''}</span></td>
                                         <td class="owner-cell">${renderOwnerCell(client)}</td>
                                         <td>${renderClientServiceState(client)}</td>
                                         <td>
@@ -5084,6 +5119,19 @@
             updateEditClientStartAfterFirstUseUI();
         }
 
+        // Look up comment from local cache
+        let clientComment = '';
+        if (Array.isArray(allInboundsData)) {
+            for (const inb of allInboundsData) {
+                if (String(inb.server_id) === String(serverId) && String(inb.id) === String(inboundId)) {
+                    const cli = (inb.clients || []).find(c => (c.email || '').toLowerCase() === email.toLowerCase());
+                    if (cli) { clientComment = cli.comment || ''; break; }
+                }
+            }
+        }
+        const commentInput = document.getElementById('edit-client-comment');
+        if (commentInput) commentInput.value = clientComment;
+
         document.getElementById('edit-client-modal').classList.remove('hidden');
     }
 
@@ -5204,8 +5252,9 @@
             return;
         }
 
-        const payload = { new_email: newEmail };
-        
+        const commentInput = document.getElementById('edit-client-comment');
+        const payload = { new_email: newEmail, comment: commentInput ? commentInput.value : '' };
+
         const totalGbInput = document.getElementById('edit-client-total-gb');
         if (totalGbInput) {
             payload.totalGB = parseFloat(totalGbInput.value) || 0;
@@ -5274,6 +5323,9 @@
                         if (Number.isFinite(gb)) {
                             patch.totalGB = Math.max(0, gb) * 1024 * 1024 * 1024;
                         }
+                    }
+                    if (Object.prototype.hasOwnProperty.call(payload, 'comment')) {
+                        patch.comment = payload.comment;
                     }
 
                     const oldKey = makeBulkClientKey(serverId, inboundId, oldEmail);

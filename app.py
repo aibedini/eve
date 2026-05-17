@@ -5219,6 +5219,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
 
                 client_data = {
                     "email": email,
+                    "comment": (client.get('comment') or '').strip(),
                     "id": client.get('id', ''),
                     "subId": sub_id,
                     "enable": client.get('enable', True),
@@ -6474,27 +6475,28 @@ def global_client_search():
         # 3. جستجو در کلاینت‌های این اینباند
         clients = inbound.get('clients', [])
         for client in clients:
-            c_email = client.get('email', '')
-            if c_email and query in c_email.lower():
-                # کلاینت پیدا شد
-                matches.append({
-                    "server_id": sid,
-                    "server_name": inbound.get('server_name'),
-                    # پنل تایپ را از روی سرور پیدا می‌کنیم (چون در کش اینباند نیست)
-                    "panel_type": next((s.panel_type for s in accessible_servers if s.id == sid), 'auto'),
-                    "inbound_id": iid,
-                    "inbound": {
-                        "id": iid,
-                        "remark": inbound.get('remark', ''),
-                        "port": inbound.get('port', ''),
-                        "protocol": inbound.get('protocol', ''),
-                        "enable": inbound.get('enable', False)
-                    },
-                    "client": client
-                })
+            c_email = (client.get('email') or '').lower()
+            c_comment = (client.get('comment') or '').lower()
+            if query not in c_email and query not in c_comment:
+                continue
+            # کلاینت پیدا شد
+            matches.append({
+                "server_id": sid,
+                "server_name": inbound.get('server_name'),
+                "panel_type": next((s.panel_type for s in accessible_servers if s.id == sid), 'auto'),
+                "inbound_id": iid,
+                "inbound": {
+                    "id": iid,
+                    "remark": inbound.get('remark', ''),
+                    "port": inbound.get('port', ''),
+                    "protocol": inbound.get('protocol', ''),
+                    "enable": inbound.get('enable', False)
+                },
+                "client": client
+            })
 
-                if len(matches) >= limit:
-                    break
+            if len(matches) >= limit:
+                break
         
         if len(matches) >= limit:
             break
@@ -6794,6 +6796,7 @@ def edit_client(server_id, inbound_id, email):
         new_email = data.get('new_email', '').strip()
         new_total_gb = data.get('totalGB')
         new_expiry_time = data.get('expiryTime')
+        new_comment = data.get('comment')
     except:
         return jsonify({"success": False, "error": "Invalid data"}), 400
 
@@ -6834,7 +6837,11 @@ def edit_client(server_id, inbound_id, email):
         
         # Update email
         target_client['email'] = new_email
-        
+
+        # Comment can be edited by anyone
+        if new_comment is not None:
+            target_client['comment'] = new_comment
+
         # Only superadmin can edit volume and expiry
         if user.is_superadmin:
             if new_total_gb is not None:
@@ -8471,6 +8478,7 @@ def add_client(server_id, inbound_id):
         new_client = {
             "id": client_uuid,
             "email": email,
+            "comment": (data.get('comment') or '').strip(),
             "enable": True,
             "expiryTime": expiry_time,
             "totalGB": volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else 0,
