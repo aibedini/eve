@@ -429,6 +429,36 @@
         from { opacity: 0; transform: translateY(-5px); }
         to { opacity: 1; transform: translateY(0); }
     }
+
+    .inbound-row-wrap {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .inbound-row-wrap .inbound-item {
+        flex: 1;
+        min-width: 0;
+    }
+    .btn-assign-inbound {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 8px;
+        font-size: 0.72rem;
+        color: var(--primary);
+        background: transparent;
+        border: 1px solid var(--primary);
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        opacity: 0.7;
+        transition: opacity .15s, background .15s;
+    }
+    .btn-assign-inbound:hover {
+        opacity: 1;
+        background: rgba(var(--primary-rgb, 99,102,241), .08);
+    }
 </style>
 <div class="admins-section">
     <div class="admins-grid" id="admins-container">
@@ -796,15 +826,22 @@
 
             const inboundItems = inbounds.length > 0 ? inbounds.map(inb => {
                 return `
-                    <label class="inbound-item checkbox-label">
-                        <input type="checkbox" class="inbound-checkbox" data-server="${s.id}" value="${inb.id}" onchange="updateCounts(${s.id})">
-                        <span class="checkmark"></span>
-                        <div class="inbound-details">
-                            <span class="inbound-name">${inb.remark || 'Inbound'}</span>
-                            <span class="protocol-badge">${inb.protocol}</span>
-                            <span class="port-number">:${inb.port}</span>
-                        </div>
-                    </label>
+                    <div class="inbound-row-wrap">
+                        <label class="inbound-item checkbox-label">
+                            <input type="checkbox" class="inbound-checkbox" data-server="${s.id}" value="${inb.id}" onchange="updateCounts(${s.id})">
+                            <span class="checkmark"></span>
+                            <div class="inbound-details">
+                                <span class="inbound-name">${inb.remark || 'Inbound'}</span>
+                                <span class="protocol-badge">${inb.protocol}</span>
+                                <span class="port-number">:${inb.port}</span>
+                            </div>
+                        </label>
+                        <button type="button" class="btn-assign-inbound" title="Assign all existing clients in this inbound to this reseller"
+                            onclick="bulkAssignInbound(${s.id}, ${inb.id}, '${(inb.remark||'Inbound').replace(/'/g,'&apos;')}')">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>
+                            Assign Users
+                        </button>
+                    </div>
                 `;
             }).join('') : '<div class="inbound-empty">No inbounds found</div>';
 
@@ -1241,6 +1278,36 @@
     
     function closeAdminModal() {
         document.getElementById('admin-modal').classList.add('hidden');
+    }
+
+    async function bulkAssignInbound(serverId, inboundId, inboundName) {
+        const resellerId = document.getElementById('edit-admin-id').value;
+        if (!resellerId) {
+            showToast('Save the reseller first, then assign existing clients', 'warning');
+            return;
+        }
+        const btn = event && event.currentTarget;
+        if (btn) { btn.disabled = true; btn.textContent = '…'; }
+        try {
+            const res = await fetch(`/api/resellers/${resellerId}/bulk-assign-inbound`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({server_id: serverId, inbound_id: inboundId})
+            });
+            const data = await res.json();
+            if (data.success) {
+                const msg = data.assigned > 0
+                    ? `${data.assigned} clients assigned from "${inboundName}"` + (data.skipped > 0 ? ` (${data.skipped} already assigned)` : '')
+                    : `No new clients to assign from "${inboundName}"`;
+                showToast(msg, data.assigned > 0 ? 'success' : 'info');
+            } else {
+                showToast(data.error || 'Failed to assign clients', 'error');
+            }
+        } catch(e) {
+            showToast('Network error', 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg> Assign Users'; }
+        }
     }
 
     function resetServerSelections(selectAll = false) {

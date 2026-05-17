@@ -8253,6 +8253,90 @@ def assign_client():
         db.session.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/api/resellers/<int:reseller_id>/bulk-assign-inbound', methods=['POST'])
+@user_management_required
+def bulk_assign_inbound(reseller_id):
+    """Assign all existing clients in a cached inbound to a reseller."""
+    data = request.json or {}
+    try:
+        server_id  = int(data['server_id'])
+        inbound_id = int(data['inbound_id'])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "server_id and inbound_id required"}), 400
+
+    reseller = db.session.get(Admin, reseller_id)
+    if not reseller or reseller.role != 'reseller':
+        return jsonify({"success": False, "error": "Invalid reseller"}), 400
+
+    # Find the inbound in the in-memory cache
+    cached_inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+    target_inbound = None
+    for inb in cached_inbounds:
+        try:
+            if int(inb.get('server_id', -1)) == server_id and int(inb.get('id', -1)) == inbound_id:
+                target_inbound = inb
+                break
+        except (TypeError, ValueError):
+            continue
+
+    if not target_inbound:
+        return jsonify({"success": False,
+                        "error": "Inbound not in cache — refresh server data first"}), 404
+
+    clients = target_inbound.get('clients') or []
+
+    assigned = 0
+    skipped  = 0
+    try:
+        for client in clients:
+            email       = (client.get('email') or '').strip()
+            client_uuid = (client.get('id')    or '').strip()
+            if not email and not client_uuid:
+                skipped += 1
+                continue
+
+            # Skip if already owned by this reseller on this inbound
+            q = ClientOwnership.query.filter_by(
+                reseller_id=reseller_id,
+                server_id=server_id,
+                inbound_id=inbound_id
+            )
+            if email:
+                q = q.filter(func.lower(ClientOwnership.client_email) == email.lower())
+            if q.first():
+                skipped += 1
+                continue
+
+            # Remove any prior ownership of this client on this server
+            del_q = ClientOwnership.query.filter(ClientOwnership.server_id == server_id)
+            if email:
+                del_q = del_q.filter(func.lower(ClientOwnership.client_email) == email.lower())
+            elif client_uuid:
+                del_q = del_q.filter(ClientOwnership.client_uuid == client_uuid)
+            del_q.delete(synchronize_session=False)
+
+            db.session.add(ClientOwnership(
+                reseller_id=reseller_id,
+                server_id=server_id,
+                inbound_id=inbound_id,
+                client_email=email or client_uuid,
+                client_uuid=client_uuid or None,
+            ))
+            assigned += 1
+
+        if assigned > 0:
+            try:
+                ensure_reseller_allowed_for_assignment(reseller, server_id, inbound_id)
+            except Exception:
+                pass
+
+        db.session.commit()
+        return jsonify({"success": True, "assigned": assigned, "skipped": skipped})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/client/qrcode', methods=['GET'])
 def generate_qrcode():
     """Generate QR code from URL query parameter (GET request)"""
