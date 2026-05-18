@@ -2446,86 +2446,68 @@
         return `${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB`;
     }
 
-    async function showQrCode(encodedLink, email, subUrl, jsonUrl, dashSubUrl, serverId, subId) {
-        let link = decodeURIComponent(encodedLink);
+    function showQrCode(encodedLink, email, subUrl, jsonUrl, dashSubUrl, serverId, subId) {
+        const link = decodeURIComponent(encodedLink);
+
         document.getElementById('qr-email').textContent = email;
         document.getElementById('title-config').textContent = email;
-        
         document.getElementById('input-sub').value = subUrl || '';
         document.getElementById('input-json').value = jsonUrl || '';
-        
-        // Fix relative URL for dashSubUrl if needed
+        document.getElementById('input-config').value = link || '';
+
         let finalDashUrl = dashSubUrl || '';
         if (finalDashUrl && finalDashUrl.startsWith('/')) {
             finalDashUrl = window.location.origin + finalDashUrl;
         }
         document.getElementById('input-dash').value = finalDashUrl;
-        
-        try {
-            // Fetch direct link from panel subscription if serverId and subId are provided
-            if (serverId && subId) {
-                try {
-                    const directLinkResp = await fetch(`/api/client/direct-link/${serverId}/${encodeURIComponent(subId)}`);
-                    const directLinkData = await directLinkResp.json();
-                    if (directLinkData.success && directLinkData.direct_link) {
-                        link = directLinkData.direct_link;
-                    }
-                } catch (e) {
-                    console.warn('Failed to fetch direct link from panel:', e);
-                }
-            }
-            
-            document.getElementById('input-config').value = link || '';
-            
-            // Generate Config QR
-            if (link) {
-                const configResp = await fetch(`/api/client/qrcode?link=${encodeURIComponent(link)}`);
-                const configData = await configResp.json();
-                if (configData.success) {
-                    document.getElementById('img-config').src = configData.qrcode;
-                    document.getElementById('box-config').style.display = 'flex';
-                }
-            }
-            
-            // Generate Subscription QR
-            if (subUrl && subUrl !== 'undefined' && subUrl !== 'null') {
-                const subResp = await fetch(`/api/client/qrcode?link=${encodeURIComponent(subUrl)}`);
-                const subData = await subResp.json();
-                if (subData.success) {
-                    document.getElementById('img-sub').src = subData.qrcode;
-                    document.getElementById('box-sub').style.display = 'flex';
-                }
-            } else {
-                document.getElementById('box-sub').style.display = 'none';
-            }
-            
-            // Generate JSON QR
-            if (jsonUrl && jsonUrl !== 'undefined' && jsonUrl !== 'null') {
-                const jsonResp = await fetch(`/api/client/qrcode?link=${encodeURIComponent(jsonUrl)}`);
-                const jsonData = await jsonResp.json();
-                if (jsonData.success) {
-                    document.getElementById('img-json').src = jsonData.qrcode;
-                    document.getElementById('box-json').style.display = 'flex';
-                }
-            } else {
-                document.getElementById('box-json').style.display = 'none';
-            }
 
-            // Generate Dash Sub QR
-            if (finalDashUrl && finalDashUrl !== 'undefined' && finalDashUrl !== 'null' && finalDashUrl !== '') {
-                const dashResp = await fetch(`/api/client/qrcode?link=${encodeURIComponent(finalDashUrl)}`);
-                const dashData = await dashResp.json();
-                if (dashData.success) {
-                    document.getElementById('img-dash').src = dashData.qrcode;
-                    document.getElementById('box-dash').style.display = 'flex';
-                }
-            } else {
-                document.getElementById('box-dash').style.display = 'none';
+        // Reset all boxes to loading state
+        ['box-sub', 'box-json', 'box-config', 'box-dash'].forEach(id => {
+            const box = document.getElementById(id);
+            box.style.display = 'flex';
+            box.classList.add('qr-loading');
+        });
+        ['img-sub', 'img-json', 'img-config', 'img-dash'].forEach(id => {
+            document.getElementById(id).src = '';
+        });
+
+        // Open modal immediately — no waiting
+        document.getElementById('qr-modal').classList.remove('hidden');
+
+        // Helper: fetch one QR and update the img element
+        async function loadQr(url, imgId, boxId) {
+            if (!url || url === 'undefined' || url === 'null') {
+                document.getElementById(boxId).style.display = 'none';
+                return;
             }
-            
-            document.getElementById('qr-modal').classList.remove('hidden');
-        } catch (error) {
-            showToast('Error generating QR Codes: ' + error.message, 'error');
+            try {
+                const resp = await fetch(`/api/client/qrcode?link=${encodeURIComponent(url)}`);
+                const data = await resp.json();
+                if (data.success) {
+                    document.getElementById(imgId).src = data.qrcode;
+                }
+            } catch (_) {}
+            document.getElementById(boxId).classList.remove('qr-loading');
+        }
+
+        // Fire sub / json / dash QRs in parallel immediately (fast — no panel call needed)
+        loadQr(subUrl, 'img-sub', 'box-sub');
+        loadQr(jsonUrl, 'img-json', 'box-json');
+        loadQr(finalDashUrl, 'img-dash', 'box-dash');
+
+        // Config QR: show with cached link first, then silently update if direct-link differs
+        loadQr(link, 'img-config', 'box-config');
+
+        if (serverId && subId) {
+            fetch(`/api/client/direct-link/${serverId}/${encodeURIComponent(subId)}`)
+                .then(r => r.json())
+                .then(d => {
+                    if (d.success && d.direct_link && d.direct_link !== link) {
+                        document.getElementById('input-config').value = d.direct_link;
+                        loadQr(d.direct_link, 'img-config', 'box-config');
+                    }
+                })
+                .catch(() => {});
         }
     }
     
