@@ -1947,46 +1947,45 @@ html[data-theme="light"] .package-price {
 
 /* Mobile responsive: clients-table → card layout */
 @media (max-width: 900px) {
-    /* Hide column headers — card layout replaces them with data-label */
+    /* Hide column headers — labels come from data-label attributes */
     .clients-table thead {
         display: none;
     }
 
     .clients-table,
-    .clients-table tbody,
-    .clients-table tr,
-    .clients-table td {
+    .clients-table tbody {
         display: block;
         width: 100%;
-        box-sizing: border-box;
     }
 
-    /* Each row becomes a card */
+    /* Each row = a card; 2-column grid: [28px checkbox] [1fr content] */
     .clients-table tbody tr {
+        display: grid;
+        grid-template-columns: 28px 1fr;
         border: 1px solid var(--border-color);
         border-radius: 12px;
         background: var(--bg-card);
         margin-bottom: 12px;
         overflow: hidden;
-        /* left padding makes room for the absolutely-positioned checkbox */
-        padding: 14px 16px 14px 46px;
-        position: relative;
+        padding: 14px 16px;
+        box-sizing: border-box;
+        row-gap: 0;
     }
 
     .clients-table td {
         padding: 0;
         border-bottom: none !important;
+        box-sizing: border-box;
     }
 
-    /* Checkbox: pinned to top-left of card */
+    /* Col 1, Row 1: checkbox — vertically centered next to email */
     .clients-table td.select-cell {
-        display: block !important;
-        position: absolute;
-        left: 14px;
-        top: 16px;
-        width: 24px;
-        height: 24px;
-        padding: 0 !important;
+        grid-column: 1;
+        grid-row: 1;
+        display: flex !important;
+        align-items: center;
+        justify-content: flex-start;
+        width: 28px;
     }
 
     .clients-table td.select-cell .checkbox-label {
@@ -1996,11 +1995,15 @@ html[data-theme="light"] .package-price {
         margin: 0 !important;
     }
 
-    /* Email + comment: card header */
+    /* Col 2, Row 1: email + comment (card header) */
     .clients-table td.email-cell {
+        grid-column: 2;
+        grid-row: 1;
+        padding-left: 4px;
         padding-bottom: 10px;
         border-bottom: 1px solid rgba(148, 163, 184, 0.1) !important;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
+        min-width: 0;
         max-width: 100%;
     }
 
@@ -2009,9 +2012,14 @@ html[data-theme="light"] .package-price {
         font-weight: 600;
     }
 
-    /* Labeled data rows (Owner, Status, Expiry, Traffic, Volume) */
+    /* Rows 2+: all cells span both columns (full card width) */
+    .clients-table td:not(.select-cell):not(.email-cell) {
+        grid-column: 1 / -1;
+    }
+
+    /* Labeled rows: Owner, Status, Expiry, Traffic, Volume */
     .clients-table td[data-label] {
-        display: flex;
+        display: flex !important;
         align-items: center;
         justify-content: space-between;
         padding: 5px 0;
@@ -2026,11 +2034,11 @@ html[data-theme="light"] .package-price {
         letter-spacing: 0.05em;
         font-weight: 600;
         flex-shrink: 0;
-        margin-right: 10px;
+        margin-right: 12px;
         opacity: 0.75;
     }
 
-    /* Action buttons row: no label, full-width, left-aligned */
+    /* Action buttons row: no label */
     .clients-table td.action-cell {
         padding-top: 10px;
         border-bottom: none !important;
