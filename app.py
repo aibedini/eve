@@ -10825,19 +10825,21 @@ def client_subscription(server_id, sub_id):
     agent_tokens = [
         # --- Universal / Cross Platform ---
         'v2ray', 'xray', 'shadowsocks', 'clash', 'sing-box', 'tuic', 'hysteria',
-        'hiddify', 'happ',  # <--- 'happ' placed in universal/cross-platform
+        'hiddify', 'happ', 'karing',
 
         # --- iOS Clients ---
-        'shadowrocket', 'streisand', 'v2box', 'kitsunebi', 'quantumult', 
+        'shadowrocket', 'streisand', 'v2box', 'kitsunebi', 'quantumult',
         'surge', 'loon', 'stash', 'fair', 'pepi', 'i2ray', 'foxray', 'potatso',
-        'oneclick',
-        
+        'oneclick', 'v2rayu', 'spectre', 'shadowlink',
+
         # --- Android Clients ---
-        'v2rayng', 'sagernet', 'nekobox', 'matsuri', 'bifrostv', 
-        'igniter', 'anxray', 'surfboard', 'v2raytun', 'mahsa', 'napstarnet',
-        
+        'v2rayng', 'sagernet', 'nekobox', 'matsuri', 'bifrostv',
+        'igniter', 'anxray', 'surfboard', 'v2raytun', 'mahsa', 'napsternetv', 'npv',
+        'invizible', 'karimg',
+
         # --- Desktop (Windows, Mac, Linux) ---
-        'nekoray', 'v2rayn', 'v2raya', 'qv2ray', 'mellow', 'flclash', 'furious'
+        'nekoray', 'v2rayn', 'v2raya', 'qv2ray', 'mellow', 'flclash', 'furious',
+        'clash-verge', 'clashverge', 'v2rayx', 'musedaq',
     ]
     wants_b64 = request.args.get('format', '').lower() == 'b64'
     accept = (request.headers.get('Accept') or '').lower()

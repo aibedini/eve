@@ -2010,6 +2010,15 @@ html[data-theme="light"] .package-price {
     .clients-table td.email-cell .email-text {
         font-size: 0.95rem;
         font-weight: 600;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+        word-break: break-word;
+    }
+
+    .clients-table td.email-cell .email-name-row {
+        overflow: visible;
+        flex-wrap: wrap;
     }
 
     /* Rows 2+: all cells span both columns (full card width) */
@@ -3743,17 +3752,17 @@ html[data-theme="light"] .server-icon {
     .clients-table tbody {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 18px;
     }
     
     .clients-table tr {
         background: var(--bg-dark);
         border: 1px solid var(--border-color);
         border-radius: 8px;
-        padding: 12px;
+        padding: 16px 18px;
         display: grid;
         grid-template-columns: 28px 1fr;
-        gap: 10px;
+        gap: 0;
         opacity: 1 !important;
     }
     
@@ -3765,7 +3774,7 @@ html[data-theme="light"] .server-icon {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 6px 0;
+        padding: 10px 0;
         border-bottom: none !important;
         border-top: 1px solid var(--border-color);
         grid-column: 1 / -1;
@@ -3784,9 +3793,7 @@ html[data-theme="light"] .server-icon {
     }
 
     .clients-table td.select-cell {
-        border-bottom: 1px solid var(--border-color);
-        padding-bottom: 10px;
-        margin-bottom: 4px;
+        padding-bottom: 12px;
     }
 
     .clients-table td.select-cell::before {
@@ -3805,25 +3812,14 @@ html[data-theme="light"] .server-icon {
     }
 
     .clients-table td.email-cell {
-        border-bottom: 1px solid var(--border-color);
-        padding-bottom: 10px;
-        margin-bottom: 4px;
+        padding-bottom: 12px;
+        border-bottom: none !important;
     }
 
     .clients-table td.email-cell::before {
         display: none;
     }
 
-    /* Status: keep same row structure as others, but add a divider above it */
-    .clients-table td:nth-child(3) {
-        border-top: 1px solid var(--border-color);
-        padding-top: 10px;
-        margin-top: 4px;
-        border-bottom: 1px solid var(--border-color);
-        padding-bottom: 10px;
-        margin-bottom: 4px;
-    }
-    
     .clients-table td::before {
         content: attr(data-label);
         font-size: 0.6rem;
@@ -3833,41 +3829,20 @@ html[data-theme="light"] .server-icon {
         letter-spacing: 0.5px;
     }
     
-    .clients-table .email-cell::before {
-        content: 'Email';
+    .clients-table td.action-cell::before {
+        display: none;
     }
 
-    /* Column order:
-       1) select, 2) email, 3) status, 4) expiry, 5) traffic, 6) volume, 7) actions
-    */
-    .clients-table td:nth-child(3)::before {
-        content: 'Status';
-    }
-
-    .clients-table td:nth-child(4)::before {
-        content: 'Expiry';
-    }
-    
-    .clients-table td:nth-child(5)::before {
-        content: 'Traffic';
-    }
-    
-    .clients-table td:nth-child(6)::before {
-        content: 'Volume';
-    }
-    
-    .clients-table td:nth-child(7)::before {
-        content: 'Actions';
-    }
-    
-    .clients-table td:nth-child(7) {
+    .clients-table td.action-cell {
         display: flex;
         justify-content: flex-start;
-        align-items: flex-start;
-        flex-direction: column;
+        align-items: center;
+        flex-direction: row;
+        flex-wrap: wrap;
         gap: 8px;
         border-top: 1px solid var(--border-color);
-        padding-top: 10px;
+        padding-top: 12px;
+        padding-bottom: 4px;
     }
     
     .email-cell {
@@ -3909,17 +3884,20 @@ html[data-theme="light"] .server-icon {
     
     .action-buttons {
         display: flex;
-        gap: 6px;
+        gap: 8px;
         flex-wrap: wrap;
-        width: 100%;
         justify-content: flex-start;
+        align-items: center;
     }
     
     .action-btn {
-        width: 28px;
-        height: 28px;
-        font-size: 0.65rem;
-        flex: 0 1 28px;
+        width: 36px !important;
+        height: 36px !important;
+        min-width: 36px;
+        max-width: 36px;
+        font-size: 0.75rem;
+        flex: 0 0 36px;
+        border-radius: 8px;
     }
     
     .header-actions {

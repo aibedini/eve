@@ -670,8 +670,11 @@
                             <label>Username / Email</label>
                             <input type="text" id="add-client-email" class="form-input" placeholder="user1">
                         </div>
-                        <div style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; height: 42px; display: flex; align-items: center; justify-content: center; padding: 0 10px; overflow: hidden;">
-                            <span style="font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="last-user-display">Last User: -</span>
+                        <div>
+                            <label>Last User</label>
+                            <div style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; min-height: 42px; display: flex; align-items: center; padding: 8px 10px;">
+                                <span id="last-user-display" style="font-size: 0.85rem; color: var(--text-secondary); white-space: normal; word-break: break-all; overflow-wrap: break-word; line-height: 1.4;">-</span>
+                            </div>
                         </div>
                     </div>
                 {% else %}
@@ -1013,11 +1016,15 @@
         white-space: nowrap;
     }
 
-    @media (max-width: 640px) {
+    @media (max-width: 900px) {
         .client-comment {
             max-width: 100%;
             font-size: 0.8rem;
             opacity: 0.85;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: unset;
+            word-break: break-word;
         }
     }
 </style>
@@ -3066,11 +3073,11 @@
 
         const lastUserDisplay = document.getElementById('last-user-display');
         if (lastUserDisplay) {
-            lastUserDisplay.innerText = 'Last User: -';
+            lastUserDisplay.innerText = '-';
             lastUserDisplay.style.color = 'var(--text-secondary)';
             lastUserDisplay.title = '';
         }
-        
+
         if (allServers && allServers.length > 0) {
             allServers.forEach(server => {
                 const option = document.createElement('option');
@@ -3321,11 +3328,11 @@
 
         const lastUserDisplay = document.getElementById('last-user-display');
         if (lastUserDisplay) {
-            lastUserDisplay.innerText = 'Last User: -';
+            lastUserDisplay.innerText = '-';
             lastUserDisplay.style.color = 'var(--text-secondary)';
             lastUserDisplay.title = '';
         }
-        
+
         if (!serverId) return;
 
         const serverInbounds = getCachedInboundsForServer(serverId);
@@ -3389,7 +3396,7 @@
             });
         } catch (e) {
             console.error(e);
-            display.innerText = 'Last User: Error';
+            display.innerText = 'Error';
             display.style.color = 'var(--text-secondary)';
             display.title = '';
         }
@@ -3403,11 +3410,11 @@
 
         if (cachedLast !== undefined) {
             if (cachedLast) {
-                display.innerText = `Last User: ${cachedLast}`;
+                display.innerText = cachedLast;
                 display.style.color = '#fbbf24';
                 display.title = cachedLast;
             } else {
-                display.innerText = 'Last User: None';
+                display.innerText = 'None';
                 display.style.color = 'var(--text-secondary)';
                 display.title = '';
             }
@@ -3418,7 +3425,7 @@
         const inbound = getCachedInboundsForServer(parseInt(serverKey)).find(i => String(i.id) === inboundKey);
         if (inbound && inbound.clients && inbound.clients.length > 0) {
             const lastClient = inbound.clients[inbound.clients.length - 1];
-            display.innerText = `Last User: ${lastClient.email}`;
+            display.innerText = lastClient.email;
             display.style.color = '#fbbf24';
             display.title = lastClient.email;
         } else {
