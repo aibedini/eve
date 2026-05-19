@@ -2608,13 +2608,25 @@
                         done++;
                         progressBar.style.width = Math.round((done / total) * 100) + '%';
                         progressPct.textContent = Math.round((done / total) * 100) + '%';
-                        try {
-                            const res = JSON.parse(xhr.responseText);
-                            if (!res.success) showToast(res.error || `Upload failed: ${file.name}`, 'error');
-                        } catch (_) {}
+                        if (xhr.status === 413) {
+                            showToast(`File too large: "${file.name}". Check server nginx client_max_body_size.`, 'error');
+                        } else if (xhr.status === 403 || xhr.status === 401) {
+                            showToast('Permission denied. Are you logged in as superadmin?', 'error');
+                        } else if (xhr.status >= 400) {
+                            let msg = `Upload failed (HTTP ${xhr.status}): ${file.name}`;
+                            try { const r = JSON.parse(xhr.responseText); if (r.error) msg = r.error; } catch (_) {}
+                            showToast(msg, 'error');
+                        } else {
+                            try {
+                                const res = JSON.parse(xhr.responseText);
+                                if (!res.success) showToast(res.error || `Upload failed: ${file.name}`, 'error');
+                            } catch (_) {
+                                showToast(`Unexpected server response for: ${file.name}`, 'error');
+                            }
+                        }
                         resolve();
                     };
-                    xhr.onerror = () => { showToast(`Upload error: ${file.name}`, 'error'); resolve(); };
+                    xhr.onerror = () => { showToast(`Network error while uploading: ${file.name}`, 'error'); resolve(); };
                     xhr.send(fd);
                 });
             }

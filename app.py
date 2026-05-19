@@ -1318,6 +1318,12 @@ else:
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['MAX_CONTENT_LENGTH'] = 512 * 1024 * 1024  # 512 MB — covers large installers/videos
+
+
+@app.errorhandler(413)
+def request_entity_too_large(e):
+    return jsonify({'success': False, 'error': 'File too large. Maximum allowed size is 512 MB.'}), 413
 
 
 @app.after_request
