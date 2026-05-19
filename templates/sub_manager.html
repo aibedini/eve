@@ -678,6 +678,124 @@
         height: 20px;
         color: var(--primary);
     }
+
+    /* ── Link input with Browse button ── */
+    .link-input-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+    .link-input-row .form-input { flex: 1; min-width: 0; }
+    .btn-browse {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 14px;
+        height: 42px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--text-secondary);
+        font-size: .8rem;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all .2s;
+        flex-shrink: 0;
+    }
+    .btn-browse:hover { border-color: var(--primary); color: var(--primary); background: rgba(99,102,241,.08); }
+
+    /* ── File Manager ── */
+    .fm-filter {
+        padding: 4px 14px;
+        border: 1px solid var(--border-color);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: .78rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all .15s;
+    }
+    .fm-filter.active, .fm-filter:hover { border-color: var(--primary); color: var(--primary); background: rgba(99,102,241,.1); }
+
+    .fm-card {
+        background: var(--bg-dark);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 12px 10px 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        transition: all .2s;
+        position: relative;
+        text-align: center;
+    }
+    .fm-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(99,102,241,.18); }
+    .fm-card.fm-selectable:hover .fm-select-hint { opacity: 1; }
+
+    .fm-ext-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 48px;
+        height: 48px;
+        border-radius: 10px;
+        font-size: .7rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+    }
+    .fm-ext-android { background: rgba(61,220,132,.15); color: #3ddc84; }
+    .fm-ext-windows { background: rgba(0,120,215,.15); color: #0078d7; }
+    .fm-ext-macos   { background: rgba(148,163,184,.12); color: #94a3b8; }
+    .fm-ext-linux   { background: rgba(251,191,36,.12); color: #fbbf24; }
+    .fm-ext-video   { background: rgba(239,68,68,.12); color: #ef4444; }
+    .fm-ext-archive { background: rgba(139,92,246,.12); color: #8b5cf6; }
+    .fm-ext-image   { background: rgba(34,211,238,.12); color: #22d3ee; }
+    .fm-ext-other   { background: rgba(148,163,184,.1); color: #94a3b8; }
+
+    .fm-name {
+        font-size: .72rem;
+        color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        width: 100%;
+        padding: 0 2px;
+    }
+    .fm-meta { font-size: .65rem; color: var(--text-secondary); opacity: .7; }
+
+    .fm-actions { display: flex; gap: 6px; }
+    .fm-btn {
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: none;
+        font-size: .72rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all .15s;
+    }
+    .fm-btn-select { background: rgba(99,102,241,.15); color: var(--primary); }
+    .fm-btn-select:hover { background: var(--primary); color: #fff; }
+    .fm-btn-delete { background: rgba(239,68,68,.12); color: #ef4444; }
+    .fm-btn-delete:hover { background: #ef4444; color: #fff; }
+
+    .fm-select-hint {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        background: var(--primary);
+        color: #fff;
+        font-size: .6rem;
+        padding: 2px 6px;
+        border-radius: 999px;
+        opacity: 0;
+        transition: opacity .15s;
+        pointer-events: none;
+    }
 </style>
 
 <div class="modal-overlay hidden" id="edit-app-modal">
@@ -741,20 +859,87 @@
             <h4 style="color: #fbbf24; margin-bottom: 10px;">Links</h4>
             <div class="form-group">
                 <label>Direct Download Link</label>
-                <input type="text" id="edit-download" class="form-input">
+                <div class="link-input-row">
+                    <input type="text" id="edit-download" class="form-input">
+                    <button type="button" class="btn-browse" onclick="openFilePicker('edit-download', ['android','windows','macos','linux','archive'])">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Browse
+                    </button>
+                </div>
             </div>
             <div class="form-group">
                 <label>Store Link (Google Play / App Store)</label>
-                <input type="text" id="edit-store" class="form-input">
+                <input type="text" id="edit-store" class="form-input" placeholder="https://play.google.com/...">
             </div>
             <div class="form-group">
                 <label>Video Tutorial Link</label>
-                <input type="text" id="edit-video" class="form-input">
+                <div class="link-input-row">
+                    <input type="text" id="edit-video" class="form-input">
+                    <button type="button" class="btn-browse" onclick="openFilePicker('edit-video', ['video'])">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Browse
+                    </button>
+                </div>
             </div>
 
             <div class="form-actions">
                 <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="saveApp()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- ══ File Manager Modal ══════════════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="file-manager-modal">
+    <div class="modal" style="max-width:860px;width:95%;max-height:90vh;display:flex;flex-direction:column;">
+        <div class="modal-header" style="flex-shrink:0;">
+            <h2 style="display:flex;align-items:center;gap:10px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                File Manager
+            </h2>
+            <button class="modal-close" onclick="closeFileManager()">&times;</button>
+        </div>
+
+        <!-- Upload zone -->
+        <div id="fm-dropzone" style="flex-shrink:0;margin:16px 20px 0;border:2px dashed var(--border-color);border-radius:10px;padding:20px;text-align:center;cursor:pointer;transition:all .2s;position:relative;"
+             onclick="document.getElementById('fm-file-input').click()"
+             ondragover="event.preventDefault();this.style.borderColor='var(--primary)';this.style.background='rgba(99,102,241,.07)'"
+             ondragleave="this.style.borderColor='';this.style.background=''"
+             ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleFileDrop(event)">
+            <input type="file" id="fm-file-input" style="display:none" multiple onchange="handleFileSelect(this)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary);margin-bottom:8px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <p style="margin:0;font-size:.9rem;color:var(--text-secondary);">Drag & drop or <strong style="color:var(--primary);">click to upload</strong></p>
+            <p style="margin:4px 0 0;font-size:.75rem;color:var(--text-secondary);opacity:.7;">APK · EXE · DMG · DEB · RPM · ZIP · MP4 · WebM · PNG — max 500 MB</p>
+        </div>
+
+        <!-- Upload progress -->
+        <div id="fm-progress-wrap" style="display:none;flex-shrink:0;margin:10px 20px 0;">
+            <div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-secondary);margin-bottom:4px;">
+                <span id="fm-progress-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;"></span>
+                <span id="fm-progress-pct">0%</span>
+            </div>
+            <div style="height:6px;background:var(--bg-dark);border-radius:999px;overflow:hidden;">
+                <div id="fm-progress-bar" style="height:100%;background:var(--primary);width:0%;transition:width .15s;border-radius:999px;"></div>
+            </div>
+        </div>
+
+        <!-- Filter tabs -->
+        <div id="fm-filters" style="flex-shrink:0;display:flex;gap:8px;padding:14px 20px 0;flex-wrap:wrap;">
+            <button class="fm-filter active" data-cat="all" onclick="setFmFilter('all',this)">All</button>
+            <button class="fm-filter" data-cat="android" onclick="setFmFilter('android',this)">Android</button>
+            <button class="fm-filter" data-cat="windows" onclick="setFmFilter('windows',this)">Windows</button>
+            <button class="fm-filter" data-cat="macos" onclick="setFmFilter('macos',this)">macOS</button>
+            <button class="fm-filter" data-cat="linux" onclick="setFmFilter('linux',this)">Linux</button>
+            <button class="fm-filter" data-cat="video" onclick="setFmFilter('video',this)">Video</button>
+            <button class="fm-filter" data-cat="archive" onclick="setFmFilter('archive',this)">Archive</button>
+            <button class="fm-filter" data-cat="image" onclick="setFmFilter('image',this)">Image</button>
+        </div>
+
+        <!-- File grid -->
+        <div id="fm-grid" style="flex:1;overflow-y:auto;padding:14px 20px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;min-height:200px;">
+            <div id="fm-empty" style="grid-column:1/-1;text-align:center;color:var(--text-secondary);padding:40px 0;display:none;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4;margin-bottom:10px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <p style="margin:0;">No files yet. Upload one above.</p>
             </div>
         </div>
     </div>
@@ -2258,5 +2443,231 @@
             if (enabledCheckbox) enabledCheckbox.checked = false;
         }
     }
+
+    /* ══════════════════════════════════════════════════════════════════
+       File Manager
+    ══════════════════════════════════════════════════════════════════ */
+    (function () {
+        let _targetInputId   = null;
+        let _allowedCats     = null;
+        let _currentFilter   = 'all';
+        let _allFiles        = [];
+        let _uploading       = false;
+
+        const EXT_LABELS = {
+            android: 'Android', windows: 'Windows', macos: 'macOS',
+            linux: 'Linux', video: 'Video', archive: 'Archive',
+            image: 'Image', other: 'Other'
+        };
+        const EXT_COLORS = {
+            android: '#3ddc84', windows: '#0078d4', macos: '#a2aaad',
+            linux: '#f7c948', video: '#e040fb', archive: '#ff7043',
+            image: '#26c6da', other: '#78909c'
+        };
+
+        function fmFmtSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+            return (bytes / 1073741824).toFixed(2) + ' GB';
+        }
+
+        function fmFmtDate(iso) {
+            if (!iso) return '';
+            try {
+                const d = new Date(iso);
+                return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+            } catch (_) { return iso; }
+        }
+
+        function renderGrid() {
+            const grid = document.getElementById('fm-grid');
+            const empty = document.getElementById('fm-empty');
+            const existing = grid.querySelectorAll('.fm-card');
+            existing.forEach(c => c.remove());
+
+            const visible = _allFiles.filter(f => {
+                if (_currentFilter !== 'all' && f.category !== _currentFilter) return false;
+                if (_allowedCats && _allowedCats.length && !_allowedCats.includes(f.category)) return false;
+                return true;
+            });
+
+            if (visible.length === 0) {
+                empty.style.display = 'block';
+                return;
+            }
+            empty.style.display = 'none';
+
+            visible.forEach(f => {
+                const cat = f.category || 'other';
+                const color = EXT_COLORS[cat] || EXT_COLORS.other;
+                const label = EXT_LABELS[cat] || 'Other';
+                const card = document.createElement('div');
+                card.className = 'fm-card fm-selectable';
+                card.title = 'Click to select';
+                card.innerHTML = `
+                    <div class="fm-ext-badge" style="background:${color}20;color:${color};border:1px solid ${color}40;">
+                        ${label}
+                    </div>
+                    <div class="fm-name" title="${f.name}">${f.name}</div>
+                    <div class="fm-meta">${fmFmtSize(f.size)} &middot; ${fmFmtDate(f.modified)}</div>
+                    <div class="fm-actions">
+                        <button class="fm-btn fm-btn-select" title="Use this file">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            Select
+                        </button>
+                        <button class="fm-btn fm-btn-delete" title="Delete file">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                        </button>
+                    </div>`;
+
+                card.querySelector('.fm-btn-select').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectFile(f.url);
+                });
+                card.querySelector('.fm-btn-delete').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteFile(f.name, card);
+                });
+                card.addEventListener('click', () => selectFile(f.url));
+
+                grid.appendChild(card);
+            });
+        }
+
+        function selectFile(url) {
+            if (_targetInputId) {
+                const input = document.getElementById(_targetInputId);
+                if (input) input.value = url;
+            }
+            closeFileManager();
+        }
+
+        async function deleteFile(filename, cardEl) {
+            if (!confirm(`Delete "${filename}"?`)) return;
+            try {
+                const resp = await fetch(`/api/app-files/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (data.success) {
+                    _allFiles = _allFiles.filter(f => f.name !== filename);
+                    cardEl.remove();
+                    if (!document.querySelectorAll('#fm-grid .fm-card').length) {
+                        document.getElementById('fm-empty').style.display = 'block';
+                    }
+                    showToast('File deleted.');
+                } else {
+                    showToast(data.error || 'Delete failed', 'error');
+                }
+            } catch (_) {
+                showToast('Delete failed', 'error');
+            }
+        }
+
+        async function loadFmFiles() {
+            try {
+                const resp = await fetch('/api/app-files');
+                const data = await resp.json();
+                if (data.success) {
+                    _allFiles = data.files || [];
+                    renderGrid();
+                } else {
+                    showToast(data.error || 'Could not load files', 'error');
+                }
+            } catch (_) {
+                showToast('Could not load files', 'error');
+            }
+        }
+
+        async function uploadFiles(fileList) {
+            if (_uploading || !fileList.length) return;
+            _uploading = true;
+
+            const progressWrap = document.getElementById('fm-progress-wrap');
+            const progressBar  = document.getElementById('fm-progress-bar');
+            const progressPct  = document.getElementById('fm-progress-pct');
+            progressWrap.style.display = 'block';
+
+            let done = 0;
+            const total = fileList.length;
+
+            for (const file of fileList) {
+                const fd = new FormData();
+                fd.append('file', file);
+                await new Promise((resolve) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/api/app-files/upload');
+                    xhr.upload.onprogress = (e) => {
+                        if (e.lengthComputable) {
+                            const filePct = Math.round((e.loaded / e.total) * 100);
+                            const overall = Math.round(((done + filePct / 100) / total) * 100);
+                            progressBar.style.width = overall + '%';
+                            progressPct.textContent = overall + '%';
+                        }
+                    };
+                    xhr.onload = () => {
+                        done++;
+                        progressBar.style.width = Math.round((done / total) * 100) + '%';
+                        progressPct.textContent = Math.round((done / total) * 100) + '%';
+                        try {
+                            const res = JSON.parse(xhr.responseText);
+                            if (!res.success) showToast(res.error || `Upload failed: ${file.name}`, 'error');
+                        } catch (_) {}
+                        resolve();
+                    };
+                    xhr.onerror = () => { showToast(`Upload error: ${file.name}`, 'error'); resolve(); };
+                    xhr.send(fd);
+                });
+            }
+
+            _uploading = false;
+            setTimeout(() => { progressWrap.style.display = 'none'; progressBar.style.width = '0'; progressPct.textContent = '0%'; }, 1200);
+            await loadFmFiles();
+        }
+
+        /* ── public API ─────────────────────────────────────────── */
+        window.openFilePicker = function (targetInputId, allowedCategories) {
+            _targetInputId = targetInputId || null;
+            _allowedCats   = allowedCategories || null;
+            _currentFilter = (_allowedCats && _allowedCats.length === 1) ? _allowedCats[0] : 'all';
+
+            /* sync filter tab UI */
+            document.querySelectorAll('.fm-filter').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.cat === _currentFilter);
+            });
+
+            document.getElementById('file-manager-modal').classList.remove('hidden');
+            loadFmFiles();
+        };
+
+        window.closeFileManager = function () {
+            document.getElementById('file-manager-modal').classList.add('hidden');
+            _targetInputId = null;
+            _allowedCats   = null;
+        };
+
+        window.setFmFilter = function (cat, btn) {
+            _currentFilter = cat;
+            document.querySelectorAll('.fm-filter').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderGrid();
+        };
+
+        window.handleFileSelect = function (input) {
+            if (input.files && input.files.length) {
+                uploadFiles(Array.from(input.files));
+                input.value = '';
+            }
+        };
+
+        window.handleFileDrop = function (event) {
+            const files = event.dataTransfer && event.dataTransfer.files;
+            if (files && files.length) uploadFiles(Array.from(files));
+        };
+
+        /* close on overlay click */
+        document.getElementById('file-manager-modal').addEventListener('click', function (e) {
+            if (e.target === this) closeFileManager();
+        });
+    })();
 </script>
 {% endblock %}

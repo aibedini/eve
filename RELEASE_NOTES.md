@@ -1,3 +1,33 @@
+# Eve - Xui Manager v1.9.6
+
+## [1.9.6] - 2026-05-19
+
+English:
+- Feature: File Manager in Applications section — upload installers (APK, EXE, DMG, DEB, RPM, ZIP) and tutorial videos (MP4, WebM, MKV) directly from the Subscription Page Manager with drag-and-drop support, real-time progress bar, category filter tabs, and secure server-side validation
+- Feature: Browse button on Direct Download Link and Video Tutorial Link fields — pick files from the server or upload new ones without leaving the form
+- Improvement: QR code modal now opens instantly; all QR codes load in parallel instead of sequentially — eliminates the long wait before the modal appears
+- Fix: Mobile client card layout — removed double border line between username and status rows, improved spacing (more breathing room between cards and rows), action buttons are now square (36×36 px)
+- Fix: Email, client name, and comment fields now wrap text on mobile instead of truncating — long usernames are always fully visible
+- Fix: Last User label in Purchase New Service moved above the field (not shown inline inside the input) so long usernames display fully with word-wrap
+- Fix: VPN user-agent detection — corrected `napsternetv` token (was misspelled `napstarnet`), added new app tokens: `karing`, `v2raytun`, `mahsa`, `npv`, `flclash`, `furious`, `clash-verge`, `clashverge`, `v2rayx`, `musedaq`, `v2rayn`, `v2raya`, `nekoray`, `qv2ray`
+- Fix: Phone number extraction — spaced numbers like `0912 833 4643` now match correctly; `1097` or similar account names no longer cause false phone matches (bare `98` prefix rejected; only `+98` accepted); comment field now checked as fallback if no number found in email/name
+
+Persian (فارسی):
+- ویژگی: مدیر فایل در بخش Applications — آپلود فایل‌های نصبی (APK، EXE، DMG، DEB، RPM، ZIP) و ویدیوهای آموزشی (MP4، WebM، MKV) مستقیم از Subscription Page Manager با پشتیبانی از Drag & Drop، نوار پیشرفت، فیلتر بر اساس دسته‌بندی، و اعتبارسنجی امن سمت سرور
+- ویژگی: دکمه Browse روی فیلدهای Direct Download Link و Video Tutorial Link — انتخاب از فایل‌های موجود یا آپلود جدید بدون خروج از فرم
+- بهبود: مودال QR Code اکنون فوراً باز می‌شود؛ تمام کدهای QR به‌صورت موازی بارگذاری می‌شوند — انتظار طولانی قبل از نمایش مودال حذف شد
+- رفع: لیوات کارت کلاینت در موبایل — خط دوتایی اضافی بین ردیف نام کاربر و وضعیت برطرف شد، فاصله‌گذاری بهبود یافت، دکمه‌های عملیات مربعی (۳۶×۳۶) شدند
+- رفع: فیلدهای ایمیل، نام کلاینت، و کامنت در موبایل اکنون wrap می‌شوند به جای truncate — نام‌های کاربری بلند همیشه کامل دیده می‌شوند
+- رفع: لیبل Last User در Purchase New Service بالای فیلد نمایش داده می‌شود (نه داخل input) تا نام‌های بلند با word-wrap کامل دیده شوند
+- رفع: تشخیص User-Agent برنامه‌های VPN — توکن `napsternetv` اصلاح شد (قبلاً `napstarnet` بود)، توکن‌های جدید اضافه شدند: karing، v2raytun، mahsa، npv، flclash، furious، clash-verge، v2rayx، و سایرین
+- رفع: استخراج شماره موبایل — اعداد فاصله‌دار مثل `0912 833 4643` اکنون شناسایی می‌شوند؛ نام‌هایی مثل `1097` دیگر false match نمی‌دهند (پیشوند `98` بدون `+` رد می‌شود)؛ فیلد comment نیز به عنوان fallback بررسی می‌شود
+
+Security notes:
+- File uploads validated by extension whitelist + MIME-independent checks
+- All uploaded filenames prefixed with UUID to prevent enumeration
+- Path traversal prevented via os.path.realpath comparison
+- Upload endpoint restricted to superadmin role only
+
 # Eve - Xui Manager v1.9.1
 
 ## [1.9.1] - 2026-05-12

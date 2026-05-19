@@ -86,7 +86,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "1.9.5"
+APP_VERSION = "1.9.6"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -11883,7 +11883,7 @@ def upload_file():
     file = request.files['file']
     if file.filename == '':
         return jsonify({'success': False, 'error': 'No selected file'}), 400
-        
+
     if file:
         file.seek(0, os.SEEK_END)
         file_length = file.tell()
@@ -11896,6 +11896,136 @@ def upload_file():
         os.makedirs(upload_folder, exist_ok=True)
         file.save(os.path.join(upload_folder, filename))
         return jsonify({'success': True, 'url': f'/static/uploads/{filename}'})
+
+
+# ── App File Manager ──────────────────────────────────────────────────────────
+# Separate from the general /api/upload — restricted to superadmin,
+# larger size limits, strict whitelist, stored in static/app-files/.
+
+_APP_FILE_MAX_BYTES  = 500 * 1024 * 1024   # 500 MB (covers large installers + videos)
+_APP_FILES_DIR_NAME  = 'app-files'
+
+# Extension → category mapping (whitelist)
+_ALLOWED_APP_EXTS = {
+    # Installers
+    '.apk':  'android', '.aab':  'android',
+    '.exe':  'windows', '.msi':  'windows',
+    '.dmg':  'macos',   '.pkg':  'macos',
+    '.deb':  'linux',   '.rpm':  'linux',   '.appimage': 'linux',
+    # Archives / cross-platform
+    '.zip':  'archive', '.tar':  'archive', '.gz': 'archive',
+    # Videos
+    '.mp4':  'video',   '.webm': 'video',   '.mkv': 'video', '.mov': 'video',
+    # Images (icons / screenshots)
+    '.png':  'image',   '.jpg':  'image',   '.jpeg': 'image', '.webp': 'image',
+    '.svg':  'image',
+}
+
+
+def _app_files_dir() -> str:
+    d = os.path.join(app.static_folder, _APP_FILES_DIR_NAME)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _safe_app_file_path(filename: str) -> str | None:
+    """Return absolute path if filename stays inside app-files dir, else None."""
+    base = os.path.realpath(_app_files_dir())
+    target = os.path.realpath(os.path.join(base, filename))
+    return target if target.startswith(base + os.sep) else None
+
+
+@app.route('/api/app-files', methods=['GET'])
+@superadmin_required
+def list_app_files():
+    base = _app_files_dir()
+    files = []
+    try:
+        for fname in sorted(os.listdir(base)):
+            fpath = os.path.join(base, fname)
+            if not os.path.isfile(fpath):
+                continue
+            ext = os.path.splitext(fname)[1].lower()
+            stat = os.stat(fpath)
+            files.append({
+                'name': fname,
+                'size': stat.st_size,
+                'modified': int(stat.st_mtime),
+                'url': f'/static/{_APP_FILES_DIR_NAME}/{fname}',
+                'category': _ALLOWED_APP_EXTS.get(ext, 'other'),
+                'ext': ext.lstrip('.'),
+            })
+    except Exception as e:
+        app.logger.error(f'list_app_files error: {e}')
+    return jsonify({'success': True, 'files': files})
+
+
+@app.route('/api/app-files/upload', methods=['POST'])
+@superadmin_required
+def upload_app_file():
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': 'No file provided'}), 400
+
+    f = request.files['file']
+    if not f or f.filename == '':
+        return jsonify({'success': False, 'error': 'No file selected'}), 400
+
+    original = secure_filename(f.filename)
+    ext = os.path.splitext(original)[1].lower()
+    if ext not in _ALLOWED_APP_EXTS:
+        return jsonify({'success': False, 'error': f'File type not allowed: {ext}'}), 415
+
+    # Size check (stream-safe: read into memory limit)
+    f.seek(0, os.SEEK_END)
+    size = f.tell()
+    f.seek(0)
+    if size > _APP_FILE_MAX_BYTES:
+        return jsonify({'success': False, 'error': 'File exceeds 500 MB limit'}), 413
+    if size == 0:
+        return jsonify({'success': False, 'error': 'Empty file'}), 400
+
+    uid = uuid.uuid4().hex[:10]
+    safe_name = f"{uid}_{original}"
+    dest = os.path.join(_app_files_dir(), safe_name)
+
+    try:
+        f.save(dest)
+    except Exception as e:
+        app.logger.error(f'upload_app_file save error: {e}')
+        return jsonify({'success': False, 'error': 'Save failed'}), 500
+
+    stat = os.stat(dest)
+    category = _ALLOWED_APP_EXTS.get(ext, 'other')
+    app.logger.info(f"App file uploaded by {session.get('admin_username')}: {safe_name} ({size} bytes)")
+    return jsonify({
+        'success': True,
+        'file': {
+            'name': safe_name,
+            'size': stat.st_size,
+            'modified': int(stat.st_mtime),
+            'url': f'/static/{_APP_FILES_DIR_NAME}/{safe_name}',
+            'category': category,
+            'ext': ext.lstrip('.'),
+        }
+    })
+
+
+@app.route('/api/app-files/<path:filename>', methods=['DELETE'])
+@superadmin_required
+def delete_app_file(filename):
+    # Prevent path traversal
+    safe_name = secure_filename(filename)
+    fpath = _safe_app_file_path(safe_name)
+    if not fpath or not os.path.isfile(fpath):
+        return jsonify({'success': False, 'error': 'File not found'}), 404
+    try:
+        os.remove(fpath)
+        app.logger.info(f"App file deleted by {session.get('admin_username')}: {safe_name}")
+        return jsonify({'success': True})
+    except Exception as e:
+        app.logger.error(f'delete_app_file error: {e}')
+        return jsonify({'success': False, 'error': 'Delete failed'}), 500
+
 
 @app.route('/api/system-config', methods=['POST'])
 @superadmin_required
