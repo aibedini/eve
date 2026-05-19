@@ -11929,8 +11929,22 @@ _ALLOWED_APP_EXTS = {
 
 
 def _app_files_dir() -> str:
+    """Return (and create if needed) the app-files storage directory.
+    Raises RuntimeError with a descriptive message on permission failure.
+    """
     d = os.path.join(app.static_folder, _APP_FILES_DIR_NAME)
-    os.makedirs(d, exist_ok=True)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError as e:
+        raise RuntimeError(
+            f"Cannot create upload directory '{d}': {e}. "
+            "Run: mkdir -p {d} && chown <user> {d} && chmod 755 {d}"
+        ) from e
+    if not os.access(d, os.W_OK):
+        raise RuntimeError(
+            f"Upload directory '{d}' exists but is not writable. "
+            f"Run: chown $(whoami) '{d}' && chmod 755 '{d}'"
+        )
     return d
 
 
@@ -11941,10 +11955,49 @@ def _safe_app_file_path(filename: str) -> str | None:
     return target if target.startswith(base + os.sep) else None
 
 
+@app.route('/api/app-files/health', methods=['GET'])
+@superadmin_required
+def app_files_health():
+    """Diagnostic endpoint — returns directory status and write-test result."""
+    static_folder = app.static_folder or '(not set)'
+    d = os.path.join(static_folder, _APP_FILES_DIR_NAME)
+    info = {
+        'static_folder': static_folder,
+        'target_dir': d,
+        'exists': os.path.isdir(d),
+        'writable': os.access(d, os.W_OK) if os.path.isdir(d) else False,
+        'file_count': 0,
+        'write_test': None,
+        'error': None,
+    }
+    try:
+        real_d = _app_files_dir()
+        info['target_dir'] = real_d
+        info['exists'] = True
+        info['writable'] = True
+        info['file_count'] = sum(1 for f in os.listdir(real_d) if os.path.isfile(os.path.join(real_d, f)))
+        # Write test
+        test_path = os.path.join(real_d, f'.write_test_{uuid.uuid4().hex[:6]}')
+        with open(test_path, 'w') as t:
+            t.write('ok')
+        os.remove(test_path)
+        info['write_test'] = 'passed'
+        info['success'] = True
+    except Exception as e:
+        info['error'] = str(e)
+        info['success'] = False
+        app.logger.error(f'app_files_health error: {e}')
+    return jsonify(info)
+
+
 @app.route('/api/app-files', methods=['GET'])
 @superadmin_required
 def list_app_files():
-    base = _app_files_dir()
+    try:
+        base = _app_files_dir()
+    except RuntimeError as e:
+        app.logger.error(f'list_app_files dir error: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
     files = []
     try:
         for fname in sorted(os.listdir(base)):
@@ -11963,6 +12016,7 @@ def list_app_files():
             })
     except Exception as e:
         app.logger.error(f'list_app_files error: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
     return jsonify({'success': True, 'files': files})
 
 
@@ -11977,38 +12031,60 @@ def upload_app_file():
         return jsonify({'success': False, 'error': 'No file selected'}), 400
 
     original = secure_filename(f.filename)
+    if not original:
+        return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+
     ext = os.path.splitext(original)[1].lower()
     if ext not in _ALLOWED_APP_EXTS:
-        return jsonify({'success': False, 'error': f'File type not allowed: {ext}'}), 415
+        return jsonify({'success': False, 'error': f'File type not allowed: {ext or "(none)"}'}), 415
 
-    # Size check (stream-safe: read into memory limit)
-    f.seek(0, os.SEEK_END)
-    size = f.tell()
-    f.seek(0)
-    if size > _APP_FILE_MAX_BYTES:
-        return jsonify({'success': False, 'error': 'File exceeds 500 MB limit'}), 413
+    # Use Content-Length header first (fast, no extra read); fall back to seek/tell
+    size = request.content_length or 0
     if size == 0:
-        return jsonify({'success': False, 'error': 'Empty file'}), 400
+        try:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(0)
+        except Exception:
+            size = 0
+
+    if size > _APP_FILE_MAX_BYTES:
+        return jsonify({'success': False, 'error': f'File too large ({size // (1024*1024)} MB). Max 500 MB.'}), 413
+
+    # Verify upload directory is accessible — return a clear 500 (not a mystery error)
+    try:
+        base_dir = _app_files_dir()
+    except RuntimeError as e:
+        app.logger.error(f'upload_app_file dir error: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
 
     uid = uuid.uuid4().hex[:10]
     safe_name = f"{uid}_{original}"
-    dest = os.path.join(_app_files_dir(), safe_name)
+    dest = os.path.join(base_dir, safe_name)
 
     try:
         f.save(dest)
     except Exception as e:
-        app.logger.error(f'upload_app_file save error: {e}')
-        return jsonify({'success': False, 'error': 'Save failed'}), 500
+        app.logger.error(f'upload_app_file save error ({dest}): {e}')
+        return jsonify({'success': False, 'error': f'Save failed: {e}'}), 500
 
-    stat = os.stat(dest)
+    try:
+        saved_size = os.stat(dest).st_size
+        modified   = int(os.stat(dest).st_mtime)
+    except OSError:
+        saved_size, modified = size, int(__import__('time').time())
+
     category = _ALLOWED_APP_EXTS.get(ext, 'other')
-    app.logger.info(f"App file uploaded by {session.get('admin_username')}: {safe_name} ({size} bytes)")
+    app.logger.info(
+        f"App file uploaded by {session.get('admin_username','?')}: "
+        f"{safe_name} ({saved_size} bytes, category={category})"
+    )
     return jsonify({
         'success': True,
         'file': {
             'name': safe_name,
-            'size': stat.st_size,
-            'modified': int(stat.st_mtime),
+            'size': saved_size,
+            'modified': modified,
             'url': f'/static/{_APP_FILES_DIR_NAME}/{safe_name}',
             'category': category,
             'ext': ext.lstrip('.'),

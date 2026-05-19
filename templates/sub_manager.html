@@ -2608,20 +2608,31 @@
                         done++;
                         progressBar.style.width = Math.round((done / total) * 100) + '%';
                         progressPct.textContent = Math.round((done / total) * 100) + '%';
-                        if (xhr.status === 413) {
-                            showToast(`File too large: "${file.name}". Check server nginx client_max_body_size.`, 'error');
-                        } else if (xhr.status === 403 || xhr.status === 401) {
-                            showToast('Permission denied. Are you logged in as superadmin?', 'error');
-                        } else if (xhr.status >= 400) {
-                            let msg = `Upload failed (HTTP ${xhr.status}): ${file.name}`;
-                            try { const r = JSON.parse(xhr.responseText); if (r.error) msg = r.error; } catch (_) {}
-                            showToast(msg, 'error');
-                        } else {
+                        if (xhr.status >= 200 && xhr.status < 300) {
                             try {
                                 const res = JSON.parse(xhr.responseText);
                                 if (!res.success) showToast(res.error || `Upload failed: ${file.name}`, 'error');
                             } catch (_) {
                                 showToast(`Unexpected server response for: ${file.name}`, 'error');
+                            }
+                        } else {
+                            // Try to extract meaningful error from response body (JSON or plain text)
+                            let detail = '';
+                            try {
+                                const r = JSON.parse(xhr.responseText);
+                                detail = r.error || r.message || r.title || '';
+                            } catch (_) {
+                                // Non-JSON (e.g. Nginx HTML error page) — show first 120 chars
+                                const stripped = xhr.responseText.replace(/<[^>]+>/g, '').trim();
+                                if (stripped) detail = stripped.substring(0, 120);
+                            }
+                            if (xhr.status === 413) {
+                                showToast(`File too large: "${file.name}". Add client_max_body_size 512m to Nginx config.`, 'error');
+                            } else if (xhr.status === 403 || xhr.status === 401) {
+                                showToast('Permission denied. Are you logged in as superadmin?', 'error');
+                            } else {
+                                const msg = detail || `HTTP ${xhr.status}`;
+                                showToast(`Upload failed (${xhr.status}): ${msg}`, 'error');
                             }
                         }
                         resolve();
