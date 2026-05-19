@@ -1,6 +1,6 @@
-# Eve - Xui Manager v1.9.6
+# Eve - Xui Manager v1.9.7
 
-## [1.9.6] - 2026-05-19
+## [1.9.7] - 2026-05-19
 
 English:
 - Feature: File Manager in Applications section — upload installers (APK, EXE, DMG, DEB, RPM, ZIP) and tutorial videos (MP4, WebM, MKV) directly from the Subscription Page Manager with drag-and-drop support, real-time progress bar, category filter tabs, and secure server-side validation
