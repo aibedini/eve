@@ -2672,15 +2672,15 @@
                                 const stripped = xhr.responseText.replace(/<[^>]+>/g, '').trim();
                                 if (stripped) detail = stripped.substring(0, 120);
                             }
-                            const isCf = xhr.responseText.includes('ray-id') || xhr.responseText.includes('cloudflare') || xhr.responseText.includes('Cloudflare');
+                            const isCdnBlock = xhr.responseText.includes('ray-id') || xhr.responseText.includes('Ray ID');
                             if (xhr.status === 413) {
                                 showToast(`File too large: "${file.name}". Add client_max_body_size 512m to Nginx config.`, 'error', 8000);
                             } else if (xhr.status === 403 || xhr.status === 401) {
                                 showToast('Permission denied. Are you logged in as superadmin?', 'error');
-                            } else if (xhr.status === 402 && isCf) {
-                                showToast(`Cloudflare blocked the upload (402). Go to Cloudflare → your domain → Security → WAF and disable any rule that blocks file uploads. Or in Page Rules, disable "Security Level" for this path.`, 'error', 12000);
-                            } else if (isCf) {
-                                showToast(`Cloudflare blocked the upload (HTTP ${xhr.status}). Check Cloudflare WAF / Firewall Rules for your domain.`, 'error', 10000);
+                            } else if (xhr.status === 402) {
+                                showToast(`Upload blocked by CDN/proxy (402). Your CDN has a file size limit or WAF rule blocking this upload. Check your CDN panel → WAF rules and upload size limits.`, 'error', 10000);
+                            } else if (isCdnBlock) {
+                                showToast(`Upload blocked by CDN/proxy (HTTP ${xhr.status}). Check your CDN WAF rules or size limits.`, 'error', 10000);
                             } else {
                                 const msg = detail || `HTTP ${xhr.status}`;
                                 showToast(`Upload failed (${xhr.status}): ${msg}`, 'error', 8000);
