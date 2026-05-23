@@ -86,7 +86,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "1.9.8"
+APP_VERSION = "1.9.9"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -1459,7 +1459,9 @@ def _pg_dump_backup(dest_path: str) -> None:
         '--file', dest_path,
         '--dbname', uri,
     ]
-    subprocess.run(cmd, check=True, env=env)
+    result = subprocess.run(cmd, env=env, timeout=600)
+    if result.returncode != 0:
+        raise RuntimeError(f"pg_dump exited with code {result.returncode}")
 
 
 def _pg_restore_backup(backup_path: str) -> None:
@@ -13037,7 +13039,34 @@ def create_backup():
         filename = _create_database_backup_file('backup')
         return jsonify({'success': True, 'message': 'Backup created', 'filename': filename})
     except Exception as e:
+        app.logger.error(f'create_backup error: {e}')
         return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/backups/diag', methods=['GET'])
+@superadmin_required
+def backup_diag():
+    """Diagnostic: show backup directory path and files on disk."""
+    pg_dump_bin = shutil.which('pg_dump')
+    files_on_disk = []
+    try:
+        if os.path.isdir(BACKUP_DIR):
+            for f in sorted(os.listdir(BACKUP_DIR)):
+                fp = os.path.join(BACKUP_DIR, f)
+                if os.path.isfile(fp):
+                    files_on_disk.append({'name': f, 'size': os.path.getsize(fp)})
+    except Exception as e:
+        files_on_disk = [{'error': str(e)}]
+    return jsonify({
+        'backup_dir': BACKUP_DIR,
+        'dir_exists': os.path.isdir(BACKUP_DIR),
+        'dir_writable': os.access(BACKUP_DIR, os.W_OK),
+        'instance_path': app.instance_path,
+        'pg_dump': pg_dump_bin or 'NOT FOUND',
+        'db_type': 'postgresql' if _is_postgres_db() else 'sqlite',
+        'files_on_disk': files_on_disk,
+    })
+
 
 @app.route('/api/backups/upload', methods=['POST'])
 @login_required

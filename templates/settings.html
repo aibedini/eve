@@ -244,7 +244,7 @@
                             <div class="file-upload-text" id="backup-file-name">No file chosen</div>
                             <input type="file" id="upload-backup-input" class="file-upload-input" accept=".db,.dump,.sql" onchange="handleUpload(this)">
                         </div>
-                        <button class="btn btn-primary" onclick="createBackup()">
+                        <button class="btn btn-primary" onclick="createBackup(this)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                             Create Backup
                         </button>
@@ -2602,10 +2602,12 @@
     async function loadBackups() {
         try {
             const res = await fetch('/api/backups');
+            if (!res.ok) { showToast(`Error loading backups: HTTP ${res.status}`, 'error'); return; }
             const data = await res.json();
-            renderBackups(data.backups);
+            if (!data.success) { showToast('Error loading backups: ' + (data.error || 'unknown'), 'error'); return; }
+            renderBackups(data.backups || []);
         } catch (e) {
-            showToast('Error loading backups', 'error');
+            showToast('Error loading backups: ' + (e.message || e), 'error');
         }
     }
 
@@ -2650,27 +2652,27 @@
         }
     }
 
-    async function createBackup() {
+    async function createBackup(btnEl) {
+        const btn = btnEl || (typeof event !== 'undefined' ? event.currentTarget : null);
+        const originalHTML = btn ? btn.innerHTML : '';
         try {
-            const btn = event.currentTarget;
-            const originalText = btn.innerHTML;
-            btn.innerHTML = 'Creating...';
-            btn.disabled = true;
+            if (btn) { btn.innerHTML = 'Creating...'; btn.disabled = true; }
 
             const res = await fetch('/api/backups', { method: 'POST' });
-            const data = await res.json();
-            
-            if (data.success) {
-                showToast('Backup created successfully');
-                loadBackups();
+            let data;
+            try { data = await res.json(); } catch (_) { data = {}; }
+
+            if (res.ok && data.success) {
+                showToast('Backup created: ' + (data.filename || 'done'));
+                await loadBackups();
             } else {
-                showToast(data.error || 'Error creating backup', 'error');
+                const errMsg = data.error || `Server error (HTTP ${res.status})`;
+                showToast('Backup failed: ' + errMsg, 'error', 8000);
             }
-            
-            btn.innerHTML = originalText;
-            btn.disabled = false;
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast('Network error — check if pg_dump is installed and connection timeout is long enough: ' + (e.message || e), 'error', 8000);
+        } finally {
+            if (btn) { btn.innerHTML = originalHTML; btn.disabled = false; }
         }
     }
 
