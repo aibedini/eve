@@ -11161,7 +11161,15 @@ def client_subscription(server_id, sub_id):
     wants_b64 = request.args.get('format', '').lower() == 'b64'
     accept = (request.headers.get('Accept') or '').lower()
     accept_prefers_html = ('text/html' in accept) or ('application/xhtml+xml' in accept)
-    is_client_app = wants_b64 or any(token in user_agent for token in agent_tokens) or (accept and not accept_prefers_html)
+    # A request is browser-like only if it BOTH sends text/html in Accept AND has a browser UA.
+    # Everything else (unknown UA, no Accept, Accept:*/*, known V2Ray UA) is treated as a client app.
+    is_browser_like = accept_prefers_html and ('mozilla' in user_agent)
+    is_client_app = (
+        wants_b64 or
+        any(token in user_agent for token in agent_tokens) or
+        (accept and not accept_prefers_html) or
+        not is_browser_like
+    )
 
     # v2rayNG is more reliable when the subscription response is base64.
     # Some versions can appear to hang/spin when the server returns plain text.
@@ -11316,12 +11324,12 @@ def client_subscription(server_id, sub_id):
             configs.append(direct_link)
 
     subscription_entries = [entry for entry in configs if entry]
-    if not subscription_entries:
-        subscription_entries.append(sub_url)
+    # Do NOT fall back to sub_url — returning a URL as a "config" causes
+    # "Subscription does not contain valid configurations" in every V2Ray client.
     subscription_blob = '\n'.join(subscription_entries)
-    encoded_blob = base64.b64encode((subscription_blob or '').encode('utf-8')).decode('utf-8') if subscription_blob else ''
+    encoded_blob = base64.b64encode(subscription_blob.encode('utf-8')).decode('utf-8')
 
-    if encoded_blob and is_client_app and not wants_html_view:
+    if is_client_app and not wants_html_view:
         headers = dict(fallback_headers)
         headers['Content-Type'] = 'text/plain; charset=utf-8'
         return encoded_blob, 200, headers
@@ -11347,7 +11355,7 @@ def client_subscription(server_id, sub_id):
 
     apps = SubAppConfig.query.filter_by(is_enabled=True).all()
     apps_payload = [app.to_dict() for app in apps]
-    
+
     # Get FAQs
     faqs = FAQ.query.filter_by(is_enabled=True).all()
     faqs_payload = [faq.to_dict() for faq in faqs]

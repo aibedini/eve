@@ -471,7 +471,7 @@
                     <div class="bg-bg/50 rounded-xl p-4 border border-white/5">
                         <h3 class="font-semibold text-white mb-4" style="direction: ${descDir}; text-align: ${descAlign};">${(IS_FA ? (app.title_fa || app.name) : (app.title_en || app.name))}</h3>
                         <ul class="space-y-3 mb-5" style="direction: ${descDir}; text-align: ${descAlign};">${desc}</ul>
-                        <div class="flex gap-3">
+                        <div class="flex gap-3 flex-wrap">
                             ${app.download_link ? `<a href="${app.download_link}" target="_blank" class="flex-1 border border-white/20 bg-white/5 hover:bg-white/10 hover:border-primary/50 text-white py-2.5 rounded-lg text-sm font-medium text-center transition-all flex items-center justify-center gap-2">${downloadIcon} ${I18N.download}</a>` : ''}
                             ${app.store_link ? `<a href="${app.store_link}" target="_blank" class="flex-1 border border-white/20 bg-white/5 hover:bg-white/10 hover:border-primary/50 text-white py-2.5 rounded-lg text-sm font-medium text-center transition-all flex items-center justify-center gap-2">${storeIcon} ${storeLabel}</a>` : ''}
                             ${app.tutorial_link ? `<a href="${app.tutorial_link}" target="_blank" class="flex-1 border border-white/20 bg-white/5 hover:bg-white/10 hover:border-primary/50 text-white py-2.5 rounded-lg text-sm font-medium text-center transition-all flex items-center justify-center gap-2">${tutorialIcon} ${I18N.tutorial}</a>` : ''}
@@ -726,5 +726,7 @@
         }
 
     </script>
+
+
 </body>
 </html>
