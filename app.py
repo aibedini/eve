@@ -2156,7 +2156,9 @@ class SubAppConfig(db.Model):
     download_link = db.Column(db.String(500))
     store_link = db.Column(db.String(500))
     tutorial_link = db.Column(db.String(500))
-    
+    icon_url = db.Column(db.String(500))
+    is_recommended = db.Column(db.Boolean, default=False)
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -2170,7 +2172,9 @@ class SubAppConfig(db.Model):
             'description_en': self.description_en,
             'download_link': self.download_link,
             'store_link': self.store_link,
-            'tutorial_link': self.tutorial_link
+            'tutorial_link': self.tutorial_link,
+            'icon_url': self.icon_url,
+            'is_recommended': self.is_recommended or False
         }
 
 class FAQ(db.Model):
@@ -3707,6 +3711,25 @@ with app.app_context():
                 print("Added inbound_tag column to usage_snapshots table")
     except Exception as _spe:
         print(f"Migration error (usage_snapshots.inbound_tag): {_spe}")
+
+    # Add icon_url and is_recommended to sub_app_configs (older DBs)
+    try:
+        inspector = inspect(db.engine)
+        if 'sub_app_configs' in set(inspector.get_table_names()):
+            _sac_cols = [c['name'] for c in inspector.get_columns('sub_app_configs')]
+            _is_pg = db.engine.dialect.name == 'postgresql'
+            _sac_new = [
+                ('icon_url', 'VARCHAR(500)'),
+                ('is_recommended', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+            ]
+            for _cn, _cd in _sac_new:
+                if _cn not in _sac_cols:
+                    with db.engine.connect() as _conn:
+                        _conn.execute(text(f'ALTER TABLE sub_app_configs ADD COLUMN {_cn} {_cd}'))
+                        _conn.commit()
+                    print(f"Added {_cn} column to sub_app_configs table")
+    except Exception as _sac_e:
+        print(f"Migration error (sub_app_configs new cols): {_sac_e}")
 
     # Initialize PanelAPI data
     if not PanelAPI.query.first():
@@ -11688,7 +11711,9 @@ def create_sub_app():
         description_en=desc_en,
         download_link=data.get('download_link'),
         store_link=data.get('store_link'),
-        tutorial_link=data.get('tutorial_link')
+        tutorial_link=data.get('tutorial_link'),
+        icon_url=data.get('icon_url'),
+        is_recommended=data.get('is_recommended', False)
     )
     
     try:
@@ -11729,6 +11754,8 @@ def update_sub_app(app_id):
     if 'download_link' in data: app_config.download_link = data['download_link']
     if 'store_link' in data: app_config.store_link = data['store_link']
     if 'tutorial_link' in data: app_config.tutorial_link = data['tutorial_link']
+    if 'icon_url' in data: app_config.icon_url = data['icon_url']
+    if 'is_recommended' in data: app_config.is_recommended = data['is_recommended']
     
     try:
         db.session.commit()

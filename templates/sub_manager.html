@@ -881,6 +881,23 @@
                     </button>
                 </div>
             </div>
+            <div class="form-group">
+                <label>App Icon URL</label>
+                <div class="link-input-row">
+                    <input type="text" id="edit-icon-url" class="form-input" placeholder="https://... or upload via Browse">
+                    <button type="button" class="btn-browse" onclick="openFilePicker('edit-icon-url', ['image'])">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Browse
+                    </button>
+                </div>
+            </div>
+            <label class="form-group form-toggle-item" style="margin-bottom: 20px; padding-bottom: 0; cursor: pointer;">
+                <div class="toggle-switch">
+                    <input type="checkbox" id="edit-recommended">
+                    <span class="slider"></span>
+                </div>
+                <span>Mark as Recommended (shows "پیشنهادی" badge)</span>
+            </label>
 
             <div class="form-actions">
                 <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
@@ -1201,17 +1218,15 @@
         container.innerHTML = apps.map(app => `
             <div class="server-card ${!app.is_enabled ? 'disabled' : ''}">
                 <div class="server-header">
-                    <div class="server-icon">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-                            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-                            <line x1="6" y1="6" x2="6.01" y2="6"></line>
-                            <line x1="6" y1="18" x2="6.01" y2="18"></line>
-                        </svg>
+                    <div class="server-icon" style="overflow:hidden; border-radius: 10px; background: linear-gradient(135deg, #6366f1, #8b5cf6); display:flex; align-items:center; justify-content:center;">
+                        ${app.icon_url
+                            ? `<img src="${app.icon_url}" alt="${app.name}" style="width:40px;height:40px;object-fit:contain;border-radius:10px;" onerror="this.style.display='none';this.parentElement.innerHTML='<span style=\\'font-size:20px;font-weight:bold;color:white;\\'>${(app.name||'?')[0].toUpperCase()}</span>'">`
+                            : `<span style="font-size:20px;font-weight:bold;color:white;">${(app.name||'?')[0].toUpperCase()}</span>`
+                        }
                     </div>
-                    
+
                     <div class="server-title">
-                        <h3>${app.name}</h3>
+                        <h3>${app.name}${app.is_recommended ? ' <span style="font-size:10px;padding:2px 6px;background:rgba(251,146,60,0.2);color:#fb923c;border-radius:999px;font-weight:600;">Recommended</span>' : ''}</h3>
                         <p class="server-url" style="direction: rtl; text-align: right; margin-top: 2px;">
                             ${app.title_fa || 'بدون عنوان'}
                         </p>
@@ -1261,7 +1276,9 @@
         document.getElementById('edit-download').value = '';
         document.getElementById('edit-store').value = '';
         document.getElementById('edit-video').value = '';
-        
+        document.getElementById('edit-icon-url').value = '';
+        document.getElementById('edit-recommended').checked = false;
+
         document.getElementById('edit-app-modal').classList.remove('hidden');
     }
 
@@ -1280,7 +1297,9 @@
         document.getElementById('edit-download').value = app.download_link || '';
         document.getElementById('edit-store').value = app.store_link || '';
         document.getElementById('edit-video').value = app.tutorial_link || '';
-        
+        document.getElementById('edit-icon-url').value = app.icon_url || '';
+        document.getElementById('edit-recommended').checked = app.is_recommended || false;
+
         document.getElementById('edit-app-modal').classList.remove('hidden');
     }
 
@@ -1296,7 +1315,9 @@
             description_en: document.getElementById('edit-desc-en').value,
             download_link: document.getElementById('edit-download').value,
             store_link: document.getElementById('edit-store').value,
-            tutorial_link: document.getElementById('edit-video').value
+            tutorial_link: document.getElementById('edit-video').value,
+            icon_url: document.getElementById('edit-icon-url').value,
+            is_recommended: document.getElementById('edit-recommended').checked
         };
 
         if (!data.name.trim()) {
