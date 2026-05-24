@@ -11108,11 +11108,13 @@ def client_subscription(server_id, sub_id):
         expiry_time_sec = int(_time.time()) + 315360000  # 10 years in the future
     
     user_info_header = f"upload={up}; download={down}; total={total_limit}; expire={expiry_time_sec}"
+    _profile_title_raw = f"{server.name} - {client_email}"
+    _profile_title_b64 = base64.b64encode(_profile_title_raw.encode('utf-8')).decode('utf-8')
     fallback_headers = {
         'Subscription-Userinfo': user_info_header,
-        'Profile-Update-Interval': '3600',
+        'Profile-Update-Interval': '24',
         'Content-Type': 'text/plain; charset=utf-8',
-        'Profile-Title': f"{server.name} - {client_email}"
+        'Profile-Title': f"base64:{_profile_title_b64}"
     }
 
     host_value = server.host
@@ -11218,22 +11220,28 @@ def client_subscription(server_id, sub_id):
         # SSRF Protection: Validate the final URL before requesting
         parsed_upstream = urlparse(upstream_sub_url)
         if parsed_upstream.scheme in ('http', 'https') and parsed_upstream.hostname == hostname:
-            # Fetch from upstream - disable redirects to prevent SSRF via redirection
             resp = requests.get(
-                upstream_sub_url, 
-                headers={'User-Agent': 'v2rayng'}, 
-                timeout=15, 
+                upstream_sub_url,
+                headers={'User-Agent': 'v2rayng'},
+                timeout=15,
                 verify=False,
-                allow_redirects=False
+                allow_redirects=True,
             )
+            # SSRF: reject if redirect led outside the server host
+            _final_host = urlparse(resp.url).hostname or ''
+            if _final_host and _final_host != hostname:
+                raise ValueError(f"SSRF: redirect to unexpected host {_final_host}")
             if resp.status_code == 200:
-                # Decode base64 if needed, then split into lines
                 raw_content = resp.content or b''
                 try:
                     decoded = base64.b64decode(raw_content).decode('utf-8')
                 except Exception:
                     decoded = raw_content.decode('utf-8', errors='ignore')
-                upstream_configs = [line.strip() for line in decoded.splitlines() if line.strip()]
+                # Only accept lines that look like actual proxy configs, not HTML
+                upstream_configs = [
+                    line.strip() for line in decoded.splitlines()
+                    if line.strip() and '://' in line and not line.strip().startswith('<')
+                ]
     except Exception as e:
         app.logger.debug(f"Upstream sub fetch for HTML page: {e}")
 
@@ -11249,14 +11257,18 @@ def client_subscription(server_id, sub_id):
                 app.logger.error(f"SSRF blocked: hostname {parsed_upstream.hostname} does not match server {hostname}")
                 return "Invalid upstream host", 400
 
-            # Fetch from upstream - disable redirects to prevent SSRF via redirection
             resp = requests.get(
-                upstream_sub_url, 
-                headers={'User-Agent': request.headers.get('User-Agent')}, 
-                timeout=15, 
+                upstream_sub_url,
+                headers={'User-Agent': request.headers.get('User-Agent')},
+                timeout=15,
                 verify=False,
-                allow_redirects=False
+                allow_redirects=True,
             )
+            # SSRF: reject if redirect led outside the server host
+            _final_host = urlparse(resp.url).hostname or ''
+            if _final_host and _final_host != hostname:
+                app.logger.error(f"SSRF blocked: redirect led to {_final_host}")
+                raise ValueError(f"SSRF: redirect to unexpected host {_final_host}")
             if resp.status_code == 200:
                 # Prefer upstream headers (especially Subscription-Userinfo) so client apps show the same usage/expiry.
                 upstream_headers = {}
@@ -11302,6 +11314,12 @@ def client_subscription(server_id, sub_id):
                     upstream_headers['Content-Type'] = fallback_headers['Content-Type']
 
                 normalized_payload = _normalize_subscription_bytes(resp.content or b'')
+                # Reject HTML/login-page responses — they're not valid subscription data
+                _preview = normalized_payload[:300].decode('utf-8', errors='ignore').lower().lstrip()
+                if _preview.startswith('<') or 'doctype html' in _preview or '<html' in _preview:
+                    raise ValueError("Upstream returned HTML instead of subscription data")
+                if not normalized_payload.strip():
+                    raise ValueError("Upstream returned empty subscription content")
 
                 if wants_b64:
                     encoded = base64.b64encode(normalized_payload).decode('utf-8')
