@@ -50,6 +50,10 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
             Traffic Check ↗
         </a>
+        <button class="settings-tab" onclick="switchTab('supported_apps')">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+            Supported Apps
+        </button>
         <!-- Add more tabs here later -->
     </div>
 
@@ -690,6 +694,123 @@
             </div>
         </div>
 
+        <!-- Supported Apps tab -->
+        <div id="tab-supported_apps" class="tab-pane">
+            <div class="panel-card">
+                <div class="panel-card-header">
+                    <div class="header-content">
+                        <h2>Supported Apps</h2>
+                        <p class="text-secondary">Manage V2Ray client apps shown on the subscription page. Enable, disable, edit or add new apps.</p>
+                    </div>
+                    <button class="btn btn-primary" onclick="openAddAppModal()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add App
+                    </button>
+                </div>
+                <div style="display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;align-items:center;">
+                    <button class="sa-filter-btn active" data-os="all" onclick="filterSubApps('all')">All</button>
+                    <button class="sa-filter-btn" data-os="android" onclick="filterSubApps('android')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18v-1a6 6 0 0 1 12 0v1"/><circle cx="12" cy="10" r="4"/></svg>
+                        Android
+                    </button>
+                    <button class="sa-filter-btn" data-os="ios" onclick="filterSubApps('ios')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                        iOS
+                    </button>
+                    <button class="sa-filter-btn" data-os="windows" onclick="filterSubApps('windows')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                        Windows
+                    </button>
+                    <button class="sa-filter-btn" data-os="desktop" onclick="filterSubApps('desktop')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                        Desktop
+                    </button>
+                    <span id="sa-count" style="margin-left:auto;font-size:0.82rem;color:var(--text-secondary);"></span>
+                </div>
+                <div id="sub-apps-grid">
+                    <div style="text-align:center;color:var(--text-secondary);padding:40px 0;">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<div class="modal-overlay hidden" id="sa-modal">
+    <div class="modal modal-lg">
+        <div class="modal-header">
+            <h2 id="sa-modal-title">Add App</h2>
+            <button class="modal-close" onclick="closeSaModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="sa-app-id">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <div class="form-group">
+                    <label>App Name <span style="color:#f87171">*</span></label>
+                    <input type="text" id="sa-app-name" class="form-input" placeholder="e.g. v2rayNG (Android)">
+                </div>
+                <div class="form-group">
+                    <label>App Code <span style="color:var(--text-secondary);font-size:0.8rem;">(auto if empty)</span></label>
+                    <input type="text" id="sa-app-code" class="form-input" placeholder="e.g. v2rayng">
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <div class="form-group">
+                    <label>OS Type</label>
+                    <select id="sa-app-os" class="form-input">
+                        <option value="android">Android</option>
+                        <option value="ios">iOS</option>
+                        <option value="windows">Windows</option>
+                        <option value="desktop">Desktop (Multi-platform)</option>
+                    </select>
+                </div>
+                <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:24px;">
+                    <label class="sa-toggle" title="Enable/Disable">
+                        <input type="checkbox" id="sa-app-enabled" checked>
+                        <span class="sa-toggle-slider"></span>
+                    </label>
+                    <span style="font-size:0.9rem;">Enabled</span>
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <div class="form-group">
+                    <label>Title (فارسی)</label>
+                    <input type="text" id="sa-app-title-fa" class="form-input" style="direction:rtl;" placeholder="عنوان فارسی">
+                </div>
+                <div class="form-group">
+                    <label>Title (English)</label>
+                    <input type="text" id="sa-app-title-en" class="form-input" placeholder="English title">
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <div class="form-group">
+                    <label>Description (فارسی)</label>
+                    <textarea id="sa-app-desc-fa" class="form-input" rows="4" style="direction:rtl;font-family:inherit;" placeholder="راهنمای نصب به فارسی..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Description (English)</label>
+                    <textarea id="sa-app-desc-en" class="form-input" rows="4" placeholder="Installation guide in English..."></textarea>
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+                <div class="form-group">
+                    <label>Download Link</label>
+                    <input type="url" id="sa-app-dl" class="form-input" placeholder="https://...">
+                </div>
+                <div class="form-group">
+                    <label>Store Link</label>
+                    <input type="url" id="sa-app-store" class="form-input" placeholder="https://play.google.com/...">
+                </div>
+                <div class="form-group">
+                    <label>Tutorial Link</label>
+                    <input type="url" id="sa-app-tutorial" class="form-input" placeholder="https://...">
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="closeSaModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveSubApp()">Save App</button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -762,6 +883,62 @@
 </div>
 
 <style nonce="{{ csp_nonce }}">
+    /* Supported Apps */
+    .sa-filter-btn {
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 5px 14px; border-radius: 20px; border: 1px solid var(--border-color);
+        background: transparent; color: var(--text-secondary); cursor: pointer;
+        font-size: 0.82rem; transition: all 0.15s;
+    }
+    .sa-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .sa-filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .sa-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 12px;
+    }
+    .sa-card {
+        background: var(--bg-input, rgba(255,255,255,0.04));
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 14px 16px;
+        transition: border-color 0.15s;
+    }
+    .sa-card:hover { border-color: var(--accent); }
+    .sa-card-disabled { opacity: 0.5; }
+    .sa-card-top {
+        display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+        margin-bottom: 12px;
+    }
+    .sa-app-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .sa-app-name { font-weight: 600; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sa-app-code { font-size: 0.75rem; color: var(--text-secondary); font-family: monospace; }
+    .sa-os-badge {
+        font-size: 0.72rem; padding: 2px 9px; border-radius: 10px;
+        font-weight: 600; white-space: nowrap; flex-shrink: 0;
+    }
+    .sa-card-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+    .sa-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; cursor: pointer; }
+    .sa-toggle input { opacity: 0; width: 0; height: 0; }
+    .sa-toggle-slider {
+        position: absolute; inset: 0; background: var(--border-color);
+        border-radius: 20px; transition: 0.2s;
+    }
+    .sa-toggle-slider::before {
+        content: ''; position: absolute; width: 14px; height: 14px;
+        left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s;
+    }
+    .sa-toggle input:checked + .sa-toggle-slider { background: var(--accent, #3b82f6); }
+    .sa-toggle input:checked + .sa-toggle-slider::before { transform: translateX(16px); }
+    .btn-icon {
+        background: transparent; border: 1px solid var(--border-color);
+        color: var(--text-secondary); border-radius: 6px;
+        padding: 5px 8px; cursor: pointer; display: inline-flex;
+        align-items: center; transition: all 0.15s;
+    }
+    .btn-icon:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-icon-danger:hover { border-color: #f87171; color: #f87171; }
+
     .settings-layout {
         display: grid;
         grid-template-columns: 250px 1fr;
@@ -3438,6 +3615,160 @@
     window.switchTab = function(name) {
         _origSwitchTab(name);
         if (name === 'traffic_check' && !_tcData) loadTrafficCheck();
+        if (name === 'supported_apps') loadSubApps();
     };
+</script>
+
+<script nonce="{{ csp_nonce }}">
+// ─── Supported Apps ───────────────────────────────────────────────────────────
+let _subApps = [];
+let _saFilter = 'all';
+
+async function loadSubApps() {
+    const grid = document.getElementById('sub-apps-grid');
+    try {
+        const res = await fetch('/api/sub-apps');
+        _subApps = await res.json();
+        renderSubApps();
+    } catch(e) {
+        grid.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:40px 0;">Failed to load apps.</div>`;
+    }
+}
+
+function filterSubApps(os) {
+    _saFilter = os;
+    document.querySelectorAll('.sa-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.os === os));
+    renderSubApps();
+}
+
+function renderSubApps() {
+    const grid = document.getElementById('sub-apps-grid');
+    const filtered = _saFilter === 'all' ? _subApps : _subApps.filter(a => a.os_type === _saFilter);
+    const counter = document.getElementById('sa-count');
+    if (counter) counter.textContent = filtered.length + ' app' + (filtered.length !== 1 ? 's' : '');
+
+    if (!filtered.length) {
+        grid.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:40px 0;">No apps found. Click "Add App" to add one.</div>`;
+        return;
+    }
+
+    const osBg   = {android:'rgba(74,222,128,0.12)',ios:'rgba(96,165,250,0.12)',windows:'rgba(167,139,250,0.12)',desktop:'rgba(245,158,11,0.12)'};
+    const osClr  = {android:'#4ade80',ios:'#60a5fa',windows:'#a78bfa',desktop:'#f59e0b'};
+
+    grid.innerHTML = `<div class="sa-grid">${filtered.map(app => `
+        <div class="sa-card${!app.is_enabled ? ' sa-card-disabled' : ''}">
+            <div class="sa-card-top">
+                <div class="sa-app-info">
+                    <span class="sa-app-name">${escapeHtml(app.name || '')}</span>
+                    <span class="sa-app-code">${escapeHtml(app.app_code || '')}</span>
+                </div>
+                <span class="sa-os-badge" style="background:${osBg[app.os_type]||'rgba(148,163,184,0.12)'};color:${osClr[app.os_type]||'#94a3b8'}">${escapeHtml(app.os_type||'')}</span>
+            </div>
+            <div class="sa-card-actions">
+                <label class="sa-toggle" title="${app.is_enabled ? 'Disable app' : 'Enable app'}">
+                    <input type="checkbox" ${app.is_enabled ? 'checked' : ''} onchange="toggleSubApp(${app.id}, this.checked)">
+                    <span class="sa-toggle-slider"></span>
+                </label>
+                <button class="btn-icon" onclick="openEditAppModal(${app.id})" title="Edit">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </button>
+                <button class="btn-icon btn-icon-danger" onclick="deleteSubApp(${app.id}, '${escapeHtml(app.name||'').replace(/'/g,"\\'")}' )" title="Delete">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                </button>
+            </div>
+        </div>
+    `).join('')}</div>`;
+}
+
+function openAddAppModal() {
+    document.getElementById('sa-modal-title').textContent = 'Add App';
+    document.getElementById('sa-app-id').value = '';
+    ['sa-app-name','sa-app-code','sa-app-title-fa','sa-app-desc-fa','sa-app-title-en','sa-app-desc-en','sa-app-dl','sa-app-store','sa-app-tutorial'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    document.getElementById('sa-app-os').value = 'android';
+    document.getElementById('sa-app-enabled').checked = true;
+    document.getElementById('sa-modal').classList.remove('hidden');
+}
+
+function openEditAppModal(id) {
+    const app = _subApps.find(a => a.id === id);
+    if (!app) return;
+    document.getElementById('sa-modal-title').textContent = 'Edit App';
+    document.getElementById('sa-app-id').value = app.id;
+    document.getElementById('sa-app-name').value = app.name || '';
+    document.getElementById('sa-app-code').value = app.app_code || '';
+    document.getElementById('sa-app-os').value = app.os_type || 'android';
+    document.getElementById('sa-app-enabled').checked = !!app.is_enabled;
+    document.getElementById('sa-app-title-fa').value = app.title_fa || '';
+    document.getElementById('sa-app-desc-fa').value = app.description_fa || '';
+    document.getElementById('sa-app-title-en').value = app.title_en || '';
+    document.getElementById('sa-app-desc-en').value = app.description_en || '';
+    document.getElementById('sa-app-dl').value = app.download_link || '';
+    document.getElementById('sa-app-store').value = app.store_link || '';
+    document.getElementById('sa-app-tutorial').value = app.tutorial_link || '';
+    document.getElementById('sa-modal').classList.remove('hidden');
+}
+
+function closeSaModal() {
+    document.getElementById('sa-modal').classList.add('hidden');
+}
+
+async function saveSubApp() {
+    const id = document.getElementById('sa-app-id').value;
+    const data = {
+        name:           document.getElementById('sa-app-name').value.trim(),
+        app_code:       document.getElementById('sa-app-code').value.trim(),
+        os_type:        document.getElementById('sa-app-os').value,
+        is_enabled:     document.getElementById('sa-app-enabled').checked,
+        title_fa:       document.getElementById('sa-app-title-fa').value.trim(),
+        description_fa: document.getElementById('sa-app-desc-fa').value.trim(),
+        title_en:       document.getElementById('sa-app-title-en').value.trim(),
+        description_en: document.getElementById('sa-app-desc-en').value.trim(),
+        download_link:  document.getElementById('sa-app-dl').value.trim(),
+        store_link:     document.getElementById('sa-app-store').value.trim(),
+        tutorial_link:  document.getElementById('sa-app-tutorial').value.trim()
+    };
+
+    if (!data.name) { alert('App name is required.'); return; }
+
+    const url    = id ? `/api/sub-apps/${id}` : '/api/sub-apps';
+    const method = id ? 'PUT' : 'POST';
+
+    try {
+        const res  = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+        const json = await res.json();
+        if (json.success) { closeSaModal(); loadSubApps(); }
+        else alert(json.error || 'Failed to save app.');
+    } catch(e) { alert('Network error.'); }
+}
+
+async function toggleSubApp(id, enabled) {
+    try {
+        await fetch(`/api/sub-apps/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({is_enabled: enabled})
+        });
+        const app = _subApps.find(a => a.id === id);
+        if (app) { app.is_enabled = enabled; renderSubApps(); }
+    } catch(e) { loadSubApps(); }
+}
+
+async function deleteSubApp(id, name) {
+    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    try {
+        const res  = await fetch(`/api/sub-apps/${id}`, {method:'DELETE'});
+        const json = await res.json();
+        if (json.success) loadSubApps();
+        else alert(json.error || 'Failed to delete.');
+    } catch(e) { alert('Network error.'); }
+}
+
+// close modal on overlay click
+document.getElementById('sa-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeSaModal();
+});
 </script>
 {% endblock %}
