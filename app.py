@@ -12387,6 +12387,7 @@ def list_app_files():
 
 
 @app.route('/api/app-files/upload', methods=['POST'])
+@app.route('/api/app-files/save', methods=['POST'])
 @superadmin_required
 def upload_app_file():
     if 'file' not in request.files:

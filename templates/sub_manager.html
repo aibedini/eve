@@ -2497,9 +2497,11 @@
             const existing = grid.querySelectorAll('.fm-card');
             existing.forEach(c => c.remove());
 
+            // Visibility: only apply category tab filter.
+            // _allowedCats restricts SELECTION only — files are always visible so the
+            // user can see and delete them regardless of which Browse context opened this.
             const visible = _allFiles.filter(f => {
                 if (_currentFilter !== 'all' && f.category !== _currentFilter) return false;
-                if (_allowedCats && _allowedCats.length && !_allowedCats.includes(f.category)) return false;
                 return true;
             });
 
@@ -2513,9 +2515,10 @@
                 const cat = f.category || 'other';
                 const color = EXT_COLORS[cat] || EXT_COLORS.other;
                 const label = EXT_LABELS[cat] || 'Other';
+                const selectable = !_allowedCats || !_allowedCats.length || _allowedCats.includes(cat);
                 const card = document.createElement('div');
-                card.className = 'fm-card fm-selectable';
-                card.title = 'Click to select';
+                card.className = selectable ? 'fm-card fm-selectable' : 'fm-card';
+                card.title = selectable ? 'Click to select' : 'Not compatible with current field';
                 card.innerHTML = `
                     <div class="fm-ext-badge" style="background:${color}20;color:${color};border:1px solid ${color}40;">
                         ${label}
@@ -2523,7 +2526,7 @@
                     <div class="fm-name" title="${f.name}">${f.name}</div>
                     <div class="fm-meta">${fmFmtSize(f.size)} &middot; ${fmFmtDate(f.modified)}</div>
                     <div class="fm-actions">
-                        <button class="fm-btn fm-btn-select" title="Use this file">
+                        <button class="fm-btn fm-btn-select" title="${selectable ? 'Use this file' : 'Not compatible'}" ${selectable ? '' : 'disabled style="opacity:0.35;cursor:not-allowed;"'}>
                             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                             Select
                         </button>
@@ -2534,13 +2537,13 @@
 
                 card.querySelector('.fm-btn-select').addEventListener('click', (e) => {
                     e.stopPropagation();
-                    selectFile(f.url);
+                    if (selectable) selectFile(f.url);
                 });
                 card.querySelector('.fm-btn-delete').addEventListener('click', (e) => {
                     e.stopPropagation();
                     deleteFile(f.name, card);
                 });
-                card.addEventListener('click', () => selectFile(f.url));
+                card.addEventListener('click', () => { if (selectable) selectFile(f.url); });
 
                 grid.appendChild(card);
             });
@@ -2642,7 +2645,7 @@
                 fd.append('file', file);
                 await new Promise((resolve) => {
                     const xhr = new XMLHttpRequest();
-                    xhr.open('POST', '/api/app-files/upload');
+                    xhr.open('POST', '/api/app-files/save');
                     xhr.upload.onprogress = (e) => {
                         if (e.lengthComputable) {
                             const filePct = Math.round((e.loaded / e.total) * 100);
@@ -2678,10 +2681,12 @@
                                 showToast(`File too large: "${file.name}". Add client_max_body_size 512m to Nginx config.`, 'error', 8000);
                             } else if (xhr.status === 403 || xhr.status === 401) {
                                 showToast('Permission denied. Are you logged in as superadmin?', 'error');
-                            } else if (xhr.status === 402) {
-                                showToast(`Upload blocked by CDN/proxy (402). Your CDN has a file size limit or WAF rule blocking this upload. Check your CDN panel → WAF rules and upload size limits.`, 'error', 10000);
-                            } else if (isCdnBlock) {
-                                showToast(`Upload blocked by CDN/proxy (HTTP ${xhr.status}). Check your CDN WAF rules or size limits.`, 'error', 10000);
+                            } else if (xhr.status === 402 || isCdnBlock) {
+                                const body = xhr.responseText ? xhr.responseText.replace(/<[^>]+>/g,'').replace(/\s+/g,' ').trim().slice(0,160) : '';
+                                showToast(
+                                    `Upload blocked by proxy/WAF (${xhr.status}).${body ? ' Detail: '+body : ''} If you use Cloudflare (orange cloud), go to Cloudflare → Security → WAF → disable rules blocking POST/multipart on this domain, or switch to DNS-only (grey cloud).`,
+                                    'error', 14000
+                                );
                             } else {
                                 const msg = detail || `HTTP ${xhr.status}`;
                                 showToast(`Upload failed (${xhr.status}): ${msg}`, 'error', 8000);
