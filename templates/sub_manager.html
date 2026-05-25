@@ -748,6 +748,60 @@
         text-transform: uppercase;
         letter-spacing: .04em;
     }
+    /* Image thumbnail inside card */
+    .fm-thumb-wrap {
+        width: calc(100% + 20px);
+        margin: -12px -10px 0;
+        border-radius: 10px 10px 0 0;
+        overflow: hidden;
+        position: relative;
+        flex-shrink: 0;
+        height: 110px;
+        background: #0b1121;
+        cursor: zoom-in;
+    }
+    .fm-thumb { width:100%; height:100%; object-fit:cover; display:block; transition:transform .25s; }
+    .fm-thumb-wrap:hover .fm-thumb { transform:scale(1.06); }
+    .fm-thumb-overlay {
+        position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+        font-size:28px; opacity:0; transition:all .2s; background:rgba(0,0,0,0);
+    }
+    .fm-thumb-wrap:hover .fm-thumb-overlay { opacity:1; background:rgba(0,0,0,0.42); }
+    /* Video play wrap */
+    .fm-video-wrap {
+        width: calc(100% + 20px);
+        margin: -12px -10px 0;
+        border-radius: 10px 10px 0 0;
+        overflow: hidden;
+        position: relative;
+        flex-shrink: 0;
+        height: 72px;
+        background: #0b1121;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+    }
+    .fm-play-btn {
+        width: 44px; height: 44px; border-radius: 50%;
+        background: rgba(224,64,251,.15); border: 2px solid rgba(224,64,251,.5);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 18px; color: #e040fb; transition: all .2s; user-select: none;
+    }
+    .fm-video-wrap:hover .fm-play-btn { background:rgba(224,64,251,.3); transform:scale(1.1); }
+    /* Lightbox / video modal */
+    .fm-lightbox {
+        display: none; position: fixed; inset: 0; z-index: 10000;
+        background: rgba(0,0,0,0.92); align-items: center; justify-content: center;
+        padding: 20px; cursor: zoom-out;
+    }
+    .fm-lightbox.open { display: flex; }
+    .fm-lightbox-inner { position:relative; max-width:90vw; max-height:90vh; cursor:default; }
+    .fm-lightbox-close {
+        position:absolute; top:-40px; right:0; background:none; border:none;
+        color:white; font-size:28px; cursor:pointer; opacity:.8; line-height:1; padding:4px 8px;
+    }
+    .fm-lightbox-close:hover { opacity:1; }
     .fm-ext-android { background: rgba(61,220,132,.15); color: #3ddc84; }
     .fm-ext-windows { background: rgba(0,120,215,.15); color: #0078d7; }
     .fm-ext-macos   { background: rgba(148,163,184,.12); color: #94a3b8; }
@@ -904,6 +958,22 @@
                 <button class="btn btn-primary" onclick="saveApp()">Save Changes</button>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- ══ Image Lightbox ══════════════════════════════════════════════════ -->
+<div class="fm-lightbox" id="fm-lightbox" onclick="closeFmLightbox()">
+    <div class="fm-lightbox-inner" onclick="event.stopPropagation()">
+        <button class="fm-lightbox-close" onclick="closeFmLightbox()">✕</button>
+        <img id="fm-lightbox-img" src="" alt="" style="max-width:100%;max-height:85vh;border-radius:8px;display:block;">
+    </div>
+</div>
+
+<!-- ══ Video Player Modal ══════════════════════════════════════════════ -->
+<div class="fm-lightbox" id="fm-video-modal" onclick="closeFmVideoPlayer()">
+    <div class="fm-lightbox-inner" style="width:min(820px,90vw);" onclick="event.stopPropagation()">
+        <button class="fm-lightbox-close" onclick="closeFmVideoPlayer()">✕</button>
+        <video id="fm-lightbox-video" controls style="width:100%;max-height:80vh;border-radius:8px;background:#000;display:block;"></video>
     </div>
 </div>
 
@@ -2537,13 +2607,27 @@
                 const color = EXT_COLORS[cat] || EXT_COLORS.other;
                 const label = EXT_LABELS[cat] || 'Other';
                 const selectable = !_allowedCats || !_allowedCats.length || _allowedCats.includes(cat);
+                const isImage = cat === 'image';
+                const isVideo = cat === 'video';
                 const card = document.createElement('div');
                 card.className = selectable ? 'fm-card fm-selectable' : 'fm-card';
-                card.title = selectable ? 'Click to select' : 'Not compatible with current field';
+                card.title = isImage ? 'Click to preview' : isVideo ? 'Click to play' : (selectable ? 'Click to select' : 'Not compatible with current field');
+
+                const safeUrl = f.url.replace(/"/g, '&quot;');
+                const badgeHtml = `<div class="fm-ext-badge" style="background:${color}20;color:${color};border:1px solid ${color}40;">${label}</div>`;
+                let topHtml = badgeHtml;
+                if (isImage) {
+                    topHtml = `<div class="fm-thumb-wrap" title="Click to preview">
+                        <img src="${safeUrl}" class="fm-thumb" alt="${f.name}" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex')">
+                        <div class="fm-ext-badge" style="display:none;background:${color}20;color:${color};border:1px solid ${color}40;">${label}</div>
+                        <div class="fm-thumb-overlay">🔍</div>
+                    </div>`;
+                } else if (isVideo) {
+                    topHtml = `<div class="fm-video-wrap" title="Click to play"><div class="fm-play-btn">▶</div></div>`;
+                }
+
                 card.innerHTML = `
-                    <div class="fm-ext-badge" style="background:${color}20;color:${color};border:1px solid ${color}40;">
-                        ${label}
-                    </div>
+                    ${topHtml}
                     <div class="fm-name" title="${f.name}">${f.name}</div>
                     <div class="fm-meta">${fmFmtSize(f.size)} &middot; ${fmFmtDate(f.modified)}</div>
                     <div class="fm-actions">
@@ -2564,7 +2648,18 @@
                     e.stopPropagation();
                     deleteFile(f.name, card);
                 });
-                card.addEventListener('click', () => { if (selectable) selectFile(f.url); });
+
+                if (isImage) {
+                    card.addEventListener('click', (e) => {
+                        if (!e.target.closest('.fm-actions')) openFmLightbox(f.url);
+                    });
+                } else if (isVideo) {
+                    card.addEventListener('click', (e) => {
+                        if (!e.target.closest('.fm-actions')) openFmVideoPlayer(f.url);
+                    });
+                } else {
+                    card.addEventListener('click', () => { if (selectable) selectFile(f.url); });
+                }
 
                 grid.appendChild(card);
             });
@@ -2577,6 +2672,30 @@
             }
             closeFileManager();
         }
+
+        function openFmLightbox(url) {
+            document.getElementById('fm-lightbox-img').src = url;
+            document.getElementById('fm-lightbox').classList.add('open');
+        }
+        function closeFmLightbox() {
+            document.getElementById('fm-lightbox').classList.remove('open');
+            document.getElementById('fm-lightbox-img').src = '';
+        }
+        function openFmVideoPlayer(url) {
+            const video = document.getElementById('fm-lightbox-video');
+            video.src = url;
+            document.getElementById('fm-video-modal').classList.add('open');
+            video.play().catch(() => {});
+        }
+        function closeFmVideoPlayer() {
+            const video = document.getElementById('fm-lightbox-video');
+            video.pause();
+            video.src = '';
+            document.getElementById('fm-video-modal').classList.remove('open');
+        }
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { closeFmLightbox(); closeFmVideoPlayer(); }
+        });
 
         async function deleteFile(filename, cardEl) {
             if (!confirm(`Delete "${filename}"?`)) return;
