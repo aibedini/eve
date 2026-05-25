@@ -5493,6 +5493,10 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
             network = streamSettings.get('network', 'tcp')
             security = streamSettings.get('security', 'none')
             
+            _inbound_remaining_raw = sum(
+                c['remaining_bytes'] for c in processed_clients
+                if c.get('enable', True) and c.get('remaining_bytes', -1) >= 0
+            )
             processed.append({
                 "id": inbound.get('id'),
                 "remark": inbound.get('remark', ''),
@@ -5508,7 +5512,9 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 "total_up": format_bytes(inbound.get('up', 0)),
                 "total_down": format_bytes(inbound.get('down', 0)),
                 "up_raw": inbound.get('up', 0),
-                "down_raw": inbound.get('down', 0)
+                "down_raw": inbound.get('down', 0),
+                "remaining_total_raw": _inbound_remaining_raw,
+                "remaining_total": format_bytes(_inbound_remaining_raw) if _inbound_remaining_raw > 0 else None,
             })
             
             stats["total_clients"] += len(processed_clients)
