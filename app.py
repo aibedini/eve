@@ -1025,6 +1025,8 @@ def _recompute_global_stats_from_server_statuses(server_statuses):
         "unlimited_volume_clients": 0,
         "upload_raw": 0,
         "download_raw": 0,
+        "remaining_raw": 0,
+        "limited_clients": 0,
     }
 
     for status in server_statuses or []:
@@ -1041,6 +1043,7 @@ def _recompute_global_stats_from_server_statuses(server_statuses):
     total_stats["total_upload"] = format_bytes(total_stats["upload_raw"])
     total_stats["total_download"] = format_bytes(total_stats["download_raw"])
     total_stats["total_traffic"] = format_bytes(total_stats["upload_raw"] + total_stats["download_raw"])
+    total_stats["total_remaining"] = format_bytes(total_stats["remaining_raw"])
     return total_stats
 
 
@@ -5306,7 +5309,7 @@ def find_client(inbounds, inbound_id, email):
 
 def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, app_base_url=None, online_index=None):
     processed = []
-    stats = {"total_inbounds": 0, "active_inbounds": 0, "total_clients": 0, "online_clients": 0, "active_clients": 0, "inactive_clients": 0, "not_started_clients": 0, "unlimited_expiry_clients": 0, "unlimited_volume_clients": 0, "upload_raw": 0, "download_raw": 0}
+    stats = {"total_inbounds": 0, "active_inbounds": 0, "total_clients": 0, "online_clients": 0, "active_clients": 0, "inactive_clients": 0, "not_started_clients": 0, "unlimited_expiry_clients": 0, "unlimited_volume_clients": 0, "upload_raw": 0, "download_raw": 0, "remaining_raw": 0}
     dashboard_thresholds = _get_dashboard_status_thresholds()
     panel_lang = _get_panel_ui_lang()
     
@@ -5481,6 +5484,9 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 else: stats["inactive_clients"] += 1
                 stats["upload_raw"] += client_up
                 stats["download_raw"] += client_down
+                # Accumulate remaining for active limited-volume clients only
+                if client.get('enable', True) and remaining_bytes is not None and remaining_bytes >= 0:
+                    stats["remaining_raw"] += int(remaining_bytes)
             
             # استخراج network و security از settings
             streamSettings = settings.get('streamSettings', {})
@@ -5515,7 +5521,9 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
     stats["total_upload"] = format_bytes(stats["upload_raw"])
     stats["total_download"] = format_bytes(stats["download_raw"])
     stats["total_traffic"] = format_bytes(stats["upload_raw"] + stats["download_raw"])
-            
+    stats["total_remaining"] = format_bytes(stats["remaining_raw"])
+    stats["limited_clients"] = stats["total_clients"] - stats["unlimited_volume_clients"]
+
     return processed, stats
 
 # --- ROUTES ---

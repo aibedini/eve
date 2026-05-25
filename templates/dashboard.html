@@ -104,6 +104,19 @@
                 <span class="stat-sub"><span id="stat-upload">↑ 0 B</span> / <span id="stat-download">↓ 0 B</span></span>
             </div>
         </div>
+        <div class="stat-card">
+            <div class="stat-icon" style="background:rgba(16,185,129,.15);color:#10b981;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                    <polyline points="17 6 23 6 23 12"></polyline>
+                </svg>
+            </div>
+            <div class="stat-info">
+                <span class="stat-label">Total Remaining</span>
+                <span class="stat-value" id="stat-remaining" style="color:#10b981;">0 B</span>
+                <span class="stat-sub" title="Active accounts with limited volume"><span id="stat-limited-clients">0</span> limited accounts</span>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -2121,6 +2134,10 @@
         document.getElementById('stat-traffic').textContent = stats?.total_traffic || '0 B';
         document.getElementById('stat-upload').textContent = `↑ ${stats?.total_upload || '0 B'}`;
         document.getElementById('stat-download').textContent = `↓ ${stats?.total_download || '0 B'}`;
+        const remEl = document.getElementById('stat-remaining');
+        if (remEl) remEl.textContent = stats?.total_remaining || '0 B';
+        const limEl = document.getElementById('stat-limited-clients');
+        if (limEl) limEl.textContent = (stats?.limited_clients || 0) + ' limited accounts';
     }
 
     function getExpiryClass(type) {
