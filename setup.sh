@@ -140,6 +140,7 @@ LOG_DIR="/var/log/$SERVICE_NAME"
 SELF_SIGNED_SSL_DIR="/etc/ssl/eve-manager"
 DOMAIN="${1:-}"
 ENVIRONMENT="${2:-production}"
+INSTALL_SOURCE="github"  # Can be "github" or "zip"
 
 DB_NAME="eve_manager_db"
 DB_USER="eve_manager"
@@ -237,6 +238,35 @@ ask_database_type() {
     fi
     echo
 }
+
+ask_install_source() {
+    echo
+    print_header "Application Source"
+    echo
+    echo -e "  ${GREEN}1) GitHub${NC}  ${YELLOW}← Recommended (latest version)${NC}"
+    echo    "     ✅ Always downloads the latest stable version"
+    echo    "     ✅ Automatically resolves all dependencies"
+    echo    "     ⚠  Requires internet connection"
+    echo
+    echo -e "  ${BLUE}2) ZIP File${NC}  ${YELLOW}(Offline / Cached)${NC}"
+    echo    "     ✅ Works without internet connection"
+    echo    "     ✅ Fast local installation from pre-downloaded ZIP"
+    echo    "     ✅ Optional: include wheels/ folder for fully offline pip install"
+    echo    "     ℹ  Upload ZIP via SCP/SFTP first"
+    echo
+    read -rp "  Install from GitHub or ZIP? [1/2] [default: 1]: " _source_choice
+    _source_choice="${_source_choice:-1}"
+    
+    if [ "$_source_choice" = "2" ]; then
+        INSTALL_SOURCE="zip"
+        print_success "ZIP source selected"
+    else
+        INSTALL_SOURCE="github"
+        print_success "GitHub source selected"
+    fi
+    echo
+}
+
 
 setup_postgresql_for_install() {
     print_header "Installing & Configuring PostgreSQL"
@@ -382,6 +412,88 @@ prepare_directories() {
     chown -R "$APP_USER:$APP_USER" "$APP_DIR" "$LOG_DIR"
     chmod 750 "$APP_DIR"
     print_success "Directories ready"
+}
+
+clone_or_update_repo_from_zip() {
+    print_header "Step 6: Extract application from ZIP"
+    
+    local ZIP_PATH="${1:-}"
+    
+    # Auto-detect ZIP in common locations if not provided
+    if [ -z "$ZIP_PATH" ]; then
+        for _f in "/root/eve-install.zip" "/root/eve.zip" "$HOME/eve-install.zip" "$HOME/eve.zip" "/tmp/eve-install.zip" "/tmp/eve.zip"; do
+            if [ -f "$_f" ]; then
+                ZIP_PATH="$_f"
+                print_success "Auto-detected ZIP: $ZIP_PATH"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$ZIP_PATH" ]; then
+        ZIP_PATH=$(find /root /tmp -maxdepth 1 -name "eve*.zip" 2>/dev/null | sort | head -1 || true)
+        if [ -n "$ZIP_PATH" ]; then
+            print_success "Found ZIP: $ZIP_PATH"
+        fi
+    fi
+
+    if [ -z "$ZIP_PATH" ]; then
+        read -rp "  Enter full path to ZIP file: " ZIP_PATH
+        ZIP_PATH="${ZIP_PATH// /}"
+    fi
+
+    if [ -z "$ZIP_PATH" ] || [ ! -f "$ZIP_PATH" ]; then
+        print_error "ZIP not found: ${ZIP_PATH:-<none>}"
+        echo
+        echo -e "  ${DIM}How to upload:   scp eve-install.zip root@YOUR_SERVER:/root/${NC}"
+        echo
+        return 1
+    fi
+
+    if ! command -v unzip >/dev/null 2>&1; then
+        print_warning "unzip not installed — installing..."
+        apt-get install -y -qq unzip
+    fi
+
+    local TMPDIR
+    TMPDIR=$(mktemp -d /tmp/eve-install-XXXXXX)
+    print_warning "Extracting $ZIP_PATH ..."
+    if ! unzip -q "$ZIP_PATH" -d "$TMPDIR"; then
+        print_error "Failed to extract ZIP"
+        rm -rf "$TMPDIR"
+        return 1
+    fi
+
+    # GitHub source ZIPs contain one sub-folder (e.g. eve-xui-manager-main/)
+    local EXTRACT_ROOT="$TMPDIR"
+    local _subdirs
+    _subdirs=$(find "$TMPDIR" -maxdepth 1 -mindepth 1 -type d | wc -l)
+    if [ "$_subdirs" -eq 1 ]; then
+        EXTRACT_ROOT=$(find "$TMPDIR" -maxdepth 1 -mindepth 1 -type d | head -1)
+    fi
+
+    if [ ! -f "$EXTRACT_ROOT/app.py" ]; then
+        print_error "Invalid ZIP — app.py not found inside archive"
+        rm -rf "$TMPDIR"
+        return 1
+    fi
+
+    # Backup if directory exists
+    if [ -d "$APP_DIR" ] && [ "$(ls -A $APP_DIR)" ]; then
+        print_warning "Directory $APP_DIR exists. Backing up..."
+        mv "$APP_DIR" "${APP_DIR}.bak.$(date +%s)"
+    fi
+
+    mkdir -p "$APP_DIR"
+    chown "$APP_USER:$APP_USER" "$APP_DIR"
+    
+    print_warning "Extracting files to $APP_DIR ..."
+    cp -r "$EXTRACT_ROOT"/* "$APP_DIR/"
+    cp -r "$EXTRACT_ROOT"/.[^.]* "$APP_DIR/" 2>/dev/null || true
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+    
+    rm -rf "$TMPDIR"
+    print_success "Source code extracted from ZIP"
 }
 
 clone_or_update_repo() {
@@ -1500,12 +1612,17 @@ show_menu() {
                 ask_domain
                 prompt_admin_credentials
                 ask_database_type
+                ask_install_source
                 update_system
                 ensure_python_pkg
                 install_dependencies
                 create_app_user
                 prepare_directories
-                clone_or_update_repo
+                if [ "$INSTALL_SOURCE" = "zip" ]; then
+                    clone_or_update_repo_from_zip
+                else
+                    clone_or_update_repo
+                fi
                 [ "$DB_TYPE" = "postgres" ] && setup_postgresql_for_install
                 create_env_file
                 ensure_server_password_key
@@ -1622,12 +1739,17 @@ if [ $# -gt 0 ]; then
     detect_os
     reset_admin_defaults
     ask_database_type
+    ask_install_source
     update_system
     ensure_python_pkg
     install_dependencies
     create_app_user
     prepare_directories
-    clone_or_update_repo
+    if [ "$INSTALL_SOURCE" = "zip" ]; then
+        clone_or_update_repo_from_zip
+    else
+        clone_or_update_repo
+    fi
     [ "$DB_TYPE" = "postgres" ] && setup_postgresql_for_install
     create_env_file
     ensure_server_password_key
