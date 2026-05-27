@@ -2527,6 +2527,14 @@ WHATSAPP_GATEWAY_TIMEOUT_KEY = 'whatsapp_gateway_timeout_seconds'
 DEFAULT_WHATSAPP_TEMPLATE_RENEW = "سلام {user}، تمدید شما با موفقیت انجام شد."
 DEFAULT_WHATSAPP_TEMPLATE_WELCOME = "سلام {user}، اشتراک شما فعال شد."
 DEFAULT_WHATSAPP_TEMPLATE_PRE_EXPIRY = "سلام {user}، اشتراک شما تا {time_left} دیگر منقضی می‌شود."
+ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE = 'account_info_whatsapp'
+DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE = """اطلاعات اکانت شما
+اسم اکانت: {email}
+مدت زمان باقی مانده: {remaining_time}
+حجم باقی مانده: {remaining_volume}
+لینک dash sub: {dashboard_link}
+
+لطفا از طریق لینک بالا به سرویس خود متصل شین ."""
 
 WHATSAPP_CONFIG_KEYS = {
     WHATSAPP_DEPLOYMENT_REGION_KEY,
@@ -13094,7 +13102,11 @@ def disable_auto_window(window_id):
 @app.route('/api/templates', methods=['GET'])
 @user_management_required
 def get_templates():
-    templates = NotificationTemplate.query.order_by(NotificationTemplate.created_at.desc()).all()
+    template_type = (request.args.get('type') or 'client_created').strip().lower()
+    query = NotificationTemplate.query
+    if template_type != 'all':
+        query = query.filter_by(type=template_type)
+    templates = query.order_by(NotificationTemplate.created_at.desc()).all()
     return jsonify({'success': True, 'templates': [t.to_dict() for t in templates]})
 
 @app.route('/api/templates', methods=['POST'])
@@ -13168,6 +13180,127 @@ def get_active_template():
         'template': template.to_dict() if template else None,
         'content': template.content if template else ''
     })
+
+def _account_info_template_vars():
+    return [
+        '{email}', '{account_name}', '{remaining_time}', '{remaining_volume}',
+        '{dashboard_link}', '{sub_link}', '{server_name}'
+    ]
+
+def _ensure_default_account_info_template():
+    existing = NotificationTemplate.query.filter_by(type=ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE).first()
+    if existing:
+        return
+    template = NotificationTemplate(
+        name='Default Account Info',
+        content=DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE,
+        type=ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE,
+        is_active=True,
+    )
+    db.session.add(template)
+    db.session.commit()
+
+@app.route('/api/account-message-templates', methods=['GET'])
+@user_management_required
+def get_account_message_templates():
+    _ensure_default_account_info_template()
+    templates = (NotificationTemplate.query
+                 .filter_by(type=ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE)
+                 .order_by(NotificationTemplate.created_at.desc())
+                 .all())
+    return jsonify({
+        'success': True,
+        'templates': [t.to_dict() for t in templates],
+        'available_vars': _account_info_template_vars(),
+        'default_content': DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE,
+    })
+
+@app.route('/api/account-message-templates/active', methods=['GET'])
+@login_required
+def get_active_account_message_template():
+    template = NotificationTemplate.query.filter_by(
+        type=ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE,
+        is_active=True
+    ).first()
+    return jsonify({
+        'success': True,
+        'template': template.to_dict() if template else None,
+        'content': template.content if template else DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE,
+        'available_vars': _account_info_template_vars(),
+    })
+
+@app.route('/api/account-message-templates', methods=['POST'])
+@user_management_required
+def create_account_message_template():
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    content = (data.get('content') or '').strip()
+    if not name or not content:
+        return jsonify({'success': False, 'error': 'Name and content are required'}), 400
+
+    template = NotificationTemplate(
+        name=name,
+        content=content,
+        type=ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE,
+        is_active=False,
+    )
+    db.session.add(template)
+    db.session.commit()
+
+    if NotificationTemplate.query.filter_by(type=ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE).count() == 1:
+        template.is_active = True
+        db.session.commit()
+
+    return jsonify({'success': True, 'template': template.to_dict()})
+
+@app.route('/api/account-message-templates/<int:template_id>', methods=['PUT'])
+@user_management_required
+def update_account_message_template(template_id):
+    template = db.session.get(NotificationTemplate, template_id)
+    if not template or template.type != ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE:
+        return jsonify({'success': False, 'error': 'Template not found'}), 404
+    data = request.get_json() or {}
+    if 'name' in data:
+        template.name = (data.get('name') or template.name).strip()
+    if 'content' in data:
+        template.content = (data.get('content') or template.content).strip()
+    if not template.name or not template.content:
+        return jsonify({'success': False, 'error': 'Name and content are required'}), 400
+    db.session.commit()
+    return jsonify({'success': True, 'template': template.to_dict()})
+
+@app.route('/api/account-message-templates/<int:template_id>', methods=['DELETE'])
+@user_management_required
+def delete_account_message_template(template_id):
+    template = db.session.get(NotificationTemplate, template_id)
+    if not template or template.type != ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE:
+        return jsonify({'success': False, 'error': 'Template not found'}), 404
+    if template.is_active:
+        return jsonify({'success': False, 'error': 'Disable this template before deleting it'}), 400
+    db.session.delete(template)
+    db.session.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/account-message-templates/<int:template_id>/activate', methods=['POST'])
+@user_management_required
+def activate_account_message_template(template_id):
+    template = db.session.get(NotificationTemplate, template_id)
+    if not template or template.type != ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE:
+        return jsonify({'success': False, 'error': 'Template not found'}), 404
+    NotificationTemplate.query.filter_by(type=ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE).update({NotificationTemplate.is_active: False})
+    template.is_active = True
+    db.session.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/account-message-templates/<int:template_id>/disable', methods=['POST'])
+@user_management_required
+def disable_account_message_template(template_id):
+    template = db.session.get(NotificationTemplate, template_id)
+    if not template or template.type != ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE:
+        return jsonify({'success': False, 'error': 'Template not found'}), 404
+    template.is_active = False
+    db.session.commit()
+    return jsonify({'success': True})
 
 @app.route('/api/backups', methods=['GET'])
 @login_required

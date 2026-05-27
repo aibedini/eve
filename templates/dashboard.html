@@ -1153,6 +1153,109 @@
         function renderOwnerCell(client) {
             return `<span style="font-size: 0.85rem; color: var(--text-secondary);">${escapeHtml(getOwnerText(client))}</span>`;
         }
+
+        function toLatinDigits(value) {
+            const fa = '۰۱۲۳۴۵۶۷۸۹';
+            const ar = '٠١٢٣٤٥٦٧٨٩';
+            return String(value || '').replace(/[۰-۹٠-٩]/g, ch => {
+                const faIdx = fa.indexOf(ch);
+                if (faIdx >= 0) return String(faIdx);
+                const arIdx = ar.indexOf(ch);
+                return arIdx >= 0 ? String(arIdx) : ch;
+            });
+        }
+
+        function normalizeWhatsAppNumber(...sources) {
+            for (const source of sources) {
+                const raw = toLatinDigits(source || '');
+                if (!raw.trim()) continue;
+                const candidates = raw.match(/(?:\+|00)?\d[\d\s().-]{8,}\d/g) || [];
+                for (const candidate of candidates) {
+                    let digits = candidate.replace(/[^\d]/g, '');
+                    if (!digits) continue;
+                    if (digits.startsWith('00')) digits = digits.slice(2);
+                    if (digits.startsWith('98') && digits.length === 12) return digits;
+                    if (digits.startsWith('0') && digits.length === 11) return `98${digits.slice(1)}`;
+                    if (digits.startsWith('9') && digits.length === 10) return `98${digits}`;
+                    if (digits.length >= 10 && digits.length <= 15) return digits;
+                }
+            }
+            return '';
+        }
+
+        const DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE = [
+                'اطلاعات اکانت شما',
+                'اسم اکانت: {email}',
+                'مدت زمان باقی مانده: {remaining_time}',
+                'حجم باقی مانده: {remaining_volume}',
+                'لینک dash sub: {dashboard_link}',
+                '',
+                'لطفا از طریق لینک بالا به سرویس خود متصل شین .'
+            ].join('\n');
+        let accountInfoWhatsAppTemplateCache = null;
+
+        async function getAccountInfoWhatsAppTemplate() {
+            if (accountInfoWhatsAppTemplateCache !== null) return accountInfoWhatsAppTemplateCache;
+            try {
+                const res = await fetch('/api/account-message-templates/active');
+                const data = await res.json();
+                accountInfoWhatsAppTemplateCache = (data && data.content) ? data.content : DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE;
+            } catch (e) {
+                accountInfoWhatsAppTemplateCache = DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE;
+            }
+            return accountInfoWhatsAppTemplateCache;
+        }
+
+        function renderClientAccountMessage(template, client) {
+            const values = {
+                email: client?.email || '-',
+                account_name: client?.email || '-',
+                remaining_time: client?.expiryTime || '-',
+                remaining_volume: client?.remaining_formatted || '-',
+                dashboard_link: client?.dash_sub_url || client?.sub_url || '',
+                sub_link: client?.sub_url || '',
+                server_name: client?.server_name || ''
+            };
+            return String(template || DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE).replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => (
+                Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
+            ));
+        }
+
+        function renderWhatsAppAccountButton(client) {
+            const payload = encodeURIComponent(JSON.stringify({
+                email: client?.email || '',
+                comment: client?.comment || '',
+                phone: client?.phone || client?.mobile || client?.whatsapp || '',
+                expiryTime: client?.expiryTime || '',
+                remaining_formatted: client?.remaining_formatted || '',
+                dash_sub_url: client?.dash_sub_url || '',
+                sub_url: client?.sub_url || '',
+                server_name: client?.server_name || ''
+            }));
+            return `
+                <button class="action-btn success" data-client-wa="${payload}" onclick="sendClientAccountWhatsApp(this)" title="Send account info via WhatsApp">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+                    </svg>
+                </button>
+            `;
+        }
+
+        async function sendClientAccountWhatsApp(button) {
+            try {
+                const client = JSON.parse(decodeURIComponent(button?.dataset?.clientWa || '%7B%7D'));
+                const phone = normalizeWhatsAppNumber(client.phone, client.comment, client.email);
+                if (!phone) {
+                    showToast('No WhatsApp phone number found for this client. Add the phone number in Comment.', 'error');
+                    return;
+                }
+                const template = await getAccountInfoWhatsAppTemplate();
+                const message = renderClientAccountMessage(template, client);
+                window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener');
+            } catch (error) {
+                showToast('Unable to prepare WhatsApp message', 'error');
+            }
+        }
     let selectedPackageId = null;
     let selectedRenewPackageId = null;
     let selectedRenewPackageDays = 0;
@@ -1237,6 +1340,7 @@
         updateExpiryFilterCount();
         syncExpiryFilterCheckboxes();
         applyDisabledVisibility();
+        getAccountInfoWhatsAppTemplate();
         // Load servers first to know if we have any
         loadServers().then(() => {
             // Kick off a background refresh (non-blocking) and render cached data immediately.
@@ -2291,6 +2395,7 @@
                                                         <polyline points="12 6 12 12 16 14"></polyline>
                                                     </svg>
                                                 </button>
+                                                ${renderWhatsAppAccountButton(client)}
                                                 <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${client.server_id}, '${client.inbound_id}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}">
                                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                                         ${client.enable 
@@ -4525,6 +4630,7 @@
                                                         <polyline points="12 6 12 12 16 14"></polyline>
                                                     </svg>
                                                 </button>
+                                                ${renderWhatsAppAccountButton(client)}
                                                 <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${inbound.server_id}, '${inbound.id}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}">
                                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                                         ${client.enable 
