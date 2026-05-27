@@ -114,7 +114,7 @@
                             <circle cx="11" cy="11" r="8"></circle>
                             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                         </svg>
-                        <input type="text" id="monitor-search" placeholder="Email or username" class="search-input">
+                        <input type="text" id="monitor-search" placeholder="Email, username, comment, or mobile" class="search-input">
                         <button class="search-clear hidden" onclick="clearMonitorSearch()" id="monitor-search-clear">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
@@ -404,8 +404,11 @@
             }
             if (search) {
                 const emailMatch = (alert.email || '').toLowerCase().includes(search);
-                const phoneMatch = (extractPhone(alert.email || '') || '').toLowerCase().includes(search);
-                if (!emailMatch && !phoneMatch) {
+                const commentMatch = (alert.comment || '').toLowerCase().includes(search);
+                const phoneMatch = getAlertPhones(alert).some((phone) => (
+                    `${phone.display} ${phone.number}`.toLowerCase().includes(search)
+                ));
+                if (!emailMatch && !commentMatch && !phoneMatch) {
                     return false;
                 }
             }
@@ -463,10 +466,13 @@
         row.className = `monitor-row status-${alert.status}`;
         row.style.setProperty('--delay', `${index * 20}ms`);
 
-        const message = buildMessage(alert);
-        const phone = extractPhone(alert.email || '');
-        const smsLink = phone ? buildSmsLink(phone, message) : '#';
-        const waLink = phone ? buildWaLink(phone, message) : '#';
+        const phones = getAlertPhones(alert);
+        const phoneHtml = phones.length
+            ? `<div style="display:grid; gap:4px;">${phones.map((phone) => (
+                `<span title="${escapeHtml(phone.label)}" dir="ltr">${escapeHtml(phone.display)}</span>`
+            )).join('')}</div>`
+            : '-';
+        const encodedAlert = encodeURIComponent(JSON.stringify(alert));
 
         const st = alert.status;
         const remCls = st === 'low' ? ' detail-highlight' : '';
@@ -479,7 +485,7 @@
                 ${escapeHtml(alert.email || '-')}
                 ${alert.verified ? '<span class="verified-badge" style="color: var(--success); font-size: 0.75rem; margin-left: 6px; font-weight: 600; display: inline-flex; align-items: center; gap: 2px;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>Verified</span>' : ''}
             </div>
-            <div class="monitor-cell monitor-phone"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>${escapeHtml(phone || '-')}</div>
+            <div class="monitor-cell monitor-phone"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>${phoneHtml}</div>
             <div class="monitor-cell"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>${escapeHtml(alert.server_name || '-')}</div>
             <div class="monitor-cell"><span class="monitor-tag tag-${st}">${escapeHtml(alert.status_label || alert.status)}</span></div>
             <div class="monitor-cell monitor-detail-stack">
@@ -488,14 +494,14 @@
                 <span class="detail-expiry${expCls}">${escapeHtml(alert.expiry_date || '-')}</span>
             </div>
             <div class="monitor-cell monitor-actions">
-                <a class="btn btn-sms" href="${smsLink}" ${phone ? '' : 'aria-disabled="true"'}>
+                <button class="btn btn-sms" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length ? '' : 'disabled'}>
                     <span class="icon">${getSmsIcon()}</span>
                     SMS
-                </a>
-                <a class="btn btn-whatsapp" href="${waLink}" ${phone ? '' : 'aria-disabled="true"'}>
+                </button>
+                <button class="btn btn-whatsapp" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length ? '' : 'disabled'}>
                     <span class="icon">${getWhatsAppIcon()}</span>
                     WhatsApp
-                </a>
+                </button>
                 <button class="btn ${alert.enabled ? 'btn-danger' : 'btn-success'}" onclick="toggleClientFromMonitor(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}', ${!alert.enabled})" title="${alert.enabled ? 'Disable' : 'Enable'}">
                     <span class="icon">${alert.enabled ? getDisableIcon() : getEnableIcon()}</span>
                     ${alert.enabled ? 'Disable' : 'Enable'}
@@ -518,17 +524,54 @@
         return (template || '').replace(/\{(user|rem|time|date|server)\}/g, (match, key) => vars[key] || '-');
     }
 
-    function extractPhone(value) {
-        const digits = String(value || '').replace(/\D/g, '');
-        const match98 = digits.match(/98(9\d{9})/);
-        if (match98) {
-            return `+98${match98[1]}`;
-        }
-        const match09 = digits.match(/0(9\d{9})/);
-        if (match09) {
-            return `+98${match09[1]}`;
-        }
-        return null;
+    function toLatinDigits(value) {
+        const faDigits = '\u06f0\u06f1\u06f2\u06f3\u06f4\u06f5\u06f6\u06f7\u06f8\u06f9';
+        const arDigits = '\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669';
+        return String(value || '').replace(/[\u06f0-\u06f9\u0660-\u0669]/g, (char) => {
+            const faIndex = faDigits.indexOf(char);
+            if (faIndex >= 0) return String(faIndex);
+            const arIndex = arDigits.indexOf(char);
+            return arIndex >= 0 ? String(arIndex) : char;
+        });
+    }
+
+    function normalizePhoneCandidate(candidate) {
+        let digits = toLatinDigits(candidate || '').replace(/[^\d]/g, '');
+        if (!digits) return '';
+        if (digits.startsWith('00')) digits = digits.slice(2);
+        if (digits.startsWith('98') && digits.length === 12 && digits[2] === '9') return `+${digits}`;
+        if (digits.startsWith('0') && digits.length === 11 && digits[1] === '9') return `+98${digits.slice(1)}`;
+        if (digits.startsWith('9') && digits.length === 10) return `+98${digits}`;
+        if (digits.length >= 10 && digits.length <= 15) return `+${digits}`;
+        return '';
+    }
+
+    function extractPhonesFromSources(...sources) {
+        const phones = [];
+        const seen = new Set();
+        sources.forEach((source) => {
+            const rawValue = typeof source === 'object' && source !== null ? source.value : source;
+            const label = (typeof source === 'object' && source !== null ? source.label : '') || 'Mobile';
+            const raw = toLatinDigits(rawValue || '');
+            if (!raw.trim()) return;
+            const candidates = raw.match(/(?:\+|00)?\d[\d\s().-]{8,}\d/g) || [];
+            candidates.forEach((candidate) => {
+                const display = normalizePhoneCandidate(candidate);
+                const number = display.replace(/[^\d]/g, '');
+                if (!number || seen.has(number)) return;
+                seen.add(number);
+                phones.push({ number, display, label });
+            });
+        });
+        return phones;
+    }
+
+    function getAlertPhones(alert) {
+        return extractPhonesFromSources(
+            { label: 'Account name', value: alert.email },
+            { label: 'Comment', value: alert.comment },
+            { label: 'Saved phone', value: alert.phone || alert.mobile || alert.whatsapp }
+        );
     }
 
     function buildSmsLink(phone, message) {
@@ -536,8 +579,89 @@
     }
 
     function buildWaLink(phone, message) {
-        const clean = phone.replace('+', '');
+        const clean = String(phone || '').replace(/[^\d]/g, '');
         return `https://wa.me/${clean}?text=${encodeURIComponent(message)}`;
+    }
+
+    function sendMonitorMessage(button, channel) {
+        let alert = {};
+        try {
+            alert = JSON.parse(decodeURIComponent(button?.dataset?.monitorAlert || '%7B%7D'));
+        } catch (_) {
+            showToast('Unable to prepare message', 'error');
+            return;
+        }
+
+        const phones = getAlertPhones(alert);
+        if (!phones.length) {
+            showToast('No mobile number found for this user', 'error');
+            return;
+        }
+
+        const message = buildMessage(alert);
+        const openTarget = (phone) => {
+            const href = channel === 'sms'
+                ? buildSmsLink(phone.display, message)
+                : buildWaLink(phone.number, message);
+            window.open(href, '_blank', 'noopener');
+        };
+
+        openPhoneChoiceModal(
+            phones,
+            openTarget,
+            channel === 'sms' ? 'Send SMS to' : 'Send WhatsApp to'
+        );
+    }
+
+    function openPhoneChoiceModal(phones, onSelect, title) {
+        const list = Array.isArray(phones) ? phones : [];
+        if (!list.length) return false;
+        if (list.length === 1) {
+            onSelect(list[0]);
+            return true;
+        }
+
+        let overlay = document.getElementById('monitor-phone-choice-modal');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'monitor-phone-choice-modal';
+            overlay.className = 'modal-overlay hidden';
+            overlay.innerHTML = `
+                <div class="modal" style="max-width: 420px;">
+                    <div class="modal-header">
+                        <h2 id="monitor-phone-choice-title">Select mobile number</h2>
+                        <button class="modal-close" type="button" data-phone-choice-close>&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="monitor-phone-choice-list" style="display:grid; gap:10px;"></div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay || event.target.closest('[data-phone-choice-close]')) {
+                    overlay.classList.add('hidden');
+                }
+            });
+        }
+
+        overlay.querySelector('#monitor-phone-choice-title').textContent = title || 'Select mobile number';
+        const container = overlay.querySelector('#monitor-phone-choice-list');
+        container.textContent = '';
+        list.forEach((phone) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-secondary';
+            btn.style.justifyContent = 'space-between';
+            btn.innerHTML = `<span>${escapeHtml(phone.label || 'Mobile')}</span><strong dir="ltr">${escapeHtml(phone.display)}</strong>`;
+            btn.addEventListener('click', () => {
+                overlay.classList.add('hidden');
+                onSelect(phone);
+            });
+            container.appendChild(btn);
+        });
+        overlay.classList.remove('hidden');
+        return true;
     }
 
     function handleMonitorSearch() {

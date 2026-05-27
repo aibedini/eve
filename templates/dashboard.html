@@ -1166,21 +1166,99 @@
         }
 
         function normalizeWhatsAppNumber(...sources) {
-            for (const source of sources) {
-                const raw = toLatinDigits(source || '');
-                if (!raw.trim()) continue;
-                const candidates = raw.match(/(?:\+|00)?\d[\d\s().-]{8,}\d/g) || [];
-                for (const candidate of candidates) {
-                    let digits = candidate.replace(/[^\d]/g, '');
-                    if (!digits) continue;
-                    if (digits.startsWith('00')) digits = digits.slice(2);
-                    if (digits.startsWith('98') && digits.length === 12) return digits;
-                    if (digits.startsWith('0') && digits.length === 11) return `98${digits.slice(1)}`;
-                    if (digits.startsWith('9') && digits.length === 10) return `98${digits}`;
-                    if (digits.length >= 10 && digits.length <= 15) return digits;
-                }
-            }
+            return (extractWhatsAppNumbers(...sources)[0] || {}).number || '';
+        }
+
+        function toLatinDigits(value) {
+            const fa = '\u06f0\u06f1\u06f2\u06f3\u06f4\u06f5\u06f6\u06f7\u06f8\u06f9';
+            const ar = '\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669';
+            return String(value || '').replace(/[\u06f0-\u06f9\u0660-\u0669]/g, ch => {
+                const faIdx = fa.indexOf(ch);
+                if (faIdx >= 0) return String(faIdx);
+                const arIdx = ar.indexOf(ch);
+                return arIdx >= 0 ? String(arIdx) : ch;
+            });
+        }
+
+        function normalizeSinglePhoneCandidate(candidate) {
+            let digits = toLatinDigits(candidate || '').replace(/[^\d]/g, '');
+            if (!digits) return '';
+            if (digits.startsWith('00')) digits = digits.slice(2);
+            if (digits.startsWith('98') && digits.length === 12 && digits[2] === '9') return digits;
+            if (digits.startsWith('0') && digits.length === 11 && digits[1] === '9') return `98${digits.slice(1)}`;
+            if (digits.startsWith('9') && digits.length === 10) return `98${digits}`;
+            if (digits.length >= 10 && digits.length <= 15) return digits;
             return '';
+        }
+
+        function extractWhatsAppNumbers(...sources) {
+            const found = [];
+            const seen = new Set();
+            sources.forEach((source) => {
+                const rawValue = typeof source === 'object' && source !== null ? source.value : source;
+                const label = (typeof source === 'object' && source !== null ? source.label : '') || 'Phone';
+                const raw = toLatinDigits(rawValue || '');
+                if (!raw.trim()) return;
+                const candidates = raw.match(/(?:\+|00)?\d[\d\s().-]{8,}\d/g) || [];
+                candidates.forEach((candidate) => {
+                    const number = normalizeSinglePhoneCandidate(candidate);
+                    if (!number || seen.has(number)) return;
+                    seen.add(number);
+                    found.push({ number, label, display: `+${number}` });
+                });
+            });
+            return found;
+        }
+
+        function openPhoneChoiceModal(numbers, onSelect, title = 'Select phone number') {
+            const list = Array.isArray(numbers) ? numbers : [];
+            if (list.length === 0) return false;
+            if (list.length === 1) {
+                onSelect(list[0]);
+                return true;
+            }
+
+            let overlay = document.getElementById('phone-choice-modal');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'phone-choice-modal';
+                overlay.className = 'modal-overlay hidden';
+                overlay.innerHTML = `
+                    <div class="modal" style="max-width: 420px;">
+                        <div class="modal-header">
+                            <h2 id="phone-choice-title">Select phone number</h2>
+                            <button class="modal-close" type="button" data-phone-choice-close>&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div id="phone-choice-list" style="display:grid; gap:10px;"></div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(overlay);
+                overlay.addEventListener('click', (event) => {
+                    if (event.target === overlay || event.target.closest('[data-phone-choice-close]')) {
+                        overlay.classList.add('hidden');
+                    }
+                });
+            }
+
+            overlay.querySelector('#phone-choice-title').textContent = title;
+            const container = overlay.querySelector('#phone-choice-list');
+            container.textContent = '';
+            list.forEach((item) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'btn btn-secondary';
+                btn.style.justifyContent = 'space-between';
+                btn.innerHTML = `<span>${escapeHtml(item.label || 'Phone')}</span><strong dir="ltr">${escapeHtml(item.display || ('+' + item.number))}</strong>`;
+                btn.addEventListener('click', () => {
+                    overlay.classList.add('hidden');
+                    onSelect(item);
+                });
+                container.appendChild(btn);
+            });
+            overlay.classList.remove('hidden');
+            return true;
         }
 
         const DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE = [
@@ -1244,14 +1322,20 @@
         async function sendClientAccountWhatsApp(button) {
             try {
                 const client = JSON.parse(decodeURIComponent(button?.dataset?.clientWa || '%7B%7D'));
-                const phone = normalizeWhatsAppNumber(client.phone, client.comment, client.email);
-                if (!phone) {
+                const phones = extractWhatsAppNumbers(
+                    { label: 'Account name', value: client.email },
+                    { label: 'Comment', value: client.comment },
+                    { label: 'Saved phone', value: client.phone }
+                );
+                if (!phones.length) {
                     showToast('No WhatsApp phone number found for this client. Add the phone number in Comment.', 'error');
                     return;
                 }
                 const template = await getAccountInfoWhatsAppTemplate();
                 const message = renderClientAccountMessage(template, client);
-                window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener');
+                openPhoneChoiceModal(phones, (phone) => {
+                    window.open(`https://wa.me/${phone.number}?text=${encodeURIComponent(message)}`, '_blank', 'noopener');
+                }, 'Send WhatsApp to');
             } catch (error) {
                 showToast('Unable to prepare WhatsApp message', 'error');
             }

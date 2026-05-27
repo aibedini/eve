@@ -6006,6 +6006,7 @@ def get_monitor_alerts():
                 'server_name': inbound.get('server_name'),
                 'inbound_id': inbound_id,
                 'email': email,
+                'comment': (client.get('comment') or '').strip(),
                 'status': status,
                 'status_label': status_labels.get(status, status),
                 'remaining': client.get('remaining_formatted') or 'Unlimited',
