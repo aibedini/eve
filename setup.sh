@@ -140,6 +140,7 @@ LOG_DIR="/var/log/$SERVICE_NAME"
 SELF_SIGNED_SSL_DIR="/etc/ssl/eve-manager"
 DOMAIN="${1:-}"
 ENVIRONMENT="${2:-production}"
+INSTALL_SOURCE="github"  # Can be "github" or "zip"
 
 DB_NAME="eve_manager_db"
 DB_USER="eve_manager"
@@ -237,6 +238,35 @@ ask_database_type() {
     fi
     echo
 }
+
+ask_install_source() {
+    echo
+    print_header "Application Source"
+    echo
+    echo -e "  ${GREEN}1) GitHub${NC}  ${YELLOW}← Recommended (latest version)${NC}"
+    echo    "     ✅ Always downloads the latest stable version"
+    echo    "     ✅ Automatically resolves all dependencies"
+    echo    "     ⚠  Requires internet connection"
+    echo
+    echo -e "  ${BLUE}2) ZIP File${NC}  ${YELLOW}(Offline / Cached)${NC}"
+    echo    "     ✅ Works without internet connection"
+    echo    "     ✅ Fast local installation from pre-downloaded ZIP"
+    echo    "     ✅ Optional: include wheels/ folder for fully offline pip install"
+    echo    "     ℹ  Upload ZIP via SCP/SFTP first"
+    echo
+    read -rp "  Install from GitHub or ZIP? [1/2] [default: 1]: " _source_choice
+    _source_choice="${_source_choice:-1}"
+    
+    if [ "$_source_choice" = "2" ]; then
+        INSTALL_SOURCE="zip"
+        print_success "ZIP source selected"
+    else
+        INSTALL_SOURCE="github"
+        print_success "GitHub source selected"
+    fi
+    echo
+}
+
 
 setup_postgresql_for_install() {
     print_header "Installing & Configuring PostgreSQL"
@@ -384,6 +414,98 @@ prepare_directories() {
     print_success "Directories ready"
 }
 
+clone_or_update_repo_from_zip() {
+    print_header "Step 6: Extract application from ZIP"
+    
+    local ZIP_PATH="${1:-}"
+    
+    # Auto-detect ZIP in common locations if not provided
+    if [ -z "$ZIP_PATH" ]; then
+        for _f in "/root/eve-install.zip" "/root/eve.zip" "$HOME/eve-install.zip" "$HOME/eve.zip" "/tmp/eve-install.zip" "/tmp/eve.zip"; do
+            if [ -f "$_f" ]; then
+                ZIP_PATH="$_f"
+                print_success "Auto-detected ZIP: $ZIP_PATH"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$ZIP_PATH" ]; then
+        ZIP_PATH=$(find /root /tmp -maxdepth 1 -name "eve*.zip" 2>/dev/null | sort | head -1 || true)
+        if [ -n "$ZIP_PATH" ]; then
+            print_success "Found ZIP: $ZIP_PATH"
+        fi
+    fi
+
+    if [ -z "$ZIP_PATH" ]; then
+        read -rp "  Enter full path to ZIP file: " ZIP_PATH
+        ZIP_PATH="${ZIP_PATH// /}"
+    fi
+
+    if [ -z "$ZIP_PATH" ] || [ ! -f "$ZIP_PATH" ]; then
+        print_error "ZIP not found: ${ZIP_PATH:-<none>}"
+        echo
+        echo -e "  ${DIM}How to upload:   scp eve-install.zip root@YOUR_SERVER:/root/${NC}"
+        echo
+        return 1
+    fi
+
+    if ! command -v unzip >/dev/null 2>&1; then
+        print_warning "unzip not installed — installing..."
+        apt-get install -y -qq unzip
+    fi
+
+    local TMPDIR
+    TMPDIR=$(mktemp -d /tmp/eve-install-XXXXXX)
+    print_warning "Extracting $ZIP_PATH ..."
+    if ! unzip -q "$ZIP_PATH" -d "$TMPDIR"; then
+        print_error "Failed to extract ZIP"
+        rm -rf "$TMPDIR"
+        return 1
+    fi
+
+    # GitHub source ZIPs contain one sub-folder (e.g. eve-xui-manager-main/)
+    local EXTRACT_ROOT="$TMPDIR"
+    local _subdirs
+    _subdirs=$(find "$TMPDIR" -maxdepth 1 -mindepth 1 -type d | wc -l)
+    if [ "$_subdirs" -eq 1 ]; then
+        EXTRACT_ROOT=$(find "$TMPDIR" -maxdepth 1 -mindepth 1 -type d | head -1)
+    fi
+
+    if [ ! -f "$EXTRACT_ROOT/app.py" ]; then
+        print_error "Invalid ZIP — app.py not found inside archive"
+        rm -rf "$TMPDIR"
+        return 1
+    fi
+
+    # Backup if directory exists
+    if [ -d "$APP_DIR" ] && [ "$(ls -A $APP_DIR)" ]; then
+        print_warning "Directory $APP_DIR exists. Backing up..."
+        mv "$APP_DIR" "${APP_DIR}.bak.$(date +%s)"
+    fi
+
+    mkdir -p "$APP_DIR"
+    chown "$APP_USER:$APP_USER" "$APP_DIR"
+    
+    print_warning "Extracting files to $APP_DIR ..."
+    cp -r "$EXTRACT_ROOT"/* "$APP_DIR/" 2>/dev/null || true
+    cp -r "$EXTRACT_ROOT"/.[^.]* "$APP_DIR/" 2>/dev/null || true
+    
+    # Verify wheels folder was copied
+    if [ -d "$EXTRACT_ROOT/wheels" ]; then
+        print_warning "Wheels folder detected, ensuring it's copied..."
+        if [ -d "$APP_DIR/wheels" ]; then
+            WHEELS_COUNT=$(find "$APP_DIR/wheels" -type f 2>/dev/null | wc -l)
+            print_success "Copied $WHEELS_COUNT files from wheels/"
+        fi
+    fi
+    
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+    
+    rm -rf "$TMPDIR"
+    print_success "Source code extracted from ZIP"
+}
+
 clone_or_update_repo() {
     print_header "Step 6: Fetch application"
     git config --global --add safe.directory "$APP_DIR" || true
@@ -445,11 +567,105 @@ setup_python_env() {
     if [ ! -x "$(command -v $PY_BIN)" ]; then
         PY_BIN="python3"
     fi
-    sudo -u "$APP_USER" "$PY_BIN" -m venv "$APP_DIR/venv"
-    sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && pip install --upgrade pip setuptools wheel"
-    sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install .; fi"
-    sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && pip install gunicorn psycopg2-binary"
-    print_success "Virtual environment configured"
+    
+    # Create venv if it doesn't exist
+    if [ ! -d "$APP_DIR/venv" ]; then
+        print_warning "Creating Python virtual environment..."
+        sudo -u "$APP_USER" "$PY_BIN" -m venv "$APP_DIR/venv" || {
+            print_error "Failed to create virtual environment"
+            return 1
+        }
+    else
+        print_warning "Virtual environment already exists, updating..."
+    fi
+    
+    # Always upgrade pip first with extended timeout
+    print_warning "Upgrading pip, setuptools, wheel..."
+    sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && \
+        pip install --upgrade --default-timeout=120 --retries 10 pip setuptools wheel 2>&1" | tail -5
+    
+    # Check for offline wheels
+    local WHEELS_DIR="$APP_DIR/wheels"
+    local WHEELS_COUNT=0
+    
+    if [ -d "$WHEELS_DIR" ]; then
+        WHEELS_COUNT=$(find "$WHEELS_DIR" -name '*.whl' -o -name '*.tar.gz' 2>/dev/null | wc -l)
+    fi
+    
+    print_warning "Checking dependencies: requirements.txt"
+    
+    # Step 1: Try offline wheels (if available)
+    if [ $WHEELS_COUNT -gt 10 ]; then
+        print_success "Found $WHEELS_COUNT wheels — attempting offline installation"
+        print_warning "Installing from wheels/ folder (no internet needed)..."
+        
+        if sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && \
+            pip install --no-index --find-links='$WHEELS_DIR' -r requirements.txt 2>&1 | tail -20"; then
+            print_success "Offline installation succeeded"
+            OFFLINE_SUCCESS=1
+        else
+            print_warning "Offline installation failed, trying online..."
+            OFFLINE_SUCCESS=0
+        fi
+    else
+        OFFLINE_SUCCESS=0
+    fi
+    
+    # Step 2: If offline failed (or no wheels), try online with retries
+    if [ $OFFLINE_SUCCESS -ne 1 ]; then
+        print_warning "Attempting online installation with extended timeout (120s)..."
+        
+        # Try official PyPI first
+        if sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && \
+            pip install --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+            print_success "Installation from PyPI succeeded"
+        else
+            # Try Aliyun mirror
+            print_warning "PyPI failed, trying Aliyun mirror..."
+            if sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && \
+                pip install -i https://mirrors.aliyun.com/pypi/simple/ \
+                --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+                print_success "Installation from Aliyun mirror succeeded"
+            else
+                # Try Tsinghua mirror
+                print_warning "Aliyun failed, trying Tsinghua mirror..."
+                if sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && \
+                    pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+                    --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+                    print_success "Installation from Tsinghua mirror succeeded"
+                else
+                    print_error "ALL installation methods failed!"
+                    echo ""
+                    echo -e "${YELLOW}Troubleshooting options:${NC}"
+                    echo "  1. Use offline wheels:"
+                    echo "     bash prepare-wheels.sh /path/to/eve-xui-manager"
+                    echo ""
+                    echo "  2. Check disk space:"
+                    echo "     df -h /opt/eve-xui-manager"
+                    echo ""
+                    echo "  3. Check pip installation manually:"
+                    echo "     source /opt/eve-xui-manager/venv/bin/activate"
+                    echo "     pip install requests==2.32.5 --default-timeout=120 --retries 10"
+                    echo ""
+                    return 1
+                fi
+            fi
+        fi
+    fi
+    
+    # Step 3: Install additional packages
+    print_warning "Installing gunicorn and psycopg2..."
+    sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && \
+        pip install --default-timeout=120 --retries 10 gunicorn psycopg2-binary 2>&1" | tail -5 || {
+        print_warning "Warning: gunicorn/psycopg2 install failed (may retry later)"
+    }
+    
+    # Verify installation
+    print_warning "Verifying installation..."
+    INSTALLED_PACKAGES=$(sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && pip list 2>/dev/null | wc -l")
+    print_success "Virtual environment configured with $INSTALLED_PACKAGES packages"
+    
+    # Run migrations if not skipped
     if [ "${SKIP_DB_MIGRATIONS:-}" != "true" ]; then
         run_migrations
     else
@@ -1417,20 +1633,43 @@ offline_update() {
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     print_success "Files synced"
 
-    # Python packages
+    # Python packages - with proper retry logic
     if [ -d "$EXTRACT_ROOT/wheels" ]; then
-        print_warning "Installing Python packages from bundled wheels (offline)..."
-        sudo -u "$APP_USER" bash -c \
+        WHEELS_COUNT=$(find "$EXTRACT_ROOT/wheels" -name '*.whl' -o -name '*.tar.gz' 2>/dev/null | wc -l)
+        if [ $WHEELS_COUNT -gt 5 ]; then
+            print_warning "Installing Python packages from bundled wheels ($WHEELS_COUNT files)..."
+            sudo -u "$APP_USER" bash -c \
+                "source $APP_DIR/venv/bin/activate && \
+                 pip install --no-index --find-links='$EXTRACT_ROOT/wheels' \
+                 -r '$APP_DIR/requirements.txt' --default-timeout=120 --retries 10" && {
+                print_success "Python packages installed from wheels"
+            } || {
+                print_warning "Wheel install failed, trying online..."
+            }
+        else
+            print_warning "wheels/ folder exists but too few packages ($WHEELS_COUNT < 5)"
+        fi
+    fi
+    
+    # Fallback: online install with extended timeout
+    if [ ! -f "$APP_DIR/requirements.txt" ] || ! sudo -u "$APP_USER" bash -c \
+        "source $APP_DIR/venv/bin/activate && pip list | grep -q flask"; then
+        
+        print_warning "Installing/updating packages from online sources..."
+        
+        if ! sudo -u "$APP_USER" bash -c \
             "source $APP_DIR/venv/bin/activate && \
-             pip install --quiet --no-index --find-links='$EXTRACT_ROOT/wheels' \
-             -r '$APP_DIR/requirements.txt'"
-        print_success "Python packages installed from wheels"
-    elif [ -f "$APP_DIR/requirements.txt" ]; then
-        print_warning "No wheels/ folder — attempting online pip install..."
-        sudo -u "$APP_USER" bash -c \
-            "source $APP_DIR/venv/bin/activate && \
-             pip install --quiet -r '$APP_DIR/requirements.txt'" ||
-        print_warning "pip install failed (PyPI unreachable?). Continuing with existing packages."
+             pip install --default-timeout=120 --retries 10 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10"; then
+            
+            print_warning "Trying Aliyun mirror..."
+            sudo -u "$APP_USER" bash -c \
+                "source $APP_DIR/venv/bin/activate && \
+                 pip install -i https://mirrors.aliyun.com/pypi/simple/ \
+                 --default-timeout=120 --retries 10 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10" ||
+            print_warning "pip install failed (PyPI unreachable?). Continuing with existing packages."
+        fi
+        
+        print_success "Python packages updated/installed"
     fi
 
     # DB migrations
@@ -1500,12 +1739,17 @@ show_menu() {
                 ask_domain
                 prompt_admin_credentials
                 ask_database_type
+                ask_install_source
                 update_system
                 ensure_python_pkg
                 install_dependencies
                 create_app_user
                 prepare_directories
-                clone_or_update_repo
+                if [ "$INSTALL_SOURCE" = "zip" ]; then
+                    clone_or_update_repo_from_zip
+                else
+                    clone_or_update_repo
+                fi
                 [ "$DB_TYPE" = "postgres" ] && setup_postgresql_for_install
                 create_env_file
                 ensure_server_password_key
@@ -1622,12 +1866,17 @@ if [ $# -gt 0 ]; then
     detect_os
     reset_admin_defaults
     ask_database_type
+    ask_install_source
     update_system
     ensure_python_pkg
     install_dependencies
     create_app_user
     prepare_directories
-    clone_or_update_repo
+    if [ "$INSTALL_SOURCE" = "zip" ]; then
+        clone_or_update_repo_from_zip
+    else
+        clone_or_update_repo
+    fi
     [ "$DB_TYPE" = "postgres" ] && setup_postgresql_for_install
     create_env_file
     ensure_server_password_key
