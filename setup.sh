@@ -488,8 +488,18 @@ clone_or_update_repo_from_zip() {
     chown "$APP_USER:$APP_USER" "$APP_DIR"
     
     print_warning "Extracting files to $APP_DIR ..."
-    cp -r "$EXTRACT_ROOT"/* "$APP_DIR/"
+    cp -r "$EXTRACT_ROOT"/* "$APP_DIR/" 2>/dev/null || true
     cp -r "$EXTRACT_ROOT"/.[^.]* "$APP_DIR/" 2>/dev/null || true
+    
+    # Verify wheels folder was copied
+    if [ -d "$EXTRACT_ROOT/wheels" ]; then
+        print_warning "Wheels folder detected, ensuring it's copied..."
+        if [ -d "$APP_DIR/wheels" ]; then
+            WHEELS_COUNT=$(find "$APP_DIR/wheels" -type f 2>/dev/null | wc -l)
+            print_success "Copied $WHEELS_COUNT files from wheels/"
+        fi
+    fi
+    
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     
     rm -rf "$TMPDIR"
@@ -557,11 +567,105 @@ setup_python_env() {
     if [ ! -x "$(command -v $PY_BIN)" ]; then
         PY_BIN="python3"
     fi
-    sudo -u "$APP_USER" "$PY_BIN" -m venv "$APP_DIR/venv"
-    sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && pip install --upgrade pip setuptools wheel"
-    sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install .; fi"
-    sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && pip install gunicorn psycopg2-binary"
-    print_success "Virtual environment configured"
+    
+    # Create venv if it doesn't exist
+    if [ ! -d "$APP_DIR/venv" ]; then
+        print_warning "Creating Python virtual environment..."
+        sudo -u "$APP_USER" "$PY_BIN" -m venv "$APP_DIR/venv" || {
+            print_error "Failed to create virtual environment"
+            return 1
+        }
+    else
+        print_warning "Virtual environment already exists, updating..."
+    fi
+    
+    # Always upgrade pip first with extended timeout
+    print_warning "Upgrading pip, setuptools, wheel..."
+    sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && \
+        pip install --upgrade --default-timeout=120 --retries 10 pip setuptools wheel 2>&1" | tail -5
+    
+    # Check for offline wheels
+    local WHEELS_DIR="$APP_DIR/wheels"
+    local WHEELS_COUNT=0
+    
+    if [ -d "$WHEELS_DIR" ]; then
+        WHEELS_COUNT=$(find "$WHEELS_DIR" -name '*.whl' -o -name '*.tar.gz' 2>/dev/null | wc -l)
+    fi
+    
+    print_warning "Checking dependencies: requirements.txt"
+    
+    # Step 1: Try offline wheels (if available)
+    if [ $WHEELS_COUNT -gt 10 ]; then
+        print_success "Found $WHEELS_COUNT wheels — attempting offline installation"
+        print_warning "Installing from wheels/ folder (no internet needed)..."
+        
+        if sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && \
+            pip install --no-index --find-links='$WHEELS_DIR' -r requirements.txt 2>&1 | tail -20"; then
+            print_success "Offline installation succeeded"
+            OFFLINE_SUCCESS=1
+        else
+            print_warning "Offline installation failed, trying online..."
+            OFFLINE_SUCCESS=0
+        fi
+    else
+        OFFLINE_SUCCESS=0
+    fi
+    
+    # Step 2: If offline failed (or no wheels), try online with retries
+    if [ $OFFLINE_SUCCESS -ne 1 ]; then
+        print_warning "Attempting online installation with extended timeout (120s)..."
+        
+        # Try official PyPI first
+        if sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && \
+            pip install --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+            print_success "Installation from PyPI succeeded"
+        else
+            # Try Aliyun mirror
+            print_warning "PyPI failed, trying Aliyun mirror..."
+            if sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && \
+                pip install -i https://mirrors.aliyun.com/pypi/simple/ \
+                --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+                print_success "Installation from Aliyun mirror succeeded"
+            else
+                # Try Tsinghua mirror
+                print_warning "Aliyun failed, trying Tsinghua mirror..."
+                if sudo -u "$APP_USER" bash -c "cd $APP_DIR && source venv/bin/activate && \
+                    pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+                    --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+                    print_success "Installation from Tsinghua mirror succeeded"
+                else
+                    print_error "ALL installation methods failed!"
+                    echo ""
+                    echo -e "${YELLOW}Troubleshooting options:${NC}"
+                    echo "  1. Use offline wheels:"
+                    echo "     bash prepare-wheels.sh /path/to/eve-xui-manager"
+                    echo ""
+                    echo "  2. Check disk space:"
+                    echo "     df -h /opt/eve-xui-manager"
+                    echo ""
+                    echo "  3. Check pip installation manually:"
+                    echo "     source /opt/eve-xui-manager/venv/bin/activate"
+                    echo "     pip install requests==2.32.5 --default-timeout=120 --retries 10"
+                    echo ""
+                    return 1
+                fi
+            fi
+        fi
+    fi
+    
+    # Step 3: Install additional packages
+    print_warning "Installing gunicorn and psycopg2..."
+    sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && \
+        pip install --default-timeout=120 --retries 10 gunicorn psycopg2-binary 2>&1" | tail -5 || {
+        print_warning "Warning: gunicorn/psycopg2 install failed (may retry later)"
+    }
+    
+    # Verify installation
+    print_warning "Verifying installation..."
+    INSTALLED_PACKAGES=$(sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && pip list 2>/dev/null | wc -l")
+    print_success "Virtual environment configured with $INSTALLED_PACKAGES packages"
+    
+    # Run migrations if not skipped
     if [ "${SKIP_DB_MIGRATIONS:-}" != "true" ]; then
         run_migrations
     else
@@ -1529,20 +1633,43 @@ offline_update() {
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     print_success "Files synced"
 
-    # Python packages
+    # Python packages - with proper retry logic
     if [ -d "$EXTRACT_ROOT/wheels" ]; then
-        print_warning "Installing Python packages from bundled wheels (offline)..."
-        sudo -u "$APP_USER" bash -c \
+        WHEELS_COUNT=$(find "$EXTRACT_ROOT/wheels" -name '*.whl' -o -name '*.tar.gz' 2>/dev/null | wc -l)
+        if [ $WHEELS_COUNT -gt 5 ]; then
+            print_warning "Installing Python packages from bundled wheels ($WHEELS_COUNT files)..."
+            sudo -u "$APP_USER" bash -c \
+                "source $APP_DIR/venv/bin/activate && \
+                 pip install --no-index --find-links='$EXTRACT_ROOT/wheels' \
+                 -r '$APP_DIR/requirements.txt' --default-timeout=120 --retries 10" && {
+                print_success "Python packages installed from wheels"
+            } || {
+                print_warning "Wheel install failed, trying online..."
+            }
+        else
+            print_warning "wheels/ folder exists but too few packages ($WHEELS_COUNT < 5)"
+        fi
+    fi
+    
+    # Fallback: online install with extended timeout
+    if [ ! -f "$APP_DIR/requirements.txt" ] || ! sudo -u "$APP_USER" bash -c \
+        "source $APP_DIR/venv/bin/activate && pip list | grep -q flask"; then
+        
+        print_warning "Installing/updating packages from online sources..."
+        
+        if ! sudo -u "$APP_USER" bash -c \
             "source $APP_DIR/venv/bin/activate && \
-             pip install --quiet --no-index --find-links='$EXTRACT_ROOT/wheels' \
-             -r '$APP_DIR/requirements.txt'"
-        print_success "Python packages installed from wheels"
-    elif [ -f "$APP_DIR/requirements.txt" ]; then
-        print_warning "No wheels/ folder — attempting online pip install..."
-        sudo -u "$APP_USER" bash -c \
-            "source $APP_DIR/venv/bin/activate && \
-             pip install --quiet -r '$APP_DIR/requirements.txt'" ||
-        print_warning "pip install failed (PyPI unreachable?). Continuing with existing packages."
+             pip install --default-timeout=120 --retries 10 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10"; then
+            
+            print_warning "Trying Aliyun mirror..."
+            sudo -u "$APP_USER" bash -c \
+                "source $APP_DIR/venv/bin/activate && \
+                 pip install -i https://mirrors.aliyun.com/pypi/simple/ \
+                 --default-timeout=120 --retries 10 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10" ||
+            print_warning "pip install failed (PyPI unreachable?). Continuing with existing packages."
+        fi
+        
+        print_success "Python packages updated/installed"
     fi
 
     # DB migrations
