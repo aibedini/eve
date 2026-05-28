@@ -116,7 +116,9 @@ REFRESH_JOBS = {}  # job_id -> job dict
 REFRESH_JOBS_LOCK = threading.Lock()
 REFRESH_MAX_JOBS = 50
 
-# Bulk job tracking (in-memory; per-process)
+# Bulk job tracking. Persist to a shared file so progress polling works across
+# gunicorn workers while the background worker updates the job.
+BULK_JOBS_FILE = os.path.join(tempfile.gettempdir(), 'eve_bulk_jobs.json')
 BULK_JOBS = {}  # job_id -> job dict
 BULK_JOBS_LOCK = threading.Lock()
 BULK_MAX_JOBS = 50
@@ -384,6 +386,7 @@ def _run_telegram_backup_job(job_id: str):
 
 
 def _prune_bulk_jobs_locked():
+    _load_bulk_jobs_locked()
     if len(BULK_JOBS) <= BULK_MAX_JOBS:
         return
     jobs_sorted = sorted(BULK_JOBS.items(), key=lambda kv: kv[1].get('created_at_ts', 0))
@@ -395,20 +398,51 @@ def _prune_bulk_jobs_locked():
         if job.get('state') in ('done', 'error'):
             BULK_JOBS.pop(job_id, None)
             deleted += 1
+    if deleted:
+        _save_bulk_jobs_locked()
+
+
+def _load_bulk_jobs_locked():
+    global BULK_JOBS
+    try:
+        with open(BULK_JOBS_FILE, 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            BULK_JOBS = data
+    except Exception:
+        pass
+    return BULK_JOBS
+
+
+def _save_bulk_jobs_locked():
+    try:
+        tmp_path = BULK_JOBS_FILE + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as fh:
+            json.dump(BULK_JOBS, fh, ensure_ascii=False)
+        os.replace(tmp_path, BULK_JOBS_FILE)
+    except Exception as exc:
+        try:
+            app.logger.warning(f"Could not persist bulk jobs: {exc}")
+        except Exception:
+            pass
 
 
 def _run_bulk_job(job_id: str):
     with BULK_JOBS_LOCK:
+        _load_bulk_jobs_locked()
         job = BULK_JOBS.get(job_id)
         if not job:
             return
         job['state'] = 'running'
         job['started_at'] = _utc_iso_now()
+        BULK_JOBS[job_id] = job
+        _save_bulk_jobs_locked()
 
     try:
         with app.app_context():
             job = None
             with BULK_JOBS_LOCK:
+                _load_bulk_jobs_locked()
                 job = BULK_JOBS.get(job_id) or {}
 
             action = job.get('action')
@@ -852,6 +886,7 @@ def _run_bulk_job(job_id: str):
                         pr['failed'] = int(pr.get('failed', 0) or 0) + 1
                         j['progress'] = pr
                         BULK_JOBS[job_id] = j
+                        _save_bulk_jobs_locked()
                     continue
 
                 try:
@@ -877,6 +912,7 @@ def _run_bulk_job(job_id: str):
                             errs.append({'client': client_ref, 'error': 'server_id, inbound_id and email are required'})
                         j['errors'] = errs
                         BULK_JOBS[job_id] = j
+                        _save_bulk_jobs_locked()
                     continue
 
                 server = servers_by_id.get(server_id)
@@ -892,6 +928,7 @@ def _run_bulk_job(job_id: str):
                             errs.append({'client': {'server_id': server_id, 'inbound_id': inbound_id, 'email': email}, 'error': 'Server not found'})
                         j['errors'] = errs
                         BULK_JOBS[job_id] = j
+                        _save_bulk_jobs_locked()
                     continue
 
                 # Optional conditional targeting
@@ -908,6 +945,7 @@ def _run_bulk_job(job_id: str):
                                 pr['skipped'] = int(pr.get('skipped', 0) or 0) + 1
                                 j['progress'] = pr
                                 BULK_JOBS[job_id] = j
+                                _save_bulk_jobs_locked()
                             continue
                     except Exception as exc:
                         with BULK_JOBS_LOCK:
@@ -921,6 +959,7 @@ def _run_bulk_job(job_id: str):
                                 errs.append({'client': {'server_id': server_id, 'inbound_id': inbound_id, 'email': email}, 'error': str(exc) or 'Condition check failed'})
                             j['errors'] = errs
                             BULK_JOBS[job_id] = j
+                            _save_bulk_jobs_locked()
                         continue
 
                 ok = False
@@ -1019,20 +1058,25 @@ def _run_bulk_job(job_id: str):
                         j['report_rows'] = rows
                     j['progress'] = pr
                     BULK_JOBS[job_id] = j
+                    _save_bulk_jobs_locked()
 
         with BULK_JOBS_LOCK:
+            _load_bulk_jobs_locked()
             job = BULK_JOBS.get(job_id) or {}
             job['state'] = 'done'
             job['finished_at'] = _utc_iso_now()
             BULK_JOBS[job_id] = job
+            _save_bulk_jobs_locked()
             _prune_bulk_jobs_locked()
     except Exception as e:
         with BULK_JOBS_LOCK:
+            _load_bulk_jobs_locked()
             job = BULK_JOBS.get(job_id) or {}
             job['state'] = 'error'
             job['error'] = str(e)
             job['finished_at'] = _utc_iso_now()
             BULK_JOBS[job_id] = job
+            _save_bulk_jobs_locked()
             _prune_bulk_jobs_locked()
 
 
@@ -8441,12 +8485,15 @@ def bulk_client_action():
         'error': None,
     }
     with BULK_JOBS_LOCK:
+        _load_bulk_jobs_locked()
         BULK_JOBS[job_id] = job
+        _save_bulk_jobs_locked()
         _prune_bulk_jobs_locked()
 
     if wait_for_completion:
         _run_bulk_job(job_id)
         with BULK_JOBS_LOCK:
+            _load_bulk_jobs_locked()
             done_job = BULK_JOBS.get(job_id)
             summary = _summarize_bulk_job(done_job) if done_job else None
         return jsonify({'success': True, 'job_id': job_id, 'done': True, 'job': summary})
@@ -8464,6 +8511,7 @@ def bulk_client_job(job_id):
         return jsonify({'success': False, 'error': 'User not found'}), 401
 
     with BULK_JOBS_LOCK:
+        _load_bulk_jobs_locked()
         job = BULK_JOBS.get(job_id)
         if not job:
             return jsonify({'success': False, 'error': 'Job not found'}), 404

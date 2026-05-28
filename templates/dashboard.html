@@ -326,7 +326,7 @@
 
         <div id="bulk-progress" style="display:none; margin-top: 10px;">
             <div style="height: 8px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 999px; overflow: hidden;">
-                <div id="bulk-progress-bar" style="height: 8px; width: 0%; background: var(--primary);"></div>
+                <div id="bulk-progress-bar" style="height: 8px; width: 0%; background: var(--primary); transition: width .18s linear;"></div>
             </div>
             <div id="bulk-progress-text" style="margin-top: 6px; font-size: 0.85rem; color: var(--text-secondary);">0/0</div>
         </div>
@@ -5247,7 +5247,7 @@
         try {
             setBulkProgress(true, 0, clients.length);
 
-            const response = await fetch('/api/client/bulk?wait=1', {
+            const response = await fetch('/api/client/bulk', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, clients, data, conditions })
@@ -5439,7 +5439,7 @@
                         return;
                     }
 
-                    setTimeout(poll, 600);
+                    setTimeout(poll, 300);
                 } catch (e) {
                     console.error('Bulk poll error:', e);
                     setBulkProgress(false);
