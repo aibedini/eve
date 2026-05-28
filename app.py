@@ -6532,6 +6532,131 @@ def fetch_worker(server_dict):
 
         return server_dict['id'], inbounds, online_index, status_payload, status_error, fetch_error, detected_type
 
+
+def enrich_inbounds_with_ownership(inbounds):
+    """Attach owner fields to cached inbound clients without mutating database rows."""
+    try:
+        if not isinstance(inbounds, list) or not inbounds:
+            return inbounds
+
+        server_ids = set()
+        email_pairs = set()
+        uuid_pairs = set()
+
+        for inbound in inbounds:
+            try:
+                sid = int(inbound.get('server_id'))
+            except Exception:
+                continue
+            server_ids.add(sid)
+            for client in (inbound.get('clients') or []):
+                email_l = (client.get('email') or '').strip().lower()
+                if email_l:
+                    email_pairs.add((sid, email_l))
+                uuid_l = str(client.get('id') or '').strip().lower()
+                if uuid_l:
+                    uuid_pairs.add((sid, uuid_l))
+
+        email_values = {email for (_sid, email) in email_pairs}
+        uuid_values = {uuid for (_sid, uuid) in uuid_pairs}
+        if not server_ids or not (email_values or uuid_values):
+            return inbounds
+
+        filters = []
+        if uuid_values:
+            filters.append(func.lower(ClientOwnership.client_uuid).in_(list(uuid_values)))
+        if email_values:
+            filters.append(func.lower(ClientOwnership.client_email).in_(list(email_values)))
+        if not filters:
+            return inbounds
+
+        rows = (
+            db.session.query(ClientOwnership, Admin)
+            .join(Admin, ClientOwnership.reseller_id == Admin.id)
+            .filter(ClientOwnership.server_id.in_(list(server_ids)))
+            .filter(or_(*filters))
+            .all()
+        )
+
+        exact_uuid_map = {}
+        exact_email_map = {}
+        loose_uuid_map = {}
+        loose_email_map = {}
+
+        def newer(existing, created):
+            return not existing or created >= (existing.get('created_at') or datetime.min)
+
+        for ownership, reseller in (rows or []):
+            try:
+                sid = int(ownership.server_id)
+            except Exception:
+                continue
+
+            created = ownership.created_at or datetime.min
+            info = {
+                'id': int(reseller.id) if reseller else None,
+                'username': reseller.username if reseller else None,
+                'created_at': created,
+            }
+
+            try:
+                iid = int(ownership.inbound_id) if ownership.inbound_id is not None else None
+            except Exception:
+                iid = None
+
+            uuid_l = (ownership.client_uuid or '').strip().lower()
+            if uuid_l:
+                loose_key = (sid, uuid_l)
+                if newer(loose_uuid_map.get(loose_key), created):
+                    loose_uuid_map[loose_key] = info
+                if iid is not None:
+                    exact_key = (sid, iid, uuid_l)
+                    if newer(exact_uuid_map.get(exact_key), created):
+                        exact_uuid_map[exact_key] = info
+
+            email_l = (ownership.client_email or '').strip().lower()
+            if email_l:
+                loose_key = (sid, email_l)
+                if newer(loose_email_map.get(loose_key), created):
+                    loose_email_map[loose_key] = info
+                if iid is not None:
+                    exact_key = (sid, iid, email_l)
+                    if newer(exact_email_map.get(exact_key), created):
+                        exact_email_map[exact_key] = info
+
+        for inbound in inbounds:
+            try:
+                sid = int(inbound.get('server_id'))
+            except Exception:
+                continue
+            try:
+                iid = int(inbound.get('id'))
+            except Exception:
+                iid = None
+
+            for client in (inbound.get('clients') or []):
+                uuid_l = str(client.get('id') or '').strip().lower()
+                email_l = (client.get('email') or '').strip().lower()
+                info = None
+                if uuid_l:
+                    info = exact_uuid_map.get((sid, iid, uuid_l)) if iid is not None else None
+                    if not info:
+                        info = loose_uuid_map.get((sid, uuid_l))
+                if not info and email_l:
+                    info = exact_email_map.get((sid, iid, email_l)) if iid is not None else None
+                    if not info:
+                        info = loose_email_map.get((sid, email_l))
+
+                if info and info.get('username'):
+                    client['owner_reseller_id'] = info.get('id')
+                    client['owner_username'] = info.get('username')
+                else:
+                    client.pop('owner_reseller_id', None)
+                    client.pop('owner_username', None)
+    except Exception:
+        app.logger.exception("Failed to enrich cached inbounds with ownership")
+    return inbounds
+
 @app.route('/api/refresh')
 @login_required
 def api_refresh():
@@ -6691,6 +6816,8 @@ def api_refresh():
                             c.pop('owner_username', None)
         except Exception:
             pass
+
+        enrich_inbounds_with_ownership(data.get('inbounds') or [])
 
         # Admins/superadmins see all cached data
         resp = {
@@ -7018,6 +7145,9 @@ def api_refresh_single_server(server_id):
 
     global_stats = GLOBAL_SERVER_DATA.get('stats') or {}
     server_count = len(GLOBAL_SERVER_DATA.get('servers_status') or [])
+    if user.role != 'reseller':
+        cached_inbounds = copy.deepcopy(cached_inbounds)
+        enrich_inbounds_with_ownership(cached_inbounds)
 
     return jsonify({
         "success": True,
