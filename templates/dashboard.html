@@ -268,6 +268,7 @@
                 <option value="delete">Delete</option>
                 <option value="add_days">Add Days</option>
                 <option value="add_volume">Add Volume (GB)</option>
+                <option value="volume_policy">Volume Filter</option>
                 {% if is_superadmin %}
                 <option value="assign_owner">Assign Owner</option>
                 <option value="unassign_owner">Unassign Owner</option>
@@ -306,6 +307,21 @@
 
             <button class="btn btn-primary" onclick="executeBulkAction()">Apply</button>
             <button class="btn btn-secondary" onclick="clearBulkSelection()">Clear</button>
+        </div>
+
+        <div id="bulk-volume-policy-container" style="display:none; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
+                <strong style="font-size:0.9rem;">Remaining Volume Rules</strong>
+                <button type="button" class="btn btn-secondary" style="padding:6px 10px;" onclick="addBulkVolumeRule()">Add Rule</button>
+            </div>
+            <div class="bulk-volume-rule-head" style="display:grid; grid-template-columns: minmax(86px,1fr) minmax(86px,1fr) minmax(120px,1.2fr) minmax(170px,1.6fr) auto; gap:8px; margin-bottom:6px; color:var(--text-secondary); font-size:0.78rem;">
+                <span>From GB</span>
+                <span>To GB</span>
+                <span>Make Left GB</span>
+                <span>Mode</span>
+                <span></span>
+            </div>
+            <div id="bulk-volume-rules" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
 
         <div id="bulk-progress" style="display:none; margin-top: 10px;">
@@ -1013,6 +1029,21 @@
 
     #edit-client-expiry {
         font-family: 'Vazirmatn', sans-serif !important;
+    }
+
+    @media (max-width: 860px) {
+        .bulk-volume-rule-head {
+            display: none !important;
+        }
+
+        .bulk-volume-rule {
+            grid-template-columns: 1fr 1fr !important;
+        }
+
+        .bulk-volume-rule .bulk-rule-mode,
+        .bulk-volume-rule .btn {
+            grid-column: 1 / -1;
+        }
     }
 
     .client-comment {
@@ -4930,6 +4961,72 @@
         text.textContent = `${safeProcessed}/${safeTotal}`;
     }
 
+    function renderBulkVolumeRule(rule = {}) {
+        const minVal = Number.isFinite(Number(rule.min)) ? Number(rule.min) : 0;
+        const maxVal = Number.isFinite(Number(rule.max)) ? Number(rule.max) : 10;
+        const targetVal = Number.isFinite(Number(rule.target)) ? Number(rule.target) : 5;
+        const mode = rule.mode === 'reset_and_set' ? 'reset_and_set' : 'set_remaining';
+        const row = document.createElement('div');
+        row.className = 'bulk-volume-rule';
+        row.style.cssText = 'display:grid; grid-template-columns: minmax(86px,1fr) minmax(86px,1fr) minmax(120px,1.2fr) minmax(170px,1.6fr) auto; gap:8px; align-items:center;';
+        row.innerHTML = `
+            <input type="number" class="form-input bulk-rule-min" min="0" step="0.1" value="${minVal}" placeholder="From GB" title="Minimum remaining GB">
+            <input type="number" class="form-input bulk-rule-max" min="0" step="0.1" value="${maxVal}" placeholder="To GB" title="Maximum remaining GB">
+            <input type="number" class="form-input bulk-rule-target" min="0" step="0.1" value="${targetVal}" placeholder="Left GB" title="Target remaining GB">
+            <select class="form-select bulk-rule-mode" title="Volume action">
+                <option value="set_remaining" ${mode === 'set_remaining' ? 'selected' : ''}>Set remaining to target</option>
+                <option value="reset_and_set" ${mode === 'reset_and_set' ? 'selected' : ''}>Reset traffic and set cap</option>
+            </select>
+            <button type="button" class="btn btn-secondary" style="padding:8px 10px;" onclick="removeBulkVolumeRule(this)">Remove</button>
+        `;
+        return row;
+    }
+
+    function addBulkVolumeRule(rule = {}) {
+        const list = document.getElementById('bulk-volume-rules');
+        if (!list) return;
+        list.appendChild(renderBulkVolumeRule(rule));
+    }
+
+    function removeBulkVolumeRule(button) {
+        const row = button ? button.closest('.bulk-volume-rule') : null;
+        if (row) row.remove();
+        const list = document.getElementById('bulk-volume-rules');
+        if (list && !list.children.length) addBulkVolumeRule();
+    }
+
+    function ensureDefaultBulkVolumeRules() {
+        const list = document.getElementById('bulk-volume-rules');
+        if (!list || list.children.length) return;
+        addBulkVolumeRule({ min: 0, max: 10, target: 5, mode: 'set_remaining' });
+        addBulkVolumeRule({ min: 10.1, max: 30, target: 15, mode: 'set_remaining' });
+    }
+
+    function collectBulkVolumeRules() {
+        const rows = Array.from(document.querySelectorAll('#bulk-volume-rules .bulk-volume-rule'));
+        const rules = [];
+        for (const row of rows) {
+            const min = Number(row.querySelector('.bulk-rule-min')?.value);
+            const max = Number(row.querySelector('.bulk-rule-max')?.value);
+            const target = Number(row.querySelector('.bulk-rule-target')?.value);
+            const mode = row.querySelector('.bulk-rule-mode')?.value || 'set_remaining';
+            if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(target)) {
+                throw new Error('Please fill all volume rule numbers');
+            }
+            if (min < 0 || max < 0 || target < 0) {
+                throw new Error('Volume rule values cannot be negative');
+            }
+            rules.push({
+                min_remaining_gb: min,
+                max_remaining_gb: max,
+                target_gb: target,
+                mode
+            });
+        }
+        if (!rules.length) throw new Error('Please add at least one volume rule');
+        return rules;
+    }
+
     function onBulkActionChanged() {
         const action = document.getElementById('bulk-action-select')?.value;
         const resellerContainer = document.getElementById('bulk-reseller-container');
@@ -4946,6 +5043,13 @@
             deltaContainer.style.display = (isDays || isVol) ? 'block' : 'none';
             daysInput.style.display = isDays ? 'block' : 'none';
             volInput.style.display = isVol ? 'block' : 'none';
+        }
+
+        const policyContainer = document.getElementById('bulk-volume-policy-container');
+        if (policyContainer) {
+            const showPolicy = action === 'volume_policy';
+            policyContainer.style.display = showPolicy ? 'block' : 'none';
+            if (showPolicy) ensureDefaultBulkVolumeRules();
         }
     }
 
@@ -4968,6 +5072,89 @@
             console.error('Error loading resellers for bulk:', error);
             select.innerHTML = '<option value="">Error loading resellers</option>';
         }
+    }
+
+    function formatReportGb(value) {
+        if (value === null || value === undefined || value === '') return 'Unlimited';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return String(value);
+        return `${num.toLocaleString(undefined, { maximumFractionDigits: 3 })} GB`;
+    }
+
+    function buildVolumePolicyReportText(job) {
+        const rows = Array.isArray(job?.report_rows) ? job.report_rows : [];
+        const progress = job?.progress || {};
+        const lines = [];
+        lines.push('Eve X-UI Manager - Volume Filter Report');
+        lines.push(`Generated: ${new Date().toISOString()}`);
+        lines.push(`Job ID: ${job?.id || '-'}`);
+        lines.push(`Total: ${progress.total || rows.length || 0}`);
+        lines.push(`Success: ${progress.success || 0}`);
+        lines.push(`Skipped: ${progress.skipped || 0}`);
+        lines.push(`Failed: ${progress.failed || 0}`);
+        lines.push('');
+        lines.push('Rules:');
+        let rules = Array.isArray(job?.report_rules) ? job.report_rules : [];
+        if (!rules.length) rules = collectBulkVolumeRules();
+        rules.forEach((rule, index) => {
+            const mode = rule.mode === 'reset_and_set' ? 'reset traffic and set cap' : 'set remaining to target';
+            lines.push(`${index + 1}. ${rule.min_remaining_gb}GB to ${rule.max_remaining_gb}GB -> ${rule.target_gb}GB (${mode})`);
+        });
+        lines.push('');
+        lines.push('Results:');
+        lines.push('Server | Inbound | Email | Before remaining | Matched filter | Mode | After remaining | Before cap | After cap | Status');
+        lines.push('--- | --- | --- | --- | --- | --- | --- | --- | --- | ---');
+
+        rows.forEach(row => {
+            const matched = row.matched_min_gb !== undefined
+                ? `${row.matched_min_gb}-${row.matched_max_gb}GB -> ${row.target_gb}GB`
+                : (row.reason === 'unlimited_volume' ? 'Unlimited volume' : 'No matching filter');
+            const mode = row.mode === 'reset_and_set'
+                ? 'reset traffic and set cap'
+                : (row.mode === 'set_remaining' ? 'set remaining to target' : '-');
+            const status = row.status === 'changed'
+                ? 'Changed'
+                : (row.status === 'skipped' ? `Skipped${row.reason ? ` (${row.reason})` : ''}` : `Failed${row.error ? ` (${row.error})` : ''}`);
+            lines.push([
+                row.server_name || row.server_id || '-',
+                row.inbound_id ?? '-',
+                row.email || '-',
+                formatReportGb(row.before_remaining_gb),
+                matched,
+                mode,
+                formatReportGb(row.after_remaining_gb),
+                formatReportGb(row.before_total_gb),
+                formatReportGb(row.after_total_gb),
+                status
+            ].join(' | '));
+        });
+
+        return lines.join('\n');
+    }
+
+    function downloadVolumePolicyReport(job) {
+        if (!job || job.action !== 'volume_policy') return;
+        const rows = Array.isArray(job.report_rows) ? job.report_rows : [];
+        if (!rows.length) return;
+
+        let text = '';
+        try {
+            text = buildVolumePolicyReportText(job);
+        } catch (e) {
+            console.error('Volume report build error:', e);
+            text = 'Eve X-UI Manager - Volume Filter Report\n\nUnable to render report details.';
+        }
+
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        link.href = url;
+        link.download = `volume-filter-report-${stamp}.txt`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
     }
 
     async function executeBulkAction() {
@@ -5007,6 +5194,15 @@
                 return;
             }
             data.volume_gb_delta = v;
+        }
+
+        if (action === 'volume_policy') {
+            try {
+                data.volume_rules = collectBulkVolumeRules();
+            } catch (e) {
+                showToast(e.message || 'Invalid volume rules', 'error');
+                return;
+            }
         }
 
         if (action === 'assign_owner') {
@@ -5080,6 +5276,7 @@
                 const skippedCount = progress.skipped || 0;
                 setBulkProgress(false);
                 showToast(`Bulk action done. Success: ${successCount}, Failed: ${failedCount}, Skipped: ${skippedCount}`);
+                downloadVolumePolicyReport(job);
 
                 let localChanged = false;
 
@@ -5177,6 +5374,7 @@
                         const failedCount = progress.failed || 0;
                         const skippedCount = progress.skipped || 0;
                         showToast(`Bulk action done. Success: ${successCount}, Failed: ${failedCount}, Skipped: ${skippedCount}`);
+                        downloadVolumePolicyReport(job);
 
                         let localChanged = false;
                         

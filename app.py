@@ -242,7 +242,7 @@ def _summarize_bulk_job(job):
     keys = (
         'id', 'state', 'action',
         'created_at', 'started_at', 'finished_at',
-        'progress', 'error'
+        'progress', 'error', 'report_rows', 'report_rules'
     )
     return {k: job.get(k) for k in keys if k in job}
 
@@ -509,6 +509,92 @@ def _run_bulk_job(job_id: str):
 
                 return True
 
+            def _post_client_update(_server: 'Server', _inbound_id: int, _email: str, target_client: dict):
+                session_obj, error = get_xui_session(_server)
+                if error:
+                    return False, error, 400
+
+                client_id = target_client.get('id', target_client.get('password', _email))
+                update_payload = {
+                    'id': _inbound_id,
+                    'settings': json.dumps({'clients': [target_client]})
+                }
+
+                replacements = {
+                    'id': _inbound_id,
+                    'inbound_id': _inbound_id,
+                    'inboundId': _inbound_id,
+                    'clientId': client_id,
+                    'client_id': client_id,
+                    'email': _email
+                }
+
+                templates = collect_endpoint_templates(_server.panel_type, 'client_update', CLIENT_UPDATE_FALLBACKS)
+                errors = []
+                for template in templates:
+                    full_url = build_panel_url(_server.host, template, replacements)
+                    if not full_url:
+                        continue
+                    try:
+                        resp = session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
+                    except Exception as exc:
+                        errors.append(f"{template}: {exc}")
+                        continue
+                    if resp.status_code == 200:
+                        try:
+                            resp_json = resp.json()
+                            if isinstance(resp_json, dict) and resp_json.get('success') is False:
+                                errors.append(f"{template}: success false")
+                                continue
+                        except ValueError:
+                            pass
+                        return True, None, 200
+                    errors.append(f"{template}: {resp.status_code}")
+
+                app.logger.warning(f"Bulk update client failed for {_email}: {'; '.join(errors)}")
+                return False, 'Update failed', 400
+
+            def _reset_client_traffic_core(_server: 'Server', _inbound_id: int, _email: str):
+                session_obj, error = get_xui_session(_server)
+                if error:
+                    return False, error, 400
+
+                replacements = {
+                    'id': _inbound_id,
+                    'inbound_id': _inbound_id,
+                    'inboundId': _inbound_id,
+                    'email': _email
+                }
+                templates = collect_endpoint_templates(_server.panel_type, 'client_reset_traffic', CLIENT_RESET_FALLBACKS)
+                errors = []
+                for template in templates:
+                    full_url = build_panel_url(_server.host, template, replacements)
+                    if not full_url:
+                        continue
+                    requires_path_email = (':email' in template) or ('{email}' in template)
+                    payload = None if requires_path_email else {'email': _email}
+                    try:
+                        if payload is None:
+                            resp = session_obj.post(full_url, verify=False, timeout=10)
+                        else:
+                            resp = session_obj.post(full_url, json=payload, verify=False, timeout=10)
+                    except Exception as exc:
+                        errors.append(f"{template}: {exc}")
+                        continue
+                    if resp.status_code == 200:
+                        try:
+                            resp_json = resp.json()
+                            if isinstance(resp_json, dict) and resp_json.get('success') is False:
+                                errors.append(f"{template}: success false")
+                                continue
+                        except ValueError:
+                            pass
+                        return True, None, 200
+                    errors.append(f"{template}: {resp.status_code}")
+
+                app.logger.warning(f"Bulk reset traffic failed for {_email}: {'; '.join(errors)}")
+                return False, 'Reset traffic failed', 400
+
             def _apply_client_limit_delta(_user: 'Admin', _server: 'Server', _inbound_id: int, _email: str,
                                           days_delta: int | None = None, volume_gb_delta: int | None = None):
                 if _user.role == 'reseller':
@@ -571,50 +657,153 @@ def _run_bulk_job(job_id: str):
                         new_total_bytes = current_total_bytes + (volume_gb_delta * 1024 * 1024 * 1024)
                     target_client['totalGB'] = new_total_bytes
 
-                # Push update to panel
-                session_obj, error = get_xui_session(_server)
-                if error:
-                    return False, error, 400
+                return _post_client_update(_server, _inbound_id, _email, target_client)
 
-                client_id = target_client.get('id', target_client.get('password', _email))
-                update_payload = {
-                    'id': _inbound_id,
-                    'settings': json.dumps({'clients': [target_client]})
-                }
-
-                replacements = {
-                    'id': _inbound_id,
-                    'inbound_id': _inbound_id,
-                    'inboundId': _inbound_id,
-                    'clientId': client_id,
-                    'client_id': client_id,
-                    'email': _email
-                }
-
-                templates = collect_endpoint_templates(_server.panel_type, 'client_update', CLIENT_UPDATE_FALLBACKS)
-                errors = []
-                for template in templates:
-                    full_url = build_panel_url(_server.host, template, replacements)
-                    if not full_url:
+            def _normalize_volume_policy_rules(raw_rules: Any) -> list[dict]:
+                if not isinstance(raw_rules, list):
+                    return []
+                rules = []
+                for raw_rule in raw_rules:
+                    if not isinstance(raw_rule, dict):
                         continue
                     try:
-                        resp = session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
-                    except Exception as exc:
-                        errors.append(f"{template}: {exc}")
+                        min_gb = float(raw_rule.get('min_remaining_gb'))
+                        max_gb = float(raw_rule.get('max_remaining_gb'))
+                        target_gb = float(raw_rule.get('target_gb'))
+                    except (TypeError, ValueError):
                         continue
-                    if resp.status_code == 200:
-                        try:
-                            resp_json = resp.json()
-                            if isinstance(resp_json, dict) and resp_json.get('success') is False:
-                                errors.append(f"{template}: success false")
-                                continue
-                        except ValueError:
-                            pass
-                        return True, None, 200
-                    errors.append(f"{template}: {resp.status_code}")
+                    if min_gb < 0 or max_gb < 0 or target_gb < 0:
+                        continue
+                    if max_gb < min_gb:
+                        min_gb, max_gb = max_gb, min_gb
+                    mode = str(raw_rule.get('mode') or 'set_remaining').strip().lower()
+                    if mode not in ('set_remaining', 'reset_and_set'):
+                        mode = 'set_remaining'
+                    rules.append({
+                        'min_remaining_gb': min_gb,
+                        'max_remaining_gb': max_gb,
+                        'target_gb': target_gb,
+                        'mode': mode,
+                    })
+                return rules
 
-                app.logger.warning(f"Bulk update client failed for {_email}: {'; '.join(errors)}")
-                return False, 'Update failed', 400
+            def _bytes_to_gb_float(value: int | float | None) -> float:
+                try:
+                    return round(float(value or 0) / float(1024 ** 3), 3)
+                except Exception:
+                    return 0.0
+
+            def _apply_client_volume_policy(_user: 'Admin', _server: 'Server', _inbound_id: int, _email: str, raw_rules: Any):
+                report = {
+                    'server_id': getattr(_server, 'id', None),
+                    'server_name': getattr(_server, 'name', '') or '',
+                    'inbound_id': _inbound_id,
+                    'email': _email,
+                    'status': 'failed',
+                    'error': None,
+                }
+                if _user.role == 'reseller':
+                    if not _has_client_access(_user, _server.id, _email, inbound_id=_inbound_id):
+                        report['error'] = 'Access denied'
+                        return False, 'Access denied', 403, report
+
+                rules = _normalize_volume_policy_rules(raw_rules)
+                if not rules:
+                    report['error'] = 'No valid volume rules'
+                    return False, 'No valid volume rules', 400, report
+
+                target_client, err = _fetch_client_snapshot(_user, _server, _inbound_id, _email)
+                if err:
+                    report['error'] = err
+                    return False, err, 400, report
+                if not isinstance(target_client, dict):
+                    report['error'] = 'Client not found'
+                    return False, 'Client not found', 404, report
+
+                try:
+                    current_total_bytes = int(target_client.get('totalGB') or 0)
+                except (TypeError, ValueError):
+                    current_total_bytes = 0
+                if current_total_bytes <= 0:
+                    report.update({
+                        'status': 'skipped',
+                        'reason': 'unlimited_volume',
+                        'before_total_gb': 0,
+                        'before_remaining_gb': None,
+                        'after_total_gb': 0,
+                        'after_remaining_gb': None,
+                    })
+                    return True, 'Unlimited volume skipped', 204, report
+
+                try:
+                    used_up = int(target_client.get('up') or 0)
+                except (TypeError, ValueError):
+                    used_up = 0
+                try:
+                    used_down = int(target_client.get('down') or 0)
+                except (TypeError, ValueError):
+                    used_down = 0
+                used_bytes = max(0, used_up + used_down)
+                remaining_bytes = max(0, current_total_bytes - used_bytes)
+                remaining_gb = remaining_bytes / float(1024 ** 3)
+                report.update({
+                    'before_total_gb': _bytes_to_gb_float(current_total_bytes),
+                    'before_remaining_gb': round(remaining_gb, 3),
+                    'used_gb': _bytes_to_gb_float(used_bytes),
+                })
+
+                matched_rule = None
+                for rule in rules:
+                    if rule['min_remaining_gb'] <= remaining_gb <= rule['max_remaining_gb']:
+                        matched_rule = rule
+                        break
+                if not matched_rule:
+                    report.update({
+                        'status': 'skipped',
+                        'reason': 'no_matching_rule',
+                        'after_total_gb': report.get('before_total_gb'),
+                        'after_remaining_gb': report.get('before_remaining_gb'),
+                    })
+                    return True, 'No matching volume rule', 204, report
+
+                target_bytes = int(round(matched_rule['target_gb'] * (1024 ** 3)))
+                report.update({
+                    'matched_min_gb': matched_rule['min_remaining_gb'],
+                    'matched_max_gb': matched_rule['max_remaining_gb'],
+                    'target_gb': matched_rule['target_gb'],
+                    'mode': matched_rule['mode'],
+                })
+                if matched_rule['mode'] == 'reset_and_set':
+                    target_client['up'] = 0
+                    target_client['down'] = 0
+                    target_client['totalGB'] = target_bytes
+                    ok, update_err, status = _post_client_update(_server, _inbound_id, _email, target_client)
+                    if not ok:
+                        report['error'] = update_err
+                        return ok, update_err, status, report
+                    reset_ok, reset_err, reset_status = _reset_client_traffic_core(_server, _inbound_id, _email)
+                    if not reset_ok:
+                        report['error'] = reset_err
+                        return reset_ok, reset_err, reset_status, report
+                    report.update({
+                        'status': 'changed',
+                        'after_total_gb': _bytes_to_gb_float(target_bytes),
+                        'after_remaining_gb': _bytes_to_gb_float(target_bytes),
+                    })
+                    return True, None, 200, report
+
+                new_total_bytes = used_bytes + target_bytes
+                target_client['totalGB'] = new_total_bytes
+                ok, update_err, status = _post_client_update(_server, _inbound_id, _email, target_client)
+                if ok:
+                    report.update({
+                        'status': 'changed',
+                        'after_total_gb': _bytes_to_gb_float(new_total_bytes),
+                        'after_remaining_gb': _bytes_to_gb_float(target_bytes),
+                    })
+                else:
+                    report['error'] = update_err
+                return ok, update_err, status, report
 
             for item in clients:
                 client_ref = item
@@ -699,6 +888,8 @@ def _run_bulk_job(job_id: str):
 
                 ok = False
                 err = None
+                skipped = False
+                report_row = None
 
                 if action in ('enable', 'disable'):
                     ok, err, _status = _toggle_client_core(user, server, inbound_id, email, action == 'enable')
@@ -710,6 +901,9 @@ def _run_bulk_job(job_id: str):
                 elif action == 'add_volume':
                     delta = data.get('volume_gb_delta')
                     ok, err, _status = _apply_client_limit_delta(user, server, inbound_id, email, days_delta=None, volume_gb_delta=delta)
+                elif action == 'volume_policy':
+                    ok, err, _status, report_row = _apply_client_volume_policy(user, server, inbound_id, email, data.get('volume_rules'))
+                    skipped = bool(ok and _status == 204)
                 elif action == 'assign_owner':
                     email_l = (email or '').lower()
                     try:
@@ -771,7 +965,9 @@ def _run_bulk_job(job_id: str):
                     j = BULK_JOBS.get(job_id) or {}
                     pr = j.get('progress') or {}
                     pr['processed'] = int(pr.get('processed', 0) or 0) + 1
-                    if ok:
+                    if skipped:
+                        pr['skipped'] = int(pr.get('skipped', 0) or 0) + 1
+                    elif ok:
                         pr['success'] = int(pr.get('success', 0) or 0) + 1
                     else:
                         pr['failed'] = int(pr.get('failed', 0) or 0) + 1
@@ -779,6 +975,11 @@ def _run_bulk_job(job_id: str):
                         if len(errs) < 50:
                             errs.append({'client': {'server_id': server_id, 'inbound_id': inbound_id, 'email': email}, 'error': err or 'Failed'})
                         j['errors'] = errs
+                    if action == 'volume_policy' and isinstance(report_row, dict):
+                        rows = j.get('report_rows') or []
+                        if len(rows) < 10000:
+                            rows.append(report_row)
+                        j['report_rows'] = rows
                     j['progress'] = pr
                     BULK_JOBS[job_id] = j
 
@@ -8116,7 +8317,7 @@ def bulk_client_action():
     data = payload.get('data') or {}
     conditions = payload.get('conditions') or {}
 
-    allowed_actions = {'enable', 'disable', 'delete', 'assign_owner', 'unassign_owner', 'add_days', 'add_volume'}
+    allowed_actions = {'enable', 'disable', 'delete', 'assign_owner', 'unassign_owner', 'add_days', 'add_volume', 'volume_policy'}
     if action not in allowed_actions:
         return jsonify({"success": False, "error": "Invalid action"}), 400
     if not isinstance(clients, list) or len(clients) == 0:
@@ -8127,7 +8328,7 @@ def bulk_client_action():
         if session.get('role') == 'reseller':
             return jsonify({"success": False, "error": "Access denied"}), 403
 
-    if action in ('add_days', 'add_volume'):
+    if action in ('add_days', 'add_volume', 'volume_policy'):
         # Basic payload validation here; deep validation happens in the worker.
         if not isinstance(data, dict):
             return jsonify({"success": False, "error": "Invalid data"}), 400
@@ -8137,6 +8338,9 @@ def bulk_client_action():
         if action == 'add_volume':
             if 'volume_gb_delta' not in data:
                 return jsonify({"success": False, "error": "volume_gb_delta required"}), 400
+        if action == 'volume_policy':
+            if not isinstance(data.get('volume_rules'), list) or len(data.get('volume_rules') or []) == 0:
+                return jsonify({"success": False, "error": "volume_rules required"}), 400
 
     if conditions is not None and not isinstance(conditions, dict):
         return jsonify({"success": False, "error": "Invalid conditions"}), 400
@@ -8175,6 +8379,8 @@ def bulk_client_action():
             'skipped': 0,
         },
         'errors': [],
+        'report_rows': [],
+        'report_rules': data.get('volume_rules') if action == 'volume_policy' else None,
         'error': None,
     }
     with BULK_JOBS_LOCK:
