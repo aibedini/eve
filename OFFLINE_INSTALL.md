@@ -35,6 +35,39 @@ Use this when the server cannot reach GitHub, PyPI, or Ubuntu repositories.
 
 #### Build the bundle on an internet-connected Linux/WSL machine
 
+Recommended exact-target flow:
+
+On the restricted server, run:
+
+```bash
+cat > /root/eve-offline-profile.sh <<'EOF'
+{
+  . /etc/os-release
+  echo "EVE_OFFLINE_PROFILE_VERSION=1"
+  echo "OS_ID=${ID:-}"
+  echo "OS_PRETTY=${PRETTY_NAME:-}"
+  echo "VERSION_ID=${VERSION_ID:-}"
+  echo "VERSION_CODENAME=${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+  echo "ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  echo "KERNEL=$(uname -r)"
+  echo "LIBC=$(ldd --version 2>/dev/null | head -1 || true)"
+  echo "PYTHON3=$(python3 --version 2>/dev/null || true)"
+} | tee /root/eve-offline-profile.txt
+EOF
+bash /root/eve-offline-profile.sh
+```
+
+Copy `/root/eve-offline-profile.txt` back to the online build machine, then run:
+
+```bash
+git clone https://github.com/yoyoraya/eve-xui-manager.git
+cd eve-xui-manager
+chmod +x prepare-offline-bundle.sh
+bash prepare-offline-bundle.sh --profile /path/to/eve-offline-profile.txt .
+```
+
+Generic all-target flow:
+
 ```bash
 git clone https://github.com/yoyoraya/eve-xui-manager.git
 cd eve-xui-manager

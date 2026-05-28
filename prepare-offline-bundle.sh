@@ -19,7 +19,50 @@ print_success() { echo -e "  ${GREEN}OK${NC} $1"; }
 print_error() { echo -e "  ${RED}ERR${NC} $1"; }
 print_warning() { echo -e "  ${YELLOW}WARN${NC} $1"; }
 
-PROJECT_DIR="$(cd "${1:-.}" && pwd -P)"
+PROJECT_ARG="."
+PROFILE_FILE="${EVE_OFFLINE_PROFILE:-}"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --profile)
+            PROFILE_FILE="${2:-}"
+            if [ -z "$PROFILE_FILE" ]; then
+                echo "Missing value for --profile" >&2
+                exit 1
+            fi
+            shift 2
+            ;;
+        --print-collector)
+            cat <<'EOF'
+{
+  . /etc/os-release
+  echo "EVE_OFFLINE_PROFILE_VERSION=1"
+  echo "OS_ID=${ID:-}"
+  echo "OS_PRETTY=${PRETTY_NAME:-}"
+  echo "VERSION_ID=${VERSION_ID:-}"
+  echo "VERSION_CODENAME=${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+  echo "ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  echo "KERNEL=$(uname -r)"
+  echo "LIBC=$(ldd --version 2>/dev/null | head -1 || true)"
+  echo "PYTHON3=$(python3 --version 2>/dev/null || true)"
+} | tee /root/eve-offline-profile.txt
+cat /root/eve-offline-profile.txt
+EOF
+            exit 0
+            ;;
+        -h|--help)
+            echo "Usage: bash prepare-offline-bundle.sh [--profile eve-offline-profile.txt] /path/to/eve-xui-manager"
+            echo "       bash prepare-offline-bundle.sh --print-collector"
+            exit 0
+            ;;
+        *)
+            PROJECT_ARG="$1"
+            shift
+            ;;
+    esac
+done
+
+PROJECT_DIR="$(cd "$PROJECT_ARG" && pwd -P)"
 OFFLINE_DIR="$PROJECT_DIR/offline"
 DIST_DIR="$PROJECT_DIR/dist"
 PY_WHEEL_DIR="$OFFLINE_DIR/wheels/cp311-linux-x86_64"
@@ -27,6 +70,7 @@ PY_RUNTIME_DIR="$OFFLINE_DIR/python"
 REQUIREMENTS_FILE="$PROJECT_DIR/requirements.txt"
 
 TARGETS="${EVE_OFFLINE_TARGETS:-focal jammy noble}"
+TARGET_ARCH="${EVE_OFFLINE_ARCH:-amd64}"
 APT_PACKAGES=(
     ca-certificates
     curl
@@ -52,9 +96,12 @@ usage() {
     cat <<EOF
 Usage:
   bash prepare-offline-bundle.sh /path/to/eve-xui-manager
+  bash prepare-offline-bundle.sh --profile /path/to/eve-offline-profile.txt /path/to/eve-xui-manager
+  bash prepare-offline-bundle.sh --print-collector
 
 Environment:
   EVE_OFFLINE_TARGETS="focal jammy noble"   Ubuntu 20.04/22.04/24.04
+  EVE_OFFLINE_ARCH="amd64"                  Target architecture
   PBS_URL="https://..."                     Override Python standalone runtime URL
 
 Output:
@@ -74,6 +121,48 @@ if [ ! -f "$REQUIREMENTS_FILE" ] || [ ! -f "$PROJECT_DIR/setup.sh" ]; then
     exit 1
 fi
 
+load_target_profile() {
+    if [ -z "${PROFILE_FILE:-}" ]; then
+        return
+    fi
+    if [ ! -f "$PROFILE_FILE" ]; then
+        print_error "Profile file not found: $PROFILE_FILE"
+        exit 1
+    fi
+
+    local key value
+    while IFS='=' read -r key value; do
+        case "$key" in
+            VERSION_CODENAME)
+                value="${value%\"}"; value="${value#\"}"
+                TARGETS="$value"
+                ;;
+            ARCH)
+                value="${value%\"}"; value="${value#\"}"
+                TARGET_ARCH="$value"
+                ;;
+            OS_PRETTY)
+                value="${value%\"}"; value="${value#\"}"
+                print_success "Target profile: $value"
+                ;;
+        esac
+    done < "$PROFILE_FILE"
+
+    if [ -z "$TARGETS" ]; then
+        print_error "Profile does not include VERSION_CODENAME"
+        exit 1
+    fi
+    if [ "$TARGET_ARCH" = "x86_64" ]; then
+        TARGET_ARCH="amd64"
+    fi
+    if [ "$TARGET_ARCH" != "amd64" ]; then
+        print_error "Only amd64/x86_64 offline bundles are supported right now; profile arch: $TARGET_ARCH"
+        exit 1
+    fi
+    print_success "Building offline apt bundle for: ${TARGETS}-${TARGET_ARCH}"
+}
+
+load_target_profile
 mkdir -p "$OFFLINE_DIR" "$DIST_DIR" "$PY_WHEEL_DIR" "$PY_RUNTIME_DIR"
 
 run_as_root() {
@@ -203,21 +292,29 @@ download_apt_with_docker() {
     local codename="$1"
     local image out_dir packages
     image="$(ubuntu_image_for_codename "$codename")"
-    out_dir="$OFFLINE_DIR/apt/${codename}-amd64"
+    out_dir="$OFFLINE_DIR/apt/${codename}-${TARGET_ARCH}"
     mkdir -p "$out_dir"
     packages="${APT_PACKAGES[*]}"
 
-    print_header "Downloading apt packages for $codename / amd64"
-    docker run --rm --platform linux/amd64 \
+    print_header "Downloading apt packages for $codename / $TARGET_ARCH"
+    docker run --rm --platform "linux/$TARGET_ARCH" \
         -v "$out_dir:/out" \
         "$image" \
         bash -lc "set -euo pipefail
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
-            apt-get install -y --download-only --no-install-recommends $packages
-            cp -v /var/cache/apt/archives/*.deb /out/
-            apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances $packages \
-              | awk '/^[[:alnum:]][^< ]/ { print \$1 }' | sort -u > /out/package-list.txt
+            resolved=\$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances $packages \
+              | awk '/^[[:alnum:]][^< ]/ { print \$1 }' | sort -u)
+            downloadable=''
+            for pkg in \$resolved; do
+              if apt-cache show \"\$pkg\" >/dev/null 2>&1; then
+                downloadable=\"\$downloadable \$pkg\"
+              fi
+            done
+            printf '%s\n' \$downloadable | tr ' ' '\n' | sed '/^$/d' | sort -u > /out/package-list.txt
+            cd /tmp
+            apt-get download \$downloadable
+            cp -v ./*.deb /out/
         "
 
     local count
@@ -237,7 +334,7 @@ download_apt_for_current_host() {
         exit 1
     fi
 
-    out_dir="$OFFLINE_DIR/apt/${codename}-amd64"
+    out_dir="$OFFLINE_DIR/apt/${codename}-${TARGET_ARCH}"
     mkdir -p "$out_dir"
     print_warning "Docker not found. Downloading only for current host: $codename"
     sudo apt-get update
@@ -261,7 +358,8 @@ write_manifest() {
         echo "Eve X-UI Manager offline bundle"
         echo "Generated at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "Targets: $TARGETS"
-        echo "Architecture: amd64 (Intel/AMD x86_64)"
+        echo "Architecture: $TARGET_ARCH"
+        [ -n "${PROFILE_FILE:-}" ] && echo "Profile: $PROFILE_FILE"
         echo
         echo "APT packages:"
         printf '  %s\n' "${APT_PACKAGES[@]}"
