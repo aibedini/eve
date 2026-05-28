@@ -15,12 +15,15 @@ Create `.env` next to `docker-compose.yml`:
 ```env
 DOMAIN=panel.example.com
 LETSENCRYPT_EMAIL=admin@example.com
+EVE_IMAGE=ghcr.io/yoyoraya/eve-xui-manager:latest
 POSTGRES_PASSWORD=change-this-long-random-password
 INITIAL_ADMIN_USERNAME=admin
 INITIAL_ADMIN_PASSWORD=change-this-admin-password
 ```
 
-`DOMAIN` is the domain or IP you want this server to use. For local HTTP-only tests, set `DOMAIN=:80`.
+`DOMAIN` is the domain you want this server to use. For local or IP-only HTTP tests, set `DOMAIN=:80`.
+
+`LETSENCRYPT_EMAIL` is optional. Caddy can issue certificates without it, but keeping it set is recommended for real domains.
 
 You can start from `.env.docker.example`.
 
@@ -42,6 +45,37 @@ docker compose up -d
 ```
 
 ## Restricted / Offline Server
+
+### Build a Complete Bundle on Hetzner
+
+On a server that has internet access, such as Hetzner:
+
+```bash
+git clone https://github.com/yoyoraya/eve-xui-manager.git
+cd eve-xui-manager
+bash scripts/docker/build-offline-bundle.sh
+```
+
+This creates:
+
+```text
+eve-docker-offline-bundle.tar.gz
+```
+
+Upload that file to the restricted server, then:
+
+```bash
+mkdir -p /opt/eve-docker
+tar -xzf eve-docker-offline-bundle.tar.gz -C /opt/eve-docker
+cd /opt/eve-docker
+sudo bash install.sh
+```
+
+The installer asks for the domain/IP, email, PostgreSQL password, and initial admin credentials, then starts Eve with Docker Compose.
+
+The target server only needs Docker Engine and the Docker Compose plugin. The app itself does not depend on the target Ubuntu package versions, so Ubuntu 20.04, 22.04, and 24.04 on amd64 are supported.
+
+### Manual Image Export
 
 On an online machine:
 
@@ -75,6 +109,14 @@ docker compose logs -f app
 ```
 
 No GitHub, PyPI, or apt package download is needed after the images are loaded.
+
+## Installing Docker on the Target Server
+
+If the restricted server already has Docker, skip this part.
+
+Docker itself must be installed once on the target server. If that server cannot access apt repositories, install Docker on another same-architecture Ubuntu server and transfer Docker's official `.deb` packages, or prepare the server image with Docker before moving it behind the restricted network.
+
+After Docker is installed, Eve updates no longer need apt, PyPI, or GitHub access.
 
 ## Data
 

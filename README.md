@@ -8,6 +8,12 @@ For production and restricted/offline servers, use the Docker deployment. GitHub
 
 See [DOCKER.md](DOCKER.md).
 
+To build a transferable bundle on an online server:
+
+```bash
+bash scripts/docker/build-offline-bundle.sh
+```
+
 un the following command on your Ubuntu/Debian server:
 ## 🚀 Installation (One-Command)
 Run the following command on your Ubuntu/Debian server:

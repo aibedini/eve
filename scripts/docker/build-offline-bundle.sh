@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_IMAGE="${APP_IMAGE:-ghcr.io/yoyoraya/eve-xui-manager:latest}"
+POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
+CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
+OUT_DIR="${OUT_DIR:-docker-offline-bundle}"
+OUT_FILE="${OUT_FILE:-eve-docker-offline-bundle.tar.gz}"
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$ROOT_DIR"
+
+need_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "ERR: '$1' is required" >&2
+        exit 1
+    fi
+}
+
+need_cmd docker
+need_cmd tar
+
+if ! docker compose version >/dev/null 2>&1; then
+    echo "ERR: Docker Compose plugin is required on this online build server." >&2
+    exit 1
+fi
+
+rm -rf "$OUT_DIR" "$OUT_FILE"
+mkdir -p "$OUT_DIR/docker"
+
+echo "-- Building Eve image: $APP_IMAGE"
+docker build -t "$APP_IMAGE" .
+
+echo "-- Pulling runtime images"
+docker pull "$POSTGRES_IMAGE"
+docker pull "$CADDY_IMAGE"
+
+echo "-- Saving Docker images"
+docker save -o "$OUT_DIR/docker-images.tar" \
+    "$APP_IMAGE" \
+    "$POSTGRES_IMAGE" \
+    "$CADDY_IMAGE"
+
+cp docker-compose.yml "$OUT_DIR/docker-compose.yml"
+cp .env.docker.example "$OUT_DIR/.env.example"
+cp docker/Caddyfile "$OUT_DIR/docker/Caddyfile"
+cp scripts/docker/install-offline-bundle.sh "$OUT_DIR/install.sh"
+chmod +x "$OUT_DIR/install.sh"
+
+cat > "$OUT_DIR/README.txt" <<EOF
+Eve X-UI Manager Docker offline bundle
+
+Copy this folder or ${OUT_FILE} to the restricted server, then run:
+
+  sudo bash install.sh
+
+Included images:
+  - ${APP_IMAGE}
+  - ${POSTGRES_IMAGE}
+  - ${CADDY_IMAGE}
+
+The target server only needs Docker + Docker Compose plugin installed.
+Ubuntu 20.04/22.04/24.04 are supported because the app runs inside containers.
+EOF
+
+echo "-- Creating archive: $OUT_FILE"
+tar -czf "$OUT_FILE" -C "$OUT_DIR" .
+
+echo "OK: $OUT_FILE is ready."
+echo "Copy it to the restricted server, extract it, then run: sudo bash install.sh"

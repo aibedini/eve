@@ -40,7 +40,7 @@ services:
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
-      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:?set LETSENCRYPT_EMAIL in .env}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
     ports:
       - "80:80"
       - "443:443"
