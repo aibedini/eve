@@ -2672,6 +2672,32 @@
         }
     }
 
+    function getTelegramBackupPayload() {
+        const proxyPortRaw = parseInt(document.getElementById('telegram-backup-proxy-port').value, 10);
+        return {
+            enabled: document.getElementById('telegram-backup-enabled').checked,
+            interval_minutes: parseInt(document.getElementById('telegram-backup-interval').value, 10),
+            bot_token: document.getElementById('telegram-backup-token').value.trim(),
+            chat_id: document.getElementById('telegram-backup-chat-id').value.trim(),
+            use_proxy: document.getElementById('telegram-backup-use-proxy').checked,
+            proxy_mode: document.getElementById('telegram-backup-proxy-mode').value,
+            proxy_url: document.getElementById('telegram-backup-proxy').value.trim(),
+            proxy_host: document.getElementById('telegram-backup-proxy-host').value.trim(),
+            proxy_port: Number.isNaN(proxyPortRaw) ? 0 : proxyPortRaw,
+            proxy_username: document.getElementById('telegram-backup-proxy-username').value.trim(),
+            proxy_password: document.getElementById('telegram-backup-proxy-password').value.trim()
+        };
+    }
+
+    async function readTelegramBackupJson(res) {
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+        if (contentType.includes('application/json')) return await res.json();
+        const text = await res.text();
+        const title = (text.match(/<title[^>]*>(.*?)<\/title>/i) || [])[1];
+        const message = title ? title.trim() : (text || `HTTP ${res.status}`).slice(0, 160);
+        throw new Error(message || `HTTP ${res.status}`);
+    }
+
     async function testTelegramBackupSettings(btnEl) {
         const btn = btnEl || (typeof event !== 'undefined' ? event.currentTarget : null);
         const originalText = btn.innerHTML;
@@ -2679,15 +2705,19 @@
         btn.disabled = true;
 
         try {
-            const res = await fetch('/api/settings/telegram-backup/test', { method: 'POST' });
-            const data = await res.json();
+            const res = await fetch('/api/settings/telegram-backup/test', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+                body: JSON.stringify(getTelegramBackupPayload())
+            });
+            const data = await readTelegramBackupJson(res);
             if (data.success) {
                 showToast('Telegram connection successful');
             } else {
                 showToast(data.error || 'Telegram test failed', 'error');
             }
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast('Telegram test failed: ' + (e.message || e), 'error', 8000);
         } finally {
             btn.innerHTML = originalText;
             btn.disabled = false;
@@ -2754,8 +2784,11 @@
 
         try {
             setProgress(true, 0, 0, 'Starting backup...');
-            const startRes = await fetch('/api/telegram-backup/now', { method: 'POST' });
-            const startData = await startRes.json();
+            const startRes = await fetch('/api/telegram-backup/now', {
+                method: 'POST',
+                headers: {'Accept': 'application/json'}
+            });
+            const startData = await readTelegramBackupJson(startRes);
             if (!startData.success || !startData.job_id) {
                 showToast(startData.error || 'Backup failed to start', 'error', 6000);
                 setProgress(false);
@@ -2766,11 +2799,16 @@
 
             async function poll() {
                 try {
-                    const res  = await fetch(`/api/telegram-backup/job/${jobId}`);
-                    const data = await res.json();
+                    const res  = await fetch(`/api/telegram-backup/job/${jobId}`, {
+                        headers: {'Accept': 'application/json'}
+                    });
+                    const data = await readTelegramBackupJson(res);
                     pollErrors = 0;
 
-                    if (!data.success || !data.job) {
+                    if (!data.success) {
+                        throw new Error(data.error || 'Could not read backup job status');
+                    }
+                    if (!data.job) {
                         setProgress(true, 0, 0, 'Waiting for job...');
                         return;
                     }

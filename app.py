@@ -156,7 +156,9 @@ def _read_snap_progress():
     except Exception:
         return _SNAPSHOT_PROGRESS
 
-# Telegram backup job tracking (in-memory; per-process)
+# Telegram backup job tracking. Persist to a shared file so all gunicorn
+# workers can report status for jobs started by another worker.
+TELEGRAM_BACKUP_JOBS_FILE = os.path.join(tempfile.gettempdir(), 'eve_telegram_backup_jobs.json')
 TELEGRAM_BACKUP_JOBS = {}  # job_id -> job dict
 TELEGRAM_BACKUP_JOBS_LOCK = threading.Lock()
 TELEGRAM_BACKUP_MAX_JOBS = 20
@@ -273,18 +275,51 @@ def _prune_telegram_backup_jobs_locked():
             deleted += 1
 
 
+def _load_telegram_backup_jobs_locked():
+    global TELEGRAM_BACKUP_JOBS
+    try:
+        with open(TELEGRAM_BACKUP_JOBS_FILE, 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            TELEGRAM_BACKUP_JOBS = data
+    except Exception:
+        pass
+    return TELEGRAM_BACKUP_JOBS
+
+
+def _save_telegram_backup_jobs_locked():
+    try:
+        tmp_path = TELEGRAM_BACKUP_JOBS_FILE + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as fh:
+            json.dump(TELEGRAM_BACKUP_JOBS, fh, ensure_ascii=False)
+        os.replace(tmp_path, TELEGRAM_BACKUP_JOBS_FILE)
+    except Exception as exc:
+        try:
+            app.logger.warning(f"Could not persist Telegram backup jobs: {exc}")
+        except Exception:
+            pass
+
+
+def _get_telegram_backup_job(job_id: str):
+    with TELEGRAM_BACKUP_JOBS_LOCK:
+        return copy.deepcopy(_load_telegram_backup_jobs_locked().get(job_id))
+
+
 def _update_telegram_backup_job(job_id: str, **patch):
     with TELEGRAM_BACKUP_JOBS_LOCK:
+        _load_telegram_backup_jobs_locked()
         job = TELEGRAM_BACKUP_JOBS.get(job_id)
         if not job:
             return
         for k, v in patch.items():
             job[k] = v
         TELEGRAM_BACKUP_JOBS[job_id] = job
+        _save_telegram_backup_jobs_locked()
 
 
 def _run_telegram_backup_job(job_id: str):
     with TELEGRAM_BACKUP_JOBS_LOCK:
+        _load_telegram_backup_jobs_locked()
         job = TELEGRAM_BACKUP_JOBS.get(job_id)
         if not job:
             return
@@ -292,6 +327,7 @@ def _run_telegram_backup_job(job_id: str):
         job['started_at'] = _utc_iso_now()
         job['stage'] = 'starting'
         TELEGRAM_BACKUP_JOBS[job_id] = job
+        _save_telegram_backup_jobs_locked()
 
     def progress_cb(update: dict):
         if not isinstance(update, dict):
@@ -308,7 +344,8 @@ def _run_telegram_backup_job(job_id: str):
 
     try:
         with app.app_context():
-            result = _run_telegram_backup(trigger=str((TELEGRAM_BACKUP_JOBS.get(job_id) or {}).get('trigger') or 'manual'), progress_cb=progress_cb)
+            job_snapshot = _get_telegram_backup_job(job_id) or {}
+            result = _run_telegram_backup(trigger=str(job_snapshot.get('trigger') or 'manual'), progress_cb=progress_cb)
     except Exception as exc:
         _update_telegram_backup_job(job_id, state='error', finished_at=_utc_iso_now(), error=str(exc), stage='error')
         return
@@ -1787,7 +1824,10 @@ def _parse_iso_datetime(value: str | None):
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
     except Exception:
         return None
 
@@ -1902,7 +1942,7 @@ def _telegram_send_document(token: str, chat_id: str, file_path: str, caption: s
         data['caption'] = caption
     with open(file_path, 'rb') as handle:
         files = {'document': (os.path.basename(file_path), handle)}
-        return requests.post(url, data=data, files=files, proxies=proxies, timeout=30)
+        return requests.post(url, data=data, files=files, proxies=proxies, timeout=(15, 300))
 
 
 def _build_telegram_backup_caption(server: 'Server', backup_time: datetime) -> str:
@@ -14504,18 +14544,27 @@ def save_telegram_backup_settings():
 @user_management_required
 def test_telegram_backup_settings():
     settings = _get_telegram_backup_settings()
-    token = (settings.get('bot_token') or '').strip()
+    data = request.get_json(silent=True) or {}
+    token = ((data.get('bot_token') if 'bot_token' in data else settings.get('bot_token')) or '').strip()
     if not token:
         return jsonify({'success': False, 'error': 'Bot token is required'}), 400
 
+    use_proxy = bool(data.get('use_proxy')) if 'use_proxy' in data else bool(settings.get('use_proxy'))
+    proxy_mode = ((data.get('proxy_mode') if 'proxy_mode' in data else settings.get('proxy_mode')) or 'url')
+    proxy_url = ((data.get('proxy_url') if 'proxy_url' in data else settings.get('proxy_url')) or '')
+    proxy_host = ((data.get('proxy_host') if 'proxy_host' in data else settings.get('proxy_host')) or '')
+    proxy_port = _parse_int(data.get('proxy_port') if 'proxy_port' in data else settings.get('proxy_port'), 0, min_value=0, max_value=65535)
+    proxy_username = ((data.get('proxy_username') if 'proxy_username' in data else settings.get('proxy_username')) or '')
+    proxy_password = ((data.get('proxy_password') if 'proxy_password' in data else settings.get('proxy_password')) or '')
+
     proxies = _build_telegram_proxies(
-        bool(settings.get('use_proxy')),
-        settings.get('proxy_mode') or 'url',
-        settings.get('proxy_url') or '',
-        settings.get('proxy_host') or '',
-        int(settings.get('proxy_port') or 0),
-        settings.get('proxy_username') or '',
-        settings.get('proxy_password') or ''
+        use_proxy,
+        proxy_mode or 'url',
+        proxy_url or '',
+        proxy_host or '',
+        proxy_port,
+        proxy_username or '',
+        proxy_password or ''
     )
 
     try:
@@ -14558,8 +14607,10 @@ def telegram_backup_now():
         'results': [],
     }
     with TELEGRAM_BACKUP_JOBS_LOCK:
+        _load_telegram_backup_jobs_locked()
         TELEGRAM_BACKUP_JOBS[job_id] = job
         _prune_telegram_backup_jobs_locked()
+        _save_telegram_backup_jobs_locked()
 
     t = threading.Thread(target=_run_telegram_backup_job, args=(job_id,), daemon=True)
     t.start()
@@ -14570,7 +14621,7 @@ def telegram_backup_now():
 @user_management_required
 def telegram_backup_job_status(job_id):
     with TELEGRAM_BACKUP_JOBS_LOCK:
-        job = TELEGRAM_BACKUP_JOBS.get(job_id)
+        job = _load_telegram_backup_jobs_locked().get(job_id)
         if not job:
             return jsonify({'success': False, 'error': 'Job not found'}), 404
         return jsonify({'success': True, 'job': _summarize_telegram_backup_job(job)})
