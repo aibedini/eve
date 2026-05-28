@@ -371,7 +371,7 @@ async function loadResellerList() {
 async function loadPackages() {
     const body = document.getElementById('pkg-list-body');
     try {
-        const res  = await fetch('/api/packages');
+        const res  = await fetch(`/api/packages?_=${Date.now()}`, { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         _pkgCache  = await res.json();
         renderPackages(body);
@@ -536,23 +536,25 @@ async function submitPackage() {
             .forEach(cb => reseller_ids.push(parseInt(cb.value)));
     }
 
-    const body = { name, days, volume: vol, price, scope };
+    const body = {
+        name,
+        days,
+        volume: vol,
+        price,
+        scope,
+        reseller_ids,
+        assigned_reseller_ids: reseller_ids
+    };
 
     try {
-        // Save base package
         const url    = _editPkgId ? `/admin/packages/${_editPkgId}` : '/admin/packages';
         const method = _editPkgId ? 'PUT' : 'POST';
         const res    = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-        if (!res.ok) { showToast('Error saving package', 'error'); return; }
-        const saved = await res.json();
-
-        // Update scope/assignment
-        const pkgId = _editPkgId || saved.id;
-        await fetch(`/admin/packages/${pkgId}/assign`, {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ scope, reseller_ids })
-        });
+        const saved = await res.json().catch(() => ({}));
+        if (!res.ok || saved.success === false) {
+            showToast(saved.error || 'Error saving package', 'error');
+            return;
+        }
 
         showToast(_editPkgId ? 'Package updated' : 'Package created');
         closePkgModal();

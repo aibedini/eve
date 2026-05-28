@@ -75,7 +75,7 @@ try:
 except Exception:
     ZoneInfo = None
     available_timezones = None
-from flask import Flask, render_template, jsonify, request, send_file, redirect, url_for, session, g
+from flask import Flask, render_template, jsonify, request, send_file, redirect, url_for, session, g, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -6871,12 +6871,16 @@ def api_refresh_job(job_id):
         job_copy = copy.deepcopy(job) if job else None
     if not job_copy:
         return jsonify({"success": False, "error": "Job not found"}), 404
-    return jsonify({
+    resp = make_response(jsonify({
         "success": True,
         "job": _summarize_job(job_copy),
         "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
         "last_update": GLOBAL_SERVER_DATA.get('last_update')
-    })
+    }))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 @app.route('/api/servers/list')
 @login_required
@@ -9670,12 +9674,20 @@ def get_packages():
         p_dict['created_by_username'] = creator_map.get(p.created_by)
         result.append(p_dict)
 
-    return jsonify(result)
+    resp = make_response(jsonify(result))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 @app.route('/admin/packages', methods=['POST'])
 @user_management_required
 def create_package():
-    data = request.json
+    import json as _j
+    data = request.json or {}
+    reseller_ids = data.get('reseller_ids', data.get('assigned_reseller_ids', []))
+    if not isinstance(reseller_ids, list):
+        reseller_ids = []
     package = Package(
         name=data.get('name'),
         days=int(data.get('days', 0)),
@@ -9684,6 +9696,7 @@ def create_package():
         reseller_price=int(data.get('reseller_price')) if data.get('reseller_price') is not None else None,
         enabled=data.get('enabled', True),
         scope=data.get('scope', 'global'),
+        assigned_reseller_ids=_j.dumps([int(r) for r in reseller_ids]),
         created_by=session.get('admin_id'),
         created_at=datetime.utcnow(),
     )
@@ -9710,9 +9723,10 @@ def update_package(package_id):
         package.enabled = bool(data['enabled'])
     if 'scope' in data:
         package.scope = data['scope']
-    if 'assigned_reseller_ids' in data:
+    if 'assigned_reseller_ids' in data or 'reseller_ids' in data:
         import json as _j
-        package.assigned_reseller_ids = _j.dumps(data['assigned_reseller_ids'] if isinstance(data['assigned_reseller_ids'], list) else [])
+        reseller_ids = data.get('assigned_reseller_ids', data.get('reseller_ids', []))
+        package.assigned_reseller_ids = _j.dumps([int(r) for r in reseller_ids] if isinstance(reseller_ids, list) else [])
     package.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({"success": True})

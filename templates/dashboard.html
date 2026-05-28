@@ -2040,14 +2040,15 @@
             params.set('mode', mode);
             if (enqueue) params.set('enqueue', '1');
             const qs = params.toString() ? `?${params.toString()}` : '';
-            const resp = await fetch(`/api/server/${sid}/refresh${qs}`, { signal: controller.signal });
+            const resp = await fetch(`/api/server/${sid}/refresh${qs}`, { signal: controller.signal, cache: 'no-store' });
             const data = await resp.json();
 
             if (data && data.success) {
                 const jobId = data.refresh_job && data.refresh_job.id;
                 const jobState = data.refresh_job && data.refresh_job.state;
                 const isAsyncJobPending = Boolean(jobId && (jobState === 'queued' || jobState === 'running'));
-                const shouldApplySnapshotNow = !isAsyncJobPending;
+                const hasServerSnapshot = Array.isArray(allInboundsData) && allInboundsData.some(item => parseInt(item?.server_id) === sid);
+                const shouldApplySnapshotNow = !isAsyncJobPending || !hasServerSnapshot;
 
                 if (shouldApplySnapshotNow) {
                     mergeServerInboundsIntoCache(sid, data.inbounds || []);
@@ -2127,7 +2128,7 @@
             }
 
             try {
-                const resp = await fetch(`/api/refresh/job/${encodeURIComponent(activeRefreshJobId)}`);
+                const resp = await fetch(`/api/refresh/job/${encodeURIComponent(activeRefreshJobId)}`, { cache: 'no-store' });
                 const payload = await resp.json();
                 if (!payload || !payload.success || !payload.job) {
                     throw new Error(payload?.error || 'Failed to poll refresh job');
@@ -2202,17 +2203,15 @@
             if (enqueue) params.set('enqueue', '1');
             if (serverId !== null && serverId !== '' && serverId !== undefined) params.set('server_id', String(serverId));
             const qs = params.toString() ? `?${params.toString()}` : '';
-            const response = await fetch(`/api/refresh${qs}`, { signal });
+            const response = await fetch(`/api/refresh${qs}`, { signal, cache: 'no-store' });
             const data = await response.json();
             
             if (data.success) {
                 const jobId = data.refresh_job && data.refresh_job.id;
                 const jobState = data.refresh_job && data.refresh_job.state;
                 const isAsyncJobPending = Boolean(jobId && (jobState === 'queued' || jobState === 'running'));
-                // While a real refresh job is running, do not re-apply the stale cache.
-                // The post-job cache read must be the only update that lands, otherwise
-                // deleted panel inbounds can visually come back until another refresh.
-                const shouldApplySnapshotNow = !isAsyncJobPending || !poll;
+                const hasSnapshotOnScreen = Array.isArray(allInboundsData) && allInboundsData.length > 0;
+                const shouldApplySnapshotNow = !isAsyncJobPending || !poll || !hasSnapshotOnScreen;
 
                 if (shouldApplySnapshotNow) {
                     allInboundsData = data.inbounds;
@@ -3323,7 +3322,7 @@
         if (!container) return;
         container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">Loading packages...</div>';
         try {
-            const res = await fetch('/api/packages');
+            const res = await fetch(`/api/packages?_=${Date.now()}`, { cache: 'no-store' });
             const pkgs = await res.json();
             
             if (!Array.isArray(pkgs) || pkgs.length === 0) {
@@ -3400,7 +3399,7 @@
         if (!container) return;
         container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">Loading packages...</div>';
         try {
-            const res = await fetch('/api/packages');
+            const res = await fetch(`/api/packages?_=${Date.now()}`, { cache: 'no-store' });
             const pkgs = await res.json();
             if (!Array.isArray(pkgs) || pkgs.length === 0) {
                 container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 15px; color: var(--text-secondary);">No packages defined.</div>';
