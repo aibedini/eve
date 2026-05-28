@@ -326,6 +326,21 @@ offline_deb_dir() {
             return 0
         fi
     done
+
+    local matches=()
+    if [ -d "$OFFLINE_ROOT/apt" ]; then
+        while IFS= read -r candidate; do
+            [ -n "$candidate" ] && matches+=("$candidate")
+        done < <(find "$OFFLINE_ROOT/apt" -maxdepth 1 -mindepth 1 -type d -name "*-${arch}" 2>/dev/null | sort)
+    fi
+
+    if [ "${#matches[@]}" -eq 1 ] && ls "${matches[0]}"/*.deb >/dev/null 2>&1; then
+        print_warning "Expected apt bundle for '${codename}-${arch}', but found only: $(basename "${matches[0]}")"
+        print_warning "Using the available apt bundle. Rebuild with prepare-offline-bundle.sh if package install fails."
+        echo "${matches[0]}"
+        return 0
+    fi
+
     return 1
 }
 
@@ -345,6 +360,10 @@ install_offline_apt_dependencies() {
     if [ -z "$deb_dir" ] || ! ls "$deb_dir"/*.deb >/dev/null 2>&1; then
         print_error "No .deb packages found for Ubuntu ${codename:-unknown} / $arch"
         echo "  Expected: $OFFLINE_ROOT/apt/${codename}-${arch}/*.deb"
+        if [ -d "$OFFLINE_ROOT/apt" ]; then
+            echo "  Available apt bundle folders:"
+            find "$OFFLINE_ROOT/apt" -maxdepth 1 -mindepth 1 -type d -printf '    - %f\n' 2>/dev/null | sort || true
+        fi
         echo "  Build it on an online machine with: bash prepare-offline-bundle.sh"
         return 1
     fi
