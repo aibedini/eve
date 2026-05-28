@@ -1187,6 +1187,10 @@
             if (digits.startsWith('98') && digits.length === 12 && digits[2] === '9') return digits;
             if (digits.startsWith('0') && digits.length === 11 && digits[1] === '9') return `98${digits.slice(1)}`;
             if (digits.startsWith('9') && digits.length === 10) return `98${digits}`;
+            const embeddedLocal = digits.match(/09\d{9}/);
+            if (embeddedLocal) return `98${embeddedLocal[0].slice(1)}`;
+            const embeddedIntl = digits.match(/98(9\d{9})/);
+            if (embeddedIntl) return `98${embeddedIntl[1]}`;
             if (digits.length >= 10 && digits.length <= 15) return digits;
             return '';
         }
@@ -1208,6 +1212,16 @@
                 });
             });
             return found;
+        }
+
+        function absolutePanelUrl(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            try {
+                return new URL(raw, window.location.origin).href;
+            } catch (_) {
+                return raw;
+            }
         }
 
         function openPhoneChoiceModal(numbers, onSelect, title = 'Select phone number') {
@@ -1290,8 +1304,8 @@
                 account_name: client?.email || '-',
                 remaining_time: client?.expiryTime || '-',
                 remaining_volume: client?.remaining_formatted || '-',
-                dashboard_link: client?.dash_sub_url || client?.sub_url || '',
-                sub_link: client?.sub_url || '',
+                dashboard_link: absolutePanelUrl(client?.dash_sub_url || client?.sub_url || ''),
+                sub_link: absolutePanelUrl(client?.sub_url || ''),
                 server_name: client?.server_name || ''
             };
             return String(template || DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE).replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => (

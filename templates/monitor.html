@@ -542,6 +542,10 @@
         if (digits.startsWith('98') && digits.length === 12 && digits[2] === '9') return `+${digits}`;
         if (digits.startsWith('0') && digits.length === 11 && digits[1] === '9') return `+98${digits.slice(1)}`;
         if (digits.startsWith('9') && digits.length === 10) return `+98${digits}`;
+        const embeddedLocal = digits.match(/09\d{9}/);
+        if (embeddedLocal) return `+98${embeddedLocal[0].slice(1)}`;
+        const embeddedIntl = digits.match(/98(9\d{9})/);
+        if (embeddedIntl) return `+98${embeddedIntl[1]}`;
         if (digits.length >= 10 && digits.length <= 15) return `+${digits}`;
         return '';
     }

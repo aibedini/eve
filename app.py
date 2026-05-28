@@ -3008,6 +3008,13 @@ def _extract_iran_mobile_from_text(value: str | None, *extra_sources: str | None
                 digits = re.sub(r'[^\d]', '', m.group(1))
                 if len(digits) == 10 and digits.startswith('9'):
                     return f"+98{digits}"
+        compact = re.sub(r'[^\d]', '', t)
+        m = re.search(r'09\d{9}', compact)
+        if m:
+            return f"+98{m.group(0)[1:]}"
+        m = re.search(r'98(9\d{9})', compact)
+        if m:
+            return f"+98{m.group(1)}"
         return ''
 
     for src in (value, *extra_sources):
