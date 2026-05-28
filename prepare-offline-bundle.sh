@@ -76,6 +76,46 @@ fi
 
 mkdir -p "$OFFLINE_DIR" "$DIST_DIR" "$PY_WHEEL_DIR" "$PY_RUNTIME_DIR"
 
+run_as_root() {
+    if [ "${EUID:-$(id -u)}" -eq 0 ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        print_error "Need root privileges to install build prerequisites. Re-run with sudo/root."
+        exit 1
+    fi
+}
+
+ensure_build_prerequisites() {
+    print_header "Checking build prerequisites"
+
+    local missing=()
+    command -v curl >/dev/null 2>&1 || missing+=(curl)
+    command -v tar >/dev/null 2>&1 || missing+=(tar)
+    if ! command -v python3 >/dev/null 2>&1; then
+        missing+=(python3 python3-pip)
+    elif ! python3 -m pip --version >/dev/null 2>&1; then
+        missing+=(python3-pip)
+    fi
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        print_warning "Installing missing build tools: ${missing[*]}"
+        if command -v apt-get >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            run_as_root apt-get update
+            run_as_root apt-get install -y --no-install-recommends "${missing[@]}"
+        else
+            print_error "Missing tools: ${missing[*]}"
+            print_warning "Install them manually, then re-run this script."
+            exit 1
+        fi
+    fi
+
+    python3 -m pip install --upgrade --user pip >/dev/null 2>&1 || true
+    print_success "Build prerequisites are ready"
+}
+
 download_python_wheels() {
     print_header "Downloading Python wheels (CPython 3.11 / Linux x86_64)"
     python3 -m pip download \
@@ -247,6 +287,7 @@ build_archive() {
     print_success "Archive ready: $archive"
 }
 
+ensure_build_prerequisites
 download_python_wheels
 download_python_runtime
 download_apt_packages
