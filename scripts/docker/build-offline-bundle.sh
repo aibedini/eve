@@ -20,11 +20,6 @@ need_cmd() {
 need_cmd docker
 need_cmd tar
 
-if ! docker compose version >/dev/null 2>&1; then
-    echo "ERR: Docker Compose plugin is required on this online build server." >&2
-    exit 1
-fi
-
 rm -rf "$OUT_DIR" "$OUT_FILE"
 mkdir -p "$OUT_DIR/docker"
 
