@@ -1703,6 +1703,17 @@ def _telegram_send_document(token: str, chat_id: str, file_path: str, caption: s
         return requests.post(url, data=data, files=files, proxies=proxies, timeout=30)
 
 
+def _build_telegram_backup_caption(server: 'Server', backup_time: datetime) -> str:
+    server_name = (getattr(server, 'name', '') or f"Server {getattr(server, 'id', '')}").strip()
+    server_address = (getattr(server, 'host', '') or '').strip() or '-'
+    backup_date = format_jalali(backup_time) or backup_time.isoformat()
+    return '\n'.join([
+        f"🛢 {server_name}",
+        f"🖥️ {server_address}",
+        f"📅 {backup_date}",
+    ])
+
+
 def _content_disposition_filename(header_value: str | None) -> str | None:
     if not header_value:
         return None
@@ -1967,7 +1978,7 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
             with open(file_path, 'wb') as handle:
                 handle.write(payload)
 
-            caption = f"{server.name} - {format_jalali(now) or now.isoformat()}"
+            caption = _build_telegram_backup_caption(server, now)
             if progress_cb:
                 try:
                     progress_cb({'stage': f"telegram_upload:{server.name}", 'progress': {'total': total_servers, 'processed': processed_servers}})
