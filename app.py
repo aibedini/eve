@@ -5836,6 +5836,28 @@ def _merger_client_email(client):
     return str(client.get('email') or client.get('remark') or client.get('id') or '').strip()
 
 
+def _merger_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _merger_normalize_settings_for_export(settings_raw):
+    settings = _merger_json_load(settings_raw, {})
+    if not isinstance(settings, dict):
+        return settings
+    clients = settings.get('clients')
+    if isinstance(clients, list):
+        for client in clients:
+            if isinstance(client, dict) and 'enable' in client:
+                client['enable'] = _merger_bool(client.get('enable'))
+    return settings
+
+
 def _merger_traffic_rows(conn, inbound_ids):
     tables = _merger_table_names(conn)
     if 'client_traffics' not in tables:
@@ -5915,22 +5937,31 @@ def _merger_make_unique_email(email, used):
         counter += 1
 
 
-def _merger_export_inbound(row):
+def _merger_export_inbound(row, client_stats=None):
     raw = dict(row)
     export = {}
-    skip = {'id', 'user_id'}
     camel = {
+        'user_id': 'userId',
         'expiry_time': 'expiryTime',
         'stream_settings': 'streamSettings',
+    }
+    allowed = {
+        'id', 'userId', 'up', 'down', 'total', 'remark', 'enable', 'expiryTime',
+        'listen', 'port', 'protocol', 'settings', 'streamSettings', 'tag',
+        'sniffing', 'allocate',
     }
     json_fields = {'settings', 'stream_settings', 'streamSettings', 'sniffing', 'allocate'}
 
     for key, value in raw.items():
-        if key in skip:
-            continue
         out_key = camel.get(key, key)
-        if key in json_fields or out_key in json_fields:
+        if out_key not in allowed:
+            continue
+        if key == 'settings':
+            export[out_key] = _merger_normalize_settings_for_export(value)
+        elif key in json_fields or out_key in json_fields:
             export[out_key] = _merger_json_load(value, {})
+        elif out_key == 'enable':
+            export[out_key] = _merger_bool(value)
         else:
             export[out_key] = value
 
@@ -5942,6 +5973,7 @@ def _merger_export_inbound(row):
         export['sniffing'] = _merger_json_dump(export['sniffing'])
     if 'allocate' in export and isinstance(export['allocate'], dict):
         export['allocate'] = _merger_json_dump(export['allocate'])
+    export['clientStats'] = client_stats or []
     return export
 
 
@@ -6063,7 +6095,22 @@ def _merger_merge_db(job_id, selected_ids, base_id, final_port, final_remark=Non
         conn.commit()
 
         final_row = conn.execute('SELECT * FROM inbounds WHERE id = ?', [base_id]).fetchone()
-        export_payload = _merger_export_inbound(_merger_row_to_dict(final_row))
+        client_stats = []
+        if 'client_traffics' in tables and 'inbound_id' in _merger_table_columns(conn, 'client_traffics'):
+            for stat_row in conn.execute('SELECT * FROM client_traffics WHERE inbound_id = ? ORDER BY id', [base_id]).fetchall():
+                raw_stat = _merger_row_to_dict(stat_row)
+                client_stats.append({
+                    'id': raw_stat.get('id'),
+                    'inboundId': raw_stat.get('inbound_id'),
+                    'enable': _merger_bool(raw_stat.get('enable')),
+                    'email': raw_stat.get('email') or '',
+                    'up': raw_stat.get('up') or 0,
+                    'down': raw_stat.get('down') or 0,
+                    'expiryTime': raw_stat.get('expiry_time', raw_stat.get('expiryTime')) or 0,
+                    'total': raw_stat.get('total') or 0,
+                    'reset': raw_stat.get('reset') or 0,
+                })
+        export_payload = _merger_export_inbound(_merger_row_to_dict(final_row), client_stats)
         with open(export_path, 'w', encoding='utf-8') as fh:
             json.dump(export_payload, fh, ensure_ascii=False, indent=2)
 
