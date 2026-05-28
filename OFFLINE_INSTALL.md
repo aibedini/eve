@@ -75,9 +75,10 @@ chmod +x prepare-offline-bundle.sh
 bash prepare-offline-bundle.sh .
 ```
 
-Docker is recommended on the build machine so the script can download `.deb`
-packages for Ubuntu 20.04, 22.04, and 24.04 in one run. Without Docker, it only
-downloads `.deb` packages for the current Ubuntu release.
+Docker is required when the online build machine is not the same Ubuntu release
+as the restricted target server. For example, do not build `jammy` packages on a
+`noble`/`resolute` machine without Docker; libc and dependency versions will not
+match.
 
 This creates:
 

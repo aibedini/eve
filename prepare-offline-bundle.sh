@@ -334,12 +334,29 @@ download_apt_for_current_host() {
         exit 1
     fi
 
+    if [ "$TARGETS" != "$codename" ]; then
+        print_error "Docker is required to build apt packages for '$TARGETS' from this machine."
+        print_warning "This build machine is '$codename', but the target server profile is '$TARGETS'."
+        print_warning "Install Docker on the online build machine, or run this builder on Ubuntu '$TARGETS'."
+        print_warning "Do not use packages from '$codename' on '$TARGETS' - libc/dependency versions will not match."
+        exit 1
+    fi
+
     out_dir="$OFFLINE_DIR/apt/${codename}-${TARGET_ARCH}"
     mkdir -p "$out_dir"
     print_warning "Docker not found. Downloading only for current host: $codename"
     sudo apt-get update
-    sudo apt-get install -y --download-only --reinstall --no-install-recommends "${APT_PACKAGES[@]}"
-    cp -v /var/cache/apt/archives/*.deb "$out_dir/"
+    local resolved downloadable pkg
+    resolved="$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances "${APT_PACKAGES[@]}" \
+        | awk '/^[[:alnum:]][^< ]/ { print $1 }' | sort -u)"
+    downloadable=()
+    for pkg in $resolved; do
+        if apt-cache show "$pkg" >/dev/null 2>&1; then
+            downloadable+=("$pkg")
+        fi
+    done
+    printf '%s\n' "${downloadable[@]}" > "$out_dir/package-list.txt"
+    (cd "$out_dir" && apt-get download "${downloadable[@]}")
 }
 
 download_apt_packages() {
