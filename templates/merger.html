@@ -1,0 +1,446 @@
+{% extends "base.html" %}
+
+{% block title %}Merger - Eve Manager{% endblock %}
+{% block page_title %}Merger{% endblock %}
+
+{% block content %}
+<div class="merger-page">
+    <section class="merger-toolbar">
+        <form id="merger-upload-form" class="merger-upload" enctype="multipart/form-data">
+            <label class="merger-file">
+                <input type="file" id="merger-db-file" name="database" accept=".db,.sqlite,.sqlite3,application/octet-stream">
+                <span id="merger-file-name">x-ui database</span>
+            </label>
+            <button type="submit" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                Load
+            </button>
+        </form>
+        <div class="merger-summary" id="merger-summary">
+            <span>0 inbounds</span>
+            <span>0 clients</span>
+        </div>
+    </section>
+
+    <section class="merger-layout">
+        <div class="merger-panel">
+            <div class="merger-panel-header">
+                <h2>Inbounds</h2>
+                <span id="merger-table-note">No database loaded</span>
+            </div>
+            <div class="merger-table-wrap">
+                <table class="merger-table">
+                    <thead>
+                        <tr>
+                            <th>Select</th>
+                            <th>Base</th>
+                            <th>Remark</th>
+                            <th>Port</th>
+                            <th>Protocol</th>
+                            <th>Clients</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="merger-inbounds-body">
+                        <tr>
+                            <td colspan="7" class="merger-empty">Upload a database.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <aside class="merger-side">
+            <div class="merger-panel">
+                <div class="merger-panel-header">
+                    <h2>Output</h2>
+                </div>
+                <div class="merger-form-grid">
+                    <label>
+                        <span>Final Port</span>
+                        <input type="number" id="merger-final-port" min="1" max="65535" placeholder="443">
+                    </label>
+                    <label>
+                        <span>Final Remark</span>
+                        <input type="text" id="merger-final-remark" placeholder="optional">
+                    </label>
+                </div>
+                <button type="button" class="btn btn-primary merger-run-btn" onclick="mergeSelectedInbounds()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M8 7h8"></path>
+                        <path d="M8 17h8"></path>
+                        <path d="M12 3v18"></path>
+                    </svg>
+                    Merge
+                </button>
+            </div>
+
+            <div class="merger-panel hidden" id="merger-result">
+                <div class="merger-panel-header">
+                    <h2>Result</h2>
+                    <span id="merger-result-meta"></span>
+                </div>
+                <div class="merger-downloads">
+                    <a class="btn btn-secondary" id="merger-db-download" href="#">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Database
+                    </a>
+                    <a class="btn btn-secondary" id="merger-export-download" href="#">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="12" y1="18" x2="12" y2="12"></line>
+                            <line x1="9" y1="15" x2="15" y2="15"></line>
+                        </svg>
+                        Export
+                    </a>
+                </div>
+                <div id="merger-duplicates" class="merger-duplicates hidden"></div>
+            </div>
+        </aside>
+    </section>
+</div>
+
+<style>
+    .merger-page {
+        display: grid;
+        gap: 16px;
+    }
+
+    .merger-toolbar,
+    .merger-panel {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+    }
+
+    .merger-toolbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 14px;
+    }
+
+    .merger-upload,
+    .merger-summary,
+    .merger-downloads {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .merger-file {
+        min-width: 260px;
+        display: flex;
+        align-items: center;
+        min-height: 42px;
+        padding: 0 12px;
+        border: 1px dashed var(--border-color);
+        border-radius: 8px;
+        color: var(--text-secondary);
+        cursor: pointer;
+    }
+
+    .merger-file input {
+        display: none;
+    }
+
+    .merger-summary span,
+    .merger-panel-header span,
+    .merger-status,
+    .merger-duplicates {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+
+    .merger-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 16px;
+        align-items: start;
+    }
+
+    .merger-panel {
+        overflow: hidden;
+    }
+
+    .merger-panel-header {
+        min-height: 54px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border-color);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .merger-panel-header h2 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 700;
+    }
+
+    .merger-table-wrap {
+        overflow-x: auto;
+    }
+
+    .merger-table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 720px;
+    }
+
+    .merger-table th,
+    .merger-table td {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border-color);
+        text-align: left;
+        white-space: nowrap;
+    }
+
+    .merger-table th {
+        color: var(--text-secondary);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        font-weight: 600;
+    }
+
+    .merger-empty {
+        color: var(--text-secondary);
+        text-align: center;
+        height: 120px;
+    }
+
+    .merger-side {
+        display: grid;
+        gap: 16px;
+    }
+
+    .merger-form-grid {
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+    }
+
+    .merger-form-grid label {
+        display: grid;
+        gap: 7px;
+        color: var(--text-secondary);
+        font-size: 0.82rem;
+    }
+
+    .merger-form-grid input {
+        width: 100%;
+        min-height: 42px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-input, var(--bg-card-hover));
+        color: var(--text-primary);
+        border-radius: 8px;
+        padding: 0 12px;
+    }
+
+    .merger-run-btn {
+        width: calc(100% - 32px);
+        margin: 0 16px 16px;
+        justify-content: center;
+    }
+
+    .merger-downloads,
+    .merger-duplicates {
+        padding: 16px;
+    }
+
+    .merger-duplicates {
+        border-top: 1px solid var(--border-color);
+        display: grid;
+        gap: 8px;
+    }
+
+    .merger-duplicates.hidden,
+    .hidden {
+        display: none;
+    }
+
+    .merger-status.enabled {
+        color: var(--success-color, #22c55e);
+    }
+
+    .merger-status.disabled {
+        color: var(--danger-color, #ef4444);
+    }
+
+    @media (max-width: 1000px) {
+        .merger-layout {
+            grid-template-columns: 1fr;
+        }
+
+        .merger-toolbar {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .merger-file {
+            min-width: 0;
+            width: 100%;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+    let mergerJobId = null;
+    let mergerInbounds = [];
+
+    document.getElementById('merger-db-file').addEventListener('change', (event) => {
+        const file = event.target.files && event.target.files[0];
+        document.getElementById('merger-file-name').textContent = file ? file.name : 'x-ui database';
+    });
+
+    document.getElementById('merger-upload-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const fileInput = document.getElementById('merger-db-file');
+        if (!fileInput.files || !fileInput.files[0]) {
+            showToast('Select a database file', 'error');
+            return;
+        }
+        const form = new FormData();
+        form.append('database', fileInput.files[0]);
+        showLoading();
+        try {
+            const resp = await fetch('/api/merger/analyze', { method: 'POST', body: form });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error || 'Analyze failed');
+            mergerJobId = data.job_id;
+            mergerInbounds = data.inbounds || [];
+            renderMergerInbounds();
+            showToast('Database loaded');
+        } catch (error) {
+            showToast(error.message || 'Database load failed', 'error');
+        } finally {
+            hideLoading();
+        }
+    });
+
+    function renderMergerInbounds() {
+        const body = document.getElementById('merger-inbounds-body');
+        const note = document.getElementById('merger-table-note');
+        const summary = document.getElementById('merger-summary');
+        const totalClients = mergerInbounds.reduce((sum, item) => sum + Number(item.client_count || 0), 0);
+        summary.innerHTML = `<span>${mergerInbounds.length} inbounds</span><span>${totalClients} clients</span>`;
+        note.textContent = mergerInbounds.length ? 'Ready' : 'No inbounds found';
+        document.getElementById('merger-result').classList.add('hidden');
+
+        if (!mergerInbounds.length) {
+            body.innerHTML = '<tr><td colspan="7" class="merger-empty">No inbounds found.</td></tr>';
+            return;
+        }
+
+        body.innerHTML = mergerInbounds.map((item, index) => {
+            const checked = index < 2 ? 'checked' : '';
+            const baseChecked = index === 0 ? 'checked' : '';
+            const statusClass = item.enable ? 'enabled' : 'disabled';
+            const statusText = item.enable ? 'Enabled' : 'Disabled';
+            return `
+                <tr>
+                    <td><input type="checkbox" class="merger-select" value="${item.id}" ${checked}></td>
+                    <td><input type="radio" name="merger-base" class="merger-base" value="${item.id}" ${baseChecked}></td>
+                    <td>${escapeMergerHtml(item.remark || '-')}</td>
+                    <td>${escapeMergerHtml(String(item.port ?? '-'))}</td>
+                    <td>${escapeMergerHtml(item.protocol || '-')}</td>
+                    <td>${Number(item.client_count || 0)}</td>
+                    <td><span class="merger-status ${statusClass}">${statusText}</span></td>
+                </tr>
+            `;
+        }).join('');
+
+        const firstPort = mergerInbounds[0]?.port;
+        if (firstPort) document.getElementById('merger-final-port').value = firstPort;
+    }
+
+    async function mergeSelectedInbounds() {
+        if (!mergerJobId) {
+            showToast('Load a database first', 'error');
+            return;
+        }
+        const selected = Array.from(document.querySelectorAll('.merger-select:checked')).map(el => Number(el.value));
+        const base = document.querySelector('.merger-base:checked');
+        const finalPort = Number(document.getElementById('merger-final-port').value || 0);
+        const remark = document.getElementById('merger-final-remark').value.trim();
+        if (selected.length < 2) {
+            showToast('Select at least two inbounds', 'error');
+            return;
+        }
+        if (!base || !selected.includes(Number(base.value))) {
+            showToast('Base inbound must be selected', 'error');
+            return;
+        }
+        if (finalPort < 1 || finalPort > 65535) {
+            showToast('Final port is invalid', 'error');
+            return;
+        }
+
+        showLoading();
+        try {
+            const resp = await fetch('/api/merger/merge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    job_id: mergerJobId,
+                    inbound_ids: selected,
+                    base_inbound_id: Number(base.value),
+                    final_port: finalPort,
+                    remark
+                })
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error || 'Merge failed');
+            showMergerResult(data);
+            showToast('Merged');
+        } catch (error) {
+            showToast(error.message || 'Merge failed', 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+
+    function showMergerResult(data) {
+        const panel = document.getElementById('merger-result');
+        panel.classList.remove('hidden');
+        document.getElementById('merger-result-meta').textContent = `${data.client_count || 0} clients | port ${data.final_port}`;
+        document.getElementById('merger-db-download').href = data.downloads?.database || '#';
+        document.getElementById('merger-export-download').href = data.downloads?.inbound_export || '#';
+
+        const dup = data.renamed_duplicates || [];
+        const box = document.getElementById('merger-duplicates');
+        if (!dup.length) {
+            box.classList.add('hidden');
+            box.innerHTML = '';
+            return;
+        }
+        box.classList.remove('hidden');
+        box.innerHTML = dup.map(item => (
+            `<div>${escapeMergerHtml(item.original)} -> ${escapeMergerHtml(item.renamed)} <span>(inbound ${item.inbound_id})</span></div>`
+        )).join('');
+    }
+
+    function escapeMergerHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+</script>
+{% endblock %}

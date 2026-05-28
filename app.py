@@ -5,6 +5,7 @@ load_dotenv()  # Load environment variables from .env file
 import io
 import re
 import json
+import sqlite3
 import base64
 import requests
 import urllib3
@@ -5768,6 +5769,396 @@ def monitor_page():
                          admin_username=session.get('admin_username'),
                          is_superadmin=session.get('is_superadmin', False),
                          role=session.get('role', 'admin'))
+
+
+MERGER_MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+MERGER_DIR_NAME = 'merger'
+
+
+def _merger_user_is_allowed():
+    return bool(session.get('is_superadmin') or session.get('role') == 'superadmin')
+
+
+def _merger_base_dir():
+    path = os.path.join(app.instance_path, MERGER_DIR_NAME)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _merger_job_dir(job_id):
+    safe_job = re.sub(r'[^a-f0-9-]', '', str(job_id or '').lower())
+    if not safe_job:
+        raise ValueError('Invalid merger job')
+    path = os.path.abspath(os.path.join(_merger_base_dir(), safe_job))
+    base = os.path.abspath(_merger_base_dir())
+    if not (path == base or path.startswith(base + os.sep)):
+        raise ValueError('Invalid merger job path')
+    return path
+
+
+def _merger_json_load(raw, default=None):
+    if default is None:
+        default = {}
+    if isinstance(raw, (dict, list)):
+        return raw
+    if raw is None:
+        return copy.deepcopy(default)
+    try:
+        parsed = json.loads(raw)
+        return parsed if parsed is not None else copy.deepcopy(default)
+    except Exception:
+        return copy.deepcopy(default)
+
+
+def _merger_json_dump(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+
+
+def _merger_table_names(conn):
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _merger_table_columns(conn, table_name):
+    try:
+        return [str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()]
+    except Exception:
+        return []
+
+
+def _merger_row_to_dict(row):
+    return {key: row[key] for key in row.keys()}
+
+
+def _merger_client_email(client):
+    if not isinstance(client, dict):
+        return ''
+    return str(client.get('email') or client.get('remark') or client.get('id') or '').strip()
+
+
+def _merger_traffic_rows(conn, inbound_ids):
+    tables = _merger_table_names(conn)
+    if 'client_traffics' not in tables:
+        return {}
+    cols = _merger_table_columns(conn, 'client_traffics')
+    if 'inbound_id' not in cols:
+        return {}
+
+    traffic = defaultdict(dict)
+    placeholders = ','.join(['?'] * len(inbound_ids))
+    rows = conn.execute(
+        f'SELECT * FROM client_traffics WHERE inbound_id IN ({placeholders})',
+        [int(v) for v in inbound_ids],
+    ).fetchall()
+    for row in rows:
+        item = _merger_row_to_dict(row)
+        email = str(item.get('email') or '').strip()
+        if email:
+            traffic[int(item.get('inbound_id') or 0)][email] = item
+    return traffic
+
+
+def _merger_analyze_db(db_path):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = _merger_table_names(conn)
+        if 'inbounds' not in tables:
+            raise ValueError('This SQLite database does not contain an inbounds table.')
+
+        inbound_cols = _merger_table_columns(conn, 'inbounds')
+        rows = conn.execute('SELECT * FROM inbounds ORDER BY id').fetchall()
+        traffic_counts = defaultdict(int)
+        if 'client_traffics' in tables and 'inbound_id' in _merger_table_columns(conn, 'client_traffics'):
+            for row in conn.execute('SELECT inbound_id, COUNT(*) AS c FROM client_traffics GROUP BY inbound_id').fetchall():
+                traffic_counts[int(row['inbound_id'] or 0)] = int(row['c'] or 0)
+
+        inbounds = []
+        for row in rows:
+            item = _merger_row_to_dict(row)
+            settings = _merger_json_load(item.get('settings'), {})
+            clients = settings.get('clients') if isinstance(settings, dict) else []
+            if not isinstance(clients, list):
+                clients = []
+            inbounds.append({
+                'id': int(item.get('id')),
+                'remark': item.get('remark') or item.get('tag') or f"Inbound {item.get('id')}",
+                'port': item.get('port'),
+                'protocol': item.get('protocol') or '-',
+                'enable': bool(item.get('enable')),
+                'client_count': len(clients),
+                'traffic_rows': traffic_counts[int(item.get('id') or 0)],
+                'up': int(item.get('up') or 0) if 'up' in inbound_cols else 0,
+                'down': int(item.get('down') or 0) if 'down' in inbound_cols else 0,
+                'total': int(item.get('total') or 0) if 'total' in inbound_cols else 0,
+            })
+        return {
+            'inbounds': inbounds,
+            'tables': sorted(list(tables)),
+            'has_client_traffics': 'client_traffics' in tables,
+        }
+    finally:
+        conn.close()
+
+
+def _merger_make_unique_email(email, used):
+    base = (email or 'client').strip() or 'client'
+    if base not in used:
+        used.add(base)
+        return base, None
+    counter = 2
+    while True:
+        candidate = f'{base}-m{counter}'
+        if candidate not in used:
+            used.add(candidate)
+            return candidate, candidate
+        counter += 1
+
+
+def _merger_export_inbound(row):
+    raw = dict(row)
+    export = {}
+    skip = {'id', 'user_id'}
+    camel = {
+        'expiry_time': 'expiryTime',
+        'stream_settings': 'streamSettings',
+    }
+    json_fields = {'settings', 'stream_settings', 'streamSettings', 'sniffing', 'allocate'}
+
+    for key, value in raw.items():
+        if key in skip:
+            continue
+        out_key = camel.get(key, key)
+        if key in json_fields or out_key in json_fields:
+            export[out_key] = _merger_json_load(value, {})
+        else:
+            export[out_key] = value
+
+    if 'settings' in export and isinstance(export['settings'], dict):
+        export['settings'] = _merger_json_dump(export['settings'])
+    if 'streamSettings' in export and isinstance(export['streamSettings'], dict):
+        export['streamSettings'] = _merger_json_dump(export['streamSettings'])
+    if 'sniffing' in export and isinstance(export['sniffing'], dict):
+        export['sniffing'] = _merger_json_dump(export['sniffing'])
+    if 'allocate' in export and isinstance(export['allocate'], dict):
+        export['allocate'] = _merger_json_dump(export['allocate'])
+    return export
+
+
+def _merger_merge_db(job_id, selected_ids, base_id, final_port, final_remark=None):
+    if len(selected_ids) < 2:
+        raise ValueError('Select at least two inbounds to merge.')
+    selected_ids = [int(v) for v in selected_ids]
+    base_id = int(base_id or selected_ids[0])
+    if base_id not in selected_ids:
+        raise ValueError('Base inbound must be one of the selected inbounds.')
+    final_port = int(final_port)
+    if final_port < 1 or final_port > 65535:
+        raise ValueError('Final port must be between 1 and 65535.')
+
+    job_dir = _merger_job_dir(job_id)
+    source_db = os.path.join(job_dir, 'source.db')
+    output_db = os.path.join(job_dir, 'merged.db')
+    export_path = os.path.join(job_dir, 'merged-inbound.json')
+    if not os.path.exists(source_db):
+        raise ValueError('Uploaded database was not found. Upload it again.')
+
+    shutil.copy2(source_db, output_db)
+    conn = sqlite3.connect(output_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = _merger_table_names(conn)
+        if 'inbounds' not in tables:
+            raise ValueError('This SQLite database does not contain an inbounds table.')
+        inbound_cols = _merger_table_columns(conn, 'inbounds')
+        placeholders = ','.join(['?'] * len(selected_ids))
+        rows = conn.execute(
+            f'SELECT * FROM inbounds WHERE id IN ({placeholders}) ORDER BY id',
+            selected_ids,
+        ).fetchall()
+        by_id = {int(row['id']): _merger_row_to_dict(row) for row in rows}
+        missing = [v for v in selected_ids if v not in by_id]
+        if missing:
+            raise ValueError(f'Inbound not found: {missing[0]}')
+
+        traffic_by_inbound = _merger_traffic_rows(conn, selected_ids)
+        merged_clients = []
+        duplicate_report = []
+        traffic_to_insert = []
+        used_emails = set()
+
+        for inbound_id in selected_ids:
+            inbound = by_id[inbound_id]
+            settings = _merger_json_load(inbound.get('settings'), {})
+            clients = settings.get('clients') if isinstance(settings, dict) else []
+            if not isinstance(clients, list):
+                clients = []
+            for client in clients:
+                if not isinstance(client, dict):
+                    continue
+                copied = copy.deepcopy(client)
+                original_email = _merger_client_email(copied)
+                final_email, renamed = _merger_make_unique_email(original_email, used_emails)
+                if final_email != original_email:
+                    copied['email'] = final_email
+                    duplicate_report.append({
+                        'inbound_id': inbound_id,
+                        'original': original_email,
+                        'renamed': final_email,
+                    })
+                merged_clients.append(copied)
+
+                traffic_row = traffic_by_inbound.get(int(inbound_id), {}).get(original_email)
+                if traffic_row:
+                    traffic_copy = dict(traffic_row)
+                    traffic_copy['inbound_id'] = base_id
+                    traffic_copy['email'] = final_email
+                    traffic_copy.pop('id', None)
+                    traffic_to_insert.append(traffic_copy)
+
+        base_row = by_id[base_id]
+        base_settings = _merger_json_load(base_row.get('settings'), {})
+        if not isinstance(base_settings, dict):
+            base_settings = {}
+        base_settings['clients'] = merged_clients
+
+        updates = {'settings': _merger_json_dump(base_settings)}
+        if 'port' in inbound_cols:
+            updates['port'] = final_port
+        if final_remark and 'remark' in inbound_cols:
+            updates['remark'] = str(final_remark).strip()
+        if 'up' in inbound_cols:
+            updates['up'] = sum(int((by_id[i].get('up') or 0)) for i in selected_ids)
+        if 'down' in inbound_cols:
+            updates['down'] = sum(int((by_id[i].get('down') or 0)) for i in selected_ids)
+
+        assignments = ', '.join([f'"{key}" = ?' for key in updates.keys()])
+        conn.execute(
+            f'UPDATE inbounds SET {assignments} WHERE id = ?',
+            list(updates.values()) + [base_id],
+        )
+
+        delete_ids = [v for v in selected_ids if v != base_id]
+        if delete_ids:
+            delete_placeholders = ','.join(['?'] * len(delete_ids))
+            conn.execute(f'DELETE FROM inbounds WHERE id IN ({delete_placeholders})', delete_ids)
+
+        if 'client_traffics' in tables:
+            traffic_cols = [c for c in _merger_table_columns(conn, 'client_traffics') if c != 'id']
+            if 'inbound_id' in traffic_cols:
+                conn.execute(
+                    f'DELETE FROM client_traffics WHERE inbound_id IN ({placeholders})',
+                    selected_ids,
+                )
+            if 'inbound_id' in traffic_cols and traffic_to_insert:
+                insert_cols = [c for c in traffic_cols if any(c in row for row in traffic_to_insert)]
+                quoted_cols = ', '.join([f'"{c}"' for c in insert_cols])
+                insert_sql = (
+                    f'INSERT INTO client_traffics ({quoted_cols}) '
+                    f'VALUES ({", ".join(["?"] * len(insert_cols))})'
+                )
+                for row in traffic_to_insert:
+                    conn.execute(insert_sql, [row.get(c) for c in insert_cols])
+
+        conn.commit()
+
+        final_row = conn.execute('SELECT * FROM inbounds WHERE id = ?', [base_id]).fetchone()
+        export_payload = _merger_export_inbound(_merger_row_to_dict(final_row))
+        with open(export_path, 'w', encoding='utf-8') as fh:
+            json.dump(export_payload, fh, ensure_ascii=False, indent=2)
+
+        return {
+            'base_inbound_id': base_id,
+            'final_port': final_port,
+            'client_count': len(merged_clients),
+            'renamed_duplicates': duplicate_report,
+        }
+    finally:
+        conn.close()
+
+
+@app.route('/merger')
+@login_required
+def merger_page():
+    if not _merger_user_is_allowed():
+        return redirect(url_for('dashboard'))
+    return render_template('merger.html',
+                         admin_username=session.get('admin_username'),
+                         is_superadmin=session.get('is_superadmin', False),
+                         role=session.get('role', 'admin'))
+
+
+@app.route('/api/merger/analyze', methods=['POST'])
+@login_required
+def merger_analyze():
+    if not _merger_user_is_allowed():
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    upload = request.files.get('database')
+    if not upload or not upload.filename:
+        return jsonify({'success': False, 'error': 'Upload an x-ui SQLite database file.'}), 400
+    if request.content_length and request.content_length > MERGER_MAX_UPLOAD_BYTES:
+        return jsonify({'success': False, 'error': 'Database file is too large.'}), 413
+
+    job_id = str(uuid.uuid4())
+    job_dir = _merger_job_dir(job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    source_db = os.path.join(job_dir, 'source.db')
+    upload.save(source_db)
+
+    try:
+        analysis = _merger_analyze_db(source_db)
+    except Exception as exc:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    return jsonify({'success': True, 'job_id': job_id, **analysis})
+
+
+@app.route('/api/merger/merge', methods=['POST'])
+@login_required
+def merger_merge():
+    if not _merger_user_is_allowed():
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        result = _merger_merge_db(
+            data.get('job_id'),
+            data.get('inbound_ids') or [],
+            data.get('base_inbound_id'),
+            data.get('final_port'),
+            data.get('remark'),
+        )
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    job_id = str(data.get('job_id') or '')
+    return jsonify({
+        'success': True,
+        **result,
+        'downloads': {
+            'database': url_for('merger_download', job_id=job_id, kind='db'),
+            'inbound_export': url_for('merger_download', job_id=job_id, kind='export'),
+        }
+    })
+
+
+@app.route('/api/merger/download/<job_id>/<kind>')
+@login_required
+def merger_download(job_id, kind):
+    if not _merger_user_is_allowed():
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    job_dir = _merger_job_dir(job_id)
+    if kind == 'db':
+        path = os.path.join(job_dir, 'merged.db')
+        filename = 'x-ui-merged.db'
+    elif kind == 'export':
+        path = os.path.join(job_dir, 'merged-inbound.json')
+        filename = 'x-ui-merged-inbound.json'
+    else:
+        return jsonify({'success': False, 'error': 'Invalid download type'}), 404
+    if not os.path.exists(path):
+        return jsonify({'success': False, 'error': 'Merged output not found'}), 404
+    return send_file(path, as_attachment=True, download_name=filename)
 
 
 @app.route('/healthz', methods=['GET'])
