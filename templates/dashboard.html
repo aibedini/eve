@@ -958,6 +958,11 @@
         box-shadow: var(--shadow-lg) !important;
         font-family: 'Vazirmatn', sans-serif !important;
         z-index: 9999 !important;
+        pointer-events: auto !important;
+    }
+
+    jdp-overlay {
+        z-index: 99998 !important;
     }
 
     jdp-container, jdp-container * {
@@ -1029,6 +1034,53 @@
 
     #edit-client-expiry {
         font-family: 'Vazirmatn', sans-serif !important;
+    }
+
+    #edit-client-expiry:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
+    }
+
+    @media (max-width: 481px) {
+        jdp-container {
+            position: fixed !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            top: auto !important;
+            width: 100vw !important;
+            min-width: 100vw !important;
+            max-width: 100vw !important;
+            transform: none !important;
+            border-radius: 12px 12px 0 0 !important;
+            z-index: 100001 !important;
+            max-height: 82vh !important;
+            overflow-y: auto !important;
+            -webkit-overflow-scrolling: touch;
+            touch-action: manipulation;
+        }
+
+        jdp-overlay {
+            display: block;
+            position: fixed !important;
+            inset: 0 !important;
+            z-index: 100000 !important;
+            pointer-events: auto !important;
+        }
+
+        jdp-container .jdp-day,
+        jdp-container .jdp-day-name {
+            height: 38px !important;
+            line-height: 38px !important;
+            margin: 3px 0 !important;
+        }
+
+        jdp-container .jdp-footer {
+            position: sticky;
+            bottom: 0;
+            background: var(--bg-card);
+            padding-bottom: calc(.75rem + env(safe-area-inset-bottom, 0px)) !important;
+        }
     }
 
     @media (max-width: 860px) {
@@ -1536,8 +1588,29 @@
             jalaliDatepicker.startWatch({
                 time: true,
                 hasSecond: false,
-                zIndex: 99999
+                zIndex: 100001,
+                autoReadOnlyInput: false
             });
+        }
+    }
+
+    function ensureEditExpiryPickerReady() {
+        const expiryInput = document.getElementById('edit-client-expiry');
+        if (!expiryInput) return;
+
+        expiryInput.setAttribute('data-jdp', '');
+        expiryInput.readOnly = false;
+        expiryInput.removeAttribute('readonly');
+
+        if (typeof jalaliDatepicker !== 'undefined') {
+            try {
+                jalaliDatepicker.updateOptions({
+                    time: true,
+                    hasSecond: false,
+                    zIndex: 100001,
+                    autoReadOnlyInput: false
+                });
+            } catch (e) {}
         }
     }
 
@@ -5653,6 +5726,7 @@
     }
 
     function openEditClientModal(serverId, inboundId, email, totalGB = 0, expiryTime = 0) {
+        ensureEditExpiryPickerReady();
         document.getElementById('edit-client-server-id').value = serverId;
         document.getElementById('edit-client-inbound-id').value = inboundId;
         document.getElementById('edit-client-old-email').value = email;
@@ -5702,6 +5776,7 @@
         if (commentInput) commentInput.value = clientComment;
 
         document.getElementById('edit-client-modal').classList.remove('hidden');
+        setTimeout(ensureEditExpiryPickerReady, 0);
     }
 
     function formatEditClientExpiryTs(ts) {
@@ -5793,11 +5868,14 @@
 
             expiryInput.value = '';
             expiryInput.disabled = true;
+            expiryInput.title = 'Turn off "Start after first use" to choose a fixed expiry date.';
             return;
         }
 
         info.style.display = 'none';
         expiryInput.disabled = false;
+        expiryInput.title = '';
+        ensureEditExpiryPickerReady();
 
         if ((!expiryInput.value || !expiryInput.value.trim()) && rawExpiry < 0) {
             // Convert pending duration back into a concrete date to make editing easier.
