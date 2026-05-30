@@ -578,18 +578,25 @@
                 </div>
             </div>
 
-            <!-- Export — for the server that HAS the cert (foreign server) -->
+            <!-- Sync + Export — for the server that HAS the cert (foreign server) -->
             <div class="panel-card" style="margin-bottom:16px;">
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>📦 Export SSL Bundle</h2>
-                        <p class="text-secondary">Download cert + key as a zip — use on servers that already have a valid certificate</p>
+                        <p class="text-secondary">First sync from LetsEncrypt, then download as zip to transfer to another server</p>
                     </div>
-                    <button class="btn btn-primary" onclick="exportSSL()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                        Download eve-ssl-bundle.zip
-                    </button>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn btn-secondary" onclick="syncSSL()" id="ssl-sync-btn">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                            1. Sync from LetsEncrypt
+                        </button>
+                        <button class="btn btn-primary" onclick="exportSSL()">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            2. Download zip
+                        </button>
+                    </div>
                 </div>
+                <div id="ssl-sync-status" style="display:none;margin-top:8px;padding:10px;border-radius:6px;font-size:0.85rem;"></div>
             </div>
 
             <!-- Upload — for the Iran server -->
@@ -2573,6 +2580,40 @@
             if (data.success) { showToast(data.message || 'SSL paths saved'); loadSSLSettings(); }
             else               { showToast(data.error || 'Error saving SSL settings', 'error'); }
         } catch (e) { showToast('Network error', 'error'); }
+    }
+
+    // ── Sync: copy LetsEncrypt → /etc/ssl/eve-manager/ via sudo ─────────
+    async function syncSSL() {
+        const btn = document.getElementById('ssl-sync-btn');
+        const statusEl = document.getElementById('ssl-sync-status');
+        btn.disabled = true;
+        statusEl.style.display = 'block';
+        statusEl.style.background = 'rgba(148,163,184,0.1)';
+        statusEl.style.color = '#94a3b8';
+        statusEl.textContent = '⏳ Copying certificate files…';
+
+        try {
+            const res  = await fetch('/api/settings/ssl/sync', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                statusEl.style.background = 'rgba(34,197,94,0.12)';
+                statusEl.style.color = '#22c55e';
+                statusEl.textContent = `✓ ${data.message}`;
+                loadSSLSettings();
+                showToast('Synced! Now click "Download zip"', 'success', 5000);
+            } else {
+                statusEl.style.background = 'rgba(239,68,68,0.1)';
+                statusEl.style.color = '#ef4444';
+                statusEl.textContent = `✗ ${data.error}`;
+                showToast(data.error, 'error', 8000);
+            }
+        } catch (e) {
+            statusEl.style.background = 'rgba(239,68,68,0.1)';
+            statusEl.style.color = '#ef4444';
+            statusEl.textContent = `✗ Network error: ${e.message}`;
+        } finally {
+            btn.disabled = false;
+        }
     }
 
     // ── Export: download cert+key zip from this server ────────────────────

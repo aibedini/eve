@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -3872,29 +3872,35 @@ def build_panel_url(host, template, replacements):
 # ── SSL auto-detection (defined early so startup context block can use it) ──
 
 _SSL_KNOWN_PATHS = [
-    # Self-signed via setup.sh option 11
-    ('/etc/ssl/eve-manager/cert.pem', '/etc/ssl/eve-manager/privkey.pem'),
+    # Copied by setup.sh / ssl/sync endpoint — evemgr-owned, always readable
+    ('/etc/ssl/eve-manager/fullchain.pem', '/etc/ssl/eve-manager/privkey.pem'),
+    # Self-signed via setup.sh
+    ('/etc/ssl/eve-manager/cert.pem',      '/etc/ssl/eve-manager/privkey.pem'),
 ]
 
 def _autodetect_ssl_paths():
     """Return (cert_path, key_path) from well-known locations, or ('', '').
 
     Detection order:
-    1. Known static paths (self-signed from setup.sh)
-    2. Nginx config (ssl_certificate directive) — most reliable
-    3. Let's Encrypt glob (may fail if /etc/letsencrypt/live has 711 perms)
-    4. Archive directory listing fallback
+    1. Known static paths under /etc/ssl/eve-manager/ (evemgr-readable)
+    2. Nginx config ssl_certificate directive (most reliable)
+    3. Let's Encrypt live glob
     """
     for cert_cand, key_cand in _SSL_KNOWN_PATHS:
         if os.path.isfile(cert_cand) and os.path.isfile(key_cand):
             return cert_cand, key_cand
 
+    # Read nginx config to discover paths
     try:
         import re as _re
+        _service = os.environ.get('SERVICE_NAME', 'eve-manager')
         _nginx_candidates = [
+            f'/etc/nginx/sites-available/{_service}',
+            f'/etc/nginx/sites-enabled/{_service}',
+            '/etc/nginx/sites-available/eve-manager',
             '/etc/nginx/sites-available/eve-xui-manager',
-            '/etc/nginx/sites-enabled/eve-xui-manager',
-            '/etc/nginx/conf.d/eve-xui-manager.conf',
+            '/etc/nginx/sites-enabled/eve-manager',
+            '/etc/nginx/conf.d/eve-manager.conf',
         ]
         for _nc in _nginx_candidates:
             if not os.path.isfile(_nc):
@@ -3907,32 +3913,22 @@ def _autodetect_ssl_paths():
                 if _cm and _km:
                     _det_cert = _cm.group(1).strip()
                     _det_key = _km.group(1).strip()
-                    if os.path.isfile(_det_cert) and os.path.isfile(_det_key):
+                    # Only return if actually readable by the current process
+                    if os.path.isfile(_det_cert) and os.access(_det_cert, os.R_OK) \
+                            and os.path.isfile(_det_key) and os.access(_det_key, os.R_OK):
                         return _det_cert, _det_key
             except Exception:
                 continue
     except Exception:
         pass
 
+    # Let's Encrypt glob fallback (may fail due to permissions on privkey)
     try:
         import glob as _glob
-        le_certs = sorted(_glob.glob('/etc/letsencrypt/live/*/fullchain.pem'))
-        for le_cert in le_certs:
-            le_key = os.path.join(os.path.dirname(le_cert), 'privkey.pem')
-            if os.path.isfile(le_key):
-                return le_cert, le_key
-    except Exception:
-        pass
-
-    try:
-        import glob as _glob
-        _archive_dirs = sorted(_glob.glob('/etc/letsencrypt/archive/*/'))
-        for _adir in _archive_dirs:
-            _domain = os.path.basename(_adir.rstrip('/'))
-            _live_cert = f'/etc/letsencrypt/live/{_domain}/fullchain.pem'
-            _live_key = f'/etc/letsencrypt/live/{_domain}/privkey.pem'
-            if os.path.isfile(_live_cert) and os.path.isfile(_live_key):
-                return _live_cert, _live_key
+        for _le_cert in sorted(_glob.glob('/etc/letsencrypt/live/*/fullchain.pem')):
+            _le_key = os.path.join(os.path.dirname(_le_cert), 'privkey.pem')
+            if os.path.isfile(_le_key) and os.access(_le_cert, os.R_OK) and os.access(_le_key, os.R_OK):
+                return _le_cert, _le_key
     except Exception:
         pass
 
@@ -15470,6 +15466,84 @@ def save_ssl_settings():
     return jsonify({'success': True, 'message': 'SSL configuration cleared.'})
 
 
+# ── SSL Sync — copy LetsEncrypt certs to /etc/ssl/eve-manager/ via sudo ──────
+@app.route('/api/settings/ssl/sync', methods=['POST'])
+@login_required
+def ssl_sync():
+    """Copy LetsEncrypt cert+key to /etc/ssl/eve-manager/ (needs sudoers entry)."""
+    import glob as _glob, re as _re
+
+    # Find cert paths from nginx config (most reliable — nginx IS serving HTTPS)
+    cert_src = key_src = ''
+
+    _nginx_files = [
+        '/etc/nginx/sites-available/eve-manager',
+        '/etc/nginx/sites-enabled/eve-manager',
+        '/etc/nginx/sites-available/eve-xui-manager',
+    ]
+    for _nc in _nginx_files:
+        if not os.path.isfile(_nc):
+            continue
+        try:
+            with open(_nc, 'r', errors='ignore') as _f:
+                _conf = _f.read()
+            _cm = _re.search(r'ssl_certificate\s+([^;]+);', _conf)
+            _km = _re.search(r'ssl_certificate_key\s+([^;]+);', _conf)
+            if _cm and _km:
+                cert_src = _cm.group(1).strip()
+                key_src  = _km.group(1).strip()
+                break
+        except Exception:
+            pass
+
+    # Fallback: glob letsencrypt
+    if not cert_src:
+        for _lc in sorted(_glob.glob('/etc/letsencrypt/live/*/fullchain.pem')):
+            cert_src = _lc
+            key_src  = os.path.join(os.path.dirname(_lc), 'privkey.pem')
+            break
+
+    if not cert_src or not key_src:
+        return jsonify({'success': False,
+                        'error': 'Cannot locate SSL certificate. Is nginx configured with SSL?'}), 400
+
+    dest_dir  = '/etc/ssl/eve-manager'
+    cert_dest = f'{dest_dir}/fullchain.pem'
+    key_dest  = f'{dest_dir}/privkey.pem'
+
+    app_user = os.environ.get('APP_USER', 'evemgr')
+
+    # Use sudo to create dir, copy files, and fix ownership — requires sudoers entry
+    cmds = [
+        ['sudo', 'mkdir', '-p', dest_dir],
+        ['sudo', 'cp', '-f', cert_src, cert_dest],
+        ['sudo', 'cp', '-f', key_src,  key_dest],
+        ['sudo', 'chown', f'{app_user}:{app_user}', cert_dest, key_dest],
+        ['sudo', 'chmod', '644', cert_dest],
+        ['sudo', 'chmod', '600', key_dest],
+    ]
+    for cmd in cmds:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            return jsonify({'success': False,
+                            'error': f'Command failed ({" ".join(cmd[:3])}): {r.stderr.strip()}'}), 500
+
+    # Persist paths in DB
+    for k, v in [('ssl_cert_path', cert_dest), ('ssl_key_path', key_dest)]:
+        row = db.session.get(SystemSetting, k) or SystemSetting(key=k, value=v)
+        row.value = v
+        db.session.merge(row)
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'message': f'Copied from LetsEncrypt → {dest_dir}/ (evemgr now owns the files)',
+        'cert_path': cert_dest,
+        'key_path':  key_dest,
+        'source_cert': cert_src,
+    })
+
+
 # ── SSL Export — download cert + key as a zip ───────────────────────────────
 @app.route('/api/settings/ssl/export')
 @login_required
@@ -15478,18 +15552,28 @@ def ssl_export():
     import zipfile, io as _io
 
     cert = db.session.get(SystemSetting, 'ssl_cert_path')
-    key = db.session.get(SystemSetting, 'ssl_key_path')
+    key  = db.session.get(SystemSetting, 'ssl_key_path')
     cert_path = (cert.value if cert else '').strip()
     key_path  = (key.value  if key  else '').strip()
 
-    if not cert_path and not key_path:
+    # Auto-detect if not saved
+    if not cert_path or not key_path:
         cert_path, key_path = _autodetect_ssl_paths()
 
+    # If still not found, try syncing from LetsEncrypt first
+    if not cert_path or not key_path:
+        return jsonify({
+            'success': False,
+            'error': 'SSL certificate not configured. Click "Sync from LetsEncrypt" first.'
+        }), 400
+
+    # Try to read — if permission denied, suggest sync
     errors = []
-    if not cert_path or not os.path.isfile(cert_path):
-        errors.append(f'Certificate not found: {cert_path or "(not configured)"}')
-    if not key_path or not os.path.isfile(key_path):
-        errors.append(f'Private key not found: {key_path or "(not configured)"}')
+    for label, path in [('Certificate', cert_path), ('Private key', key_path)]:
+        if not path or not os.path.isfile(path):
+            errors.append(f'{label} file not found: {path or "(empty)"}')
+        elif not os.access(path, os.R_OK):
+            errors.append(f'{label} not readable (permission denied): {path} — click "Sync from LetsEncrypt" to fix')
     if errors:
         return jsonify({'success': False, 'error': ' | '.join(errors)}), 400
 

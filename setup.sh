@@ -1267,6 +1267,43 @@ setup_certbot_ssl() {
     print_warning "Requesting SSL for $DOMAIN..."
     certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "admin@$DOMAIN" --redirect
     print_success "SSL Certificate installed!"
+
+    # Copy cert+key to /etc/ssl/eve-manager/ so the app user can read them
+    local CERT_SRC="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+    local KEY_SRC="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+    local SSL_DIR="/etc/ssl/eve-manager"
+
+    if [ -f "$CERT_SRC" ] && [ -f "$KEY_SRC" ]; then
+        mkdir -p "$SSL_DIR"
+        cp -f "$CERT_SRC" "$SSL_DIR/fullchain.pem"
+        cp -f "$KEY_SRC"  "$SSL_DIR/privkey.pem"
+        chown "${APP_USER}:${APP_USER}" "$SSL_DIR/fullchain.pem" "$SSL_DIR/privkey.pem"
+        chmod 644 "$SSL_DIR/fullchain.pem"
+        chmod 600 "$SSL_DIR/privkey.pem"
+        print_success "Cert copied to $SSL_DIR/ (readable by $APP_USER)"
+    fi
+
+    # Deploy hook: auto-copy on every renewal
+    local HOOK_DIR="/etc/letsencrypt/renewal-hooks/deploy"
+    mkdir -p "$HOOK_DIR"
+    cat > "$HOOK_DIR/eve-manager.sh" <<HOOK
+#!/bin/bash
+SSL_DIR="/etc/ssl/eve-manager"
+mkdir -p "\$SSL_DIR"
+cp -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" "\$SSL_DIR/fullchain.pem"
+cp -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem"  "\$SSL_DIR/privkey.pem"
+chown ${APP_USER}:${APP_USER} "\$SSL_DIR/fullchain.pem" "\$SSL_DIR/privkey.pem"
+chmod 644 "\$SSL_DIR/fullchain.pem"
+chmod 600 "\$SSL_DIR/privkey.pem"
+HOOK
+    chmod +x "$HOOK_DIR/eve-manager.sh"
+    print_success "Certbot deploy hook installed (auto-copy on renewal)"
+
+    # Also update sudoers for ssl/sync endpoint (handles manual sync from panel)
+    local SUDOERS_FILE="/etc/sudoers.d/eve-nginx"
+    if [ -f "$SUDOERS_FILE" ]; then
+        echo "${APP_USER} ALL=(root) NOPASSWD: /bin/cp, /bin/mkdir, /bin/chmod, /bin/chown" >> "$SUDOERS_FILE" 2>/dev/null || true
+    fi
 }
 
 setup_self_signed_ssl() {
@@ -1799,14 +1836,22 @@ install_eve_cli() {
         print_warning "Could not install eve CLI (permission denied?)"
     fi
 
-    # Allow the app user to reload nginx without a password (needed for SSL apply)
+    # Allow the app user to reload nginx and manage SSL files without a password
     local SUDOERS_FILE="/etc/sudoers.d/eve-nginx"
     cat > "$SUDOERS_FILE" <<EOF
-# Allow ${APP_USER} to reload/test nginx for SSL management
-${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl reload nginx, /usr/sbin/nginx -t, /usr/bin/tee /etc/nginx/sites-available/${SERVICE_NAME}
+# Eve Manager — allow evemgr to manage nginx and SSL certs
+${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl reload nginx
+${APP_USER} ALL=(root) NOPASSWD: /usr/sbin/nginx -t
+${APP_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/nginx/sites-available/${SERVICE_NAME}
+${APP_USER} ALL=(root) NOPASSWD: /bin/mkdir -p /etc/ssl/eve-manager
+${APP_USER} ALL=(root) NOPASSWD: /bin/cp -f * /etc/ssl/eve-manager/fullchain.pem
+${APP_USER} ALL=(root) NOPASSWD: /bin/cp -f * /etc/ssl/eve-manager/privkey.pem
+${APP_USER} ALL=(root) NOPASSWD: /bin/chown ${APP_USER}\:${APP_USER} /etc/ssl/eve-manager/fullchain.pem /etc/ssl/eve-manager/privkey.pem
+${APP_USER} ALL=(root) NOPASSWD: /bin/chmod 644 /etc/ssl/eve-manager/fullchain.pem
+${APP_USER} ALL=(root) NOPASSWD: /bin/chmod 600 /etc/ssl/eve-manager/privkey.pem
 EOF
     chmod 440 "$SUDOERS_FILE"
-    print_success "Sudoers entry created for nginx reload"
+    print_success "Sudoers entry created for nginx + SSL management"
 }
 
 # ──────────────────────────────────────────────────────────────
