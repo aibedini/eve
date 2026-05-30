@@ -1895,6 +1895,7 @@ def _normalize_proxy_url(raw: str | None) -> str:
 
 def _get_telegram_backup_settings() -> dict:
     enabled = _parse_bool(_get_system_setting_value('telegram_backup_enabled', 'false'))
+    send_panel_backup = _parse_bool(_get_system_setting_value('telegram_backup_send_panel_backup', 'false'))
     interval = _parse_int(
         _get_system_setting_value('telegram_backup_interval_minutes', str(TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES)),
         TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES,
@@ -1914,6 +1915,7 @@ def _get_telegram_backup_settings() -> dict:
     last_dt = _parse_iso_datetime(last_run)
     return {
         'enabled': enabled,
+        'send_panel_backup': send_panel_backup,
         'interval_minutes': interval,
         'bot_token': _get_system_setting_value('telegram_backup_bot_token', '') or '',
         'chat_id': _get_system_setting_value('telegram_backup_chat_id', '') or '',
@@ -2022,6 +2024,23 @@ def _build_telegram_backup_caption(server: 'Server', backup_time: datetime) -> s
         f"🛢 {server_name}",
         f"🖥️ {server_address}",
         f"📅 {backup_date}",
+    ])
+
+
+def _build_telegram_panel_backup_caption(backup_time: datetime) -> str:
+    try:
+        iran_tz = ZoneInfo('Asia/Tehran') if ZoneInfo is not None else timezone(timedelta(hours=3, minutes=30))
+        if backup_time.tzinfo is None:
+            backup_dt = backup_time.replace(tzinfo=timezone.utc)
+        else:
+            backup_dt = backup_time.astimezone(timezone.utc)
+        iran_dt = backup_dt.astimezone(iran_tz)
+        backup_date = jdatetime_class.fromgregorian(datetime=iran_dt.replace(tzinfo=None)).strftime('%Y/%m/%d %H:%M')
+    except Exception:
+        backup_date = format_jalali(backup_time) or backup_time.isoformat()
+    return '\n'.join([
+        f"Panel version: v{APP_VERSION}",
+        f"Date time (Iran): {backup_date}",
     ])
 
 
@@ -2204,6 +2223,7 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
 
         settings = _get_telegram_backup_settings()
         enabled = bool(settings.get('enabled'))
+        send_panel_backup = bool(settings.get('send_panel_backup'))
         if trigger == 'scheduled' and not enabled:
             return {'success': True, 'skipped': True, 'message': 'Telegram backup disabled'}
 
@@ -2231,52 +2251,52 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
         now = datetime.utcnow()
 
         servers = Server.query.filter_by(enabled=True).all()
-        if not servers:
+        if not servers and not send_panel_backup:
             return {'success': False, 'error': 'No enabled servers found'}
 
         if progress_cb:
             try:
-                progress_cb({'stage': 'fetching_servers', 'progress': {'total': len(servers), 'processed': 0}})
+                progress_cb({'stage': 'fetching_servers', 'progress': {'total': len(servers) + (1 if send_panel_backup else 0), 'processed': 0}})
             except Exception:
                 pass
 
         tmp_dir = tempfile.mkdtemp(prefix='telegram_backup_', dir=TELEGRAM_BACKUP_TMP_DIR)
         results = []
 
-        total_servers = len(servers)
-        processed_servers = 0
+        total_items = len(servers) + (1 if send_panel_backup else 0)
+        processed_items = 0
 
         for server in servers:
             if progress_cb:
                 try:
-                    progress_cb({'stage': f"xui_login:{server.name}", 'progress': {'total': total_servers, 'processed': processed_servers}})
+                    progress_cb({'stage': f"xui_login:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
                 except Exception:
                     pass
 
             session_obj, error = get_xui_session(server)
             if error:
                 results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Connection Failed: {error}"})
-                processed_servers += 1
+                processed_items += 1
                 if progress_cb:
                     try:
-                        progress_cb({'stage': f"xui_failed:{server.name}", 'progress': {'total': total_servers, 'processed': processed_servers}, 'results': list(results)})
+                        progress_cb({'stage': f"xui_failed:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
                     except Exception:
                         pass
                 continue
 
             if progress_cb:
                 try:
-                    progress_cb({'stage': f"xui_download_backup:{server.name}", 'progress': {'total': total_servers, 'processed': processed_servers}})
+                    progress_cb({'stage': f"xui_download_backup:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
                 except Exception:
                     pass
 
             payload, ext, err = _fetch_xui_backup(session_obj, server)
             if err or not payload:
                 results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Backup Download Failed: {err or 'Empty response'}"})
-                processed_servers += 1
+                processed_items += 1
                 if progress_cb:
                     try:
-                        progress_cb({'stage': f"xui_failed:{server.name}", 'progress': {'total': total_servers, 'processed': processed_servers}, 'results': list(results)})
+                        progress_cb({'stage': f"xui_failed:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
                     except Exception:
                         pass
                 continue
@@ -2292,17 +2312,17 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
             caption = _build_telegram_backup_caption(server, now)
             if progress_cb:
                 try:
-                    progress_cb({'stage': f"telegram_upload:{server.name}", 'progress': {'total': total_servers, 'processed': processed_servers}})
+                    progress_cb({'stage': f"telegram_upload:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
                 except Exception:
                     pass
             try:
                 resp = _telegram_send_document(token, chat_id, file_path, caption, proxies=proxies)
             except Exception as exc:
                 results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"Telegram Upload Failed (Network/Proxy): {str(exc)}"})
-                processed_servers += 1
+                processed_items += 1
                 if progress_cb:
                     try:
-                        progress_cb({'stage': f"telegram_failed:{server.name}", 'progress': {'total': total_servers, 'processed': processed_servers}, 'results': list(results)})
+                        progress_cb({'stage': f"telegram_failed:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
                     except Exception:
                         pass
                 continue
@@ -2310,10 +2330,10 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
             resp_json, resp_err = _safe_response_json(resp)
             if resp_err:
                 results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"Telegram API Error: {resp_err}"})
-                processed_servers += 1
+                processed_items += 1
                 if progress_cb:
                     try:
-                        progress_cb({'stage': f"telegram_failed:{server.name}", 'progress': {'total': total_servers, 'processed': processed_servers}, 'results': list(results)})
+                        progress_cb({'stage': f"telegram_failed:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
                     except Exception:
                         pass
                 continue
@@ -2327,13 +2347,63 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
                     msg = resp_json.get('description') or resp_json.get('error')
                 results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"Telegram API Refused: {msg or 'Unknown error'}"})
 
-            processed_servers += 1
+            processed_items += 1
             if progress_cb:
                 try:
                     stage_name = f"server_done:{server.name}" if server_ok else f"telegram_failed:{server.name}"
-                    progress_cb({'stage': stage_name, 'progress': {'total': total_servers, 'processed': processed_servers}, 'results': list(results)})
+                    progress_cb({'stage': stage_name, 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
                 except Exception:
                     pass
+
+        if send_panel_backup:
+            panel_label = 'Panel Backup'
+            panel_file_path = None
+            if progress_cb:
+                try:
+                    progress_cb({'stage': 'panel_backup_create', 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
+                except Exception:
+                    pass
+            try:
+                panel_filename = _create_database_backup_file('telegram_panel')
+                panel_file_path = os.path.join(BACKUP_DIR, panel_filename)
+            except Exception as exc:
+                results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Panel Backup Create Failed: {str(exc)}"})
+                processed_items += 1
+                if progress_cb:
+                    try:
+                        progress_cb({'stage': 'panel_backup_failed', 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
+                    except Exception:
+                        pass
+            if panel_file_path:
+                if progress_cb:
+                    try:
+                        progress_cb({'stage': 'panel_backup_upload', 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
+                    except Exception:
+                        pass
+                try:
+                    caption = _build_telegram_panel_backup_caption(now)
+                    resp = _telegram_send_document(token, chat_id, panel_file_path, caption, proxies=proxies)
+                    resp_json, resp_err = _safe_response_json(resp)
+                    if resp_err:
+                        results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Telegram API Error: {resp_err}"})
+                    elif isinstance(resp_json, dict) and resp_json.get('ok'):
+                        results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': True})
+                    else:
+                        msg = None
+                        if isinstance(resp_json, dict):
+                            msg = resp_json.get('description') or resp_json.get('error')
+                        results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Telegram API Refused: {msg or 'Unknown error'}"})
+                except Exception as exc:
+                    results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Telegram Upload Failed (Network/Proxy): {str(exc)}"})
+
+                processed_items += 1
+                if progress_cb:
+                    try:
+                        panel_ok = bool(results and results[-1].get('success'))
+                        stage_name = 'panel_backup_done' if panel_ok else 'panel_backup_failed'
+                        progress_cb({'stage': stage_name, 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
+                    except Exception:
+                        pass
 
         success_count = sum(1 for r in results if r.get('success'))
 
@@ -14805,6 +14875,7 @@ def save_telegram_backup_settings():
         data = {}
 
     enabled = bool(data.get('enabled'))
+    send_panel_backup = bool(data.get('send_panel_backup'))
     interval = _parse_int(
         data.get('interval_minutes', TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES),
         TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES,
@@ -14830,6 +14901,7 @@ def save_telegram_backup_settings():
             return jsonify({'success': False, 'error': 'Proxy URL is required'}), 400
 
     _set_system_setting_value('telegram_backup_enabled', 'true' if enabled else 'false')
+    _set_system_setting_value('telegram_backup_send_panel_backup', 'true' if send_panel_backup else 'false')
     _set_system_setting_value('telegram_backup_interval_minutes', str(interval))
     _set_system_setting_value('telegram_backup_bot_token', bot_token)
     _set_system_setting_value('telegram_backup_chat_id', chat_id)

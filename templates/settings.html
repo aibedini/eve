@@ -338,6 +338,18 @@
                 </div>
 
                 <div class="form-group">
+                    <label>Send Panel Backup</label>
+                    <div class="refresh-toggle" style="gap: 10px;">
+                        <label class="toggle-switch" style="margin: 0;">
+                            <input type="checkbox" id="telegram-backup-send-panel">
+                            <span class="slider"></span>
+                        </label>
+                        <span class="toggle-label">Enabled</span>
+                    </div>
+                    <small class="text-secondary">Send this panel database backup with the same Telegram backup schedule.</small>
+                </div>
+
+                <div class="form-group">
                     <label>Interval (Minutes)</label>
                     <input type="number" id="telegram-backup-interval" class="form-control" min="1" max="1440" value="60">
                     <small class="text-secondary">How often to run the scheduled backup.</small>
@@ -2801,6 +2813,7 @@
             if (!data.success) return;
 
             const enabled = document.getElementById('telegram-backup-enabled');
+            const sendPanel = document.getElementById('telegram-backup-send-panel');
             const interval = document.getElementById('telegram-backup-interval');
             const token = document.getElementById('telegram-backup-token');
             const chatId = document.getElementById('telegram-backup-chat-id');
@@ -2814,6 +2827,7 @@
             const lastRun = document.getElementById('telegram-backup-last-run');
 
             if (enabled) enabled.checked = !!data.enabled;
+            if (sendPanel) sendPanel.checked = !!data.send_panel_backup;
             if (interval) interval.value = data.interval_minutes || 60;
             if (token) token.value = data.bot_token || '';
             if (chatId) chatId.value = data.chat_id || '';
@@ -2883,6 +2897,7 @@
 
     async function saveTelegramBackupSettings() {
         const enabled = document.getElementById('telegram-backup-enabled').checked;
+        const sendPanel = document.getElementById('telegram-backup-send-panel').checked;
         const interval = parseInt(document.getElementById('telegram-backup-interval').value, 10);
         const token = document.getElementById('telegram-backup-token').value.trim();
         const chatId = document.getElementById('telegram-backup-chat-id').value.trim();
@@ -2927,6 +2942,7 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     enabled,
+                    send_panel_backup: sendPanel,
                     interval_minutes: interval,
                     bot_token: token,
                     chat_id: chatId,
@@ -2959,6 +2975,7 @@
         const proxyPortRaw = parseInt(document.getElementById('telegram-backup-proxy-port').value, 10);
         return {
             enabled: document.getElementById('telegram-backup-enabled').checked,
+            send_panel_backup: document.getElementById('telegram-backup-send-panel').checked,
             interval_minutes: parseInt(document.getElementById('telegram-backup-interval').value, 10),
             bot_token: document.getElementById('telegram-backup-token').value.trim(),
             chat_id: document.getElementById('telegram-backup-chat-id').value.trim(),
@@ -3055,6 +3072,10 @@
             if (s.startsWith('server_done:'))         return `Done: ${s.split(':').slice(1).join(':')}`;
             if (s.startsWith('xui_failed:'))          return `X-UI error: ${s.split(':').slice(1).join(':')}`;
             if (s.startsWith('telegram_failed:'))     return `Telegram error: ${s.split(':').slice(1).join(':')}`;
+            if (s === 'panel_backup_create') return 'Creating panel backup...';
+            if (s === 'panel_backup_upload') return 'Uploading panel backup to Telegram...';
+            if (s === 'panel_backup_done')   return 'Panel backup sent';
+            if (s === 'panel_backup_failed') return 'Panel backup failed';
             if (s === 'done')  return 'Completed';
             if (s === 'error') return 'Failed';
             return s;
@@ -3120,7 +3141,7 @@
 
                         if (job.state === 'done') {
                             if (bar) bar.style.width = '100%';
-                            if (text) text.textContent = `Done — ${done}/${all} servers sent`;
+                            if (text) text.textContent = `Done — ${done}/${all} files sent`;
                             const hasFailures = Array.isArray(job.results) && job.results.some(r => !r.success);
                             if (hasFailures && job.error) {
                                 showToast(`Backup partially done (${done}/${all})\nFailed: ${job.error}`, 'warning', 8000);
@@ -3130,7 +3151,7 @@
                             loadTelegramBackupSettings();
                         } else {
                             if (bar) { bar.style.background = '#ef4444'; bar.style.width = '100%'; }
-                            if (text) text.textContent = `Failed — ${done}/${all} servers sent`;
+                            if (text) text.textContent = `Failed — ${done}/${all} files sent`;
                             let message = job.error || 'Backup failed';
                             if (Array.isArray(job.results) && job.results.length) {
                                 const details = job.results
