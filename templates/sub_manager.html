@@ -1046,14 +1046,23 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='quill.snow.css') }}">
 <style nonce="{{ csp_nonce }}">
     /* Quill Editor Dark Mode Styles */
-    #editor-container {
+    #editor-container, #ann-quill-container {
         font-family: 'Vazirmatn', sans-serif !important;
     }
-    #editor-container .ql-editor {
+    #editor-container .ql-editor, #ann-quill-editor .ql-editor {
         font-family: 'Vazirmatn', sans-serif !important;
         font-size: 1rem;
         color: var(--text-primary);
-        min-height: 150px;
+        min-height: 120px;
+    }
+    #ann-quill-container .ql-toolbar.ql-snow {
+        border: none;
+        border-bottom: 1px solid var(--border-color);
+        border-radius: 7px 7px 0 0;
+    }
+    #ann-quill-container .ql-container.ql-snow {
+        border: none;
+        border-radius: 0 0 7px 7px;
     }
     .ql-toolbar.ql-snow {
         background: var(--bg-card-hover);
@@ -1181,20 +1190,9 @@
 
             <div class="form-group">
                 <label>Message</label>
-                <div id="ann-editor-toolbar" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">
-                    <button type="button" onclick="annFmt('bold')" title="Bold" style="min-width:32px;padding:4px 8px;border:1px solid var(--border-color);background:var(--bg-dark);color:var(--text-primary);border-radius:5px;cursor:pointer;font-weight:700;font-size:0.85rem;">B</button>
-                    <button type="button" onclick="annFmt('italic')" title="Italic" style="min-width:32px;padding:4px 8px;border:1px solid var(--border-color);background:var(--bg-dark);color:var(--text-primary);border-radius:5px;cursor:pointer;font-style:italic;font-size:0.85rem;">I</button>
-                    <button type="button" onclick="annFmt('underline')" title="Underline" style="min-width:32px;padding:4px 8px;border:1px solid var(--border-color);background:var(--bg-dark);color:var(--text-primary);border-radius:5px;cursor:pointer;text-decoration:underline;font-size:0.85rem;">U</button>
-                    <button type="button" onclick="annInsertLine()" title="New line" style="padding:4px 10px;border:1px solid var(--border-color);background:var(--bg-dark);color:var(--text-secondary);border-radius:5px;cursor:pointer;font-size:0.8rem;">↵ Line</button>
-                    <button type="button" onclick="annClearFormat()" title="Clear formatting" style="padding:4px 10px;border:1px solid var(--border-color);background:var(--bg-dark);color:var(--text-secondary);border-radius:5px;cursor:pointer;font-size:0.8rem;">✕ Clear</button>
+                <div id="ann-quill-container" style="border-radius:8px;overflow:hidden;border:1px solid var(--border-color);">
+                    <div id="ann-quill-editor" style="min-height:120px;direction:rtl;"></div>
                 </div>
-                <!-- contentEditable rich editor, hidden textarea syncs the HTML value -->
-                <div id="ann-editor"
-                    contenteditable="true"
-                    class="form-input"
-                    style="min-height:100px;white-space:pre-wrap;line-height:1.6;direction:rtl;text-align:right;outline:none;cursor:text;"
-                    oninput="annSyncToHidden()"
-                    placeholder="Write announcement text..."></div>
                 <textarea id="announcement-message" style="display:none;"></textarea>
             </div>
 
@@ -1980,38 +1978,61 @@
         document.getElementById('announcement-modal').classList.remove('hidden');
     }
 
-    // ── Announcement rich-text editor helpers ──────────────────────────────
-    function annFmt(cmd) {
-        document.getElementById('ann-editor').focus();
-        document.execCommand(cmd, false, null);
-        annSyncToHidden();
+    // ── Announcement Quill WYSIWYG editor ──────────────────────────────────
+    let annQuill = null;
+
+    function annInitQuill() {
+        if (annQuill) return;
+        const DirectionAttribute = Quill.import('attributors/style/direction');
+        const AlignStyle = Quill.import('attributors/style/align');
+        Quill.register(DirectionAttribute, true);
+        Quill.register(AlignStyle, true);
+
+        annQuill = new Quill('#ann-quill-editor', {
+            theme: 'snow',
+            placeholder: 'Write announcement text…',
+            modules: {
+                toolbar: [
+                    ['bold', 'italic', 'underline', 'strike'],
+                    [{ 'color': [] }, { 'background': [] }],
+                    [{ 'size': ['small', false, 'large', 'huge'] }],
+                    [{ 'align': [] }, { 'direction': 'rtl' }],
+                    ['blockquote'],
+                    [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+                    ['clean']
+                ]
+            }
+        });
+
+        // RTL by default for Persian content
+        annQuill.format('direction', 'rtl');
+        annQuill.format('align', 'right');
+
+        annQuill.on('text-change', () => {
+            const hidden = document.getElementById('announcement-message');
+            if (hidden) hidden.value = annQuill.root.innerHTML;
+        });
     }
-    function annInsertLine() {
-        document.getElementById('ann-editor').focus();
-        document.execCommand('insertHTML', false, '<br>');
-        annSyncToHidden();
-    }
-    function annClearFormat() {
-        document.getElementById('ann-editor').focus();
-        document.execCommand('removeFormat', false, null);
-        annSyncToHidden();
-    }
-    function annSyncToHidden() {
-        const editor = document.getElementById('ann-editor');
-        const hidden = document.getElementById('announcement-message');
-        if (editor && hidden) hidden.value = editor.innerHTML;
-    }
+
     function annSetContent(html) {
-        const editor = document.getElementById('ann-editor');
+        annInitQuill();
         const hidden = document.getElementById('announcement-message');
-        if (editor) editor.innerHTML = html || '';
         if (hidden) hidden.value = html || '';
+        if (annQuill) {
+            if (!html || html.trim() === '' || html.trim() === '<p><br></p>') {
+                annQuill.setContents([]);
+            } else {
+                annQuill.root.innerHTML = html;
+            }
+        }
     }
+
     function annGetContent() {
-        // Strip empty editor (just a <br> or whitespace)
-        const editor = document.getElementById('ann-editor');
-        const raw = (editor ? editor.innerHTML : '').trim();
-        return raw === '<br>' ? '' : raw;
+        if (annQuill) {
+            const html = annQuill.root.innerHTML.trim();
+            return html === '<p><br></p>' ? '' : html;
+        }
+        return (document.getElementById('announcement-message').value || '').trim();
     }
 
     async function saveAnnouncement() {
