@@ -2637,7 +2637,7 @@
                 <div class="inbound-meta-compact">
                     <span class="meta-tag"><span class="label">Network:</span> <span class="value">${inbound.network}</span></span>
                     <span class="meta-tag"><span class="label">Security:</span> <span class="value">${inbound.security}</span></span>
-                    <span class="meta-tag"><span class="label">Clients:</span> <span class="value">${inbound.client_count}</span></span>
+                    <span class="meta-tag"><span class="label">Clients:</span> <span class="value">${inbound.client_count}</span><span style="color:#64748b;margin:0 2px;">/</span><span class="value" style="color:#4ade80;" title="Active clients">${inbound.active_count ?? inbound.clients.filter(c=>c.enable).length}</span></span>
                     <span class="meta-tag traffic"><span class="label">Traffic:</span> <span class="up">↑${inbound.total_up}</span> <span class="down">↓${inbound.total_down}</span></span>
                     ${inbound.remaining_total ? `<span class="meta-tag"><span class="label">Remaining:</span> <span class="value" style="color:#10b981;font-weight:600;">${inbound.remaining_total}</span></span>` : ''}
                 </div>
