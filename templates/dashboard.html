@@ -1645,9 +1645,11 @@
         // Load servers first to know if we have any
         loadServers().then(() => {
             // Kick off a background refresh (non-blocking) and render cached data immediately.
-            refreshData(true, { mode: 'full', poll: true }).finally(() => hideLoading());
-            // Pre-fetch last-user data for all servers (silently) so adds are fast
-            prefetchAllLastUsers();
+            // Warm the last-user cache from the snapshot AFTER it loads — no HTTP storm.
+            refreshData(true, { mode: 'full', poll: true }).finally(() => {
+                hideLoading();
+                prefetchAllLastUsers();
+            });
         });
         document.getElementById('global-search-input').addEventListener('input', () => performGlobalSearch(false));
         if (IS_SUPERADMIN) {
@@ -1657,10 +1659,28 @@
         onBulkActionChanged();
     });
 
-    async function prefetchAllLastUsers() {
-        if (!Array.isArray(serverListCache) || !serverListCache.length) return;
-        // Fetch last users for all servers in parallel, silently
-        Promise.allSettled(serverListCache.map(srv => fetchLastUsersForServer(srv.id)));
+    function prefetchAllLastUsers() {
+        // Build the last-user cache directly from the already-loaded inbound snapshot.
+        // Previously this fired one /api/server/<id>/last-users request PER server in
+        // parallel — each scanning every inbound server-side — which created an
+        // O(servers × inbounds) request storm on load and froze the dashboard at scale.
+        // The snapshot is already in memory, so compute the same data in a single pass.
+        if (!Array.isArray(allInboundsData) || !allInboundsData.length) return;
+
+        const byServer = new Map();
+        for (const inbound of allInboundsData) {
+            const sid = inbound && inbound.server_id != null ? String(inbound.server_id) : '';
+            if (!sid) continue;
+            const iid = inbound && inbound.id != null ? String(inbound.id) : null;
+            if (!iid) continue;
+            if (!byServer.has(sid)) byServer.set(sid, {});
+            const clients = Array.isArray(inbound.clients) ? inbound.clients : [];
+            const last = clients.length ? clients[clients.length - 1] : null;
+            byServer.get(sid)[iid] = last && last.email ? last.email : null;
+        }
+        for (const [sid, raw] of byServer.entries()) {
+            lastUserCacheByServer.set(sid, _mergeWithOverrides(sid, raw));
+        }
     }
 
     function toggleAutoRefresh() {
@@ -1919,7 +1939,7 @@
                     server_id: inbound.server_id,
                     inbound_id: inbound.id
                 });
-                const activeClients = inbound.clients.filter(c => c.enable).length;
+                const activeClients = inbound.active_count ?? inbound.clients.filter(c => c.enable).length;
                 option.textContent = `${inbound.remark} - ${inbound.protocol} (${inbound.port}) [${activeClients}]`;
                 inboundSelect.appendChild(option);
             });
@@ -3810,7 +3830,7 @@
                     server_id: inbound.server_id,
                     inbound_id: inbound.id
                 });
-                const activeClients = inbound.clients.filter(c => c.enable).length;
+                const activeClients = inbound.active_count ?? inbound.clients.filter(c => c.enable).length;
                 option.textContent = `${inbound.remark} - ${inbound.protocol} (${inbound.port}) [${activeClients}]`;
                 inboundSelect.appendChild(option);
             });

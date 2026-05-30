@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.6"
+APP_VERSION = "2.1.7"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -107,6 +107,72 @@ GLOBAL_SERVER_DATA = {
     'servers_status': [],
     'is_updating': False
 }
+
+# Ownership cache: pre-loaded from DB, used by enrich_inbounds_with_ownership.
+# Avoids a per-request DB query with thousands of emails in IN clause.
+_OWNERSHIP_CACHE: dict = {
+    'email_map': {},   # {(server_id, email_lower): {'id':..,'username':..,'created_at':..}}
+    'uuid_map':  {},   # {(server_id, uuid_lower):  {'id':..,'username':..,'created_at':..}}
+    'updated_at': 0.0, # time.monotonic()
+}
+_OWNERSHIP_CACHE_LOCK = threading.Lock()
+OWNERSHIP_CACHE_TTL = 30  # seconds — ownership refreshed at most every 30 s
+
+def _build_ownership_maps() -> tuple[dict, dict]:
+    """Query DB once and return (email_map, uuid_map).  Called with lock held."""
+    email_map: dict = {}
+    uuid_map:  dict = {}
+    try:
+        rows = (
+            db.session.query(ClientOwnership, Admin)
+            .join(Admin, ClientOwnership.reseller_id == Admin.id)
+            .all()
+        )
+        for own, reseller in rows:
+            try:
+                sid = int(own.server_id)
+            except Exception:
+                continue
+            created = own.created_at or datetime.min
+            info = {
+                'id': int(reseller.id) if reseller else None,
+                'username': reseller.username if reseller else None,
+                'created_at': created,
+            }
+            em = (own.client_email or '').strip().lower()
+            if em:
+                key = (sid, em)
+                ex = email_map.get(key)
+                if not ex or created >= ex.get('created_at', datetime.min):
+                    email_map[key] = info
+            uu = (own.client_uuid or '').strip().lower()
+            if uu:
+                key = (sid, uu)
+                ex = uuid_map.get(key)
+                if not ex or created >= ex.get('created_at', datetime.min):
+                    uuid_map[key] = info
+    except Exception:
+        pass
+    return email_map, uuid_map
+
+def _get_ownership_maps(force: bool = False) -> tuple[dict, dict]:
+    """Return cached (email_map, uuid_map); rebuild from DB if stale."""
+    now = time.monotonic()
+    with _OWNERSHIP_CACHE_LOCK:
+        if not force and now - _OWNERSHIP_CACHE['updated_at'] < OWNERSHIP_CACHE_TTL:
+            return _OWNERSHIP_CACHE['email_map'], _OWNERSHIP_CACHE['uuid_map']
+    # Build outside lock to avoid blocking other threads
+    em, um = _build_ownership_maps()
+    with _OWNERSHIP_CACHE_LOCK:
+        _OWNERSHIP_CACHE['email_map'] = em
+        _OWNERSHIP_CACHE['uuid_map']  = um
+        _OWNERSHIP_CACHE['updated_at'] = time.monotonic()
+    return em, um
+
+def invalidate_ownership_cache() -> None:
+    """Call after any ownership change so next request rebuilds from DB."""
+    with _OWNERSHIP_CACHE_LOCK:
+        _OWNERSHIP_CACHE['updated_at'] = 0.0
 
 # Prevent overlapping forced refreshes (e.g. after rapid UI actions)
 GLOBAL_REFRESH_LOCK = threading.Lock()
@@ -1767,6 +1833,33 @@ def _pg_restore_jobs() -> int:
     return max(1, min(cpus, 8))
 
 
+def _pg_env_from_uri(uri: str) -> dict:
+    parsed = urlparse(uri)
+    env = os.environ.copy()
+    if parsed.password:
+        env['PGPASSWORD'] = parsed.password
+    return env
+
+
+def _pg_reset_public_schema(uri: str, env: dict) -> None:
+    psql_bin = shutil.which('psql')
+    if not psql_bin:
+        raise RuntimeError("psql not found in PATH. Install postgresql-client (psql) on the server.")
+
+    db.session.remove()
+    db.engine.dispose()
+    cmd = [
+        psql_bin,
+        '--dbname', uri,
+        '--set', 'ON_ERROR_STOP=1',
+        '--command', 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or 'Unknown error')[:1000].strip()
+        raise RuntimeError(f"PostgreSQL schema reset failed (exit {result.returncode}): {err}")
+
+
 def _pg_restore_backup(backup_path: str) -> None:
     """Restore a PostgreSQL database from a pg_dump file.
 
@@ -1776,10 +1869,7 @@ def _pg_restore_backup(backup_path: str) -> None:
     Requires postgresql-client tools (pg_restore / psql) on the server.
     """
     uri = _db_uri()
-    parsed = urlparse(uri)
-    env = os.environ.copy()
-    if parsed.password:
-        env['PGPASSWORD'] = parsed.password
+    env = _pg_env_from_uri(uri)
 
     ext = os.path.splitext(backup_path)[1].lower()
 
@@ -1793,7 +1883,6 @@ def _pg_restore_backup(backup_path: str) -> None:
         jobs = _pg_restore_jobs()
         cmd = [
             bin_,
-            '--clean', '--if-exists',
             '--no-owner', '--no-acl',
             f'--jobs={jobs}',
             '--dbname', uri,
@@ -1810,8 +1899,7 @@ def _pg_restore_backup(backup_path: str) -> None:
     else:
         raise ValueError(f"Unsupported backup format for PostgreSQL restore: {ext!r}")
 
-    # Release all pooled connections so pg_restore can lock tables
-    db.engine.dispose()
+    _pg_reset_public_schema(uri, env)
     result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
     if result.returncode != 0:
         err = (result.stderr or result.stdout or 'Unknown error')[:1000].strip()
@@ -6066,6 +6154,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 c['remaining_bytes'] for c in processed_clients
                 if c.get('enable', True) and c.get('remaining_bytes', -1) >= 0
             )
+            _active_count = sum(1 for _c in processed_clients if _c.get('enable', True))
             processed.append({
                 "id": inbound.get('id'),
                 "remark": inbound.get('remark', ''),
@@ -6075,6 +6164,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 "security": security,
                 "clients": processed_clients,
                 "client_count": len(processed_clients),
+                "active_count": _active_count,
                 "enable": inbound.get('enable', False),
                 "server_id": server.id,
                 "server_name": server.name,
@@ -7053,128 +7143,42 @@ def fetch_worker(server_dict):
 
 
 def enrich_inbounds_with_ownership(inbounds):
-    """Attach owner fields to cached inbound clients without mutating database rows."""
+    """Attach owner fields to inbound clients using the in-memory ownership cache.
+
+    Old approach: built email/uuid sets → huge IN-clause DB query → second iteration.
+    New approach: read from _OWNERSHIP_CACHE (rebuilt at most every 30 s); each
+    client lookup is O(1) dict access.  No per-request DB query.
+    """
     try:
         if not isinstance(inbounds, list) or not inbounds:
             return inbounds
 
-        server_ids = set()
-        email_pairs = set()
-        uuid_pairs = set()
+        email_map, uuid_map = _get_ownership_maps()
+        if not email_map and not uuid_map:
+            return inbounds
 
         for inbound in inbounds:
             try:
                 sid = int(inbound.get('server_id'))
             except Exception:
                 continue
-            server_ids.add(sid)
             for client in (inbound.get('clients') or []):
-                email_l = (client.get('email') or '').strip().lower()
-                if email_l:
-                    email_pairs.add((sid, email_l))
-                uuid_l = str(client.get('id') or '').strip().lower()
-                if uuid_l:
-                    uuid_pairs.add((sid, uuid_l))
-
-        email_values = {email for (_sid, email) in email_pairs}
-        uuid_values = {uuid for (_sid, uuid) in uuid_pairs}
-        if not server_ids or not (email_values or uuid_values):
-            return inbounds
-
-        filters = []
-        if uuid_values:
-            filters.append(func.lower(ClientOwnership.client_uuid).in_(list(uuid_values)))
-        if email_values:
-            filters.append(func.lower(ClientOwnership.client_email).in_(list(email_values)))
-        if not filters:
-            return inbounds
-
-        rows = (
-            db.session.query(ClientOwnership, Admin)
-            .join(Admin, ClientOwnership.reseller_id == Admin.id)
-            .filter(ClientOwnership.server_id.in_(list(server_ids)))
-            .filter(or_(*filters))
-            .all()
-        )
-
-        exact_uuid_map = {}
-        exact_email_map = {}
-        loose_uuid_map = {}
-        loose_email_map = {}
-
-        def newer(existing, created):
-            return not existing or created >= (existing.get('created_at') or datetime.min)
-
-        for ownership, reseller in (rows or []):
-            try:
-                sid = int(ownership.server_id)
-            except Exception:
-                continue
-
-            created = ownership.created_at or datetime.min
-            info = {
-                'id': int(reseller.id) if reseller else None,
-                'username': reseller.username if reseller else None,
-                'created_at': created,
-            }
-
-            try:
-                iid = int(ownership.inbound_id) if ownership.inbound_id is not None else None
-            except Exception:
-                iid = None
-
-            uuid_l = (ownership.client_uuid or '').strip().lower()
-            if uuid_l:
-                loose_key = (sid, uuid_l)
-                if newer(loose_uuid_map.get(loose_key), created):
-                    loose_uuid_map[loose_key] = info
-                if iid is not None:
-                    exact_key = (sid, iid, uuid_l)
-                    if newer(exact_uuid_map.get(exact_key), created):
-                        exact_uuid_map[exact_key] = info
-
-            email_l = (ownership.client_email or '').strip().lower()
-            if email_l:
-                loose_key = (sid, email_l)
-                if newer(loose_email_map.get(loose_key), created):
-                    loose_email_map[loose_key] = info
-                if iid is not None:
-                    exact_key = (sid, iid, email_l)
-                    if newer(exact_email_map.get(exact_key), created):
-                        exact_email_map[exact_key] = info
-
-        for inbound in inbounds:
-            try:
-                sid = int(inbound.get('server_id'))
-            except Exception:
-                continue
-            try:
-                iid = int(inbound.get('id'))
-            except Exception:
-                iid = None
-
-            for client in (inbound.get('clients') or []):
-                uuid_l = str(client.get('id') or '').strip().lower()
-                email_l = (client.get('email') or '').strip().lower()
-                info = None
-                if uuid_l:
-                    info = exact_uuid_map.get((sid, iid, uuid_l)) if iid is not None else None
-                    if not info:
-                        info = loose_uuid_map.get((sid, uuid_l))
-                if not info and email_l:
-                    info = exact_email_map.get((sid, iid, email_l)) if iid is not None else None
-                    if not info:
-                        info = loose_email_map.get((sid, email_l))
-
+                uu = str(client.get('id') or '').strip().lower()
+                em = (client.get('email') or '').strip().lower()
+                info = uuid_map.get((sid, uu)) if uu else None
+                if not info and em:
+                    info = email_map.get((sid, em))
                 if info and info.get('username'):
                     client['owner_reseller_id'] = info.get('id')
-                    client['owner_username'] = info.get('username')
+                    client['owner_username']    = info.get('username')
                 else:
                     client.pop('owner_reseller_id', None)
-                    client.pop('owner_username', None)
+                    client.pop('owner_username',    None)
+
     except Exception:
-        app.logger.exception("Failed to enrich cached inbounds with ownership")
+        app.logger.exception("Failed to enrich inbounds with ownership")
     return inbounds
+
 
 @app.route('/api/refresh')
 @login_required
@@ -7237,105 +7241,7 @@ def api_refresh():
     
     # === حالت سوپرادمین (یا ادمین معمولی غیر ریسلر) ===
     if user.role != 'reseller':
-        # Enrich payload with ownership info (who this client is assigned to) for admins/superadmins.
-        # This is computed on-demand to avoid changing the background refresh pipeline.
-        try:
-            server_ids = set()
-            email_pairs = set()  # (server_id, email_lower)
-            uuid_pairs = set()   # (server_id, client_uuid)
-
-            for inbound in (data.get('inbounds') or []):
-                try:
-                    sid = int(inbound.get('server_id'))
-                except Exception:
-                    continue
-                server_ids.add(sid)
-                for c in (inbound.get('clients') or []):
-                    em = (c.get('email') or '').strip().lower()
-                    if em:
-                        email_pairs.add((sid, em))
-                    cu = str(c.get('id') or '').strip()
-                    if cu:
-                        uuid_pairs.add((sid, cu))
-
-            email_values = {e for (_sid, e) in email_pairs}
-            uuid_values = {u for (_sid, u) in uuid_pairs}
-
-            owner_email_map = {}
-            owner_uuid_map = {}
-
-            if server_ids and (email_values or uuid_values):
-                q = (
-                    db.session.query(ClientOwnership, Admin)
-                    .join(Admin, ClientOwnership.reseller_id == Admin.id)
-                    .filter(ClientOwnership.server_id.in_(list(server_ids)))
-                )
-                filters = []
-                if uuid_values:
-                    # Use case-insensitive matching for UUIDs
-                    lower_uuid_values = [u.lower() for u in uuid_values if u]
-                    if lower_uuid_values:
-                        filters.append(func.lower(ClientOwnership.client_uuid).in_(lower_uuid_values))
-                if email_values:
-                    filters.append(func.lower(ClientOwnership.client_email).in_(list(email_values)))
-                if not filters:
-                    filters.append(ClientOwnership.id == -1)  # No matches if no filters
-                q = q.filter(or_(*filters))
-
-                for own, reseller in (q.all() or []):
-                    try:
-                        sid = int(own.server_id)
-                    except Exception:
-                        continue
-
-                    created = own.created_at or datetime.min
-
-                    ou = (own.client_uuid or '').strip().lower()
-                    if ou:
-                        key_u = (sid, ou)
-                        existing_u = owner_uuid_map.get(key_u)
-                        ex_created_u = existing_u.get('created_at') if existing_u else datetime.min
-                        if (not existing_u) or (created >= ex_created_u):
-                            owner_uuid_map[key_u] = {
-                                'id': int(reseller.id) if reseller else None,
-                                'username': reseller.username if reseller else None,
-                                'created_at': created,
-                            }
-
-                    em = (own.client_email or '').strip().lower()
-                    if em:
-                        key = (sid, em)
-                        existing = owner_email_map.get(key)
-                        ex_created = existing.get('created_at') if existing else datetime.min
-                        if (not existing) or (created >= ex_created):
-                            owner_email_map[key] = {
-                                'id': int(reseller.id) if reseller else None,
-                                'username': reseller.username if reseller else None,
-                                'created_at': created,
-                            }
-
-            if owner_email_map or owner_uuid_map:
-                for inbound in (data.get('inbounds') or []):
-                    try:
-                        sid = int(inbound.get('server_id'))
-                    except Exception:
-                        continue
-                    for c in (inbound.get('clients') or []):
-                        cu = str(c.get('id') or '').strip().lower()
-                        em = (c.get('email') or '').strip().lower()
-                        info = owner_uuid_map.get((sid, cu)) if cu else None
-                        if not info and em:
-                            info = owner_email_map.get((sid, em))
-
-                        if info and info.get('username'):
-                            c['owner_reseller_id'] = info.get('id')
-                            c['owner_username'] = info.get('username')
-                        else:
-                            c.pop('owner_reseller_id', None)
-                            c.pop('owner_username', None)
-        except Exception:
-            pass
-
+        # Enrich with ownership using the in-memory cache (O(1) per client, no per-request DB query)
         enrich_inbounds_with_ownership(data.get('inbounds') or [])
 
         # Admins/superadmins see all cached data
@@ -8612,6 +8518,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
                 )
             ).delete(synchronize_session=False)
             db.session.commit()
+            invalidate_ownership_cache()
 
             try:
                 log_transaction(user.id, 0, 'delete_client', f"Deleted client {email}", server_id=server.id, client_email=email)
@@ -9761,6 +9668,7 @@ def delete_server(server_id):
 
     XUI_SESSION_CACHE.pop(server_id, None)
     REFRESH_BACKOFF.pop(server_id, None)
+    invalidate_ownership_cache()
     GLOBAL_SERVER_DATA['inbounds'] = [
         item for item in (GLOBAL_SERVER_DATA.get('inbounds') or [])
         if str(item.get('server_id') or '') != str(server_id)
@@ -9916,6 +9824,7 @@ def assign_client():
             pass
 
         db.session.commit()
+        invalidate_ownership_cache()
         return jsonify({"success": True})
     except Exception as e:
         db.session.rollback()
@@ -9999,6 +9908,7 @@ def bulk_assign_inbound(reseller_id):
                 pass
 
         db.session.commit()
+        invalidate_ownership_cache()
         return jsonify({"success": True, "assigned": assigned, "skipped": skipped})
     except Exception as e:
         db.session.rollback()
@@ -10271,7 +10181,8 @@ def add_client(server_id, inbound_id):
                 pass
 
             db.session.commit()
-            
+            invalidate_ownership_cache()
+
             # Generate Links for Response
             parsed_host = urlparse(server.host)
             hostname = parsed_host.hostname
@@ -16538,9 +16449,12 @@ def restore_backup_stream(filename):
                     if not tool_bin:
                         yield _sse('error', 'pg_restore not found.\n  Fix: sudo apt install postgresql-client')
                         return
+                    if not shutil.which('psql'):
+                        yield _sse('error', 'psql not found.\n  Fix: sudo apt install postgresql-client')
+                        return
                     jobs = _pg_restore_jobs()
                     tool = 'pg_restore'
-                    cmd = [tool_bin, '--clean', '--if-exists', '--no-owner', '--no-acl',
+                    cmd = [tool_bin, '--no-owner', '--no-acl',
                            f'--jobs={jobs}', '--dbname', _db_uri(), backup_path]
                 else:
                     tool_bin = shutil.which('psql')
@@ -16565,12 +16479,12 @@ def restore_backup_stream(filename):
                 yield _heartbeat()
 
                 uri = _db_uri()
-                parsed = urlparse(uri)
-                env = os.environ.copy()
-                if parsed.password:
-                    env['PGPASSWORD'] = parsed.password
+                env = _pg_env_from_uri(uri)
 
-                db.engine.dispose()
+                yield _sse('log', 'Resetting PostgreSQL public schema with CASCADEâ€¦')
+                yield _heartbeat()
+                _pg_reset_public_schema(uri, env)
+                yield _sse('log', 'âœ“ PostgreSQL schema reset complete')
 
                 # --jobs=N means pg_restore spawns parallel workers — no stdout
                 # lines will flow during restore. We run it in the background and
@@ -16596,7 +16510,10 @@ def restore_backup_stream(filename):
 
                 # Stream heartbeats + elapsed time while waiting
                 start = _time.monotonic()
-                yield _sse('log', f'Running {tool} with --jobs={jobs} (parallel)…')
+                if ext == '.dump':
+                    yield _sse('log', f'Running {tool} with --jobs={jobs} (parallel)…')
+                else:
+                    yield _sse('log', f'Running {tool}…')
                 while proc.poll() is None:
                     _time.sleep(2)
                     elapsed = int(_time.monotonic() - start)
@@ -16616,7 +16533,8 @@ def restore_backup_stream(filename):
                 if proc.returncode != 0:
                     yield _sse('error', f'{tool} exited with code {proc.returncode} after {elapsed}s')
                 else:
-                    yield _sse('log', f'✓ {tool} finished in {elapsed}s (--jobs={jobs})')
+                    suffix = f' (--jobs={jobs})' if ext == '.dump' else ''
+                    yield _sse('log', f'✓ {tool} finished in {elapsed}s{suffix}')
                     yield _sse('done', '✓ Restore complete — logging you out.',
                                redirect=url_for('logout'))
             else:
