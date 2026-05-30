@@ -3541,10 +3541,10 @@
         }
 
         if (allServers && allServers.length > 0) {
-            allServers.forEach(server => {
+            allServers.filter(s => !s.hidden).forEach(server => {
                 const option = document.createElement('option');
                 option.value = server.id;
-                option.textContent = server.name;
+                option.textContent = `#${server.id} ${server.name}`;
                 document.getElementById('add-client-server-select').appendChild(option);
             });
         }
@@ -4127,8 +4127,8 @@
     function populateServerFilter(servers) {
         const list = document.getElementById('server-filter-list');
         list.innerHTML = '';
-        
-        servers.forEach(server => {
+
+        servers.filter(s => !s.hidden).forEach(server => {
             const div = document.createElement('div');
             div.className = 'filter-item';
             
@@ -4565,31 +4565,45 @@
         }
 
         container.innerHTML = servers.map(server => {
-            const xrayBadge = server.xray_version
+            const isHidden = Boolean(server.hidden);
+            const xrayBadge = (!isHidden && server.xray_version)
                 ? `<span style="background:rgba(34,197,94,0.12);color:#4ade80;border-radius:4px;padding:1px 6px;font-size:0.7rem;font-weight:600;">xray ${escapeHtml(server.xray_version)}</span>`
                 : '';
-            const xuiBadge = server.xui_version
+            const xuiBadge = (!isHidden && server.xui_version)
                 ? `<span style="background:rgba(56,189,248,0.12);color:#38bdf8;border-radius:4px;padding:1px 6px;font-size:0.7rem;">v${escapeHtml(server.xui_version)}</span>`
                 : '';
-            const stateDot = _serverStateDot(server.xray_state);
+            const stateDot = !isHidden ? _serverStateDot(server.xray_state) : '';
             const ptBadge = _panelTypeBadge(server.panel_type);
-            const fetchingBadge = (!server.xray_version && !server.panel_status_error)
+            const fetchingBadge = (!isHidden && !server.xray_version && !server.panel_status_error)
                 ? `<span id="srv-fetching-${server.id}" style="font-size:0.7rem;color:#94a3b8;">fetching…</span>`
                 : '';
-            const errBadge = server.panel_status_error
+            const errBadge = (!isHidden && server.panel_status_error)
                 ? `<span style="font-size:0.7rem;color:#ef4444;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;" title="${escapeHtml(server.panel_status_error)}">⚠ ${escapeHtml(server.panel_status_error)}</span>`
                 : '';
+            const hiddenBadge = isHidden
+                ? `<span style="background:rgba(148,163,184,0.15);color:#64748b;border-radius:4px;padding:1px 6px;font-size:0.7rem;">hidden</span>`
+                : '';
+            const idBadge = `<span style="background:rgba(148,163,184,0.1);color:#64748b;border-radius:4px;padding:1px 6px;font-size:0.7rem;font-family:monospace;">#${server.id}</span>`;
 
-            const meta = [ptBadge, xrayBadge, xuiBadge, stateDot, fetchingBadge, errBadge].filter(Boolean).join(' ');
+            const meta = [idBadge, ptBadge, xrayBadge, xuiBadge, stateDot, fetchingBadge, errBadge, hiddenBadge].filter(Boolean).join(' ');
+
+            // Eye icon: open = show, closed = hidden
+            const eyeIcon = isHidden
+                ? `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`
+                : `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
 
             return `
-            <div class="server-item ${!server.enabled ? 'disabled' : ''}" id="srv-item-${server.id}">
+            <div class="server-item ${!server.enabled ? 'disabled' : ''} ${isHidden ? 'server-hidden' : ''}" id="srv-item-${server.id}">
                 <div class="server-info">
                     <h4>${escapeHtml(server.name)}</h4>
                     <p style="margin:0 0 4px 0;">${escapeHtml(server.host)}</p>
                     <div style="display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:3px;">${meta}</div>
                 </div>
                 <div class="server-actions">
+                    <button class="action-btn" onclick="toggleServerHidden(${server.id})" title="${isHidden ? 'Show server (resume fetching)' : 'Hide server (pause fetching)'}"
+                        style="color:${isHidden ? '#94a3b8' : 'inherit'};">
+                        ${eyeIcon}
+                    </button>
                     <button class="action-btn" onclick="refreshServerInfo(${server.id})" title="Refresh info"
                         style="font-size:11px;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg>
@@ -4609,6 +4623,22 @@
                 </div>
             </div>`;
         }).join('');
+    }
+
+    async function toggleServerHidden(serverId) {
+        try {
+            const res = await fetch(`/api/servers/${serverId}/hidden`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.hidden ? 'Server hidden — no longer fetched' : 'Server visible — will be fetched on next refresh', 'success', 4000);
+                await loadServers();
+                if (!data.hidden) refreshData(true, { serverId, mode: 'full', poll: true, enqueue: true });
+            } else {
+                showToast(data.error || 'Failed to toggle', 'error');
+            }
+        } catch (e) {
+            showToast('Network error', 'error');
+        }
     }
 
     async function refreshServerInfo(serverId) {

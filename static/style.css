@@ -2986,6 +2986,12 @@ select optgroup {
     opacity: 0.5;
 }
 
+.server-item.server-hidden {
+    opacity: 0.55;
+    border-style: dashed;
+    border-color: rgba(100, 116, 139, 0.4);
+}
+
 .server-info {
     display: flex;
     flex-direction: column;

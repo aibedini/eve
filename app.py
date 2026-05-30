@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.10"
+APP_VERSION = "2.1.11"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -1285,7 +1285,8 @@ def _run_refresh_job(job_id: str):
                     force = bool(job.get('force'))
 
                     if mode == 'status':
-                        servers_q = Server.query.filter_by(enabled=True)
+                        servers_q = Server.query.filter_by(enabled=True).filter(
+                            (Server.hidden == False) | (Server.hidden == None))
                         if server_id:
                             servers_q = servers_q.filter(Server.id == int(server_id))
                         servers = servers_q.all()
@@ -1401,6 +1402,8 @@ def fetch_and_update_server_data(server_id: int):
     server = db.session.get(Server, int(server_id))
     if not server or not server.enabled:
         raise ValueError("Server not found or disabled")
+    if server.hidden:
+        raise ValueError("Server is hidden — skipping fetch")
 
     admin_user = Admin.query.filter(or_(Admin.is_superadmin == True, Admin.role == 'superadmin')).first()
     if not admin_user:
@@ -2607,12 +2610,13 @@ class Server(db.Model):
     username = db.Column(db.String(100), nullable=False)
     password = db.Column(db.String(255), nullable=False)
     enabled = db.Column(db.Boolean, default=True)
+    hidden = db.Column(db.Boolean, default=False)   # hidden=True: skip fetch & dashboard, but still backed up
     panel_type = db.Column(db.String(50), default='auto')
     sub_path = db.Column(db.String(50), default='/sub/')
     json_path = db.Column(db.String(50), default='/json/')
     sub_port = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -2620,6 +2624,7 @@ class Server(db.Model):
             'host': self.host,
             'username': self.username,
             'enabled': self.enabled,
+            'hidden': bool(self.hidden),
             'panel_type': self.panel_type,
             'sub_path': self.sub_path,
             'json_path': self.json_path,
@@ -4256,6 +4261,18 @@ with app.app_context():
             print("Added sender_name column to transactions table")
     except Exception as e:
         print(f"Migration error (transactions.sender_name): {e}")
+
+    # Ensure servers.hidden column exists (added for server hide/show feature)
+    try:
+        inspector = inspect(db.engine)
+        srv_cols = [c['name'] for c in inspector.get_columns('servers')]
+        if 'hidden' not in srv_cols:
+            with db.engine.connect() as conn:
+                conn.execute(text('ALTER TABLE servers ADD COLUMN hidden BOOLEAN DEFAULT FALSE'))
+                conn.commit()
+            print("Added hidden column to servers table")
+    except Exception as e:
+        print(f"Migration error (servers.hidden): {e}")
 
     # Ensure system_configs.value can store long URLs (PostgreSQL only)
     try:
@@ -9638,8 +9655,33 @@ def update_server(server_id):
     server.json_path = data.get('json_path', server.json_path)
     server.sub_port = data.get('sub_port', server.sub_port)
     server.enabled = data.get('enabled', server.enabled)
+    if 'hidden' in data:
+        server.hidden = bool(data['hidden'])
     db.session.commit()
     return jsonify({"success": True})
+
+
+@app.route('/api/servers/<int:server_id>/hidden', methods=['POST'])
+@login_required
+def toggle_server_hidden(server_id):
+    """Toggle server hidden flag. Hidden servers are skipped in fetching/dashboard but still backed up."""
+    if session.get('role') == 'reseller':
+        return jsonify({"success": False, "error": "Only admins can toggle server visibility"}), 403
+    server = Server.query.get_or_404(server_id)
+    server.hidden = not bool(server.hidden)
+    db.session.commit()
+    if server.hidden:
+        # Remove from in-memory cache so it disappears from dashboard immediately
+        GLOBAL_SERVER_DATA['inbounds'] = [
+            item for item in (GLOBAL_SERVER_DATA.get('inbounds') or [])
+            if str(item.get('server_id') or '') != str(server_id)
+        ]
+        GLOBAL_SERVER_DATA['servers_status'] = [
+            item for item in (GLOBAL_SERVER_DATA.get('servers_status') or [])
+            if str(item.get('server_id') or '') != str(server_id)
+        ]
+    return jsonify({"success": True, "hidden": server.hidden})
+
 
 @app.route('/api/servers/<int:server_id>', methods=['DELETE'])
 @login_required
@@ -16723,7 +16765,8 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
     try:
         GLOBAL_SERVER_DATA['is_updating'] = True
 
-        servers_q = Server.query.filter_by(enabled=True)
+        servers_q = Server.query.filter_by(enabled=True).filter(
+            (Server.hidden == False) | (Server.hidden == None))
         if server_ids:
             try:
                 ids = [int(x) for x in (server_ids or [])]
