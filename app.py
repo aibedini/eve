@@ -15706,50 +15706,85 @@ def restore_backup(filename):
 @login_required
 def restore_backup_stream(filename):
     """SSE endpoint — streams live restore progress to the browser."""
+    import threading
     filename = secure_filename(filename)
     backup_path = os.path.join(BACKUP_DIR, filename)
 
     def _sse(type_, message, **extra):
         data = {'type': type_, 'message': message, **extra}
-        return f"data: {json.dumps(data)}\n\n"
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def _heartbeat():
+        # SSE comment — keeps the connection alive through nginx/proxies
+        return ": heartbeat\n\n"
 
     def generate():
+        # ── Pre-flight checks ──────────────────────────────────────────
+        yield _sse('log', '🔍 Checking backup file…')
+
         if not os.path.exists(backup_path):
-            yield _sse('error', 'Backup file not found')
+            yield _sse('error', f'Backup not found: {filename}')
             return
 
         ext = os.path.splitext(filename)[1].lower()
         size_mb = round(os.path.getsize(backup_path) / 1024 / 1024, 2)
-        yield _sse('log', f'Starting restore of {filename} ({size_mb} MB)…')
+        yield _sse('log', f'File: {filename}  ({size_mb} MB)')
+
+        db_type = 'PostgreSQL' if _is_postgres_db() else ('SQLite' if _is_sqlite_db() else 'Unknown')
+        yield _sse('log', f'Database: {db_type}')
 
         try:
             # ── SQLite ────────────────────────────────────────────────────
             if _is_sqlite_db():
                 if ext != '.db':
-                    yield _sse('error', 'SQLite databases require a .db backup file')
+                    yield _sse('error', f'SQLite requires a .db backup; got {ext!r}')
                     return
                 db_path = os.path.join(app.instance_path, 'servers.db')
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 safety = os.path.join(BACKUP_DIR, f'pre_restore_{timestamp}.db')
                 if os.path.exists(db_path):
                     shutil.copy2(db_path, safety)
-                    yield _sse('log', f'Safety backup saved: {os.path.basename(safety)}')
-                yield _sse('log', 'Copying backup file over current database…')
+                    yield _sse('log', f'✓ Safety backup: {os.path.basename(safety)}')
+                yield _sse('log', 'Replacing database file…')
                 shutil.copy2(backup_path, db_path)
-                yield _sse('done', 'Restore complete — logging you out.', redirect=url_for('logout'))
+                yield _sse('done', '✓ Restore complete — logging you out.', redirect=url_for('logout'))
 
             # ── PostgreSQL ────────────────────────────────────────────────
             elif _is_postgres_db():
                 if ext not in ('.dump', '.sql'):
-                    yield _sse('error', f'Unsupported format {ext!r} — need .dump or .sql')
+                    yield _sse('error', f'PostgreSQL requires .dump or .sql; got {ext!r}')
                     return
+
+                # Check tools first
+                if ext == '.dump':
+                    tool_bin = shutil.which('pg_restore')
+                    if not tool_bin:
+                        yield _sse('error', 'pg_restore not found.\n  Fix: sudo apt install postgresql-client')
+                        return
+                    tool = 'pg_restore'
+                    cmd = [tool_bin, '--clean', '--if-exists', '--no-owner', '--no-acl',
+                           '--dbname', _db_uri(), '--verbose', backup_path]
+                else:
+                    tool_bin = shutil.which('psql')
+                    if not tool_bin:
+                        yield _sse('error', 'psql not found.\n  Fix: sudo apt install postgresql-client')
+                        return
+                    tool = 'psql'
+                    cmd = [tool_bin, '--dbname', _db_uri(), '--file', backup_path, '--echo-errors']
+
+                yield _sse('log', f'✓ {tool} found at: {tool_bin}')
 
                 # Safety backup
                 try:
+                    yield _sse('log', 'Creating safety backup before overwriting…')
+                    yield _heartbeat()
                     safety_name = _create_database_backup_file('pre_restore')
-                    yield _sse('log', f'Safety backup saved: {os.path.basename(safety_name)}')
+                    yield _sse('log', f'✓ Safety backup: {os.path.basename(safety_name)}')
                 except Exception as be:
-                    yield _sse('log', f'Warning: could not create safety backup — {be}')
+                    yield _sse('log', f'⚠ Safety backup failed (continuing): {be}')
+
+                yield _sse('log', f'Running {tool}…')
+                yield _heartbeat()
 
                 uri = _db_uri()
                 parsed = urlparse(uri)
@@ -15757,23 +15792,6 @@ def restore_backup_stream(filename):
                 if parsed.password:
                     env['PGPASSWORD'] = parsed.password
 
-                if ext == '.dump':
-                    bin_ = shutil.which('pg_restore')
-                    if not bin_:
-                        yield _sse('error', 'pg_restore not found — run: apt install postgresql-client')
-                        return
-                    cmd = [bin_, '--clean', '--if-exists', '--no-owner', '--no-acl',
-                           '--dbname', uri, '--verbose', backup_path]
-                    tool = 'pg_restore'
-                else:
-                    bin_ = shutil.which('psql')
-                    if not bin_:
-                        yield _sse('error', 'psql not found — run: apt install postgresql-client')
-                        return
-                    cmd = [bin_, '--dbname', uri, '--file', backup_path, '--echo-errors']
-                    tool = 'psql'
-
-                yield _sse('log', f'Running {tool}…')
                 db.engine.dispose()
 
                 proc = subprocess.Popen(
@@ -15781,25 +15799,35 @@ def restore_backup_stream(filename):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    bufsize=1,
                     env=env,
                 )
-                for line in proc.stdout:
-                    line = line.rstrip()
+
+                line_count = 0
+                for raw_line in proc.stdout:
+                    line = raw_line.rstrip()
                     if line:
+                        line_count += 1
                         yield _sse('log', line)
+                        # Heartbeat every 20 lines to keep nginx from timing out
+                        if line_count % 20 == 0:
+                            yield _heartbeat()
+
                 proc.wait(timeout=600)
 
                 if proc.returncode != 0:
                     yield _sse('error', f'{tool} exited with code {proc.returncode}')
                 else:
-                    yield _sse('done', 'Restore complete — logging you out.',
+                    yield _sse('log', f'✓ {tool} finished ({line_count} lines processed)')
+                    yield _sse('done', '✓ Restore complete — logging you out.',
                                redirect=url_for('logout'))
             else:
-                yield _sse('error', 'Unsupported database backend')
+                uri = _db_uri()
+                yield _sse('error', f'Unsupported database type (URI: {uri[:30]}…)')
 
         except Exception as exc:
-            app.logger.error(f"restore_backup_stream error: {exc}")
-            yield _sse('error', str(exc))
+            app.logger.error(f"restore_backup_stream error: {exc}", exc_info=True)
+            yield _sse('error', f'Unexpected error: {exc}')
 
     return Response(
         stream_with_context(generate()),
@@ -15807,6 +15835,7 @@ def restore_backup_stream(filename):
         headers={
             'Cache-Control': 'no-cache',
             'X-Accel-Buffering': 'no',
+            'X-Content-Type-Options': 'nosniff',
         },
     )
 
