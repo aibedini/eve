@@ -14,7 +14,7 @@ Create `.env` next to `docker-compose.yml`:
 
 ```env
 DOMAIN=panel.example.com
-SSL_MODE=letsencrypt
+SSL_MODE=http
 LETSENCRYPT_EMAIL=admin@example.com
 EVE_IMAGE=ghcr.io/yoyoraya/eve-xui-manager:latest
 POSTGRES_PASSWORD=change-this-long-random-password
@@ -24,9 +24,9 @@ INITIAL_ADMIN_PASSWORD=change-this-admin-password
 
 `SSL_MODE` options:
 
-- `letsencrypt`: automatic trusted HTTPS certificates (requires correct DNS + open 80/443)
+- `http`: HTTP only (fastest first boot; useful for IP-only or debugging)
 - `internal`: self-signed HTTPS via Caddy's internal CA (works without DNS validation; browsers warn)
-- `http`: HTTP only (no TLS; useful for IP-only or debugging)
+- `letsencrypt`: automatic trusted HTTPS certificates (requires correct DNS + open 80/443)
 
 `DOMAIN` is the domain/IP you want this server to use. For `http` mode you can use an IP or hostname.
 
@@ -53,9 +53,61 @@ docker compose up -d
 
 ## Restricted / Offline Server
 
-### Build a Complete Bundle on Hetzner
+There are two offline bundle types. Choose based on what is already on the target server.
 
-On a server that has internet access, such as Hetzner:
+### Option A — Full Offline Bundle (Ubuntu 22.04 Jammy, no Docker pre-installed)
+
+Use this when the target server is a **bare Ubuntu 22.04 (Jammy) amd64** machine with no Docker.
+The bundle includes Docker Engine, Docker Compose plugin, all runtime images, and the app config.
+**No internet access is needed on the target server at any point.**
+
+#### Build on any machine that has Docker + internet
+
+```bash
+git clone https://github.com/yoyoraya/eve-xui-manager.git
+cd eve-xui-manager
+bash scripts/docker/build-full-offline-bundle.sh
+```
+
+This creates:
+
+```text
+eve-full-offline-bundle.tar.gz   (~800 MB – 1.2 GB)
+```
+
+Upload it to GitHub Releases (or any file host), then download it on the target server.
+
+#### Install on the bare Ubuntu 22.04 server
+
+```bash
+mkdir -p /opt/eve-docker
+tar -xzf eve-full-offline-bundle.tar.gz -C /opt/eve-docker
+cd /opt/eve-docker
+sudo bash install.sh
+```
+
+The installer:
+1. Installs Docker Engine + Compose plugin from the bundled `.deb` packages (no apt network calls)
+2. Loads the app, PostgreSQL, and Caddy images from the included tar
+3. Prompts for domain/IP, SSL mode, admin credentials
+4. Starts Eve with Docker Compose
+5. Prints the login URL and initial credentials
+
+After install, use the management CLI:
+
+```bash
+sudo eve
+```
+
+The `eve` menu includes **[6] Setup Full Offline** which can re-run the same process (useful if Docker needs reinstalling or the stack needs to be rebuilt from the bundle files).
+
+---
+
+### Option B — Standard Offline Bundle (Docker already installed)
+
+Use this when Docker Engine is already on the target server (Ubuntu 20.04, 22.04, or 24.04).
+
+#### Build on Hetzner or any online server
 
 ```bash
 git clone https://github.com/yoyoraya/eve-xui-manager.git
@@ -79,6 +131,7 @@ sudo bash install.sh
 ```
 
 The installer asks for the domain/IP, email, PostgreSQL password, and initial admin credentials, then starts Eve with Docker Compose.
+On a fresh install it creates a working HTTP setup automatically, detects the server IP, generates secrets, and prints the login URL plus initial admin credentials.
 
 After install, run `eve` for a simple interactive menu (set domain, choose SSL mode, view status/logs):
 

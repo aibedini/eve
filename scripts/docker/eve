@@ -178,12 +178,94 @@ http_ip_quickstart() {
     echo "Try: http://${ip}"
 }
 
-main_menu() {
-    need_cmd docker
+install_docker_from_bundle() {
+    local deb_dir="$INSTALL_DIR/docker-debs"
 
-    if [ ! -f "$COMPOSE_FILE" ]; then
-        echo "ERR: docker-compose.yml not found at: $COMPOSE_FILE" >&2
-        echo "Set INSTALL_DIR in $CONFIG_FILE or move the install to $INSTALL_DIR_DEFAULT" >&2
+    if [ ! -d "$deb_dir" ] || [ -z "$(ls -A "$deb_dir"/*.deb 2>/dev/null)" ]; then
+        echo "ERR: docker-debs/ not found in $INSTALL_DIR." >&2
+        echo "     This option requires the full offline bundle (eve-full-offline-bundle.tar.gz)." >&2
+        echo "     Download it from the GitHub Releases page." >&2
+        return 1
+    fi
+
+    echo "-- Installing Docker from bundled .deb packages"
+
+    for pkg in containerd.io docker-ce-cli docker-ce docker-buildx-plugin docker-compose-plugin; do
+        deb_file="$(ls "$deb_dir"/${pkg}_*.deb 2>/dev/null | head -1 || true)"
+        [ -n "$deb_file" ] && dpkg -i --force-depends "$deb_file" 2>&1 || true
+    done
+
+    dpkg --configure -a 2>&1 || true
+    systemctl enable docker 2>/dev/null || true
+    systemctl start  docker 2>/dev/null || true
+
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "ERR: Docker installation failed." >&2
+        return 1
+    fi
+
+    echo "OK: $(docker --version)"
+    echo "OK: $(docker compose version 2>/dev/null || echo 'compose plugin not detected')"
+}
+
+setup_full_offline() {
+    if [ "${EUID}" -ne 0 ]; then
+        echo "ERR: this option requires root: sudo eve" >&2
+        return 1
+    fi
+
+    print_header "Setup Full Offline"
+    echo "This installs Docker (if missing) and starts Eve from the local bundle."
+    echo "No internet connection is required."
+    echo
+
+    if command -v docker >/dev/null 2>&1; then
+        echo "Docker is already installed: $(docker --version)"
+    else
+        read -r -p "Docker is not installed. Install from bundled packages now? [Y/n]: " do_install
+        do_install="${do_install:-Y}"
+        if [ "$do_install" = "n" ] || [ "$do_install" = "N" ]; then
+            echo "Skipped. Install Docker manually, then rerun."
+            return 0
+        fi
+        install_docker_from_bundle || return 1
+    fi
+
+    if ! docker compose version >/dev/null 2>&1; then
+        echo "ERR: Docker Compose plugin is not available." >&2
+        return 1
+    fi
+
+    local images_tar="$INSTALL_DIR/docker-images.tar"
+    if [ ! -f "$images_tar" ]; then
+        echo "ERR: docker-images.tar not found in $INSTALL_DIR." >&2
+        return 1
+    fi
+
+    echo "-- Loading Docker images (offline)"
+    docker load -i "$images_tar"
+
+    if [ ! -f "$ENV_FILE" ]; then
+        set_domain_and_ssl
+    else
+        echo "-- Existing .env found"
+        read -r -p "Reconfigure domain/SSL? [y/N]: " reconf
+        if [ "${reconf:-N}" = "y" ] || [ "${reconf:-N}" = "Y" ]; then
+            set_domain_and_ssl
+        fi
+    fi
+
+    compose up -d
+
+    echo
+    echo "OK: Eve is running."
+    echo "Use 'sudo eve' anytime to manage the stack."
+}
+
+main_menu() {
+    if [ ! -f "$COMPOSE_FILE" ] && ! ls "$INSTALL_DIR"/docker-images.tar >/dev/null 2>&1; then
+        echo "ERR: Installation files not found at: $INSTALL_DIR" >&2
+        echo "Extract the bundle first, then run: sudo bash install.sh" >&2
         exit 1
     fi
 
@@ -200,16 +282,18 @@ main_menu() {
         echo "[3] Set domain + SSL mode"
         echo "[4] Quickstart: IP without SSL (HTTP)"
         echo "[5] Restart stack"
+        echo "[6] Setup Full Offline (install Docker + start Eve, no internet)"
         echo "[q] Quit"
         echo
         read -r -p "Select: " choice
 
         case "$choice" in
-            1) status; pause ;;
-            2) logs; pause ;;
+            1) need_cmd docker; status; pause ;;
+            2) need_cmd docker; logs; pause ;;
             3) set_domain_and_ssl; pause ;;
             4) http_ip_quickstart; pause ;;
-            5) restart_stack; pause ;;
+            5) need_cmd docker; restart_stack; pause ;;
+            6) setup_full_offline; pause ;;
             q|Q) exit 0 ;;
             *) echo "Invalid choice" ;;
         esac

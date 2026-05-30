@@ -1,0 +1,68 @@
+name: Build Offline Bundle
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Ubuntu targets (e.g. jammy  or  focal jammy noble)"
+        default: "jammy"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build offline bundle
+        env:
+          EVE_OFFLINE_TARGETS: ${{ github.event.inputs.targets || 'jammy' }}
+        run: bash prepare-offline-bundle.sh .
+
+      - name: Bundle info
+        id: info
+        run: |
+          SIZE=$(du -sh dist/eve-xui-manager-offline.tar.gz | awk '{print $1}')
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "Bundle size: $SIZE"
+
+      - name: Upload artifact (all runs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: eve-xui-manager-offline-jammy
+          path: dist/eve-xui-manager-offline.tar.gz
+          retention-days: 90
+
+      - name: Attach to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/eve-xui-manager-offline.tar.gz
+          body: |
+            ## Offline Bundle — Ubuntu 22.04 (Jammy) amd64
+
+            Contains **everything** needed to install Eve on a server with no internet:
+            - All system packages (.deb files, Ubuntu 22.04 Jammy)
+            - Python 3.11 portable runtime
+            - All Python packages (pre-built wheels, CPython 3.11 / x86_64)
+            - Full application source code
+
+            ### Install (no internet needed on target server)
+
+            ```bash
+            # Upload to server via SCP first, then:
+            tar -xzf eve-xui-manager-offline.tar.gz
+            cd eve-xui-manager
+            sudo bash setup.sh
+            # → Choose:  [o] Setup Full Offline
+            ```
+
+            Bundle size: ${{ steps.info.outputs.size }}
