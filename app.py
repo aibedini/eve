@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.1.3"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -15798,49 +15798,87 @@ def ssl_export():
 
 
 # ── SSL Upload — receive zip, extract cert+key ──────────────────────────────
-SSL_UPLOAD_DIR = '/etc/ssl/eve-manager'
+SSL_DEST_DIR = '/etc/ssl/eve-manager'
 
 @app.route('/api/settings/ssl/upload', methods=['POST'])
 @login_required
 def ssl_upload():
-    """Accept a zip (with fullchain.pem + privkey.pem) or two individual files."""
-    import zipfile
+    """Accept a zip (with fullchain.pem + privkey.pem) or two individual files.
 
-    os.makedirs(SSL_UPLOAD_DIR, mode=0o700, exist_ok=True)
+    Strategy:
+    1. Write uploaded files to a temp dir that evemgr CAN write to (/tmp)
+    2. Use sudo cp/mkdir/chown/chmod to install them under /etc/ssl/eve-manager/
+       (sudoers entry created by setup.sh)
+    """
+    import zipfile, tempfile
 
-    cert_dest = os.path.join(SSL_UPLOAD_DIR, 'fullchain.pem')
-    key_dest  = os.path.join(SSL_UPLOAD_DIR, 'privkey.pem')
+    tmp_dir = tempfile.mkdtemp(prefix='eve-ssl-upload-')
+    tmp_cert = os.path.join(tmp_dir, 'fullchain.pem')
+    tmp_key  = os.path.join(tmp_dir, 'privkey.pem')
 
-    if 'ssl_zip' in request.files:
-        zf_file = request.files['ssl_zip']
-        if not zf_file.filename.lower().endswith('.zip'):
-            return jsonify({'success': False, 'error': 'Expected a .zip file'}), 400
-        raw = zf_file.read()
-        try:
-            with zipfile.ZipFile(_io_BytesIO(raw)) as zf:
-                names = zf.namelist()
-                cert_member = next((n for n in names if n.endswith('fullchain.pem') or n.endswith('.crt') or n.endswith('.cer')), None)
-                key_member  = next((n for n in names if n.endswith('privkey.pem') or n.endswith('.key')), None)
-                if not cert_member or not key_member:
-                    return jsonify({'success': False,
-                                    'error': 'Zip must contain fullchain.pem (or .crt) and privkey.pem (or .key)'}), 400
-                with open(cert_dest, 'wb') as f:
-                    f.write(zf.read(cert_member))
-                with open(key_dest, 'wb') as f:
-                    f.write(zf.read(key_member))
-        except zipfile.BadZipFile:
-            return jsonify({'success': False, 'error': 'Invalid zip file'}), 400
+    try:
+        if 'ssl_zip' in request.files:
+            zf_file = request.files['ssl_zip']
+            if not zf_file.filename.lower().endswith('.zip'):
+                return jsonify({'success': False, 'error': 'Expected a .zip file'}), 400
+            raw = zf_file.read()
+            try:
+                with zipfile.ZipFile(_io_BytesIO(raw)) as zf:
+                    names = zf.namelist()
+                    cert_member = next(
+                        (n for n in names if n.endswith('fullchain.pem')
+                         or n.endswith('.crt') or n.endswith('.cer')), None)
+                    key_member = next(
+                        (n for n in names if n.endswith('privkey.pem')
+                         or n.endswith('.key')), None)
+                    if not cert_member or not key_member:
+                        return jsonify({'success': False,
+                                        'error': 'Zip must contain fullchain.pem (or .crt) and privkey.pem (or .key)'}), 400
+                    with open(tmp_cert, 'wb') as f:
+                        f.write(zf.read(cert_member))
+                    with open(tmp_key, 'wb') as f:
+                        f.write(zf.read(key_member))
+            except zipfile.BadZipFile:
+                return jsonify({'success': False, 'error': 'Invalid zip file'}), 400
 
-    elif 'cert_file' in request.files and 'key_file' in request.files:
-        request.files['cert_file'].save(cert_dest)
-        request.files['key_file'].save(key_dest)
-    else:
-        return jsonify({'success': False, 'error': 'Send ssl_zip OR cert_file+key_file'}), 400
+        elif 'cert_file' in request.files and 'key_file' in request.files:
+            request.files['cert_file'].save(tmp_cert)
+            request.files['key_file'].save(tmp_key)
+        else:
+            return jsonify({'success': False, 'error': 'Send ssl_zip OR cert_file+key_file'}), 400
 
-    os.chmod(cert_dest, 0o644)
-    os.chmod(key_dest,  0o600)
+        # Sanity check: must be PEM text
+        with open(tmp_cert, 'r', errors='ignore') as _f:
+            _head = _f.read(64)
+        if '-----BEGIN' not in _head:
+            return jsonify({'success': False,
+                            'error': 'Certificate does not look like PEM — check the file'}), 400
 
-    # Persist paths
+        cert_dest = f'{SSL_DEST_DIR}/fullchain.pem'
+        key_dest  = f'{SSL_DEST_DIR}/privkey.pem'
+        app_user  = os.environ.get('APP_USER', 'evemgr')
+
+        # Use sudo to move files into the protected /etc/ssl/eve-manager/ dir
+        cmds = [
+            ['sudo', 'mkdir', '-p', SSL_DEST_DIR],
+            ['sudo', 'cp', '-f', tmp_cert, cert_dest],
+            ['sudo', 'cp', '-f', tmp_key,  key_dest],
+            ['sudo', 'chown', f'{app_user}:{app_user}', cert_dest, key_dest],
+            ['sudo', 'chmod', '644', cert_dest],
+            ['sudo', 'chmod', '600', key_dest],
+        ]
+        for cmd in cmds:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if r.returncode != 0:
+                return jsonify({'success': False,
+                                'error': f'Install failed ({" ".join(cmd[:3])}): {r.stderr.strip()}'}), 500
+
+    finally:
+        # Always clean up temp files
+        import shutil as _sh
+        _sh.rmtree(tmp_dir, ignore_errors=True)
+
+    # Persist paths in DB
     for k, v in [('ssl_cert_path', cert_dest), ('ssl_key_path', key_dest)]:
         row = db.session.get(SystemSetting, k) or SystemSetting(key=k, value=v)
         row.value = v
@@ -15849,9 +15887,9 @@ def ssl_upload():
 
     return jsonify({
         'success': True,
-        'message': 'SSL files uploaded successfully.',
+        'message': f'SSL files installed to {SSL_DEST_DIR}/',
         'cert_path': cert_dest,
-        'key_path': key_dest,
+        'key_path':  key_dest,
     })
 
 
