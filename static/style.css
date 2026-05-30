@@ -5451,3 +5451,13 @@ html[data-theme="light"] .server-icon {
  } 
  
  
+
+/* Prevent mobile browsers from auto-zooming when inputs are focused.
+   Android Chrome zooms in when font-size < 16px, blurring the whole page. */
+@media (max-width: 768px) {
+    input, select, textarea,
+    .form-input, .form-select, .form-control,
+    .search-input, #global-search-input {
+        font-size: 16px !important;
+    }
+}
