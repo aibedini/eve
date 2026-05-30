@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.4"
+APP_VERSION = "2.1.5"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -2742,15 +2742,27 @@ class NotificationTemplate(db.Model):
     type = db.Column(db.String(50), default='client_created')
     is_active = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # NULL = global; reseller admin.id = reseller-specific (takes priority over global)
+    owner_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True, index=True)
 
     def to_dict(self):
+        owner_username = None
+        if self.owner_id:
+            try:
+                _owner = db.session.get(Admin, self.owner_id)
+                owner_username = _owner.username if _owner else None
+            except Exception:
+                pass
         return {
             'id': self.id,
             'name': self.name,
             'content': self.content,
             'type': self.type,
             'is_active': self.is_active,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'owner_id': self.owner_id,
+            'owner_username': owner_username,
+            'scope': 'reseller' if self.owner_id else 'global',
         }
 
 
@@ -4130,6 +4142,19 @@ with app.app_context():
                 print(f"Migration error ({col_name}): {_col_err}")
     except Exception as e:
         print(f"Migration error: {e}")
+
+    # Ensure owner_id exists on notification_templates (per-reseller templates)
+    try:
+        inspector = inspect(db.engine)
+        nt_cols = [c['name'] for c in inspector.get_columns('notification_templates')]
+        if 'owner_id' not in nt_cols:
+            print("owner_id column missing on notification_templates, adding...")
+            with db.engine.connect() as conn:
+                conn.execute(text('ALTER TABLE notification_templates ADD COLUMN owner_id INTEGER REFERENCES admins(id)'))
+                conn.commit()
+            print("Added owner_id to notification_templates")
+    except Exception as e:
+        print(f"Migration error (notification_templates.owner_id): {e}")
 
     # Ensure sender_name exists on transactions table (older DBs)
     try:
@@ -14603,7 +14628,8 @@ def _account_info_channel_from_type(template_type):
 
 def _ensure_default_account_info_template(channel='whatsapp'):
     template_type = _account_info_template_type(channel)
-    existing = NotificationTemplate.query.filter_by(type=template_type).first()
+    # Only ensure a global (owner_id=None) default exists
+    existing = NotificationTemplate.query.filter_by(type=template_type, owner_id=None).first()
     if existing:
         return
     template = NotificationTemplate(
@@ -14611,30 +14637,72 @@ def _ensure_default_account_info_template(channel='whatsapp'):
         content=_account_info_default_template(channel),
         type=template_type,
         is_active=True,
+        owner_id=None,
     )
     db.session.add(template)
     db.session.commit()
+
+
+def _resolve_account_info_template(admin: 'Admin', channel: str = 'whatsapp') -> 'NotificationTemplate | None':
+    """Return the best-match active template for an admin.
+
+    Priority:
+    1. Reseller-specific active template (owner_id = admin.id)
+    2. Global active template (owner_id = NULL)
+    """
+    template_type = _account_info_template_type(channel)
+    if admin and admin.role == 'reseller':
+        specific = NotificationTemplate.query.filter_by(
+            type=template_type, owner_id=admin.id, is_active=True
+        ).first()
+        if specific:
+            return specific
+    return NotificationTemplate.query.filter_by(
+        type=template_type, owner_id=None, is_active=True
+    ).first()
 
 @app.route('/api/account-message-templates', methods=['GET'])
 @user_management_required
 def get_account_message_templates():
     _ensure_default_account_info_template('whatsapp')
     _ensure_default_account_info_template('sms')
-    templates = (NotificationTemplate.query
-                 .filter(NotificationTemplate.type.in_([ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE, ACCOUNT_INFO_SMS_TEMPLATE_TYPE]))
-                 .order_by(NotificationTemplate.created_at.desc())
-                 .all())
+
+    current_admin = db.session.get(Admin, session.get('admin_id'))
+
+    # Resellers only see their own specific templates + global ones
+    # Admins/superadmins see everything
+    q = NotificationTemplate.query.filter(
+        NotificationTemplate.type.in_([ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE, ACCOUNT_INFO_SMS_TEMPLATE_TYPE])
+    )
+    if current_admin and current_admin.role == 'reseller':
+        q = q.filter(
+            (NotificationTemplate.owner_id == current_admin.id) |
+            (NotificationTemplate.owner_id == None)  # noqa: E711
+        )
+    templates = q.order_by(NotificationTemplate.owner_id.desc().nullslast(),
+                           NotificationTemplate.created_at.desc()).all()
+
     template_dicts = []
     for template in templates:
         data = template.to_dict()
         data['channel'] = _account_info_channel_from_type(template.type)
         template_dicts.append(data)
+
+    # Build reseller list for admin UI (assign template to reseller)
+    resellers = []
+    if current_admin and current_admin.role in ('admin', 'superadmin'):
+        resellers = [
+            {'id': r.id, 'username': r.username}
+            for r in Admin.query.filter_by(role='reseller').order_by(Admin.username).all()
+        ]
+
     return jsonify({
         'success': True,
         'templates': template_dicts,
         'available_vars': _account_info_template_vars(),
         'default_content': DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE,
         'default_sms_content': DEFAULT_ACCOUNT_INFO_SMS_TEMPLATE,
+        'resellers': resellers,
     })
 
 @app.route('/api/account-message-templates/active', methods=['GET'])
@@ -14642,18 +14710,17 @@ def get_account_message_templates():
 def get_active_account_message_template():
     channel = (request.args.get('channel') or 'whatsapp').strip().lower()
     _ensure_default_account_info_template(channel)
-    template_type = _account_info_template_type(channel)
     default_content = _account_info_default_template(channel)
-    template = NotificationTemplate.query.filter_by(
-        type=template_type,
-        is_active=True
-    ).first()
+
+    current_admin = db.session.get(Admin, session.get('admin_id'))
+
+    # Priority: reseller-specific → global
+    template = _resolve_account_info_template(current_admin, channel)
+
     template_data = template.to_dict() if template else None
     if template_data:
         template_data['channel'] = _account_info_channel_from_type(template.type)
 
-    # Resolve channel links based on the logged-in user's role
-    current_admin = db.session.get(Admin, session.get('admin_id'))
     channel_links = _account_info_channel_links(current_admin) if current_admin else {
         'telegram_channel': '', 'whatsapp_channel': ''
     }
@@ -14663,6 +14730,7 @@ def get_active_account_message_template():
         'template': template_data,
         'content': template.content if template else default_content,
         'available_vars': _account_info_template_vars(),
+        'scope': template_data.get('scope') if template_data else 'global',
         **channel_links,
     })
 
@@ -14676,16 +14744,32 @@ def create_account_message_template():
     if not name or not content:
         return jsonify({'success': False, 'error': 'Name and content are required'}), 400
 
+    # owner_id: None = global, reseller admin.id = reseller-specific
+    owner_id = None
+    raw_owner = data.get('owner_id')
+    if raw_owner:
+        try:
+            owner_id = int(raw_owner)
+            # Validate: must be an existing reseller
+            owner = db.session.get(Admin, owner_id)
+            if not owner or owner.role != 'reseller':
+                return jsonify({'success': False, 'error': 'owner_id must refer to a reseller account'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'error': 'Invalid owner_id'}), 400
+
     template = NotificationTemplate(
         name=name,
         content=content,
         type=template_type,
         is_active=False,
+        owner_id=owner_id,
     )
     db.session.add(template)
     db.session.commit()
 
-    if NotificationTemplate.query.filter_by(type=template_type).count() == 1:
+    # Auto-activate if it's the only one of its scope
+    scope_count = NotificationTemplate.query.filter_by(type=template_type, owner_id=owner_id).count()
+    if scope_count == 1:
         template.is_active = True
         db.session.commit()
 
@@ -14731,7 +14815,10 @@ def activate_account_message_template(template_id):
     template = db.session.get(NotificationTemplate, template_id)
     if not template or template.type not in (ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE, ACCOUNT_INFO_SMS_TEMPLATE_TYPE):
         return jsonify({'success': False, 'error': 'Template not found'}), 404
-    NotificationTemplate.query.filter_by(type=template.type).update({NotificationTemplate.is_active: False})
+    # Only deactivate templates in the same scope (same owner_id)
+    NotificationTemplate.query.filter_by(
+        type=template.type, owner_id=template.owner_id
+    ).update({NotificationTemplate.is_active: False})
     template.is_active = True
     db.session.commit()
     return jsonify({'success': True})

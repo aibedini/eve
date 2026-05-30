@@ -3919,6 +3919,7 @@
             accountMessageAvailableVars = data.available_vars || [];
             accountMessageDefaultContent = data.default_content || '';
             accountMessageDefaultSmsContent = data.default_sms_content || '';
+            accountMessageResellers = data.resellers || [];
 
             // Load channel links for preview (from active template endpoint which resolves per-user)
             try {
@@ -3945,6 +3946,8 @@
         }
     }
 
+    let accountMessageResellers = [];   // [{id, username}] — set by loadAccountMessageTemplates
+
     function renderAccountMessageTemplates(templates) {
         const container = document.getElementById('account-message-templates-container');
         if (!container) return;
@@ -3954,12 +3957,17 @@
             return;
         }
 
-        container.innerHTML = templates.map(t => `
+        container.innerHTML = templates.map(t => {
+            const scopeBadge = t.scope === 'reseller'
+                ? `<span class="channel-badge" style="background:rgba(168,85,247,0.18);color:#a855f7;">👤 ${escapeHtml(t.owner_username || 'Reseller')}</span>`
+                : `<span class="channel-badge" style="background:rgba(59,130,246,0.18);color:#3b82f6;">🌐 Global</span>`;
+            return `
             <div class="template-card ${t.is_active ? 'active' : ''}">
                 <div class="template-header">
                     <div class="template-title">
                         ${escapeHtml(t.name)}
                         <span class="channel-badge">${(t.channel || 'whatsapp').toUpperCase()}</span>
+                        ${scopeBadge}
                         ${t.is_active ? '<span class="active-badge">Active</span>' : '<span class="active-badge" style="background:rgba(148,163,184,0.16);color:var(--text-secondary);">Disabled</span>'}
                     </div>
                     <div class="action-buttons">
@@ -3979,9 +3987,24 @@
                     </div>
                 </div>
                 <div class="template-preview">${escapeHtml(t.content).replace(/\n/g, '<br>')}</div>
-                <div class="renew-template-preview" style="margin-top: 12px; min-height: 96px;">${escapeHtml(renderAccountMessagePreviewText(t.content)).replace(/\n/g, '<br>')}</div>
-            </div>
-        `).join('');
+                <div class="renew-template-preview" style="margin-top:12px;min-height:96px;">${escapeHtml(renderAccountMessagePreviewText(t.content)).replace(/\n/g, '<br>')}</div>
+            </div>`;
+        }).join('');
+    }
+
+    function _buildResellerSelect(selectedId) {
+        if (!accountMessageResellers.length) return '';
+        const opts = accountMessageResellers.map(r =>
+            `<option value="${r.id}" ${r.id == selectedId ? 'selected' : ''}>${escapeHtml(r.username)}</option>`
+        ).join('');
+        return `
+        <div class="form-group" id="account-msg-reseller-group" style="margin-top:14px;">
+            <label>Assign to Reseller <small style="color:#64748b;">(leave Global for everyone)</small></label>
+            <select id="account-message-template-owner" class="form-select">
+                <option value="">🌐 Global — all users</option>
+                ${opts}
+            </select>
+        </div>`;
     }
 
     function openAccountMessageTemplateModal() {
@@ -3989,6 +4012,16 @@
         document.getElementById('edit-account-message-template-id').value = '';
         document.getElementById('account-message-template-name').value = '';
         document.getElementById('account-message-template-channel').value = 'whatsapp';
+
+        // Inject reseller dropdown
+        const modalBody = document.getElementById('account-message-template-modal')?.querySelector('.modal-body');
+        const existing = document.getElementById('account-msg-reseller-group');
+        if (existing) existing.remove();
+        if (modalBody && accountMessageResellers.length) {
+            const nameGroup = document.getElementById('account-message-template-name')?.closest('.form-group');
+            if (nameGroup) nameGroup.insertAdjacentHTML('afterend', _buildResellerSelect(''));
+        }
+
         const textarea = document.getElementById('account-message-template-content');
         textarea.value = [
             'اطلاعات اکانت شما',
@@ -3996,6 +4029,7 @@
             'مدت زمان باقی مانده: {remaining_time}',
             'حجم باقی مانده: {remaining_volume}',
             'لینک dash sub: {dashboard_link}',
+            '{telegram_channel}',
             '',
             'لطفا از طریق لینک بالا به سرویس خود متصل شین .'
         ].join('\n');
@@ -4010,6 +4044,15 @@
         document.getElementById('edit-account-message-template-id').value = t.id;
         document.getElementById('account-message-template-name').value = t.name;
         document.getElementById('account-message-template-channel').value = t.channel || 'whatsapp';
+
+        // Inject reseller dropdown
+        const existing = document.getElementById('account-msg-reseller-group');
+        if (existing) existing.remove();
+        const nameGroup = document.getElementById('account-message-template-name')?.closest('.form-group');
+        if (nameGroup && accountMessageResellers.length) {
+            nameGroup.insertAdjacentHTML('afterend', _buildResellerSelect(t.owner_id || ''));
+        }
+
         document.getElementById('account-message-template-content').value = t.content;
         updateAccountMessageModalPreview(t.content);
         document.getElementById('account-message-template-modal').classList.remove('hidden');
@@ -4045,7 +4088,10 @@
             const res = await fetch(id ? `/api/account-message-templates/${id}` : '/api/account-message-templates', {
                 method: id ? 'PUT' : 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name, content, channel })
+                body: JSON.stringify({
+                    name, content, channel,
+                    owner_id: document.getElementById('account-message-template-owner')?.value || null
+                })
             });
             const data = await res.json();
             if (data.success) {
