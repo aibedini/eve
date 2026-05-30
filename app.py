@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.9"
+APP_VERSION = "2.1.10"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -6150,9 +6150,14 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
             network = streamSettings.get('network', 'tcp')
             security = streamSettings.get('security', 'none')
             
+            # Remaining = sum of active+usable clients only:
+            # enabled, not expired, not disabled — active / expiring_soon / volume_low
+            _ACTIVE_STATES = {'active', 'expiring_soon', 'volume_low'}
             _inbound_remaining_raw = sum(
                 c['remaining_bytes'] for c in processed_clients
-                if c.get('enable', True) and c.get('remaining_bytes', -1) >= 0
+                if c.get('enable', True)
+                and c.get('service_state', 'active') in _ACTIVE_STATES
+                and c.get('remaining_bytes', -1) >= 0
             )
             _active_count = sum(1 for _c in processed_clients if _c.get('enable', True))
             processed.append({
