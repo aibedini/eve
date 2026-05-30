@@ -3026,7 +3026,7 @@
         }
     }
 
-    async function restoreBackup(filename) {
+    function restoreBackup(filename) {
         if (!confirm(
             'Restore backup: ' + filename + '\n\n' +
             'This will OVERWRITE all current data and log you out.\n' +
@@ -3034,25 +3034,87 @@
             'Continue?'
         )) return;
 
-        // Show persistent toast while restore is running (can take 10–60s for large DBs)
-        showToast('Restoring database, please wait…', 'info', 60000);
+        // Build live-log modal
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center';
 
-        try {
-            const res = await fetch(`/api/backups/${filename}/restore`, {
-                method: 'POST',
-                headers: { 'Accept': 'application/json' }
-            });
-            const data = await res.json();
+        const box = document.createElement('div');
+        box.style.cssText = 'background:#1a1a2e;border:1px solid #333;border-radius:12px;width:min(720px,92vw);max-height:80vh;display:flex;flex-direction:column;padding:0;overflow:hidden';
 
-            if (data.success) {
-                showToast(data.message || 'Restored successfully. Redirecting…', 'success', 4000);
-                setTimeout(() => window.location.href = data.redirect || '/login', 2000);
-            } else {
-                showToast(data.error || 'Restore failed', 'error', 10000);
-            }
-        } catch (e) {
-            showToast('Network error: ' + (e.message || 'request failed'), 'error', 8000);
+        const header = document.createElement('div');
+        header.style.cssText = 'padding:16px 20px;border-bottom:1px solid #333;display:flex;align-items:center;gap:10px';
+        header.innerHTML = '<span style="font-size:18px">🔄</span><strong style="color:#fff;flex:1">Restore in progress…</strong>';
+
+        const logArea = document.createElement('div');
+        logArea.style.cssText = 'flex:1;overflow-y:auto;padding:14px 18px;font-family:monospace;font-size:12px;line-height:1.7;color:#ccc;background:#0d0d1a;min-height:260px;max-height:420px';
+
+        const footer = document.createElement('div');
+        footer.style.cssText = 'padding:12px 18px;border-top:1px solid #333;display:flex;align-items:center;gap:10px';
+        const spinner = document.createElement('span');
+        spinner.textContent = '⏳';
+        const statusTxt = document.createElement('span');
+        statusTxt.style.color = '#aaa';
+        statusTxt.textContent = 'Connecting…';
+        footer.appendChild(spinner);
+        footer.appendChild(statusTxt);
+
+        box.appendChild(header);
+        box.appendChild(logArea);
+        box.appendChild(footer);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        function appendLog(msg, color) {
+            const line = document.createElement('div');
+            line.style.color = color || '#ccc';
+            line.textContent = msg;
+            logArea.appendChild(line);
+            logArea.scrollTop = logArea.scrollHeight;
         }
+
+        appendLog('▶ ' + filename, '#7eb8f7');
+
+        const es = new EventSource(`/api/backups/${encodeURIComponent(filename)}/restore/stream`);
+
+        es.onmessage = function(e) {
+            let data;
+            try { data = JSON.parse(e.data); } catch { return; }
+
+            if (data.type === 'log') {
+                appendLog(data.message);
+            } else if (data.type === 'error') {
+                es.close();
+                appendLog('✗ ' + data.message, '#ff6b6b');
+                spinner.textContent = '❌';
+                statusTxt.textContent = 'Restore failed';
+                statusTxt.style.color = '#ff6b6b';
+                const closeBtn = document.createElement('button');
+                closeBtn.textContent = 'Close';
+                closeBtn.style.cssText = 'margin-left:auto;padding:6px 18px;background:#c0392b;color:#fff;border:none;border-radius:6px;cursor:pointer';
+                closeBtn.onclick = () => overlay.remove();
+                footer.appendChild(closeBtn);
+            } else if (data.type === 'done') {
+                es.close();
+                appendLog('✓ ' + data.message, '#51cf66');
+                spinner.textContent = '✅';
+                statusTxt.textContent = 'Redirecting to login…';
+                statusTxt.style.color = '#51cf66';
+                setTimeout(() => { window.location.href = data.redirect || '/logout'; }, 2000);
+            }
+        };
+
+        es.onerror = function() {
+            es.close();
+            appendLog('Connection lost or server error.', '#ff6b6b');
+            spinner.textContent = '❌';
+            statusTxt.textContent = 'Connection error';
+            statusTxt.style.color = '#ff6b6b';
+            const closeBtn = document.createElement('button');
+            closeBtn.textContent = 'Close';
+            closeBtn.style.cssText = 'margin-left:auto;padding:6px 18px;background:#c0392b;color:#fff;border:none;border-radius:6px;cursor:pointer';
+            closeBtn.onclick = () => overlay.remove();
+            footer.appendChild(closeBtn);
+        };
     }
 
     async function deleteBackup(filename) {

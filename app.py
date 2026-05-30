@@ -75,7 +75,7 @@ try:
 except Exception:
     ZoneInfo = None
     available_timezones = None
-from flask import Flask, render_template, jsonify, request, send_file, redirect, url_for, session, g, make_response
+from flask import Flask, render_template, jsonify, request, send_file, redirect, url_for, session, g, make_response, Response, stream_with_context
 from flask_sqlalchemy import SQLAlchemy
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -15700,6 +15700,116 @@ def restore_backup(filename):
     except Exception as e:
         app.logger.error(f"Restore failed for {filename}: {e}")
         return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/backups/<filename>/restore/stream')
+@login_required
+def restore_backup_stream(filename):
+    """SSE endpoint — streams live restore progress to the browser."""
+    filename = secure_filename(filename)
+    backup_path = os.path.join(BACKUP_DIR, filename)
+
+    def _sse(type_, message, **extra):
+        data = {'type': type_, 'message': message, **extra}
+        return f"data: {json.dumps(data)}\n\n"
+
+    def generate():
+        if not os.path.exists(backup_path):
+            yield _sse('error', 'Backup file not found')
+            return
+
+        ext = os.path.splitext(filename)[1].lower()
+        size_mb = round(os.path.getsize(backup_path) / 1024 / 1024, 2)
+        yield _sse('log', f'Starting restore of {filename} ({size_mb} MB)…')
+
+        try:
+            # ── SQLite ────────────────────────────────────────────────────
+            if _is_sqlite_db():
+                if ext != '.db':
+                    yield _sse('error', 'SQLite databases require a .db backup file')
+                    return
+                db_path = os.path.join(app.instance_path, 'servers.db')
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                safety = os.path.join(BACKUP_DIR, f'pre_restore_{timestamp}.db')
+                if os.path.exists(db_path):
+                    shutil.copy2(db_path, safety)
+                    yield _sse('log', f'Safety backup saved: {os.path.basename(safety)}')
+                yield _sse('log', 'Copying backup file over current database…')
+                shutil.copy2(backup_path, db_path)
+                yield _sse('done', 'Restore complete — logging you out.', redirect=url_for('logout'))
+
+            # ── PostgreSQL ────────────────────────────────────────────────
+            elif _is_postgres_db():
+                if ext not in ('.dump', '.sql'):
+                    yield _sse('error', f'Unsupported format {ext!r} — need .dump or .sql')
+                    return
+
+                # Safety backup
+                try:
+                    safety_name = _create_database_backup_file('pre_restore')
+                    yield _sse('log', f'Safety backup saved: {os.path.basename(safety_name)}')
+                except Exception as be:
+                    yield _sse('log', f'Warning: could not create safety backup — {be}')
+
+                uri = _db_uri()
+                parsed = urlparse(uri)
+                env = os.environ.copy()
+                if parsed.password:
+                    env['PGPASSWORD'] = parsed.password
+
+                if ext == '.dump':
+                    bin_ = shutil.which('pg_restore')
+                    if not bin_:
+                        yield _sse('error', 'pg_restore not found — run: apt install postgresql-client')
+                        return
+                    cmd = [bin_, '--clean', '--if-exists', '--no-owner', '--no-acl',
+                           '--dbname', uri, '--verbose', backup_path]
+                    tool = 'pg_restore'
+                else:
+                    bin_ = shutil.which('psql')
+                    if not bin_:
+                        yield _sse('error', 'psql not found — run: apt install postgresql-client')
+                        return
+                    cmd = [bin_, '--dbname', uri, '--file', backup_path, '--echo-errors']
+                    tool = 'psql'
+
+                yield _sse('log', f'Running {tool}…')
+                db.engine.dispose()
+
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                )
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    if line:
+                        yield _sse('log', line)
+                proc.wait(timeout=600)
+
+                if proc.returncode != 0:
+                    yield _sse('error', f'{tool} exited with code {proc.returncode}')
+                else:
+                    yield _sse('done', 'Restore complete — logging you out.',
+                               redirect=url_for('logout'))
+            else:
+                yield _sse('error', 'Unsupported database backend')
+
+        except Exception as exc:
+            app.logger.error(f"restore_backup_stream error: {exc}")
+            yield _sse('error', str(exc))
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
 
 @app.route('/api/backups/<filename>', methods=['DELETE'])
 @login_required
