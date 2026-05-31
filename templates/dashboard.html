@@ -917,6 +917,36 @@
     </div>
 </div>
 
+<div class="modal-overlay hidden" id="volume-stats-modal">
+    <div class="modal modal-md">
+        <div class="modal-header">
+            <h2 id="volume-stats-title">Remaining Volume Distribution</h2>
+            <button class="modal-close" onclick="closeVolumeStatsModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="text-secondary" id="volume-stats-sub" style="margin:0 0 12px 0; font-size:0.85rem;"></p>
+            <div class="clients-table-wrapper" style="max-height:50vh; overflow:auto;">
+                <table class="clients-table" id="volume-stats-table" style="width:100%;">
+                    <thead>
+                        <tr>
+                            <th>Remaining (GB)</th>
+                            <th style="text-align:center;">Active users</th>
+                            <th style="width:45%;">Share</th>
+                        </tr>
+                    </thead>
+                    <tbody id="volume-stats-body"></tbody>
+                </table>
+            </div>
+            <textarea id="volume-stats-copytext" class="form-input" rows="10" readonly
+                style="margin-top:12px; font-family:monospace; direction:ltr; white-space:pre; line-height:1.6;"></textarea>
+            <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="copyVolumeStats()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Copy for AI
+            </button>
+        </div>
+    </div>
+</div>
+
 <div class="modal-overlay hidden" id="new-client-modal">
     <div class="modal modal-md">
         <div class="modal-header">
@@ -2646,9 +2676,14 @@
                         <span class="server-badge">${inbound.server_name}</span>
                     </div>
                     <div class="inbound-status">
-                        ${inbound.enable 
-                            ? `<span class="status-pill active">Active</span>` 
+                        ${inbound.enable
+                            ? `<span class="status-pill active">Active</span>`
                             : `<span class="status-pill inactive">Inactive</span>`}
+                        ${inbound.clients.length > 0
+                            ? `<button class="btn btn-secondary" style="padding: 6px 10px;" title="Remaining-volume distribution" onclick="event.stopPropagation(); openVolumeStatsModal('${inboundKey}')">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                              </button>`
+                            : ''}
                         ${inbound.clients.length > 0
                             ? `<button class="btn btn-secondary" style="padding: 6px 10px;" onclick="event.stopPropagation(); toggleSelectAllClients('${inboundKey}', true)">Select All</button>`
                             : ''}
@@ -2990,6 +3025,124 @@
         }
     }
     
+    // ── Remaining-volume distribution modal (per inbound) ─────────────────
+    function _findInboundByKey(inboundKey) {
+        const [sid, iid] = String(inboundKey).split(':');
+        const list = (Array.isArray(allInboundsData) && allInboundsData.length) ? allInboundsData : (inboundsData || []);
+        return list.find(i => String(i.server_id) === String(sid) && String(i.id) === String(iid));
+    }
+
+    function openVolumeStatsModal(inboundKey) {
+        const inbound = _findInboundByKey(inboundKey);
+        if (!inbound) { showToast('Inbound data not loaded', 'error'); return; }
+
+        const clients = Array.isArray(inbound.clients) ? inbound.clients : [];
+        const GB = 1024 ** 3;
+
+        // Buckets: 0-5, then 10-wide steps (5.1-10, 10.1-20, 20.1-30, ...).
+        // Only ACTIVE clients with a LIMITED, positive remaining volume are counted.
+        const ACTIVE_STATES = new Set(['active', 'expiring_soon', 'volume_low']);
+        let unlimited = 0, depleted = 0, counted = 0;
+        const buckets = [];  // {label, loGB, hiGB, count}
+        const ensureBucket = (loGB, hiGB, label) => {
+            buckets.push({ label, loGB, hiGB, count: 0 });
+            return buckets[buckets.length - 1];
+        };
+
+        // Determine the max remaining among eligible clients to size the buckets
+        let maxGB = 0;
+        const eligible = [];
+        for (const c of clients) {
+            if (!c.enable) continue;
+            const state = c.service_state || 'active';
+            if (!ACTIVE_STATES.has(state)) continue;
+            const rem = Number(c.remaining_bytes);
+            if (!Number.isFinite(rem) || rem < 0) { unlimited++; continue; }  // -1 = unlimited
+            const remGB = rem / GB;
+            if (remGB <= 0.0001) { depleted++; continue; }
+            eligible.push(remGB);
+            if (remGB > maxGB) maxGB = remGB;
+        }
+
+        // Build bucket ranges: 0–5, 5–10, 10–20, 20–30, … up to maxGB
+        ensureBucket(0, 5, '0 – 5');
+        let lo = 5;
+        while (lo < maxGB) {
+            const hi = lo + 10;
+            ensureBucket(lo, hi, `${lo === 5 ? '5.1' : (lo + 0.1).toFixed(0)} – ${hi}`);
+            lo = hi;
+        }
+        if (!buckets.length) ensureBucket(0, 5, '0 – 5');
+
+        for (const remGB of eligible) {
+            let placed = false;
+            for (const b of buckets) {
+                // first bucket inclusive of 0; others (lo, hi]
+                if ((b.loGB === 0 && remGB <= b.hiGB) || (remGB > b.loGB && remGB <= b.hiGB)) {
+                    b.count++; placed = true; break;
+                }
+            }
+            if (!placed && buckets.length) buckets[buckets.length - 1].count++;
+            counted++;
+        }
+
+        const totalActive = counted + depleted + unlimited;
+
+        // Render table
+        const body = document.getElementById('volume-stats-body');
+        const rowsHtml = buckets.map(b => {
+            const pct = counted ? Math.round((b.count / counted) * 100) : 0;
+            return `<tr>
+                <td>${b.label} GB</td>
+                <td style="text-align:center; font-weight:600;">${b.count}</td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <div style="flex:1; height:8px; background:var(--bg-dark); border-radius:999px; overflow:hidden;">
+                            <div style="height:8px; width:${pct}%; background:var(--primary);"></div>
+                        </div>
+                        <span style="font-size:0.78rem; color:var(--text-secondary); min-width:34px; text-align:right;">${pct}%</span>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+        const extraRows = `
+            <tr><td>♾️ Unlimited</td><td style="text-align:center; font-weight:600;">${unlimited}</td><td></td></tr>
+            <tr><td>⛔ Depleted (0)</td><td style="text-align:center; font-weight:600;">${depleted}</td><td></td></tr>`;
+        body.innerHTML = rowsHtml + extraRows;
+
+        document.getElementById('volume-stats-title').textContent =
+            `Volume Distribution — ${inbound.remark || ('Inbound ' + inbound.id)}`;
+        document.getElementById('volume-stats-sub').textContent =
+            `Server: ${inbound.server_name || '-'} · Active users counted: ${totalActive}`;
+
+        // Build copy-for-AI plaintext
+        const lines = [];
+        lines.push(`Inbound: ${inbound.remark || ('Inbound ' + inbound.id)} (server: ${inbound.server_name || '-'})`);
+        lines.push(`Active users: ${totalActive}`);
+        lines.push(`Remaining volume distribution (active, limited users):`);
+        for (const b of buckets) {
+            const pct = counted ? Math.round((b.count / counted) * 100) : 0;
+            lines.push(`  ${b.label} GB : ${b.count} users (${pct}%)`);
+        }
+        lines.push(`  Unlimited : ${unlimited} users`);
+        lines.push(`  Depleted (0 GB) : ${depleted} users`);
+        document.getElementById('volume-stats-copytext').value = lines.join('\n');
+
+        document.getElementById('volume-stats-modal').classList.remove('hidden');
+    }
+
+    function closeVolumeStatsModal() {
+        document.getElementById('volume-stats-modal').classList.add('hidden');
+    }
+
+    function copyVolumeStats() {
+        const ta = document.getElementById('volume-stats-copytext');
+        if (!ta || !ta.value) return;
+        navigator.clipboard.writeText(ta.value)
+            .then(() => showToast('Copied — paste to your AI'))
+            .catch(() => { ta.select(); document.execCommand('copy'); showToast('Copied'); });
+    }
+
     function copyText(elementId, imgId, title) {
         const input = document.getElementById(elementId);
         if (!input.value) return;
