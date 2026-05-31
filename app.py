@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.17"
+APP_VERSION = "2.1.18"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -3013,6 +3013,30 @@ class SystemSetting(db.Model):
     __tablename__ = 'system_settings'
     key = db.Column(db.String(50), primary_key=True)
     value = db.Column(db.Text)
+
+
+class VolumeRulePreset(db.Model):
+    """Saved Volume Filter rule sets so users can reload them instead of
+    re-entering rules every time."""
+    __tablename__ = 'volume_rule_presets'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    rules = db.Column(db.Text, nullable=False)  # JSON list of rule dicts
+    owner_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        try:
+            rules = json.loads(self.rules or '[]')
+        except Exception:
+            rules = []
+        return {
+            'id': self.id,
+            'name': self.name,
+            'rules': rules,
+            'owner_id': self.owner_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class UsageSnapshot(db.Model):
@@ -8605,6 +8629,59 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
     except Exception as exc:
         app.logger.error(f"Delete client error: {str(exc)}")
         return False, str(exc), 400
+
+
+@app.route('/api/volume-rule-presets', methods=['GET'])
+@login_required
+def list_volume_rule_presets():
+    """Return volume-filter presets visible to the current user (own + global)."""
+    user = db.session.get(Admin, session['admin_id'])
+    q = VolumeRulePreset.query
+    if user and user.role == 'reseller':
+        q = q.filter((VolumeRulePreset.owner_id == user.id) | (VolumeRulePreset.owner_id == None))  # noqa: E711
+    presets = q.order_by(VolumeRulePreset.created_at.desc()).all()
+    return jsonify({'success': True, 'presets': [p.to_dict() for p in presets]})
+
+
+@app.route('/api/volume-rule-presets', methods=['POST'])
+@login_required
+def save_volume_rule_preset():
+    """Create or overwrite (by same name + owner) a volume-filter preset."""
+    user = db.session.get(Admin, session['admin_id'])
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    rules = data.get('rules')
+    if not name:
+        return jsonify({'success': False, 'error': 'Name is required'}), 400
+    if not isinstance(rules, list) or not rules:
+        return jsonify({'success': False, 'error': 'At least one rule is required'}), 400
+
+    rules_json = json.dumps(rules, ensure_ascii=False)
+    # Overwrite an existing preset with the same name for this owner
+    existing = VolumeRulePreset.query.filter_by(name=name, owner_id=user.id).first()
+    if existing:
+        existing.rules = rules_json
+        preset = existing
+    else:
+        preset = VolumeRulePreset(name=name, rules=rules_json, owner_id=user.id)
+        db.session.add(preset)
+    db.session.commit()
+    return jsonify({'success': True, 'preset': preset.to_dict()})
+
+
+@app.route('/api/volume-rule-presets/<int:preset_id>', methods=['DELETE'])
+@login_required
+def delete_volume_rule_preset(preset_id):
+    user = db.session.get(Admin, session['admin_id'])
+    preset = db.session.get(VolumeRulePreset, preset_id)
+    if not preset:
+        return jsonify({'success': False, 'error': 'Preset not found'}), 404
+    # Only the owner (or superadmin) can delete
+    if preset.owner_id != user.id and not session.get('is_superadmin', False):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    db.session.delete(preset)
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 @app.route('/api/client/bulk', methods=['POST'])

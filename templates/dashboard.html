@@ -310,9 +310,19 @@
         </div>
 
         <div id="bulk-volume-policy-container" style="display:none; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; flex-wrap:wrap;">
                 <strong style="font-size:0.9rem;">Remaining Volume Rules</strong>
-                <button type="button" class="btn btn-secondary" style="padding:6px 10px;" onclick="addBulkVolumeRule()">Add Rule</button>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-secondary" style="padding:6px 10px;" onclick="addBulkVolumeRule()">Add Rule</button>
+                    <button type="button" class="btn btn-primary" style="padding:6px 10px;" onclick="saveVolumeRulePreset()">Save Setting</button>
+                </div>
+            </div>
+            <!-- Saved presets: pick to load instantly -->
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+                <select id="bulk-volume-preset-select" class="form-select" style="flex:1; min-width:160px;" onchange="applyVolumeRulePreset()">
+                    <option value="">— Load saved setting —</option>
+                </select>
+                <button type="button" class="btn btn-secondary" style="padding:6px 10px;" onclick="deleteVolumeRulePreset()" title="Delete selected preset">Delete</button>
             </div>
             <div class="bulk-volume-rule-head" style="display:grid; grid-template-columns: minmax(86px,1fr) minmax(86px,1fr) minmax(120px,1.2fr) minmax(170px,1.6fr) auto; gap:8px; margin-bottom:6px; color:var(--text-secondary); font-size:0.78rem;">
                 <span>From GB</span>
@@ -5272,6 +5282,94 @@
         return rules;
     }
 
+    // ── Volume Filter presets (save/load rule sets) ───────────────────────
+    let volumeRulePresetsCache = [];
+
+    async function loadVolumeRulePresets() {
+        try {
+            const res = await fetch('/api/volume-rule-presets');
+            const data = await res.json();
+            if (!data.success) return;
+            volumeRulePresetsCache = data.presets || [];
+            const sel = document.getElementById('bulk-volume-preset-select');
+            if (!sel) return;
+            const current = sel.value;
+            sel.innerHTML = '<option value="">— Load saved setting —</option>'
+                + volumeRulePresetsCache.map(p =>
+                    `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+            if (current) sel.value = current;
+        } catch (e) { /* silent */ }
+    }
+
+    function applyVolumeRulePreset() {
+        const sel = document.getElementById('bulk-volume-preset-select');
+        const id = Number(sel?.value || 0);
+        if (!id) return;
+        const preset = volumeRulePresetsCache.find(p => p.id === id);
+        if (!preset) return;
+        // Rebuild the rule rows from the saved preset
+        const list = document.getElementById('bulk-volume-rules');
+        if (list) list.innerHTML = '';
+        (preset.rules || []).forEach(r => addBulkVolumeRule({
+            min: r.min_remaining_gb,
+            max: r.max_remaining_gb,
+            target: r.target_gb,
+            mode: r.mode,
+        }));
+        if (list && !list.children.length) ensureDefaultBulkVolumeRules();
+        showToast(`Loaded "${preset.name}"`, 'success', 2500);
+    }
+
+    async function saveVolumeRulePreset() {
+        let rules;
+        try {
+            rules = collectBulkVolumeRules();
+        } catch (e) {
+            showToast(e.message || 'Fix the rules first', 'error');
+            return;
+        }
+        const name = (prompt('Save this volume setting as:') || '').trim();
+        if (!name) return;
+        try {
+            const res = await fetch('/api/volume-rule-presets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, rules }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`Saved "${name}"`, 'success');
+                await loadVolumeRulePresets();
+                const sel = document.getElementById('bulk-volume-preset-select');
+                if (sel && data.preset) sel.value = data.preset.id;
+            } else {
+                showToast(data.error || 'Save failed', 'error');
+            }
+        } catch (e) {
+            showToast('Network error', 'error');
+        }
+    }
+
+    async function deleteVolumeRulePreset() {
+        const sel = document.getElementById('bulk-volume-preset-select');
+        const id = Number(sel?.value || 0);
+        if (!id) { showToast('Select a saved setting first', 'error'); return; }
+        const preset = volumeRulePresetsCache.find(p => p.id === id);
+        if (!confirm(`Delete saved setting "${preset ? preset.name : id}"?`)) return;
+        try {
+            const res = await fetch(`/api/volume-rule-presets/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.success) {
+                showToast('Deleted', 'success');
+                await loadVolumeRulePresets();
+            } else {
+                showToast(data.error || 'Delete failed', 'error');
+            }
+        } catch (e) {
+            showToast('Network error', 'error');
+        }
+    }
+
     function onBulkActionChanged() {
         const action = document.getElementById('bulk-action-select')?.value;
         const resellerContainer = document.getElementById('bulk-reseller-container');
@@ -5294,7 +5392,10 @@
         if (policyContainer) {
             const showPolicy = action === 'volume_policy';
             policyContainer.style.display = showPolicy ? 'block' : 'none';
-            if (showPolicy) ensureDefaultBulkVolumeRules();
+            if (showPolicy) {
+                ensureDefaultBulkVolumeRules();
+                loadVolumeRulePresets();
+            }
         }
     }
 
