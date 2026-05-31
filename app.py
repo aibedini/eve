@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.20"
+APP_VERSION = "2.1.21"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -15851,6 +15851,108 @@ def traffic_check():
     except Exception as e:
         app.logger.exception("traffic_check error")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/settings/ssl/diagnose', methods=['GET'])
+@login_required
+def diagnose_ssl():
+    """Figure out where HTTPS is actually coming from for THIS request.
+
+    Three cases the panel could be in:
+      1. own_ssl  — origin server has its own cert (nginx serves HTTPS directly)
+      2. cdn_ssl  — a CDN (e.g. Cloudflare) terminates TLS at the edge; the
+                    origin may be plain HTTP (browser still shows the padlock)
+      3. none     — no SSL anywhere; served over plain HTTP
+
+    We read the headers of the admin's own request (which reflect exactly how
+    their browser reached the panel) plus the origin certificate status.
+    """
+    h = request.headers
+
+    # --- CDN detection (Cloudflare is the common one) ---
+    cf_ray = h.get('CF-Ray')
+    cf_conn_ip = h.get('CF-Connecting-IP')
+    cf_visitor = (h.get('CF-Visitor') or '').lower()
+    via = h.get('Via') or ''
+    behind_cloudflare = bool(cf_ray or cf_conn_ip)
+    # Other CDNs / proxies leave a trail in Via or known headers
+    other_cdn = None
+    for hdr, name in (('X-Sucuri-ID', 'Sucuri'), ('X-Fastly-Request-ID', 'Fastly'),
+                      ('X-Amz-Cf-Id', 'CloudFront'), ('X-Cache', 'Generic CDN')):
+        if h.get(hdr):
+            other_cdn = name
+            break
+
+    # --- Edge scheme: what scheme did the END USER's browser use? ---
+    # CF-Visitor carries the real client scheme even when CF→origin is HTTP.
+    xfp = (h.get('X-Forwarded-Proto') or '').lower()
+    xfp_first = xfp.split(',')[0].strip() if xfp else ''
+    edge_https = (
+        'https' in cf_visitor
+        or xfp_first == 'https'
+        or bool(request.is_secure)
+    )
+
+    # --- Origin certificate status (reuse autodetect) ---
+    cert_path, key_path = _autodetect_ssl_paths()
+    # also honor an explicitly saved path
+    saved_cert = db.session.get(SystemSetting, 'ssl_cert_path')
+    if saved_cert and saved_cert.value:
+        cert_path = saved_cert.value
+    origin_has_cert = bool(cert_path) and os.path.isfile(cert_path) and os.access(cert_path, os.R_OK)
+
+    # --- Verdict ---
+    if behind_cloudflare or other_cdn:
+        cdn_name = 'Cloudflare' if behind_cloudflare else other_cdn
+        if origin_has_cert:
+            mode = 'cdn_plus_origin'
+            title = f'HTTPS via {cdn_name} (origin also has a certificate)'
+            detail = (f'You are reaching the panel through {cdn_name}, which provides the '
+                      f'browser padlock. Your origin server ALSO has its own certificate, '
+                      f'so a Full/Strict CDN SSL mode works and direct access stays secure.')
+        else:
+            mode = 'cdn_only'
+            title = f'HTTPS is provided by {cdn_name} — your server has NO certificate'
+            detail = (f'The padlock you see comes from {cdn_name} at the edge. Your origin '
+                      f'server itself has no SSL certificate. If you turn off the CDN proxy '
+                      f'(grey-cloud the DNS record) the panel will fall back to plain HTTP, '
+                      f'and any subscription/dash links that depend on HTTPS may break. '
+                      f'Consider installing a free Origin/Let\'s Encrypt cert too.')
+    elif origin_has_cert and edge_https:
+        mode = 'own_ssl'
+        title = 'Your server has its own SSL certificate (direct HTTPS)'
+        detail = 'No CDN detected. nginx is serving HTTPS directly from a certificate on this server.'
+    elif edge_https:
+        mode = 'edge_only'
+        title = 'HTTPS detected, but no certificate found on this server'
+        detail = ('The connection looks secure but no certificate file was found on the origin. '
+                  'A reverse proxy or load balancer in front is likely terminating TLS.')
+    else:
+        mode = 'none'
+        title = 'No SSL — the panel is served over plain HTTP'
+        detail = ('No CDN and no certificate detected, and this request is not HTTPS. '
+                  'Install a certificate (Settings → SSL) or put the domain behind a CDN.')
+
+    return jsonify({
+        'success': True,
+        'mode': mode,
+        'title': title,
+        'detail': detail,
+        'edge_https': edge_https,
+        'behind_cdn': bool(behind_cloudflare or other_cdn),
+        'cdn': ('Cloudflare' if behind_cloudflare else other_cdn),
+        'origin_has_cert': origin_has_cert,
+        'origin_cert_path': cert_path or None,
+        'request_scheme': request.scheme,
+        'signals': {
+            'cf_ray': bool(cf_ray),
+            'cf_connecting_ip': bool(cf_conn_ip),
+            'cf_visitor': cf_visitor or None,
+            'x_forwarded_proto': xfp or None,
+            'via': via or None,
+            'host': h.get('Host'),
+        },
+    })
 
 
 @app.route('/api/settings/ssl', methods=['GET'])

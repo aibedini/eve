@@ -609,6 +609,17 @@
                         <div>🔑 Key: <span id="ssl-key-path-display" style="color:#94a3b8;font-family:monospace;"></span></div>
                     </div>
                 </div>
+
+                <!-- Where is HTTPS actually coming from? (own cert vs CDN vs none) -->
+                <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:14px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
+                        <strong style="font-size:0.9rem;">Where is HTTPS coming from?</strong>
+                        <button class="btn btn-secondary" style="padding:5px 10px;" onclick="diagnoseSSL()">Diagnose</button>
+                    </div>
+                    <div id="ssl-diagnose-panel" style="padding:12px 14px; border-radius:8px; font-size:0.85rem; background:#1e293b; color:#94a3b8;">
+                        Click <em>Diagnose</em> to detect whether SSL is served by this server, a CDN (Cloudflare), or not at all.
+                    </div>
+                </div>
             </div>
 
             <!-- Sync + Export — for the server that HAS the cert (foreign server) -->
@@ -2626,6 +2637,50 @@
 
         setFieldStatus(data.cert_ok, !!data.cert_path, certIcon, certFeedback);
         setFieldStatus(data.key_ok,  !!data.key_path,  keyIcon,  keyFeedback);
+    }
+
+    async function diagnoseSSL() {
+        const panel = document.getElementById('ssl-diagnose-panel');
+        panel.innerHTML = 'Diagnosing…';
+        try {
+            const res = await fetch('/api/settings/ssl/diagnose');
+            const d = await res.json();
+            if (!d.success) { panel.textContent = d.error || 'Diagnose failed'; return; }
+
+            // Color + icon by mode
+            const styleByMode = {
+                own_ssl:          { bg: 'rgba(34,197,94,0.12)',  bd: 'rgba(34,197,94,0.35)',  col: '#4ade80', icon: '🔒' },
+                cdn_plus_origin:  { bg: 'rgba(34,197,94,0.12)',  bd: 'rgba(34,197,94,0.35)',  col: '#4ade80', icon: '🔒' },
+                cdn_only:         { bg: 'rgba(245,158,11,0.10)', bd: 'rgba(245,158,11,0.35)', col: '#fbbf24', icon: '☁️' },
+                edge_only:        { bg: 'rgba(245,158,11,0.10)', bd: 'rgba(245,158,11,0.35)', col: '#fbbf24', icon: '⚠️' },
+                none:             { bg: 'rgba(239,68,68,0.10)',  bd: 'rgba(239,68,68,0.35)',  col: '#f87171', icon: '🔓' },
+            };
+            const s = styleByMode[d.mode] || styleByMode.none;
+
+            const chip = (label, ok) =>
+                `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:999px;font-size:0.72rem;
+                    background:${ok ? 'rgba(34,197,94,0.15)' : 'rgba(148,163,184,0.12)'};
+                    color:${ok ? '#4ade80' : '#94a3b8'};">${label}</span>`;
+
+            panel.style.background = s.bg;
+            panel.style.border = `1px solid ${s.bd}`;
+            panel.style.color = '#cbd5e1';
+            panel.innerHTML = `
+                <div style="display:flex;align-items:flex-start;gap:10px;">
+                    <span style="font-size:1.2rem;line-height:1;">${s.icon}</span>
+                    <div style="flex:1;">
+                        <div style="font-weight:700;color:${s.col};margin-bottom:4px;">${escapeHtml(d.title)}</div>
+                        <div style="font-size:0.82rem;line-height:1.6;color:#94a3b8;">${escapeHtml(d.detail)}</div>
+                        <div style="margin-top:8px;">
+                            ${chip(d.edge_https ? 'Browser: HTTPS' : 'Browser: HTTP', d.edge_https)}
+                            ${chip(d.behind_cdn ? ('CDN: ' + (d.cdn || 'yes')) : 'No CDN', d.behind_cdn)}
+                            ${chip(d.origin_has_cert ? 'Origin cert: yes' : 'Origin cert: no', d.origin_has_cert)}
+                        </div>
+                    </div>
+                </div>`;
+        } catch (e) {
+            panel.textContent = 'Diagnose error: ' + (e.message || 'network');
+        }
     }
 
     async function loadSSLSettings() {
