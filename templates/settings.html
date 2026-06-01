@@ -271,13 +271,20 @@
                                 </span>
                             </div>
                             <div class="file-upload-text" id="backup-file-name">No file chosen</div>
-                            <input type="file" id="upload-backup-input" class="file-upload-input" accept=".db,.dump,.sql" onchange="handleUpload(this)">
+                            <input type="file" id="upload-backup-input" class="file-upload-input" accept=".db,.dump,.sql,.zip" onchange="handleUpload(this)">
                         </div>
                         <button class="btn btn-primary" onclick="createBackup(this)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                             Create Backup
                         </button>
+                        <button class="btn btn-secondary" onclick="createMigrationBackup(this)" title="Database + all uploaded files (icons, receipts, tutorials) — for moving to another server">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                            Full Migration Backup
+                        </button>
                     </div>
+                    <small class="text-secondary" style="display:block; margin-top:6px;">
+                        <strong>Create Backup</strong> = database only. <strong>Full Migration Backup</strong> = database + all uploaded files (app icons, receipts, tutorial files) as a <code>.zip</code> — use this to move everything to another server.
+                    </small>
                 </div>
                 <div class="table-responsive">
                     <table class="table">
@@ -3404,6 +3411,32 @@
             }
         } catch (e) {
             showToast('Network error — check if pg_dump is installed and connection timeout is long enough: ' + (e.message || e), 'error', 8000);
+        } finally {
+            if (btn) { btn.innerHTML = originalHTML; btn.disabled = false; }
+        }
+    }
+
+    async function createMigrationBackup(btnEl) {
+        const btn = btnEl || (typeof event !== 'undefined' ? event.currentTarget : null);
+        const originalHTML = btn ? btn.innerHTML : '';
+        try {
+            if (btn) { btn.innerHTML = 'Bundling DB + files…'; btn.disabled = true; }
+            const res = await fetch('/api/backups/migration', { method: 'POST' });
+            let data;
+            try { data = await res.json(); } catch (_) { data = {}; }
+            if (res.ok && data.success) {
+                const mb = data.size ? (data.size / 1024 / 1024).toFixed(1) + ' MB' : '';
+                showToast(`Migration bundle ready ${mb ? '(' + mb + ')' : ''} — downloading…`, 'success', 6000);
+                await loadBackups();
+                // Auto-start the download
+                if (data.filename) {
+                    window.location.href = `/api/backups/${encodeURIComponent(data.filename)}/download`;
+                }
+            } else {
+                showToast('Migration backup failed: ' + (data.error || `HTTP ${res.status}`), 'error', 9000);
+            }
+        } catch (e) {
+            showToast('Network error creating migration bundle: ' + (e.message || e), 'error', 8000);
         } finally {
             if (btn) { btn.innerHTML = originalHTML; btn.disabled = false; }
         }

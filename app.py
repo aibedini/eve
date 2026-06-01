@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.23"
+APP_VERSION = "2.1.24"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -1979,6 +1979,153 @@ def _create_database_backup_file(prefix: str) -> str:
         return filename
 
     raise RuntimeError('Unsupported database backend for backup')
+
+
+# Directories that hold user-uploaded files which must travel WITH the database
+# in a full migration (the DB only stores their URLs/paths, not the bytes).
+def _migration_file_dirs() -> dict:
+    """Map of archive-folder-name → absolute source dir for migration bundles."""
+    static_folder = app.static_folder or ''
+    return {
+        'static_uploads':   os.path.join(static_folder, 'uploads'),       # receipts/images uploaded via editor
+        'static_app_files': os.path.join(static_folder, _APP_FILES_DIR_NAME),  # app icons / screenshots / tutorial files
+        'instance_receipts': RECEIPTS_DIR,                                # manual payment receipts
+    }
+
+
+def _create_full_migration_zip(prefix: str = 'migration') -> str:
+    """Create a COMPLETE migration bundle (.zip) in BACKUP_DIR and return filename.
+
+    Contains everything needed to move to another server:
+      - database/<db>      the DB dump (.db for SQLite, .dump for PostgreSQL)
+      - static_uploads/    uploaded images/receipts
+      - static_app_files/  app icons, screenshots, tutorial files
+      - instance_receipts/ manual payment receipts
+      - manifest.json      metadata (db type, version, created at)
+    """
+    import zipfile
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    # 1) Produce the DB dump first (reuses the existing logic)
+    db_filename = _create_database_backup_file(f'{prefix}_db')
+    db_path = os.path.join(BACKUP_DIR, db_filename)
+    db_arcname = f"database/{db_filename}"
+
+    zip_filename = f"{prefix}_full_{timestamp}.zip"
+    zip_path = os.path.join(BACKUP_DIR, zip_filename)
+
+    manifest = {
+        'kind': 'eve_full_migration',
+        'version': APP_VERSION,
+        'created_at': datetime.now().isoformat(),
+        'db_type': 'postgresql' if _is_postgres_db() else 'sqlite',
+        'db_file': db_arcname,
+        'included_dirs': [],
+    }
+
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            # DB
+            zf.write(db_path, db_arcname)
+            # File directories
+            for arc_root, src_dir in _migration_file_dirs().items():
+                if not src_dir or not os.path.isdir(src_dir):
+                    continue
+                file_count = 0
+                for root, _dirs, files in os.walk(src_dir):
+                    for fname in files:
+                        fpath = os.path.join(root, fname)
+                        rel = os.path.relpath(fpath, src_dir)
+                        zf.write(fpath, f"{arc_root}/{rel}")
+                        file_count += 1
+                if file_count:
+                    manifest['included_dirs'].append({'dir': arc_root, 'files': file_count})
+            # Manifest
+            zf.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+    finally:
+        # Remove the standalone DB dump (it's now inside the zip)
+        try:
+            os.remove(db_path)
+        except Exception:
+            pass
+
+    return zip_filename
+
+
+def _restore_full_migration_zip(zip_path: str, log=None):
+    """Restore a full migration bundle: DB + uploaded file directories.
+
+    `log` is an optional callable(str) for progress messages.
+    Returns the db archive member path that was extracted+restored.
+    """
+    import zipfile, tempfile
+    def _say(m):
+        if log:
+            try: log(m)
+            except Exception: pass
+
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        names = zf.namelist()
+        # locate the DB file inside database/
+        db_member = next((n for n in names if n.startswith('database/') and not n.endswith('/')), None)
+        if not db_member:
+            raise RuntimeError('Bundle has no database/ file')
+
+        tmp_dir = tempfile.mkdtemp(prefix='eve-migrate-')
+        try:
+            # 1) Restore the database
+            db_ext = os.path.splitext(db_member)[1].lower()
+            extracted_db = zf.extract(db_member, tmp_dir)
+            _say(f'Database file: {os.path.basename(db_member)}')
+
+            if _is_sqlite_db():
+                if db_ext != '.db':
+                    raise RuntimeError(f'This server is SQLite but bundle DB is {db_ext}')
+                db_path = os.path.join(app.instance_path, 'servers.db')
+                if os.path.exists(db_path):
+                    shutil.copy2(db_path, os.path.join(BACKUP_DIR, f'pre_restore_{datetime.now():%Y%m%d_%H%M%S}.db'))
+                shutil.copy2(extracted_db, db_path)
+                _say('✓ SQLite database restored')
+            elif _is_postgres_db():
+                if db_ext not in ('.dump', '.sql'):
+                    raise RuntimeError(f'This server is PostgreSQL but bundle DB is {db_ext}')
+                uri = _db_uri()
+                env = _pg_env_from_uri(uri)
+                _pg_reset_public_schema(uri, env)
+                if db_ext == '.dump':
+                    bin_ = shutil.which('pg_restore')
+                    subprocess.run([bin_, '--no-owner', '--no-acl', f'--jobs={_pg_restore_jobs()}',
+                                    '--dbname', uri, extracted_db], env=env, check=False,
+                                   capture_output=True, text=True)
+                else:
+                    bin_ = shutil.which('psql')
+                    subprocess.run([bin_, '--dbname', uri, '--file', extracted_db],
+                                   env=env, check=False, capture_output=True, text=True)
+                _say('✓ PostgreSQL database restored')
+            else:
+                raise RuntimeError('Unsupported database backend')
+
+            # 2) Restore the uploaded file directories
+            dir_map = _migration_file_dirs()
+            for arc_root, dest_dir in dir_map.items():
+                members = [n for n in names if n.startswith(arc_root + '/') and not n.endswith('/')]
+                if not members:
+                    continue
+                os.makedirs(dest_dir, exist_ok=True)
+                restored = 0
+                for n in members:
+                    rel = n[len(arc_root) + 1:]
+                    target = os.path.join(dest_dir, rel)
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with zf.open(n) as src, open(target, 'wb') as out:
+                        shutil.copyfileobj(src, out)
+                    restored += 1
+                _say(f'✓ Restored {restored} file(s) → {arc_root}')
+        finally:
+            try:
+                shutil.rmtree(tmp_dir)
+            except Exception:
+                pass
 
 
 TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES = 60
@@ -14981,7 +15128,7 @@ def disable_account_message_template(template_id):
 def list_backups():
     backups = []
     if os.path.exists(BACKUP_DIR):
-        patterns = ('*.db', '*.dump', '*.sql')
+        patterns = ('*.db', '*.dump', '*.sql', '*.zip')
         files = []
         for pat in patterns:
             files.extend(glob.glob(os.path.join(BACKUP_DIR, pat)))
@@ -14992,12 +15139,16 @@ def list_backups():
             size = os.path.getsize(f)
             date = datetime.fromtimestamp(os.path.getmtime(f)).strftime('%Y-%m-%d %H:%M:%S')
 
-            if _is_sqlite_db():
+            if ext == '.zip':
+                restore_supported = True  # full migration bundle (DB + files)
+            elif _is_sqlite_db():
                 restore_supported = ext == '.db'
             else:
                 restore_supported = ext in ('.dump', '.sql')
 
-            if name.startswith('upload_'):
+            if ext == '.zip' or 'migration' in name:
+                b_type = 'Migration (DB+files)'
+            elif name.startswith('upload_'):
                 b_type = 'Uploaded'
             elif name.startswith('auto_'):
                 b_type = 'Automatic'
@@ -15027,6 +15178,21 @@ def create_backup():
     except Exception as e:
         app.logger.error(f'create_backup error: {e}')
         return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/backups/migration', methods=['POST'])
+@superadmin_required
+def create_migration_backup():
+    """Create a COMPLETE migration bundle (DB + all uploaded files) and return its filename.
+    Use this to move everything to another server."""
+    try:
+        filename = _create_full_migration_zip('migration')
+        size = os.path.getsize(os.path.join(BACKUP_DIR, filename))
+        return jsonify({'success': True, 'filename': filename, 'size': size,
+                        'message': 'Full migration bundle created (database + uploaded files)'})
+    except Exception as e:
+        app.logger.error(f'create_migration_backup error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/backups/diag', methods=['GET'])
@@ -15070,7 +15236,7 @@ def upload_backup():
         mb = BACKUP_UPLOAD_MAX_SIZE // (1024 * 1024)
         return jsonify({'success': False, 'error': f'File too large (max {mb} MB)'}), 413
 
-    allowed_exts = {'.db', '.dump', '.sql'}
+    allowed_exts = {'.db', '.dump', '.sql', '.zip'}  # .zip = full migration bundle
     _, ext = os.path.splitext(file.filename or '')
     ext = (ext or '').lower()
 
@@ -15083,7 +15249,7 @@ def upload_backup():
             return jsonify({'success': True, 'message': 'Backup uploaded successfully'})
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)})
-    return jsonify({'success': False, 'error': 'Invalid file type. Allowed: .db, .dump, .sql'})
+    return jsonify({'success': False, 'error': 'Invalid file type. Allowed: .db, .dump, .sql, .zip'})
 
 @app.route('/api/settings/backup', methods=['GET'])
 @login_required
@@ -16787,6 +16953,21 @@ def restore_backup_stream(filename):
 
         db_type = 'PostgreSQL' if _is_postgres_db() else ('SQLite' if _is_sqlite_db() else 'Unknown')
         yield _sse('log', f'Database: {db_type}')
+
+        # ── Full migration bundle (.zip): DB + uploaded files ─────────────
+        if ext == '.zip':
+            try:
+                yield _sse('log', '📦 Full migration bundle detected — restoring database AND uploaded files…')
+                _msgs = []
+                _restore_full_migration_zip(backup_path, log=lambda m: _msgs.append(m))
+                for _m in _msgs:
+                    yield _sse('log', _m)
+                yield _sse('done', '✓ Migration restore complete (DB + files) — logging you out.',
+                           redirect=url_for('logout'))
+            except Exception as exc:
+                app.logger.error(f"migration restore error: {exc}", exc_info=True)
+                yield _sse('error', f'Migration restore failed: {exc}')
+            return
 
         try:
             # ── SQLite ────────────────────────────────────────────────────
