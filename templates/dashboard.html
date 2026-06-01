@@ -1557,11 +1557,17 @@
                     </div>
                 `;
                 document.body.appendChild(overlay);
+                // The overlay is a singleton, so the click handler must read the
+                // CURRENT selection/phone from the element — not close over the
+                // first call's values (that caused every client to reuse the
+                // first account's data).
                 overlay.addEventListener('click', (event) => {
                     const channelBtn = event.target.closest('[data-message-channel]');
                     if (channelBtn) {
                         overlay.classList.add('hidden');
-                        onSelect(channelBtn.dataset.messageChannel, phone);
+                        const cb = overlay._onSelect;
+                        const ph = overlay._phone;
+                        if (typeof cb === 'function') cb(channelBtn.dataset.messageChannel, ph);
                         return;
                     }
                     if (event.target === overlay || event.target.closest('[data-channel-choice-close]')) {
@@ -1569,6 +1575,9 @@
                     }
                 });
             }
+            // Always refresh the current handler + phone for THIS invocation
+            overlay._onSelect = onSelect;
+            overlay._phone = phone;
             const phoneBox = overlay.querySelector('#message-channel-phone');
             if (phoneBox) {
                 phoneBox.querySelector('span').textContent = phone?.label || 'Phone';
