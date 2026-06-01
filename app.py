@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.25"
+APP_VERSION = "2.1.26"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -6665,6 +6665,131 @@ def monitor_page():
                          admin_username=session.get('admin_username'),
                          is_superadmin=session.get('is_superadmin', False),
                          role=session.get('role', 'admin'))
+
+
+@app.route('/royalty')
+@login_required
+def royalty_page():
+    return render_template('royalty.html',
+                         admin_username=session.get('admin_username'),
+                         is_superadmin=session.get('is_superadmin', False),
+                         role=session.get('role', 'admin'))
+
+
+@app.route('/api/royalty/idle', methods=['GET'])
+@login_required
+def royalty_idle_clients():
+    """List ACTIVE accounts that used NO traffic over the last `days` window.
+
+    An account is "idle" when its current cumulative usage (up+down) equals the
+    usage recorded at the start of the window — i.e. no bytes moved.
+    Supports server_id and reseller_id filters.
+    """
+    days = _parse_int(request.args.get('days'), 1, min_value=1, max_value=365)
+    server_filter = request.args.get('server_id')
+    reseller_filter = request.args.get('reseller_id')
+    try:
+        server_filter = int(server_filter) if server_filter not in (None, '', 'all') else None
+    except Exception:
+        server_filter = None
+    try:
+        reseller_filter = int(reseller_filter) if reseller_filter not in (None, '', 'all') else None
+    except Exception:
+        reseller_filter = None
+
+    user = db.session.get(Admin, session['admin_id'])
+    is_reseller = bool(user and user.role == 'reseller')
+
+    window_start = datetime.utcnow() - timedelta(days=days)
+
+    # 1) Earliest snapshot per (server_id, sub_id) at/after window_start → baseline usage
+    baseline = {}  # (server_id, sub_id) -> total_bytes
+    try:
+        rows = db.session.execute(text(
+            """
+            SELECT server_id, sub_id, total_bytes FROM (
+                SELECT server_id, sub_id, total_bytes,
+                       ROW_NUMBER() OVER (PARTITION BY server_id, sub_id ORDER BY recorded_at ASC) AS rn
+                FROM usage_snapshots
+                WHERE recorded_at >= :start
+            ) t WHERE rn = 1
+            """
+        ), {'start': window_start}).fetchall()
+        for r in rows:
+            baseline[(int(r[0]), str(r[1]))] = int(r[2] or 0)
+    except Exception as exc:
+        app.logger.warning(f"royalty baseline query failed: {exc}")
+        return jsonify({'success': False, 'error': 'Usage history not available yet. Try a smaller window.'}), 200
+
+    # 2) Reseller ownership maps (for filtering + labeling)
+    email_map, uuid_map = _get_ownership_maps()
+
+    # 3) Walk current cached clients and pick the idle ones
+    idle = []
+    snapshot = GLOBAL_SERVER_DATA.get('inbounds') or []
+    for inbound in snapshot:
+        try:
+            sid = int(inbound.get('server_id'))
+        except Exception:
+            continue
+        if server_filter is not None and sid != server_filter:
+            continue
+        server_name = inbound.get('server_name') or ''
+        for c in (inbound.get('clients') or []):
+            if not c.get('enable', True):
+                continue
+            sub_id = str(c.get('subId') or '').strip()
+            if not sub_id:
+                continue
+            base = baseline.get((sid, sub_id))
+            if base is None:
+                continue  # no history at window start → can't classify
+            current_total = int(c.get('up', 0) or 0) + int(c.get('down', 0) or 0)
+            if current_total != base:
+                continue  # had traffic → not idle
+
+            # Ownership / reseller resolution
+            uu = str(c.get('id') or '').strip().lower()
+            em = (c.get('email') or '').strip().lower()
+            owner = (uuid_map.get((sid, uu)) if uu else None) or (email_map.get((sid, em)) if em else None)
+            owner_id = owner.get('id') if owner else None
+            owner_username = owner.get('username') if owner else None
+
+            if is_reseller:
+                if owner_id != user.id:
+                    continue
+            elif reseller_filter is not None:
+                if reseller_filter == 0:
+                    if owner_id is not None:
+                        continue  # only unassigned/system
+                elif owner_id != reseller_filter:
+                    continue
+
+            idle.append({
+                'email': c.get('email') or '',
+                'comment': c.get('comment') or '',
+                'server_id': sid,
+                'server_name': server_name,
+                'inbound_id': inbound.get('id'),
+                'sub_url': c.get('sub_url') or '',
+                'dash_sub_url': c.get('dash_sub_url') or '',
+                'expiryTime': c.get('expiryTime') or '',
+                'remaining_formatted': c.get('remaining_formatted') or '',
+                'total_used_formatted': format_bytes(current_total),
+                'owner_username': owner_username,
+                'is_online': bool(c.get('is_online')),
+            })
+
+    # Sort: by server then email
+    idle.sort(key=lambda x: (x.get('server_name') or '', (x.get('email') or '').lower()))
+
+    return jsonify({
+        'success': True,
+        'days': days,
+        'count': len(idle),
+        'clients': idle,
+        'generated_at': datetime.utcnow().isoformat(),
+    })
 
 
 MERGER_MAX_UPLOAD_BYTES = 200 * 1024 * 1024
