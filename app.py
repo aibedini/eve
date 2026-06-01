@@ -87,7 +87,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.1.21"
+APP_VERSION = "2.1.22"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -2053,9 +2053,15 @@ def _get_telegram_backup_settings() -> dict:
     proxy_password = (_get_system_setting_value('telegram_backup_proxy_password', '') or '').strip()
     last_run = _get_system_setting_value('telegram_backup_last_run', '') or ''
     last_dt = _parse_iso_datetime(last_run)
+    schedule_mode = (_get_system_setting_value('telegram_backup_schedule_mode', 'interval') or 'interval').strip().lower()
+    if schedule_mode not in ('interval', 'daily'):
+        schedule_mode = 'interval'
+    daily_time = (_get_system_setting_value('telegram_backup_daily_time', '00:00') or '00:00').strip()
     return {
         'enabled': enabled,
         'send_panel_backup': send_panel_backup,
+        'schedule_mode': schedule_mode,
+        'daily_time': daily_time,
         'interval_minutes': interval,
         'bot_token': _get_system_setting_value('telegram_backup_bot_token', '') or '',
         'chat_id': _get_system_setting_value('telegram_backup_chat_id', '') or '',
@@ -2560,7 +2566,18 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
         if success_count == 0 and results:
             # Collect unique error prefixes
             errs = sorted(list(set(r.get('error', 'Unknown') for r in results)))
-            if len(errs) == 1:
+            raw = ' '.join(errs).lower()
+            # Translate cryptic proxy/network errors into a clear, actionable message
+            if 'socks5 authentication failed' in raw or ('authentication' in raw and 'socks' in raw):
+                main_error = ('SOCKS5 proxy authentication failed — check the proxy username/password '
+                              '(or disable proxy auth if the proxy does not require it). '
+                              'Telegram backups have been failing since this started.')
+            elif 'failed to establish a new connection' in raw or 'max retries exceeded' in raw or 'connection refused' in raw:
+                main_error = ('Could not reach Telegram through the proxy — the proxy may be down or the '
+                              'host/port is wrong. Check Settings → Telegram Backup → Proxy.')
+            elif 'timed out' in raw or 'timeout' in raw:
+                main_error = 'Connection to Telegram/proxy timed out. The proxy or network may be slow or blocked.'
+            elif len(errs) == 1:
                 main_error = errs[0]
             else:
                 main_error = f"All backups failed. Errors: {'; '.join(errs[:2])}..."
@@ -15111,6 +15128,18 @@ def save_telegram_backup_settings():
 
     enabled = bool(data.get('enabled'))
     send_panel_backup = bool(data.get('send_panel_backup'))
+    schedule_mode = (data.get('schedule_mode') or 'interval').strip().lower()
+    if schedule_mode not in ('interval', 'daily'):
+        schedule_mode = 'interval'
+    # daily_time: "HH:MM" in Tehran local time
+    daily_time = (data.get('daily_time') or '00:00').strip()
+    try:
+        _h, _m = daily_time.split(':')
+        _h = max(0, min(23, int(_h)))
+        _m = max(0, min(59, int(_m)))
+        daily_time = f"{_h:02d}:{_m:02d}"
+    except Exception:
+        daily_time = '00:00'
     interval = _parse_int(
         data.get('interval_minutes', TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES),
         TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES,
@@ -15137,6 +15166,8 @@ def save_telegram_backup_settings():
 
     _set_system_setting_value('telegram_backup_enabled', 'true' if enabled else 'false')
     _set_system_setting_value('telegram_backup_send_panel_backup', 'true' if send_panel_backup else 'false')
+    _set_system_setting_value('telegram_backup_schedule_mode', schedule_mode)
+    _set_system_setting_value('telegram_backup_daily_time', daily_time)
     _set_system_setting_value('telegram_backup_interval_minutes', str(interval))
     _set_system_setting_value('telegram_backup_bot_token', bot_token)
     _set_system_setting_value('telegram_backup_chat_id', chat_id)
@@ -17238,22 +17269,60 @@ def run_scheduler():
                 # Telegram backups
                 tg_enabled = _parse_bool(_get_system_setting_value('telegram_backup_enabled', 'false'))
                 if tg_enabled:
-                    tg_interval = _parse_int(
-                        _get_system_setting_value('telegram_backup_interval_minutes', str(TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES)),
-                        TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES,
-                        min_value=1,
-                        max_value=TELEGRAM_BACKUP_MAX_INTERVAL_MINUTES
-                    )
-                    last_run_value = _get_system_setting_value('telegram_backup_last_run', '')
-                    last_run_dt = _parse_iso_datetime(last_run_value)
+                    # Normalize any parsed datetime to naive-UTC for safe arithmetic
+                    def _naive_utc(dt):
+                        if not dt:
+                            return None
+                        return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+                    schedule_mode = (_get_system_setting_value('telegram_backup_schedule_mode', 'interval') or 'interval').strip().lower()
                     now_utc = datetime.utcnow()
+                    last_run_dt = _naive_utc(_parse_iso_datetime(_get_system_setting_value('telegram_backup_last_run', '')))
+                    last_attempt_dt = _naive_utc(_parse_iso_datetime(_get_system_setting_value('telegram_backup_last_attempt', '')))
+                    # Retry throttle: never re-attempt more than once per 15 min on failure
+                    attempt_ok = (not last_attempt_dt) or ((now_utc - last_attempt_dt) >= timedelta(minutes=15))
                     should_run = False
-                    if not last_run_dt:
-                        should_run = True
-                    elif (now_utc - last_run_dt) >= timedelta(minutes=tg_interval):
-                        should_run = True
+
+                    if schedule_mode == 'daily':
+                        # Fire once per day at a fixed local time (server timezone).
+                        daily_time = (_get_system_setting_value('telegram_backup_daily_time', '00:00') or '00:00').strip()
+                        try:
+                            th, tm = (int(x) for x in daily_time.split(':'))
+                        except Exception:
+                            th, tm = 0, 0
+                        try:
+                            tz_local = _get_app_tzinfo()
+                        except Exception:
+                            tz_local = timezone(timedelta(hours=3, minutes=30))
+                        now_local = datetime.now(tz_local)
+                        target_today = now_local.replace(hour=th, minute=tm, second=0, microsecond=0)
+                        last_local = None
+                        if last_run_dt:
+                            last_local = last_run_dt.replace(tzinfo=timezone.utc).astimezone(tz_local)
+                        already_done_today = bool(last_local and last_local.date() == now_local.date()
+                                                  and last_local >= target_today)
+                        if now_local >= target_today and not already_done_today and attempt_ok:
+                            should_run = True
+                    else:
+                        tg_interval = _parse_int(
+                            _get_system_setting_value('telegram_backup_interval_minutes', str(TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES)),
+                            TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES,
+                            min_value=1,
+                            max_value=TELEGRAM_BACKUP_MAX_INTERVAL_MINUTES
+                        )
+                        if not last_run_dt:
+                            should_run = attempt_ok
+                        elif (now_utc - last_run_dt) >= timedelta(minutes=tg_interval) and attempt_ok:
+                            should_run = True
 
                     if should_run:
+                        # Record attempt time first so a failure doesn't trigger a
+                        # per-minute retry storm (next try is throttled to +15 min).
+                        try:
+                            _set_system_setting_value('telegram_backup_last_attempt', datetime.utcnow().isoformat())
+                            db.session.commit()
+                        except Exception:
+                            pass
                         result = _run_telegram_backup(trigger='scheduled')
                         if not result.get('success'):
                             app.logger.warning(f"Telegram backup failed: {result.get('error')}")

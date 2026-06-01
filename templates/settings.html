@@ -350,6 +350,21 @@
                 </div>
 
                 <div class="form-group">
+                    <label>Schedule</label>
+                    <select id="telegram-backup-schedule-mode" class="form-control" onchange="onTelegramScheduleModeChange()">
+                        <option value="daily">Once a day at a fixed time</option>
+                        <option value="interval">Every N minutes (interval)</option>
+                    </select>
+                    <small class="text-secondary">Choose a fixed daily time (recommended) or a repeating interval.</small>
+                </div>
+
+                <div class="form-group" id="telegram-daily-time-group">
+                    <label>Daily time (server timezone)</label>
+                    <input type="time" id="telegram-backup-daily-time" class="form-control" value="00:00">
+                    <small class="text-secondary">Backup is sent once per day at this time. Default 00:00 (midnight).</small>
+                </div>
+
+                <div class="form-group" id="telegram-interval-group" style="display:none;">
                     <label>Interval (Minutes)</label>
                     <input type="number" id="telegram-backup-interval" class="form-control" min="1" max="1440" value="60">
                     <small class="text-secondary">How often to run the scheduled backup.</small>
@@ -2881,6 +2896,14 @@
         }
     }
 
+    function onTelegramScheduleModeChange() {
+        const mode = document.getElementById('telegram-backup-schedule-mode')?.value || 'interval';
+        const dailyGroup = document.getElementById('telegram-daily-time-group');
+        const intervalGroup = document.getElementById('telegram-interval-group');
+        if (dailyGroup) dailyGroup.style.display = (mode === 'daily') ? 'block' : 'none';
+        if (intervalGroup) intervalGroup.style.display = (mode === 'interval') ? 'block' : 'none';
+    }
+
     async function loadTelegramBackupSettings() {
         try {
             const res = await fetch('/api/settings/telegram-backup');
@@ -2904,6 +2927,11 @@
             if (enabled) enabled.checked = !!data.enabled;
             if (sendPanel) sendPanel.checked = !!data.send_panel_backup;
             if (interval) interval.value = data.interval_minutes || 60;
+            const schedMode = document.getElementById('telegram-backup-schedule-mode');
+            const dailyTime = document.getElementById('telegram-backup-daily-time');
+            if (schedMode) schedMode.value = data.schedule_mode || 'interval';
+            if (dailyTime) dailyTime.value = data.daily_time || '00:00';
+            onTelegramScheduleModeChange();
             if (token) token.value = data.bot_token || '';
             if (chatId) chatId.value = data.chat_id || '';
             if (useProxy) useProxy.checked = !!data.use_proxy;
@@ -2973,6 +3001,8 @@
     async function saveTelegramBackupSettings() {
         const enabled = document.getElementById('telegram-backup-enabled').checked;
         const sendPanel = document.getElementById('telegram-backup-send-panel').checked;
+        const scheduleMode = document.getElementById('telegram-backup-schedule-mode')?.value || 'interval';
+        const dailyTime = document.getElementById('telegram-backup-daily-time')?.value || '00:00';
         const interval = parseInt(document.getElementById('telegram-backup-interval').value, 10);
         const token = document.getElementById('telegram-backup-token').value.trim();
         const chatId = document.getElementById('telegram-backup-chat-id').value.trim();
@@ -2986,7 +3016,7 @@
         const proxyUser = document.getElementById('telegram-backup-proxy-username').value.trim();
         const proxyPass = document.getElementById('telegram-backup-proxy-password').value.trim();
 
-        if (!interval || interval < 1) {
+        if (scheduleMode === 'interval' && (!interval || interval < 1)) {
             showToast('Interval must be at least 1 minute', 'error');
             return;
         }
@@ -3018,6 +3048,8 @@
                 body: JSON.stringify({
                     enabled,
                     send_panel_backup: sendPanel,
+                    schedule_mode: scheduleMode,
+                    daily_time: dailyTime,
                     interval_minutes: interval,
                     bot_token: token,
                     chat_id: chatId,
@@ -3051,6 +3083,8 @@
         return {
             enabled: document.getElementById('telegram-backup-enabled').checked,
             send_panel_backup: document.getElementById('telegram-backup-send-panel').checked,
+            schedule_mode: document.getElementById('telegram-backup-schedule-mode')?.value || 'interval',
+            daily_time: document.getElementById('telegram-backup-daily-time')?.value || '00:00',
             interval_minutes: parseInt(document.getElementById('telegram-backup-interval').value, 10),
             bot_token: document.getElementById('telegram-backup-token').value.trim(),
             chat_id: document.getElementById('telegram-backup-chat-id').value.trim(),
