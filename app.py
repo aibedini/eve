@@ -2980,6 +2980,7 @@ class Package(db.Model):
     assigned_reseller_ids = db.Column(db.Text, default='[]')  # JSON list of admin IDs
     created_by = db.Column(db.Integer, nullable=True)
     display_order = db.Column(db.Integer, default=0)
+    show_on_sub = db.Column(db.Boolean, default=False)  # show this package on customer subscription page
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=True)
 
@@ -3001,6 +3002,7 @@ class Package(db.Model):
             'assigned_reseller_ids': assigned,
             'created_by': self.created_by,
             'display_order': self.display_order or 0,
+            'show_on_sub': bool(self.show_on_sub),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -4666,6 +4668,7 @@ with app.app_context():
                 ('assigned_reseller_ids', "TEXT DEFAULT '[]'"),
                 ('created_by', 'INTEGER'),
                 ('display_order', 'INTEGER DEFAULT 0'),
+                ('show_on_sub', 'BOOLEAN DEFAULT 0'),
                 ('created_at', _ts_type),
                 ('updated_at', _ts_type),
             ]
@@ -5002,6 +5005,56 @@ def calculate_reseller_price(user, base_price=None, package=None, cost_type=None
         return int(package.price * (1 - discount / 100))
 
     return base_price if base_price is not None else 0
+
+def _build_sub_page_packages(owner) -> list[dict]:
+    """Packages to surface on a customer's subscription page, based on the
+    account OWNER. Only packages flagged show_on_sub are eligible.
+
+    - Reseller-owned account: global + packages assigned to that reseller +
+      the reseller's own packages, each priced with the reseller's pricing.
+    - No reseller (system/admin-managed): only global packages, standard price.
+    """
+    import json as _j
+    try:
+        pkgs = Package.query.filter_by(enabled=True).order_by(Package.display_order, Package.id).all()
+    except Exception:
+        return []
+
+    is_reseller = bool(owner and getattr(owner, 'role', None) == 'reseller')
+    out = []
+    for p in pkgs:
+        if not getattr(p, 'show_on_sub', False):
+            continue
+        scope = p.scope or 'global'
+        if is_reseller:
+            if scope == 'global':
+                visible = True
+            elif scope == 'assigned':
+                try:
+                    ids = _j.loads(p.assigned_reseller_ids or '[]')
+                except Exception:
+                    ids = []
+                visible = owner.id in ids
+            elif scope == 'personal':
+                visible = (p.created_by == owner.id)
+            else:
+                visible = False
+            if not visible:
+                continue
+            price = calculate_reseller_price(owner, package=p)
+        else:
+            if scope != 'global':
+                continue
+            price = p.price
+        out.append({
+            'id': p.id,
+            'name': p.name,
+            'days': int(p.days or 0),
+            'volume': int(p.volume or 0),
+            'price': int(price or 0),
+        })
+    return out
+
 
 def get_config(key, default=0):
     conf = db.session.get(SystemConfig, key)
@@ -10924,6 +10977,7 @@ def create_package():
         scope=data.get('scope', 'global'),
         assigned_reseller_ids=_j.dumps([int(r) for r in reseller_ids]),
         created_by=session.get('admin_id'),
+        show_on_sub=bool(data.get('show_on_sub', False)),
         created_at=datetime.utcnow(),
     )
     db.session.add(package)
@@ -10949,6 +11003,8 @@ def update_package(package_id):
         package.enabled = bool(data['enabled'])
     if 'scope' in data:
         package.scope = data['scope']
+    if 'show_on_sub' in data:
+        package.show_on_sub = bool(data['show_on_sub'])
     if 'assigned_reseller_ids' in data or 'reseller_ids' in data:
         import json as _j
         reseller_ids = data.get('assigned_reseller_ids', data.get('reseller_ids', []))
@@ -13402,6 +13458,7 @@ def client_subscription(server_id, sub_id):
     }
 
     # If this client is assigned to a reseller, use reseller-defined support/channels instead of global SystemConfig.
+    sub_owner_reseller = None  # the account's reseller owner (if any), used for sub-page packages
     try:
         cu = (target_client.get('id') or '').strip() if isinstance(target_client, dict) else ''
         email_l = (client_email or '').strip().lower()
@@ -13414,6 +13471,7 @@ def client_subscription(server_id, sub_id):
         ).first()
         reseller = ownership.reseller if ownership else None
         if reseller and getattr(reseller, 'role', None) == 'reseller':
+            sub_owner_reseller = reseller
             def _clean_telegram_username(v: str | None) -> str:
                 val = (v or '').strip()
                 if not val:
@@ -13605,6 +13663,9 @@ def client_subscription(server_id, sub_id):
     except Exception:
         backup_configs_payload = []
 
+    # Renewal packages to show on the sub page, based on the account owner.
+    sub_packages_payload = _build_sub_page_packages(sub_owner_reseller)
+
     return render_template(
         'subscription.html',
         client=client_payload,
@@ -13615,6 +13676,7 @@ def client_subscription(server_id, sub_id):
         announcements=announcements_payload,
         active_online_chat_script=active_online_chat_script,
         backup_configs=backup_configs_payload,
+        sub_packages=sub_packages_payload,
         page_lang=page_lang,
         server_id=server_id,
         sub_id=normalized_sub_id,

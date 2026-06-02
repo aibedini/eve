@@ -163,6 +163,13 @@
                     <span class="text-muted" style="font-size:0.85rem;">Loading…</span>
                 </div>
             </div>
+            <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:4px;">
+                <div class="toggle-switch">
+                    <input type="checkbox" id="pkg-show-on-sub">
+                    <span class="slider"></span>
+                </div>
+                <span>Show on subscription page <small style="color:var(--text-secondary); font-weight:normal;">(customers can request renewal)</small></span>
+            </label>
             <div class="form-actions">
                 <button class="btn btn-secondary" type="button" onclick="closePkgModal()">Cancel</button>
                 <button class="btn btn-primary" id="pkg-submit-btn" type="button" onclick="submitPackage()">Create Package</button>
@@ -412,6 +419,7 @@ function renderPackages(body) {
             </div>
             <div class="pkg-meta">
                 <span class="scope-badge ${scopeClass}">${scopeLabel}</span>
+                ${p.show_on_sub ? '<span class="scope-badge" style="background:rgba(34,197,94,0.18); color:#22c55e; border:1px solid rgba(34,197,94,0.35);" title="Visible on customer subscription page">🌐 Sub</span>' : ''}
                 <div class="pkg-price">${Number(p.price).toLocaleString()} T</div>
                 <button class="action-icon" title="Edit" onclick="startEditPackage(${p.id})">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
@@ -434,6 +442,7 @@ function openPkgModal(pkg) {
     document.getElementById('pkg-vol').value   = pkg ? Number(pkg.volume).toLocaleString() : '';
     document.getElementById('pkg-price').value = pkg ? Number(pkg.price).toLocaleString() : '';
     document.getElementById('pkg-scope').value = pkg ? (pkg.scope || 'global') : 'global';
+    document.getElementById('pkg-show-on-sub').checked = pkg ? !!pkg.show_on_sub : false;
     _cachedMinPrice = null;
     document.getElementById('pkg-price-hint').style.display = 'none';
     document.getElementById('pkg-price-warn').style.display = 'none';
@@ -543,7 +552,8 @@ async function submitPackage() {
         price,
         scope,
         reseller_ids,
-        assigned_reseller_ids: reseller_ids
+        assigned_reseller_ids: reseller_ids,
+        show_on_sub: document.getElementById('pkg-show-on-sub').checked
     };
 
     try {
