@@ -11039,10 +11039,35 @@ def add_client(server_id, inbound_id):
             if not direct_link:
                 direct_link = generate_client_link(new_client, inbound_data, server.host)
 
+            # Render the active Client Created Notification template (if any).
+            copy_text = ''
+            try:
+                active_tpl = NotificationTemplate.query.filter_by(
+                    type='client_created', is_active=True
+                ).first()
+                if active_tpl and active_tpl.content:
+                    vol_label = '♾️' if volume_gb == 0 else f'{volume_gb} GB'
+                    days_label_cc = '♾️' if days == 0 else f'{days}'
+                    copy_text = _render_text_template(active_tpl.content, {
+                        'service_name': email,
+                        'email': email,
+                        'protocol': inbound_data.get('protocol', 'vless'),
+                        'volume': vol_label,
+                        'days': days_label_cc,
+                        'sub_link': sub_url,
+                        'dashboard_link': dash_sub_url,
+                        'server_name': getattr(server, 'name', '') or '',
+                        'comment': data.get('comment', '') or '',
+                    })
+            except Exception:
+                copy_text = ''
+
             return jsonify({
                 "success": True,
+                "copy_text": copy_text,
                 "client": {
                     "email": email,
+                    "comment": data.get('comment', '') or '',
                     "protocol": inbound_data.get('protocol', 'vless'),
                     "volume": volume_gb,
                     "days": days,
