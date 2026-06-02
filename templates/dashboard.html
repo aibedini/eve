@@ -1584,10 +1584,22 @@
             overlay._onSelect = onSelect;
             overlay._phone = phone;
             overlay._clientButton = options.clientButton || null;
+            const noPhone = !!options.noPhone;
             const phoneBox = overlay.querySelector('#message-channel-phone');
-            if (phoneBox) {
-                phoneBox.querySelector('span').textContent = phone?.label || 'Phone';
-                phoneBox.querySelector('strong').textContent = phone?.display || ('+' + (phone?.number || ''));
+            const whatsappBtn = overlay.querySelector('[data-message-channel="whatsapp"]');
+            const smsBtn = overlay.querySelector('[data-message-channel="sms"]');
+            if (noPhone) {
+                if (phoneBox) phoneBox.innerHTML = `<span style="color:var(--text-secondary); font-size:0.85rem; text-align:center; width:100%;">No phone number — add it in Comment field.</span>`;
+                if (whatsappBtn) whatsappBtn.style.display = 'none';
+                if (smsBtn) smsBtn.style.display = 'none';
+            } else {
+                if (phoneBox) {
+                    phoneBox.innerHTML = `<span>Phone</span><strong dir="ltr"></strong>`;
+                    phoneBox.querySelector('span').textContent = phone?.label || 'Phone';
+                    phoneBox.querySelector('strong').textContent = phone?.display || ('+' + (phone?.number || ''));
+                }
+                if (whatsappBtn) whatsappBtn.style.display = '';
+                if (smsBtn) smsBtn.style.display = '';
             }
             // Reset copy button to default state
             const copyBtn = overlay.querySelector('#message-channel-copy-btn');
@@ -1626,7 +1638,7 @@
                     { label: 'Saved phone', value: client.phone }
                 );
                 if (!phones.length) {
-                    showToast('No mobile phone number found for this client. Add the phone number in Comment.', 'error');
+                    openMessageChannelChoice(null, null, { clientButton: button, noPhone: true });
                     return;
                 }
                 openPhoneChoiceModal(phones, (phone) => {
