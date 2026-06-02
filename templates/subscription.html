@@ -234,39 +234,46 @@
         </div>
 
         {% set needs_renewal = state_tag in ('low', 'soon', 'expired', 'ended') %}
-        {% set renew_block %}
-        {% if sub_packages and sub_packages|length and (support.whatsapp or support.telegram) %}
-        <div id="sec-renew" class="bg-card rounded-lg border border-border p-6 shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]{% if needs_renewal %} renew-highlight{% endif %}">
-            <div class="flex items-center gap-2 mb-1 text-primary font-semibold">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z"/></svg>
-                {{ 'تمدید سرویس' if is_fa else 'Renew Service' }}
-            </div>
-            <p class="text-xs text-muted mb-4">{{ 'یک پکیج انتخاب کنید تا درخواست تمدید برای پشتیبانی ارسال شود.' if is_fa else 'Pick a package to send a renewal request to support.' }}</p>
 
-            <div class="pkg-renew-grid">
-                {% for p in sub_packages %}
-                <div class="pkg-renew-card"
-                        data-name="{{ p.name }}"
-                        data-days="{{ p.days }}"
-                        data-volume="{{ p.volume }}"
-                        data-price="{{ p.price }}"
-                        onclick="openRenewRequest(this)">
-                    <span class="pkg-renew-name">{{ p.name }}</span>
-                    <span class="pkg-renew-meta">
-                        <span>{{ ('∞' if p.days == 0 else (p.days|string ~ (' روز' if is_fa else 'd'))) }}</span>
-                        <span class="pkg-renew-dot">•</span>
-                        <span>{{ ('∞' if p.volume == 0 else (p.volume|string ~ ' GB')) }}</span>
-                    </span>
-                    <span class="pkg-renew-price">{{ "{:,}".format(p.price) }} <small>{{ 'تومان' if is_fa else 'T' }}</small></span>
-                    <span class="pkg-renew-cta">{{ 'درخواست تمدید' if is_fa else 'Request Renewal' }}</span>
+        {% if sub_packages and sub_packages|length and (support.whatsapp or support.telegram) %}
+        <div id="sec-renew" class="bg-card rounded-lg border border-border shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]{% if needs_renewal %} renew-highlight{% endif %}">
+            <!-- Header row — always visible, acts as toggle when collapsed -->
+            <button type="button" id="renew-toggle-btn" onclick="toggleRenewSection()"
+                    style="width:100%; display:flex; align-items:center; justify-content:space-between; padding:16px 20px; background:none; border:none; cursor:pointer; gap:10px;">
+                <span style="display:flex; align-items:center; gap:8px; font-weight:600; color:{% if needs_renewal %}#a5b4fc{% else %}rgba(255,255,255,0.85){% endif %}; font-size:0.95rem;">
+                    <svg xmlns="http://www.w3.org/2000/svg" style="width:18px;height:18px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z"/></svg>
+                    {{ 'تمدید سرویس' if is_fa else 'Renew Service' }}
+                </span>
+                <svg id="renew-arrow" style="width:18px;height:18px;flex-shrink:0;color:rgba(148,163,184,0.7);transition:transform .28s ease;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+
+            <!-- Collapsible body -->
+            <div id="renew-body" style="overflow:hidden; transition:max-height .35s cubic-bezier(0.4,0,0.2,1); max-height:{% if needs_renewal %}2000px{% else %}0{% endif %};">
+                <div style="padding:0 20px 20px; border-top:1px solid rgba(255,255,255,0.06);">
+                    <p style="font-size:0.78rem; color:rgba(148,163,184,0.85); margin:12px 0 14px;">{{ 'یک پکیج انتخاب کنید تا درخواست تمدید برای پشتیبانی ارسال شود.' if is_fa else 'Pick a package to send a renewal request to support.' }}</p>
+                    <div class="pkg-renew-grid">
+                        {% for p in sub_packages %}
+                        <div class="pkg-renew-card"
+                                data-name="{{ p.name }}"
+                                data-days="{{ p.days }}"
+                                data-volume="{{ p.volume }}"
+                                data-price="{{ p.price }}"
+                                onclick="openRenewRequest(this)">
+                            <span class="pkg-renew-name">{{ p.name }}</span>
+                            <span class="pkg-renew-meta">
+                                <span>{{ ('∞' if p.days == 0 else (p.days|string ~ (' روز' if is_fa else 'd'))) }}</span>
+                                <span class="pkg-renew-dot">•</span>
+                                <span>{{ ('∞' if p.volume == 0 else (p.volume|string ~ ' GB')) }}</span>
+                            </span>
+                            <span class="pkg-renew-price">{{ "{:,}".format(p.price) }} <small>{{ 'تومان' if is_fa else 'T' }}</small></span>
+                            <span class="pkg-renew-cta">{{ 'درخواست تمدید' if is_fa else 'Request Renewal' }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
                 </div>
-                {% endfor %}
             </div>
         </div>
         {% endif %}
-        {% endset %}
-
-        {% if needs_renewal %}{{ renew_block }}{% endif %}
 
         {% if backup_configs and backup_configs|length %}
         {% for bc in backup_configs %}
@@ -422,8 +429,6 @@
             </div>
             {% endif %}
         </div>
-
-        {% if not needs_renewal %}{{ renew_block }}{% endif %}
 
         <div class="bg-card rounded-lg border border-border p-6 shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
             <div class="flex items-center gap-2 mb-6 text-success font-semibold">
@@ -954,10 +959,22 @@
             el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
+        function toggleRenewSection(forceOpen) {
+            const body  = document.getElementById('renew-body');
+            const arrow = document.getElementById('renew-arrow');
+            if (!body) return;
+            const isOpen = body.style.maxHeight !== '0px' && body.style.maxHeight !== '';
+            const open = (forceOpen !== undefined) ? forceOpen : !isOpen;
+            body.style.maxHeight  = open ? (body.scrollHeight + 40) + 'px' : '0px';
+            if (arrow) arrow.style.transform = open ? 'rotate(180deg)' : 'rotate(0deg)';
+        }
+
         function pwaRenew() {
             const el = document.getElementById('sec-renew');
-            if (el) { pwaScrollTo('sec-renew'); }
-            else { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+            if (!el) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+            // Open accordion first (so scrollHeight is correct), then scroll.
+            toggleRenewSection(true);
+            setTimeout(() => pwaScrollTo('sec-renew'), 40);
         }
 
         function pwaOpenConfig() {
