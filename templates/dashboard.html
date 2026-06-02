@@ -604,13 +604,17 @@
             <div id="renew-prev-state" style="margin-bottom: 15px; font-size: 0.85rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-all;">
             </div>
             <div id="renew-success-text" style="white-space: pre-wrap; word-break: break-all; margin-bottom: 20px; font-size: 1.1rem; line-height: 1.6; background: var(--bg-dark); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); direction: ltr; text-align: left;"></div>
-            <div style="display: flex; gap: 10px;">
-                <button class="btn btn-secondary" style="flex: 1;" onclick="recheckRenewal()" id="renew-recheck-btn">
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button class="btn btn-secondary" style="flex: 1; min-width: 90px;" onclick="recheckRenewal()" id="renew-recheck-btn">
                     Re-check
                 </button>
-                <button class="btn btn-primary" style="flex: 1;" onclick="copyRenewSuccessText()">
+                <button class="btn btn-primary" style="flex: 1; min-width: 90px;" onclick="copyRenewSuccessText()">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     Copy Text
+                </button>
+                <button class="btn btn-success" style="flex: 1; min-width: 90px;" onclick="sendRenewToUser()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    ارسال به کاربر
                 </button>
             </div>
         </div>
@@ -992,10 +996,16 @@
             <div class="form-group">
                 <label>Client Details</label>
                 <textarea id="new-client-details" class="form-input" rows="12" readonly style="font-family: 'Vazirmatn', sans-serif; direction: rtl; white-space: pre-wrap; word-break: break-all; line-height: 1.7;"></textarea>
-                <button class="btn btn-secondary btn-block" style="margin-top: 8px;" onclick="copyNewClientDetails()">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                    Copy Details
-                </button>
+                <div style="display: flex; gap: 8px; margin-top: 8px;">
+                    <button class="btn btn-secondary" style="flex: 1;" onclick="copyNewClientDetails()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        Copy Details
+                    </button>
+                    <button class="btn btn-success" style="flex: 1;" onclick="sendNewClientToUser()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                        ارسال به کاربر
+                    </button>
+                </div>
             </div>
             
             <div style="margin-top: 20px;">
@@ -1566,7 +1576,11 @@
                     const channelBtn = event.target.closest('[data-message-channel]');
                     if (channelBtn) {
                         if (channelBtn.dataset.messageChannel === 'copy') {
-                            copyClientAccountMessage(overlay._clientButton, overlay._phone, channelBtn);
+                            if (overlay._message != null) {
+                                copyPlainMessage(overlay._message, channelBtn);
+                            } else {
+                                copyClientAccountMessage(overlay._clientButton, overlay._phone, channelBtn);
+                            }
                             return;
                         }
                         overlay.classList.add('hidden');
@@ -1584,6 +1598,9 @@
             overlay._onSelect = onSelect;
             overlay._phone = phone;
             overlay._clientButton = options.clientButton || null;
+            overlay._message = (options.message != null) ? options.message : null;
+            const titleEl = overlay.querySelector('.modal-header h2');
+            if (titleEl) titleEl.textContent = options.title || 'Send account info';
             const noPhone = !!options.noPhone;
             const phoneBox = overlay.querySelector('#message-channel-phone');
             const whatsappBtn = overlay.querySelector('[data-message-channel="whatsapp"]');
@@ -1626,6 +1643,51 @@
                 }
             } catch (error) {
                 showToast('Failed to copy message', 'error');
+            }
+        }
+
+        async function copyPlainMessage(message, copyBtn) {
+            try {
+                await navigator.clipboard.writeText(message || '');
+                if (copyBtn) {
+                    copyBtn.innerHTML = `<span>Copied!</span><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                    copyBtn.style.color = '#4ade80';
+                    setTimeout(() => {
+                        copyBtn.innerHTML = `<span>Copy Message</span><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+                        copyBtn.style.color = '';
+                    }, 2000);
+                }
+            } catch (error) {
+                showToast('Failed to copy message', 'error');
+            }
+        }
+
+        // Send an arbitrary, already-rendered message (renewal / new-account text)
+        // to a specific client via WhatsApp or SMS — same channel chooser as the
+        // account-info button, but with the message we already built.
+        function sendCustomMessageToClient(ctx, message, title) {
+            try {
+                const phones = extractWhatsAppNumbers(
+                    { label: 'Account name', value: ctx.email },
+                    { label: 'Comment', value: ctx.comment },
+                    { label: 'Saved phone', value: ctx.phone }
+                );
+                const doSend = (channel, phone) => {
+                    if (!phone) return;
+                    const href = channel === 'sms'
+                        ? `sms:${phone.display || ('+' + phone.number)}?body=${encodeURIComponent(message)}`
+                        : `https://wa.me/${phone.number}?text=${encodeURIComponent(message)}`;
+                    window.open(href, '_blank', 'noopener');
+                };
+                if (!phones.length) {
+                    openMessageChannelChoice(null, null, { noPhone: true, message, title });
+                    return;
+                }
+                openPhoneChoiceModal(phones, (phone) => {
+                    openMessageChannelChoice(phone, doSend, { message, title });
+                }, 'Select mobile number', { alwaysShow: true });
+            } catch (e) {
+                showToast('Unable to prepare message', 'error');
             }
         }
 
@@ -3689,6 +3751,7 @@
                     successText += '\n✅ کاربر از حالت غیرفعال خارج و اکتیو شد';
                 }
                 document.getElementById('renew-success-text').innerText = successText;
+                _sendCtxRenew = { email: String(email || ''), comment: '', phone: '' };
                 document.getElementById('renew-success-modal').classList.remove('hidden');
 
                 // Update UI instantly using authoritative values returned by the API.
@@ -4331,9 +4394,25 @@
             .replace(/{dashboard_link}/g, client.dashboard_link || '');
     }
 
+    let _sendCtxNewClient = null;
+    let _sendCtxRenew = null;
+
+    function sendNewClientToUser() {
+        if (!_sendCtxNewClient) { showToast('No client context', 'error'); return; }
+        const msg = document.getElementById('new-client-details').value || '';
+        sendCustomMessageToClient(_sendCtxNewClient, msg, 'ارسال به کاربر');
+    }
+
+    function sendRenewToUser() {
+        if (!_sendCtxRenew) { showToast('No client context', 'error'); return; }
+        const msg = document.getElementById('renew-success-text').innerText || '';
+        sendCustomMessageToClient(_sendCtxRenew, msg, 'ارسال به کاربر');
+    }
+
     async function showNewClientModal(client) {
         const modal = document.getElementById('new-client-modal');
         const detailsText = document.getElementById('new-client-details');
+        _sendCtxNewClient = { email: client.email || '', comment: client.comment || '', phone: client.phone || '' };
 
         // 1) Show the modal + copyable details IMMEDIATELY.
         //    Use cached template if available so there's zero network wait;
