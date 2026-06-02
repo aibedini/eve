@@ -3417,7 +3417,8 @@ DEFAULT_MONITOR_SETTINGS = {
         "ended": "مشترک گرامی {user}، حجم سرویس شما به پایان رسیده است.\nلطفا جهت تمدید اقدام فرمایید.",
         "expired": "مشترک گرامی {user}، زمان سرویس شما به پایان رسیده است.\nلطفا جهت تمدید اقدام فرمایید.",
         "low": "مشترک گرامی {user}، تنها {rem} از حجم سرویس شما باقی مانده است.\nتمدید میفرمایید؟",
-        "soon": "مشترک گرامی {user}، تنها {time} از زمان سرویس شما باقی مانده است.\nتمدید میفرمایید؟"
+        "soon": "مشترک گرامی {user}، تنها {time} از زمان سرویس شما باقی مانده است.\nتمدید میفرمایید؟",
+        "disabled": "مشترک گرامی {user}، سرویس شما غیرفعال شده است.\nبرای پیگیری با پشتیبانی در تماس باشید."
     }
 }
 
@@ -3617,19 +3618,24 @@ def _compute_client_service_state(*, enabled: bool, total_bytes: int, remaining_
         'volume_ended': 'حجم تمام کردی' if is_fa else 'Volume Ended',
     }
 
-    if not enabled:
-        return {'key': 'inactive', 'label': labels['inactive'], 'emoji': '⏸️', 'tag': 'inactive'}
-
     low_volume_threshold_gb = float((thresholds or {}).get('low_volume_gb') or 1.0)
     near_expiry_days = int((thresholds or {}).get('near_expiry_days') or 0)
     near_expiry_hours = int((thresholds or {}).get('near_expiry_hours') or 0)
     near_expiry_ms = ((near_expiry_days * 24) + near_expiry_hours) * 3600 * 1000
 
+    # Reasons that hold regardless of the enable flag. Sanaei-style panels flip
+    # enable=False the moment time or traffic runs out, so checking these BEFORE
+    # the bare enable flag is what lets us show the real reason (expired / volume
+    # ended) instead of a generic "inactive" for auto-disabled accounts.
     if total_bytes > 0 and remaining_bytes is not None and remaining_bytes <= 0:
         return {'key': 'volume_ended', 'label': labels['volume_ended'], 'emoji': '🚫', 'tag': 'ended'}
 
     if str((expiry_info or {}).get('type') or '').lower() == 'expired':
         return {'key': 'expired', 'label': labels['expired'], 'emoji': '⛔', 'tag': 'expired'}
+
+    # Past time/traffic checks: a still-disabled account was turned off manually.
+    if not enabled:
+        return {'key': 'inactive', 'label': labels['inactive'], 'emoji': '⏸️', 'tag': 'inactive'}
 
     if total_bytes > 0 and remaining_bytes is not None:
         remaining_gb = float(remaining_bytes) / (1024 ** 3)
@@ -7425,6 +7431,7 @@ def get_monitor_alerts():
         'expired': 'Expired',
         'low': 'Low data',
         'soon': 'Expiring soon',
+        'disabled': 'Disabled (manual)',
         'ok': 'OK'
     }
     status_order = {
@@ -7432,7 +7439,8 @@ def get_monitor_alerts():
         'expired': 1,
         'low': 2,
         'soon': 3,
-        'ok': 4
+        'disabled': 4,
+        'ok': 5
     }
 
     alerts = []
@@ -7474,8 +7482,11 @@ def get_monitor_alerts():
                     continue
 
             enabled = bool(client.get('enable', True))
-            if not enabled and not debug:
-                continue
+            # IMPORTANT: We do NOT skip disabled clients here. Sanaei-style panels
+            # auto-disable a client the instant its time or traffic runs out, so
+            # filtering by the enable flag alone would hide exactly the users we
+            # most need to follow up with. Instead, every client is categorized by
+            # the REAL reason below (ended / expired / manual-disable).
 
             total_bytes = int(client.get('totalGB') or 0)
             remaining_bytes = client.get('remaining_bytes')
@@ -7502,6 +7513,7 @@ def get_monitor_alerts():
             status = None
             status_rank = -1
 
+            # Traffic-based reason (applies whether or not the panel already disabled it)
             if total_bytes > 0 and remaining_bytes is not None:
                 if remaining_bytes <= 0:
                     status = 'ended'
@@ -7510,6 +7522,7 @@ def get_monitor_alerts():
                     status = 'low'
                     status_rank = 2
 
+            # Time-based reason
             if expiry_ts and expiry_info.get('type') == 'expired':
                 if status_rank < 3:
                     status = 'expired'
@@ -7519,6 +7532,15 @@ def get_monitor_alerts():
                     status = 'soon'
                     status_rank = 1
 
+            # A disabled client whose time AND traffic are both still fine was
+            # switched off by an operator — its own "manual disable" category,
+            # kept separate from the auto-disabled (ended/expired) accounts.
+            # 'low'/'soon' are active-user warnings, so they don't apply once off.
+            if not enabled and status in (None, 'low', 'soon'):
+                status = 'disabled'
+                status_rank = 0
+
+            # Hide long-expired garbage (date-based, independent of enable flag).
             if expiry_info.get('type') == 'expired' and not debug:
                 try:
                     days_ago = abs(int(expiry_info.get('days') or 0))

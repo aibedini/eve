@@ -607,7 +607,8 @@ body {
     color: #22c55e !important;
 }
 
-.monitor-tag.tag-inactive {
+.monitor-tag.tag-inactive,
+.monitor-tag.tag-disabled {
     background: rgba(148, 163, 184, 0.25) !important;
     border: 1px solid rgba(148, 163, 184, 0.35);
     color: #cbd5e1 !important;
@@ -770,6 +771,10 @@ body {
 
 .status-soon {
     border-left-color: #38bdf8;
+}
+
+.status-disabled {
+    border-left-color: #94a3b8;
 }
 
 .status-ok {

@@ -97,6 +97,10 @@
                         <summary>Expiring Soon</summary>
                         <textarea id="tpl-soon" rows="4"></textarea>
                     </details>
+                    <details>
+                        <summary>Disabled (manual)</summary>
+                        <textarea id="tpl-disabled" rows="4"></textarea>
+                    </details>
                 </div>
             </div>
         </aside>
@@ -128,6 +132,7 @@
                     <button class="chip active" data-status="expired" data-label="Expired" onclick="toggleStatusFilter(this)">Expired (0)</button>
                     <button class="chip active" data-status="low" data-label="Low" onclick="toggleStatusFilter(this)">Low (0)</button>
                     <button class="chip active" data-status="soon" data-label="Soon" onclick="toggleStatusFilter(this)">Soon (0)</button>
+                    <button class="chip" data-status="disabled" data-label="Disabled" onclick="toggleStatusFilter(this)">Disabled (0)</button>
                     <button class="chip" data-status="ok" data-label="All" onclick="toggleStatusFilter(this)">All (0)</button>
                 </div>
                 {% if role != 'reseller' %}
@@ -223,6 +228,7 @@
         document.getElementById('tpl-expired').value = templates.expired || '';
         document.getElementById('tpl-low').value = templates.low || '';
         document.getElementById('tpl-soon').value = templates.soon || '';
+        document.getElementById('tpl-disabled').value = templates.disabled || '';
     }
 
     function applyTimezoneOptions(selectId, options) {
@@ -262,7 +268,8 @@
                 ended: document.getElementById('tpl-ended').value || '',
                 expired: document.getElementById('tpl-expired').value || '',
                 low: document.getElementById('tpl-low').value || '',
-                soon: document.getElementById('tpl-soon').value || ''
+                soon: document.getElementById('tpl-soon').value || '',
+                disabled: document.getElementById('tpl-disabled').value || ''
             }
         };
 
@@ -417,7 +424,7 @@
     }
 
     function getStatusCounts(alerts) {
-        const counts = { all: alerts.length, ended: 0, expired: 0, low: 0, soon: 0 };
+        const counts = { all: alerts.length, ended: 0, expired: 0, low: 0, soon: 0, disabled: 0 };
         alerts.forEach((alert) => {
             const status = String(alert.status || '').toLowerCase();
             if (Object.prototype.hasOwnProperty.call(counts, status)) {
