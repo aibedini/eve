@@ -167,6 +167,99 @@
                 </button>
             </div>
 
+            <!-- Transform a single inbound (the "Base" row) -->
+            <div class="merger-card">
+                <div class="merger-panel-title compact">
+                    <div>
+                        <span class="merger-kicker">Convert</span>
+                        <h3>Transform Inbound</h3>
+                    </div>
+                </div>
+                <div class="merger-target-card" id="transform-target-card">
+                    <span>Target (= Base row)</span>
+                    <strong id="transform-target-label">-</strong>
+                    <small id="transform-target-meta">Pick a Base row above</small>
+                </div>
+                <p style="margin:0 16px 4px; font-size:0.78rem; color:var(--text-secondary); line-height:1.5;">
+                    Change protocol / transport while keeping all clients. Leave fields on “Keep” to skip them.
+                </p>
+
+                <div class="merger-fields">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <label class="merger-field">
+                            <span>Protocol</span>
+                            <select class="form-input form-select" id="tf-protocol" onchange="onTransformProtoChange()">
+                                <option value="keep">Keep current</option>
+                                <option value="vless">VLESS</option>
+                                <option value="vmess">VMess</option>
+                                <option value="trojan">Trojan</option>
+                                <option value="shadowsocks">Shadowsocks</option>
+                            </select>
+                        </label>
+                        <label class="merger-field" id="tf-ssmethod-field" style="display:none;">
+                            <span>SS Method</span>
+                            <select class="form-input form-select" id="tf-ss-method">
+                                <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                                <option value="aes-256-gcm">aes-256-gcm</option>
+                                <option value="aes-128-gcm">aes-128-gcm</option>
+                                <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
+                                <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
+                                <option value="2022-blake3-chacha20-poly1305">2022-blake3-chacha20-poly1305</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <label class="merger-field">
+                            <span>Transport</span>
+                            <select class="form-input form-select" id="tf-transport">
+                                <option value="keep">Keep current</option>
+                                <option value="tcp">TCP (no header)</option>
+                                <option value="tcp_http">TCP + HTTP header</option>
+                                <option value="ws">WebSocket</option>
+                                <option value="grpc">gRPC</option>
+                                <option value="h2">HTTP/2</option>
+                            </select>
+                        </label>
+                        <label class="merger-field">
+                            <span>Security</span>
+                            <select class="form-input form-select" id="tf-security">
+                                <option value="keep">Keep current</option>
+                                <option value="none">None</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <label class="merger-field">
+                            <span>New Port</span>
+                            <input class="form-input" type="number" id="tf-port" min="1" max="65535" placeholder="keep">
+                        </label>
+                        <label class="merger-field">
+                            <span>New Remark</span>
+                            <input class="form-input" type="text" id="tf-remark" placeholder="keep">
+                        </label>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <label class="merger-field">
+                            <span>Email prefix</span>
+                            <input class="form-input" type="text" id="tf-email-prefix" placeholder="e.g. [ss]-">
+                        </label>
+                        <label class="merger-field">
+                            <span>Email suffix</span>
+                            <input class="form-input" type="text" id="tf-email-suffix" placeholder="e.g. -v2">
+                        </label>
+                    </div>
+                    <small id="tf-email-preview" style="color:var(--text-secondary); font-size:0.76rem;"></small>
+                </div>
+
+                <button type="button" class="btn btn-primary merger-run-btn" onclick="transformInbound()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line>
+                        <polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line>
+                    </svg>
+                    Transform Inbound
+                </button>
+            </div>
+
             <div class="merger-card hidden" id="merger-result">
                 <div class="merger-panel-title compact">
                     <div>
@@ -903,6 +996,78 @@
         document.getElementById('merger-base-meta').textContent = baseItem
             ? `ID ${baseItem.id} · port ${baseItem.port ?? '-'} · ${baseItem.protocol || '-'}`
             : 'Select a row as base';
+        updateTransformTarget();
+    }
+
+    function updateTransformTarget() {
+        const baseItem = mergerInbounds.find((item) => Number(item.id) === Number(baseInboundId));
+        const label = document.getElementById('transform-target-label');
+        const meta = document.getElementById('transform-target-meta');
+        if (!label || !meta) return;
+        label.textContent = baseItem ? (baseItem.remark || `Inbound ${baseItem.id}`) : '-';
+        meta.textContent = baseItem
+            ? `ID ${baseItem.id} · port ${baseItem.port ?? '-'} · ${baseItem.protocol || '-'} · ${baseItem.client_count || 0} clients`
+            : 'Pick a Base row above';
+    }
+
+    function onTransformProtoChange() {
+        const proto = document.getElementById('tf-protocol').value;
+        document.getElementById('tf-ssmethod-field').style.display = proto === 'shadowsocks' ? '' : 'none';
+        if (proto === 'shadowsocks') {
+            // Shadowsocks can't use a TCP HTTP header — steer to plain TCP.
+            const tr = document.getElementById('tf-transport');
+            if (tr.value === 'keep' || tr.value === 'tcp_http') tr.value = 'tcp';
+        }
+    }
+
+    function updateTransformEmailPreview() {
+        const p = document.getElementById('tf-email-prefix').value || '';
+        const s = document.getElementById('tf-email-suffix').value || '';
+        const el = document.getElementById('tf-email-preview');
+        el.textContent = (p || s) ? `Email preview:  ${p}your-user${s}` : '';
+    }
+
+    async function transformInbound() {
+        if (!mergerJobId) { showToast('Load a database first', 'error'); return; }
+        if (!baseInboundId) { showToast('Pick a Base row to transform', 'error'); return; }
+        const portRaw = document.getElementById('tf-port').value.trim();
+        if (portRaw && (Number(portRaw) < 1 || Number(portRaw) > 65535)) {
+            showToast('Port must be 1–65535', 'error');
+            return;
+        }
+        const payload = {
+            job_id: mergerJobId,
+            inbound_id: Number(baseInboundId),
+            protocol: document.getElementById('tf-protocol').value,
+            ss_method: document.getElementById('tf-ss-method').value,
+            transport: document.getElementById('tf-transport').value,
+            security: document.getElementById('tf-security').value,
+            port: portRaw,
+            remark: document.getElementById('tf-remark').value.trim(),
+            email_prefix: document.getElementById('tf-email-prefix').value,
+            email_suffix: document.getElementById('tf-email-suffix').value,
+        };
+        showLoading();
+        try {
+            const resp = await fetch('/api/merger/transform', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error || 'Transform failed');
+            showMergerResult(data);
+            document.getElementById('merger-result-meta').textContent =
+                `${data.final_protocol} · ${data.client_count} clients`;
+            const note = [];
+            if (data.source_protocol !== data.final_protocol) note.push(`${data.source_protocol} → ${data.final_protocol}`);
+            if (data.emails_renamed) note.push(`${data.emails_renamed} emails renamed`);
+            showToast('Transformed' + (note.length ? ': ' + note.join(', ') : ''));
+        } catch (error) {
+            showToast(error.message || 'Transform failed', 'error');
+        } finally {
+            hideLoading();
+        }
     }
 
     async function mergeSelectedInbounds() {
@@ -983,10 +1148,17 @@
         document.getElementById('merger-search').value = '';
         document.getElementById('merger-final-port').value = '';
         document.getElementById('merger-final-remark').value = '';
+        ['tf-port', 'tf-remark', 'tf-email-prefix', 'tf-email-suffix'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        ['tf-protocol', 'tf-transport', 'tf-security'].forEach(id => { const el = document.getElementById(id); if (el) el.value = 'keep'; });
+        onTransformProtoChange();
+        updateTransformEmailPreview();
         document.getElementById('merger-result').classList.add('hidden');
         updateMergerSummary();
         renderMergerInbounds();
     }
+
+    document.getElementById('tf-email-prefix')?.addEventListener('input', updateTransformEmailPreview);
+    document.getElementById('tf-email-suffix')?.addEventListener('input', updateTransformEmailPreview);
 
     function formatBytes(bytes) {
         if (!bytes || bytes <= 0) return '0 B';

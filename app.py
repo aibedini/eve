@@ -7396,6 +7396,276 @@ def _merger_merge_db(job_id, selected_ids, base_id, final_port, final_remark=Non
         conn.close()
 
 
+# ── Inbound Transform (protocol / transport / emails / port) ─────────────────
+# Offline rebuild of a single inbound inside the uploaded x-ui DB. Lets you do
+# what the x-ui panel forbids: change an inbound's protocol while keeping all of
+# its clients (their fields are remapped to the target protocol's shape).
+
+MERGER_TRANSFORM_PROTOCOLS = ('vless', 'vmess', 'trojan', 'shadowsocks')
+MERGER_SS_METHODS = (
+    'chacha20-ietf-poly1305', 'aes-256-gcm', 'aes-128-gcm',
+    '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305',
+)
+
+
+def _ss_key_len(method: str) -> int:
+    m = (method or '').lower()
+    if '128' in m:
+        return 16
+    return 32  # aes-256-gcm, chacha20-ietf-poly1305, 2022-256 variants
+
+
+def _ss_password(method: str) -> str:
+    return base64.b64encode(os.urandom(_ss_key_len(method))).decode('ascii')
+
+
+def _transform_client(src: dict, target_protocol: str, ss_method: str,
+                      email_prefix: str, email_suffix: str) -> dict:
+    """Remap one client dict from its source shape to the target protocol's shape,
+    keeping the cross-protocol fields (quota/expiry/sub/etc.)."""
+    src = src if isinstance(src, dict) else {}
+    old_email = _merger_client_email(src) or 'client'
+    new_email = f'{email_prefix}{old_email}{email_suffix}'
+
+    def _i(v, d=0):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return d
+
+    common = {
+        'email': new_email,
+        'enable': _merger_bool(src.get('enable', True)),
+        'limitIp': _i(src.get('limitIp'), 0),
+        'totalGB': _i(src.get('totalGB'), 0),
+        'expiryTime': _i(src.get('expiryTime'), 0),
+        'tgId': src.get('tgId', 0) if src.get('tgId') not in (None, '') else 0,
+        'subId': src.get('subId') or '',
+        'comment': src.get('comment') or '',
+        'reset': _i(src.get('reset'), 0),
+    }
+
+    if target_protocol == 'vless':
+        common['id'] = src.get('id') or str(uuid.uuid4())
+        common['flow'] = src.get('flow') or ''
+    elif target_protocol == 'vmess':
+        common['id'] = src.get('id') or str(uuid.uuid4())
+    elif target_protocol == 'trojan':
+        common['password'] = src.get('password') or secrets.token_urlsafe(16)
+    elif target_protocol == 'shadowsocks':
+        common['method'] = ss_method
+        # Reuse an existing SS password only if it already matches the method length.
+        existing = src.get('password') or ''
+        try:
+            existing_len = len(base64.b64decode(existing)) if existing else 0
+        except Exception:
+            existing_len = 0
+        common['password'] = existing if existing_len == _ss_key_len(ss_method) else _ss_password(ss_method)
+    return common, old_email, new_email
+
+
+def _build_inbound_settings(target_protocol: str, clients: list,
+                            ss_method: str, existing_settings: dict) -> dict:
+    if target_protocol == 'vless':
+        return {'clients': clients, 'decryption': 'none', 'fallbacks': []}
+    if target_protocol == 'vmess':
+        return {'clients': clients}
+    if target_protocol == 'trojan':
+        return {'clients': clients, 'fallbacks': []}
+    if target_protocol == 'shadowsocks':
+        return {
+            'clients': clients,
+            'method': ss_method,
+            'password': _ss_password(ss_method),
+            'network': 'tcp,udp',
+            'ivCheck': False,
+        }
+    # Fallback: keep existing structure, just swap clients.
+    out = dict(existing_settings or {})
+    out['clients'] = clients
+    return out
+
+
+def _build_stream_settings(existing: dict, transport: str, security: str,
+                           target_protocol: str) -> dict:
+    ss = copy.deepcopy(existing) if isinstance(existing, dict) else {}
+    ss.setdefault('externalProxy', [])
+
+    # ── Security ──
+    if security == 'none':
+        ss['security'] = 'none'
+        for k in ('tlsSettings', 'realitySettings', 'xtlsSettings'):
+            ss.pop(k, None)
+    # security == 'keep' → leave as-is
+
+    # ── Transport ──
+    if transport != 'keep':
+        for k in ('tcpSettings', 'wsSettings', 'grpcSettings', 'httpSettings',
+                  'kcpSettings', 'quicSettings', 'httpupgradeSettings'):
+            ss.pop(k, None)
+        if transport == 'tcp':
+            ss['network'] = 'tcp'
+            ss['tcpSettings'] = {'acceptProxyProtocol': False, 'header': {'type': 'none'}}
+        elif transport == 'tcp_http':
+            ss['network'] = 'tcp'
+            ss['tcpSettings'] = {
+                'acceptProxyProtocol': False,
+                'header': {
+                    'type': 'http',
+                    'request': {'version': '1.1', 'method': 'GET', 'path': ['/'], 'headers': {}},
+                    'response': {'version': '1.1', 'status': '200', 'reason': 'OK', 'headers': {}},
+                },
+            }
+        elif transport == 'ws':
+            ss['network'] = 'ws'
+            ss['wsSettings'] = {'path': '/', 'headers': {}}
+        elif transport == 'grpc':
+            ss['network'] = 'grpc'
+            ss['grpcSettings'] = {'serviceName': '', 'multiMode': False}
+        elif transport == 'h2':
+            ss['network'] = 'http'
+            ss['httpSettings'] = {'path': '/', 'host': []}
+    else:
+        # Keeping the transport, but Shadowsocks doesn't use TCP http-header
+        # obfuscation — normalize it to avoid an unusable config.
+        if target_protocol == 'shadowsocks' and (ss.get('network') == 'tcp'):
+            tcp = ss.get('tcpSettings') or {}
+            if isinstance(tcp.get('header'), dict) and tcp['header'].get('type') == 'http':
+                ss['tcpSettings'] = {'acceptProxyProtocol': False, 'header': {'type': 'none'}}
+    return ss
+
+
+def _merger_transform_db(job_id, inbound_id, opts):
+    job_dir = _merger_job_dir(job_id)
+    source_db = os.path.join(job_dir, 'source.db')
+    output_db = os.path.join(job_dir, 'merged.db')
+    export_path = os.path.join(job_dir, 'merged-inbound.json')
+    if not os.path.exists(source_db):
+        raise ValueError('Uploaded database was not found. Upload it again.')
+
+    inbound_id = int(inbound_id)
+    target_protocol = (opts.get('protocol') or 'keep').strip().lower()
+    ss_method = (opts.get('ss_method') or 'chacha20-ietf-poly1305').strip()
+    transport = (opts.get('transport') or 'keep').strip().lower()
+    security = (opts.get('security') or 'keep').strip().lower()
+    email_prefix = str(opts.get('email_prefix') or '')
+    email_suffix = str(opts.get('email_suffix') or '')
+    new_port = opts.get('port')
+    new_remark = opts.get('remark')
+
+    if target_protocol not in ('keep',) + MERGER_TRANSFORM_PROTOCOLS:
+        raise ValueError('Unsupported target protocol.')
+    if target_protocol == 'shadowsocks' and ss_method not in MERGER_SS_METHODS:
+        raise ValueError('Unsupported Shadowsocks method.')
+    if new_port is not None and str(new_port).strip() != '':
+        new_port = int(new_port)
+        if new_port < 1 or new_port > 65535:
+            raise ValueError('Port must be between 1 and 65535.')
+    else:
+        new_port = None
+
+    shutil.copy2(source_db, output_db)
+    conn = sqlite3.connect(output_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = _merger_table_names(conn)
+        if 'inbounds' not in tables:
+            raise ValueError('This SQLite database does not contain an inbounds table.')
+        inbound_cols = _merger_table_columns(conn, 'inbounds')
+
+        row = conn.execute('SELECT * FROM inbounds WHERE id = ?', [inbound_id]).fetchone()
+        if not row:
+            raise ValueError(f'Inbound {inbound_id} not found.')
+        inbound = _merger_row_to_dict(row)
+
+        source_protocol = (inbound.get('protocol') or 'vless').lower()
+        final_protocol = source_protocol if target_protocol == 'keep' else target_protocol
+
+        settings = _merger_json_load(inbound.get('settings'), {})
+        src_clients = settings.get('clients') if isinstance(settings, dict) else []
+        if not isinstance(src_clients, list):
+            src_clients = []
+
+        new_clients = []
+        rename_map = {}  # old_email -> new_email
+        for c in src_clients:
+            tc, old_email, new_email = _transform_client(c, final_protocol, ss_method, email_prefix, email_suffix)
+            new_clients.append(tc)
+            if old_email:
+                rename_map[old_email] = new_email
+
+        new_settings = _build_inbound_settings(final_protocol, new_clients, ss_method, settings if isinstance(settings, dict) else {})
+
+        existing_stream = _merger_json_load(inbound.get('streamSettings') or inbound.get('stream_settings'), {})
+        new_stream = _build_stream_settings(existing_stream, transport, security, final_protocol)
+
+        updates = {
+            'protocol': final_protocol,
+            'settings': _merger_json_dump(new_settings),
+        }
+        if 'streamSettings' in inbound_cols:
+            updates['streamSettings'] = _merger_json_dump(new_stream)
+        elif 'stream_settings' in inbound_cols:
+            updates['stream_settings'] = _merger_json_dump(new_stream)
+        if new_port is not None and 'port' in inbound_cols:
+            updates['port'] = new_port
+            if 'tag' in inbound_cols:
+                updates['tag'] = f'inbound-{new_port}'
+        if new_remark is not None and str(new_remark).strip() != '' and 'remark' in inbound_cols:
+            updates['remark'] = str(new_remark).strip()
+
+        assignments = ', '.join([f'"{k}" = ?' for k in updates.keys()])
+        conn.execute(f'UPDATE inbounds SET {assignments} WHERE id = ?',
+                     list(updates.values()) + [inbound_id])
+
+        # Carry traffic rows over to the renamed emails.
+        renamed_traffic = 0
+        if 'client_traffics' in tables:
+            tcols = _merger_table_columns(conn, 'client_traffics')
+            if 'email' in tcols and 'inbound_id' in tcols:
+                for old_email, new_email in rename_map.items():
+                    if old_email == new_email:
+                        continue
+                    cur = conn.execute(
+                        'UPDATE client_traffics SET email = ? WHERE inbound_id = ? AND email = ?',
+                        [new_email, inbound_id, old_email])
+                    renamed_traffic += cur.rowcount or 0
+
+        conn.commit()
+
+        final_row = conn.execute('SELECT * FROM inbounds WHERE id = ?', [inbound_id]).fetchone()
+        client_stats = []
+        if 'client_traffics' in tables and 'inbound_id' in _merger_table_columns(conn, 'client_traffics'):
+            for stat_row in conn.execute('SELECT * FROM client_traffics WHERE inbound_id = ? ORDER BY id', [inbound_id]).fetchall():
+                raw_stat = _merger_row_to_dict(stat_row)
+                client_stats.append({
+                    'id': raw_stat.get('id'),
+                    'inboundId': raw_stat.get('inbound_id'),
+                    'enable': _merger_bool(raw_stat.get('enable')),
+                    'email': raw_stat.get('email') or '',
+                    'up': raw_stat.get('up') or 0,
+                    'down': raw_stat.get('down') or 0,
+                    'expiryTime': raw_stat.get('expiry_time', raw_stat.get('expiryTime')) or 0,
+                    'total': raw_stat.get('total') or 0,
+                    'reset': raw_stat.get('reset') or 0,
+                })
+        export_payload = _merger_export_inbound(_merger_row_to_dict(final_row), client_stats)
+        with open(export_path, 'w', encoding='utf-8') as fh:
+            json.dump(export_payload, fh, ensure_ascii=False, indent=2)
+
+        return {
+            'inbound_id': inbound_id,
+            'source_protocol': source_protocol,
+            'final_protocol': final_protocol,
+            'client_count': len(new_clients),
+            'emails_renamed': sum(1 for o, n in rename_map.items() if o != n),
+            'traffic_rows_updated': renamed_traffic,
+            'final_port': new_port if new_port is not None else inbound.get('port'),
+        }
+    finally:
+        conn.close()
+
+
 @app.route('/merger')
 @login_required
 def merger_page():
@@ -7451,6 +7721,41 @@ def merger_merge():
         return jsonify({'success': False, 'error': str(exc)}), 400
 
     job_id = str(data.get('job_id') or '')
+    return jsonify({
+        'success': True,
+        **result,
+        'downloads': {
+            'database': url_for('merger_download', job_id=job_id, kind='db'),
+            'inbound_export': url_for('merger_download', job_id=job_id, kind='export'),
+        }
+    })
+
+
+@app.route('/api/merger/transform', methods=['POST'])
+@login_required
+def merger_transform():
+    if not _merger_user_is_allowed():
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    data = request.get_json(silent=True) or {}
+    job_id = str(data.get('job_id') or '')
+    try:
+        result = _merger_transform_db(
+            job_id,
+            data.get('inbound_id'),
+            {
+                'protocol': data.get('protocol'),
+                'ss_method': data.get('ss_method'),
+                'transport': data.get('transport'),
+                'security': data.get('security'),
+                'port': data.get('port'),
+                'remark': data.get('remark'),
+                'email_prefix': data.get('email_prefix'),
+                'email_suffix': data.get('email_suffix'),
+            },
+        )
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
     return jsonify({
         'success': True,
         **result,
