@@ -99,6 +99,36 @@
             </div>
         </div>
 
+        {% if backup_configs and backup_configs|length %}
+        {% for bc in backup_configs %}
+        <div class="bg-card rounded-lg border border-border shadow-lg overflow-hidden transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
+            <div class="flex items-center gap-2 px-5 pt-5 pb-3 font-semibold text-white">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-primary flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                {{ bc.title }}
+            </div>
+            {% if bc.description %}
+            <div class="mx-5 mb-3 px-4 py-3 rounded-xl text-sm leading-relaxed"
+                 style="background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2); color: rgba(255,255,255,0.85); direction: {{ 'rtl' if is_fa else 'ltr' }}; text-align: {{ 'right' if is_fa else 'left' }}; white-space: pre-line;">
+                <span style="display:inline-flex; align-items:center; gap:5px; font-weight:600; color: #a5b4fc; font-size:0.78rem; margin-bottom:6px; display:block;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline; vertical-align:middle; margin-left:3px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    {{ 'کانفیگ پشتیبان' if is_fa else 'Backup Config' }}
+                </span>{{ bc.description }}
+            </div>
+            {% endif %}
+            <div class="flex gap-2 bg-bg mx-5 mb-5 p-1.5 rounded-xl border border-border">
+                <div class="flex-1 px-3 flex items-center overflow-hidden">
+                    <div class="break-all text-xs text-muted font-mono">{{ bc.config_url }}</div>
+                </div>
+                <button onclick="copyToClipboard('{{ bc.config_url }}')"
+                        class="bg-primary hover:bg-accent text-white px-4 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap flex-shrink-0">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    {{ 'کپی' if is_fa else 'COPY' }}
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+
         <div class="bg-card rounded-lg border border-border p-6 shadow-lg relative overflow-hidden transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
             <div class="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
 

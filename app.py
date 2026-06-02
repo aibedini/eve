@@ -3237,6 +3237,40 @@ class OnlineChatScript(db.Model):
         }
 
 
+class BackupConfig(db.Model):
+    __tablename__ = 'backup_configs'
+    id = db.Column(db.Integer, primary_key=True)
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='SET NULL'), nullable=True)
+    title = db.Column(db.String(200), nullable=False)
+    config_url = db.Column(db.Text, nullable=False)
+    description = db.Column(db.Text, nullable=False, default='')
+    is_enabled = db.Column(db.Boolean, default=True)
+    sort_order = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    server = db.relationship('Server', backref=db.backref('backup_configs', passive_deletes=True), foreign_keys=[server_id])
+
+    DEFAULT_DESCRIPTION = (
+        'این کانفیگ پشتیبانه. اگه کانفیگ اصلیت کار نمیکنه، '
+        'این رو کپی کن و توی برنامه VPN بزن Import from clipboard.\n\n'
+        'This is a backup config. If your main connection isn\'t working, '
+        'copy this and import it in your VPN app.'
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'server_id': self.server_id,
+            'server_name': self.server.name if self.server else None,
+            'title': self.title,
+            'config_url': self.config_url,
+            'description': self.description,
+            'is_enabled': bool(self.is_enabled),
+            'sort_order': self.sort_order,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class SystemSetting(db.Model):
     __tablename__ = 'system_settings'
     key = db.Column(db.String(50), primary_key=True)
@@ -13538,6 +13572,17 @@ def client_subscription(server_id, sub_id):
     except Exception:
         active_online_chat_script = ''
 
+    backup_configs_payload = []
+    try:
+        from sqlalchemy import or_ as _or
+        _bcs = BackupConfig.query.filter(
+            BackupConfig.is_enabled == True,
+            _or(BackupConfig.server_id == server.id, BackupConfig.server_id == None)
+        ).order_by(BackupConfig.sort_order, BackupConfig.id).all()
+        backup_configs_payload = [bc.to_dict() for bc in _bcs]
+    except Exception:
+        backup_configs_payload = []
+
     return render_template(
         'subscription.html',
         client=client_payload,
@@ -13547,6 +13592,7 @@ def client_subscription(server_id, sub_id):
         channels=channels_info,
         announcements=announcements_payload,
         active_online_chat_script=active_online_chat_script,
+        backup_configs=backup_configs_payload,
         page_lang=page_lang,
         server_id=server_id,
         sub_id=normalized_sub_id,
@@ -14133,6 +14179,87 @@ def activate_online_chat_script(item_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/backup-configs', methods=['GET'])
+@user_management_required
+def get_backup_configs():
+    items = BackupConfig.query.order_by(BackupConfig.sort_order, BackupConfig.id).all()
+    servers = Server.query.order_by(Server.name).all()
+    return jsonify({
+        'success': True,
+        'items': [i.to_dict() for i in items],
+        'servers': [{'id': s.id, 'name': s.name} for s in servers],
+        'default_description': BackupConfig.DEFAULT_DESCRIPTION,
+    })
+
+
+@app.route('/api/backup-configs', methods=['POST'])
+@user_management_required
+def create_backup_config():
+    data = request.get_json(force=True) or {}
+    title = (data.get('title') or '').strip()
+    config_url = (data.get('config_url') or '').strip()
+    if not title or not config_url:
+        return jsonify({'success': False, 'error': 'Title and config URL are required'}), 400
+    item = BackupConfig(
+        server_id=data.get('server_id') or None,
+        title=title,
+        config_url=config_url,
+        description=(data.get('description') or '').strip(),
+        is_enabled=bool(data.get('is_enabled', True)),
+        sort_order=int(data.get('sort_order') or 0),
+    )
+    try:
+        db.session.add(item)
+        db.session.commit()
+        return jsonify({'success': True, 'item': item.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/backup-configs/<int:item_id>', methods=['PUT'])
+@user_management_required
+def update_backup_config(item_id):
+    item = db.session.get(BackupConfig, item_id)
+    if not item:
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    data = request.get_json(force=True) or {}
+    if 'title' in data:
+        item.title = (data['title'] or '').strip()
+    if 'config_url' in data:
+        item.config_url = (data['config_url'] or '').strip()
+    if 'description' in data:
+        item.description = (data['description'] or '').strip()
+    if 'is_enabled' in data:
+        item.is_enabled = bool(data['is_enabled'])
+    if 'server_id' in data:
+        item.server_id = data['server_id'] or None
+    if 'sort_order' in data:
+        item.sort_order = int(data.get('sort_order') or 0)
+    item.updated_at = datetime.utcnow()
+    try:
+        db.session.commit()
+        return jsonify({'success': True, 'item': item.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/backup-configs/<int:item_id>', methods=['DELETE'])
+@user_management_required
+def delete_backup_config(item_id):
+    item = db.session.get(BackupConfig, item_id)
+    if not item:
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    try:
+        db.session.delete(item)
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/upload', methods=['POST'])
 @user_management_required
