@@ -190,10 +190,18 @@
                             <span>Protocol</span>
                             <select class="form-input form-select" id="tf-protocol" onchange="onTransformProtoChange()">
                                 <option value="keep">Keep current</option>
-                                <option value="vless">VLESS</option>
-                                <option value="vmess">VMess</option>
-                                <option value="trojan">Trojan</option>
-                                <option value="shadowsocks">Shadowsocks</option>
+                                <optgroup label="Quota-preserving (clients kept)">
+                                    <option value="vless">VLESS</option>
+                                    <option value="vmess">VMess</option>
+                                    <option value="trojan">Trojan</option>
+                                    <option value="shadowsocks">Shadowsocks</option>
+                                </optgroup>
+                                <optgroup label="Other (quota/expiry NOT kept)">
+                                    <option value="socks">SOCKS</option>
+                                    <option value="http">HTTP</option>
+                                    <option value="dokodemo-door">Dokodemo-door</option>
+                                    <option value="wireguard">WireGuard</option>
+                                </optgroup>
                             </select>
                         </label>
                         <label class="merger-field" id="tf-ssmethod-field" style="display:none;">
@@ -208,6 +216,17 @@
                             </select>
                         </label>
                     </div>
+                    <div id="tf-dokodemo-fields" style="display:none; grid-template-columns:1fr 1fr; gap:12px;">
+                        <label class="merger-field">
+                            <span>Forward to address</span>
+                            <input class="form-input" type="text" id="tf-dokodemo-address" placeholder="127.0.0.1">
+                        </label>
+                        <label class="merger-field">
+                            <span>Forward to port</span>
+                            <input class="form-input" type="number" id="tf-dokodemo-port" min="1" max="65535" placeholder="same as port">
+                        </label>
+                    </div>
+                    <div id="tf-lossy-warn" style="display:none; padding:9px 11px; border-radius:8px; background:rgba(245,158,11,0.10); border:1px solid rgba(245,158,11,0.30); color:#fbbf24; font-size:0.78rem; line-height:1.5;"></div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                         <label class="merger-field">
                             <span>Transport</span>
@@ -1010,9 +1029,27 @@
             : 'Pick a Base row above';
     }
 
+    const TF_CLIENT_FAMILY = ['keep', 'vless', 'vmess', 'trojan', 'shadowsocks'];
+    const TF_LOSSY_NOTE = {
+        socks: 'SOCKS uses username/password accounts. Each client becomes user=email with a random password. Data quota, expiry and traffic are NOT carried over.',
+        http: 'HTTP proxy uses username/password accounts. Each client becomes user=email with a random password. Data quota, expiry and traffic are NOT carried over.',
+        'dokodemo-door': 'Dokodemo-door is a port forwarder with NO users — all clients are removed. Set the forward target below.',
+        wireguard: 'WireGuard uses peers with fresh key-pairs. Each client becomes a peer (auto IP 10.0.0.x). Data quota, expiry and traffic are NOT carried over.'
+    };
+
     function onTransformProtoChange() {
         const proto = document.getElementById('tf-protocol').value;
         document.getElementById('tf-ssmethod-field').style.display = proto === 'shadowsocks' ? '' : 'none';
+        document.getElementById('tf-dokodemo-fields').style.display = proto === 'dokodemo-door' ? 'grid' : 'none';
+
+        const warn = document.getElementById('tf-lossy-warn');
+        if (TF_LOSSY_NOTE[proto]) {
+            warn.style.display = 'block';
+            warn.textContent = '⚠️ ' + TF_LOSSY_NOTE[proto];
+        } else {
+            warn.style.display = 'none';
+        }
+
         if (proto === 'shadowsocks') {
             // Shadowsocks can't use a TCP HTTP header — steer to plain TCP.
             const tr = document.getElementById('tf-transport');
@@ -1046,6 +1083,8 @@
             remark: document.getElementById('tf-remark').value.trim(),
             email_prefix: document.getElementById('tf-email-prefix').value,
             email_suffix: document.getElementById('tf-email-suffix').value,
+            dokodemo_address: document.getElementById('tf-dokodemo-address').value.trim(),
+            dokodemo_port: document.getElementById('tf-dokodemo-port').value.trim(),
         };
         showLoading();
         try {

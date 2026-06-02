@@ -7419,6 +7419,25 @@ def _ss_password(method: str) -> str:
     return base64.b64encode(os.urandom(_ss_key_len(method))).decode('ascii')
 
 
+# Protocol families: 'client' protocols share x-ui's per-client quota model and
+# transform losslessly. The others use a different user model entirely.
+MERGER_CLIENT_FAMILY = ('vless', 'vmess', 'trojan', 'shadowsocks')
+MERGER_ACCOUNT_FAMILY = ('socks', 'http')
+MERGER_ALL_TARGETS = MERGER_CLIENT_FAMILY + MERGER_ACCOUNT_FAMILY + ('dokodemo-door', 'wireguard')
+
+
+def _wg_keypair():
+    """Return (private_b64, public_b64) Curve25519 keys in WireGuard format."""
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+    priv = X25519PrivateKey.generate()
+    priv_raw = priv.private_bytes(
+        serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+    pub_raw = priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    return base64.b64encode(priv_raw).decode('ascii'), base64.b64encode(pub_raw).decode('ascii')
+
+
 def _transform_client(src: dict, target_protocol: str, ss_method: str,
                       email_prefix: str, email_suffix: str) -> dict:
     """Remap one client dict from its source shape to the target protocol's shape,
@@ -7553,7 +7572,7 @@ def _merger_transform_db(job_id, inbound_id, opts):
     new_port = opts.get('port')
     new_remark = opts.get('remark')
 
-    if target_protocol not in ('keep',) + MERGER_TRANSFORM_PROTOCOLS:
+    if target_protocol not in ('keep',) + MERGER_ALL_TARGETS:
         raise ValueError('Unsupported target protocol.')
     if target_protocol == 'shadowsocks' and ss_method not in MERGER_SS_METHODS:
         raise ValueError('Unsupported Shadowsocks method.')
@@ -7586,15 +7605,73 @@ def _merger_transform_db(job_id, inbound_id, opts):
         if not isinstance(src_clients, list):
             src_clients = []
 
-        new_clients = []
-        rename_map = {}  # old_email -> new_email
-        for c in src_clients:
-            tc, old_email, new_email = _transform_client(c, final_protocol, ss_method, email_prefix, email_suffix)
-            new_clients.append(tc)
-            if old_email:
-                rename_map[old_email] = new_email
+        rename_map = {}     # old_email -> new_email  (only for client-family)
+        client_count = 0
+        drop_traffic = False  # for non-client families, the old per-client rows no longer apply
 
-        new_settings = _build_inbound_settings(final_protocol, new_clients, ss_method, settings if isinstance(settings, dict) else {})
+        def _renamed_email(c):
+            old = _merger_client_email(c) or 'client'
+            return old, f'{email_prefix}{old}{email_suffix}'
+
+        if final_protocol in MERGER_CLIENT_FAMILY:
+            new_clients = []
+            for c in src_clients:
+                tc, old_email, new_email = _transform_client(c, final_protocol, ss_method, email_prefix, email_suffix)
+                new_clients.append(tc)
+                if old_email:
+                    rename_map[old_email] = new_email
+            new_settings = _build_inbound_settings(final_protocol, new_clients, ss_method, settings if isinstance(settings, dict) else {})
+            client_count = len(new_clients)
+
+        elif final_protocol in MERGER_ACCOUNT_FAMILY:
+            # socks / http → username/password accounts (no quota/expiry)
+            accounts = []
+            for c in src_clients:
+                _, new_email = _renamed_email(c)
+                accounts.append({'user': new_email, 'pass': secrets.token_urlsafe(12)})
+            if final_protocol == 'socks':
+                new_settings = {'auth': 'password', 'accounts': accounts, 'udp': True, 'ip': ''}
+            else:  # http
+                new_settings = {'accounts': accounts, 'allowTransparent': False}
+            client_count = len(accounts)
+            drop_traffic = True
+
+        elif final_protocol == 'dokodemo-door':
+            addr = str(opts.get('dokodemo_address') or '127.0.0.1').strip() or '127.0.0.1'
+            try:
+                dport = int(opts.get('dokodemo_port') or 0)
+            except (TypeError, ValueError):
+                dport = 0
+            if dport <= 0:
+                dport = int(new_port or inbound.get('port') or 0)
+            new_settings = {
+                'address': addr,
+                'port': dport,
+                'network': 'tcp,udp',
+                'followRedirect': False,
+                'portMap': {},
+            }
+            client_count = 0
+            drop_traffic = True
+
+        elif final_protocol == 'wireguard':
+            server_priv, _server_pub = _wg_keypair()
+            peers = []
+            for i, c in enumerate(src_clients):
+                p_priv, p_pub = _wg_keypair()
+                peers.append({
+                    'privateKey': p_priv,
+                    'publicKey': p_pub,
+                    'psk': '',
+                    'allowedIPs': [f'10.0.0.{(i % 250) + 2}/32'],
+                    'keepAlive': 0,
+                })
+            new_settings = {'mtu': 1420, 'secretKey': server_priv, 'peers': peers, 'noKernelTun': False}
+            client_count = len(peers)
+            drop_traffic = True
+        else:
+            # Fallback: keep clients shape unchanged
+            new_settings = settings if isinstance(settings, dict) else {}
 
         existing_stream = _merger_json_load(inbound.get('streamSettings') or inbound.get('stream_settings'), {})
         new_stream = _build_stream_settings(existing_stream, transport, security, final_protocol)
@@ -7618,18 +7695,23 @@ def _merger_transform_db(job_id, inbound_id, opts):
         conn.execute(f'UPDATE inbounds SET {assignments} WHERE id = ?',
                      list(updates.values()) + [inbound_id])
 
-        # Carry traffic rows over to the renamed emails.
+        # Traffic rows: rename for the client family, drop for the others
+        # (socks/http accounts, dokodemo forwarder and wireguard peers have no
+        # per-client traffic rows, so leaving the old ones would show ghosts).
         renamed_traffic = 0
         if 'client_traffics' in tables:
             tcols = _merger_table_columns(conn, 'client_traffics')
-            if 'email' in tcols and 'inbound_id' in tcols:
-                for old_email, new_email in rename_map.items():
-                    if old_email == new_email:
-                        continue
-                    cur = conn.execute(
-                        'UPDATE client_traffics SET email = ? WHERE inbound_id = ? AND email = ?',
-                        [new_email, inbound_id, old_email])
-                    renamed_traffic += cur.rowcount or 0
+            if 'inbound_id' in tcols:
+                if drop_traffic:
+                    conn.execute('DELETE FROM client_traffics WHERE inbound_id = ?', [inbound_id])
+                elif 'email' in tcols:
+                    for old_email, new_email in rename_map.items():
+                        if old_email == new_email:
+                            continue
+                        cur = conn.execute(
+                            'UPDATE client_traffics SET email = ? WHERE inbound_id = ? AND email = ?',
+                            [new_email, inbound_id, old_email])
+                        renamed_traffic += cur.rowcount or 0
 
         conn.commit()
 
@@ -7657,9 +7739,10 @@ def _merger_transform_db(job_id, inbound_id, opts):
             'inbound_id': inbound_id,
             'source_protocol': source_protocol,
             'final_protocol': final_protocol,
-            'client_count': len(new_clients),
+            'client_count': client_count,
             'emails_renamed': sum(1 for o, n in rename_map.items() if o != n),
             'traffic_rows_updated': renamed_traffic,
+            'quota_preserved': final_protocol in MERGER_CLIENT_FAMILY,
             'final_port': new_port if new_port is not None else inbound.get('port'),
         }
     finally:
@@ -7751,6 +7834,8 @@ def merger_transform():
                 'remark': data.get('remark'),
                 'email_prefix': data.get('email_prefix'),
                 'email_suffix': data.get('email_suffix'),
+                'dokodemo_address': data.get('dokodemo_address'),
+                'dokodemo_port': data.get('dokodemo_port'),
             },
         )
     except Exception as exc:
