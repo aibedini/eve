@@ -787,15 +787,30 @@ clone_or_update_repo() {
 
 run_migrations() {
     print_header "Running Database Initialization & Migrations"
+    local MIGRATION_OK=true
+
     if [ -f "$APP_DIR/init_db.py" ]; then
         print_header "Initializing Database Tables..."
-        sudo -u "$APP_USER" bash -c "set -a; [ -f $ENV_FILE ] && source $ENV_FILE || true; set +a; source $APP_DIR/venv/bin/activate 2>/dev/null || true && cd $APP_DIR && export DISABLE_BACKGROUND_THREADS=true && INITIAL_ADMIN_USERNAME='${ADMIN_USERNAME}' INITIAL_ADMIN_PASSWORD='${ADMIN_PASS}' python3 init_db.py"
+        if ! sudo -u "$APP_USER" bash -c "set -a; [ -f $ENV_FILE ] && source $ENV_FILE || true; set +a; source $APP_DIR/venv/bin/activate 2>/dev/null || true && cd $APP_DIR && export DISABLE_BACKGROUND_THREADS=true && INITIAL_ADMIN_USERNAME='${ADMIN_USERNAME}' INITIAL_ADMIN_PASSWORD='${ADMIN_PASS}' python3 init_db.py"; then
+            MIGRATION_OK=false
+        fi
     fi
-    if [ -f "$APP_DIR/migrations.py" ]; then
+    if [ -f "$APP_DIR/migrations.py" ] && [ "$MIGRATION_OK" = true ]; then
         print_header "Checking for Schema Updates..."
-        sudo -u "$APP_USER" bash -c "set -a; [ -f $ENV_FILE ] && source $ENV_FILE || true; set +a; source $APP_DIR/venv/bin/activate 2>/dev/null || true && cd $APP_DIR && export DISABLE_BACKGROUND_THREADS=true && python3 migrations.py"
-        print_success "Database check completed"
+        if ! sudo -u "$APP_USER" bash -c "set -a; [ -f $ENV_FILE ] && source $ENV_FILE || true; set +a; source $APP_DIR/venv/bin/activate 2>/dev/null || true && cd $APP_DIR && export DISABLE_BACKGROUND_THREADS=true && python3 migrations.py"; then
+            MIGRATION_OK=false
+        else
+            print_success "Database check completed"
+        fi
     fi
+
+    if [ "$MIGRATION_OK" = false ]; then
+        echo ""
+        print_error "Database migration failed!"
+        # Return non-zero so callers can handle rollback
+        return 1
+    fi
+    return 0
 }
 
 setup_python_env() {
@@ -1759,6 +1774,66 @@ install_with_remote_migration() {
     echo -e "Logs:     journalctl -u ${SERVICE_NAME} -f"
 }
 
+_offer_rollback() {
+    # $1 = backup path
+    local BAK_PATH="$1"
+    echo ""
+    print_error "───────────────────────────────────────────────"
+    print_error " Update failed at the migration step."
+    print_error "───────────────────────────────────────────────"
+    echo -e "  ${YELLOW}Backup is at: ${BAK_PATH}${NC}"
+    echo ""
+    echo -ne "  ${YELLOW}Roll back to previous version? [Y/n]: ${NC}"
+    read -r _RB_ANS </dev/tty
+    _RB_ANS="${_RB_ANS:-Y}"
+    if [[ "$_RB_ANS" =~ ^[Yy]$ ]]; then
+        print_warning "Rolling back..."
+        systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+        rsync -a --exclude='.env' --exclude='instance/' --exclude='venv/' \
+            "${BAK_PATH}/" "$APP_DIR/"
+        chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+        systemctl start "${SERVICE_NAME}"
+        sleep 2
+        if systemctl is-active --quiet "${SERVICE_NAME}"; then
+            print_success "Rolled back successfully — previous version is running."
+        else
+            print_error "Service failed to start after rollback."
+            print_warning "Check logs: journalctl -u ${SERVICE_NAME} -n 50"
+        fi
+    else
+        print_warning "Rollback skipped. Fix the issue, then start manually:"
+        echo -e "  ${DIM}systemctl start ${SERVICE_NAME}${NC}"
+    fi
+}
+
+do_online_update() {
+    # Backup before pulling so we can roll back on migration failure
+    local _BAK_TS; _BAK_TS="$(date +%s)"
+    if [ -d "$APP_DIR" ]; then
+        print_warning "Backing up current installation..."
+        if rsync -a --exclude='.env' --exclude='instance/' --exclude='venv/' \
+            "$APP_DIR/" "${APP_DIR}.bak.${_BAK_TS}/" 2>/dev/null; then
+            print_success "Backup saved to ${APP_DIR}.bak.${_BAK_TS}"
+        else
+            print_warning "Backup failed (continuing anyway)"
+        fi
+    fi
+    install_dependencies
+    clone_or_update_repo
+    create_env_file
+    ensure_server_password_key
+    ensure_systemd_envfile_evemanager
+    SKIP_DB_MIGRATIONS=true setup_python_env
+    if ! run_migrations; then
+        _offer_rollback "${APP_DIR}.bak.${_BAK_TS}"
+        return 1
+    fi
+    setup_nginx
+    systemctl restart "${SERVICE_NAME}"
+    install_eve_cli
+    print_success "Updated and service restarted"
+}
+
 update_self() {
     print_header "Updating Script (Online)"
     if curl -o "$0" -fsSL "${REPO_URL%.git}/raw/main/setup.sh"; then
@@ -2021,7 +2096,11 @@ offline_update() {
 
     # DB migrations
     print_warning "Running database migrations..."
-    run_migrations
+    if ! run_migrations; then
+        _offer_rollback "${APP_DIR}.bak.${BAK_TS}"
+        rm -rf "$TMPDIR"
+        return 1
+    fi
 
     # Update eve CLI from the ZIP
     if [ -f "$EXTRACT_ROOT/setup.sh" ]; then
@@ -2155,16 +2234,7 @@ show_menu() {
             2)
                 require_root
                 detect_os
-                install_dependencies
-                clone_or_update_repo
-                create_env_file
-                ensure_server_password_key
-                ensure_systemd_envfile_evemanager
-                setup_python_env
-                setup_nginx
-                systemctl restart ${SERVICE_NAME}
-                install_eve_cli
-                print_success "Updated and service restarted"
+                do_online_update
                 read -rp "  Press Enter to return to menu..." _dummy
                 ;;
             3)
