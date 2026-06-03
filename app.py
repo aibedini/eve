@@ -3283,6 +3283,7 @@ class Announcement(db.Model):
     end_at = db.Column(db.DateTime, nullable=False)
     created_by = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    hide_from_resellers = db.Column(db.Boolean, default=False)  # when True, not shown on reseller-owned accounts' sub pages
 
     servers = db.relationship('Server', secondary=announcement_servers, lazy='subquery')
 
@@ -3318,6 +3319,7 @@ class Announcement(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'created_at_jalali': format_jalali(self.created_at) if self.created_at else None,
             'is_active': is_active,
+            'hide_from_resellers': bool(self.hide_from_resellers),
         }
 
 
@@ -4687,6 +4689,21 @@ with app.app_context():
                 print(f"Migration error ({col_name}): {_col_err}")
     except Exception as e:
         print(f"Migration error: {e}")
+
+    # Ensure hide_from_resellers exists on announcements
+    try:
+        inspector = inspect(db.engine)
+        if 'announcements' in set(inspector.get_table_names()):
+            ann_cols = [c['name'] for c in inspector.get_columns('announcements')]
+            if 'hide_from_resellers' not in ann_cols:
+                _is_pg = db.engine.dialect.name == 'postgresql'
+                _bool_def = 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'
+                with db.engine.connect() as conn:
+                    conn.execute(text(f'ALTER TABLE announcements ADD COLUMN hide_from_resellers {_bool_def}'))
+                    conn.commit()
+                print("Added hide_from_resellers to announcements")
+    except Exception as e:
+        print(f"Migration error (announcements.hide_from_resellers): {e}")
 
     # Ensure owner_id exists on notification_templates (per-reseller templates)
     try:
@@ -14405,7 +14422,11 @@ def client_subscription(server_id, sub_id):
         q = Announcement.query.filter(Announcement.start_at <= now_utc, Announcement.end_at >= now_utc)
         q = q.order_by(Announcement.created_at.desc())
         active = q.all()
-        announcements_payload = [a.to_dict() for a in active if _announcement_allows(a, server_id=server.id, inbound_id=inbound_id)]
+        announcements_payload = [
+            a.to_dict() for a in active
+            if _announcement_allows(a, server_id=server.id, inbound_id=inbound_id)
+            and not (getattr(a, 'hide_from_resellers', False) and sub_owner_reseller is not None)
+        ]
     except Exception:
         announcements_payload = []
 
@@ -14859,6 +14880,7 @@ def create_announcement():
         start_at=payload['start_at'],
         end_at=payload['end_at'],
         created_by=created_by,
+        hide_from_resellers=bool(data.get('hide_from_resellers', False)),
     )
 
     if not payload['all_servers']:
@@ -14893,6 +14915,8 @@ def update_announcement(announcement_id):
     ann.targets = payload['targets']
     ann.start_at = payload['start_at']
     ann.end_at = payload['end_at']
+    if 'hide_from_resellers' in data:
+        ann.hide_from_resellers = bool(data['hide_from_resellers'])
 
     if ann.all_servers:
         ann.servers = []
