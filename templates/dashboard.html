@@ -6245,8 +6245,13 @@
         // Per-server backup buttons
         const backupList = document.getElementById('bulk-confirm-backup-list');
         const isReseller = (typeof IS_SUPERADMIN !== 'undefined') ? !IS_SUPERADMIN : false;
+        const proceedBtn = document.getElementById('bulk-confirm-proceed');
+        _bulkPendingBackupServers = new Set(byServer.keys()); // track which need backup
+        _updateBulkProceedBtn();
         if (isReseller) {
             document.getElementById('bulk-confirm-backup').style.display = 'none';
+            _bulkPendingBackupServers.clear();
+            _updateBulkProceedBtn();
         } else {
             document.getElementById('bulk-confirm-backup').style.display = 'block';
             backupList.innerHTML = Array.from(byServer.keys()).map(sid =>
@@ -6263,9 +6268,27 @@
         document.getElementById('bulk-confirm-modal').classList.remove('hidden');
     }
 
+    let _bulkPendingBackupServers = new Set();
+
+    function _updateBulkProceedBtn() {
+        const btn = document.getElementById('bulk-confirm-proceed');
+        if (!btn) return;
+        if (_bulkPendingBackupServers.size === 0) {
+            btn.textContent = 'Proceed';
+            btn.classList.remove('btn-warning');
+            btn.classList.add('btn-primary');
+        } else {
+            btn.textContent = 'No backup, proceed';
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-warning');
+        }
+    }
+
     function closeBulkConfirmModal() {
         document.getElementById('bulk-confirm-modal').classList.add('hidden');
         _pendingBulkPayload = null;
+        _bulkPendingBackupServers.clear();
+        _updateBulkProceedBtn();
     }
 
     async function downloadServerBackup(serverId, btn) {
@@ -6291,6 +6314,8 @@
             btn.innerHTML = '✓ Saved';
             btn.style.color = '#4ade80';
             showToast('Backup downloaded', 'success');
+            _bulkPendingBackupServers.delete(String(serverId));
+            _updateBulkProceedBtn();
         } catch (e) {
             btn.innerHTML = original;
             btn.disabled = false;
