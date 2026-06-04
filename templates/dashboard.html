@@ -519,6 +519,9 @@
                 <span id="renew-client-status" style="color: var(--text-secondary);"></span>
             </p>
 
+            <!-- Last renewal notice (avoid double-charging) -->
+            <div id="renew-last-notice" style="display:none; margin-bottom:14px; padding:10px 12px; border-radius:8px; font-size:0.83rem; line-height:1.6;"></div>
+
             <div class="form-group">
                 <label>Packages (Optional)</label>
                 <div id="renew-packages-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-height: 200px; overflow-y: auto;">
@@ -3507,7 +3510,9 @@
         document.getElementById('renew-inbound-id').value = inboundId;
         document.getElementById('renew-email').value = email;
         document.getElementById('renew-client-email').textContent = email;
-        
+
+        loadLastRenewalNotice(email);
+
         currentClientExpiryText = expiryText || '';
         currentClientRemainingVolume = remainingFormatted || '';
 
@@ -3597,6 +3602,62 @@
         // Reset gift volume
         const gt = document.getElementById('renew-gift-toggle');
         if (gt) { gt.checked = false; onGiftVolumeToggle(); }
+        const notice = document.getElementById('renew-last-notice');
+        if (notice) { notice.style.display = 'none'; notice.innerHTML = ''; }
+    }
+
+    async function loadLastRenewalNotice(email) {
+        const box = document.getElementById('renew-last-notice');
+        if (!box) return;
+        box.style.display = 'none';
+        box.innerHTML = '';
+        try {
+            const res = await fetch(`/api/client/${encodeURIComponent(email)}/last-renewal`);
+            const data = await res.json();
+            // Ignore if the modal was reopened for a different client meanwhile
+            if ((document.getElementById('renew-email').value || '') !== email) return;
+            if (!data.success || !data.renewals || !data.renewals.length) return;
+
+            const last = data.renewals[0];
+            const recent = (last.hours_ago !== null && last.hours_ago < 48); // < 2 days
+            const isFa = {{ ('fa' if panel_lang == 'fa' else 'en')|tojson }} === 'fa';
+
+            // Human "time ago"
+            let ago = '';
+            const h = last.hours_ago ?? 0;
+            if (isFa) {
+                ago = h < 1 ? 'کمتر از یک ساعت پیش' : (h < 24 ? `${h} ساعت پیش` : `${last.days_ago} روز پیش`);
+            } else {
+                ago = h < 1 ? 'less than an hour ago' : (h < 24 ? `${h}h ago` : `${last.days_ago}d ago`);
+            }
+
+            const amountStr = Number(last.amount || 0).toLocaleString();
+            const cardLine = (last.sender_card || last.dest_card)
+                ? `<div>💳 ${isFa ? 'کارت' : 'Card'}: <span dir="ltr">${escapeHtml(last.sender_card || '—')}</span>${last.dest_card ? ` → ${escapeHtml(last.dest_card)}` : ''}</div>`
+                : '';
+
+            box.style.display = 'block';
+            if (recent) {
+                box.style.background = 'rgba(239,68,68,0.12)';
+                box.style.border = '1px solid rgba(239,68,68,0.40)';
+                box.style.color = '#fca5a5';
+            } else {
+                box.style.background = 'rgba(99,102,241,0.08)';
+                box.style.border = '1px solid rgba(99,102,241,0.25)';
+                box.style.color = 'var(--text-secondary)';
+            }
+            const head = recent
+                ? (isFa ? '⛔ اخطار: این اکانت به‌تازگی تمدید شده!' : '⛔ Warning: this account was renewed recently!')
+                : (isFa ? '🧾 آخرین تمدید این اکانت' : '🧾 Last renewal of this account');
+
+            box.innerHTML = `
+                <div style="font-weight:700; margin-bottom:4px;">${head}</div>
+                <div>📅 ${escapeHtml(last.date_jalali || '')} <span style="opacity:0.8;">(${ago})</span></div>
+                <div>💰 ${isFa ? 'مبلغ' : 'Amount'}: ${amountStr} T</div>
+                ${cardLine}
+                ${last.admin_username ? `<div style="opacity:0.75;">👤 ${escapeHtml(last.admin_username)}</div>` : ''}
+            `;
+        } catch (e) { /* silent */ }
     }
 
     function onGiftVolumeToggle() {

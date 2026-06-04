@@ -9831,6 +9831,62 @@ def bulk_client_job(job_id):
 
         return jsonify({'success': True, 'job': _summarize_bulk_job(job)})
 
+
+@app.route('/api/client/<email>/last-renewal', methods=['GET'])
+@login_required
+def client_last_renewal(email):
+    """Return the most recent renewal transaction(s) for a client email so the
+    operator can avoid charging the same account twice."""
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+
+    email_l = (email or '').strip()
+    if not email_l:
+        return jsonify({'success': True, 'renewals': []})
+
+    q = Transaction.query.filter(
+        func.lower(Transaction.client_email) == email_l.lower(),
+        Transaction.type == 'renew',
+    )
+    # Resellers only see their own transactions
+    if user.role == 'reseller':
+        q = q.filter(Transaction.admin_id == user.id)
+
+    rows = q.order_by(Transaction.created_at.desc()).limit(3).all()
+
+    renewals = []
+    now = datetime.utcnow()
+    for t in rows:
+        created = t.created_at
+        days_ago = None
+        hours_ago = None
+        if created:
+            delta = now - created
+            days_ago = delta.days
+            hours_ago = int(delta.total_seconds() // 3600)
+        card_label = ''
+        try:
+            if t.card:
+                card_label = t.card.label or t.card.masked_card() or ''
+        except Exception:
+            card_label = ''
+        renewals.append({
+            'id': t.id,
+            'amount': t.amount,
+            'date_jalali': format_jalali(created) if created else None,
+            'date_iso': created.isoformat() if created else None,
+            'days_ago': days_ago,
+            'hours_ago': hours_ago,
+            'sender_card': t.sender_card or '',
+            'dest_card': card_label,
+            'description': t.description or '',
+            'admin_username': (t.admin.username if getattr(t, 'admin', None) else ''),
+        })
+
+    return jsonify({'success': True, 'renewals': renewals})
+
+
 @app.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew', methods=['POST'])
 @login_required
 def renew_client(server_id, inbound_id, email):
