@@ -411,6 +411,19 @@ is_offline_mode() {
     [ "${OFFLINE_MODE}" = "true" ] || [ "${OFFLINE_MODE}" = "1" ]
 }
 
+# Fast (<=~5s) internet check against a package index. Returns 0 if reachable.
+# Used to AVOID multi-minute pip hangs on air-gapped servers.
+_have_internet() {
+    if command -v curl >/dev/null 2>&1; then
+        timeout 4 curl -sfI https://pypi.org/simple/ >/dev/null 2>&1 && return 0
+        timeout 4 curl -sfI https://mirrors.aliyun.com/pypi/simple/ >/dev/null 2>&1 && return 0
+        return 1
+    fi
+    # No curl: try a quick TCP check to PyPI:443
+    timeout 4 bash -c 'exec 3<>/dev/tcp/pypi.org/443' >/dev/null 2>&1 && return 0
+    return 1
+}
+
 get_os_codename() {
     local codename=""
     if [ -f /etc/os-release ]; then
@@ -2080,43 +2093,50 @@ offline_update() {
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     print_success "Files synced"
 
-    # Python packages - with proper retry logic
+    # ── Python packages ──────────────────────────────────────────────────
+    # Prefer bundled wheels (fully offline). Only touch the network if wheels
+    # are absent AND the server actually has internet — otherwise an air-gapped
+    # box would hang for many minutes on pip retries.
+    local _pkgs_done=false
     if [ -d "$EXTRACT_ROOT/wheels" ]; then
         WHEELS_COUNT=$(find "$EXTRACT_ROOT/wheels" -name '*.whl' -o -name '*.tar.gz' 2>/dev/null | wc -l)
-        if [ $WHEELS_COUNT -gt 5 ]; then
+        if [ "$WHEELS_COUNT" -gt 5 ]; then
             print_warning "Installing Python packages from bundled wheels ($WHEELS_COUNT files)..."
-            sudo -u "$APP_USER" bash -c \
+            if sudo -u "$APP_USER" bash -c \
                 "source $APP_DIR/venv/bin/activate && \
                  pip install --no-index --find-links='$EXTRACT_ROOT/wheels' \
-                 -r '$APP_DIR/requirements.txt' --default-timeout=120 --retries 10" && {
-                print_success "Python packages installed from wheels"
-            } || {
-                print_warning "Wheel install failed, trying online..."
-            }
+                 -r '$APP_DIR/requirements.txt' --retries 1"; then
+                print_success "Python packages installed from wheels (offline)"
+                _pkgs_done=true
+            else
+                print_warning "Some wheels missing — will check for internet."
+            fi
         else
             print_warning "wheels/ folder exists but too few packages ($WHEELS_COUNT < 5)"
         fi
     fi
-    
-    # Fallback: online install with extended timeout
-    if [ ! -f "$APP_DIR/requirements.txt" ] || ! sudo -u "$APP_USER" bash -c \
-        "source $APP_DIR/venv/bin/activate && pip list | grep -q flask"; then
-        
-        print_warning "Installing/updating packages from online sources..."
-        
-        if ! sudo -u "$APP_USER" bash -c \
-            "source $APP_DIR/venv/bin/activate && \
-             pip install --default-timeout=120 --retries 10 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10"; then
-            
-            print_warning "Trying Aliyun mirror..."
+
+    if [ "$_pkgs_done" != true ]; then
+        # Are the core deps already satisfied? (offline update of code only)
+        if sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && python -c 'import flask, sqlalchemy, psycopg2' >/dev/null 2>&1"; then
+            print_success "Core Python packages already present — skipping pip."
+            _pkgs_done=true
+        fi
+    fi
+
+    if [ "$_pkgs_done" != true ]; then
+        if _have_internet; then
+            print_warning "Installing/updating packages from online sources..."
             sudo -u "$APP_USER" bash -c \
                 "source $APP_DIR/venv/bin/activate && \
-                 pip install -i https://mirrors.aliyun.com/pypi/simple/ \
-                 --default-timeout=120 --retries 10 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10" ||
-            print_warning "pip install failed (PyPI unreachable?). Continuing with existing packages."
+                 pip install --timeout 15 --retries 2 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10" \
+              || print_warning "pip install failed. Continuing with existing packages."
+            print_success "Python packages updated/installed"
+        else
+            print_warning "No internet detected — skipping online pip (offline server)."
+            echo -e "  ${DIM}To add new dependencies offline, include a wheels/ folder in the ZIP,${NC}"
+            echo -e "  ${DIM}or use the standalone Redis add-on (redis-offline-*.tar.gz).${NC}"
         fi
-        
-        print_success "Python packages updated/installed"
     fi
 
     # DB migrations
