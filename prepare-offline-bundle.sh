@@ -90,6 +90,7 @@ APT_PACKAGES=(
     postgresql-client
     libpq-dev
     libmagic1
+    redis-server
 )
 
 usage() {

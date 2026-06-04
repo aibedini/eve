@@ -512,6 +512,9 @@ install_offline_apt_dependencies() {
         grep -v '^(Selecting\|Preparing\|Unpacking\|Setting\|Processing\|update-alter)' || true
     dpkg --configure -a 2>&1 || true
 
+    # Enable & start Redis if it came in the offline bundle (shared cache).
+    enable_redis_if_present
+
     if dpkg -s nginx >/dev/null 2>&1; then
         print_success "System packages installed (nginx ready)"
         return 0
@@ -520,6 +523,21 @@ install_offline_apt_dependencies() {
     print_error "Offline apt install failed — nginx not found after install"
     print_warning "Rebuild the bundle: bash prepare-offline-bundle.sh --profile profile.txt ."
     return 1
+}
+
+enable_redis_if_present() {
+    # Enable + start redis-server if it is installed (online or offline path).
+    if dpkg -s redis-server >/dev/null 2>&1 || command -v redis-server >/dev/null 2>&1; then
+        systemctl enable redis-server >/dev/null 2>&1 || true
+        systemctl restart redis-server >/dev/null 2>&1 || true
+        if systemctl is-active --quiet redis-server 2>/dev/null; then
+            print_success "Redis running (localhost:6379)"
+        else
+            print_warning "Redis installed but not active — app will fall back to per-worker cache."
+        fi
+    else
+        print_warning "Redis not installed — app will use per-worker in-memory cache (still works)."
+    fi
 }
 
 install_offline_python_runtime() {
@@ -631,12 +649,7 @@ install_dependencies() {
         postgresql-client \
         redis-server \
         libmagic1
-    # Redis: bind to localhost only, enable + start (shared cache across workers)
-    if systemctl list-unit-files 2>/dev/null | grep -q '^redis-server'; then
-        systemctl enable redis-server >/dev/null 2>&1 || true
-        systemctl restart redis-server >/dev/null 2>&1 || true
-        print_success "Redis installed & running (localhost:6379)"
-    fi
+    enable_redis_if_present
     print_success "Dependencies installed"
 }
 
