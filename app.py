@@ -6536,6 +6536,25 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
         ownerships = ClientOwnership.query.filter_by(reseller_id=user.id, server_id=server.id).all()
         owned_emails = {o.client_email.lower() for o in ownerships if o.client_email}
 
+    # ── Hoist server-level values out of the per-client loop (computed once) ──
+    _parsed_host = urlparse(server.host)
+    _hostname = _parsed_host.hostname
+    _scheme = _parsed_host.scheme
+    _final_port = server.sub_port if server.sub_port else _parsed_host.port
+    _port_str = f":{_final_port}" if _final_port else ""
+    _base_sub = f"{_scheme}://{_hostname}{_port_str}"
+    _s_path = (server.sub_path or '').strip('/')
+    _j_path = (server.json_path or '').strip('/')
+    if app_base_url:
+        _app_base = app_base_url
+    else:
+        try:
+            _app_base = request.url_root.rstrip('/')
+        except RuntimeError:
+            _app_base = ""  # background thread (no request context)
+    _is_sanaei = (server.panel_type == 'sanaei')
+    _server_id = server.id
+
     for inbound in inbounds:
         try:
             inbound_id_raw = inbound.get('id')
@@ -6546,14 +6565,20 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
 
             if user.role == 'reseller':
                 accessible = is_inbound_accessible(server.id, inbound_id, allowed_map, assignments)
-                app.logger.info(f"Reseller check: server={server.id}, inbound={inbound_id}, accessible={accessible}, allowed_map={allowed_map}, assignments={assignments}")
                 if not accessible:
                     continue
 
             settings = json.loads(inbound.get('settings', '{}'))
             clients = settings.get('clients', [])
             client_stats = inbound.get('clientStats', [])
-            
+
+            # Build an email -> stats lookup ONCE per inbound (was O(clients*stats))
+            stats_by_email = {}
+            for _st in client_stats:
+                _e = _st.get('email')
+                if _e is not None and _e not in stats_by_email:
+                    stats_by_email[_e] = _st
+
             processed_clients = []
             seen_client_keys = set()
             for client in clients:
@@ -6569,41 +6594,19 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                     continue 
                 
                 sub_id = client.get('subId', '')
-                parsed_host = urlparse(server.host)
-                hostname = parsed_host.hostname
-                scheme = parsed_host.scheme
-                final_port = server.sub_port if server.sub_port else parsed_host.port
-                port_str = f":{final_port}" if final_port else ""
-                
                 sub_url = ""
                 json_url = ""
                 dash_sub_url = ""
-                
-                if sub_id or (server.panel_type == 'sanaei' and client.get('id')):
+
+                if sub_id or (_is_sanaei and client.get('id')):
                     final_id = sub_id if sub_id else client.get('id')
-                    base_sub = f"{scheme}://{hostname}{port_str}"
-                    s_path = server.sub_path.strip('/')
-                    j_path = server.json_path.strip('/')
-                    
-                    if app_base_url:
-                        app_base = app_base_url
-                    else:
-                        try:
-                            app_base = request.url_root.rstrip('/')
-                        except RuntimeError:
-                            app_base = "" # Fallback for background thread
+                    sub_url = f"{_base_sub}/{_s_path}/{final_id}"
+                    json_url = f"{_base_sub}/{_j_path}/{final_id}"
+                    dash_sub_url = f"{_app_base}/s/{_server_id}/{final_id}"
 
-                    sub_url = f"{base_sub}/{s_path}/{final_id}"
-                    json_url = f"{base_sub}/{j_path}/{final_id}"
-                    dash_sub_url = f"{app_base}/s/{server.id}/{final_id}"
-
-                client_up = 0
-                client_down = 0
-                for stat in client_stats:
-                    if stat.get('email') == email:
-                        client_up = stat.get('up', 0)
-                        client_down = stat.get('down', 0)
-                        break
+                _stat = stats_by_email.get(email)
+                client_up = _stat.get('up', 0) if _stat else 0
+                client_down = _stat.get('down', 0) if _stat else 0
 
                 total_bytes = client.get('totalGB', 0) or 0
                 remaining_bytes = max(total_bytes - (client_up + client_down), 0) if total_bytes > 0 else None
