@@ -8828,6 +8828,71 @@ def api_server_last_users(server_id):
     })
 
 
+@app.route('/api/add-client/inbounds/<int:server_id>')
+@login_required
+def api_add_client_inbounds(server_id):
+    """Lightweight, cache-only inbound list for the Add/Renew client modal.
+
+    Returns minimal per-inbound fields (no client arrays) + the last user, read
+    straight from the in-memory snapshot. Tiny payload → the dropdown is ready
+    instantly, independent of the heavy dashboard data load.
+    """
+    user = db.session.get(Admin, session['admin_id'])
+    is_reseller = bool(user and user.role == 'reseller')
+    allowed_map, assignments = ('*', {})
+    if is_reseller:
+        allowed_map, assignments = get_reseller_access_maps(user)
+
+    items = []
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id', -1)) != int(server_id):
+                continue
+        except Exception:
+            continue
+
+        inbound_id = inbound.get('id')
+        if inbound_id is None:
+            continue
+
+        if is_reseller:
+            try:
+                if not is_inbound_accessible(int(server_id), int(inbound_id), allowed_map, assignments):
+                    continue
+            except Exception:
+                continue
+
+        clients = inbound.get('clients') or []
+        try:
+            active_count = inbound.get('active_count')
+            if active_count is None:
+                active_count = sum(1 for c in clients if isinstance(c, dict) and c.get('enable'))
+        except Exception:
+            active_count = 0
+
+        last_email = None
+        if isinstance(clients, list) and clients and isinstance(clients[-1], dict):
+            last_email = clients[-1].get('email')
+
+        items.append({
+            'id': inbound_id,
+            'server_id': server_id,
+            'remark': inbound.get('remark') or f'Inbound {inbound_id}',
+            'protocol': inbound.get('protocol') or '',
+            'port': inbound.get('port'),
+            'client_count': inbound.get('client_count', len(clients)),
+            'active_count': active_count,
+            'last_user': last_email,
+        })
+
+    return jsonify({
+        'success': True,
+        'server_id': server_id,
+        'inbounds': items,
+        'last_update': GLOBAL_SERVER_DATA.get('last_update'),
+    })
+
+
 @app.route('/settings')
 @login_required
 def settings_page():

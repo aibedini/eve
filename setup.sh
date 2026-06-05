@@ -2127,10 +2127,12 @@ offline_update() {
     if [ "$_pkgs_done" != true ]; then
         if _have_internet; then
             print_warning "Installing/updating packages from online sources..."
-            sudo -u "$APP_USER" bash -c \
+            # Hard timeout so this can NEVER hang the whole update, even if the
+            # network drops mid-install.
+            timeout 120 sudo -u "$APP_USER" bash -c \
                 "source $APP_DIR/venv/bin/activate && \
                  pip install --timeout 15 --retries 2 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10" \
-              || print_warning "pip install failed. Continuing with existing packages."
+              || print_warning "pip install skipped/failed (timeout or offline). Continuing with existing packages."
             print_success "Python packages updated/installed"
         else
             print_warning "No internet detected — skipping online pip (offline server)."

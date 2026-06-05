@@ -4313,27 +4313,66 @@
         if (!serverId) return;
 
         const serverInbounds = getCachedInboundsForServer(serverId);
-        updateLastUserCacheFromInbounds(serverId, serverInbounds);
         if (serverInbounds.length > 0) {
-            serverInbounds.forEach(inbound => {
-                const option = document.createElement('option');
-                option.value = JSON.stringify({
-                    server_id: inbound.server_id,
-                    inbound_id: inbound.id
-                });
-                const activeClients = inbound.active_count ?? inbound.clients.filter(c => c.enable).length;
-                option.textContent = `${inbound.remark} - ${inbound.protocol} (${inbound.port}) [${activeClients}]`;
-                inboundSelect.appendChild(option);
-            });
+            updateLastUserCacheFromInbounds(serverId, serverInbounds);
+            _fillInboundOptions(inboundSelect, serverInbounds.map(ib => ({
+                id: ib.id, server_id: ib.server_id, remark: ib.remark,
+                protocol: ib.protocol, port: ib.port,
+                active_count: (ib.active_count ?? (Array.isArray(ib.clients) ? ib.clients.filter(c => c.enable).length : 0)),
+            })));
+            fetchLastUsersForServer(serverId).catch(() => {});
         } else {
-            const option = document.createElement('option');
-            option.textContent = 'No inbounds available';
-            option.disabled = true;
-            inboundSelect.appendChild(option);
+            // Heavy dashboard cache not ready yet → pull a lightweight list straight
+            // from the backend cache so the dropdown is usable immediately.
+            const loadingOpt = document.createElement('option');
+            loadingOpt.textContent = 'Loading inbounds…';
+            loadingOpt.disabled = true;
+            inboundSelect.appendChild(loadingOpt);
+            loadInboundOptionsLight(serverId);
         }
+    }
 
-        // Fire a silent background fetch for this server's last users (no await, no UI block)
-        fetchLastUsersForServer(serverId).catch(() => {});
+    function _fillInboundOptions(inboundSelect, inbounds) {
+        // Keep only the placeholder, then add the options.
+        inboundSelect.innerHTML = '<option value="">-- Select Inbound --</option>';
+        if (!inbounds || !inbounds.length) {
+            const o = document.createElement('option');
+            o.textContent = 'No inbounds available';
+            o.disabled = true;
+            inboundSelect.appendChild(o);
+            return;
+        }
+        inbounds.forEach(inbound => {
+            const option = document.createElement('option');
+            option.value = JSON.stringify({ server_id: inbound.server_id, inbound_id: inbound.id });
+            const active = inbound.active_count ?? 0;
+            option.textContent = `${inbound.remark} - ${inbound.protocol} (${inbound.port}) [${active}]`;
+            inboundSelect.appendChild(option);
+        });
+    }
+
+    async function loadInboundOptionsLight(serverId) {
+        try {
+            const resp = await fetch(`/api/add-client/inbounds/${serverId}`, { cache: 'no-store' });
+            const data = await resp.json();
+            // Only apply if the user is still on this server in the modal.
+            const sel = document.getElementById('add-client-server-select');
+            if (!sel || String(sel.value) !== String(serverId)) return;
+            const inboundSelect = document.getElementById('add-client-inbound-select');
+            if (!data.success || !Array.isArray(data.inbounds) || data.inbounds.length === 0) {
+                _fillInboundOptions(inboundSelect, []);
+                return;
+            }
+            _fillInboundOptions(inboundSelect, data.inbounds);
+            // Seed the last-user cache from the light payload (instant "last user")
+            const sid = String(serverId);
+            const raw = {};
+            data.inbounds.forEach(ib => { raw[String(ib.id)] = ib.last_user || null; });
+            lastUserCacheByServer.set(sid, _mergeWithOverrides(sid, raw));
+        } catch (e) {
+            const inboundSelect = document.getElementById('add-client-inbound-select');
+            if (inboundSelect) _fillInboundOptions(inboundSelect, []);
+        }
     }
 
     function onInboundSelected() {
