@@ -7957,7 +7957,9 @@
                 showToast(result.error || 'Error deleting client', 'error');
             }
         } catch (error) {
-            showToast('Error deleting client', 'error');
+            let msg = 'Error deleting client';
+            if (error && error.message) msg += `: ${error.message}`;
+            showToast(msg, 'error');
         }
     }
 </script>

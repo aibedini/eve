@@ -856,6 +856,14 @@ def _run_bulk_job(job_id: str):
                 if error:
                     return False, error, 400
 
+                if server_is_v3(_server):
+                    ok, _vr, verr = v3_update_client(_server, session_obj, _email, target_client)
+                    if ok:
+                        return True, None, 200
+                    detail = verr or 'panel rejected update'
+                    app.logger.warning(f"Bulk update client (v3) failed for {_email}: {detail}")
+                    return False, detail, 502
+
                 client_id = target_client.get('id', target_client.get('password', _email))
                 update_payload = {
                     'id': _inbound_id,
@@ -886,20 +894,30 @@ def _run_bulk_job(job_id: str):
                         try:
                             resp_json = resp.json()
                             if isinstance(resp_json, dict) and resp_json.get('success') is False:
-                                errors.append(f"{template}: success false")
+                                panel_msg = resp_json.get('msg') or resp_json.get('message') or 'success=false'
+                                errors.append(f"{template}: {panel_msg}")
                                 continue
                         except ValueError:
                             pass
                         return True, None, 200
-                    errors.append(f"{template}: {resp.status_code}")
+                    errors.append(f"{template}: HTTP {resp.status_code}")
 
-                app.logger.warning(f"Bulk update client failed for {_email}: {'; '.join(errors)}")
-                return False, 'Update failed', 400
+                detail = '; '.join(errors) or 'no endpoint succeeded'
+                app.logger.warning(f"Bulk update client failed for {_email}: {detail}")
+                return False, detail, 400
 
             def _reset_client_traffic_core(_server: 'Server', _inbound_id: int, _email: str):
                 session_obj, error = get_xui_session(_server)
                 if error:
                     return False, error, 400
+
+                if server_is_v3(_server):
+                    ok, _vr, verr = v3_reset_client(_server, session_obj, _email)
+                    if ok:
+                        return True, None, 200
+                    detail = verr or 'reset failed'
+                    app.logger.warning(f"Bulk reset traffic (v3) failed for {_email}: {detail}")
+                    return False, detail, 502
 
                 replacements = {
                     'id': _inbound_id,
@@ -927,15 +945,17 @@ def _run_bulk_job(job_id: str):
                         try:
                             resp_json = resp.json()
                             if isinstance(resp_json, dict) and resp_json.get('success') is False:
-                                errors.append(f"{template}: success false")
+                                panel_msg = resp_json.get('msg') or resp_json.get('message') or 'success=false'
+                                errors.append(f"{template}: {panel_msg}")
                                 continue
                         except ValueError:
                             pass
                         return True, None, 200
-                    errors.append(f"{template}: {resp.status_code}")
+                    errors.append(f"{template}: HTTP {resp.status_code}")
 
-                app.logger.warning(f"Bulk reset traffic failed for {_email}: {'; '.join(errors)}")
-                return False, 'Reset traffic failed', 400
+                detail = '; '.join(errors) or 'no endpoint succeeded'
+                app.logger.warning(f"Bulk reset traffic failed for {_email}: {detail}")
+                return False, detail, 400
 
             def _apply_client_limit_delta(_user: 'Admin', _server: 'Server', _inbound_id: int, _email: str,
                                           days_delta: int | None = None, volume_gb_delta: int | None = None):
@@ -9947,12 +9967,42 @@ def reset_client_traffic(server_id, inbound_id):
     session_obj, error = get_xui_session(server)
     if error: return jsonify({"success": False, "error": error}), 400
 
+    def _apply_volume_cap_after_reset(target_client):
+        """After a successful traffic reset, set totalGB if caller specified a volume cap."""
+        if volume_gb <= 0:
+            return
+        target_client['totalGB'] = volume_gb * 1024 * 1024 * 1024
+        try:
+            if server_is_v3(server):
+                v3_update_client(server, session_obj, email, target_client)
+            else:
+                client_id = target_client.get('id', target_client.get('password', email))
+                up = {'id': inbound_id, 'settings': json.dumps({'clients': [target_client]})}
+                rpl = {'id': inbound_id, 'inbound_id': inbound_id, 'inboundId': inbound_id,
+                       'clientId': client_id, 'client_id': client_id, 'email': email}
+                for tpl in collect_endpoint_templates(server.panel_type, 'client_update', CLIENT_UPDATE_FALLBACKS):
+                    url2 = build_panel_url(server.host, tpl, rpl)
+                    if not url2:
+                        continue
+                    r2 = session_obj.post(url2, json=up, verify=False, timeout=10)
+                    if r2.status_code == 200:
+                        break
+        except Exception as exc:
+            app.logger.warning(f"apply_volume_cap_after_reset failed for {email}: {exc}")
+
     try:
         # v3: reset the first-class client by email (legacy resetClientTraffic is 404).
         if server_is_v3(server):
             ok, _vr, verr = v3_reset_client(server, session_obj, email)
             if not ok:
                 return jsonify({"success": False, "error": f"v3 reset failed: {verr}"}), 502
+
+            if volume_gb > 0:
+                inbounds_r, _, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                target_r, _ = find_client(inbounds_r, inbound_id, email)
+                if target_r:
+                    _apply_volume_cap_after_reset(target_r)
+
             if charge_amount > 0:
                 sender_card = data.get('sender_card', '') or ''
                 card_id = data.get('card_id')
@@ -9998,7 +10048,13 @@ def reset_client_traffic(server_id, inbound_id):
                         continue
                 except ValueError:
                     pass
-                
+
+                if volume_gb > 0:
+                    inbounds_r, _, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                    target_r, _ = find_client(inbounds_r, inbound_id, email)
+                    if target_r:
+                        _apply_volume_cap_after_reset(target_r)
+
                 if charge_amount > 0:
                     sender_card = data.get('sender_card', '') or ''
                     card_id = data.get('card_id')
@@ -10097,48 +10153,63 @@ def edit_client(server_id, inbound_id, email):
                 except (ValueError, TypeError):
                     pass
         
-        update_payload = {
-            "id": inbound_id,
-            "settings": json.dumps({"clients": [target_client]})
-        }
-        
-        replacements = {
-            'id': inbound_id,
-            'inbound_id': inbound_id,
-            'inboundId': inbound_id,
-            'clientId': client_id,
-            'client_id': client_id,
-            'email': email 
-        }
-        
-        templates = collect_endpoint_templates(server.panel_type, 'client_update', CLIENT_UPDATE_FALLBACKS)
-        errors = []
-        success = False
-        
-        for template in templates:
-            full_url = build_panel_url(server.host, template, replacements)
-            if not full_url:
-                continue
-            try:
-                resp = session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
-            except Exception as exc:
-                errors.append(f"{template}: {exc}")
-                continue
-                
-            if resp.status_code == 200:
+        # v3: use first-class client endpoint (legacy updateClient is 404 on v3)
+        if server_is_v3(server):
+            ok_v3, _vr, verr = v3_update_client(server, session_obj, email, target_client)
+            if not ok_v3:
+                detail = verr or 'panel rejected update'
+                app.logger.warning(f"v3 edit client failed for {email}: {detail}")
+                return jsonify({"success": False, "error": f"پنل خطا برگرداند: {detail}"}), 502
+            success = True
+        else:
+            update_payload = {
+                "id": inbound_id,
+                "settings": json.dumps({"clients": [target_client]})
+            }
+
+            replacements = {
+                'id': inbound_id,
+                'inbound_id': inbound_id,
+                'inboundId': inbound_id,
+                'clientId': client_id,
+                'client_id': client_id,
+                'email': email
+            }
+
+            templates = collect_endpoint_templates(server.panel_type, 'client_update', CLIENT_UPDATE_FALLBACKS)
+            errors = []
+            success = False
+
+            for template in templates:
+                full_url = build_panel_url(server.host, template, replacements)
+                if not full_url:
+                    continue
                 try:
-                    resp_json = resp.json()
-                    if isinstance(resp_json, dict) and resp_json.get('success') is False:
-                        errors.append(f"{template}: success false")
-                        continue
-                except ValueError:
-                    pass
-                
-                success = True
-                break
-            
-            errors.append(f"{template}: {resp.status_code}")
-            
+                    resp = session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
+                except Exception as exc:
+                    errors.append(f"{template}: {exc}")
+                    continue
+
+                if resp.status_code == 200:
+                    try:
+                        resp_json = resp.json()
+                        if isinstance(resp_json, dict) and resp_json.get('success') is False:
+                            panel_msg = resp_json.get('msg') or resp_json.get('message') or 'success=false'
+                            errors.append(f"{template}: {panel_msg}")
+                            continue
+                    except ValueError:
+                        pass
+
+                    success = True
+                    break
+
+                errors.append(f"{template}: HTTP {resp.status_code}")
+
+            if not success:
+                detail = '; '.join(errors) or 'no endpoint succeeded'
+                app.logger.warning(f"Edit client failed for {email}: {detail}")
+                return jsonify({"success": False, "error": f"آپدیت ناموفق بود — {detail}"}), 400
+
         if success:
             # Update ownership if exists
             email_l = (email or '').strip().lower()
@@ -10154,11 +10225,8 @@ def edit_client(server_id, inbound_id, email):
                 if (not (own.client_uuid or '').strip()) and str(client_id):
                     own.client_uuid = str(client_id)
             db.session.commit()
-            
+
             return jsonify({"success": True})
-        else:
-            app.logger.warning(f"Edit client failed for {email}: {'; '.join(errors)}")
-            return jsonify({"success": False, "error": "Update failed"}), 400
             
     except Exception as e:
         app.logger.error(f"Edit client error: {str(e)}")
@@ -10194,16 +10262,20 @@ def set_client_inbounds(server_id, email):
 @app.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/delete', methods=['POST'])
 @login_required
 def delete_client(server_id, inbound_id, email):
-    user = db.session.get(Admin, session['admin_id'])
-    if not user:
-        return jsonify({"success": False, "error": "User not found"}), 401
+    try:
+        user = db.session.get(Admin, session['admin_id'])
+        if not user:
+            return jsonify({"success": False, "error": "User not found"}), 401
 
-    server = Server.query.get_or_404(server_id)
+        server = Server.query.get_or_404(server_id)
 
-    ok, error_message, status_code = _delete_client_core(user, server, inbound_id, email)
-    if ok:
-        return jsonify({"success": True})
-    return jsonify({"success": False, "error": error_message}), status_code
+        ok, error_message, status_code = _delete_client_core(user, server, inbound_id, email)
+        if ok:
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": error_message}), status_code
+    except Exception as exc:
+        app.logger.error(f"Unhandled delete_client error: {exc}", exc_info=True)
+        return jsonify({"success": False, "error": f"Server error: {exc}"}), 500
 
 
 def _delete_client_core(user, server, inbound_id: int, email: str):
@@ -10233,9 +10305,25 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
         # v3: delete the first-class client by email (legacy delClient is 404).
         if server_is_v3(server):
             ok, _vr, verr = v3_delete_client(server, session_obj, email)
-            if ok:
-                return True, None, 200
-            return False, f"v3 delete failed: {verr}", 502
+            if not ok:
+                return False, f"v3 delete failed: {verr}", 502
+            email_l = (email or '').strip().lower()
+            cu = str(client_id) if client_id else ''
+            q = ClientOwnership.query.filter(ClientOwnership.server_id == server.id)
+            kf = []
+            if cu:
+                kf.append(ClientOwnership.client_uuid == cu)
+            if email_l:
+                kf.append(func.lower(ClientOwnership.client_email) == email_l)
+            if kf:
+                q.filter(or_(*kf)).delete(synchronize_session=False)
+            db.session.commit()
+            invalidate_ownership_cache()
+            try:
+                log_transaction(user.id, 0, 'delete_client', f"Deleted client {email}", server_id=server.id, client_email=email)
+            except Exception:
+                pass
+            return True, None, 200
 
         replacements = {
             'id': inbound_id,
@@ -10264,7 +10352,8 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
                 try:
                     resp_json = resp.json()
                     if isinstance(resp_json, dict) and resp_json.get('success') is False:
-                        errors.append(f"{template}: success false")
+                        panel_msg = resp_json.get('msg') or resp_json.get('message') or 'success=false'
+                        errors.append(f"{template}: {panel_msg}")
                         continue
                 except ValueError:
                     pass
@@ -10272,7 +10361,12 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
                 success = True
                 break
 
-            errors.append(f"{template}: {resp.status_code}")
+            errors.append(f"{template}: HTTP {resp.status_code}")
+
+        if not success:
+            detail = '; '.join(errors) or 'no endpoint succeeded'
+            app.logger.warning(f"Delete client failed for {email}: {detail}")
+            return False, detail, 400
 
         if success:
             email_l = (email or '').strip().lower()
@@ -10292,9 +10386,6 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
                 pass
 
             return True, None, 200
-
-        app.logger.warning(f"Delete client failed for {email}: {'; '.join(errors)}")
-        return False, "Delete failed", 400
 
     except Exception as exc:
         app.logger.error(f"Delete client error: {str(exc)}")
