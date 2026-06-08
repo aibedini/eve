@@ -58,13 +58,16 @@
         </div>
     </div>
 
-    <!-- Bulk actions container (same as dashboard) -->
-    <div id="bulk-actions-container" style="display:none; margin-bottom:10px; padding:10px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card);">
-        <strong>Bulk Actions</strong>
-        <span id="bulk-selected-count" style="margin-left:10px; font-size:0.9em; color:var(--text-secondary);">0 selected</span>
+    <!-- Bulk actions container -->
+    <div id="bulk-actions-container" style="display:none; margin-bottom:10px; padding:12px 14px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card);">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+            <strong style="font-size:0.9rem;">Bulk Actions</strong>
+            <span id="bulk-selected-count" style="font-size:0.82em; color:var(--text-secondary);">0 selected</span>
+        </div>
 
-        <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <select id="bulk-action-select" class="form-select" style="max-width:220px;" onchange="onBulkActionChanged()">
+        <!-- Main controls row — all inline, auto-width, consistent height 36px -->
+        <div class="bulk-bar">
+            <select id="bulk-action-select" class="bulk-ctrl" onchange="onBulkActionChanged()">
                 <option value="">Select Action</option>
                 <option value="set_start_after_use">Set to Start After First Use</option>
                 <option value="enable">Enable</option>
@@ -80,38 +83,32 @@
                 {% endif %}
             </select>
 
-            <div id="bulk-delta-container" style="display:none;">
-                <input id="bulk-days-delta" type="number" class="form-input" min="1" step="1" placeholder="Days" style="max-width:110px; display:none;">
-                <input id="bulk-volume-delta" type="number" class="form-input" min="1" step="1" placeholder="GB" style="max-width:110px; display:none;">
-            </div>
+            <input id="bulk-days-delta"   type="number" class="bulk-ctrl" min="1" step="1" placeholder="Days"  style="display:none; width:90px;">
+            <input id="bulk-volume-delta" type="number" class="bulk-ctrl" min="1" step="1" placeholder="GB"    style="display:none; width:80px;">
 
-            <div id="bulk-conditions" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                <select id="bulk-cond-enable" class="form-select" style="max-width:160px;" title="Target by enabled/disabled">
-                    <option value="any" selected>Any Status</option>
-                    <option value="enabled">Enabled only</option>
-                    <option value="disabled">Disabled only</option>
-                </select>
-                <select id="bulk-cond-expiry" class="form-select" style="max-width:190px;" title="Target by expiry type">
-                    <option value="any" selected>Any Expiry</option>
-                    <option value="unlimited">Unlimited</option>
-                    <option value="start_after_use">Not started</option>
-                    <option value="expired">Expired</option>
-                    <option value="today">Today</option>
-                    <option value="soon">Soon</option>
-                    <option value="normal">Normal</option>
-                </select>
-            </div>
+            <select id="bulk-cond-enable" class="bulk-ctrl" title="Target by enabled/disabled">
+                <option value="any" selected>Any Status</option>
+                <option value="enabled">Enabled only</option>
+                <option value="disabled">Disabled only</option>
+            </select>
+            <select id="bulk-cond-expiry" class="bulk-ctrl" title="Target by expiry type">
+                <option value="any" selected>Any Expiry</option>
+                <option value="unlimited">Unlimited</option>
+                <option value="start_after_use">Not started</option>
+                <option value="expired">Expired</option>
+                <option value="today">Today</option>
+                <option value="soon">Soon</option>
+                <option value="normal">Normal</option>
+            </select>
 
             {% if is_superadmin %}
-            <div id="bulk-reseller-container" style="display:none;">
-                <select id="bulk-reseller-select" class="form-select" style="max-width:220px;">
-                    <option value="">Select Reseller</option>
-                </select>
-            </div>
+            <select id="bulk-reseller-select" class="bulk-ctrl" style="display:none;">
+                <option value="">Select Reseller</option>
+            </select>
             {% endif %}
 
-            <button class="btn btn-primary" onclick="executeRoyaltyBulkAction()">Apply</button>
-            <button class="btn btn-secondary" onclick="clearRoyaltyBulkSelection()">Clear</button>
+            <button class="btn btn-primary  bulk-ctrl-btn" onclick="executeRoyaltyBulkAction()">Apply</button>
+            <button class="btn btn-secondary bulk-ctrl-btn" onclick="clearRoyaltyBulkSelection()">Clear</button>
         </div>
 
         <!-- Volume Filter policy -->
@@ -213,6 +210,37 @@
 </div>
 
 <style nonce="{{ csp_nonce }}">
+    /* Bulk bar: single row, auto-width controls, 36px height throughout */
+    .bulk-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+    .bulk-ctrl {
+        height: 36px;
+        padding: 0 10px;
+        font-size: 0.85rem;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        background: var(--bg-dark);
+        color: var(--text-primary);
+        width: auto;
+        min-width: 0;
+        flex-shrink: 0;
+        cursor: pointer;
+        box-sizing: border-box;
+    }
+    .bulk-ctrl:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+    input.bulk-ctrl { cursor: text; }
+    .bulk-ctrl-btn {
+        height: 36px;
+        padding: 0 16px;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
+
     .royalty-filters {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
@@ -489,19 +517,16 @@
     function onBulkActionChanged() {
         const action = document.getElementById('bulk-action-select')?.value;
 
-        const resellerContainer = document.getElementById('bulk-reseller-container');
-        if (resellerContainer)
-            resellerContainer.style.display = (IS_SUPERADMIN && action === 'assign_owner') ? 'block' : 'none';
+        // Reseller select (superadmin only, flat in bar now)
+        const resellerSel = document.getElementById('bulk-reseller-select');
+        if (resellerSel)
+            resellerSel.style.display = (IS_SUPERADMIN && action === 'assign_owner') ? '' : 'none';
 
-        const deltaContainer = document.getElementById('bulk-delta-container');
+        // Days / volume inputs (flat in bar, no wrapper div)
         const daysInput = document.getElementById('bulk-days-delta');
-        const volInput = document.getElementById('bulk-volume-delta');
-        if (deltaContainer && daysInput && volInput) {
-            const isDays = action === 'add_days', isVol = action === 'add_volume';
-            deltaContainer.style.display = (isDays || isVol) ? 'block' : 'none';
-            daysInput.style.display = isDays ? 'block' : 'none';
-            volInput.style.display = isVol ? 'block' : 'none';
-        }
+        const volInput  = document.getElementById('bulk-volume-delta');
+        if (daysInput) daysInput.style.display = (action === 'add_days')   ? '' : 'none';
+        if (volInput)  volInput.style.display  = (action === 'add_volume') ? '' : 'none';
 
         const policyContainer = document.getElementById('bulk-volume-policy-container');
         if (policyContainer) {
