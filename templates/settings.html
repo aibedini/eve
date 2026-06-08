@@ -4347,46 +4347,47 @@
                     owner_id: document.getElementById('account-message-template-owner')?.value || null
                 })
             });
-            const data = await res.json();
+            let data;
+            try { data = await res.json(); } catch (_) { data = {}; }
             if (data.success) {
                 showToast('Account message template saved');
                 closeAccountMessageTemplateModal();
                 loadAccountMessageTemplates();
             } else {
-                showToast(data.error || 'Error saving template', 'error');
+                showToast(data.error || `Error saving template (HTTP ${res.status})`, 'error');
             }
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast(`Network error: ${e.message || e}`, 'error');
         }
     }
 
     async function activateAccountMessageTemplate(id) {
         try {
             const res = await fetch(`/api/account-message-templates/${id}/activate`, { method: 'POST' });
-            const data = await res.json();
+            let data; try { data = await res.json(); } catch (_) { data = {}; }
             if (data.success) {
                 showToast('Account message template activated');
                 loadAccountMessageTemplates();
             } else {
-                showToast(data.error || 'Error activating template', 'error');
+                showToast(data.error || `Error activating template (HTTP ${res.status})`, 'error');
             }
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast(`Network error: ${e.message || e}`, 'error');
         }
     }
 
     async function disableAccountMessageTemplate(id) {
         try {
             const res = await fetch(`/api/account-message-templates/${id}/disable`, { method: 'POST' });
-            const data = await res.json();
+            let data; try { data = await res.json(); } catch (_) { data = {}; }
             if (data.success) {
                 showToast('Account message template disabled');
                 loadAccountMessageTemplates();
             } else {
-                showToast(data.error || 'Error disabling template', 'error');
+                showToast(data.error || `Error disabling template (HTTP ${res.status})`, 'error');
             }
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast(`Network error: ${e.message || e}`, 'error');
         }
     }
 
@@ -4394,15 +4395,15 @@
         if (!confirm('Delete this account message template?')) return;
         try {
             const res = await fetch(`/api/account-message-templates/${id}`, { method: 'DELETE' });
-            const data = await res.json();
+            let data; try { data = await res.json(); } catch (_) { data = {}; }
             if (data.success) {
                 showToast('Account message template deleted');
                 loadAccountMessageTemplates();
             } else {
-                showToast(data.error || 'Error deleting template', 'error');
+                showToast(data.error || `Error deleting template (HTTP ${res.status})`, 'error');
             }
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast(`Network error: ${e.message || e}`, 'error');
         }
     }
 

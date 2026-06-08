@@ -16941,7 +16941,7 @@ def create_account_message_template():
 @user_management_required
 def update_account_message_template(template_id):
     template = db.session.get(NotificationTemplate, template_id)
-    if not template or template.type not in (ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE, ACCOUNT_INFO_SMS_TEMPLATE_TYPE):
+    if not template or template.type not in _ALL_ACCOUNT_INFO_TYPES:
         return jsonify({'success': False, 'error': 'Template not found'}), 404
     data = request.get_json() or {}
     if 'name' in data:
@@ -16961,7 +16961,7 @@ def update_account_message_template(template_id):
 @user_management_required
 def delete_account_message_template(template_id):
     template = db.session.get(NotificationTemplate, template_id)
-    if not template or template.type not in (ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE, ACCOUNT_INFO_SMS_TEMPLATE_TYPE):
+    if not template or template.type not in _ALL_ACCOUNT_INFO_TYPES:
         return jsonify({'success': False, 'error': 'Template not found'}), 404
     if template.is_active:
         return jsonify({'success': False, 'error': 'Disable this template before deleting it'}), 400
@@ -16973,7 +16973,7 @@ def delete_account_message_template(template_id):
 @user_management_required
 def activate_account_message_template(template_id):
     template = db.session.get(NotificationTemplate, template_id)
-    if not template or template.type not in (ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE, ACCOUNT_INFO_SMS_TEMPLATE_TYPE):
+    if not template or template.type not in _ALL_ACCOUNT_INFO_TYPES:
         return jsonify({'success': False, 'error': 'Template not found'}), 404
     # Only deactivate templates in the same scope (same owner_id)
     NotificationTemplate.query.filter_by(
@@ -16987,7 +16987,7 @@ def activate_account_message_template(template_id):
 @user_management_required
 def disable_account_message_template(template_id):
     template = db.session.get(NotificationTemplate, template_id)
-    if not template or template.type not in (ACCOUNT_INFO_WHATSAPP_TEMPLATE_TYPE, ACCOUNT_INFO_SMS_TEMPLATE_TYPE):
+    if not template or template.type not in _ALL_ACCOUNT_INFO_TYPES:
         return jsonify({'success': False, 'error': 'Template not found'}), 404
     template.is_active = False
     db.session.commit()
