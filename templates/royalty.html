@@ -210,17 +210,19 @@
 </div>
 
 <style nonce="{{ csp_nonce }}">
-    /* Bulk bar: single row, auto-width controls, 36px height throughout */
+    /* Bulk bar: consistent 36px height, gap on both axes, select arrow padded */
     .bulk-bar {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 8px;
+        gap: 8px;          /* column gap */
+        row-gap: 8px;      /* row gap when wrapping on mobile */
     }
     .bulk-ctrl {
         height: 36px;
         padding: 0 10px;
         font-size: 0.85rem;
+        line-height: 36px;
         border: 1px solid var(--border-color);
         border-radius: 6px;
         background: var(--bg-dark);
@@ -230,15 +232,25 @@
         flex-shrink: 0;
         cursor: pointer;
         box-sizing: border-box;
+        vertical-align: middle;
+    }
+    /* Give the native dropdown arrow room to breathe */
+    select.bulk-ctrl {
+        padding-right: 28px;
+        -webkit-appearance: auto;
+        appearance: auto;
     }
     .bulk-ctrl:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
-    input.bulk-ctrl { cursor: text; }
+    input.bulk-ctrl { cursor: text; padding: 0 10px; }
     .bulk-ctrl-btn {
         height: 36px;
-        padding: 0 16px;
+        padding: 0 18px;
         font-size: 0.85rem;
+        line-height: 36px;
         flex-shrink: 0;
         white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
     }
 
     .royalty-filters {
