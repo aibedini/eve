@@ -2136,10 +2136,14 @@
 
         const existing = postActionRefreshState.get(key) || { nextAllowedAt: 0, timer: null };
         const run = () => {
+            // Write-through cache makes every successful edit already correct in the
+            // cache, so we only need a cheap cache read here — NOT a 1–3s panel
+            // re-fetch. This is what removes the post-edit lag/flicker. The periodic
+            // auto-refresh and the background fetcher still reconcile external changes.
             if (serverId !== undefined && serverId !== null && serverId !== '') {
-                refreshServerData(serverId, { mode: 'full', force: true, poll: true, enqueue: true });
+                refreshServerData(serverId, { mode: 'cache', poll: false, enqueue: false });
             } else {
-                refreshData(true, { mode: 'full', force: true, poll: true, serverId: null });
+                refreshData(true, { mode: 'cache', poll: false, serverId: null });
             }
         };
 
@@ -2385,14 +2389,17 @@
         const sid = parseInt(serverId);
         const iid = String(inboundId);
         const em = String(email || '').toLowerCase();
-        if (!Number.isFinite(sid) || !iid || !em) return false;
+        if (!Number.isFinite(sid) || !em) return false;
 
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render')) ? Boolean(options.render) : true;
 
+        // A v3 client lives in several inbound blocks (one per assigned inbound) and
+        // the unified card dedups by email taking the FIRST copy — so we must patch
+        // EVERY copy on the server, not just the one matching inboundId. Email is
+        // unique per server, so matching by server+email is correct for legacy too.
         let changed = false;
         for (const inbound of (allInboundsData || [])) {
             if (parseInt(inbound?.server_id) !== sid) continue;
-            if (String(inbound?.id) !== iid) continue;
             const clients = Array.isArray(inbound.clients) ? inbound.clients : [];
             const client = clients.find(c => String(c?.email || '').toLowerCase() === em);
             if (!client) continue;
@@ -2551,7 +2558,7 @@
                     }
                 }
             }
-            break;
+            // No break: keep going so every inbound copy of a v3 client is patched.
         }
 
         if (changed && shouldRender) applyFilters();
@@ -2578,23 +2585,21 @@
     // Rename a client locally (optimistic) to avoid waiting for refresh.
     function renameLocalClient(serverId, inboundId, oldEmail, newEmail, options = {}) {
         const sid = parseInt(serverId);
-        const iid = String(inboundId);
         const oldEm = String(oldEmail || '').toLowerCase();
         const newEm = String(newEmail || '').trim();
-        if (!Number.isFinite(sid) || !iid || !oldEm || !newEm) return false;
+        if (!Number.isFinite(sid) || !oldEm || !newEm) return false;
 
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render')) ? Boolean(options.render) : true;
 
+        // Rename every copy (v3 clients span multiple inbound blocks).
         let changed = false;
         for (const inbound of (allInboundsData || [])) {
             if (parseInt(inbound?.server_id) !== sid) continue;
-            if (String(inbound?.id) !== iid) continue;
             const clients = Array.isArray(inbound.clients) ? inbound.clients : [];
             const client = clients.find(c => String(c?.email || '').toLowerCase() === oldEm);
-            if (!client) break;
+            if (!client) continue;
             client.email = newEm;
             changed = true;
-            break;
         }
 
         if (changed && shouldRender) applyFilters();
@@ -2654,16 +2659,15 @@
     // Remove a client from local data (optimistic delete)
     function removeLocalClient(serverId, inboundId, email, options = {}) {
         const sid = parseInt(serverId);
-        const iid = String(inboundId);
         const em = String(email || '').toLowerCase();
-        if (!Number.isFinite(sid) || !iid || !em) return false;
+        if (!Number.isFinite(sid) || !em) return false;
 
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render')) ? Boolean(options.render) : true;
 
+        // Remove every copy (a v3 client is deleted from all its inbounds).
         let changed = false;
         for (const inbound of (allInboundsData || [])) {
             if (parseInt(inbound?.server_id) !== sid) continue;
-            if (String(inbound?.id) !== iid) continue;
             if (!Array.isArray(inbound.clients)) continue;
             const idx = inbound.clients.findIndex(c => String(c?.email || '').toLowerCase() === em);
             if (idx >= 0) {
@@ -2671,7 +2675,6 @@
                 inbound.client_count = inbound.clients.length;
                 changed = true;
             }
-            break;
         }
 
         if (changed && shouldRender) applyFilters();

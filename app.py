@@ -851,6 +851,18 @@ def _run_bulk_job(job_id: str):
 
                 return True
 
+            def _wt_patch_cache(_server, _email, tc):
+                """Write-through the cache after a successful bulk client update."""
+                try:
+                    patch_cached_client(
+                        _server.id, _email,
+                        client_uuid=str(tc.get('id')) if tc.get('id') else None,
+                        total_gb_bytes=int(tc.get('totalGB') or 0),
+                        expiry_ts=int(tc.get('expiryTime') or 0),
+                        enable=tc.get('enable'))
+                except Exception:
+                    pass
+
             def _post_client_update(_server: 'Server', _inbound_id: int, _email: str, target_client: dict):
                 session_obj, error = get_xui_session(_server)
                 if error:
@@ -859,6 +871,7 @@ def _run_bulk_job(job_id: str):
                 if server_is_v3(_server):
                     ok, _vr, verr = v3_update_client(_server, session_obj, _email, target_client)
                     if ok:
+                        _wt_patch_cache(_server, _email, target_client)
                         return True, None, 200
                     detail = verr or 'panel rejected update'
                     app.logger.warning(f"Bulk update client (v3) failed for {_email}: {detail}")
@@ -884,6 +897,7 @@ def _run_bulk_job(job_id: str):
                     ]
                     _ok_push, _push_err = _push_full_inbound(_server, session_obj, _full_ib, _full_settings)
                     if _ok_push:
+                        _wt_patch_cache(_server, _email, target_client)
                         return True, None, 200
                     detail = _push_err or 'shadowsocks inbound update failed'
                     app.logger.warning(f"Bulk update client failed for {_email}: {detail}")
@@ -924,6 +938,7 @@ def _run_bulk_job(job_id: str):
                                 continue
                         except ValueError:
                             pass
+                        _wt_patch_cache(_server, _email, target_client)
                         return True, None, 200
                     errors.append(f"{template}: HTTP {resp.status_code}")
 
@@ -1849,6 +1864,246 @@ def fetch_and_update_server_data(server_id: int):
 
     GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(statuses)
     GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+
+
+# ── Write-through cache ──────────────────────────────────────────────────────
+# After any successful panel write we mutate GLOBAL_SERVER_DATA directly (and
+# republish to Redis) so the dashboard reflects the change INSTANTLY without the
+# slow per-server panel re-fetch. The background fetcher reconciles on its next
+# cycle, so any small drift here is self-healing.
+
+def _recompute_cached_client(cd, thresholds=None, lang=None):
+    """Recompute a processed client's derived display fields from its raw_client.
+    Mirrors process_inbounds() so a patched row matches a full fetch."""
+    raw = cd.get('raw_client') or {}
+    if thresholds is None:
+        thresholds = _get_dashboard_status_thresholds()
+    if lang is None:
+        lang = _get_panel_ui_lang()
+    up = int(cd.get('up') or 0)
+    down = int(cd.get('down') or 0)
+    try:
+        total_bytes = int(raw.get('totalGB') or 0)
+    except (TypeError, ValueError):
+        total_bytes = 0
+
+    cd['totalGB'] = total_bytes
+    cd['totalGB_formatted'] = format_bytes_gb_tb(total_bytes) if total_bytes > 0 else "Unlimited"
+
+    if total_bytes > 0:
+        remaining_bytes = max(total_bytes - (up + down), 0)
+        rf = format_bytes_gb_tb(remaining_bytes)
+        vs = ""
+        if remaining_bytes <= 0:
+            rf, vs = "Suspended", "suspended"
+        elif remaining_bytes < int(float(thresholds.get('low_volume_gb', 1.0)) * (1024 ** 3)):
+            rf, vs = f"{rf} Low", "low"
+        cd['remaining_bytes'] = remaining_bytes
+        cd['remaining_formatted'] = rf
+        cd['volume_status'] = vs
+    else:
+        remaining_bytes = None
+        cd['remaining_bytes'] = -1
+        cd['remaining_formatted'] = "Unlimited"
+        cd['volume_status'] = "expiry-start-after"
+
+    expiry_raw = raw.get('expiryTime', 0)
+    expiry_info = format_remaining_days(expiry_raw, lang=lang)
+    cd['expiryTime'] = expiry_info['text']
+    cd['expiryTimestamp'] = expiry_raw
+    cd['expiryType'] = expiry_info['type']
+
+    try:
+        state = _compute_client_service_state(
+            enabled=bool(raw.get('enable', True)),
+            total_bytes=int(total_bytes or 0),
+            remaining_bytes=(None if remaining_bytes is None else int(remaining_bytes)),
+            expiry_ts=int(expiry_raw or 0),
+            expiry_info=expiry_info,
+            thresholds=thresholds,
+            lang=lang,
+        )
+        cd['service_state'] = state.get('key', 'active')
+        cd['service_state_label'] = state.get('label', '')
+        cd['service_state_emoji'] = state.get('emoji', '')
+        cd['service_state_tag'] = state.get('tag', 'ok')
+    except Exception:
+        pass
+
+    cd['enable'] = bool(raw.get('enable', True))
+    cd['comment'] = (raw.get('comment') or '').strip()
+    cd['email'] = raw.get('email', cd.get('email'))
+    cd['id'] = raw.get('id', cd.get('id'))
+
+
+def _iter_cached_client_copies(server_id, email, client_uuid=None):
+    """Yield (inbound, processed_client) for every cached copy of a client on a
+    server (a v3 client appears once per assigned inbound)."""
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        return
+    email_l = (email or '').strip().lower()
+    uuid_l = (client_uuid or '').strip().lower()
+    for ib in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(ib.get('server_id', -1)) != sid:
+                continue
+        except Exception:
+            continue
+        for cd in (ib.get('clients') or []):
+            ce = (cd.get('email') or '').strip().lower()
+            cu = (cd.get('id') or '').strip().lower()
+            if (email_l and ce == email_l) or (uuid_l and cu == uuid_l):
+                yield ib, cd
+
+
+def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
+                        comment=None, total_gb_bytes=None, expiry_ts=None,
+                        enable=None, up=None, down=None, publish=True):
+    """Write-through: update every cached copy of a client after a panel write."""
+    changed = False
+    try:
+        with GLOBAL_REFRESH_LOCK:
+            thresholds = _get_dashboard_status_thresholds()
+            lang = _get_panel_ui_lang()
+            for _ib, cd in _iter_cached_client_copies(server_id, email, client_uuid):
+                raw = cd.get('raw_client')
+                if not isinstance(raw, dict):
+                    raw = {}
+                    cd['raw_client'] = raw
+                if comment is not None:
+                    raw['comment'] = comment
+                if total_gb_bytes is not None:
+                    raw['totalGB'] = int(total_gb_bytes)
+                if expiry_ts is not None:
+                    raw['expiryTime'] = int(expiry_ts)
+                if enable is not None:
+                    raw['enable'] = bool(enable)
+                if new_email is not None:
+                    raw['email'] = new_email
+                if up is not None:
+                    cd['up'] = int(up)
+                    cd['up_formatted'] = format_bytes(int(up))
+                if down is not None:
+                    cd['down'] = int(down)
+                    cd['down_formatted'] = format_bytes(int(down))
+                _recompute_cached_client(cd, thresholds, lang)
+                changed = True
+            if changed:
+                GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+    except Exception as exc:
+        app.logger.debug(f"patch_cached_client failed: {exc}")
+        return False
+    if changed and publish:
+        try:
+            publish_snapshot_to_redis()
+        except Exception:
+            pass
+    return changed
+
+
+def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None, publish=True):
+    """Write-through: drop a client from cache (all inbounds, or just one)."""
+    removed = False
+    try:
+        with GLOBAL_REFRESH_LOCK:
+            try:
+                sid = int(server_id)
+            except (TypeError, ValueError):
+                return False
+            email_l = (email or '').strip().lower()
+            uuid_l = (client_uuid or '').strip().lower()
+            for ib in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                try:
+                    if int(ib.get('server_id', -1)) != sid:
+                        continue
+                except Exception:
+                    continue
+                if inbound_id is not None:
+                    try:
+                        if int(ib.get('id', -1)) != int(inbound_id):
+                            continue
+                    except Exception:
+                        continue
+                clients = ib.get('clients') or []
+                kept = []
+                for cd in clients:
+                    ce = (cd.get('email') or '').strip().lower()
+                    cu = (cd.get('id') or '').strip().lower()
+                    if (email_l and ce == email_l) or (uuid_l and cu == uuid_l):
+                        removed = True
+                        continue
+                    kept.append(cd)
+                if len(kept) != len(clients):
+                    ib['clients'] = kept
+            if removed:
+                GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+    except Exception as exc:
+        app.logger.debug(f"remove_cached_client failed: {exc}")
+        return False
+    if removed and publish:
+        try:
+            publish_snapshot_to_redis()
+        except Exception:
+            pass
+    return removed
+
+
+def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=None, publish=True):
+    """Clone an existing cached processed client into another inbound block on the
+    same server (used when a v3 client is newly assigned to an inbound)."""
+    done = False
+    try:
+        with GLOBAL_REFRESH_LOCK:
+            try:
+                sid = int(server_id)
+                iid = int(inbound_id)
+            except (TypeError, ValueError):
+                return False
+            email_l = (email or '').strip().lower()
+            uuid_l = (client_uuid or '').strip().lower()
+            source = None
+            target_ib = None
+            for ib in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                try:
+                    if int(ib.get('server_id', -1)) != sid:
+                        continue
+                except Exception:
+                    continue
+                try:
+                    if int(ib.get('id', -1)) == iid:
+                        target_ib = ib
+                except Exception:
+                    pass
+                if source is None:
+                    for cd in (ib.get('clients') or []):
+                        ce = (cd.get('email') or '').strip().lower()
+                        cu = (cd.get('id') or '').strip().lower()
+                        if (email_l and ce == email_l) or (uuid_l and cu == uuid_l):
+                            source = cd
+                            break
+            if target_ib is None or source is None:
+                return False
+            tgt_email = (source.get('email') or '').strip().lower()
+            for cd in (target_ib.get('clients') or []):
+                if (cd.get('email') or '').strip().lower() == tgt_email:
+                    return False  # already present
+            clone = copy.deepcopy(source)
+            clone['inbound_id'] = iid
+            target_ib.setdefault('clients', []).append(clone)
+            GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+            done = True
+    except Exception as exc:
+        app.logger.debug(f"clone_cached_client_into_inbound failed: {exc}")
+        return False
+    if done and publish:
+        try:
+            publish_snapshot_to_redis()
+        except Exception:
+            pass
+    return done
+
 
 # Guard to avoid starting background threads multiple times (important for gunicorn workers / dev reload)
 BACKGROUND_THREADS_STARTED = False
@@ -6373,6 +6628,19 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
     except Exception:
         db.session.rollback()
 
+    # Write-through cache: reflect membership changes instantly (no panel re-fetch).
+    try:
+        for _iid in added:
+            clone_cached_client_into_inbound(server.id, _iid, email,
+                                             client_uuid=base_client.get('id'), publish=False)
+        for _iid in removed:
+            remove_cached_client(server.id, email, client_uuid=base_client.get('id'),
+                                 inbound_id=_iid, publish=False)
+        if added or removed:
+            publish_snapshot_to_redis()
+    except Exception:
+        pass
+
     if errors and not added and not removed:
         return False, '; '.join(errors), 502, None
     return True, ('; '.join(errors) or None), 200, {'added': added, 'removed': removed}
@@ -9187,6 +9455,15 @@ def api_refresh_single_server(server_id):
     enqueue = request.args.get('enqueue')
     enqueue = _parse_bool(enqueue) if enqueue is not None else (mode != 'cache')
 
+    # Multi-worker: pull the freshest shared snapshot so a write-through edit made
+    # on another worker is visible here immediately (cheap version check; no-op
+    # without Redis). This is what keeps a post-edit cache read from reverting.
+    if mode == 'cache':
+        try:
+            load_snapshot_from_redis()
+        except Exception:
+            pass
+
     job = None
     if enqueue and mode in ('full', 'status'):
         job = enqueue_refresh_job(mode='full', server_id=server.id, force=force)
@@ -9894,6 +10171,7 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
         if server_is_v3(server):
             ok, _vr, verr = v3_update_client(server, session_obj, email, target_client)
             if ok:
+                patch_cached_client(server.id, email, enable=bool(enable))
                 return True, None, 200
             return False, f"v3 toggle failed: {verr}", 502
 
@@ -9935,6 +10213,7 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
                     user.credit -= price
                     log_transaction(user.id, -price, 'renew', description or f"Renew client {email}", server_id=server.id)
                     db.session.commit()
+                patch_cached_client(server.id, email, enable=bool(enable))
                 return True, None, 200
 
             errors.append(f"{template}: {resp.status_code}")
@@ -10053,6 +10332,8 @@ def reset_client_traffic(server_id, inbound_id):
                 else:
                     log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
                 db.session.commit()
+            patch_cached_client(server.id, email, up=0, down=0,
+                                total_gb_bytes=(volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None))
             response = {"success": True}
             if user.role == 'reseller':
                 response["remaining_credit"] = user.credit
@@ -10106,6 +10387,8 @@ def reset_client_traffic(server_id, inbound_id):
                         log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
                     db.session.commit()
 
+                patch_cached_client(server.id, email, up=0, down=0,
+                                    total_gb_bytes=(volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None))
                 response = {"success": True}
                 if user.role == 'reseller':
                     response["remaining_credit"] = user.credit
@@ -10283,8 +10566,25 @@ def edit_client(server_id, inbound_id, email):
                     own.client_uuid = str(client_id)
             db.session.commit()
 
+            # Write-through cache: reflect the edit instantly (no panel re-fetch).
+            try:
+                _tg = None
+                _ex = None
+                if user.is_superadmin:
+                    if new_total_gb is not None:
+                        _tg = int(float(new_total_gb) * 1024 * 1024 * 1024)
+                    if new_expiry_time is not None:
+                        _ex = int(new_expiry_time)
+                patch_cached_client(
+                    server_id, email, client_uuid=str(client_id) if client_id else None,
+                    new_email=(new_email if new_email != email else None),
+                    comment=(new_comment if new_comment is not None else None),
+                    total_gb_bytes=_tg, expiry_ts=_ex)
+            except Exception:
+                pass
+
             return jsonify({"success": True})
-            
+
     except Exception as e:
         app.logger.error(f"Edit client error: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 400
@@ -10381,6 +10681,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
                 log_transaction(user.id, 0, 'delete_client', f"Deleted client {email}", server_id=server.id, client_email=email)
             except Exception:
                 pass
+            remove_cached_client(server.id, email, client_uuid=str(client_id) if client_id else None)
             return True, None, 200
 
         # Shadowsocks clients have no UUID — delClient/:clientId won't work.
@@ -10465,6 +10766,8 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
             except Exception:
                 pass
 
+            remove_cached_client(server.id, email, client_uuid=str(client_id) if client_id else None,
+                                 inbound_id=inbound_id)
             return True, None, 200
 
     except Exception as exc:
@@ -11432,6 +11735,19 @@ def renew_client(server_id, inbound_id, email):
                     'blocked_reason': whatsapp_runtime.get('blocked_reason') if not whatsapp_runtime.get('enabled', False) else None,
                     'delivery': whatsapp_delivery,
                 }
+
+                # Write-through cache: reflect the renewal instantly (no panel re-fetch).
+                try:
+                    patch_cached_client(
+                        server_id, email,
+                        client_uuid=str(target_client.get('id')) if target_client and target_client.get('id') else None,
+                        total_gb_bytes=int(target_client.get('totalGB') or 0),
+                        expiry_ts=int(target_client.get('expiryTime') or 0),
+                        enable=(True if _was_disabled else None),
+                        up=(0 if reset_traffic else None),
+                        down=(0 if reset_traffic else None))
+                except Exception:
+                    pass
 
                 return _finish({"success": True, "copy_text": copy_text, "verify": verify, "whatsapp": whatsapp_meta, "was_reactivated": _was_disabled})
 
