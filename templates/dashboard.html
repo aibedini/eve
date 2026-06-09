@@ -4804,6 +4804,28 @@
                 </label>
             </div>`).join('');
         _updateAddInboundMultiLabel();
+        _updateV3LastUserDisplay(serverId, inbounds);
+    }
+
+    function _updateV3LastUserDisplay(serverId, inbounds) {
+        const sid = String(serverId || '');
+        if (!sid) return;
+        const seen = new Set();
+        const merged = [];
+        const cachedMap = lastUserCacheByServer.get(sid) || {};
+        for (const ib of (inbounds || [])) {
+            const arr = cachedMap[String(ib.id)] || [];
+            for (const em of arr) {
+                if (!seen.has(em)) { seen.add(em); merged.push(em); }
+                if (merged.length >= 8) break;
+            }
+            if (merged.length >= 8) break;
+        }
+        const curMap = lastUserCacheByServer.get(sid) || {};
+        curMap['__v3__'] = merged;
+        lastUserCacheByServer.set(sid, curMap);
+        const display = document.getElementById('last-user-display');
+        if (display) showLastUserFromCache(sid, '__v3__', display);
     }
     function toggleAddInboundDropdown(e) {
         if (e) e.stopPropagation();
@@ -4923,6 +4945,18 @@
         const select = document.getElementById('add-client-inbound-select');
         const display = document.getElementById('last-user-display');
         if (!display) return;
+
+        // v3 mode: multi-checkbox is visible, hidden select has no value.
+        // Show merged recent clients across all inbounds (client-based, not inbound-based).
+        const _multiWrap = document.getElementById('add-client-inbound-multi');
+        if (_multiWrap && _multiWrap.style.display !== 'none') {
+            const serverKey = String(document.getElementById('add-client-server-select')?.value || '');
+            if (serverKey) {
+                const _ibs = getCachedInboundsForServer(parseInt(serverKey));
+                _updateV3LastUserDisplay(serverKey, _ibs);
+            }
+            return;
+        }
 
         if (!select.value) {
             _lastUserNav = { key: '', list: [], index: 0 };

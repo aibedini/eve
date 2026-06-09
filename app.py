@@ -864,6 +864,31 @@ def _run_bulk_job(job_id: str):
                     app.logger.warning(f"Bulk update client (v3) failed for {_email}: {detail}")
                     return False, detail, 502
 
+                # Shadowsocks clients have no UUID 'id' — updateClient/:clientId won't work.
+                if 'id' not in target_client:
+                    _ibs, _fe, _ = fetch_inbounds(session_obj, _server.host, _server.panel_type)
+                    _full_ib = None
+                    if not _fe:
+                        for _ib in (_ibs or []):
+                            if _ib.get('id') == _inbound_id:
+                                _full_ib = _ib
+                                break
+                    if _full_ib is None:
+                        detail = 'shadowsocks: could not fetch full inbound for update'
+                        app.logger.warning(f"Bulk update client failed for {_email}: {detail}")
+                        return False, detail, 400
+                    _full_settings = _json_field(_full_ib.get('settings'), {})
+                    _full_settings['clients'] = [
+                        target_client if c.get('email') == _email else c
+                        for c in _full_settings.get('clients', [])
+                    ]
+                    _ok_push, _push_err = _push_full_inbound(_server, session_obj, _full_ib, _full_settings)
+                    if _ok_push:
+                        return True, None, 200
+                    detail = _push_err or 'shadowsocks inbound update failed'
+                    app.logger.warning(f"Bulk update client failed for {_email}: {detail}")
+                    return False, detail, 400
+
                 client_id = target_client.get('id', target_client.get('password', _email))
                 update_payload = {
                     'id': _inbound_id,
@@ -9975,6 +10000,22 @@ def reset_client_traffic(server_id, inbound_id):
         try:
             if server_is_v3(server):
                 v3_update_client(server, session_obj, email, target_client)
+            elif 'id' not in target_client:
+                # Shadowsocks: need full inbound update
+                _ibs_r, _fe_r, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                _full_ib_r = None
+                if not _fe_r:
+                    for _ib_r in (_ibs_r or []):
+                        if _ib_r.get('id') == inbound_id:
+                            _full_ib_r = _ib_r
+                            break
+                if _full_ib_r:
+                    _fs_r = _json_field(_full_ib_r.get('settings'), {})
+                    _fs_r['clients'] = [
+                        target_client if c.get('email') == email else c
+                        for c in _fs_r.get('clients', [])
+                    ]
+                    _push_full_inbound(server, session_obj, _full_ib_r, _fs_r)
             else:
                 client_id = target_client.get('id', target_client.get('password', email))
                 up = {'id': inbound_id, 'settings': json.dumps({'clients': [target_client]})}
@@ -10117,10 +10158,10 @@ def edit_client(server_id, inbound_id, email):
 
         persist_detected_panel_type(server, detected_type)
             
-        target_client, _ = find_client(inbounds, inbound_id, email)
+        target_client, fetched_inbound_row_edit = find_client(inbounds, inbound_id, email)
         if not target_client:
             return jsonify({"success": False, "error": "Client not found"}), 404
-            
+
         # Check for duplicate email on the same server (excluding current client)
         if new_email != email:
             for ib in inbounds:
@@ -10132,7 +10173,7 @@ def edit_client(server_id, inbound_id, email):
 
         # Extract ID before modification to ensure we target the correct client
         client_id = target_client.get('id', target_client.get('password', email))
-        
+
         # Update email
         target_client['email'] = new_email
 
@@ -10152,7 +10193,7 @@ def edit_client(server_id, inbound_id, email):
                     target_client['expiryTime'] = int(new_expiry_time)
                 except (ValueError, TypeError):
                     pass
-        
+
         # v3: use first-class client endpoint (legacy updateClient is 404 on v3)
         if server_is_v3(server):
             ok_v3, _vr, verr = v3_update_client(server, session_obj, email, target_client)
@@ -10160,6 +10201,22 @@ def edit_client(server_id, inbound_id, email):
                 detail = verr or 'panel rejected update'
                 app.logger.warning(f"v3 edit client failed for {email}: {detail}")
                 return jsonify({"success": False, "error": f"پنل خطا برگرداند: {detail}"}), 502
+            success = True
+        elif 'id' not in target_client:
+            # Shadowsocks clients have no UUID — use full inbound update.
+            _full_ib_edit = fetched_inbound_row_edit
+            if _full_ib_edit is None:
+                return jsonify({"success": False, "error": "shadowsocks: could not get full inbound for update"}), 400
+            _full_settings_edit = _json_field(_full_ib_edit.get('settings'), {})
+            _full_settings_edit['clients'] = [
+                target_client if c.get('email') == email else c
+                for c in _full_settings_edit.get('clients', [])
+            ]
+            _ok_push_edit, _push_err_edit = _push_full_inbound(server, session_obj, _full_ib_edit, _full_settings_edit)
+            if not _ok_push_edit:
+                detail = _push_err_edit or 'shadowsocks inbound update failed'
+                app.logger.warning(f"Edit client failed for {email}: {detail}")
+                return jsonify({"success": False, "error": f"آپدیت ناموفق بود — {detail}"}), 400
             success = True
         else:
             update_payload = {
@@ -10289,6 +10346,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
     if error:
         return False, error, 400
 
+    _delete_inbound_row = None
     try:
         if not target_client:
             inbounds, fetch_err, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type)
@@ -10296,7 +10354,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
                 return False, "Failed to fetch inbounds", 400
 
             persist_detected_panel_type(server, detected_type)
-            target_client, _ = find_client(inbounds, inbound_id, email)
+            target_client, _delete_inbound_row = find_client(inbounds, inbound_id, email)
             if not target_client:
                 return False, "Client not found", 404
 
@@ -10325,48 +10383,70 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
                 pass
             return True, None, 200
 
-        replacements = {
-            'id': inbound_id,
-            'inbound_id': inbound_id,
-            'inboundId': inbound_id,
-            'clientId': client_id,
-            'client_id': client_id,
-            'email': email
-        }
+        # Shadowsocks clients have no UUID — delClient/:clientId won't work.
+        # Remove the client from the full inbound settings and push.
+        if 'id' not in target_client:
+            _full_ib_del = _delete_inbound_row
+            if _full_ib_del is None:
+                _ibs_del, _fe_del, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                if not _fe_del:
+                    for _ib_del in (_ibs_del or []):
+                        if _ib_del.get('id') == inbound_id:
+                            _full_ib_del = _ib_del
+                            break
+            if _full_ib_del is None:
+                return False, "shadowsocks: could not fetch full inbound for delete", 400
+            _fs_del = _json_field(_full_ib_del.get('settings'), {})
+            _fs_del['clients'] = [c for c in _fs_del.get('clients', []) if c.get('email') != email]
+            _ok_del, _err_del = _push_full_inbound(server, session_obj, _full_ib_del, _fs_del)
+            if not _ok_del:
+                detail = _err_del or 'shadowsocks inbound delete failed'
+                app.logger.warning(f"Delete client failed for {email}: {detail}")
+                return False, detail, 400
+            success = True
+        else:
+            replacements = {
+                'id': inbound_id,
+                'inbound_id': inbound_id,
+                'inboundId': inbound_id,
+                'clientId': client_id,
+                'client_id': client_id,
+                'email': email
+            }
 
-        templates = collect_endpoint_templates(server.panel_type, 'client_delete', CLIENT_DELETE_FALLBACKS)
-        errors = []
-        success = False
+            templates = collect_endpoint_templates(server.panel_type, 'client_delete', CLIENT_DELETE_FALLBACKS)
+            errors = []
+            success = False
 
-        for template in templates:
-            full_url = build_panel_url(server.host, template, replacements)
-            if not full_url:
-                continue
-            try:
-                resp = session_obj.post(full_url, verify=False, timeout=10)
-            except Exception as exc:
-                errors.append(f"{template}: {exc}")
-                continue
-
-            if resp.status_code == 200:
+            for template in templates:
+                full_url = build_panel_url(server.host, template, replacements)
+                if not full_url:
+                    continue
                 try:
-                    resp_json = resp.json()
-                    if isinstance(resp_json, dict) and resp_json.get('success') is False:
-                        panel_msg = resp_json.get('msg') or resp_json.get('message') or 'success=false'
-                        errors.append(f"{template}: {panel_msg}")
-                        continue
-                except ValueError:
-                    pass
+                    resp = session_obj.post(full_url, verify=False, timeout=10)
+                except Exception as exc:
+                    errors.append(f"{template}: {exc}")
+                    continue
 
-                success = True
-                break
+                if resp.status_code == 200:
+                    try:
+                        resp_json = resp.json()
+                        if isinstance(resp_json, dict) and resp_json.get('success') is False:
+                            panel_msg = resp_json.get('msg') or resp_json.get('message') or 'success=false'
+                            errors.append(f"{template}: {panel_msg}")
+                            continue
+                    except ValueError:
+                        pass
 
-            errors.append(f"{template}: HTTP {resp.status_code}")
+                    success = True
+                    break
 
-        if not success:
-            detail = '; '.join(errors) or 'no endpoint succeeded'
-            app.logger.warning(f"Delete client failed for {email}: {detail}")
-            return False, detail, 400
+                errors.append(f"{template}: HTTP {resp.status_code}")
+
+            if not success:
+                detail = '; '.join(errors) or 'no endpoint succeeded'
+                app.logger.warning(f"Delete client failed for {email}: {detail}")
+                return False, detail, 400
 
         if success:
             email_l = (email or '').strip().lower()
@@ -11083,6 +11163,8 @@ def renew_client(server_id, inbound_id, email):
         }
 
         _is_v3 = server_is_v3(server)
+        # Shadowsocks clients have no UUID 'id' field — updateClient/:clientId won't work.
+        _is_shadowsocks_no_id = (not _is_v3) and ('id' not in target_client)
 
         class _SyntheticOK:  # lets the v3 path reuse the legacy post-success block
             status_code = 200
@@ -11102,6 +11184,30 @@ def renew_client(server_id, inbound_id, email):
                 ok, _vr, verr = v3_update_client(server, session_obj, email, target_client)
                 if not ok:
                     errors.append(f"v3 update: {verr}")
+                    break
+                resp = _SyntheticOK()
+            elif _is_shadowsocks_no_id:
+                # Shadowsocks clients have no UUID — use full inbound update instead.
+                _full_ib = fetched_inbound_row
+                if _full_ib is None:
+                    # Came from cache; re-fetch to get the complete inbound object.
+                    _ibs_fresh, _fe2, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                    if not _fe2:
+                        for _ib in (_ibs_fresh or []):
+                            if _ib.get('id') == inbound_id:
+                                _full_ib = _ib
+                                break
+                if _full_ib is None:
+                    errors.append("shadowsocks: could not fetch full inbound for update")
+                    break
+                _full_settings = _json_field(_full_ib.get('settings'), {})
+                _full_settings['clients'] = [
+                    target_client if c.get('email') == email else c
+                    for c in _full_settings.get('clients', [])
+                ]
+                _ok_push, _push_err = _push_full_inbound(server, session_obj, _full_ib, _full_settings)
+                if not _ok_push:
+                    errors.append(f"shadowsocks inbound update: {_push_err}")
                     break
                 resp = _SyntheticOK()
             else:
