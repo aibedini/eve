@@ -1510,7 +1510,11 @@
     let disabledOnlyClients = false;
 
     // Persist bulk selections across refresh/re-render
-    const bulkSelectedClientKeys = new Set(); // key = `${server_id}:${inbound_id}:${emailLower}`
+    // Selection store: key -> { server_id, inbound_id, email, client_uuid, enable }.
+    // A Map (not a Set) so bulk actions can be fully data-driven — selections work
+    // even for collapsed cards whose rows aren't in the DOM. .has/.delete/.clear/
+    // .size behave like a Set; only adds use .set(key, obj).
+    const bulkSelectedClientKeys = new Map(); // key = `${server_id}:${inbound_id}:${emailLower}`
 
     const IS_SUPERADMIN = {{ 'true' if is_superadmin else 'false' }};
     const USER_ROLE = "{{ role }}";
@@ -2211,48 +2215,51 @@
         });
     }
 
+    // Should an item (by enable state) be included under the current disabled filters?
+    function _itemAllowedByDisabledFilters(enable) {
+        if (disabledOnlyClients) return !enable;
+        if (hideDisabledClients) return !!enable;
+        return true;
+    }
+
     function selectAllVisibleClients(checked = true) {
-        // Global select-all should include filtered clients even when inbound rows are collapsed.
-        const boxes = getVisibleBulkCheckboxes(null, { includeCollapsed: true });
-        boxes.forEach(cb => {
-            cb.checked = checked;
-            const key = makeBulkClientKey(cb.dataset.serverId, cb.dataset.inboundId, cb.dataset.email);
-            if (checked) bulkSelectedClientKeys.add(key);
-            else bulkSelectedClientKeys.delete(key);
+        // Data-driven: operate on every registered (filtered) card, so it works
+        // even for collapsed cards whose rows aren't in the DOM.
+        _cardRowData.forEach(reg => {
+            (reg.items || []).forEach(it => {
+                if (!_itemAllowedByDisabledFilters(reg.enableOf(it))) return;
+                const key = reg.keyOf(it);
+                if (checked) bulkSelectedClientKeys.set(key, reg.objOf(it));
+                else bulkSelectedClientKeys.delete(key);
+            });
         });
         applyBulkSelectionToDOM();
         updateBulkUI();
     }
 
     function applyBulkSelectionToDOM() {
-        const boxes = Array.from(document.querySelectorAll('.client-bulk-checkbox'));
-        const byInboundVisible = new Map();
-
-        boxes.forEach(cb => {
+        // Sync the checkboxes that are actually rendered (expanded/search cards).
+        document.querySelectorAll('.client-bulk-checkbox').forEach(cb => {
             const key = makeBulkClientKey(cb.dataset.serverId, cb.dataset.inboundId, cb.dataset.email);
-            cb.checked = bulkSelectedClientKeys.has(key);
             if (!isBulkCheckboxAllowedByDisabledFilters(cb)) {
                 cb.checked = false;
                 bulkSelectedClientKeys.delete(key);
                 return;
             }
-            if (!isBulkCheckboxVisible(cb)) return;
-            const inboundKey = cb.dataset.inboundKey;
-            if (!byInboundVisible.has(inboundKey)) byInboundVisible.set(inboundKey, []);
-            byInboundVisible.get(inboundKey).push(cb);
+            cb.checked = bulkSelectedClientKeys.has(key);
         });
-
-        // Update each inbound's select-all checkbox based on children
+        // Header "select all" state comes from the data model (works for collapsed
+        // cards too). Build a key->el map once so this stays O(cards), not O(cards²).
+        const headerByKey = new Map();
         document.querySelectorAll('.select-all-clients').forEach(sa => {
-            const onChangeAttr = sa.getAttribute('onchange') || '';
-            const match = onChangeAttr.match(/toggleSelectAllClients\('([^']+)'/);
-            const inboundKey = match ? match[1] : null;
-            if (!inboundKey || !byInboundVisible.has(inboundKey)) {
-                sa.checked = false;
-                return;
-            }
-            const children = byInboundVisible.get(inboundKey);
-            sa.checked = children.length > 0 && children.every(cb => cb.checked);
+            const m = (sa.getAttribute('onchange') || '').match(/toggleSelectAllClients\('([^']+)'/);
+            if (m) headerByKey.set(m[1], sa);
+        });
+        _cardRowData.forEach((reg, key) => {
+            const sa = headerByKey.get(key);
+            if (!sa) return;
+            const items = reg.items || [];
+            sa.checked = items.length > 0 && items.every(it => bulkSelectedClientKeys.has(reg.keyOf(it)));
         });
     }
 
@@ -3019,6 +3026,195 @@
 
     // Build a unified card for a v3 server — deduplicates clients across inbounds
     // and adds an "Inbounds" column showing which inbounds each client belongs to.
+    // ── Lazy + incremental client-row rendering (Phase 3) ────────────────────
+    // Cards render with an EMPTY <tbody>; rows are built only when a card is
+    // expanded, and in scroll-triggered batches so even a 10k-client card never
+    // freezes on load or expand. Bulk selection is data-driven (see _cardRowData)
+    // so it keeps working for collapsed cards whose rows aren't in the DOM.
+    const _cardRowData = new Map();   // key -> { items, buildRow, keyOf, objOf, enableOf }
+    const ROW_BATCH = 60;             // client rows appended per scroll step
+
+    function _v3ClientRowHtml(client, ibs, sid, cardKey) {
+        const firstIbId = ibs[0]?.id || client.inbound_id || '';
+        const ibPillsHtml = ibs.map(ib => {
+            const proto = (ib.protocol || '').toUpperCase();
+            const name = ib.remark || ('Inbound ' + ib.id);
+            return `<span class="inbound-name-line ${(ib.protocol || '').toLowerCase()}" title="${escapeHtml(proto + ' · ' + name)}"><span class="ib-proto-dot"></span><span class="ib-name-text">${escapeHtml(name)}</span></span>`;
+        }).join('');
+        const assignBtn = IS_SUPERADMIN ? `<button class="action-btn" onclick="openAssignModal(${sid}, '${client.email}', '${firstIbId}', '${client.id || ''}')" title="Assign Owner"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 11h-2.5a2.5 2.5 0 0 0 0 5H22"></path></svg></button>` : '';
+        const toggleIcon = client.enable
+            ? '<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>'
+            : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>';
+        return `<tr class="${!client.enable ? 'disabled-row' : ''}">
+            <td class="select-cell"><label class="checkbox-label" style="padding-left:0;width:20px;height:20px;margin:0 auto;"><input type="checkbox" class="client-bulk-checkbox" data-inbound-key="${cardKey}" data-server-id="${sid}" data-inbound-id="${firstIbId}" data-email="${client.email}" data-client-uuid="${client.id || ''}" data-enabled="${client.enable ? '1' : '0'}" onchange="onBulkClientCheckboxChanged(this)"><span class="checkmark"></span></label></td>
+            <td class="email-cell"><span class="email-with-online"><span class="email-name-row">${client.is_online ? '<span class="online-pulse" title="Online"></span>' : ''}<span class="email-text">${client.email}</span></span>${client.comment ? `<span class="client-comment">${escHtml(client.comment)}</span>` : ''}</span></td>
+            <td class="inbounds-cell" data-label="Inbounds"><div class="inbound-pills">${ibPillsHtml}</div></td>
+            <td class="owner-cell" data-label="Owner">${renderOwnerCell(client)}</td>
+            <td data-label="Status">${renderClientServiceState(client)}</td>
+            <td data-label="Expiry"><span class="expiry-badge ${getExpiryClass(client.expiryType)}"><span class="expiry-time">${client.expiryTime}</span>${client.expiryTimestamp ? `<span class="expiry-time">${formatTehranTime(client.expiryTimestamp)}</span>` : ''}</span></td>
+            <td class="traffic-cell" data-label="Traffic"><div class="traffic-combined-cell"><span class="up">↑ ${client.up_formatted}</span><span class="down">↓ ${client.down_formatted}</span></div></td>
+            <td class="volume-cell" data-label="Volume"><div class="volume-info"><span class="remaining ${client.volume_status || ''}">${client.remaining_formatted}</span><span class="total ${client.totalGB_formatted === 'Unlimited' ? 'expiry-start-after' : ''}">/ ${client.totalGB_formatted}</span></div></td>
+            <td class="action-cell"><div class="action-buttons">
+                <button class="action-btn" onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${sid}, '${client.subId || client.id || ''}')" title="QR Code"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
+                <button class="action-btn renew" onclick="openRenewModal(${sid}, '${firstIbId}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="Renew"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></button>
+                ${renderAccountMessageButton(client)}
+                <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${sid}, '${firstIbId}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${toggleIcon}</svg></button>
+                <button class="action-btn warning" onclick="openResetModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0})" title="Reset Traffic"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg></button>
+                <button class="action-btn" onclick="openEditClientModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="Edit Client"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>
+                ${assignBtn}
+                <button class="action-btn danger" onclick="openDeleteClientModal(${sid}, '${firstIbId}', '${client.email}', '${client.id}', ${client.enable}, '${client.expiryTime}', ${client.expiryTimestamp || 0}, '${client.up}', '${client.down}', '${client.totalGB_formatted}', '${client.remaining_formatted}')" title="Delete Client"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+            </div></td>
+        </tr>`;
+    }
+
+    function _legacyClientRowHtml(client, inboundKey) {
+        return `<tr class="${!client.enable ? 'disabled-row' : ''}">
+            <td class="select-cell">
+                <label class="checkbox-label" style="padding-left: 0; width: 20px; height: 20px; margin: 0 auto;">
+                    <input type="checkbox" class="client-bulk-checkbox" data-inbound-key="${inboundKey}" data-server-id="${client.server_id}" data-inbound-id="${client.inbound_id}" data-email="${client.email}" data-client-uuid="${client.id || ''}" data-enabled="${client.enable ? '1' : '0'}" onchange="onBulkClientCheckboxChanged(this)">
+                    <span class="checkmark"></span>
+                </label>
+            </td>
+            <td class="email-cell"><span class="email-with-online"><span class="email-name-row">${client.is_online ? '<span class="online-pulse" title="Online"></span>' : ''}<span class="email-text">${client.email}</span></span>${client.comment ? `<span class="client-comment">${escHtml(client.comment)}</span>` : ''}</span></td>
+            <td class="owner-cell" data-label="Owner">${renderOwnerCell(client)}</td>
+            <td data-label="Status">${renderClientServiceState(client)}</td>
+            <td data-label="Expiry">
+                <span class="expiry-badge ${getExpiryClass(client.expiryType)}">
+                    <span class="expiry-time">${client.expiryTime}</span>
+                    ${client.expiryTimestamp ? `<span class="expiry-time">${formatTehranTime(client.expiryTimestamp)}</span>` : ''}
+                </span>
+            </td>
+            <td class="traffic-cell" data-label="Traffic">
+                <div class="traffic-combined-cell">
+                    <span class="up">↑ ${client.up_formatted}</span>
+                    <span class="down">↓ ${client.down_formatted}</span>
+                </div>
+            </td>
+            <td class="volume-cell" data-label="Volume">
+                <div class="volume-info">
+                    <span class="remaining ${client.volume_status || ''}">${client.remaining_formatted}</span>
+                    <span class="total ${client.totalGB_formatted === 'Unlimited' ? 'expiry-start-after' : ''}">/ ${client.totalGB_formatted}</span>
+                </div>
+            </td>
+            <td class="action-cell">
+                <div class="action-buttons">
+                    <button class="action-btn" onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${client.server_id}, '${client.subId || client.id || ''}')" title="QR Code">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                    </button>
+                    <button class="action-btn renew" onclick="openRenewModal(${client.server_id}, '${client.inbound_id}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="Renew">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    </button>
+                    ${renderAccountMessageButton(client)}
+                    <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${client.server_id}, '${client.inbound_id}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${client.enable ? '<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>' : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>'}</svg>
+                    </button>
+                    <button class="action-btn warning" onclick="openResetModal(${client.server_id}, '${client.inbound_id}', '${client.email}', ${client.totalGB || 0})" title="Reset Traffic">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+                    </button>
+                    <button class="action-btn" onclick="openEditClientModal(${client.server_id}, '${client.inbound_id}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="Edit Client">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                    </button>
+                    ${IS_SUPERADMIN ? `<button class="action-btn" onclick="openAssignModal(${client.server_id}, '${client.email}', '${client.inbound_id}', '${client.id || ''}')" title="Assign Owner">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 11h-2.5a2.5 2.5 0 0 0 0 5H22"></path></svg>
+                    </button>` : ''}
+                    <button class="action-btn danger" onclick="openDeleteClientModal(${client.server_id}, '${client.inbound_id}', '${client.email}', '${client.id}', ${client.enable}, '${client.expiryTime}', ${client.expiryTimestamp || 0}, '${client.up}', '${client.down}', '${client.totalGB_formatted}', '${client.remaining_formatted}')" title="Delete Client">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    </button>
+                </div>
+            </td>
+        </tr>`;
+    }
+
+    // Sync rendered checkboxes in a section with the selection store.
+    function _syncRenderedCheckboxesIn(scopeEl) {
+        (scopeEl || document).querySelectorAll('.client-bulk-checkbox').forEach(cb => {
+            const key = makeBulkClientKey(cb.dataset.serverId, cb.dataset.inboundId, cb.dataset.email);
+            cb.checked = bulkSelectedClientKeys.has(key);
+        });
+    }
+
+    // Set a card's header "select all" checkbox from the data model (works even
+    // when the card has no rows in the DOM yet).
+    function _updateCardHeaderSelectAll(key) {
+        const reg = _cardRowData.get(key);
+        if (!reg) return;
+        const items = reg.items || [];
+        const allSelected = items.length > 0 && items.every(it => bulkSelectedClientKeys.has(reg.keyOf(it)));
+        document.querySelectorAll('.select-all-clients').forEach(sa => {
+            const m = (sa.getAttribute('onchange') || '').match(/toggleSelectAllClients\('([^']+)'/);
+            if (m && m[1] === key) sa.checked = allSelected;
+        });
+    }
+
+    // Build the rows of an expanded card incrementally (Layer 2). The first batch
+    // renders immediately; further batches are appended as a bottom sentinel
+    // scrolls near the viewport, so even a 10k-client card stays smooth.
+    function mountCardRows(sectionEl) {
+        if (!sectionEl || sectionEl._rowsMounted) return;
+        const btn = sectionEl.querySelector('.toggle-clients');
+        const key = btn && btn.dataset ? btn.dataset.inboundKey : null;
+        const reg = key && _cardRowData.get(key);
+        const tbody = sectionEl.querySelector('tbody');
+        if (!reg || !tbody) return;
+        sectionEl._rowsMounted = true;
+
+        const items = reg.items || [];
+        let idx = 0;
+        let io = null;
+
+        const sentinel = document.createElement('tr');
+        sentinel.className = 'vrow-sentinel';
+        sentinel.innerHTML = '<td colspan="20" style="height:1px;padding:0;border:0;"></td>';
+
+        const teardown = () => {
+            if (io) { try { io.disconnect(); } catch (e) {} io = null; }
+            if (sentinel.parentNode) sentinel.remove();
+        };
+        sectionEl._teardownRows = teardown;
+
+        const appendBatch = () => {
+            if (idx >= items.length) { teardown(); return; }
+            const end = Math.min(idx + ROW_BATCH, items.length);
+            let buf = '';
+            for (let i = idx; i < end; i++) buf += reg.buildRow(items[i]);
+            const tpl = document.createElement('template');
+            tpl.innerHTML = buf;
+            tbody.insertBefore(tpl.content, sentinel);
+            idx = end;
+            _syncRenderedCheckboxesIn(sectionEl);
+            if (idx >= items.length) teardown();
+        };
+
+        tbody.appendChild(sentinel);
+        appendBatch(); // first batch now
+        if (idx < items.length) {
+            io = new IntersectionObserver((entries) => {
+                if (entries.some(e => e.isIntersecting)) appendBatch();
+            }, { root: null, rootMargin: '800px' });
+            io.observe(sentinel);
+        }
+        _updateCardHeaderSelectAll(key);
+    }
+
+    function unmountCardRows(sectionEl) {
+        if (!sectionEl) return;
+        if (typeof sectionEl._teardownRows === 'function') {
+            try { sectionEl._teardownRows(); } catch (e) {}
+            sectionEl._teardownRows = null;
+        }
+        const tbody = sectionEl.querySelector('tbody');
+        if (tbody) tbody.innerHTML = '';
+        sectionEl._rowsMounted = false;
+    }
+
+    // Mount rows for every currently-expanded card present in the container.
+    function mountExpandedCards() {
+        document.querySelectorAll('#inbounds-container .clients-section').forEach(section => {
+            const list = section.querySelector('.clients-list');
+            if (list && !list.classList.contains('hidden')) mountCardRows(section);
+        });
+    }
+
     function _buildV3ServerCard(sid, serverInbounds) {
         const server = (allServers || []).find(s => String(s.id) === String(sid));
         const serverName = server ? server.name : `Server #${sid}`;
@@ -3048,38 +3244,14 @@
         const SVG_HIDE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>`;
         const SVG_SHOW = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
 
-        const clientRowsHtml = entries.map(({ client, ibs }) => {
-            const firstIbId = ibs[0]?.id || client.inbound_id || '';
-            const ibPillsHtml = ibs.map(ib => {
-                const proto = (ib.protocol || '').toUpperCase();
-                const name = ib.remark || ('Inbound ' + ib.id);
-                return `<span class="inbound-name-line ${(ib.protocol || '').toLowerCase()}" title="${escapeHtml(proto + ' · ' + name)}"><span class="ib-proto-dot"></span><span class="ib-name-text">${escapeHtml(name)}</span></span>`;
-            }).join('');
-            const assignBtn = IS_SUPERADMIN ? `<button class="action-btn" onclick="openAssignModal(${sid}, '${client.email}', '${firstIbId}', '${client.id || ''}')" title="Assign Owner"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 11h-2.5a2.5 2.5 0 0 0 0 5H22"></path></svg></button>` : '';
-            const toggleIcon = client.enable
-                ? '<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>'
-                : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>';
-            return `<tr class="${!client.enable ? 'disabled-row' : ''}">
-                <td class="select-cell"><label class="checkbox-label" style="padding-left:0;width:20px;height:20px;margin:0 auto;"><input type="checkbox" class="client-bulk-checkbox" data-inbound-key="${cardKey}" data-server-id="${sid}" data-inbound-id="${firstIbId}" data-email="${client.email}" data-client-uuid="${client.id || ''}" data-enabled="${client.enable ? '1' : '0'}" onchange="onBulkClientCheckboxChanged(this)"><span class="checkmark"></span></label></td>
-                <td class="email-cell"><span class="email-with-online"><span class="email-name-row">${client.is_online ? '<span class="online-pulse" title="Online"></span>' : ''}<span class="email-text">${client.email}</span></span>${client.comment ? `<span class="client-comment">${escHtml(client.comment)}</span>` : ''}</span></td>
-                <td class="inbounds-cell" data-label="Inbounds"><div class="inbound-pills">${ibPillsHtml}</div></td>
-                <td class="owner-cell" data-label="Owner">${renderOwnerCell(client)}</td>
-                <td data-label="Status">${renderClientServiceState(client)}</td>
-                <td data-label="Expiry"><span class="expiry-badge ${getExpiryClass(client.expiryType)}"><span class="expiry-time">${client.expiryTime}</span>${client.expiryTimestamp ? `<span class="expiry-time">${formatTehranTime(client.expiryTimestamp)}</span>` : ''}</span></td>
-                <td class="traffic-cell" data-label="Traffic"><div class="traffic-combined-cell"><span class="up">↑ ${client.up_formatted}</span><span class="down">↓ ${client.down_formatted}</span></div></td>
-                <td class="volume-cell" data-label="Volume"><div class="volume-info"><span class="remaining ${client.volume_status || ''}">${client.remaining_formatted}</span><span class="total ${client.totalGB_formatted === 'Unlimited' ? 'expiry-start-after' : ''}">/ ${client.totalGB_formatted}</span></div></td>
-                <td class="action-cell"><div class="action-buttons">
-                    <button class="action-btn" onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${sid}, '${client.subId || client.id || ''}')" title="QR Code"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
-                    <button class="action-btn renew" onclick="openRenewModal(${sid}, '${firstIbId}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="Renew"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></button>
-                    ${renderAccountMessageButton(client)}
-                    <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${sid}, '${firstIbId}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${toggleIcon}</svg></button>
-                    <button class="action-btn warning" onclick="openResetModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0})" title="Reset Traffic"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg></button>
-                    <button class="action-btn" onclick="openEditClientModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="Edit Client"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>
-                    ${assignBtn}
-                    <button class="action-btn danger" onclick="openDeleteClientModal(${sid}, '${firstIbId}', '${client.email}', '${client.id}', ${client.enable}, '${client.expiryTime}', ${client.expiryTimestamp || 0}, '${client.up}', '${client.down}', '${client.totalGB_formatted}', '${client.remaining_formatted}')" title="Delete Client"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
-                </div></td>
-            </tr>`;
-        }).join('');
+        // Register this card's rows for lazy/incremental build + data-driven bulk.
+        _cardRowData.set(cardKey, {
+            items: entries,
+            buildRow: (e) => _v3ClientRowHtml(e.client, e.ibs, sid, cardKey),
+            keyOf: (e) => makeBulkClientKey(sid, (e.ibs[0]?.id ?? e.client.inbound_id ?? ''), e.client.email),
+            objOf: (e) => ({ server_id: parseInt(sid), inbound_id: parseInt(e.ibs[0]?.id ?? e.client.inbound_id ?? 0), email: e.client.email, client_uuid: e.client.id || '' }),
+            enableOf: (e) => !!e.client.enable,
+        });
 
         const clientsSectionHtml = totalCount > 0 ? `
         <div class="clients-section">
@@ -3093,7 +3265,7 @@
                             <th style="width:34px;"><label class="checkbox-label" style="padding-left:0;width:20px;height:20px;margin:0 auto;"><input type="checkbox" class="select-all-clients" onchange="toggleSelectAllClients('${cardKey}', this.checked)"><span class="checkmark"></span></label></th>
                             <th>Email</th><th>Inbounds</th><th>Owner</th><th>Status</th><th>Expiry</th><th>Traffic</th><th>Volume</th><th>Actions</th>
                         </tr></thead>
-                        <tbody>${clientRowsHtml}</tbody>
+                        <tbody></tbody>
                     </table>
                 </div>
             </div>
@@ -3129,6 +3301,8 @@
 
         // Invalidate any in-flight chunked render (and any other innerHTML swap).
         const myToken = ++_inboundsRenderToken;
+        // Rebuild the lazy-row registry for this render (drops stale cards).
+        _cardRowData.clear();
         let html = '';
 
         if (inbounds.length === 0 && (!pendingServers || pendingServers.length === 0)) {
@@ -3162,6 +3336,14 @@
             const inboundKey = `${inbound.server_id}:${inbound.id}`;
             const isExpanded = expandedInboundKeys.has(inboundKey);
             const toggleCount = inbound.clients.length;
+            // Register rows for lazy/incremental build + data-driven bulk.
+            _cardRowData.set(inboundKey, {
+                items: inbound.clients,
+                buildRow: (c) => _legacyClientRowHtml(c, inboundKey),
+                keyOf: (c) => makeBulkClientKey(c.server_id, c.inbound_id, c.email),
+                objOf: (c) => ({ server_id: parseInt(c.server_id), inbound_id: parseInt(c.inbound_id), email: c.email, client_uuid: c.id || '' }),
+                enableOf: (c) => !!c.enable,
+            });
             _renderItems.push({ clientCount: toggleCount, html: `
             <div class="inbound-card ${!inbound.enable ? 'disabled' : ''}">
                 <div class="inbound-header">
@@ -3221,90 +3403,7 @@
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
-                                <tbody>
-                                    ${inbound.clients.map(client => `
-                                    <tr class="${!client.enable ? 'disabled-row' : ''}">
-                                        <td class="select-cell">
-                                            <label class="checkbox-label" style="padding-left: 0; width: 20px; height: 20px; margin: 0 auto;">
-                                                <input type="checkbox" class="client-bulk-checkbox" data-inbound-key="${inboundKey}" data-server-id="${client.server_id}" data-inbound-id="${client.inbound_id}" data-email="${client.email}" data-client-uuid="${client.id || ''}" data-enabled="${client.enable ? '1' : '0'}" onchange="onBulkClientCheckboxChanged(this)">
-                                                <span class="checkmark"></span>
-                                            </label>
-                                        </td>
-                                        <td class="email-cell"><span class="email-with-online"><span class="email-name-row">${client.is_online ? '<span class="online-pulse" title="Online"></span>' : ''}<span class="email-text">${client.email}</span></span>${client.comment ? `<span class="client-comment">${escHtml(client.comment)}</span>` : ''}</span></td>
-                                        <td class="owner-cell" data-label="Owner">${renderOwnerCell(client)}</td>
-                                        <td data-label="Status">${renderClientServiceState(client)}</td>
-                                        <td data-label="Expiry">
-                                            <span class="expiry-badge ${getExpiryClass(client.expiryType)}">
-                                                <span class="expiry-time">${client.expiryTime}</span>
-                                                ${client.expiryTimestamp ? `<span class=\"expiry-time\">${formatTehranTime(client.expiryTimestamp)}</span>` : ''}
-                                            </span>
-                                        </td>
-                                        <td class="traffic-cell" data-label="Traffic">
-                                            <div class="traffic-combined-cell">
-                                                <span class="up">↑ ${client.up_formatted}</span>
-                                                <span class="down">↓ ${client.down_formatted}</span>
-                                            </div>
-                                        </td>
-                                        <td class="volume-cell" data-label="Volume">
-                                            <div class="volume-info">
-                                                <span class="remaining ${client.volume_status || ''}">${client.remaining_formatted}</span>
-                                                <span class="total ${client.totalGB_formatted === 'Unlimited' ? 'expiry-start-after' : ''}">/ ${client.totalGB_formatted}</span>
-                                            </div>
-                                        </td>
-                                        <td class="action-cell">
-                                            <div class="action-buttons">
-                                                <button class="action-btn" onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${client.server_id}, '${client.subId || client.id || ''}')" title="QR Code">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <rect x="3" y="3" width="7" height="7"></rect>
-                                                        <rect x="14" y="3" width="7" height="7"></rect>
-                                                        <rect x="14" y="14" width="7" height="7"></rect>
-                                                        <rect x="3" y="14" width="7" height="7"></rect>
-                                                    </svg>
-                                                </button>
-                                                <button class="action-btn renew" onclick="openRenewModal(${client.server_id}, '${client.inbound_id}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="Renew">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <circle cx="12" cy="12" r="10"></circle>
-                                                        <polyline points="12 6 12 12 16 14"></polyline>
-                                                    </svg>
-                                                </button>
-                                                ${renderAccountMessageButton(client)}
-                                                <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${client.server_id}, '${client.inbound_id}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        ${client.enable 
-                                                            ? '<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>'
-                                                            : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>'}
-                                                    </svg>
-                                                </button>
-                                                <button class="action-btn warning" onclick="openResetModal(${client.server_id}, '${client.inbound_id}', '${client.email}', ${client.totalGB || 0})" title="Reset Traffic">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <polyline points="1 4 1 10 7 10"></polyline>
-                                                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
-                                                    </svg>
-                                                </button>
-                                                <button class="action-btn" onclick="openEditClientModal(${client.server_id}, '${client.inbound_id}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="Edit Client">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                                                    </svg>
-                                                </button>
-                                                ${IS_SUPERADMIN ? `<button class="action-btn" onclick="openAssignModal(${client.server_id}, '${client.email}', '${client.inbound_id}', '${client.id || ''}')" title="Assign Owner">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                                                        <circle cx="10" cy="7" r="4"></circle>
-                                                        <path d="M22 11h-2.5a2.5 2.5 0 0 0 0 5H22"></path>
-                                                    </svg>
-                                                </button>` : ''}
-                                                <button class="action-btn danger" onclick="openDeleteClientModal(${client.server_id}, '${client.inbound_id}', '${client.email}', '${client.id}', ${client.enable}, '${client.expiryTime}', ${client.expiryTimestamp || 0}, '${client.up}', '${client.down}', '${client.totalGB_formatted}', '${client.remaining_formatted}')" title="Delete Client">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <polyline points="3 6 5 6 21 6"></polyline>
-                                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                                                    </svg>
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                    `).join('')}
-                                </tbody>
+                                <tbody></tbody>
                             </table>
                         </div>
                     </div>
@@ -3420,22 +3519,19 @@
         }
 
         // ── Chunked injection ────────────────────────────────────────────────
-        // Parsing thousands of client rows in one innerHTML assignment blocks the
-        // main thread for seconds (frozen UI: clicks, typing, dropdowns). Inject
-        // the inbound cards in small batches, yielding to the event loop between
-        // them so the page stays responsive while it builds.
+        // Cards now ship with an EMPTY <tbody> (rows are built lazily on expand),
+        // so injecting card shells is cheap — batch by card count, not row count.
         container.innerHTML = '';
-        const ROWS_PER_FRAME = 400;  // cap parsed client rows per frame (size-aware)
+        const CARDS_PER_FRAME = 60;  // card shells injected per frame
         let _ci = 0;
         const _renderChunk = () => {
             if (myToken !== _inboundsRenderToken) return; // a newer render superseded us
             if (_ci < _renderItems.length) {
                 let buf = '';
-                let rows = 0;
-                // Always emit at least one card; otherwise stop once the row budget is hit.
-                while (_ci < _renderItems.length && (buf === '' || rows < ROWS_PER_FRAME)) {
+                let cards = 0;
+                while (_ci < _renderItems.length && (buf === '' || cards < CARDS_PER_FRAME)) {
                     buf += _renderItems[_ci].html;
-                    rows += _renderItems[_ci].clientCount;
+                    cards++;
                     _ci++;
                 }
                 const tpl = document.createElement('template');
@@ -3449,6 +3545,7 @@
                 tpl.innerHTML = extraHtml;
                 container.appendChild(tpl.content);
             }
+            mountExpandedCards();   // build rows only for cards left expanded
             applyBulkSelectionToDOM();
             updateBulkUI();
         };
@@ -3461,8 +3558,16 @@
             ev.stopPropagation();
         }
         const clientsList = btn.nextElementSibling;
+        const section = btn.closest('.clients-section');
         const isHidden = clientsList.classList.contains('hidden');
         clientsList.classList.toggle('hidden');
+
+        // Build rows on expand, tear them down on collapse (lazy rendering).
+        if (isHidden) {
+            mountCardRows(section);
+        } else {
+            unmountCardRows(section);
+        }
 
         const inboundKey = btn && btn.dataset ? btn.dataset.inboundKey : null;
         if (inboundKey) {
@@ -3472,7 +3577,7 @@
                 expandedInboundKeys.delete(inboundKey);
             }
         }
-        
+
         const count = parseInt(btn.dataset.clientCount || '0') || clientsList.querySelectorAll('tbody tr').length;
         btn.innerHTML = isHidden
             ? `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg> Hide Clients (${count})`
@@ -6149,6 +6254,7 @@
 
     function updateInboundsFiltered(filteredResults) {
         _inboundsRenderToken++; // abort any in-flight chunked main-list render
+        _cardRowData.clear();   // rebuild the registry for the search view
         if (filteredResults.length === 0) {
             const container = document.getElementById('inbounds-container');
             container.innerHTML = `<div class="empty-state"><h3>No results</h3></div>`;
@@ -6181,6 +6287,18 @@
             }
         });
         
+        // Register search cards so data-driven bulk (select-all) works here too.
+        inboundsToShow.forEach(inbound => {
+            const inboundKey = `${inbound.server_id}:${inbound.id}`;
+            _cardRowData.set(inboundKey, {
+                items: inbound.clients,
+                buildRow: (c) => _legacyClientRowHtml(c, inboundKey),
+                keyOf: (c) => makeBulkClientKey(inbound.server_id, inbound.id, c.email),
+                objOf: (c) => ({ server_id: parseInt(inbound.server_id), inbound_id: parseInt(inbound.id), email: c.email, client_uuid: c.id || '' }),
+                enableOf: (c) => !!c.enable,
+            });
+        });
+
         const html = inboundsToShow.map(inbound => `
             <div class="inbound-card ${!inbound.enable ? 'disabled' : ''}">
                 <div class="inbound-header">
@@ -6318,20 +6436,20 @@
     }
 
     function getSelectedClientsForBulk() {
-        // Prefer persisted selection; intersect with currently-present boxes.
-        const boxes = Array.from(document.querySelectorAll('.client-bulk-checkbox'));
+        // Fully data-driven: the selection store holds the client objects directly,
+        // so this works even for collapsed cards with no checkboxes in the DOM.
         const selected = [];
-        boxes.forEach(cb => {
-            const key = makeBulkClientKey(cb.dataset.serverId, cb.dataset.inboundId, cb.dataset.email);
-            if (!bulkSelectedClientKeys.has(key)) return;
-            selected.push({
-                server_id: parseInt(cb.dataset.serverId),
-                inbound_id: parseInt(cb.dataset.inboundId),
-                email: cb.dataset.email,
-                client_uuid: cb.dataset.clientUuid || ''
-            });
+        bulkSelectedClientKeys.forEach(obj => {
+            if (obj && obj.server_id && (obj.inbound_id || obj.inbound_id === 0) && obj.email) {
+                selected.push({
+                    server_id: parseInt(obj.server_id),
+                    inbound_id: parseInt(obj.inbound_id),
+                    email: obj.email,
+                    client_uuid: obj.client_uuid || ''
+                });
+            }
         });
-        return selected.filter(x => x.server_id && (x.inbound_id || x.inbound_id === 0) && x.email);
+        return selected;
     }
 
     function updateBulkUI() {
@@ -6458,21 +6576,33 @@
     function onBulkClientCheckboxChanged(el) {
         if (!el) return;
         const key = makeBulkClientKey(el.dataset.serverId, el.dataset.inboundId, el.dataset.email);
-        if (el.checked) bulkSelectedClientKeys.add(key);
-        else bulkSelectedClientKeys.delete(key);
+        if (el.checked) {
+            bulkSelectedClientKeys.set(key, {
+                server_id: parseInt(el.dataset.serverId),
+                inbound_id: parseInt(el.dataset.inboundId),
+                email: el.dataset.email,
+                client_uuid: el.dataset.clientUuid || '',
+                enable: String(el.dataset.enabled || '') !== '0',
+            });
+        } else {
+            bulkSelectedClientKeys.delete(key);
+        }
         applyBulkSelectionToDOM();
         updateBulkUI();
     }
 
     function toggleSelectAllClients(inboundKey, checked) {
-        // Inbound-level select-all should also work without expanding that inbound.
-        const boxes = getVisibleBulkCheckboxes(inboundKey, { includeCollapsed: true });
-        boxes.forEach(cb => {
-            cb.checked = checked;
-            const key = makeBulkClientKey(cb.dataset.serverId, cb.dataset.inboundId, cb.dataset.email);
-            if (checked) bulkSelectedClientKeys.add(key);
-            else bulkSelectedClientKeys.delete(key);
-        });
+        // Data-driven: select/deselect every client of this card from the registry,
+        // so it works whether the card is expanded, collapsed, or not yet built.
+        const reg = _cardRowData.get(inboundKey);
+        if (reg) {
+            (reg.items || []).forEach(it => {
+                if (checked && !_itemAllowedByDisabledFilters(reg.enableOf(it))) return;
+                const key = reg.keyOf(it);
+                if (checked) bulkSelectedClientKeys.set(key, reg.objOf(it));
+                else bulkSelectedClientKeys.delete(key);
+            });
+        }
         applyBulkSelectionToDOM();
         updateBulkUI();
     }
@@ -6485,13 +6615,23 @@
     }
 
     function pruneBulkSelectionByDisabledFilters() {
-        const boxes = Array.from(document.querySelectorAll('.client-bulk-checkbox'));
-        boxes.forEach(cb => {
-            if (isBulkCheckboxAllowedByDisabledFilters(cb)) return;
-            const key = makeBulkClientKey(cb.dataset.serverId, cb.dataset.inboundId, cb.dataset.email);
-            bulkSelectedClientKeys.delete(key);
-            cb.checked = false;
-        });
+        // Drop selected clients that the current disabled-filter would hide.
+        for (const [key, obj] of Array.from(bulkSelectedClientKeys.entries())) {
+            const enable = obj && Object.prototype.hasOwnProperty.call(obj, 'enable')
+                ? !!obj.enable
+                : _selectedEnableState(obj);
+            if (!_itemAllowedByDisabledFilters(enable)) bulkSelectedClientKeys.delete(key);
+        }
+    }
+
+    // Best-effort enable lookup for a selected client (from local data).
+    function _selectedEnableState(obj) {
+        if (!obj) return true;
+        const inbound = (allInboundsData || []).find(i =>
+            String(i.server_id) === String(obj.server_id) && String(i.id) === String(obj.inbound_id));
+        const em = String(obj.email || '').toLowerCase();
+        const c = inbound && (inbound.clients || []).find(x => String(x.email || '').toLowerCase() === em);
+        return c ? !!c.enable : true;
     }
 
     // Optimistic update: patch local data immediately after bulk assign/unassign
