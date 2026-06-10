@@ -6382,22 +6382,30 @@ def _v3_client_payload(client: dict) -> dict:
     return c
 
 
+def _v3_sanitize_email(email: str) -> str:
+    """v3 rejects emails containing spaces; strip them before every API call."""
+    return (email or '').replace(' ', '')
+
+
 def v3_update_client(server, session_obj, email, client: dict):
+    email = _v3_sanitize_email(email)
     return _v3_post(server, session_obj,
-                    f"/panel/api/clients/update/{quote(str(email), safe='')}",
+                    f"/panel/api/clients/update/{quote(email, safe='')}",
                     _v3_client_payload(client))
 
 
 def v3_delete_client(server, session_obj, email, keep_traffic=False):
-    path = f"/panel/api/clients/del/{quote(str(email), safe='')}"
+    email = _v3_sanitize_email(email)
+    path = f"/panel/api/clients/del/{quote(email, safe='')}"
     if keep_traffic:
         path += "?keepTraffic=1"
     return _v3_post(server, session_obj, path, {})
 
 
 def v3_reset_client(server, session_obj, email):
+    email = _v3_sanitize_email(email)
     return _v3_post(server, session_obj,
-                    f"/panel/api/clients/resetTraffic/{quote(str(email), safe='')}", {})
+                    f"/panel/api/clients/resetTraffic/{quote(email, safe='')}", {})
 
 
 def v3_add_client(server, session_obj, client: dict, inbound_ids: list):
