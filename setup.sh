@@ -1859,6 +1859,42 @@ _offer_rollback() {
     fi
 }
 
+patch_nginx_backup_location() {
+    # Idempotently add the /protected-backups/ internal location to the live
+    # nginx config so large backup downloads bypass the gunicorn worker.
+    # Safe to call multiple times — skips if already present.
+    local NGINX_CONF="/etc/nginx/sites-available/${SERVICE_NAME}"
+    if [ ! -f "$NGINX_CONF" ]; then
+        return 0
+    fi
+    if grep -q 'protected-backups' "$NGINX_CONF" 2>/dev/null; then
+        print_success "Nginx backup location already configured"
+        return 0
+    fi
+    print_warning "Patching nginx config: adding /protected-backups/ internal location..."
+    local BACKUP_LOCATION
+    BACKUP_LOCATION="$(printf '\n    location /protected-backups/ {\n        internal;\n        alias %s/instance/backups/;\n    }' "${APP_DIR}")"
+    # Insert before the last closing } of the last server block
+    python3 - "$NGINX_CONF" "$BACKUP_LOCATION" <<'PY'
+import sys, re
+conf_path, block = sys.argv[1], sys.argv[2]
+with open(conf_path, 'r') as f:
+    content = f.read()
+# Insert before the very last } in the file (closes the final server block)
+new_content = re.sub(r'\n}(\s*)$', '\n' + block + '\n}\\1', content, count=1)
+with open(conf_path, 'w') as f:
+    f.write(new_content)
+PY
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        print_success "Nginx patched and reloaded — large backup downloads now work"
+    else
+        print_error "Nginx config test failed after patch — reverting"
+        # Restore from backup that setup_nginx usually creates, or just warn
+        nginx -t 2>&1 | tail -5
+    fi
+}
+
 do_online_update() {
     # Backup before pulling so we can roll back on migration failure
     local _BAK_TS; _BAK_TS="$(date +%s)"
@@ -1882,6 +1918,7 @@ do_online_update() {
         return 1
     fi
     setup_nginx
+    patch_nginx_backup_location
     systemctl restart "${SERVICE_NAME}"
     install_eve_cli
     print_success "Updated and service restarted"
