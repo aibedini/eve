@@ -19687,6 +19687,20 @@ def download_backup(filename):
     path = os.path.join(BACKUP_DIR, filename)
     if not os.path.exists(path):
         return jsonify({'success': False, 'error': 'File not found'}), 404
+    file_size = os.path.getsize(path)
+    # Files >50 MB: let nginx stream directly via X-Accel-Redirect so the
+    # gunicorn worker is freed immediately and never times out mid-download.
+    # Requires the /protected-backups/ internal location in nginx.conf.
+    # Falls back to send_file when accessed without nginx (dev / direct).
+    behind_nginx = bool(request.headers.get('X-Forwarded-For') or
+                        request.headers.get('X-Real-IP'))
+    if behind_nginx and file_size > 50 * 1024 * 1024:
+        resp = make_response()
+        resp.headers['X-Accel-Redirect'] = f'/protected-backups/{filename}'
+        resp.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        resp.headers['Content-Type'] = 'application/octet-stream'
+        resp.headers['Content-Length'] = str(file_size)
+        return resp
     return send_file(path, as_attachment=True)
 
 @app.route('/api/backups/<filename>/restore', methods=['POST'])

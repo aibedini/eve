@@ -1151,6 +1151,11 @@ server {
         proxy_send_timeout 600s;
         proxy_request_buffering off;
     }
+
+    location /protected-backups/ {
+        internal;
+        alias ${APP_DIR}/instance/backups/;
+    }
 }
 EOF
     elif [ -f "$SELF_SIGNED_CERT" ] && [ -f "$SELF_SIGNED_KEY" ]; then
@@ -1265,6 +1270,11 @@ server {
         proxy_send_timeout 600s;
         proxy_request_buffering off;
     }
+
+    location /protected-backups/ {
+        internal;
+        alias ${APP_DIR}/instance/backups/;
+    }
 }
 EOF
     else
@@ -1331,6 +1341,11 @@ server {
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
         proxy_request_buffering off;
+    }
+
+    location /protected-backups/ {
+        internal;
+        alias ${APP_DIR}/instance/backups/;
     }
 }
 EOF
