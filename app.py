@@ -18451,6 +18451,7 @@ def get_settings_overview():
     ssl_issuer = None
 
     if cert_path and os.path.isfile(cert_path) and os.access(cert_path, os.R_OK):
+        # Provisional from path; refined below using the parsed cert.
         if '/etc/letsencrypt/' in cert_path:
             ssl_type = 'letsencrypt'
         elif '/etc/ssl/eve-manager/' in cert_path:
@@ -18470,6 +18471,20 @@ def get_settings_overview():
                 ssl_issuer = cert.issuer.get_attributes_for_oid(_NameOID.COMMON_NAME)[0].value
             except Exception:
                 ssl_issuer = None
+            # Classify by the cert, not the path (LE certs are copied into the
+            # eve-manager dir): self-signed iff issuer DN == subject DN.
+            if cert.issuer == cert.subject:
+                ssl_type = 'self_signed'
+            else:
+                _issuer_org = ''
+                try:
+                    _issuer_org = (cert.issuer.get_attributes_for_oid(_NameOID.ORGANIZATION_NAME)[0].value or '')
+                except Exception:
+                    _issuer_org = ''
+                if '/etc/letsencrypt/' in cert_path or "let's encrypt" in _issuer_org.lower():
+                    ssl_type = 'letsencrypt'
+                else:
+                    ssl_type = 'custom'
         except Exception as exc:
             app.logger.debug(f"SSL cert parse error: {exc}")
 
@@ -19131,7 +19146,7 @@ def get_ssl_settings():
     else:
         ssl_status = 'not_configured'
 
-    # Detect SSL type from path
+    # Provisional SSL type from path; refined below once the cert is parsed.
     ssl_type = 'none'
     if cert_path:
         if '/etc/letsencrypt/' in cert_path:
@@ -19162,6 +19177,21 @@ def get_ssl_settings():
                 cert_subject = _cert.subject.get_attributes_for_oid(_NameOID.COMMON_NAME)[0].value
             except Exception:
                 cert_subject = None
+            # Classify by the cert itself, not the file path: a real Let's Encrypt
+            # cert is copied into /etc/ssl/eve-manager/ so path-based detection
+            # mislabels it "self_signed". Self-signed iff issuer DN == subject DN.
+            if _cert.issuer == _cert.subject:
+                ssl_type = 'self_signed'
+            else:
+                _issuer_org = ''
+                try:
+                    _issuer_org = (_cert.issuer.get_attributes_for_oid(_NameOID.ORGANIZATION_NAME)[0].value or '')
+                except Exception:
+                    _issuer_org = ''
+                if '/etc/letsencrypt/' in cert_path or "let's encrypt" in _issuer_org.lower():
+                    ssl_type = 'letsencrypt'
+                else:
+                    ssl_type = 'custom'
         except Exception:
             pass
 
