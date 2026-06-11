@@ -11629,6 +11629,11 @@ def renew_client(server_id, inbound_id, email):
                 if not ok:
                     errors.append(f"v3 update: {verr}")
                     break
+                # v3 renames the client to the space-free email on the panel during
+                # the update, so every later lookup (reset, verify) and the success
+                # message must use the clean email — otherwise find_client returns
+                # client_not_found and the message shows the old spaced email.
+                email = _v3_sanitize_email(email)
                 resp = _SyntheticOK()
             elif _is_shadowsocks_no_id:
                 # Shadowsocks clients have no UUID — use full inbound update instead.
@@ -11978,6 +11983,14 @@ def verify_renew_client(server_id, inbound_id, email):
             return _finish({'success': True, 'verify': verify, 'timing': {'login_ms': login_ms, 'verify_fetch_ms': verify_fetch_ms}})
 
         v_client, _ = find_client(inbounds, inbound_id, email)
+        if not v_client and server_is_v3(server):
+            # v3 stores the client email without spaces; retry the lookup with
+            # the sanitized form so Re-check works after a spaced-email rename.
+            _clean = _v3_sanitize_email(email)
+            if _clean and _clean != email:
+                v_client, _ = find_client(inbounds, inbound_id, _clean)
+                if v_client:
+                    email = _clean
         if not v_client:
             verify['ok'] = False
             verify['error'] = 'client_not_found'
