@@ -704,6 +704,16 @@
     </div>
 </div>
 
+        <div class="modal-overlay hidden" id="server-error-modal">
+            <div class="modal modal-sm">
+                <div class="modal-header">
+                    <h2>{{ 'چرا این سرور خطا می‌دهد؟' if panel_lang == 'fa' else 'Why is this server erroring?' }}</h2>
+                    <button class="modal-close" onclick="closeServerErrorModal()">&times;</button>
+                </div>
+                <div class="modal-body" id="server-error-modal-body"></div>
+            </div>
+        </div>
+
         <div class="modal-overlay hidden" id="reset-modal">
             <div class="modal modal-sm">
                 <div class="modal-header">
@@ -3493,6 +3503,21 @@
                             : `<span class="status-pill inactive">Empty</span>`;
                         const panelType = (s?.panel_type || st?.panel_type || '') ? escapeHtml(String(s?.panel_type || st?.panel_type)) : '';
 
+                        // Stash full error detail so the "Why?" modal can explain it.
+                        (window.__serverErrorDetails = window.__serverErrorDetails || {})[sid] = {
+                            id: sid,
+                            name: s?.name || ('Server #' + sid),
+                            panel_type: String(s?.panel_type || st?.panel_type || ''),
+                            reachable: st?.reachable,
+                            reachable_error: st?.reachable_error || '',
+                            panel_status_error: st?.panel_status_error || '',
+                            fetch_error: st?.error || '',
+                            xray_state: st?.xray_state || '',
+                            xui_version: st?.xui_version || s?.xui_version || '',
+                            checked_at: st?.panel_status_checked_at || '',
+                            reason: String(reason),
+                        };
+
                         return `
                         <div class="inbound-card" style="border-style: dashed; opacity: 0.95;">
                             <div class="inbound-header">
@@ -3509,6 +3534,7 @@
                                     <span class="label">${escapeHtml(title)}:</span>
                                     <span class="value" style="opacity: 0.9;">${escapeHtml(String(reason))}</span>
                                 </span>
+                                <button class="btn btn-secondary" style="padding: 6px 10px;" onclick="showServerErrorDetail(${sid})">${ {{ ('fa' if panel_lang == 'fa' else 'en')|tojson }} === 'fa' ? 'چرا؟' : 'Why?'}</button>
                                 <button class="btn btn-secondary" style="padding: 6px 10px;" onclick="refreshServerData(${sid}, { mode: 'full', force: true, poll: true, enqueue: true })">Retry</button>
                             </div>
                         </div>`;
@@ -4149,6 +4175,94 @@
 
     function closeRenewSuccessModal() {
         document.getElementById('renew-success-modal').classList.add('hidden');
+    }
+
+    function closeServerErrorModal() {
+        document.getElementById('server-error-modal').classList.add('hidden');
+    }
+
+    // Interpret a raw panel error into a human cause + fix hint.
+    function _interpretServerError(detail) {
+        const isFa = {{ ('fa' if panel_lang == 'fa' else 'en')|tojson }} === 'fa';
+        const blob = `${detail.fetch_error} ${detail.panel_status_error} ${detail.reachable_error} ${detail.reason}`.toLowerCase();
+        const pt = (detail.panel_type || '').toLowerCase();
+        const looksV3 = pt.includes('3') || pt.includes('sanaei') || pt.includes('v3');
+
+        const has = (...keys) => keys.some(k => blob.includes(k));
+
+        if (has('401', 'unauthorized', 'forbidden', '403', 'login fail', 'invalid token', 'token', 'authenticat')) {
+            return isFa
+                ? { cause: 'مشکل احراز هویت — پنل ورود/توکن را نپذیرفت.',
+                    fix: 'اگر این سرور v3 است، حتماً باید فیلد <b>API Token</b> پر باشد (v3 با یوزر/پسورد تنها کار نمی‌کند). توکن را از پنل بساز و در ویرایش سرور وارد کن. اگر هم یوزر/پسورد عوض شده، اصلاحش کن.' }
+                : { cause: 'Authentication failed — the panel rejected the login/token.',
+                    fix: 'If this is a v3 panel it REQUIRES an <b>API Token</b> (username/password alone won\'t work). Generate one in the panel and set it in Edit Server. Also re-check username/password.' };
+        }
+        if (has('timeout', 'timed out', 'connection', 'refused', 'unreachable', 'no route', 'failed to connect', 'max retries')) {
+            return isFa
+                ? { cause: 'سرور در دسترس نیست — اتصال برقرار نشد (timeout/refused).',
+                    fix: 'مطمئن شو پنل x-ui روشن و پورتش باز است، آدرس/پورت درست است، و فایروال یا تحریم مسیر را نبسته. از خود سرور <code>curl</code> بزن.' }
+                : { cause: 'Server unreachable — connection failed (timeout/refused).',
+                    fix: 'Make sure the x-ui panel is running, the host/port is correct, and no firewall blocks it. Test with curl from the server.' };
+        }
+        if (has('ssl', 'certificate', 'cert ', 'tls', 'handshake')) {
+            return isFa
+                ? { cause: 'مشکل گواهی SSL پنل.',
+                    fix: 'اگر پنل SSL self-signed دارد طبیعی است؛ بررسی کن آدرس http/https و پورت درست باشد.' }
+                : { cause: 'SSL/TLS certificate problem on the panel.',
+                    fix: 'If the panel uses a self-signed cert this can happen; verify the http/https scheme and port.' };
+        }
+        if (has('404', 'not found', 'no inbound', 'path')) {
+            return isFa
+                ? { cause: 'مسیر API پیدا نشد (۴۰۴) — احتمالاً نوع پنل/مسیر اشتباه است.',
+                    fix: 'نوع پنل (auto/Sanaei/Alireza) و مسیرها را در ویرایش سرور بررسی کن. برای v3، نوع درست و توکن لازم است.' }
+                : { cause: 'API path not found (404) — likely wrong panel type/path.',
+                    fix: 'Check the panel type (auto/Sanaei/Alireza) and paths in Edit Server. v3 needs the correct type and a token.' };
+        }
+        // Fallback
+        return isFa
+            ? { cause: 'خطای نامشخص هنگام خواندن اطلاعات از پنل.',
+                fix: looksV3 ? 'این سرور v3 است — مطمئن شو <b>API Token</b> آن وارد شده. سپس Retry بزن.' : 'یک‌بار Retry بزن؛ اگر ماند، یوزر/پسورد/آدرس را در ویرایش سرور بررسی کن.' }
+            : { cause: 'Unspecified error while reading data from the panel.',
+                fix: looksV3 ? 'This is a v3 panel — make sure its <b>API Token</b> is set, then Retry.' : 'Try Retry; if it persists, verify credentials/host in Edit Server.' };
+    }
+
+    function showServerErrorDetail(sid) {
+        const isFa = {{ ('fa' if panel_lang == 'fa' else 'en')|tojson }} === 'fa';
+        const detail = (window.__serverErrorDetails || {})[sid];
+        const body = document.getElementById('server-error-modal-body');
+        if (!detail || !body) return;
+
+        const interp = _interpretServerError(detail);
+        const rawError = (detail.fetch_error || detail.panel_status_error || detail.reachable_error || detail.reason || '—');
+        const reachTxt = detail.reachable === false
+            ? (isFa ? 'خیر' : 'No')
+            : (detail.reachable === true ? (isFa ? 'بله' : 'Yes') : '—');
+        let checked = '—';
+        try { if (detail.checked_at) checked = new Date(detail.checked_at + (detail.checked_at.endsWith('Z') ? '' : 'Z')).toLocaleString(); } catch (e) {}
+
+        const row = (label, val) => `<div style="display:flex;gap:8px;margin:4px 0;"><span style="min-width:120px;opacity:0.7;">${label}</span><span style="word-break:break-word;">${val}</span></div>`;
+
+        body.innerHTML = `
+            <div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.30);border-radius:8px;padding:12px;margin-bottom:14px;">
+                <div style="font-weight:700;margin-bottom:6px;color:#fca5a5;">${isFa ? '⛔ علت احتمالی' : '⛔ Likely cause'}</div>
+                <div style="margin-bottom:10px;">${interp.cause}</div>
+                <div style="font-weight:700;margin-bottom:6px;color:#86efac;">${isFa ? '🛠️ راه‌حل' : '🛠️ How to fix'}</div>
+                <div>${interp.fix}</div>
+            </div>
+            <div style="font-size:0.85rem;background:var(--bg-dark);border:1px solid var(--border-color);border-radius:8px;padding:12px;direction:ltr;text-align:left;">
+                ${row(isFa ? 'سرور' : 'Server', escapeHtml(detail.name) + ' (#' + detail.id + ')')}
+                ${row(isFa ? 'نوع پنل' : 'Panel type', escapeHtml(detail.panel_type || '—'))}
+                ${row(isFa ? 'در دسترس' : 'Reachable', reachTxt)}
+                ${row('Xray', escapeHtml(detail.xray_state || '—'))}
+                ${row(isFa ? 'آخرین بررسی' : 'Last checked', escapeHtml(checked))}
+                ${row(isFa ? 'متن خطا' : 'Raw error', '<span style="color:#fca5a5;">' + escapeHtml(String(rawError)) + '</span>')}
+            </div>
+            <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
+                <button class="btn btn-primary" style="flex:1;min-width:120px;" onclick="closeServerErrorModal(); refreshServerData(${detail.id}, { mode: 'full', force: true, poll: true, enqueue: true });">${isFa ? 'تلاش مجدد' : 'Retry now'}</button>
+                <button class="btn btn-secondary" style="flex:1;min-width:120px;" onclick="closeServerErrorModal()">${isFa ? 'بستن' : 'Close'}</button>
+            </div>`;
+
+        document.getElementById('server-error-modal').classList.remove('hidden');
     }
 
     function copyRenewSuccessText() {
