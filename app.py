@@ -6475,6 +6475,24 @@ def _rename_client_email_local(server, old_email, new_email):
             db.session.rollback()
         except Exception:
             pass
+    # Move transaction history (renewals, gifts) to the new email so the
+    # "last renewal" / gift-once notices keep matching after the rename.
+    # One-time per client; not on the hot renewal path.
+    try:
+        old_l = (old_email or '').strip().lower()
+        tx_rows = Transaction.query.filter(
+            func.lower(Transaction.client_email) == old_l,
+        ).all()
+        for tx in tx_rows:
+            tx.client_email = new_email
+        if tx_rows:
+            db.session.commit()
+    except Exception as exc:
+        app.logger.debug(f"transaction email rename '{old_email}' -> '{new_email}' failed: {exc}")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
     try:
         patch_cached_client(server.id, old_email, new_email=new_email)
     except Exception:
@@ -11142,8 +11160,13 @@ def client_last_renewal(email):
     if not email_l:
         return jsonify({'success': True, 'renewals': []})
 
+    # Match space-insensitively: v3 renames spaced emails on the panel, so old
+    # transactions may be stored under the spaced email while the modal now
+    # queries with the clean one (or vice versa). Normalize both sides.
+    email_norm = email_l.replace(' ', '').lower()
+
     q = Transaction.query.filter(
-        func.lower(Transaction.client_email) == email_l.lower(),
+        func.replace(func.lower(Transaction.client_email), ' ', '') == email_norm,
         Transaction.type == 'renew',
     )
     # Resellers only see their own transactions
@@ -11187,7 +11210,7 @@ def client_last_renewal(email):
     gift_count = 0
     try:
         gq = Transaction.query.filter(
-            func.lower(Transaction.client_email) == email_l.lower(),
+            func.replace(func.lower(Transaction.client_email), ' ', '') == email_norm,
             or_(
                 Transaction.description.like('%هدیه رویالتی%'),
                 Transaction.description.like('%for Royalty%'),
