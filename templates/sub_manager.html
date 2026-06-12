@@ -1349,6 +1349,23 @@
                 </span>
             </label>
 
+            <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:12px; margin-bottom:0;">
+                <div class="toggle-switch">
+                    <input type="checkbox" id="announcement-is-popup" onchange="ann_togglePopupOptions(this)">
+                    <span class="slider"></span>
+                </div>
+                <span style="font-size:0.88rem;">
+                    📢 Show as popup modal
+                    <small style="display:block; color:var(--text-secondary); font-weight:normal; margin-top:2px;">When on, this announcement opens as a modal when the user opens their subscription page (instead of the inline notice)</small>
+                </span>
+            </label>
+
+            <div class="form-group" id="announcement-button-text-wrap" style="display:none; margin-top:12px;">
+                <label>Popup button text</label>
+                <input type="text" id="announcement-button-text" class="form-input" placeholder="e.g. Got it / متوجه شدم" maxlength="120">
+                <small style="color: var(--text-secondary);">Label of the button that closes the popup. Leave empty for a default.</small>
+            </div>
+
             <div class="form-actions">
                 <button class="btn btn-secondary" onclick="closeAnnouncementModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="saveAnnouncement()">Save</button>
@@ -2107,12 +2124,22 @@
         document.getElementById('announcement-modal').classList.add('hidden');
     }
 
+    function ann_togglePopupOptions(cb) {
+        const wrap = document.getElementById('announcement-button-text-wrap');
+        if (wrap) wrap.style.display = (cb && cb.checked) ? 'block' : 'none';
+    }
+
     async function openAddAnnouncementModal() {
         document.getElementById('announcement-id').value = '';
         document.getElementById('announcement-modal-title').textContent = 'Add Announcement';
         annSetContent('');
         const hrEl = document.getElementById('announcement-hide-resellers');
         if (hrEl) hrEl.checked = false;
+        const popEl = document.getElementById('announcement-is-popup');
+        if (popEl) popEl.checked = false;
+        const btEl = document.getElementById('announcement-button-text');
+        if (btEl) btEl.value = '';
+        ann_togglePopupOptions(popEl);
 
         // Default: all targets
         const hidden = document.getElementById('announcement-targets');
@@ -2139,6 +2166,11 @@
         document.getElementById('announcement-end').value = a.end_at_jalali || '';
         const hrEl = document.getElementById('announcement-hide-resellers');
         if (hrEl) hrEl.checked = !!a.hide_from_resellers;
+        const popEl = document.getElementById('announcement-is-popup');
+        if (popEl) popEl.checked = !!a.is_popup;
+        const btEl = document.getElementById('announcement-button-text');
+        if (btEl) btEl.value = a.button_text || '';
+        ann_togglePopupOptions(popEl);
 
         const hidden = document.getElementById('announcement-targets');
         if (hidden) hidden.value = (a.targets || (a.all_servers ? '*' : '[]'));
@@ -2230,6 +2262,8 @@
             end_at_jalali: endAtJalali,
             targets,
             hide_from_resellers: document.getElementById('announcement-hide-resellers')?.checked || false,
+            is_popup: document.getElementById('announcement-is-popup')?.checked || false,
+            button_text: (document.getElementById('announcement-button-text')?.value || '').trim(),
         };
 
         try {

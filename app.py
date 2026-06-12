@@ -3743,6 +3743,8 @@ class Announcement(db.Model):
     created_by = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     hide_from_resellers = db.Column(db.Boolean, default=False)  # when True, not shown on reseller-owned accounts' sub pages
+    is_popup = db.Column(db.Boolean, default=False)  # when True, shown as a modal popup when the sub page opens
+    button_text = db.Column(db.String(120))          # popup dismiss-button label (optional)
 
     servers = db.relationship('Server', secondary=announcement_servers, lazy='subquery')
 
@@ -3779,6 +3781,8 @@ class Announcement(db.Model):
             'created_at_jalali': format_jalali(self.created_at) if self.created_at else None,
             'is_active': is_active,
             'hide_from_resellers': bool(self.hide_from_resellers),
+            'is_popup': bool(self.is_popup),
+            'button_text': self.button_text or '',
         }
 
 
@@ -5193,15 +5197,26 @@ with app.app_context():
         inspector = inspect(db.engine)
         if 'announcements' in set(inspector.get_table_names()):
             ann_cols = [c['name'] for c in inspector.get_columns('announcements')]
+            _is_pg = db.engine.dialect.name == 'postgresql'
+            _bool_def = 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'
             if 'hide_from_resellers' not in ann_cols:
-                _is_pg = db.engine.dialect.name == 'postgresql'
-                _bool_def = 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'
                 with db.engine.connect() as conn:
                     conn.execute(text(f'ALTER TABLE announcements ADD COLUMN hide_from_resellers {_bool_def}'))
                     conn.commit()
                 print("Added hide_from_resellers to announcements")
+            # Popup announcements: shown as a modal when the sub page opens.
+            if 'is_popup' not in ann_cols:
+                with db.engine.connect() as conn:
+                    conn.execute(text(f'ALTER TABLE announcements ADD COLUMN is_popup {_bool_def}'))
+                    conn.commit()
+                print("Added is_popup to announcements")
+            if 'button_text' not in ann_cols:
+                with db.engine.connect() as conn:
+                    conn.execute(text('ALTER TABLE announcements ADD COLUMN button_text VARCHAR(120)'))
+                    conn.commit()
+                print("Added button_text to announcements")
     except Exception as e:
-        print(f"Migration error (announcements.hide_from_resellers): {e}")
+        print(f"Migration error (announcements.is_popup/button_text): {e}")
 
     # Ensure owner_id exists on notification_templates (per-reseller templates)
     try:
@@ -16596,6 +16611,8 @@ def create_announcement():
         end_at=payload['end_at'],
         created_by=created_by,
         hide_from_resellers=bool(data.get('hide_from_resellers', False)),
+        is_popup=bool(data.get('is_popup', False)),
+        button_text=(str(data.get('button_text') or '').strip()[:120] or None),
     )
 
     if not payload['all_servers']:
@@ -16632,6 +16649,10 @@ def update_announcement(announcement_id):
     ann.end_at = payload['end_at']
     if 'hide_from_resellers' in data:
         ann.hide_from_resellers = bool(data['hide_from_resellers'])
+    if 'is_popup' in data:
+        ann.is_popup = bool(data['is_popup'])
+    if 'button_text' in data:
+        ann.button_text = (str(data.get('button_text') or '').strip()[:120] or None)
 
     if ann.all_servers:
         ann.servers = []
