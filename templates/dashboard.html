@@ -3280,14 +3280,9 @@
 
         const clientsSectionHtml = totalCount > 0 ? `
         <div class="clients-section">
-            <div style="display:flex; gap:8px; margin-bottom:8px;">
-                <button class="toggle-clients" style="flex:1;" data-inbound-key="${cardKey}" data-client-count="${totalCount}" onclick="toggleClients(this, event)">
-                    ${isExpanded ? `${SVG_HIDE} Hide Clients (${totalCount})` : `${SVG_SHOW} Show Clients (${totalCount})`}
-                </button>
-                <button class="btn btn-secondary" style="padding: 6px 10px;" title="Remaining-volume distribution" onclick="event.stopPropagation(); openVolumeStatsModal('${cardKey}')">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                </button>
-            </div>
+            <button class="toggle-clients" data-inbound-key="${cardKey}" data-client-count="${totalCount}" onclick="toggleClients(this, event)">
+                ${isExpanded ? `${SVG_HIDE} Hide Clients (${totalCount})` : `${SVG_SHOW} Show Clients (${totalCount})`}
+            </button>
             <div class="clients-list ${isExpanded ? '' : 'hidden'}">
                 <div class="clients-table-wrapper">
                     <table class="clients-table">
@@ -3311,6 +3306,7 @@
                 </div>
                 <div class="inbound-status">
                     <span class="status-pill active">Active</span>
+                    ${totalCount > 0 ? `<button class="btn btn-secondary" style="padding:6px 10px;" title="Remaining-volume distribution" onclick="event.stopPropagation(); openVolumeStatsModal('${cardKey}')"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></button>` : ''}
                     ${totalCount > 0 ? `<button class="btn btn-secondary" style="padding:6px 10px;" onclick="event.stopPropagation(); toggleSelectAllClients('${cardKey}', true)">Select All</button>` : ''}
                 </div>
             </div>
@@ -3714,10 +3710,28 @@
     }
 
     function openVolumeStatsModal(inboundKey) {
-        const inbound = _findInboundByKey(inboundKey);
-        if (!inbound) { showToast('Inbound data not loaded', 'error'); return; }
+        // v3 cards use key "v3s:<serverId>" — merge all inbounds for that server.
+        let clients;
+        if (String(inboundKey).startsWith('v3s:')) {
+            const sid = String(inboundKey).slice(4);
+            const list = (Array.isArray(allInboundsData) && allInboundsData.length) ? allInboundsData : (inboundsData || []);
+            const serverInbs = list.filter(i => String(i.server_id) === sid);
+            if (!serverInbs.length) { showToast('Inbound data not loaded', 'error'); return; }
+            // Deduplicate clients by email (same as _buildV3ServerCard)
+            const emailMap = new Map();
+            for (const ib of serverInbs) {
+                for (const c of (ib.clients || [])) {
+                    if (c.email && !emailMap.has(c.email)) emailMap.set(c.email, c);
+                }
+            }
+            clients = Array.from(emailMap.values());
+        } else {
+            const inbound = _findInboundByKey(inboundKey);
+            if (!inbound) { showToast('Inbound data not loaded', 'error'); return; }
+            clients = Array.isArray(inbound.clients) ? inbound.clients : [];
+        }
 
-        const clients = Array.isArray(inbound.clients) ? inbound.clients : [];
+        // (rest of function reads `clients` directly)
         const GB = 1024 ** 3;
 
         // Buckets: 0-5, then 10-wide steps (5.1-10, 10.1-20, 20.1-30, ...).
@@ -3791,14 +3805,18 @@
             <tr><td>⛔ Depleted (0)</td><td style="text-align:center; font-weight:600;">${depleted}</td><td></td></tr>`;
         body.innerHTML = rowsHtml + extraRows;
 
-        document.getElementById('volume-stats-title').textContent =
-            `Volume Distribution — ${inbound.remark || ('Inbound ' + inbound.id)}`;
-        document.getElementById('volume-stats-sub').textContent =
-            `Server: ${inbound.server_name || '-'} · Active users counted: ${totalActive}`;
+        const _modalTitle = String(inboundKey).startsWith('v3s:')
+            ? `Volume Distribution — Server #${String(inboundKey).slice(4)}`
+            : `Volume Distribution — ${inbound ? (inbound.remark || ('Inbound ' + inbound.id)) : inboundKey}`;
+        const _modalSub = String(inboundKey).startsWith('v3s:')
+            ? `All inbounds · Active users counted: ${totalActive}`
+            : `Server: ${inbound ? (inbound.server_name || '-') : '-'} · Active users counted: ${totalActive}`;
+        document.getElementById('volume-stats-title').textContent = _modalTitle;
+        document.getElementById('volume-stats-sub').textContent = _modalSub;
 
         // Build copy-for-AI plaintext
         const lines = [];
-        lines.push(`Inbound: ${inbound.remark || ('Inbound ' + inbound.id)} (server: ${inbound.server_name || '-'})`);
+        lines.push(`${_modalTitle} (${_modalSub})`);
         lines.push(`Active users: ${totalActive}`);
         lines.push(`Remaining volume distribution (active, limited users):`);
         for (const b of buckets) {
