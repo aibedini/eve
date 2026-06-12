@@ -5192,31 +5192,28 @@ with app.app_context():
     except Exception as e:
         print(f"Migration error: {e}")
 
-    # Ensure hide_from_resellers exists on announcements
-    try:
-        inspector = inspect(db.engine)
-        if 'announcements' in set(inspector.get_table_names()):
-            ann_cols = [c['name'] for c in inspector.get_columns('announcements')]
-            _is_pg = db.engine.dialect.name == 'postgresql'
-            _bool_def = 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'
-            if 'hide_from_resellers' not in ann_cols:
-                with db.engine.connect() as conn:
-                    conn.execute(text(f'ALTER TABLE announcements ADD COLUMN hide_from_resellers {_bool_def}'))
-                    conn.commit()
-                print("Added hide_from_resellers to announcements")
-            # Popup announcements: shown as a modal when the sub page opens.
-            if 'is_popup' not in ann_cols:
-                with db.engine.connect() as conn:
-                    conn.execute(text(f'ALTER TABLE announcements ADD COLUMN is_popup {_bool_def}'))
-                    conn.commit()
-                print("Added is_popup to announcements")
-            if 'button_text' not in ann_cols:
-                with db.engine.connect() as conn:
-                    conn.execute(text('ALTER TABLE announcements ADD COLUMN button_text VARCHAR(120)'))
-                    conn.commit()
-                print("Added button_text to announcements")
-    except Exception as e:
-        print(f"Migration error (announcements.is_popup/button_text): {e}")
+    # Ensure announcements columns exist — each in its own try so one failure
+    # doesn't prevent the others from running.
+    def _ensure_ann_col(col_name, col_type):
+        try:
+            inspector = inspect(db.engine)
+            if 'announcements' not in set(inspector.get_table_names()):
+                return
+            cols = [c['name'] for c in inspector.get_columns('announcements')]
+            if col_name in cols:
+                return
+            with db.engine.connect() as conn:
+                conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col_name} {col_type}'))
+                conn.commit()
+            print(f"Migration: added announcements.{col_name}")
+        except Exception as _e:
+            print(f"Migration error (announcements.{col_name}): {_e}")
+
+    _is_pg = db.engine.dialect.name == 'postgresql'
+    _bool_def = 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'
+    _ensure_ann_col('hide_from_resellers', _bool_def)
+    _ensure_ann_col('is_popup',            _bool_def)
+    _ensure_ann_col('button_text',         'VARCHAR(120)')
 
     # Ensure owner_id exists on notification_templates (per-reseller templates)
     try:
