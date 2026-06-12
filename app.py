@@ -1775,15 +1775,7 @@ def fetch_and_update_server_data(server_id: int):
     if fetch_error:
         raise RuntimeError(fetch_error)
 
-    # Onlines = web-UI route needing a cookie login; v3 token session can't reach it.
-    onlines_session = session_obj
-    if get_server_api_token(server) and getattr(server, 'username', '') and get_server_password(server):
-        _cookie = get_xui_cookie_session(
-            server.host, server.username, get_server_password(server),
-            server.panel_type, cache_key=f"sid:{server.id}")
-        if _cookie is not None:
-            onlines_session = _cookie
-    online_index, _ = fetch_onlines(onlines_session, server.host, server.panel_type)
+    online_index, _ = fetch_onlines(session_obj, server.host, server.panel_type)
     status_payload, status_error, _status_type = fetch_server_status(session_obj, server.host, server.panel_type)
 
     # Enrich status_payload with online_count from onlines endpoint
@@ -7137,11 +7129,12 @@ def fetch_onlines(session_obj, host, panel_type='auto'):
         candidates = []
         if normalized_type in ('sanaei', 'auto', ''):
             candidates.extend([
-                # Web-UI route (present on more 3x-ui builds than the API route)
+                # Official 3x-ui v3 API path (Bearer token works on /panel/api/*)
+                ('POST', '/panel/api/clients/onlines'),
+                ('GET',  '/panel/api/clients/onlines'),
+                # Fallbacks for older builds
                 ('POST', '/panel/inbound/onlines'),
                 ('POST', '/panel/api/inbounds/onlines'),
-                ('GET', '/panel/inbound/onlines'),
-                ('GET', '/panel/api/inbounds/onlines'),
             ])
         if normalized_type in ('alireza', 'alireza0', 'xui', 'x-ui', 'auto', ''):
             candidates.extend([
@@ -9344,17 +9337,7 @@ def fetch_worker(server_dict):
             return server_dict['id'], None, None, None, None, error, 'auto'
         
         inbounds, fetch_error, detected_type = fetch_inbounds(session_obj, server_obj.host, server_obj.panel_type)
-        # Onlines lives on the web-UI route which needs a cookie login; the v3
-        # Bearer-token session can't reach it (404). Use a cookie session when
-        # the panel is token-based (v3) but we have username/password.
-        onlines_session = session_obj
-        if get_server_api_token(server_obj) and getattr(server_obj, 'username', '') and getattr(server_obj, 'password', ''):
-            _cookie = get_xui_cookie_session(
-                server_obj.host, server_obj.username, server_obj.password,
-                server_obj.panel_type, cache_key=f"sid:{server_dict['id']}")
-            if _cookie is not None:
-                onlines_session = _cookie
-        online_index, _ = fetch_onlines(onlines_session, server_obj.host, server_obj.panel_type)
+        online_index, _ = fetch_onlines(session_obj, server_obj.host, server_obj.panel_type)
         status_payload, status_error, _status_type = fetch_server_status(session_obj, server_obj.host, server_obj.panel_type)
 
         # Enrich status_payload with online_count from the onlines endpoint
