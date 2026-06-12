@@ -16606,10 +16606,17 @@ def create_announcement():
     user = db.session.get(Admin, session.get('admin_id')) if session.get('admin_id') else None
     created_by = (getattr(user, 'username', None) or session.get('admin_username') or '').strip() or None
 
-    _ANN_TAGS = ['b','strong','i','em','u','br','p','span','ul','ol','li','a']
-    _ANN_ATTRS = {'a': ['href'], 'span': ['style'], '*': []}
+    _ANN_TAGS = ['b','strong','i','em','u','br','p','div','span','ul','ol','li',
+                 'a','img','video','source']
+    _ANN_ATTRS = {'a': ['href','class','target'], 'span': ['style'], 'div': ['style','class'],
+                  'img': ['src','alt','style','width','height'],
+                  'video': ['src','controls','style','width','height','preload'],
+                  'source': ['src','type'], '*': []}
+    _ANN_STYLES = ['color','background-color','font-size','text-align','direction',
+                   'max-width','width','height','border-radius','padding','margin',
+                   'display','text-decoration','font-weight']
     ann = Announcement(
-        message=sanitize_html(payload['message'], tags=_ANN_TAGS, attributes=_ANN_ATTRS),
+        message=sanitize_html(payload['message'], tags=_ANN_TAGS, attributes=_ANN_ATTRS, styles=_ANN_STYLES),
         all_servers=payload['all_servers'],
         targets=payload['targets'],
         start_at=payload['start_at'],
@@ -16645,9 +16652,16 @@ def update_announcement(announcement_id):
     if err:
         return jsonify({'success': False, 'error': err}), 400
 
-    _ANN_TAGS = ['b','strong','i','em','u','br','p','span','ul','ol','li','a']
-    _ANN_ATTRS = {'a': ['href'], 'span': ['style'], '*': []}
-    ann.message = sanitize_html(payload['message'], tags=_ANN_TAGS, attributes=_ANN_ATTRS)
+    _ANN_TAGS = ['b','strong','i','em','u','br','p','div','span','ul','ol','li',
+                 'a','img','video','source']
+    _ANN_ATTRS = {'a': ['href','class','target'], 'span': ['style'], 'div': ['style','class'],
+                  'img': ['src','alt','style','width','height'],
+                  'video': ['src','controls','style','width','height','preload'],
+                  'source': ['src','type'], '*': []}
+    _ANN_STYLES = ['color','background-color','font-size','text-align','direction',
+                   'max-width','width','height','border-radius','padding','margin',
+                   'display','text-decoration','font-weight']
+    ann.message = sanitize_html(payload['message'], tags=_ANN_TAGS, attributes=_ANN_ATTRS, styles=_ANN_STYLES)
     ann.all_servers = payload['all_servers']
     ann.targets = payload['targets']
     ann.start_at = payload['start_at']

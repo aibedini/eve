@@ -188,6 +188,19 @@
         .pwa-sheet-wa:hover { background: rgba(37,211,102,0.22); }
         .pwa-sheet-tg { background: rgba(34,158,217,0.12); color: #229ED9; border-color: rgba(34,158,217,0.30); }
         .pwa-sheet-tg:hover { background: rgba(34,158,217,0.22); }
+        /* Inline announcement buttons — distinct from the popup dismiss button */
+        .ann-btn {
+            display: inline-block; padding: 8px 18px; border-radius: 8px;
+            background: rgba(99,102,241,0.18); color: #a5b4fc;
+            border: 1px solid rgba(99,102,241,0.35); font-weight: 600;
+            font-size: 0.85rem; text-decoration: none; cursor: pointer;
+            transition: background .18s, border-color .18s; margin: 4px 2px;
+        }
+        .ann-btn:hover { background: rgba(99,102,241,0.32); border-color: rgba(99,102,241,0.6); color: #c7d2fe; }
+        /* Announcement media (images / videos) stay within container */
+        .ann-media img, .ann-media video {
+            max-width: 100%; border-radius: 10px; margin-top: 10px; display: block;
+        }
     </style>
     {% if active_online_chat_script %}
     {{ active_online_chat_script | safe }}
@@ -227,7 +240,7 @@
                 {% if not a.is_popup %}
                 <div class="px-4 py-3 rounded-xl bg-[#fb923c]/10 border border-[#fb923c]/20">
                     <div class="text-sm font-semibold text-[#fb923c]">⚠️ {{ 'یه نکته' if is_fa else 'Attention' }}</div>
-                    <div class="mt-1 text-sm text-white/90" style="direction: rtl; text-align: right;">{{ a.message | safe }}</div>
+                    <div class="mt-1 text-sm text-white/90 ann-media" style="direction: rtl; text-align: right;">{{ a.message | safe }}</div>
                 </div>
                 {% endif %}
                 {% endfor %}
@@ -1217,7 +1230,7 @@
                     <span style="font-size:1.4rem;">📢</span>
                     <span style="font-weight:700; color:#fb923c; font-size:1rem;">{{ 'اطلاعیه' if is_fa else 'Announcement' }}</span>
                 </div>
-                <div style="color:rgba(255,255,255,0.92); font-size:0.92rem; line-height:1.7; direction:rtl; text-align:right;">{{ popup_ann.message | safe }}</div>
+                <div class="ann-media" style="color:rgba(255,255,255,0.92); font-size:0.92rem; line-height:1.7; direction:rtl; text-align:right;">{{ popup_ann.message | safe }}</div>
             </div>
             <div style="padding:0 24px 24px;">
                 <button onclick="closePopupAnnouncement()" style="width:100%; padding:12px; border:none; border-radius:10px; background:linear-gradient(90deg,#6366f1,#818cf8); color:white; font-weight:600; font-size:0.95rem; cursor:pointer;">

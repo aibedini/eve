@@ -2197,17 +2197,31 @@
             theme: 'snow',
             placeholder: 'Write announcement text…',
             modules: {
-                toolbar: [
-                    ['bold', 'italic', 'underline', 'strike'],
-                    [{ 'color': [] }, { 'background': [] }],
-                    [{ 'size': ['small', false, 'large', 'huge'] }],
-                    [{ 'align': [] }, { 'direction': 'rtl' }],
-                    ['blockquote'],
-                    [{ 'list': 'ordered' }, { 'list': 'bullet' }],
-                    ['clean']
-                ]
+                toolbar: {
+                    container: [
+                        ['bold', 'italic', 'underline', 'strike'],
+                        [{ 'color': [] }, { 'background': [] }],
+                        [{ 'size': ['small', false, 'large', 'huge'] }],
+                        [{ 'align': [] }, { 'direction': 'rtl' }],
+                        ['blockquote'],
+                        [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+                        [{ 'ann-btn': 'insert' }, { 'ann-media': 'upload' }],
+                        ['clean']
+                    ],
+                    handlers: {
+                        'ann-btn':   () => annInsertButton(),
+                        'ann-media': () => annUploadMedia(),
+                    }
+                }
             }
         });
+
+        // Label the custom toolbar buttons
+        const tb = annQuill.getModule('toolbar').container;
+        const btnPicker = tb.querySelector('.ql-ann-btn');
+        if (btnPicker) { btnPicker.title = 'Insert button'; btnPicker.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="3"/><text x="12" y="16" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="sans-serif">BTN</text></svg>'; }
+        const mediaPicker = tb.querySelector('.ql-ann-media');
+        if (mediaPicker) { mediaPicker.title = 'Upload image / video'; mediaPicker.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'; }
 
         // RTL by default for Persian content
         annQuill.format('direction', 'rtl');
@@ -2217,6 +2231,97 @@
             const hidden = document.getElementById('announcement-message');
             if (hidden) hidden.value = annQuill.root.innerHTML;
         });
+    }
+
+    // ── hidden file input for media upload ──────────────────────────────────
+    (function() {
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.id = 'ann-media-file-input';
+        inp.accept = 'image/*,video/mp4,video/webm,video/x-matroska,video/quicktime,.mp4,.webm,.mkv,.mov';
+        inp.style.display = 'none';
+        inp.onchange = () => annHandleMediaFile(inp);
+        document.body.appendChild(inp);
+    })();
+
+    function annInsertButton() {
+        // Small inline form shown as a modal-within-modal
+        const existing = document.getElementById('ann-btn-dialog');
+        if (existing) existing.remove();
+
+        const dlg = document.createElement('div');
+        dlg.id = 'ann-btn-dialog';
+        dlg.style.cssText = 'position:fixed;inset:0;z-index:19999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6)';
+        dlg.innerHTML = `
+        <div style="background:#1e293b;border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:24px;width:360px;max-width:94vw;">
+            <h3 style="margin:0 0 16px;font-size:1rem;color:#f1f5f9;">Insert Inline Button</h3>
+            <div class="form-group" style="margin-bottom:12px;">
+                <label style="font-size:0.82rem;color:#94a3b8;">Button label</label>
+                <input id="ann-btn-label" class="form-input" placeholder="e.g. دریافت کانفیگ" style="margin-top:4px;">
+            </div>
+            <div class="form-group" style="margin-bottom:16px;">
+                <label style="font-size:0.82rem;color:#94a3b8;">URL (optional)</label>
+                <input id="ann-btn-url" class="form-input" placeholder="https://..." style="margin-top:4px;">
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-primary" style="flex:1;" onclick="annConfirmButton()">Insert</button>
+                <button class="btn btn-secondary" onclick="document.getElementById('ann-btn-dialog').remove()">Cancel</button>
+            </div>
+        </div>`;
+        document.body.appendChild(dlg);
+        dlg.addEventListener('click', e => { if (e.target === dlg) dlg.remove(); });
+        setTimeout(() => document.getElementById('ann-btn-label')?.focus(), 50);
+    }
+
+    function annConfirmButton() {
+        const label = (document.getElementById('ann-btn-label')?.value || '').trim();
+        const url   = (document.getElementById('ann-btn-url')?.value   || '').trim();
+        document.getElementById('ann-btn-dialog')?.remove();
+        if (!label) return;
+
+        const range = annQuill.getSelection(true);
+        const href = url || '#';
+        // Insert as plain HTML via clipboard delta trick
+        const btn = `<a class="ann-btn" href="${href}"${url ? ' target="_blank"' : ''}>${label}</a>`;
+        annQuill.clipboard.dangerouslyPasteHTML(range ? range.index : annQuill.getLength(), btn);
+    }
+
+    function annUploadMedia() {
+        document.getElementById('ann-media-file-input')?.click();
+    }
+
+    async function annHandleMediaFile(input) {
+        if (!input.files || !input.files[0]) return;
+        const file = input.files[0];
+        input.value = '';
+        const isVideo = file.type.startsWith('video/');
+        const endpoint = isVideo ? '/api/app-files/upload' : '/api/upload';
+
+        // Show toast with progress
+        const toastId = '_annUpload';
+        showToast(`Uploading ${isVideo ? 'video' : 'image'}…`, 'info', 60000);
+
+        const fd = new FormData();
+        fd.append('file', file);
+
+        try {
+            const resp = await fetch(endpoint, { method: 'POST', body: fd });
+            const res = await resp.json();
+            const url = isVideo ? res?.file?.url : res?.url;
+            if (!url) throw new Error(res?.error || 'Upload failed');
+
+            // Insert at cursor
+            const range = annQuill.getSelection(true);
+            const idx = range ? range.index : annQuill.getLength();
+            if (isVideo) {
+                const html = `<video src="${url}" controls style="max-width:100%;border-radius:8px;margin-top:8px;" preload="metadata"></video>`;
+                annQuill.clipboard.dangerouslyPasteHTML(idx, html);
+            } else {
+                annQuill.insertEmbed(idx, 'image', url);
+            }
+            showToast(`${isVideo ? 'Video' : 'Image'} inserted ✓`);
+        } catch (err) {
+            showToast(`Upload error: ${err.message}`, 'error', 8000);
+        }
     }
 
     function annSetContent(html) {
