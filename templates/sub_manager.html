@@ -1775,30 +1775,32 @@
     async function ann_loadServers() {
         try {
             const response = await fetch('/api/servers', { cache: 'no-store' });
-            annAllServers = await response.json();
+            const _srv = await response.json();
+            annAllServers = Array.isArray(_srv) ? _srv : (_srv.servers || []);
             annServersLoaded = true;
             ann_renderServerList();
         } catch (e) {
-            console.error('Error loading servers:', error);
+            console.error('Error loading servers:', e);
         }
     }
 
     async function ann_loadInbounds() {
         try {
-            const response = await fetch('/api/refresh?mode=cache&enqueue=0');
+            const response = await fetch('/api/refresh?mode=cache&enqueue=0', { cache: 'no-store' });
             const data = await response.json();
-            if (data && data.inbounds) {
-                annServerInbounds = data.inbounds.reduce((acc, inbound) => {
-                    const sid = inbound.server_id;
-                    if (!acc[sid]) acc[sid] = [];
-                    acc[sid].push(inbound);
-                    return acc;
-                }, {});
-                annInboundsLoaded = true;
-                ann_renderServerList();
-            }
+            const inbs = (data && Array.isArray(data.inbounds)) ? data.inbounds : [];
+            annServerInbounds = inbs.reduce((acc, inbound) => {
+                const sid = inbound.server_id;
+                if (!acc[sid]) acc[sid] = [];
+                acc[sid].push(inbound);
+                return acc;
+            }, {});
+            annInboundsLoaded = true;
+            // Always re-render so the server list + selection sync reflect the
+            // final inbound set (even if some servers returned none).
+            ann_renderServerList();
         } catch (e) {
-            console.error('Error loading inbounds:', error);
+            console.error('Error loading inbounds:', e);
         }
     }
 
@@ -2175,11 +2177,16 @@
         ann_togglePopupOptions(popEl);
 
         const hidden = document.getElementById('announcement-targets');
-        if (hidden) hidden.value = (a.targets || (a.all_servers ? '*' : '[]'));
+        const _targetsVal = (a.targets || (a.all_servers ? '*' : '[]'));
+        if (hidden) hidden.value = _targetsVal;
+        console.log('[ann-edit] id=', a.id, 'targets=', JSON.stringify(_targetsVal), 'all_servers=', a.all_servers);
 
         await ann_loadServers();
         await ann_loadInbounds();
         ann_syncSelectionsToUi();
+        console.log('[ann-edit] after sync: checked servers=',
+            document.querySelectorAll('.ann-server-checkbox:checked').length,
+            'checked inbounds=', document.querySelectorAll('.ann-inbound-checkbox:checked').length);
         initAnnouncementShamsiPicker();
 
         document.getElementById('announcement-modal').classList.remove('hidden');
