@@ -6821,11 +6821,19 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
 
 
 def get_xui_session(server):
+    # Current auth identity: the token for v3, or '' for cookie-login panels.
+    # Cached sessions are keyed to this so a server that just switched to v3
+    # (token added) doesn't keep returning a stale, token-less cookie session
+    # — which the v3 panel rejects with 403. This is per-worker, so the cache
+    # self-heals on the next call in each gunicorn worker.
+    _api_token = get_server_api_token(server)
+    _auth_key = _api_token or ''
+
     # Try to reuse session from cache
     now = time.time()
     if server.id in XUI_SESSION_CACHE:
         cached = XUI_SESSION_CACHE[server.id]
-        if now < cached['expiry']:
+        if now < cached['expiry'] and cached.get('auth_key', '') == _auth_key:
             return cached['session'], None
         else:
             XUI_SESSION_CACHE.pop(server.id, None)
@@ -6840,10 +6848,9 @@ def get_xui_session(server):
     # ── 3x-ui v3+ : authenticate with the API token (Bearer) ──
     # The token bypasses the v3 login CSRF guard and never expires, so we attach
     # it to the session and skip the cookie-login dance entirely.
-    _api_token = get_server_api_token(server)
     if _api_token:
         session_obj.headers.update({'Authorization': f'Bearer {_api_token}'})
-        XUI_SESSION_CACHE[server.id] = {'session': session_obj, 'expiry': now + XUI_SESSION_TTL}
+        XUI_SESSION_CACHE[server.id] = {'session': session_obj, 'expiry': now + XUI_SESSION_TTL, 'auth_key': _auth_key}
         return session_obj, None
 
     try:
@@ -6900,7 +6907,8 @@ def get_xui_session(server):
         if login_resp.status_code == 200 and isinstance(login_json, dict) and login_json.get('success'):
             XUI_SESSION_CACHE[server.id] = {
                 'session': session_obj,
-                'expiry': now + XUI_SESSION_TTL
+                'expiry': now + XUI_SESSION_TTL,
+                'auth_key': _auth_key,
             }
             return session_obj, None
 
