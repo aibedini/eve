@@ -18622,6 +18622,7 @@ def _run_snapshot_with_progress():
                     srv_dict = {
                         'id': srv.id, 'name': srv.name, 'host': srv.host,
                         'username': srv.username, 'password': get_server_password(srv),
+                        'api_token': srv.api_token,  # v3 Bearer auth (else cookie login → 403)
                         'panel_type': srv.panel_type, 'sub_port': srv.sub_port,
                         'sub_path': srv.sub_path, 'json_path': srv.json_path,
                     }
@@ -20347,6 +20348,10 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
         server_dicts = [{
             'id': s.id, 'name': s.name, 'host': s.host,
             'username': s.username, 'password': get_server_password(s),
+            # Pass the (encrypted) v3 API token through so the concurrent
+            # fetch_worker authenticates v3 panels with the Bearer token.
+            # Without it server_is_v3() is False → cookie login → 403 on v3.
+            'api_token': s.api_token,
             'panel_type': s.panel_type, 'sub_port': s.sub_port,
             'sub_path': s.sub_path, 'json_path': s.json_path
         } for s in servers if int(s.id) not in skipped_ids]
