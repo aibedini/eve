@@ -1207,6 +1207,7 @@
             <div class="form-group">
                 <label>Platform</label>
                 <select id="edit-faq-platform" class="form-select" style="width: 100%; padding: 10px; background: var(--bg-dark); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px;">
+                    <option value="general">General (all platforms)</option>
                     <option value="android">Android</option>
                     <option value="ios">iOS</option>
                     <option value="windows">Windows</option>
@@ -1245,8 +1246,30 @@
             </div>
 
             <div class="form-group">
-                <label>Video URL</label>
-                <input type="text" id="edit-faq-video" class="form-input" placeholder="Video URL (optional)">
+                <label>Video</label>
+                <input type="text" id="edit-faq-video" class="form-input" placeholder="Video URL (optional)" style="margin-bottom: 10px;">
+
+                <div class="file-upload-wrapper" id="faq-video-upload-container">
+                    <div class="file-upload-btn" id="faq-video-upload-btn">
+                        <span class="btn-text">Browse Video</span>
+                        <span class="btn-loading hidden">
+                            <svg class="animate-spin" width="16" height="16" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Uploading...
+                        </span>
+                    </div>
+                    <div class="file-upload-text" id="faq-video-file-name">No file chosen</div>
+                    <input type="file" id="faq-video-upload" class="file-upload-input" accept="video/mp4,video/webm,video/x-matroska,video/quicktime,.mp4,.webm,.mkv,.mov" onchange="uploadFAQVideo(this)">
+                </div>
+                <div id="faq-video-progress" style="display:none; margin-top:8px;">
+                    <div style="height:6px;border-radius:99px;background:var(--bg-card-hover);overflow:hidden;">
+                        <div id="faq-video-progress-bar" style="height:100%;width:0%;background:var(--primary);transition:width .2s;"></div>
+                    </div>
+                    <div id="faq-video-progress-text" style="margin-top:4px;font-size:0.72rem;color:var(--text-secondary);"></div>
+                </div>
+                <p style="margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary);">Paste a URL, or browse to upload MP4 / WEBM / MKV / MOV (max 500 MB).</p>
             </div>
 
             <label class="form-group form-toggle-item" style="margin-bottom: 20px; cursor: pointer;">
@@ -2510,6 +2533,19 @@
         document.getElementById('edit-faq-modal').classList.add('hidden');
     }
 
+    function _resetFAQVideoUI() {
+        const inp = document.getElementById('faq-video-upload');
+        if (inp) inp.value = '';
+        const name = document.getElementById('faq-video-file-name');
+        if (name) name.textContent = 'No file chosen';
+        const prog = document.getElementById('faq-video-progress');
+        if (prog) prog.style.display = 'none';
+        const bar = document.getElementById('faq-video-progress-bar');
+        if (bar) { bar.style.width = '0%'; bar.style.background = 'var(--primary)'; }
+        const txt = document.getElementById('faq-video-progress-text');
+        if (txt) txt.textContent = '';
+    }
+
     function openAddFAQModal() {
         document.getElementById('edit-faq-id').value = '';
         document.getElementById('faq-modal-title').textContent = 'Add New FAQ';
@@ -2524,7 +2560,8 @@
         // Reset file upload
         document.getElementById('faq-image-upload').value = '';
         document.getElementById('faq-file-name').textContent = 'No file chosen';
-        
+        _resetFAQVideoUI();
+
         document.getElementById('edit-faq-modal').classList.remove('hidden');
     }
 
@@ -2543,7 +2580,8 @@
         // Reset file upload
         document.getElementById('faq-image-upload').value = '';
         document.getElementById('faq-file-name').textContent = 'No file chosen';
-        
+        _resetFAQVideoUI();
+
         document.getElementById('edit-faq-modal').classList.remove('hidden');
     }
 
@@ -2643,6 +2681,76 @@
                 btn.classList.remove('loading');
             }
         }
+    }
+
+    function uploadFAQVideo(input) {
+        if (!input.files || !input.files[0]) return;
+        const file = input.files[0];
+        document.getElementById('faq-video-file-name').textContent = file.name;
+
+        const wrapper = document.getElementById('faq-video-upload-container');
+        const btn = document.getElementById('faq-video-upload-btn');
+        const prog = document.getElementById('faq-video-progress');
+        const bar = document.getElementById('faq-video-progress-bar');
+        const txt = document.getElementById('faq-video-progress-text');
+        wrapper.classList.add('uploading');
+        btn.classList.add('loading');
+        prog.style.display = 'block';
+        bar.style.width = '0%';
+        txt.textContent = 'Starting…';
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        // XHR gives real upload progress (fetch can't) — videos can be large.
+        const xhr = new XMLHttpRequest();
+        const t0 = Date.now();
+        xhr.upload.onprogress = (e) => {
+            if (!e.lengthComputable) return;
+            const pct = Math.round((e.loaded / e.total) * 100);
+            bar.style.width = pct + '%';
+            const mb = (n) => (n / 1024 / 1024).toFixed(1) + ' MB';
+            const sp = (Date.now() - t0) / 1000;
+            const spd = sp > 0 ? (e.loaded / sp / 1024 / 1024).toFixed(1) + ' MB/s' : '';
+            txt.textContent = `${pct}% · ${mb(e.loaded)} / ${mb(e.total)}${spd ? ' · ' + spd : ''}`;
+        };
+        xhr.upload.onload = () => { txt.textContent = 'Processing on server…'; };
+
+        const cleanup = () => {
+            wrapper.classList.remove('uploading');
+            btn.classList.remove('loading');
+            input.value = '';
+            document.getElementById('faq-video-file-name').textContent = 'No file chosen';
+        };
+
+        xhr.onload = () => {
+            cleanup();
+            let res = {};
+            try { res = JSON.parse(xhr.responseText); } catch (_) {}
+            const url = res && res.file && res.file.url;
+            if (xhr.status >= 200 && xhr.status < 300 && res.success && url) {
+                document.getElementById('edit-faq-video').value = url;
+                bar.style.width = '100%';
+                bar.style.background = '#22c55e';
+                txt.textContent = 'Uploaded ✓';
+                showToast('Video uploaded successfully');
+            } else {
+                bar.style.background = '#ef4444';
+                const msg = (res && res.error) || ('Upload failed (HTTP ' + xhr.status + ')');
+                txt.textContent = msg;
+                showToast(msg, 'error', 8000);
+            }
+        };
+        xhr.onerror = () => {
+            cleanup();
+            bar.style.background = '#ef4444';
+            txt.textContent = 'Network error — upload interrupted';
+            showToast('Network error during video upload', 'error', 8000);
+        };
+
+        // Larger limit + video extensions are handled by /api/app-files/upload.
+        xhr.open('POST', '/api/app-files/upload');
+        xhr.send(formData);
     }
 
     async function saveContactInfo() {

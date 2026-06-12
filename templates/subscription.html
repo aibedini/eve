@@ -836,7 +836,11 @@
         
         function renderFAQs() {
             const container = document.getElementById('faq-container');
-            const filteredFaqs = faqs.filter(f => (f.platform || 'android') === currentFAQPlatform);
+            // "general" FAQs apply to every platform, so show them on all tabs.
+            const filteredFaqs = faqs.filter(f => {
+                const p = f.platform || 'android';
+                return p === currentFAQPlatform || p === 'general';
+            });
             
             if (!filteredFaqs || filteredFaqs.length === 0) {
                 container.innerHTML = `<div class="text-center text-muted py-4">${I18N.noFaqs}</div>`;
