@@ -7081,12 +7081,16 @@ def fetch_onlines(session_obj, host, panel_type='auto'):
         candidates = []
         if normalized_type in ('sanaei', 'auto', ''):
             candidates.extend([
+                # Web-UI route (present on more 3x-ui builds than the API route)
+                ('POST', '/panel/inbound/onlines'),
                 ('POST', '/panel/api/inbounds/onlines'),
+                ('GET', '/panel/inbound/onlines'),
                 ('GET', '/panel/api/inbounds/onlines'),
             ])
         if normalized_type in ('alireza', 'alireza0', 'xui', 'x-ui', 'auto', ''):
             candidates.extend([
                 ('POST', '/xui/API/inbounds/onlines'),
+                ('POST', '/xui/inbound/onlines'),
                 ('POST', '/xui/api/inbounds/onlines'),
                 ('GET', '/xui/API/inbounds/onlines'),
                 ('GET', '/xui/api/inbounds/onlines'),
