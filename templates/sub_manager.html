@@ -1419,7 +1419,8 @@
         try {
             const response = await fetch('/api/sub-apps');
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            apps = await response.json();
+            const _appsData = await response.json();
+            apps = Array.isArray(_appsData) ? _appsData : (_appsData.apps || []);
             renderApps();
         } catch (e) {
             showToast('Error loading apps', 'error');
@@ -1700,7 +1701,8 @@
         try {
             const response = await fetch('/api/announcements');
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            announcements = await response.json();
+            const _annData = await response.json();
+            announcements = Array.isArray(_annData) ? _annData : (_annData.announcements || []);
             renderAnnouncements();
         } catch (e) {
             showToast('Error loading announcements', 'error');
@@ -2622,17 +2624,18 @@
         try {
             const response = await fetch('/api/faqs');
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            faqs = await response.json();
+            const data = await response.json();
+            faqs = Array.isArray(data) ? data : (data.faqs || []);
             renderFAQs();
         } catch (e) {
-            showToast('Error loading FAQs', 'error');
+            showToast('Error loading FAQs: ' + (e.message || e), 'error');
         }
     }
 
     function renderFAQs() {
         const container = document.getElementById('faqs-container');
-        
-        if (faqs.length === 0) {
+
+        if (!faqs || faqs.length === 0) {
             container.innerHTML = '<div class="empty-state"><p>No FAQs defined</p></div>';
             return;
         }
