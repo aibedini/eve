@@ -7109,8 +7109,10 @@ def fetch_onlines(session_obj, host, panel_type='auto'):
 
                 last_status = resp.status_code
                 try:
-                    _body_snippet = re.sub(r'\s+', ' ', (resp.text or ''))[:200]
-                    app.logger.info(f"[onlines] {method} {ep} -> HTTP {resp.status_code}: {_body_snippet}")
+                    _body_snippet = re.sub(r'\s+', ' ', (resp.text or ''))[:160]
+                    _srv_hdr = resp.headers.get('Server', '?')
+                    _ct = resp.headers.get('Content-Type', '?')
+                    app.logger.info(f"[onlines] {method} {url} -> HTTP {resp.status_code} [Server={_srv_hdr}, CT={_ct}]: {_body_snippet}")
                 except Exception:
                     pass
                 if resp.status_code != 200:
