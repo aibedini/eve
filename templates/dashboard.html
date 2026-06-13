@@ -5104,7 +5104,7 @@
         list.innerHTML = inbounds.map(ib => `
             <div class="filter-item">
                 <label class="checkbox-label">
-                    <input type="checkbox" class="add-inbound-cb" value="${ib.id}" checked onchange="_updateAddInboundMultiLabel()">
+                    <input type="checkbox" class="add-inbound-cb" value="${ib.id}" checked onchange="_onAddInboundToggle()">
                     <span class="checkmark"></span>
                     <span>${escHtml(ib.remark || ('Inbound ' + ib.id))} <span style="color:var(--text-secondary);">:${ib.port}</span></span>
                 </label>
@@ -5116,13 +5116,20 @@
     function _updateV3LastUserDisplay(serverId, inbounds) {
         const sid = String(serverId || '');
         if (!sid) return;
+        // Show recent clients only for the inbounds the user has actually CHECKED
+        // (the ones the new client will be assigned to). If the checkbox list
+        // isn't built yet, fall back to all provided inbounds.
+        const checkedIds = _getCheckedAddInboundIds().map(String);
+        const idList = checkedIds.length ? checkedIds : (inbounds || []).map(ib => String(ib.id));
         const seen = new Set();
         const merged = [];
         const cachedMap = lastUserCacheByServer.get(sid) || {};
-        for (const ib of (inbounds || [])) {
-            const arr = cachedMap[String(ib.id)] || [];
+        for (const iid of idList) {
+            const arr = cachedMap[iid] || [];
             for (const em of arr) {
-                if (!seen.has(em)) { seen.add(em); merged.push(em); }
+                // De-dupe: the same client assigned to several inbounds shows once.
+                const key = String(em || '').toLowerCase();
+                if (key && !seen.has(key)) { seen.add(key); merged.push(em); }
                 if (merged.length >= 8) break;
             }
             if (merged.length >= 8) break;
@@ -5132,6 +5139,13 @@
         lastUserCacheByServer.set(sid, curMap);
         const display = document.getElementById('last-user-display');
         if (display) showLastUserFromCache(sid, '__v3__', display);
+    }
+
+    // Re-render label + last-user display when an inbound checkbox is toggled.
+    function _onAddInboundToggle() {
+        _updateAddInboundMultiLabel();
+        const sid = String(document.getElementById('add-client-server-select')?.value || '');
+        if (sid) _updateV3LastUserDisplay(sid, getCachedInboundsForServer(parseInt(sid)));
     }
     function toggleAddInboundDropdown(e) {
         if (e) e.stopPropagation();
@@ -5150,7 +5164,7 @@
         // If all already checked, toggle to none; else select all (mirrors filter UX).
         const allChecked = boxes.length > 0 && boxes.every(cb => cb.checked);
         boxes.forEach(cb => { cb.checked = !allChecked; });
-        _updateAddInboundMultiLabel();
+        _onAddInboundToggle();
     }
     function _updateAddInboundMultiLabel() {
         const boxes = Array.from(document.querySelectorAll('#add-client-inbound-multi-list .add-inbound-cb'));
