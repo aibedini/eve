@@ -537,6 +537,7 @@
                     </table>
                 </div>
                 <p id="history-empty" class="hidden text-center text-muted py-6 text-xs">{{ 'هنوز داده‌ای ثبت نشده. اولین snapshot چند دقیقه بعد از راه‌اندازی سرور ثبت می‌شود.' if is_fa else 'No history yet. First snapshot is taken a few minutes after server startup.' }}</p>
+                <div id="history-pagination" class="hidden items-center justify-center gap-2 mt-3 text-xs" style="display:none;"></div>
             </div>
         </div>
 
@@ -1086,6 +1087,10 @@
         const HISTORY_SERVER_ID = {{ server_id | tojson }};
         const HISTORY_SUB_ID = {{ sub_id | tojson }};
         let _historyPeriod = 'day';
+        const HISTORY_PAGE_SIZE = 10;
+        let _historyRows = [];
+        let _historyRenewalLabels = new Set();
+        let _historyPage = 0;
 
         // ── Jalali (Shamsi) conversion ─────────────────────────────────
         const _JALALI_MONTHS_FA = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
@@ -1155,6 +1160,8 @@
             if (emptyEl) emptyEl.classList.add('hidden');
             if (tbody) tbody.innerHTML = '';
             if (renewalContainer) renewalContainer.classList.add('hidden');
+            const pagerEl = document.getElementById('history-pagination');
+            if (pagerEl) { pagerEl.style.display = 'none'; pagerEl.innerHTML = ''; }
 
             try {
                 const resp = await fetch(`/sub/history/${HISTORY_SERVER_ID}/${encodeURIComponent(HISTORY_SUB_ID)}?period=${_historyPeriod}`);
@@ -1166,52 +1173,95 @@
                     return;
                 }
 
-                // Renewal events
+                // Renewal events — single compact inline line (icon + title + details)
                 if (data.renewals && data.renewals.length > 0 && renewalContainer) {
                     renewalContainer.classList.remove('hidden');
                     renewalContainer.innerHTML = data.renewals.map(r => {
                         const volText = r.is_unlimited_volume ? (IS_FA?'نامحدود':'Unlimited') : fmtBytes(r.volume_bytes);
                         const timeText = r.is_unlimited_time ? (IS_FA?'نامحدود':'Unlimited') : (r.days!=null?(IS_FA?`${r.days} روز`:`${r.days} days`):'—');
-                        return `<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-success/10 border border-success/20">
-                            <svg class="w-3.5 h-3.5 text-success shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                            <div class="leading-tight">
-                                <div class="text-xs font-semibold text-success">${IS_FA?'تمدید شد':'Renewed'} — ${fmtJalali(r.renewed_at, 'day')}</div>
-                                <div class="text-[0.7rem] text-muted mt-0.5">${IS_FA?'حجم':'Vol'}: ${volText} · ${IS_FA?'مدت':'Duration'}: ${timeText}</div>
-                            </div>
+                        return `<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-1.5 rounded-lg bg-success/10 border border-success/20 text-[0.7rem]">
+                            <svg class="w-3 h-3 text-success shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            <span class="font-semibold text-success">${IS_FA?'تمدید شد':'Renewed'} — ${fmtJalali(r.renewed_at, 'day')}</span>
+                            <span class="text-muted">· ${IS_FA?'حجم':'Vol'}: ${volText} · ${IS_FA?'مدت':'Duration'}: ${timeText}</span>
                         </div>`;
                     }).join('');
                 }
 
-                const rows = data.history || [];
-                if (rows.length === 0) {
+                // Build the set of date labels (in the current period's format) on
+                // which a renewal happened, so the table can flag those rows.
+                _historyRenewalLabels = new Set(
+                    (data.renewals || []).map(r => fmtJalali(r.renewed_at, _historyPeriod))
+                );
+
+                _historyRows = data.history || [];
+                _historyPage = 0;
+                if (_historyRows.length === 0) {
                     if (emptyEl) emptyEl.classList.remove('hidden');
+                    renderHistoryPage();
                     return;
                 }
-
-                if (tbody) {
-                    tbody.innerHTML = rows.map(row => {
-                        const leftColor = (row.remaining!=null && row.volume_limit && (row.remaining/row.volume_limit)<0.1)
-                            ? 'text-red-400' : 'text-success';
-                        const noUsage = !row.delta_total || row.delta_total === 0;
-                        const usedColor = !noUsage ? 'text-white font-medium' : 'text-muted';
-                        const dash = `<span class="text-muted" style="opacity:.35;">—</span>`;
-                        const dateFmt = fmtJalali(row.recorded_at, _historyPeriod);
-                        const dateLabel = row.is_cumulative
-                            ? `<span style="font-size:.72rem;opacity:.6;">${IS_FA?'تا':'Until'}</span> ${dateFmt}`
-                            : dateFmt;
-                        return `<tr class="hover:bg-white/5 transition-colors" style="direction:rtl;">
-                            <td class="px-3 py-2 text-muted whitespace-nowrap text-right">${dateLabel}</td>
-                            <td class="px-3 py-2 text-right text-blue-400">${noUsage ? dash : fmtBytes(row.delta_download)}</td>
-                            <td class="px-3 py-2 text-right text-purple-400">${noUsage ? dash : fmtBytes(row.delta_upload)}</td>
-                            <td class="px-3 py-2 text-right ${usedColor}">${noUsage ? dash : fmtBytes(row.delta_total)}</td>
-                            <td class="px-3 py-2 text-right ${leftColor}">${fmtBytes(row.remaining)}</td>
-                        </tr>`;
-                    }).join('');
-                }
+                renderHistoryPage();
             } catch (e) {
                 if (loadingEl) loadingEl.style.display = 'none';
                 if (emptyEl) { emptyEl.textContent = IS_FA ? 'خطا در بارگزاری.' : 'Failed to load history.'; emptyEl.classList.remove('hidden'); }
             }
+        }
+
+        function renderHistoryPage() {
+            const tbody = document.getElementById('history-tbody');
+            const pager = document.getElementById('history-pagination');
+            if (!tbody) return;
+
+            const total = _historyRows.length;
+            const pageCount = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+            if (_historyPage > pageCount - 1) _historyPage = pageCount - 1;
+            if (_historyPage < 0) _historyPage = 0;
+            const start = _historyPage * HISTORY_PAGE_SIZE;
+            const pageRows = _historyRows.slice(start, start + HISTORY_PAGE_SIZE);
+
+            tbody.innerHTML = pageRows.map(row => {
+                const leftColor = (row.remaining!=null && row.volume_limit && (row.remaining/row.volume_limit)<0.1)
+                    ? 'text-red-400' : 'text-success';
+                const noUsage = !row.delta_total || row.delta_total === 0;
+                const usedColor = !noUsage ? 'text-white font-medium' : 'text-muted';
+                const dash = `<span class="text-muted" style="opacity:.35;">—</span>`;
+                const dateFmt = fmtJalali(row.recorded_at, _historyPeriod);
+                const dateLabel = row.is_cumulative
+                    ? `<span style="font-size:.72rem;opacity:.6;">${IS_FA?'تا':'Until'}</span> ${dateFmt}`
+                    : dateFmt;
+                const renewedTag = _historyRenewalLabels.has(dateFmt)
+                    ? `<div class="text-[0.65rem] font-semibold text-success mt-0.5">${IS_FA?'تمدید':'Renewed'}</div>`
+                    : '';
+                return `<tr class="hover:bg-white/5 transition-colors" style="direction:rtl;">
+                    <td class="px-3 py-2 text-muted whitespace-nowrap text-right">${dateLabel}${renewedTag}</td>
+                    <td class="px-3 py-2 text-right text-blue-400">${noUsage ? dash : fmtBytes(row.delta_download)}</td>
+                    <td class="px-3 py-2 text-right text-purple-400">${noUsage ? dash : fmtBytes(row.delta_upload)}</td>
+                    <td class="px-3 py-2 text-right ${usedColor}">${noUsage ? dash : fmtBytes(row.delta_total)}</td>
+                    <td class="px-3 py-2 text-right ${leftColor}">${fmtBytes(row.remaining)}</td>
+                </tr>`;
+            }).join('');
+
+            // Pagination controls (only when more than one page)
+            if (!pager) return;
+            if (total <= HISTORY_PAGE_SIZE) {
+                pager.style.display = 'none';
+                pager.innerHTML = '';
+                return;
+            }
+            pager.style.display = 'flex';
+            const btnCls = 'px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed';
+            const prevDisabled = _historyPage <= 0 ? 'disabled' : '';
+            const nextDisabled = _historyPage >= pageCount - 1 ? 'disabled' : '';
+            // In RTL the "newer/previous" arrow points right; keep it simple with labels.
+            pager.innerHTML = `
+                <button class="${btnCls}" ${prevDisabled} onclick="changeHistoryPage(-1)">${IS_FA?'قبلی':'Prev'}</button>
+                <span class="text-muted">${IS_FA?`صفحه ${_historyPage+1} از ${pageCount}`:`Page ${_historyPage+1} of ${pageCount}`}</span>
+                <button class="${btnCls}" ${nextDisabled} onclick="changeHistoryPage(1)">${IS_FA?'بعدی':'Next'}</button>`;
+        }
+
+        function changeHistoryPage(delta) {
+            _historyPage += delta;
+            renderHistoryPage();
         }
 
         function closePopupAnnouncement() {
