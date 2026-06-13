@@ -6382,8 +6382,10 @@
     async function performGlobalSearch(immediate = false) {
         const searchInput = document.getElementById('global-search-input');
         const clearBtn = document.getElementById('clear-search-btn');
-        const query = searchInput.value.trim().toLowerCase();
-        
+        // Convert Persian/Arabic digits to ASCII so phone numbers typed in
+        // Persian (۰۹۱۲…) match the stored English digits.
+        const query = toEnglishDigits(searchInput.value.trim()).toLowerCase();
+
         // Toggle clear button visibility
         if (searchInput.value.length > 0) {
             clearBtn.classList.remove('hidden');
