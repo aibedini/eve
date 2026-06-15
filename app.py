@@ -9293,11 +9293,19 @@ def get_monitor_alerts():
                 if email_l not in owned_emails_by_server.get(sid_norm, set()):
                     continue
 
-            # Collapse the per-inbound copies of one v3 client into a single card.
-            dedupe_key = ('u', sid_norm, client_uuid_l) if client_uuid_l else ('e', sid_norm, email_l)
-            if dedupe_key in seen_clients:
+            # One card per user per server: same email = same user regardless of
+            # inbound count or UUID (catches both v3 multi-inbound and same email
+            # across different inbounds with distinct UUIDs).
+            if email_l:
+                dedupe_key = ('e', sid_norm, email_l)
+            elif client_uuid_l:
+                dedupe_key = ('u', sid_norm, client_uuid_l)
+            else:
+                dedupe_key = None
+            if dedupe_key is not None and dedupe_key in seen_clients:
                 continue
-            seen_clients.add(dedupe_key)
+            if dedupe_key is not None:
+                seen_clients.add(dedupe_key)
 
             enabled = bool(client.get('enable', True))
             # IMPORTANT: We do NOT skip disabled clients here. Sanaei-style panels
