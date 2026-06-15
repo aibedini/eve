@@ -230,7 +230,7 @@
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>Renew Template</h2>
-                        <p class="text-secondary">Customize the copy text shown after a successful renew. Supports variables like {email}, {days_label}, {volume_label}, {date}.</p>
+                        <p class="text-secondary">Customize the copy text shown after a successful renew. Supports variables like {email}, {days_label}, {volume_label}, {date}. Use {if_gift}...{/if_gift} to show a line only when a gift volume was given (e.g. 🎁 +{gift_volume} گیگ هدیه).</p>
                     </div>
                     <button class="btn btn-primary" onclick="openRenewTemplateModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
@@ -4120,7 +4120,9 @@
         date: '1404/10/06',
         server_name: 'Main Server',
         mode: 'custom',
-        dashboard_link: 'https://example.com/s/1/uuid'
+        dashboard_link: 'https://example.com/s/1/uuid',
+        gift_volume: '5',
+        gift_given: true
     };
 
     let renewTemplatesCache = [];
@@ -4136,7 +4138,17 @@
             return;
         }
 
-        const rendered = template.replace(/\{(.*?)\}/g, (match, key) => {
+        // Resolve {if_<name>}...{/if_<name>} blocks first (mirrors server render),
+        // so the preview reflects how a gift block shows/hides.
+        const withConditionals = template.replace(
+            /(\n?)\{if_([a-zA-Z0-9_]+)\}([\s\S]*?)\{\/if_\2\}/g,
+            (m, lead, name, inner) => {
+                const flag = (typeof renewPreviewSample[name + '_given'] !== 'undefined')
+                    ? renewPreviewSample[name + '_given'] : renewPreviewSample[name];
+                return flag ? (lead + inner) : '';
+            });
+
+        const rendered = withConditionals.replace(/\{(.*?)\}/g, (match, key) => {
             const tmp = renewPreviewSample[key.trim()];
             return typeof tmp !== 'undefined' ? tmp : match;
         });

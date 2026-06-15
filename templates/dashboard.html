@@ -1731,7 +1731,7 @@
                 telegram_channel:  telegramCh,
                 whatsapp_channel:  whatsappCh,
             };
-            return String(templateStr).replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => (
+            return _applyTplConditionals(String(templateStr), values).replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => (
                 Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
             ));
         }
@@ -1912,8 +1912,20 @@
         }
 
         // Render a template string by substituting {key} from a vars object.
+        // Resolve {if_<name>}...{/if_<name>} blocks. Kept when vars['<name>_given']
+        // (or vars['<name>']) is truthy, else the block + its leading newline is
+        // dropped. Mirrors the server-side _apply_template_conditionals.
+        function _applyTplConditionals(templateStr, vars) {
+            return String(templateStr || '').replace(
+                /(\n?)\{if_([a-zA-Z0-9_]+)\}([\s\S]*?)\{\/if_\2\}/g,
+                (m, lead, name, inner) => {
+                    const flag = vars && (vars[name + '_given'] !== undefined ? vars[name + '_given'] : vars[name]);
+                    return flag ? (lead + inner) : '';
+                });
+        }
+
         function _renderTplVars(templateStr, vars) {
-            return String(templateStr || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) =>
+            return _applyTplConditionals(templateStr, vars).replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) =>
                 (vars && Object.prototype.hasOwnProperty.call(vars, k)) ? vars[k] : m);
         }
 
@@ -4549,7 +4561,20 @@
                     comment: (_renewClientData?.comment) || '',
                     phone: (_renewClientData?.phone) || '',
                     group: 'renew',
-                    tplVars: (data && data.tpl_vars) ? data.tpl_vars : { email: String(email || '') },
+                    // Fall back to a complete account-info-style var set so a custom
+                    // renew SMS/WhatsApp template ({service_name}/{remaining_time}/
+                    // {remaining_volume}/…) still renders when the server omits tpl_vars.
+                    tplVars: (data && data.tpl_vars) ? data.tpl_vars : {
+                        email: String(email || ''),
+                        service_name: String(email || ''),
+                        account_name: String(email || ''),
+                        days: String(finalDays ?? ''),
+                        volume: fallbackVolLabel,
+                        remaining_time: String(finalDays ?? ''),
+                        remaining_volume: fallbackVolLabel,
+                        gift_volume: giftGb > 0 ? String(giftGb) : '',
+                        gift_given: giftGb > 0,
+                    },
                     fallback: successText,
                 };
                 document.getElementById('renew-success-modal').classList.remove('hidden');
@@ -5577,6 +5602,12 @@
                 email: client.email || '', volume: client.volume || '', days: client.days || '',
                 sub_link: client.sub_link || '', dashboard_link: client.dashboard_link || '',
                 server_name: client.server_name || '',
+                // Account-Info-style aliases so a template written with
+                // {service_name}/{account_name}/{remaining_time}/{remaining_volume}
+                // still renders when the server didn't return tpl_vars (SMS + WhatsApp).
+                service_name: client.email || '', account_name: client.email || '',
+                remaining_time: (client.days === 0 || client.days == null) ? '♾️' : String(client.days),
+                remaining_volume: (client.volume === 0 || client.volume == null) ? '♾️' : String(client.volume),
             },
             fallback: (copyTextFromServer || '').trim(),
         };

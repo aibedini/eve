@@ -3914,7 +3914,7 @@ class RenewalEvent(db.Model):
 
 
 RENEW_TEMPLATE_SETTING_KEY = 'renew_template'
-DEFAULT_RENEW_TEMPLATE = """🔰{email}\n⌛{days_label} 📊{volume_label}\nتمدید شد"""
+DEFAULT_RENEW_TEMPLATE = """🔰{email}\n⌛{days_label} 📊{volume_label}{if_gift}\n🎁 +{gift_volume} گیگ هدیه{/if_gift}\nتمدید شد"""
 
 MONITOR_SETTINGS_KEY = 'monitor_settings'
 GENERAL_TIMEZONE_SETTING_KEY = 'general_timezone'
@@ -4103,15 +4103,38 @@ def _get_or_create_system_setting(key: str, default_value: str | None = None) ->
     return str(default_value)
 
 
+# Conditional template blocks: {if_<name>}...{/if_<name>}
+# The block is KEPT (markers stripped) when variables['<name>_given'] is truthy
+# (falling back to variables['<name>']), otherwise the whole block — along with
+# the newline that precedes it — is removed so no blank line is left behind.
+# This must run BEFORE str.format(), because the {if_..}/{/if_..} markers are
+# not valid format fields and would otherwise raise.
+_TEMPLATE_COND_RE = re.compile(r'(\n?)\{if_([a-zA-Z0-9_]+)\}(.*?)\{/if_\2\}', re.DOTALL)
+
+
+def _apply_template_conditionals(template: str | None, variables: dict) -> str:
+    def _sub(m):
+        lead, name, inner = m.group(1), m.group(2), m.group(3)
+        flag = variables.get(f'{name}_given')
+        if flag is None:
+            flag = variables.get(name)
+        return (lead + inner) if flag else ''
+    return _TEMPLATE_COND_RE.sub(_sub, template or '')
+
+
 def _render_text_template(template: str | None, variables: dict) -> str:
-    """Render a python-format template with a safe fallback."""
+    """Render a python-format template with a safe fallback.
+
+    Supports optional {if_<name>}...{/if_<name>} conditional blocks.
+    """
     raw = (template or '').strip() or DEFAULT_RENEW_TEMPLATE
+    raw = _apply_template_conditionals(raw, variables)
     try:
         return raw.format(**variables)
     except Exception:
         # Fall back to the built-in default if user template is invalid.
         try:
-            return DEFAULT_RENEW_TEMPLATE.format(**variables)
+            return _apply_template_conditionals(DEFAULT_RENEW_TEMPLATE, variables).format(**variables)
         except Exception:
             return DEFAULT_RENEW_TEMPLATE
 
@@ -12031,6 +12054,10 @@ def renew_client(server_id, inbound_id, email):
                     'remaining_time': days_label,
                     'remaining_volume': volume_label,
                     'sub_link': dashboard_link,
+                    # Gift: {gift_volume} holds the amount; {gift_given} drives the
+                    # {if_gift}...{/if_gift} conditional block in the template.
+                    'gift_volume': str(gift_volume_gb) if gift_volume_gb > 0 else '',
+                    'gift_given': gift_volume_gb > 0,
                     # Channel links resolved by role (superadmin→global, reseller→own).
                     'telegram_channel': _ch_links.get('telegram_channel', ''),
                     'whatsapp_channel': _ch_links.get('whatsapp_channel', ''),
@@ -20055,7 +20082,8 @@ def get_renew_templates():
         'success': True, 
         'templates': [t.to_dict() for t in templates],
         'available_vars': [
-            '{email}', '{days}', '{days_label}', '{volume}', '{volume_label}', '{date}', '{server_name}', '{mode}', '{dashboard_link}'
+            '{email}', '{days}', '{days_label}', '{volume}', '{volume_label}', '{date}', '{server_name}', '{mode}', '{dashboard_link}',
+            '{gift_volume}', '{if_gift}...{/if_gift}'
         ]
     })
 

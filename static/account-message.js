@@ -103,6 +103,7 @@
         const values = {
             email: client.email || '-',
             account_name: client.email || '-',
+            service_name: client.email || '-',
             remaining_time: client.expiryTime || '-',
             remaining_volume: client.remaining_formatted || '-',
             dashboard_link: absoluteUrl(client.dash_sub_url || client.sub_url || ''),
@@ -111,8 +112,19 @@
             telegram_channel: telegramCh,
             whatsapp_channel: whatsappCh,
         };
-        return String(tpl).replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) =>
+        return applyConditionals(tpl, values).replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) =>
             Object.prototype.hasOwnProperty.call(values, k) ? values[k] : m);
+    }
+
+    // Resolve {if_<name>}...{/if_<name>} blocks: kept when values['<name>_given']
+    // (or values['<name>']) is truthy, else the block + leading newline is dropped.
+    function applyConditionals(templateStr, values) {
+        return String(templateStr || '').replace(
+            /(\n?)\{if_([a-zA-Z0-9_]+)\}([\s\S]*?)\{\/if_\2\}/g,
+            function (m, lead, name, inner) {
+                var flag = values && (values[name + '_given'] !== undefined ? values[name + '_given'] : values[name]);
+                return flag ? (lead + inner) : '';
+            });
     }
 
     function buildSms(phone, message) {
