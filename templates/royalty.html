@@ -378,10 +378,9 @@
     }
 
     // ── Data loading ────────────────────────────────────────────────────────
-    // Runs the scan as a background job (kicks off → polls → pages through the
-    // results). This avoids the 120 s gunicorn worker timeout that made long
-    // windows fetch-error, and works across the 3 workers via server-side job
-    // files. A load token cancels any in-flight scan when filters change.
+    // Single synchronous scan, made fast by the (server_id, sub_id, recorded_at)
+    // index. A load token ignores a stale response when filters change, and an
+    // AbortController stops the request (and the spinner) instead of hanging.
     let _royaltyLoadToken = 0;
     async function loadRoyalty() {
         const days = document.getElementById('royalty-days').value;
@@ -397,52 +396,31 @@
         if (reseller && reseller !== 'all') params.set('reseller_id', reseller);
 
         const stale = () => myToken !== _royaltyLoadToken;
-        const fail = (msg) => {
-            if (stale()) return;
-            results.innerHTML = `<div class="royalty-empty">${escapeHtmlR(msg || 'Failed to load')}</div>`;
-            document.getElementById('royalty-count').textContent = '0 found';
-        };
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 115000);
 
         try {
-            const startData = await (await fetch(`/api/royalty/idle/start?${params.toString()}`, { method: 'POST' })).json();
+            const res = await fetch(`/api/royalty/idle?${params.toString()}`, { signal: controller.signal });
+            clearTimeout(timer);
+            const data = await res.json();
             if (stale()) return;
-            if (!startData.success || !startData.job_id) { fail(startData.error || 'Failed to start scan'); return; }
-            const jobId = startData.job_id;
-
-            // Poll until the scan finishes.
-            let status = null;
-            while (true) {
-                if (stale()) return;
-                status = await (await fetch(`/api/royalty/idle/job/${jobId}`)).json();
-                if (stale()) return;
-                if (status.state !== 'running') break;
-                await new Promise(r => setTimeout(r, 1200));
+            if (!data.success) {
+                results.innerHTML = `<div class="royalty-empty">${escapeHtmlR(data.error || 'Failed to load')}</div>`;
+                document.getElementById('royalty-count').textContent = '0 found';
+                return;
             }
-            if (!status.success || status.state === 'error' || status.state === 'missing') {
-                fail(status.error || 'Scan failed'); return;
-            }
-
-            // Done → page through the stored results into royaltyData.
-            const total = status.count || 0;
-            const all = Array.isArray(status.clients) ? status.clients.slice() : [];
-            let offset = (status.offset || 0) + all.length;
-            while (offset < total) {
-                if (stale()) return;
-                const pageData = await (await fetch(`/api/royalty/idle/job/${jobId}?offset=${offset}&limit=1000`)).json();
-                if (stale()) return;
-                if (!pageData.success || !Array.isArray(pageData.clients) || !pageData.clients.length) break;
-                all.push(...pageData.clients);
-                offset += pageData.clients.length;
-            }
-            if (stale()) return;
-
-            royaltyData = all;
+            royaltyData = data.clients || [];
             bulkSelectedClientKeys.clear();
             updateBulkUI();
             renderRoyalty();
         } catch (e) {
+            clearTimeout(timer);
             if (stale()) return;
-            results.innerHTML = `<div class="royalty-empty">Network error: ${escapeHtmlR(e.message || '')}</div>`;
+            const msg = (e && e.name === 'AbortError')
+                ? 'Scan timed out. Try a single server or a shorter window.'
+                : `Network error: ${escapeHtmlR(e.message || '')}`;
+            results.innerHTML = `<div class="royalty-empty">${msg}</div>`;
+            document.getElementById('royalty-count').textContent = '0 found';
         }
     }
 

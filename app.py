@@ -8148,9 +8148,10 @@ def _royalty_parse_filters(args):
 def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
     """Return the list of idle (no-traffic-in-window) active clients.
 
-    Shared by the synchronous endpoint and the background job. Must run inside an
-    app context. Raises RoyaltyBaselineError if the baseline query fails.
+    Must run inside an app context. Raises RoyaltyBaselineError if the baseline
+    query fails. Logs timing so a slow scan can be diagnosed from the server log.
     """
+    t0 = time.perf_counter()
     user = db.session.get(Admin, admin_id)
     is_reseller = bool(user and user.role == 'reseller')
     window_start = datetime.utcnow() - timedelta(days=days)
@@ -8180,6 +8181,7 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
     except Exception as exc:
         app.logger.warning(f"royalty baseline query failed: {exc}")
         raise RoyaltyBaselineError(str(exc))
+    t_base = time.perf_counter()
 
     # 2) Ownership maps (for filtering + labeling), incl. server-independent UUID.
     email_map, uuid_map = _get_ownership_maps()
@@ -8245,13 +8247,23 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
             })
 
     idle.sort(key=lambda x: (x.get('server_name') or '', (x.get('email') or '').lower()))
+    try:
+        app.logger.info(
+            "royalty idle: days=%s server=%s reseller=%s baseline_rows=%d "
+            "baseline_ms=%.0f total_ms=%.0f idle=%d",
+            days, server_filter, reseller_filter, len(baseline),
+            (t_base - t0) * 1000.0, (time.perf_counter() - t0) * 1000.0, len(idle),
+        )
+    except Exception:
+        pass
     return idle
 
 
 @app.route('/api/royalty/idle', methods=['GET'])
 @login_required
 def royalty_idle_clients():
-    """Synchronous idle scan (kept for small windows / backward compatibility)."""
+    """List active accounts with no traffic in the window. Fast via the
+    (server_id, sub_id, recorded_at) index; server timing is logged."""
     days, server_filter, reseller_filter = _royalty_parse_filters(request.args)
     try:
         idle = _compute_royalty_idle(session['admin_id'], days, server_filter, reseller_filter)
@@ -8263,138 +8275,6 @@ def royalty_idle_clients():
         'count': len(idle),
         'clients': idle,
         'generated_at': datetime.utcnow().isoformat(),
-    })
-
-
-# ── Royalty idle: background job (cross-worker via temp files) ───────────────
-# 3 gunicorn workers + 120 s timeout means a long-window scan over a 10k-user
-# snapshot table must run off the request thread, and its state must be visible
-# to whichever worker serves the poll — so status + results live in temp files.
-ROYALTY_JOB_TTL_SECONDS = 1800  # prune job files older than 30 min
-
-
-def _royalty_job_paths(job_id):
-    safe = re.sub(r'[^a-f0-9]', '', str(job_id or '').lower())
-    if not safe:
-        raise ValueError('Invalid royalty job id')
-    base = os.path.join(tempfile.gettempdir(), f'eve_royalty_{safe}')
-    return base + '.json', base + '_result.json'
-
-
-def _royalty_job_write_status(job_id, status):
-    status_path, _ = _royalty_job_paths(job_id)
-    tmp = status_path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(status, f)
-    os.replace(tmp, status_path)
-
-
-def _royalty_job_read_status(job_id):
-    status_path, _ = _royalty_job_paths(job_id)
-    try:
-        with open(status_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _royalty_prune_old_jobs():
-    try:
-        now = time.time()
-        for name in os.listdir(tempfile.gettempdir()):
-            if not name.startswith('eve_royalty_'):
-                continue
-            p = os.path.join(tempfile.gettempdir(), name)
-            try:
-                if now - os.path.getmtime(p) > ROYALTY_JOB_TTL_SECONDS:
-                    os.remove(p)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
-def _run_royalty_job(job_id, admin_id, days, server_filter, reseller_filter):
-    with app.app_context():
-        try:
-            idle = _compute_royalty_idle(admin_id, days, server_filter, reseller_filter)
-            _, result_path = _royalty_job_paths(job_id)
-            tmp = result_path + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(idle, f, ensure_ascii=False)
-            os.replace(tmp, result_path)
-            _royalty_job_write_status(job_id, {
-                'state': 'done', 'admin_id': admin_id, 'days': days,
-                'count': len(idle), 'generated_at': datetime.utcnow().isoformat(),
-            })
-        except RoyaltyBaselineError:
-            _royalty_job_write_status(job_id, {
-                'state': 'error', 'admin_id': admin_id,
-                'error': 'Usage history not available yet. Try a smaller window.',
-            })
-        except Exception as exc:
-            app.logger.exception('royalty job failed')
-            _royalty_job_write_status(job_id, {
-                'state': 'error', 'admin_id': admin_id, 'error': str(exc),
-            })
-
-
-@app.route('/api/royalty/idle/start', methods=['POST'])
-@login_required
-def royalty_idle_start():
-    """Kick off an idle scan in the background; returns a job_id to poll."""
-    _royalty_prune_old_jobs()
-    days, server_filter, reseller_filter = _royalty_parse_filters(request.args)
-    job_id = uuid.uuid4().hex
-    _royalty_job_write_status(job_id, {
-        'state': 'running', 'admin_id': session['admin_id'], 'days': days,
-        'started_at': datetime.utcnow().isoformat(),
-    })
-    threading.Thread(
-        target=_run_royalty_job,
-        args=(job_id, session['admin_id'], days, server_filter, reseller_filter),
-        daemon=True,
-    ).start()
-    return jsonify({'success': True, 'job_id': job_id, 'days': days})
-
-
-@app.route('/api/royalty/idle/job/<job_id>', methods=['GET'])
-@login_required
-def royalty_idle_job(job_id):
-    """Poll a royalty job. When done, returns a page of results (offset/limit)."""
-    status = _royalty_job_read_status(job_id)
-    if not status:
-        return jsonify({'success': False, 'state': 'missing', 'error': 'Job not found or expired'}), 404
-    if status.get('admin_id') != session['admin_id']:
-        return jsonify({'success': False, 'error': 'Forbidden'}), 403
-
-    state = status.get('state')
-    if state == 'running':
-        return jsonify({'success': True, 'state': 'running'})
-    if state == 'error':
-        return jsonify({'success': False, 'state': 'error', 'error': status.get('error') or 'Scan failed'}), 200
-
-    # done → return a page of the stored results
-    offset = _parse_int(request.args.get('offset'), 0, min_value=0, max_value=10_000_000)
-    limit = _parse_int(request.args.get('limit'), 500, min_value=1, max_value=2000)
-    _, result_path = _royalty_job_paths(job_id)
-    try:
-        with open(result_path, 'r', encoding='utf-8') as f:
-            clients = json.load(f)
-    except Exception:
-        return jsonify({'success': False, 'state': 'missing', 'error': 'Results expired'}), 404
-    total = len(clients)
-    page = clients[offset:offset + limit]
-    return jsonify({
-        'success': True,
-        'state': 'done',
-        'days': status.get('days'),
-        'count': total,
-        'offset': offset,
-        'limit': limit,
-        'has_more': (offset + limit) < total,
-        'clients': page,
-        'generated_at': status.get('generated_at'),
     })
 
 
