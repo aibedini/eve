@@ -8157,10 +8157,17 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
     window_start = datetime.utcnow() - timedelta(days=days)
 
     # 1) Earliest snapshot per (server_id, sub_id) at/after window_start → baseline.
+    #    Key perf point: the earliest snapshot for each sub lands within ~1 day of
+    #    window_start (snapshots are hourly), so we only scan a 1-day bracket right
+    #    after the window start instead of every row from window_start to now. This
+    #    makes the cost constant regardless of how long `days` is — a 30-day window
+    #    is as fast as a 1-day window. (A sub with a >1-day snapshot gap right at
+    #    the boundary just gets no baseline and is skipped — conservative.)
     #    Pushing server_id into the WHERE clause (when a single server is picked)
-    #    lets the (server_id, sub_id, recorded_at) index slash the scanned rows.
+    #    further narrows the scan via the (server_id, sub_id, recorded_at) index.
     baseline = {}  # (server_id, sub_id) -> total_bytes
-    params = {'start': window_start}
+    baseline_end = window_start + timedelta(days=1)
+    params = {'start': window_start, 'end': baseline_end}
     server_clause = ''
     if server_filter is not None:
         server_clause = 'AND server_id = :sid'
@@ -8172,7 +8179,7 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
                 SELECT server_id, sub_id, total_bytes,
                        ROW_NUMBER() OVER (PARTITION BY server_id, sub_id ORDER BY recorded_at ASC) AS rn
                 FROM usage_snapshots
-                WHERE recorded_at >= :start {server_clause}
+                WHERE recorded_at >= :start AND recorded_at < :end {server_clause}
             ) t WHERE rn = 1
             """
         ), params).fetchall()
