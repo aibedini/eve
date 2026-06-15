@@ -378,31 +378,70 @@
     }
 
     // ── Data loading ────────────────────────────────────────────────────────
+    // Runs the scan as a background job (kicks off → polls → pages through the
+    // results). This avoids the 120 s gunicorn worker timeout that made long
+    // windows fetch-error, and works across the 3 workers via server-side job
+    // files. A load token cancels any in-flight scan when filters change.
+    let _royaltyLoadToken = 0;
     async function loadRoyalty() {
         const days = document.getElementById('royalty-days').value;
         const server = document.getElementById('royalty-server').value;
         const resellerEl = document.getElementById('royalty-reseller');
         const reseller = resellerEl ? resellerEl.value : 'all';
         const results = document.getElementById('royalty-results');
+        const myToken = ++_royaltyLoadToken;
         results.innerHTML = `<div class="royalty-loading"><div class="spinner" style="margin:0 auto 12px;"></div>Scanning usage history…</div>`;
 
         const params = new URLSearchParams({ days });
         if (server && server !== 'all') params.set('server_id', server);
         if (reseller && reseller !== 'all') params.set('reseller_id', reseller);
 
+        const stale = () => myToken !== _royaltyLoadToken;
+        const fail = (msg) => {
+            if (stale()) return;
+            results.innerHTML = `<div class="royalty-empty">${escapeHtmlR(msg || 'Failed to load')}</div>`;
+            document.getElementById('royalty-count').textContent = '0 found';
+        };
+
         try {
-            const res = await fetch(`/api/royalty/idle?${params.toString()}`);
-            const data = await res.json();
-            if (!data.success) {
-                results.innerHTML = `<div class="royalty-empty">${escapeHtmlR(data.error || 'Failed to load')}</div>`;
-                document.getElementById('royalty-count').textContent = '0 found';
-                return;
+            const startData = await (await fetch(`/api/royalty/idle/start?${params.toString()}`, { method: 'POST' })).json();
+            if (stale()) return;
+            if (!startData.success || !startData.job_id) { fail(startData.error || 'Failed to start scan'); return; }
+            const jobId = startData.job_id;
+
+            // Poll until the scan finishes.
+            let status = null;
+            while (true) {
+                if (stale()) return;
+                status = await (await fetch(`/api/royalty/idle/job/${jobId}`)).json();
+                if (stale()) return;
+                if (status.state !== 'running') break;
+                await new Promise(r => setTimeout(r, 1200));
             }
-            royaltyData = data.clients || [];
+            if (!status.success || status.state === 'error' || status.state === 'missing') {
+                fail(status.error || 'Scan failed'); return;
+            }
+
+            // Done → page through the stored results into royaltyData.
+            const total = status.count || 0;
+            const all = Array.isArray(status.clients) ? status.clients.slice() : [];
+            let offset = (status.offset || 0) + all.length;
+            while (offset < total) {
+                if (stale()) return;
+                const pageData = await (await fetch(`/api/royalty/idle/job/${jobId}?offset=${offset}&limit=1000`)).json();
+                if (stale()) return;
+                if (!pageData.success || !Array.isArray(pageData.clients) || !pageData.clients.length) break;
+                all.push(...pageData.clients);
+                offset += pageData.clients.length;
+            }
+            if (stale()) return;
+
+            royaltyData = all;
             bulkSelectedClientKeys.clear();
             updateBulkUI();
             renderRoyalty();
         } catch (e) {
+            if (stale()) return;
             results.innerHTML = `<div class="royalty-empty">Network error: ${escapeHtmlR(e.message || '')}</div>`;
         }
     }
