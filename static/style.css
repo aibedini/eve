@@ -840,6 +840,29 @@ body {
     }
 }
 
+/* Tablet / Surface-class widths (e.g. Surface Pro @200% ≈ 1368px CSS):
+   keep the data columns but drop the action buttons onto a full-width
+   second line so the row never overflows the viewport. */
+@media (min-width: 1101px) and (max-width: 1500px) {
+    .monitor-list-header,
+    .monitor-row {
+        grid-template-columns: minmax(120px, 1.4fr) minmax(110px, 1fr) minmax(70px, 0.7fr) 84px minmax(110px, 1fr);
+    }
+
+    .monitor-list-header span:last-child {
+        display: none; /* "Actions" label — buttons now live on their own row */
+    }
+
+    .monitor-row {
+        row-gap: 12px;
+    }
+
+    .monitor-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+    }
+}
+
 
 
 .app-layout {
