@@ -8197,6 +8197,7 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
 
     # 3) Walk current cached clients and pick the idle ones.
     idle = []
+    seen_clients = set()  # one card per user per server (v3 assigns one user to many inbounds)
     snapshot = GLOBAL_SERVER_DATA.get('inbounds') or []
     for inbound in snapshot:
         try:
@@ -8237,6 +8238,19 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
                         continue  # only unassigned/system
                 elif owner_id != reseller_filter:
                     continue
+
+            # One card per user per server: same email = same user regardless of
+            # inbound count or UUID (v3 assigns one user to multiple inbounds).
+            if em:
+                dedupe_key = ('e', sid, em)
+            elif uu:
+                dedupe_key = ('u', sid, uu)
+            else:
+                dedupe_key = None
+            if dedupe_key is not None:
+                if dedupe_key in seen_clients:
+                    continue
+                seen_clients.add(dedupe_key)
 
             idle.append({
                 'email': c.get('email') or '',
