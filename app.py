@@ -19763,44 +19763,74 @@ def ssl_sync():
         return jsonify({'success': False,
                         'error': 'Cannot find SSL cert paths. Is nginx configured with SSL?'}), 400
 
-    # Read cert — usually world-readable
-    try:
-        with open(cert_src, 'rb') as _f:
-            cert_data = _f.read()
-    except PermissionError:
-        r = subprocess.run(['sudo', 'cat', cert_src], capture_output=True, timeout=10)
+    # Helper: read a source file, falling back to `sudo cat` for mode-600 keys.
+    # Never lets an unexpected subprocess error (missing sudo / timeout) bubble
+    # up as a generic 500 — always returns a clean JSON error tuple instead.
+    def _read_src(path, label):
+        try:
+            with open(path, 'rb') as _f:
+                return _f.read(), None
+        except PermissionError:
+            pass
+        except Exception as _e:
+            return None, (jsonify({'success': False,
+                                   'error': f'Cannot read {label}: {_e}'}), 500)
+        try:
+            r = subprocess.run(['sudo', 'cat', path], capture_output=True, timeout=10)
+        except FileNotFoundError:
+            return None, (jsonify({'success': False,
+                                   'error': f'sudo not available — cannot read {label}.\n\nRun this on the server:\n\n{FIX_CMD}',
+                                   'fix_command': FIX_CMD}), 500)
+        except Exception as _e:
+            return None, (jsonify({'success': False,
+                                   'error': f'Cannot read {label} ({_e}).\n\nRun: {FIX_CMD}',
+                                   'fix_command': FIX_CMD}), 500)
         if r.returncode != 0:
-            return jsonify({'success': False,
-                            'error': f'Cannot read certificate: {r.stderr.decode().strip()}\n\nRun: {FIX_CMD}',
-                            'fix_command': FIX_CMD}), 500
-        cert_data = r.stdout
-
-    # Read private key — typically mode 600, needs sudo cat
-    try:
-        with open(key_src, 'rb') as _f:
-            key_data = _f.read()
-    except PermissionError:
-        r = subprocess.run(['sudo', 'cat', key_src], capture_output=True, timeout=10)
-        if r.returncode != 0:
-            err = r.stderr.decode().strip()
-            if 'password' in err or 'askpass' in err:
-                return jsonify({
+            err = r.stderr.decode(errors='ignore').strip()
+            if 'password' in err.lower() or 'askpass' in err.lower() or 'terminal' in err.lower():
+                return None, (jsonify({
                     'success': False,
                     'error': f'sudo not configured for this app user.\n\nRun this on the server:\n\n{FIX_CMD}',
-                    'fix_command': FIX_CMD,
-                }), 500
-            return jsonify({'success': False,
-                            'error': f'Cannot read private key: {err}'}), 500
-        key_data = r.stdout
+                    'fix_command': FIX_CMD}), 500)
+            return None, (jsonify({'success': False,
+                                   'error': f'Cannot read {label}: {err}\n\nRun: {FIX_CMD}',
+                                   'fix_command': FIX_CMD}), 500)
+        return r.stdout, None
 
-    # Write directly — evemgr owns the dir, no sudo needed
-    with open(cert_dest, 'wb') as _f:
-        _f.write(cert_data)
-    os.chmod(cert_dest, 0o644)
+    # Helper: overwrite a destination file even if a stale copy is owned by root.
+    # The dir is owned by evemgr (700), so we can unlink the old file and recreate
+    # it fresh — this avoids PermissionError on open('wb') of a root-owned file
+    # (the bug that produced a generic 500 on sync).
+    def _write_dest(path, data, mode):
+        try:
+            if os.path.lexists(path):
+                try:
+                    os.remove(path)
+                except PermissionError:
+                    # Dir not writable enough to unlink — try sudo rm, best effort
+                    subprocess.run(['sudo', 'rm', '-f', path], capture_output=True, timeout=10)
+            with open(path, 'wb') as _f:
+                _f.write(data)
+            os.chmod(path, mode)
+            return None
+        except Exception as _e:
+            return (jsonify({'success': False,
+                             'error': f'Cannot write {path}: {_e}\n\nRun: {FIX_CMD}',
+                             'fix_command': FIX_CMD}), 500)
 
-    with open(key_dest, 'wb') as _f:
-        _f.write(key_data)
-    os.chmod(key_dest, 0o600)
+    cert_data, _err = _read_src(cert_src, 'certificate')
+    if _err:
+        return _err
+    key_data, _err = _read_src(key_src, 'private key')
+    if _err:
+        return _err
+
+    _err = _write_dest(cert_dest, cert_data, 0o644)
+    if _err:
+        return _err
+    _err = _write_dest(key_dest, key_data, 0o600)
+    if _err:
+        return _err
 
     # Persist paths in DB
     for k, v in [('ssl_cert_path', cert_dest), ('ssl_key_path', key_dest)]:

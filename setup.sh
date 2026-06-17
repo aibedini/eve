@@ -1391,6 +1391,10 @@ cp -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem"  "\$SSL_DIR/privkey.pem"
 chown ${APP_USER}:${APP_USER} "\$SSL_DIR/fullchain.pem" "\$SSL_DIR/privkey.pem"
 chmod 644 "\$SSL_DIR/fullchain.pem"
 chmod 600 "\$SSL_DIR/privkey.pem"
+# Reload nginx so it picks up the freshly-renewed cert (otherwise it keeps
+# serving the old one in memory until a manual reload — the "SSL keeps dropping"
+# symptom). Test first so a bad config never takes the site down.
+nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
 HOOK
     chmod +x "$HOOK_DIR/eve-manager.sh"
     print_success "Certbot deploy hook installed (auto-copy on renewal)"
