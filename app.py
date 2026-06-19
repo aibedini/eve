@@ -18254,6 +18254,7 @@ def _account_info_template_vars():
         '{email}', '{account_name}', '{remaining_time}', '{remaining_volume}',
         '{dashboard_link}', '{sub_link}', '{server_name}',
         '{telegram_channel}', '{whatsapp_channel}',
+        '{gift_volume}', '{if_gift}...{/if_gift}',
     ]
 
 
