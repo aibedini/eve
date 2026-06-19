@@ -9477,11 +9477,12 @@ def get_monitor_alerts():
                     status = 'soon'
                     status_rank = 1
 
-            # A disabled client whose time AND traffic are both still fine was
-            # switched off by an operator — its own "manual disable" category,
-            # kept separate from the auto-disabled (ended/expired) accounts.
-            # 'low'/'soon' are active-user warnings, so they don't apply once off.
-            if not enabled and status in (None, 'low', 'soon'):
+            # Disabled always wins — whether the panel auto-disabled the client
+            # (time/traffic exhausted) or an operator did it manually. This
+            # pushes them into the 'disabled' bucket so they leave the
+            # expired/ended lists and only reappear when the admin shows
+            # the Disabled filter.
+            if not enabled:
                 status = 'disabled'
                 status_rank = 0
 

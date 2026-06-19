@@ -724,66 +724,40 @@
 
     async function toggleClientFromMonitor(serverId, inboundId, email, enable) {
         const action = enable ? 'enable' : 'disable';
-        
-        // Optimistic update
+
         const alert = allAlerts.find(a => a.server_id === serverId && a.inbound_id === inboundId && a.email === email);
+        const prevStatus = alert ? alert.status : null;
+
+        // Optimistic update: disabling moves the card to the disabled bucket immediately.
         if (alert) {
             alert.enabled = enable;
-            alert.verified = false;
+            if (!enable) alert.status = 'disabled';
             renderAlerts();
         }
-        
+
         try {
             const response = await fetch(`/api/client/${serverId}/${inboundId}/toggle`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email: email, enable: enable })
             });
-            
+
             const data = await response.json();
             if (data.success) {
                 showToast(`Client ${action}d successfully`, 'success');
-                
-                // Fetch real status from server immediately
-                try {
-                    const refreshResp = await fetch(`/api/server/${serverId}/refresh?force=true&wait=true`);
-                    const refreshData = await refreshResp.json();
-                    if (refreshData.success && refreshData.inbounds) {
-                        let realStatus = null;
-                        for (const ib of refreshData.inbounds) {
-                            if (ib.id === inboundId) {
-                                const client = (ib.clients || []).find(c => c.email === email);
-                                if (client) {
-                                    realStatus = client.enable;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        if (alert && realStatus !== null) {
-                            alert.enabled = realStatus;
-                            if (realStatus === enable) {
-                                alert.verified = true;
-                            }
-                            renderAlerts();
-                        }
-                    }
-                } catch (e) {
-                    console.error('Error verifying status:', e);
-                }
             } else {
                 showToast(data.error || `Error ${action}ing client`, 'error');
-                // Revert optimistic update
                 if (alert) {
                     alert.enabled = !enable;
+                    if (!enable) alert.status = prevStatus;
                     renderAlerts();
                 }
             }
         } catch (error) {
             showToast(`Error ${action}ing client`, 'error');
-            // Revert optimistic update
             if (alert) {
                 alert.enabled = !enable;
+                if (!enable) alert.status = prevStatus;
                 renderAlerts();
             }
         }
