@@ -101,6 +101,10 @@
                         <summary>Disabled (manual)</summary>
                         <textarea id="tpl-disabled" rows="4"></textarea>
                     </details>
+                    <details open>
+                        <summary>No Usage (Royalty)</summary>
+                        <textarea id="tpl-zero-usage" rows="4" placeholder="Template for users who never connected. Vars: {user}, {rem}, {time}, {date}, {server}"></textarea>
+                    </details>
                 </div>
             </div>
         </aside>
@@ -293,6 +297,7 @@
         document.getElementById('tpl-low').value = templates.low || '';
         document.getElementById('tpl-soon').value = templates.soon || '';
         document.getElementById('tpl-disabled').value = templates.disabled || '';
+        document.getElementById('tpl-zero-usage').value = templates.zero_usage || '';
     }
 
     function applyTimezoneOptions(selectId, options) {
@@ -333,7 +338,8 @@
                 expired: document.getElementById('tpl-expired').value || '',
                 low: document.getElementById('tpl-low').value || '',
                 soon: document.getElementById('tpl-soon').value || '',
-                disabled: document.getElementById('tpl-disabled').value || ''
+                disabled: document.getElementById('tpl-disabled').value || '',
+                zero_usage: document.getElementById('tpl-zero-usage').value || ''
             }
         };
 
@@ -601,26 +607,10 @@
     }
 
     function buildMessage(alert, channel) {
-        // Zero-usage users get the Royalty Information template
-        if (alert.zero_usage) {
-            const royaltyTpl = channel === 'whatsapp' ? royaltyTemplates.whatsapp : royaltyTemplates.sms;
-            if (royaltyTpl) {
-                return royaltyTpl
-                    .replace(/\{email\}/g, alert.email || '-')
-                    .replace(/\{account_name\}/g, alert.email || '-')
-                    .replace(/\{server_name\}/g, alert.server_name || '-')
-                    .replace(/\{remaining_time\}/g, alert.time_left || '-')
-                    .replace(/\{remaining_volume\}/g, alert.remaining || '-')
-                    .replace(/\{dashboard_link\}/g, '')
-                    .replace(/\{sub_link\}/g, '')
-                    .replace(/\{telegram_channel\}/g, '')
-                    .replace(/\{whatsapp_channel\}/g, '')
-                    .replace(/\{gift_volume\}/g, '')
-                    .replace(/\{if_gift\}[\s\S]*?\{\/if_gift\}/g, '');
-            }
-        }
         const templates = (monitorSettings || {}).templates || {};
-        const template = templates[alert.status] || '';
+        // Zero-usage users use the dedicated No Usage (Royalty) template
+        const templateKey = alert.zero_usage ? 'zero_usage' : alert.status;
+        const template = templates[templateKey] || templates[alert.status] || '';
         const vars = {
             user: alert.email || '-',
             rem: alert.remaining || '-',
