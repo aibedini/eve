@@ -4956,6 +4956,16 @@ class HealthLog(db.Model):
         }
 
 
+class MonitorMessageLog(db.Model):
+    __tablename__ = 'monitor_message_log'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), nullable=False, index=True)
+    server_id = db.Column(db.Integer, nullable=False)
+    channel = db.Column(db.String(16), nullable=False)  # 'sms' or 'whatsapp'
+    sent_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    sent_by = db.Column(db.Integer)  # admin id
+
+
 def _add_health_log(level, category, message, action_taken=None, details=None, resolved=False):
     """Helper to insert a HealthLog row safely."""
     try:
@@ -9368,6 +9378,15 @@ def get_monitor_alerts():
         'ok': 5
     }
 
+    # Pre-load message send counts per (server_id, email) from the log table.
+    try:
+        msg_rows = db.session.execute(
+            text('SELECT server_id, email, COUNT(*) as cnt FROM monitor_message_log GROUP BY server_id, email')
+        ).fetchall()
+        msg_counts = {(int(r[0]), str(r[1]).lower()): int(r[2]) for r in msg_rows}
+    except Exception:
+        msg_counts = {}
+
     alerts = []
     # A v3 client assigned to several inbounds appears once per inbound in the
     # snapshot. Those copies are the same account (same UUID), so collapse them to
@@ -9433,14 +9452,16 @@ def get_monitor_alerts():
             # the REAL reason below (ended / expired / manual-disable).
 
             total_bytes = int(client.get('totalGB') or 0)
+            try:
+                used_bytes = int(client.get('up') or 0) + int(client.get('down') or 0)
+            except Exception:
+                used_bytes = 0
+            zero_usage = used_bytes < (1 * 1024 * 1024)  # < 1 MB means never connected
+
             remaining_bytes = client.get('remaining_bytes')
             if remaining_bytes is None or remaining_bytes == -1:
                 if total_bytes > 0:
-                    try:
-                        used_bytes = int(client.get('up') or 0) + int(client.get('down') or 0)
-                        remaining_bytes = max(total_bytes - used_bytes, 0)
-                    except Exception:
-                        remaining_bytes = None
+                    remaining_bytes = max(total_bytes - used_bytes, 0)
                 else:
                     remaining_bytes = None
 
@@ -9522,6 +9543,8 @@ def get_monitor_alerts():
                 'expiry_date': expiry_date,
                 'enabled': enabled,
                 'is_reseller_owned': is_reseller_owned,
+                'zero_usage': zero_usage,
+                'msg_count': msg_counts.get((sid_norm or 0, email_l), 0),
             })
 
     alerts.sort(key=lambda row: (
@@ -9538,6 +9561,34 @@ def get_monitor_alerts():
         'generated_at_jalali': format_jalali(now_utc),
         'alerts': alerts
     })
+
+
+@app.route('/api/monitor/log_message', methods=['POST'])
+@login_required
+def monitor_log_message():
+    """Record that a monitor message was sent to a client."""
+    data = request.get_json(silent=True) or {}
+    email = str(data.get('email') or '').strip().lower()
+    try:
+        server_id = int(data.get('server_id'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'server_id required'}), 400
+    channel = str(data.get('channel') or 'sms').strip().lower()
+    if not email:
+        return jsonify({'success': False, 'error': 'email required'}), 400
+    try:
+        log = MonitorMessageLog(
+            email=email,
+            server_id=server_id,
+            channel=channel,
+            sent_by=session.get('admin_id'),
+        )
+        db.session.add(log)
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 @app.route('/api/monitor/refresh', methods=['POST'])

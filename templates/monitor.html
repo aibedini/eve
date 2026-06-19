@@ -169,6 +169,59 @@
 {% endblock %}
 
 {% block scripts %}
+<style>
+    .zero-usage-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: rgba(139, 92, 246, 0.15);
+        color: #8b5cf6;
+        border: 1px solid rgba(139, 92, 246, 0.35);
+        margin-inline-start: 6px;
+        vertical-align: middle;
+        white-space: nowrap;
+    }
+    .msg-sent-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 0.68rem;
+        font-weight: 700;
+        padding: 0 5px;
+        border-radius: 999px;
+        background: rgba(234, 179, 8, 0.2);
+        color: #b45309;
+        border: 1px solid rgba(234, 179, 8, 0.4);
+        margin-inline-start: 4px;
+    }
+    .btn-msg-sent {
+        opacity: 0.75;
+        border-color: rgba(234, 179, 8, 0.5) !important;
+    }
+    .btn-royalty {
+        background: rgba(139, 92, 246, 0.12);
+        color: #8b5cf6;
+        border: 1px solid rgba(139, 92, 246, 0.35);
+        font-size: 0.78rem;
+        padding: 4px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.15s;
+    }
+    .btn-royalty:hover {
+        background: rgba(139, 92, 246, 0.25);
+    }
+    .btn-royalty .icon svg {
+        width: 13px;
+        height: 13px;
+        stroke: #8b5cf6;
+    }
+</style>
 <script nonce="{{ csp_nonce }}">
     const MONITOR_ROLE = '{{ role|e }}';
     let monitorSettings = null;
@@ -486,10 +539,26 @@
         const timeCls = st === 'soon' ? ' detail-highlight' : '';
         const expCls = (st === 'expired' || st === 'ended') ? ' detail-highlight' : '';
 
+        const msgCount = parseInt(alert.msg_count || 0, 10);
+        const smsBtnLabel = msgCount > 0 ? `SMS <span class="msg-sent-badge">${msgCount}×</span>` : 'SMS';
+        const waBtnLabel = msgCount > 0 ? `WhatsApp <span class="msg-sent-badge">${msgCount}×</span>` : 'WhatsApp';
+        const msgBtnClass = msgCount > 0 ? ' btn-msg-sent' : '';
+
+        const zeroUsageBadge = alert.zero_usage
+            ? '<span class="zero-usage-badge" title="این کاربر هیچ ترافیکی مصرف نکرده">بدون مصرف</span>'
+            : '';
+        const royaltyBtn = alert.zero_usage
+            ? `<button class="btn btn-royalty" onclick="openRoyaltyModal(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}')" title="تمدید رویالتی برای کاربر بدون مصرف">
+                <span class="icon">${getRoyaltyIcon()}</span>
+                تمدید
+               </button>`
+            : '';
+
         row.innerHTML = `
             <div class="monitor-cell monitor-user">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                 ${escapeHtml(alert.email || '-')}
+                ${zeroUsageBadge}
                 ${alert.verified ? '<span class="verified-badge" style="color: var(--success); font-size: 0.75rem; margin-left: 6px; font-weight: 600; display: inline-flex; align-items: center; gap: 2px;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>Verified</span>' : ''}
             </div>
             <div class="monitor-cell monitor-phone"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>${phoneHtml}</div>
@@ -501,14 +570,15 @@
                 <span class="detail-expiry${expCls}">${escapeHtml(alert.expiry_date || '-')}</span>
             </div>
             <div class="monitor-cell monitor-actions">
-                <button class="btn btn-sms" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length ? '' : 'disabled'}>
+                <button class="btn btn-sms${msgBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length ? '' : 'disabled'}>
                     <span class="icon">${getSmsIcon()}</span>
-                    SMS
+                    ${smsBtnLabel}
                 </button>
-                <button class="btn btn-whatsapp" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length ? '' : 'disabled'}>
+                <button class="btn btn-whatsapp${msgBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length ? '' : 'disabled'}>
                     <span class="icon">${getWhatsAppIcon()}</span>
-                    WhatsApp
+                    ${waBtnLabel}
                 </button>
+                ${royaltyBtn}
                 <button class="btn ${alert.enabled ? 'btn-danger' : 'btn-success'}" onclick="toggleClientFromMonitor(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}', ${!alert.enabled})" title="${alert.enabled ? 'Disable' : 'Enable'}">
                     <span class="icon">${alert.enabled ? getDisableIcon() : getEnableIcon()}</span>
                     ${alert.enabled ? 'Disable' : 'Enable'}
@@ -615,6 +685,21 @@
                 ? buildSmsLink(phone.display, message)
                 : buildWaLink(phone.number, message);
             window.open(href, '_blank', 'noopener');
+
+            // Log the send and update msg_count optimistically
+            fetch('/api/monitor/log_message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: alert.email, server_id: alert.server_id, channel }),
+            }).catch(() => {});
+
+            const existing = allAlerts.find(
+                (a) => a.server_id === alert.server_id && a.email === alert.email
+            );
+            if (existing) {
+                existing.msg_count = (existing.msg_count || 0) + 1;
+                renderAlerts();
+            }
         };
 
         openPhoneChoiceModal(
@@ -720,6 +805,95 @@
 
     function getEnableIcon() {
         return '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
+    }
+
+    function getRoyaltyIcon() {
+        return '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>';
+    }
+
+    function openRoyaltyModal(serverId, inboundId, email) {
+        let overlay = document.getElementById('monitor-royalty-modal');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'monitor-royalty-modal';
+            overlay.className = 'modal-overlay hidden';
+            overlay.innerHTML = `
+                <div class="modal" style="max-width: 400px;">
+                    <div class="modal-header">
+                        <h2>تمدید رویالتی — بدون مصرف</h2>
+                        <button class="modal-close" type="button" data-royalty-close>&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="margin-bottom:12px; color: var(--text-secondary); font-size: 0.9rem;" id="royalty-modal-email-label"></p>
+                        <div class="form-group">
+                            <label>تعداد روز اضافه</label>
+                            <input type="number" id="royalty-days-input" min="1" max="365" value="30" style="width:100%">
+                        </div>
+                        <div style="display:flex; gap:8px; margin-top:16px;">
+                            <button class="btn btn-primary" style="flex:1" onclick="applyRoyaltyFromModal()">اعمال تمدید</button>
+                            <button class="btn btn-secondary" type="button" data-royalty-close>لغو</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay || event.target.closest('[data-royalty-close]')) {
+                    overlay.classList.add('hidden');
+                }
+            });
+        }
+
+        overlay._serverId = serverId;
+        overlay._inboundId = inboundId;
+        overlay._email = email;
+        overlay.querySelector('#royalty-modal-email-label').textContent = `کاربر: ${email}`;
+        overlay.querySelector('#royalty-days-input').value = 30;
+        overlay.classList.remove('hidden');
+    }
+
+    async function applyRoyaltyFromModal() {
+        const overlay = document.getElementById('monitor-royalty-modal');
+        if (!overlay) return;
+
+        const serverId = overlay._serverId;
+        const inboundId = overlay._inboundId;
+        const email = overlay._email;
+        const days = parseInt(document.getElementById('royalty-days-input').value || '30', 10);
+
+        if (!days || days <= 0) {
+            showToast('تعداد روز باید بیشتر از صفر باشد', 'error');
+            return;
+        }
+
+        overlay.classList.add('hidden');
+
+        try {
+            const resp = await fetch('/api/client/bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'add_days',
+                    clients: [{ server_id: serverId, inbound_id: inboundId, email: email }],
+                    data: { days_delta: days },
+                }),
+            });
+            const result = await resp.json();
+            if (result.success || result.job_id) {
+                showToast(`${days} روز به ${email} اضافه شد`, 'success');
+                const existing = allAlerts.find(
+                    (a) => a.server_id === serverId && a.email === email
+                );
+                if (existing) {
+                    existing.zero_usage = false;
+                    renderAlerts();
+                }
+            } else {
+                showToast(result.error || 'خطا در تمدید', 'error');
+            }
+        } catch (err) {
+            showToast('خطا در ارتباط با سرور', 'error');
+        }
     }
 
     async function toggleClientFromMonitor(serverId, inboundId, email, enable) {
