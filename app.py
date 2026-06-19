@@ -1387,6 +1387,14 @@ def _run_bulk_job(job_id: str):
                 elif action == 'add_days':
                     delta = data.get('days_delta')
                     ok, err, _status = _apply_client_limit_delta(user, server, inbound_id, email, days_delta=delta, volume_gb_delta=None)
+                    if ok:
+                        try:
+                            MonitorMessageLog.query.filter_by(
+                                email=(email or '').strip().lower(), server_id=server_id
+                            ).delete()
+                            db.session.commit()
+                        except Exception:
+                            pass
                 elif action == 'add_volume':
                     delta = data.get('volume_gb_delta')
                     ok, err, _status = _apply_client_limit_delta(user, server, inbound_id, email, days_delta=None, volume_gb_delta=delta)
@@ -12398,6 +12406,15 @@ def renew_client(server_id, inbound_id, email):
                         enable=(True if _was_disabled else None),
                         up=(0 if reset_traffic else None),
                         down=(0 if reset_traffic else None))
+                except Exception:
+                    pass
+
+                # Clear monitor message log so the send counter resets after renewal
+                try:
+                    MonitorMessageLog.query.filter_by(
+                        email=email.strip().lower(), server_id=server_id
+                    ).delete()
+                    db.session.commit()
                 except Exception:
                     pass
 
