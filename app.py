@@ -9598,6 +9598,27 @@ def monitor_log_message():
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 
+@app.route('/api/monitor/reset_msg_count', methods=['POST'])
+@login_required
+def monitor_reset_msg_count():
+    """Clear the message send log for a client (called after renewal)."""
+    data = request.get_json(silent=True) or {}
+    email = str(data.get('email') or '').strip().lower()
+    try:
+        server_id = int(data.get('server_id'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'server_id required'}), 400
+    if not email:
+        return jsonify({'success': False, 'error': 'email required'}), 400
+    try:
+        MonitorMessageLog.query.filter_by(email=email, server_id=server_id).delete()
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
 @app.route('/api/monitor/refresh', methods=['POST'])
 @login_required
 def trigger_monitor_refresh():

@@ -260,6 +260,12 @@
             const waData = await waResp.json();
             royaltyTemplates.sms = smsData.content || '';
             royaltyTemplates.whatsapp = waData.content || '';
+
+            // Auto-fill the zero_usage textarea if it's still empty
+            const zeroTpl = document.getElementById('tpl-zero-usage');
+            if (zeroTpl && !zeroTpl.value.trim() && royaltyTemplates.sms) {
+                zeroTpl.value = royaltyTemplates.sms;
+            }
         } catch (_) {}
     }
 
@@ -608,9 +614,37 @@
 
     function buildMessage(alert, channel) {
         const templates = (monitorSettings || {}).templates || {};
-        // Zero-usage users use the dedicated No Usage (Royalty) template
-        const templateKey = alert.zero_usage ? 'zero_usage' : alert.status;
-        const template = templates[templateKey] || templates[alert.status] || '';
+        let template = '';
+
+        if (alert.zero_usage) {
+            // Priority: 1) monitor zero_usage textarea  2) royalty notification template  3) status fallback
+            template = templates['zero_usage'] || '';
+            if (!template) {
+                template = (channel === 'whatsapp' ? royaltyTemplates.whatsapp : royaltyTemplates.sms) || '';
+            }
+            if (template) {
+                // Support both monitor vars ({user}) and royalty vars ({email})
+                return template
+                    .replace(/\{email\}/g, alert.email || '-')
+                    .replace(/\{account_name\}/g, alert.email || '-')
+                    .replace(/\{user\}/g, alert.email || '-')
+                    .replace(/\{server_name\}/g, alert.server_name || '-')
+                    .replace(/\{server\}/g, alert.server_name || '-')
+                    .replace(/\{remaining_time\}/g, alert.time_left || '-')
+                    .replace(/\{remaining_volume\}/g, alert.remaining || '-')
+                    .replace(/\{rem\}/g, alert.remaining || '-')
+                    .replace(/\{time\}/g, alert.time_left || '-')
+                    .replace(/\{date\}/g, alert.expiry_date || '-')
+                    .replace(/\{dashboard_link\}/g, '')
+                    .replace(/\{sub_link\}/g, '')
+                    .replace(/\{telegram_channel\}/g, '')
+                    .replace(/\{whatsapp_channel\}/g, '')
+                    .replace(/\{gift_volume\}/g, '')
+                    .replace(/\{if_gift\}[\s\S]*?\{\/if_gift\}/g, '');
+            }
+        }
+
+        template = templates[alert.status] || '';
         const vars = {
             user: alert.email || '-',
             rem: alert.remaining || '-',
@@ -618,7 +652,7 @@
             date: alert.expiry_date || '-',
             server: alert.server_name || '-'
         };
-        return (template || '').replace(/\{(user|rem|time|date|server)\}/g, (match, key) => vars[key] || '-');
+        return template.replace(/\{(user|rem|time|date|server)\}/g, (match, key) => vars[key] || '-');
     }
 
     function toLatinDigits(value) {
@@ -902,11 +936,19 @@
             const result = await resp.json();
             if (result.success || result.job_id) {
                 showToast(`${days} days added to ${email}`, 'success');
+                // Reset message send counter after renewal
+                fetch('/api/monitor/reset_msg_count', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, server_id: serverId }),
+                }).catch(() => {});
                 const existing = allAlerts.find(
                     (a) => a.server_id === serverId && a.email === email
                 );
                 if (existing) {
                     existing.zero_usage = false;
+                    existing.sms_count = 0;
+                    existing.wa_count = 0;
                     renderAlerts();
                 }
             } else {
