@@ -9477,12 +9477,12 @@ def get_monitor_alerts():
                     status = 'soon'
                     status_rank = 1
 
-            # Disabled always wins — whether the panel auto-disabled the client
-            # (time/traffic exhausted) or an operator did it manually. This
-            # pushes them into the 'disabled' bucket so they leave the
-            # expired/ended lists and only reappear when the admin shows
-            # the Disabled filter.
-            if not enabled:
+            # 'disabled' only applies when time AND volume are both still fine —
+            # meaning the operator explicitly shut the client off. Auto-disabled
+            # accounts (panel killed them because time or traffic ran out) are
+            # already captured as 'expired' or 'ended' above, and those labels
+            # must survive even when enable=False.
+            if not enabled and status in (None, 'low', 'soon'):
                 status = 'disabled'
                 status_rank = 0
 

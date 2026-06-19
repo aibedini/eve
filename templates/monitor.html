@@ -728,10 +728,11 @@
         const alert = allAlerts.find(a => a.server_id === serverId && a.inbound_id === inboundId && a.email === email);
         const prevStatus = alert ? alert.status : null;
 
-        // Optimistic update: disabling moves the card to the disabled bucket immediately.
+        // Optimistic update: disabling moves to disabled ONLY when status is not already
+        // expired/ended — those reflect the actual reason (time/volume) and should stay.
         if (alert) {
             alert.enabled = enable;
-            if (!enable) alert.status = 'disabled';
+            if (!enable && !['expired', 'ended'].includes(alert.status)) alert.status = 'disabled';
             renderAlerts();
         }
 
