@@ -170,18 +170,14 @@
 
 {% block scripts %}
 <style>
-    .zero-usage-badge {
-        display: inline-flex;
-        align-items: center;
-        font-size: 0.68rem;
-        font-weight: 600;
-        padding: 1px 7px;
-        border-radius: 999px;
+    .tag-zero-usage {
         background: rgba(139, 92, 246, 0.15);
         color: #8b5cf6;
         border: 1px solid rgba(139, 92, 246, 0.35);
-        margin-inline-start: 6px;
-        vertical-align: middle;
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 999px;
         white-space: nowrap;
     }
     .msg-sent-badge {
@@ -539,18 +535,20 @@
         const timeCls = st === 'soon' ? ' detail-highlight' : '';
         const expCls = (st === 'expired' || st === 'ended') ? ' detail-highlight' : '';
 
-        const msgCount = parseInt(alert.msg_count || 0, 10);
-        const smsBtnLabel = msgCount > 0 ? `SMS <span class="msg-sent-badge">${msgCount}×</span>` : 'SMS';
-        const waBtnLabel = msgCount > 0 ? `WhatsApp <span class="msg-sent-badge">${msgCount}×</span>` : 'WhatsApp';
-        const msgBtnClass = msgCount > 0 ? ' btn-msg-sent' : '';
+        const smsCount = parseInt(alert.sms_count || 0, 10);
+        const waCount = parseInt(alert.wa_count || 0, 10);
+        const smsBtnLabel = smsCount > 0 ? `SMS <span class="msg-sent-badge">${smsCount}×</span>` : 'SMS';
+        const waBtnLabel = waCount > 0 ? `WhatsApp <span class="msg-sent-badge">${waCount}×</span>` : 'WhatsApp';
+        const smsBtnClass = smsCount > 0 ? ' btn-msg-sent' : '';
+        const waBtnClass = waCount > 0 ? ' btn-msg-sent' : '';
 
-        const zeroUsageBadge = alert.zero_usage
-            ? '<span class="zero-usage-badge" title="این کاربر هیچ ترافیکی مصرف نکرده">بدون مصرف</span>'
+        const zeroUsageChip = alert.zero_usage
+            ? '<span class="monitor-tag tag-zero-usage" title="No traffic consumed — never connected">No Usage</span>'
             : '';
         const royaltyBtn = alert.zero_usage
-            ? `<button class="btn btn-royalty" onclick="openRoyaltyModal(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}')" title="تمدید رویالتی برای کاربر بدون مصرف">
+            ? `<button class="btn btn-royalty" onclick="openRoyaltyModal(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}')" title="Add days for zero-usage client">
                 <span class="icon">${getRoyaltyIcon()}</span>
-                تمدید
+                Add Days
                </button>`
             : '';
 
@@ -558,23 +556,22 @@
             <div class="monitor-cell monitor-user">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                 ${escapeHtml(alert.email || '-')}
-                ${zeroUsageBadge}
                 ${alert.verified ? '<span class="verified-badge" style="color: var(--success); font-size: 0.75rem; margin-left: 6px; font-weight: 600; display: inline-flex; align-items: center; gap: 2px;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>Verified</span>' : ''}
             </div>
             <div class="monitor-cell monitor-phone"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>${phoneHtml}</div>
             <div class="monitor-cell"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>${escapeHtml(alert.server_name || '-')}</div>
-            <div class="monitor-cell"><span class="monitor-tag tag-${st}">${escapeHtml(alert.status_label || alert.status)}</span></div>
+            <div class="monitor-cell" style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;"><span class="monitor-tag tag-${st}">${escapeHtml(alert.status_label || alert.status)}</span>${zeroUsageChip}</div>
             <div class="monitor-cell monitor-detail-stack">
                 <span class="detail-remaining${remCls}">${escapeHtml(alert.remaining || '-')}</span>
                 <span class="detail-time${timeCls}">${escapeHtml(alert.time_left || '-')}</span>
                 <span class="detail-expiry${expCls}">${escapeHtml(alert.expiry_date || '-')}</span>
             </div>
             <div class="monitor-cell monitor-actions">
-                <button class="btn btn-sms${msgBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length ? '' : 'disabled'}>
+                <button class="btn btn-sms${smsBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length ? '' : 'disabled'}>
                     <span class="icon">${getSmsIcon()}</span>
                     ${smsBtnLabel}
                 </button>
-                <button class="btn btn-whatsapp${msgBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length ? '' : 'disabled'}>
+                <button class="btn btn-whatsapp${waBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length ? '' : 'disabled'}>
                     <span class="icon">${getWhatsAppIcon()}</span>
                     ${waBtnLabel}
                 </button>
@@ -697,7 +694,8 @@
                 (a) => a.server_id === alert.server_id && a.email === alert.email
             );
             if (existing) {
-                existing.msg_count = (existing.msg_count || 0) + 1;
+                if (channel === 'sms') existing.sms_count = (existing.sms_count || 0) + 1;
+                else existing.wa_count = (existing.wa_count || 0) + 1;
                 renderAlerts();
             }
         };

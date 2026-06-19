@@ -9378,12 +9378,17 @@ def get_monitor_alerts():
         'ok': 5
     }
 
-    # Pre-load message send counts per (server_id, email) from the log table.
+    # Pre-load message send counts per (server_id, email, channel) from the log table.
     try:
         msg_rows = db.session.execute(
-            text('SELECT server_id, email, COUNT(*) as cnt FROM monitor_message_log GROUP BY server_id, email')
+            text('SELECT server_id, email, channel, COUNT(*) as cnt FROM monitor_message_log GROUP BY server_id, email, channel')
         ).fetchall()
-        msg_counts = {(int(r[0]), str(r[1]).lower()): int(r[2]) for r in msg_rows}
+        msg_counts = {}
+        for r in msg_rows:
+            key = (int(r[0]), str(r[1]).lower())
+            if key not in msg_counts:
+                msg_counts[key] = {}
+            msg_counts[key][str(r[2])] = int(r[3])
     except Exception:
         msg_counts = {}
 
@@ -9544,7 +9549,8 @@ def get_monitor_alerts():
                 'enabled': enabled,
                 'is_reseller_owned': is_reseller_owned,
                 'zero_usage': zero_usage,
-                'msg_count': msg_counts.get((sid_norm or 0, email_l), 0),
+                'sms_count': msg_counts.get((sid_norm or 0, email_l), {}).get('sms', 0),
+                'wa_count': msg_counts.get((sid_norm or 0, email_l), {}).get('whatsapp', 0),
             })
 
     alerts.sort(key=lambda row: (
