@@ -6905,6 +6905,99 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
     return True, ('; '.join(errors) or None), 200, {'added': added, 'removed': removed}
 
 
+def _autoupgrade_http_to_https(server):
+    """Self-heal an http:// host that is really an HTTPS-only panel.
+
+    3x-ui panels with SSL enabled (they send HSTS + Secure cookies) reject plaintext
+    on the TLS port — Python's requests raises ConnectionError('UnknownProtocol'),
+    which surfaces in the UI as a generic "Error testing connection". This commonly
+    bites after a panel upgrade where the admin also turned SSL on at the same time.
+
+    If the stored host is http://, probe the same host over https. Only when https
+    answers AND http does not do we rewrite server.host to https and persist it.
+    Panels that genuinely run plaintext are left untouched (the https probe fails, so
+    no change is made). Returns True when the host was upgraded.
+    """
+    try:
+        host = (getattr(server, 'host', '') or '').strip()
+    except Exception:
+        host = ''
+    if not host.lower().startswith('http://'):
+        return False
+    base, webpath = extract_base_and_webpath(host)
+    https_base = 'https://' + base[len('http://'):]
+    probe_path = f"{webpath}/" if webpath else '/'
+
+    def _reaches(b):
+        try:
+            r = requests.get(f"{b}{probe_path}", timeout=6, verify=False, allow_redirects=False)
+            return r.status_code < 500
+        except Exception:
+            return False
+
+    if not _reaches(https_base):
+        return False          # panel is not reachable over https — leave http as-is
+    if _reaches(base):
+        return False          # http works too; don't second-guess the operator
+    try:
+        server.host = https_base + webpath
+        db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return False
+    try:
+        XUI_SESSION_CACHE.pop(server.id, None)  # drop any session built on the old scheme
+    except Exception:
+        pass
+    return True
+
+
+def _fetch_csrf_token(session_obj, base, webpath):
+    """Seed and pin a CSRF token for cookie-login panels (3x-ui v3.3.1+).
+
+    Starting with 3x-ui v3.3.1 the refactor (#5167) guards POST /login — and every
+    other state-changing browser route (logout, getTwoFactorEnable, and the
+    cookie-session /panel/api/* POSTs) — with a CSRF middleware. Requests without a
+    valid token are rejected with HTTP 403, which is exactly why EVE could no longer
+    log in to upgraded panels.
+
+    The token lives in the server-side session (cookie '3x-ui'). A public
+    GET {basePath}/csrf-token both seeds that session cookie and returns the token as
+    {"success": true, "obj": "<token>"}. The panel reads it back from the
+    'X-CSRF-Token' header (or a '_csrf' form field). Login does NOT rotate the
+    session in v3.3.1, so a token fetched here stays valid for the subsequent login
+    and for every later API POST made through the same requests.Session.
+
+    We pin it as a default header on the session so all later calls carry it
+    automatically. Backward compatible by construction:
+      • Older panels (<=3.3.0, v3, pre-v3) have no /csrf-token route — the GET 404s,
+        we skip the header, and those panels harmlessly ignore the unknown header.
+      • Bearer/API-token servers never reach this path (they short-circuit earlier and
+        CSRF is bypassed for api_authed requests).
+
+    Returns the token string, or None when unavailable. Failures are non-fatal —
+    login is still attempted without the header for maximum compatibility.
+    """
+    try:
+        url = f"{base}{webpath}/csrf-token"
+        resp = session_obj.get(url, timeout=8, headers={"Accept": "application/json"})
+        if resp.status_code != 200:
+            return None
+        j, err = _safe_response_json(resp)
+        if err or not isinstance(j, dict) or not j.get('success'):
+            return None
+        token = j.get('obj')
+        if isinstance(token, str) and token:
+            session_obj.headers.update({'X-CSRF-Token': token})
+            return token
+    except Exception:
+        pass
+    return None
+
+
 def get_xui_session(server):
     # Current auth identity: the token for v3, or '' for cookie-login panels.
     # Cached sessions are keyed to this so a server that just switched to v3
@@ -6946,6 +7039,12 @@ def get_xui_session(server):
         login_url = login_ep if login_ep.startswith('http') else f"{base}{webpath}{login_ep}"
         panel_password = get_server_password(server)
         credentials = {"username": server.username, "password": panel_password}
+
+        # 3x-ui v3.3.1+ guards POST /login with a CSRF middleware (403 without a
+        # token). Seed + pin the token now so the login POST below — and every later
+        # cookie-session API POST through this same session — carries X-CSRF-Token.
+        # No-op on older panels (the /csrf-token route 404s).
+        _fetch_csrf_token(session_obj, base, webpath)
 
         login_resp = None
         login_json = None
@@ -7154,6 +7253,10 @@ def get_xui_cookie_session(host, username, password, panel_type='auto', cache_ke
         s.proxies = {'http': None, 'https': None}
         s.verify = False
         creds = {"username": username, "password": password}
+        # v3.3.1+ CSRF guard: pin a token before the login POST so both /login and
+        # the later /panel/inbound/onlines POST (made through this same session)
+        # pass the middleware. No-op on older panels.
+        _fetch_csrf_token(s, base, webpath)
         for use_json in (True, False):
             try:
                 if use_json:
@@ -12690,6 +12793,9 @@ def delete_server(server_id):
 @login_required
 def test_server_connection(server_id):
     server = Server.query.get_or_404(server_id)
+    # Self-heal the common "http:// stored for an HTTPS-only panel" foot-gun, which
+    # otherwise fails with a bare ConnectionError ("Error testing connection").
+    _autoupgrade_http_to_https(server)
     session_obj, error = get_xui_session(server)
     if error:
         return jsonify({"success": False, "error": error}), 400

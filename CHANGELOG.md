@@ -2,6 +2,12 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [Unreleased]
+
+### 🐛 Bug Fixes & Improvements
+- **3x-ui v3.3.1 compatibility (CSRF)**: v3.3.1 added a CSRF middleware in front of `POST /login` (and every other cookie-session state-changing route), so EVE could no longer log in to upgraded panels — cookie-login servers returned `403`, which surfaced as `502 Bad Gateway` on the EVE subscription page when the client wasn't cached. EVE now fetches a token from `GET {basePath}/csrf-token` and pins it as the `X-CSRF-Token` header on the panel session before logging in, so login and all later `/panel/api/*` POSTs (add/update/delete client, reset traffic, backup, onlines) pass the guard. Verified live against a v3.3.1 panel (login `success:true` with the token, `403` without it). Fully backward compatible: older panels (≤3.3.0, v3, pre-v3) have no `/csrf-token` route and ignore the header, and API-token (Bearer) servers are unaffected (CSRF is bypassed for token auth).
+- **HTTPS-only panel self-heal**: A server saved with an `http://` host pointing at an SSL-enabled panel (HSTS + Secure cookies) failed with a bare `ConnectionError` shown as "Error testing connection". Testing a server now auto-detects this and rewrites the host to `https://` when — and only when — https answers and http does not, so plaintext panels are left untouched.
+
 ## [1.4.2] - 2025-12-12
 
 ### 🐛 Bug Fixes & Improvements
