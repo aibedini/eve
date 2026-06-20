@@ -15,6 +15,7 @@ import logging
 import qrcode
 import uuid
 import secrets
+import random
 import string
 import shutil
 import glob
@@ -406,7 +407,8 @@ XUI_SESSION_TTL = 600  # 10 minutes cache
 
 WHATSAPP_SEND_TRACKER = {
     'per_recipient': {},
-    'daily': {'date': '', 'count': 0}
+    'daily': {'date': '', 'count': 0},
+    'last_global_send': 0.0,  # ts of the most recent send of any recipient (pace gate)
 }
 WHATSAPP_SEND_TRACKER_LOCK = threading.Lock()
 
@@ -4785,7 +4787,14 @@ def _take_whatsapp_send_slot(recipient: str, runtime_cfg: dict) -> tuple[bool, s
     now_ts = time.time()
     today = datetime.utcnow().strftime('%Y-%m-%d')
     min_interval = int(runtime_cfg.get('min_interval_seconds') or 45)
-    daily_limit = int(runtime_cfg.get('daily_limit') or 100)
+    # Warm-up shrinks the daily cap for fresh numbers; falls back to daily_limit.
+    daily_limit = _whatsapp_effective_daily_cap(runtime_cfg)
+
+    # Global pace gate (#4): minimum gap + jitter between ANY two sends. OFF by
+    # default; protects against a batch turning into a burst.
+    pace_enabled = bool(runtime_cfg.get('pace_enabled'))
+    pace_gap = int(runtime_cfg.get('pace_min_gap_seconds') or 0)
+    pace_jitter = int(runtime_cfg.get('pace_jitter_seconds') or 0)
 
     with WHATSAPP_SEND_TRACKER_LOCK:
         daily = WHATSAPP_SEND_TRACKER.get('daily') or {}
@@ -4796,6 +4805,12 @@ def _take_whatsapp_send_slot(recipient: str, runtime_cfg: dict) -> tuple[bool, s
         if current_count >= daily_limit:
             return False, 'daily_limit_reached'
 
+        if pace_enabled and pace_gap > 0:
+            last_global = float(WHATSAPP_SEND_TRACKER.get('last_global_send') or 0.0)
+            required = pace_gap + (random.uniform(0, pace_jitter) if pace_jitter > 0 else 0)
+            if last_global > 0 and (now_ts - last_global) < required:
+                return False, 'pace_gated'
+
         per_recipient = WHATSAPP_SEND_TRACKER.get('per_recipient') or {}
         last_sent = float(per_recipient.get(recipient) or 0.0)
         if last_sent > 0 and (now_ts - last_sent) < float(min_interval):
@@ -4804,6 +4819,7 @@ def _take_whatsapp_send_slot(recipient: str, runtime_cfg: dict) -> tuple[bool, s
         per_recipient[recipient] = now_ts
         WHATSAPP_SEND_TRACKER['per_recipient'] = per_recipient
         WHATSAPP_SEND_TRACKER['daily'] = {'date': today, 'count': current_count + 1}
+        WHATSAPP_SEND_TRACKER['last_global_send'] = now_ts
 
     return True, None
 
