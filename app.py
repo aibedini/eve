@@ -4399,12 +4399,17 @@ def _probe_whatsapp_gateway(gateway_url: str, timeout_seconds: int, api_key: str
 
 
 def _openwa_session_status(gateway_url: str, api_key: str, session_name: str, timeout_seconds: int) -> dict:
-    """Look up an OpenWA session by name in GET /api/sessions and return its row.
+    """Look up an OpenWA session by name OR UUID in GET /api/sessions.
 
-    Returns {'found': bool, 'connected': bool, 'status': str, 'phone': str, 'error': str|None}.
+    OpenWA's runtime engine is keyed by the session UUID, not its name —
+    messaging by name fails with "not active" even when the session is ready.
+    So we always resolve to the real UUID ('id') and return it for callers to
+    address the send-text endpoint with.
+
+    Returns {'found','connected','status','phone','id','error'}.
     """
     normalized = _normalize_whatsapp_gateway_url(gateway_url)
-    result = {'found': False, 'connected': False, 'status': '', 'phone': '', 'error': None}
+    result = {'found': False, 'connected': False, 'status': '', 'phone': '', 'id': '', 'error': None}
     if not normalized or not session_name:
         result['error'] = 'missing_gateway_or_session'
         return result
@@ -4431,6 +4436,7 @@ def _openwa_session_status(gateway_url: str, api_key: str, session_name: str, ti
                 result['found'] = True
                 result['status'] = status
                 result['phone'] = str(row.get('phone') or '')
+                result['id'] = str(row.get('id') or '')
                 result['connected'] = status in ('connected', 'ready', 'authenticated', 'active')
                 return result
         result['error'] = 'session_not_found'
@@ -4438,6 +4444,36 @@ def _openwa_session_status(gateway_url: str, api_key: str, session_name: str, ti
     except Exception as exc:
         result['error'] = str(exc)
         return result
+
+
+# Short-lived cache of {(gateway_url, session_value): (uuid, expires_ts)} so we
+# don't hit GET /api/sessions on every single message send.
+_OPENWA_SESSION_ID_CACHE = {}
+_OPENWA_SESSION_ID_TTL = 300  # seconds
+
+
+def _openwa_resolve_session_id(gateway_url: str, api_key: str, session_value: str, timeout_seconds: int) -> tuple[str, str | None]:
+    """Resolve a configured session name/UUID to the active UUID OpenWA needs.
+
+    Returns (uuid, error). On a cache hit returns immediately. On miss, queries
+    the gateway; only caches when the session is connected so a freshly
+    reconnected session is picked up promptly.
+    """
+    normalized = _normalize_whatsapp_gateway_url(gateway_url)
+    cache_key = (normalized, (session_value or '').strip().lower())
+    cached = _OPENWA_SESSION_ID_CACHE.get(cache_key)
+    if cached and cached[1] > time.time():
+        return cached[0], None
+
+    sess = _openwa_session_status(normalized, api_key, session_value, timeout_seconds)
+    if not sess.get('found'):
+        return '', (sess.get('error') or 'session_not_found')
+    if not sess.get('connected'):
+        return sess.get('id') or '', f"session_{sess.get('status') or 'disconnected'}"
+    uuid = sess.get('id') or ''
+    if uuid:
+        _OPENWA_SESSION_ID_CACHE[cache_key] = (uuid, time.time() + _OPENWA_SESSION_ID_TTL)
+    return uuid, None
 
 
 def _build_whatsapp_gateway_candidates(host_hint: str | None = None, configured_url: str | None = None) -> list[str]:
@@ -4684,8 +4720,8 @@ def _send_whatsapp_message(event_name: str, recipient_source: str, message_text:
 
     if provider == 'openwa':
         # OpenWA self-hosted gateway: session-scoped send-text endpoint.
-        session_name = (runtime_cfg.get('session_id') or '').strip()
-        if not session_name:
+        session_value = (runtime_cfg.get('session_id') or '').strip()
+        if not session_value:
             result['attempted'] = False
             result['reason'] = 'openwa_session_not_configured'
             return result
@@ -4693,13 +4729,19 @@ def _send_whatsapp_message(event_name: str, recipient_source: str, message_text:
         if not chat_id:
             result['reason'] = 'invalid_recipient'
             return result
+        # OpenWA's engine is keyed by UUID; a name works for DB lookup but not
+        # for active messaging. Resolve to the real UUID before sending.
+        session_uuid, resolve_err = _openwa_resolve_session_id(gateway_url, api_key, session_value, timeout)
+        if not session_uuid:
+            result['reason'] = f"openwa_session_unavailable: {resolve_err}"
+            return result
         headers = {'Content-Type': 'application/json'}
         if api_key:
             headers['X-API-Key'] = api_key
         payload = {'chatId': chat_id, 'text': (message_text or '').strip()}
         try:
             response = requests.post(
-                f"{gateway_url}/api/sessions/{session_name}/messages/send-text",
+                f"{gateway_url}/api/sessions/{session_uuid}/messages/send-text",
                 json=payload,
                 headers=headers,
                 timeout=timeout,
@@ -4709,6 +4751,8 @@ def _send_whatsapp_message(event_name: str, recipient_source: str, message_text:
             if 200 <= response.status_code < 300:
                 result['sent'] = True
                 return result
+            # Stale UUID (session restarted) — drop the cache so the next send re-resolves.
+            _OPENWA_SESSION_ID_CACHE.pop((_normalize_whatsapp_gateway_url(gateway_url), session_value.strip().lower()), None)
             # Surface the gateway's own message (e.g. "session not active") to help debugging.
             try:
                 body_msg = (response.json() or {}).get('message')
