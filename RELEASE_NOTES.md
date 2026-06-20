@@ -1,4 +1,16 @@
-# Eve - Xui Manager v2.3.1
+# Eve - Xui Manager v2.3.2
+
+## [2.3.2] - 2026-06-20
+
+English:
+- Feature: **Per-reseller WhatsApp automation permission** — new "WhatsApp Automation Enabled" switch in each reseller's user settings (default OFF). The system will not message a reseller's clients from the owner's WhatsApp number unless the reseller is explicitly opted in
+- Scope: both the background near-depletion scanner and the automatic post-renewal WhatsApp message now skip reseller-owned accounts whose owner hasn't enabled automation
+- Owner/admin/superadmin accounts are always eligible (unchanged)
+
+فارسی:
+- قابلیت: **پرمیشن اتوماسیون واتساپ به‌ازای هر رسلر** — سوییچ جدید «اتوماسیون واتساپ فعال» در تنظیمات هر رسلر (پیش‌فرض خاموش). تا وقتی این گزینه روشن نشده باشد، سیستم با شماره‌ی owner به کلاینت‌های آن رسلر پیام نمی‌دهد
+- دامنه: هم اسکن خودکار near-depletion و هم ارسال خودکار بعد از تمدید، اکانت‌های متعلق به رسلرِ بدون این مجوز را نادیده می‌گیرند
+- اکانت‌های owner/ادمین/سوپرادمین همیشه شامل اتوماسیون هستند (بدون تغییر)
 
 ## [2.3.1] - 2026-06-20
 

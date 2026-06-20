@@ -4,6 +4,14 @@ All notable changes to Eve - Xui Manager are documented in this file.
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-06-20
+
+### 📱 WhatsApp Automation Scope
+- **Per-reseller automation permission**: New "WhatsApp Automation Enabled" toggle in each reseller's user settings (default OFF). The system no longer messages a reseller's clients from the owner's WhatsApp number unless that reseller is explicitly opted in
+- **Scoped near-depletion scan**: Background depletion scanner skips accounts owned by resellers who haven't enabled automation
+- **Scoped renew auto-send**: Automatic post-renewal WhatsApp message is suppressed for reseller-owned accounts without the permission
+- Accounts owned by the system owner / admins / superadmins are always eligible (unchanged behavior)
+
 ## [2.3.1] - 2026-06-20
 
 ### 🔒 Reseller Permissions

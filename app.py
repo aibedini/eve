@@ -89,7 +89,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -3422,6 +3422,7 @@ class Admin(db.Model):
     allow_negative_credit = db.Column(db.Boolean, default=False)
     negative_credit_limit = db.Column(db.Integer, default=0)
     allow_free_creation = db.Column(db.Boolean, default=False)
+    whatsapp_automation_enabled = db.Column(db.Boolean, default=False)
     allowed_servers = db.Column(db.Text, default='[]')
     enabled = db.Column(db.Boolean, default=True)
     discount_percent = db.Column(db.Integer, default=0)
@@ -3455,6 +3456,7 @@ class Admin(db.Model):
             'allow_negative_credit': bool(self.allow_negative_credit),
             'negative_credit_limit': self.negative_credit_limit or 0,
             'allow_free_creation': bool(self.allow_free_creation),
+            'whatsapp_automation_enabled': bool(self.whatsapp_automation_enabled),
             'allowed_servers': parse_allowed_servers(self.allowed_servers),
             'enabled': self.enabled,
             'discount_percent': self.discount_percent,
@@ -4770,6 +4772,52 @@ def _public_base_url() -> str:
     return f"{proto}://{domain}"
 
 
+def _whatsapp_blocked_account_keys() -> set:
+    """Return the set of (server_id, email_lower) accounts that belong to a
+    reseller WITHOUT WhatsApp automation permission. These must never be
+    messaged from the system number by any automated send. Accounts not owned
+    by a reseller (owner/admin/superadmin) are never in this set."""
+    try:
+        disabled = {a.id for a in Admin.query.filter_by(role='reseller').all()
+                    if not a.whatsapp_automation_enabled}
+        if not disabled:
+            return set()
+        keys = set()
+        for own in ClientOwnership.query.filter(ClientOwnership.reseller_id.in_(disabled)).all():
+            email_l = (own.client_email or '').strip().lower()
+            if email_l:
+                keys.add((own.server_id, email_l))
+        return keys
+    except Exception:
+        return set()
+
+
+def _whatsapp_automation_allowed_for_account(server_id, email) -> bool:
+    """A reseller-owned account is eligible for automated WhatsApp sends only
+    when its owner reseller has whatsapp_automation_enabled. Accounts not owned
+    by any reseller are always eligible (owner/admin/superadmin)."""
+    try:
+        email_l = (email or '').strip().lower()
+        if not email_l:
+            return True
+        try:
+            sid_norm = int(server_id)
+        except (TypeError, ValueError):
+            sid_norm = server_id
+        own = ClientOwnership.query.filter(
+            ClientOwnership.server_id == sid_norm,
+            db.func.lower(ClientOwnership.client_email) == email_l,
+        ).first()
+        if not own:
+            return True
+        reseller = db.session.get(Admin, own.reseller_id)
+        if not reseller or reseller.role != 'reseller':
+            return True
+        return bool(reseller.whatsapp_automation_enabled)
+    except Exception:
+        return True
+
+
 def _run_whatsapp_depletion_scan() -> dict:
     """Scan cached clients and proactively message accounts whose time or volume
     is about to run out, once per cooldown window. Honors enable/region/warm-up/
@@ -4789,6 +4837,9 @@ def _run_whatsapp_depletion_scan() -> dict:
     scanned = 0
     sent = 0
     seen = set()
+    # Reseller-owned accounts whose owner has not enabled WhatsApp automation
+    # must be skipped — we never message them from the system number.
+    blocked_keys = _whatsapp_blocked_account_keys()
 
     for inbound in inbounds:
         sid = inbound.get('server_id')
@@ -4805,6 +4856,8 @@ def _run_whatsapp_depletion_scan() -> dict:
             if dedupe in seen:
                 continue
             seen.add(dedupe)
+            if (sid_norm, email_l) in blocked_keys:
+                continue
             scanned += 1
 
             recipient = _extract_iran_mobile_from_text(email, client.get('comment') or '')
@@ -5751,6 +5804,7 @@ with app.app_context():
             ('allow_negative_credit', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
             ('negative_credit_limit', 'INTEGER DEFAULT 0'),
             ('allow_free_creation', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+            ('whatsapp_automation_enabled', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
             ('sub_shown_package_ids', "TEXT DEFAULT '[]'"),
             ('support_sms', 'VARCHAR(64)'),
         ]
@@ -12907,7 +12961,13 @@ def renew_client(server_id, inbound_id, email):
                 # WhatsApp bot uses its own renew template (falls back to the
                 # generic renew copy when no bot template is configured).
                 _wa_text = _whatsapp_render_bot_template('renew_success', _renew_tpl_vars, whatsapp_runtime) or copy_text
-                whatsapp_delivery = _send_whatsapp_message('renew_success', email, _wa_text, recipient_comment=_client_comment)
+                # Skip the automated send for reseller-owned accounts whose owner
+                # has not enabled WhatsApp automation — don't message their
+                # clients from the system number.
+                if _whatsapp_automation_allowed_for_account(server.id, email):
+                    whatsapp_delivery = _send_whatsapp_message('renew_success', email, _wa_text, recipient_comment=_client_comment)
+                else:
+                    whatsapp_delivery = {'sent': False, 'reason': 'reseller_automation_disabled'}
                 whatsapp_meta = {
                     'enabled': whatsapp_runtime.get('enabled', False),
                     'deployment_region': whatsapp_runtime.get('deployment_region', 'outside'),
@@ -13124,6 +13184,7 @@ def add_admin():
         allow_negative_credit=bool(data.get('allow_negative_credit', False)),
         negative_credit_limit=max(0, int(data.get('negative_credit_limit', 0) or 0)),
         allow_free_creation=bool(data.get('allow_free_creation', False)),
+        whatsapp_automation_enabled=bool(data.get('whatsapp_automation_enabled', False)),
         allowed_servers=serialize_allowed_servers(data.get('allowed_servers', [])),
         enabled=data.get('enabled', True),
         discount_percent=int(data.get('discount_percent', 0)),
@@ -13209,6 +13270,7 @@ def update_admin(admin_id):
     if 'allow_negative_credit' in data: admin.allow_negative_credit = bool(data['allow_negative_credit'])
     if 'negative_credit_limit' in data: admin.negative_credit_limit = max(0, int(data['negative_credit_limit'] or 0))
     if 'allow_free_creation' in data: admin.allow_free_creation = bool(data['allow_free_creation'])
+    if 'whatsapp_automation_enabled' in data: admin.whatsapp_automation_enabled = bool(data['whatsapp_automation_enabled'])
     if 'allowed_servers' in data: admin.allowed_servers = serialize_allowed_servers(data['allowed_servers'])
     if 'enabled' in data: admin.enabled = data['enabled']
     if 'discount_percent' in data: admin.discount_percent = int(data['discount_percent'])
