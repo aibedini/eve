@@ -3977,6 +3977,63 @@ WHATSAPP_GATEWAY_TIMEOUT_KEY = 'whatsapp_gateway_timeout_seconds'
 # provider == 'openwa' to address POST /api/sessions/{session}/messages/send-text.
 WHATSAPP_SESSION_KEY = 'whatsapp_session_id'
 
+# --- Anti-ban / warm-up / bot controls (mostly for the OpenWA provider) ---
+# Warm-up: linearly ramp the daily send cap from a low start value up to the
+# configured daily_limit over N days, starting from a chosen date. Lowers the
+# odds of a fresh number getting flagged for a sudden volume spike.
+WHATSAPP_WARMUP_ENABLED_KEY = 'whatsapp_warmup_enabled'
+WHATSAPP_WARMUP_START_DATE_KEY = 'whatsapp_warmup_start_date'      # YYYY-MM-DD
+WHATSAPP_WARMUP_START_PER_DAY_KEY = 'whatsapp_warmup_start_per_day'  # cap on day 0
+WHATSAPP_WARMUP_RAMP_DAYS_KEY = 'whatsapp_warmup_ramp_days'        # days to reach full cap
+
+# Global pace gate (item #4): enforce a minimum gap + random jitter between ANY
+# two outbound sends (not just same-recipient), so a batch never turns into a
+# burst. Built but OFF by default — turn on only when automated bulk sending.
+WHATSAPP_PACE_ENABLED_KEY = 'whatsapp_pace_enabled'
+WHATSAPP_PACE_MIN_GAP_KEY = 'whatsapp_pace_min_gap_seconds'
+WHATSAPP_PACE_JITTER_KEY = 'whatsapp_pace_jitter_seconds'
+
+# Near-depletion bot: a background scanner that proactively messages accounts
+# whose time/volume is about to run out, exactly once per cooldown window.
+WHATSAPP_DEPLETION_ENABLED_KEY = 'whatsapp_depletion_enabled'
+WHATSAPP_DEPLETION_EXPIRY_DAYS_KEY = 'whatsapp_depletion_expiry_days'  # <= days left
+WHATSAPP_DEPLETION_VOLUME_GB_KEY = 'whatsapp_depletion_volume_gb'      # <= GB left
+WHATSAPP_DEPLETION_COOLDOWN_DAYS_KEY = 'whatsapp_depletion_cooldown_days'
+
+# Dedicated "bot" templates for the OpenWA automation, per scenario. These are
+# distinct from the SMS/monitor templates so the WhatsApp voice can differ.
+WHATSAPP_BOT_TPL_CREATED_KEY = 'whatsapp_bot_tpl_created'
+WHATSAPP_BOT_TPL_RENEW_KEY = 'whatsapp_bot_tpl_renew'
+WHATSAPP_BOT_TPL_ENDED_KEY = 'whatsapp_bot_tpl_ended'
+WHATSAPP_BOT_TPL_INFO_KEY = 'whatsapp_bot_tpl_info'
+
+DEFAULT_WHATSAPP_BOT_TPL_CREATED = """اکانت شما ساخته شد ✅
+اسم اکانت: {email}
+حجم: {volume} | مدت: {days} روز
+لینک اتصال: {dashboard_link}
+
+لطفا از طریق لینک بالا به سرویس خود متصل شین."""
+
+DEFAULT_WHATSAPP_BOT_TPL_RENEW = """تمدید شد ✅
+اسم اکانت: {email}
+{days_label} | {volume_label}
+تاریخ انقضا: {date}
+لینک: {dashboard_link}"""
+
+DEFAULT_WHATSAPP_BOT_TPL_ENDED = """مشترک گرامی {email}،
+سرویس شما رو به پایانه ⏳
+زمان باقی‌مانده: {remaining_time}
+حجم باقی‌مانده: {remaining_volume}
+
+برای جلوگیری از قطعی، لطفا تمدید کنید 🙏
+لینک: {dashboard_link}"""
+
+DEFAULT_WHATSAPP_BOT_TPL_INFO = """اطلاعات اکانت شما
+اسم اکانت: {email}
+مدت باقی‌مانده: {remaining_time}
+حجم باقی‌مانده: {remaining_volume}
+لینک اتصال: {dashboard_link}"""
+
 DEFAULT_WHATSAPP_TEMPLATE_RENEW = "سلام {user}، تمدید شما با موفقیت انجام شد."
 DEFAULT_WHATSAPP_TEMPLATE_WELCOME = "سلام {user}، اشتراک شما فعال شد."
 DEFAULT_WHATSAPP_TEMPLATE_PRE_EXPIRY = "سلام {user}، اشتراک شما تا {time_left} دیگر منقضی می‌شود."
@@ -4055,6 +4112,21 @@ WHATSAPP_CONFIG_KEYS = {
     WHATSAPP_GATEWAY_API_KEY,
     WHATSAPP_GATEWAY_TIMEOUT_KEY,
     WHATSAPP_SESSION_KEY,
+    WHATSAPP_WARMUP_ENABLED_KEY,
+    WHATSAPP_WARMUP_START_DATE_KEY,
+    WHATSAPP_WARMUP_START_PER_DAY_KEY,
+    WHATSAPP_WARMUP_RAMP_DAYS_KEY,
+    WHATSAPP_PACE_ENABLED_KEY,
+    WHATSAPP_PACE_MIN_GAP_KEY,
+    WHATSAPP_PACE_JITTER_KEY,
+    WHATSAPP_DEPLETION_ENABLED_KEY,
+    WHATSAPP_DEPLETION_EXPIRY_DAYS_KEY,
+    WHATSAPP_DEPLETION_VOLUME_GB_KEY,
+    WHATSAPP_DEPLETION_COOLDOWN_DAYS_KEY,
+    WHATSAPP_BOT_TPL_CREATED_KEY,
+    WHATSAPP_BOT_TPL_RENEW_KEY,
+    WHATSAPP_BOT_TPL_ENDED_KEY,
+    WHATSAPP_BOT_TPL_INFO_KEY,
 }
 DEFAULT_MONITOR_SETTINGS = {
     "filters": {
@@ -4546,6 +4618,13 @@ def _get_whatsapp_runtime_settings() -> dict:
         WHATSAPP_TEMPLATE_RENEW_KEY, WHATSAPP_TEMPLATE_WELCOME_KEY, WHATSAPP_TEMPLATE_PRE_EXPIRY_KEY,
         WHATSAPP_GATEWAY_URL_KEY, WHATSAPP_GATEWAY_API_KEY, WHATSAPP_GATEWAY_TIMEOUT_KEY,
         WHATSAPP_SESSION_KEY,
+        WHATSAPP_WARMUP_ENABLED_KEY, WHATSAPP_WARMUP_START_DATE_KEY,
+        WHATSAPP_WARMUP_START_PER_DAY_KEY, WHATSAPP_WARMUP_RAMP_DAYS_KEY,
+        WHATSAPP_PACE_ENABLED_KEY, WHATSAPP_PACE_MIN_GAP_KEY, WHATSAPP_PACE_JITTER_KEY,
+        WHATSAPP_DEPLETION_ENABLED_KEY, WHATSAPP_DEPLETION_EXPIRY_DAYS_KEY,
+        WHATSAPP_DEPLETION_VOLUME_GB_KEY, WHATSAPP_DEPLETION_COOLDOWN_DAYS_KEY,
+        WHATSAPP_BOT_TPL_CREATED_KEY, WHATSAPP_BOT_TPL_RENEW_KEY,
+        WHATSAPP_BOT_TPL_ENDED_KEY, WHATSAPP_BOT_TPL_INFO_KEY,
     ]
     _c = _get_system_configs_batch(_wa_keys)
 
@@ -4558,6 +4637,17 @@ def _get_whatsapp_runtime_settings() -> dict:
 
     def _int(key, default, min_value=None, max_value=None):
         return _parse_int(_txt(key, str(default)), default, min_value=min_value, max_value=max_value)
+
+    def _float(key, default, min_value=None, max_value=None):
+        try:
+            val = float(_txt(key, str(default)))
+        except (TypeError, ValueError):
+            val = float(default)
+        if min_value is not None:
+            val = max(val, min_value)
+        if max_value is not None:
+            val = min(val, max_value)
+        return val
 
     region = _normalize_whatsapp_region(_txt(WHATSAPP_DEPLOYMENT_REGION_KEY, 'outside'))
     provider = _normalize_whatsapp_provider(_txt(WHATSAPP_PROVIDER_KEY, 'baileys'))
@@ -4585,11 +4675,56 @@ def _get_whatsapp_runtime_settings() -> dict:
         'gateway_api_key': _txt(WHATSAPP_GATEWAY_API_KEY, '').strip(),
         'gateway_timeout_seconds': _int(WHATSAPP_GATEWAY_TIMEOUT_KEY, 10, min_value=3, max_value=60),
         'session_id': _normalize_whatsapp_session(_txt(WHATSAPP_SESSION_KEY, '')),
+        # Warm-up
+        'warmup_enabled': _bool(WHATSAPP_WARMUP_ENABLED_KEY, False),
+        'warmup_start_date': _txt(WHATSAPP_WARMUP_START_DATE_KEY, '').strip(),
+        'warmup_start_per_day': _int(WHATSAPP_WARMUP_START_PER_DAY_KEY, 20, min_value=1, max_value=50000),
+        'warmup_ramp_days': _int(WHATSAPP_WARMUP_RAMP_DAYS_KEY, 14, min_value=1, max_value=120),
+        # Global pace gate (#4)
+        'pace_enabled': _bool(WHATSAPP_PACE_ENABLED_KEY, False),
+        'pace_min_gap_seconds': _int(WHATSAPP_PACE_MIN_GAP_KEY, 8, min_value=0, max_value=600),
+        'pace_jitter_seconds': _int(WHATSAPP_PACE_JITTER_KEY, 5, min_value=0, max_value=600),
+        # Near-depletion scanner
+        'depletion_enabled': _bool(WHATSAPP_DEPLETION_ENABLED_KEY, False),
+        'depletion_expiry_days': _int(WHATSAPP_DEPLETION_EXPIRY_DAYS_KEY, 3, min_value=0, max_value=60),
+        'depletion_volume_gb': _float(WHATSAPP_DEPLETION_VOLUME_GB_KEY, 2.0, min_value=0.0, max_value=1000.0),
+        'depletion_cooldown_days': _int(WHATSAPP_DEPLETION_COOLDOWN_DAYS_KEY, 7, min_value=1, max_value=120),
+        # Bot templates (per scenario)
+        'bot_tpl_created': _txt(WHATSAPP_BOT_TPL_CREATED_KEY, DEFAULT_WHATSAPP_BOT_TPL_CREATED).strip() or DEFAULT_WHATSAPP_BOT_TPL_CREATED,
+        'bot_tpl_renew': _txt(WHATSAPP_BOT_TPL_RENEW_KEY, DEFAULT_WHATSAPP_BOT_TPL_RENEW).strip() or DEFAULT_WHATSAPP_BOT_TPL_RENEW,
+        'bot_tpl_ended': _txt(WHATSAPP_BOT_TPL_ENDED_KEY, DEFAULT_WHATSAPP_BOT_TPL_ENDED).strip() or DEFAULT_WHATSAPP_BOT_TPL_ENDED,
+        'bot_tpl_info': _txt(WHATSAPP_BOT_TPL_INFO_KEY, DEFAULT_WHATSAPP_BOT_TPL_INFO).strip() or DEFAULT_WHATSAPP_BOT_TPL_INFO,
     }
 
     if region == 'iran':
         config['blocked_reason'] = 'deployment_in_iran'
     return config
+
+
+def _whatsapp_effective_daily_cap(runtime_cfg: dict) -> int:
+    """Daily send cap after applying warm-up. Returns the full daily_limit when
+    warm-up is off or finished; otherwise a linearly interpolated cap based on
+    days elapsed since the warm-up start date."""
+    daily_limit = int(runtime_cfg.get('daily_limit') or 100)
+    if not runtime_cfg.get('warmup_enabled'):
+        return daily_limit
+    start_raw = (runtime_cfg.get('warmup_start_date') or '').strip()
+    start_per_day = int(runtime_cfg.get('warmup_start_per_day') or 20)
+    ramp_days = max(1, int(runtime_cfg.get('warmup_ramp_days') or 14))
+    # No/!invalid start date → treat today as day 0 (most conservative).
+    try:
+        start_date = datetime.strptime(start_raw, '%Y-%m-%d').date() if start_raw else datetime.utcnow().date()
+    except ValueError:
+        start_date = datetime.utcnow().date()
+    days_elapsed = (datetime.utcnow().date() - start_date).days
+    if days_elapsed >= ramp_days:
+        return daily_limit
+    if days_elapsed <= 0:
+        return max(1, min(start_per_day, daily_limit))
+    # Linear interpolation from start_per_day (day 0) to daily_limit (day ramp_days).
+    span = daily_limit - start_per_day
+    cap = start_per_day + (span * days_elapsed / ramp_days)
+    return max(1, min(daily_limit, int(round(cap))))
 
 
 def _normalize_ascii_digits(value: str | None) -> str:
@@ -10481,7 +10616,22 @@ def settings_page():
                          whatsapp_session_id=whatsapp_cfg.get('session_id', ''),
                          whatsapp_template_renew=whatsapp_cfg.get('template_renew', DEFAULT_WHATSAPP_TEMPLATE_RENEW),
                          whatsapp_template_welcome=whatsapp_cfg.get('template_welcome', DEFAULT_WHATSAPP_TEMPLATE_WELCOME),
-                         whatsapp_template_pre_expiry=whatsapp_cfg.get('template_pre_expiry', DEFAULT_WHATSAPP_TEMPLATE_PRE_EXPIRY))
+                         whatsapp_template_pre_expiry=whatsapp_cfg.get('template_pre_expiry', DEFAULT_WHATSAPP_TEMPLATE_PRE_EXPIRY),
+                         whatsapp_warmup_enabled=whatsapp_cfg.get('warmup_enabled', False),
+                         whatsapp_warmup_start_date=whatsapp_cfg.get('warmup_start_date', ''),
+                         whatsapp_warmup_start_per_day=whatsapp_cfg.get('warmup_start_per_day', 20),
+                         whatsapp_warmup_ramp_days=whatsapp_cfg.get('warmup_ramp_days', 14),
+                         whatsapp_pace_enabled=whatsapp_cfg.get('pace_enabled', False),
+                         whatsapp_pace_min_gap_seconds=whatsapp_cfg.get('pace_min_gap_seconds', 8),
+                         whatsapp_pace_jitter_seconds=whatsapp_cfg.get('pace_jitter_seconds', 5),
+                         whatsapp_depletion_enabled=whatsapp_cfg.get('depletion_enabled', False),
+                         whatsapp_depletion_expiry_days=whatsapp_cfg.get('depletion_expiry_days', 3),
+                         whatsapp_depletion_volume_gb=whatsapp_cfg.get('depletion_volume_gb', 2.0),
+                         whatsapp_depletion_cooldown_days=whatsapp_cfg.get('depletion_cooldown_days', 7),
+                         whatsapp_bot_tpl_created=whatsapp_cfg.get('bot_tpl_created', DEFAULT_WHATSAPP_BOT_TPL_CREATED),
+                         whatsapp_bot_tpl_renew=whatsapp_cfg.get('bot_tpl_renew', DEFAULT_WHATSAPP_BOT_TPL_RENEW),
+                         whatsapp_bot_tpl_ended=whatsapp_cfg.get('bot_tpl_ended', DEFAULT_WHATSAPP_BOT_TPL_ENDED),
+                         whatsapp_bot_tpl_info=whatsapp_cfg.get('bot_tpl_info', DEFAULT_WHATSAPP_BOT_TPL_INFO))
 
 
 @app.route('/api/settings/subscription-page', methods=['GET'])
@@ -16887,7 +17037,22 @@ def sub_manager_page():
                          whatsapp_session_id=whatsapp_cfg.get('session_id', ''),
                          whatsapp_template_renew=whatsapp_cfg.get('template_renew', DEFAULT_WHATSAPP_TEMPLATE_RENEW),
                          whatsapp_template_welcome=whatsapp_cfg.get('template_welcome', DEFAULT_WHATSAPP_TEMPLATE_WELCOME),
-                         whatsapp_template_pre_expiry=whatsapp_cfg.get('template_pre_expiry', DEFAULT_WHATSAPP_TEMPLATE_PRE_EXPIRY))
+                         whatsapp_template_pre_expiry=whatsapp_cfg.get('template_pre_expiry', DEFAULT_WHATSAPP_TEMPLATE_PRE_EXPIRY),
+                         whatsapp_warmup_enabled=whatsapp_cfg.get('warmup_enabled', False),
+                         whatsapp_warmup_start_date=whatsapp_cfg.get('warmup_start_date', ''),
+                         whatsapp_warmup_start_per_day=whatsapp_cfg.get('warmup_start_per_day', 20),
+                         whatsapp_warmup_ramp_days=whatsapp_cfg.get('warmup_ramp_days', 14),
+                         whatsapp_pace_enabled=whatsapp_cfg.get('pace_enabled', False),
+                         whatsapp_pace_min_gap_seconds=whatsapp_cfg.get('pace_min_gap_seconds', 8),
+                         whatsapp_pace_jitter_seconds=whatsapp_cfg.get('pace_jitter_seconds', 5),
+                         whatsapp_depletion_enabled=whatsapp_cfg.get('depletion_enabled', False),
+                         whatsapp_depletion_expiry_days=whatsapp_cfg.get('depletion_expiry_days', 3),
+                         whatsapp_depletion_volume_gb=whatsapp_cfg.get('depletion_volume_gb', 2.0),
+                         whatsapp_depletion_cooldown_days=whatsapp_cfg.get('depletion_cooldown_days', 7),
+                         whatsapp_bot_tpl_created=whatsapp_cfg.get('bot_tpl_created', DEFAULT_WHATSAPP_BOT_TPL_CREATED),
+                         whatsapp_bot_tpl_renew=whatsapp_cfg.get('bot_tpl_renew', DEFAULT_WHATSAPP_BOT_TPL_RENEW),
+                         whatsapp_bot_tpl_ended=whatsapp_cfg.get('bot_tpl_ended', DEFAULT_WHATSAPP_BOT_TPL_ENDED),
+                         whatsapp_bot_tpl_info=whatsapp_cfg.get('bot_tpl_info', DEFAULT_WHATSAPP_BOT_TPL_INFO))
 
 @app.route('/api/sub-apps', methods=['GET'])
 def get_sub_apps():
@@ -17985,6 +18150,40 @@ def update_system_config():
             elif key == WHATSAPP_GATEWAY_TIMEOUT_KEY:
                 sanitized_value = str(_parse_int(value, 10, min_value=3, max_value=60))
             elif key in {WHATSAPP_TEMPLATE_RENEW_KEY, WHATSAPP_TEMPLATE_WELCOME_KEY, WHATSAPP_TEMPLATE_PRE_EXPIRY_KEY}:
+                sanitized_value = sanitize_html(str(value))[:2000]
+            elif key in {
+                WHATSAPP_WARMUP_ENABLED_KEY, WHATSAPP_PACE_ENABLED_KEY, WHATSAPP_DEPLETION_ENABLED_KEY,
+            }:
+                sanitized_value = 'true' if _parse_bool(value) else 'false'
+            elif key == WHATSAPP_WARMUP_START_DATE_KEY:
+                # Accept YYYY-MM-DD only; anything else stored empty.
+                _raw = str(value or '').strip()
+                try:
+                    sanitized_value = datetime.strptime(_raw, '%Y-%m-%d').strftime('%Y-%m-%d') if _raw else ''
+                except ValueError:
+                    sanitized_value = ''
+            elif key == WHATSAPP_WARMUP_START_PER_DAY_KEY:
+                sanitized_value = str(_parse_int(value, 20, min_value=1, max_value=50000))
+            elif key == WHATSAPP_WARMUP_RAMP_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 14, min_value=1, max_value=120))
+            elif key == WHATSAPP_PACE_MIN_GAP_KEY:
+                sanitized_value = str(_parse_int(value, 8, min_value=0, max_value=600))
+            elif key == WHATSAPP_PACE_JITTER_KEY:
+                sanitized_value = str(_parse_int(value, 5, min_value=0, max_value=600))
+            elif key == WHATSAPP_DEPLETION_EXPIRY_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 3, min_value=0, max_value=60))
+            elif key == WHATSAPP_DEPLETION_VOLUME_GB_KEY:
+                try:
+                    _v = max(0.0, min(1000.0, float(value)))
+                except (TypeError, ValueError):
+                    _v = 2.0
+                sanitized_value = str(_v)
+            elif key == WHATSAPP_DEPLETION_COOLDOWN_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 7, min_value=1, max_value=120))
+            elif key in {
+                WHATSAPP_BOT_TPL_CREATED_KEY, WHATSAPP_BOT_TPL_RENEW_KEY,
+                WHATSAPP_BOT_TPL_ENDED_KEY, WHATSAPP_BOT_TPL_INFO_KEY,
+            }:
                 sanitized_value = sanitize_html(str(value))[:2000]
             else:
                 sanitized_value = sanitize_html(str(value))
