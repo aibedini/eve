@@ -977,6 +977,98 @@ setup_python_env() {
     fi
 }
 
+# ── Dependency verification ─────────────────────────────────────────
+# Exit 0 = every requirement in requirements.txt is installed at a satisfying
+# version inside the venv. Exit 1 = something missing/outdated (printed to
+# stderr). Exit 2 = couldn't introspect (caller should just (re)install).
+verify_requirements() {
+    sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && python3 - <<'PY'
+import sys
+try:
+    from pip._vendor.packaging.requirements import Requirement
+except Exception:
+    sys.exit(2)  # can't verify — let the caller install unconditionally
+from importlib.metadata import version, PackageNotFoundError
+
+missing = []
+try:
+    with open('requirements.txt') as fh:
+        for raw in fh:
+            line = raw.split('#', 1)[0].strip()
+            if not line:
+                continue
+            try:
+                req = Requirement(line)
+            except Exception:
+                continue
+            try:
+                have = version(req.name)
+            except PackageNotFoundError:
+                missing.append(line)
+                continue
+            if req.specifier and not req.specifier.contains(have, prereleases=True):
+                missing.append('%s (have %s)' % (line, have))
+except FileNotFoundError:
+    sys.exit(0)
+
+if missing:
+    sys.stderr.write('Missing/outdated: ' + '; '.join(missing) + '\n')
+    sys.exit(1)
+sys.exit(0)
+PY"
+}
+
+# Guarantee every requirements.txt entry is installed. Verifies first and only
+# installs what's actually missing (online, with mirror fallbacks), then
+# re-verifies. Lets a freshly-added dependency get picked up automatically on
+# online update — no manual "pip install" needed.
+ensure_requirements_satisfied() {
+    print_header "Verifying Python dependencies (requirements.txt)"
+
+    verify_requirements
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
+        print_success "All Python requirements already satisfied"
+        return 0
+    fi
+
+    if [ "$rc" -eq 2 ]; then
+        print_warning "Cannot introspect installed versions — running a plain requirements install to be safe..."
+    else
+        print_warning "New or unsatisfied requirements detected — installing..."
+    fi
+
+    if sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
+            pip install --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+        :
+    elif sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
+            pip install -i https://mirrors.aliyun.com/pypi/simple/ \
+            --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+        :
+    else
+        sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
+            pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+            --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20" || true
+    fi
+
+    # If we couldn't verify to begin with, trust the install we just ran.
+    if [ "$rc" -eq 2 ]; then
+        print_success "Requirements install completed"
+        return 0
+    fi
+
+    verify_requirements
+    if [ $? -eq 0 ]; then
+        print_success "All Python requirements installed and verified"
+        return 0
+    fi
+
+    print_error "Some requirements are still missing after install."
+    print_warning "Install manually, then restart the service:"
+    echo -e "  ${DIM}sudo -u ${APP_USER} bash -c 'source ${APP_DIR}/venv/bin/activate && pip install -r ${APP_DIR}/requirements.txt'${NC}"
+    return 1
+}
+
 create_env_file() {
     print_header "Step 8: Environment variables"
     if [ -f "$ENV_FILE" ]; then
@@ -1968,6 +2060,9 @@ do_online_update() {
     ensure_server_password_key
     ensure_systemd_envfile_evemanager
     SKIP_DB_MIGRATIONS=true setup_python_env
+    # Safety net: guarantee any newly-added requirement is installed before we
+    # migrate/restart, even if the wheels-first path above skipped a new dep.
+    ensure_requirements_satisfied || print_warning "Continuing despite a dependency warning (app has graceful fallbacks for optional deps)."
     if ! run_migrations; then
         _offer_rollback "${APP_DIR}.bak.${_BAK_TS}"
         return 1
