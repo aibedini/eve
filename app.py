@@ -89,7 +89,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.4"
+APP_VERSION = "2.3.5"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -10266,6 +10266,22 @@ def enrich_inbounds_with_ownership(inbounds):
     return inbounds
 
 
+def _ensure_snapshot_enriched():
+    """Enrich the shared GLOBAL_SERVER_DATA snapshot with ownership in place, but
+    only once per (snapshot, ownership) version. Enrichment is idempotent and
+    additive (it just sets/clears owner_* fields on client dicts), so the read
+    path can serve the shared lists directly — avoiding a full deepcopy of the
+    snapshot on every /api/refresh, which was the dominant cost at scale."""
+    try:
+        key = (GLOBAL_SERVER_DATA.get('last_update'), _OWNERSHIP_CACHE.get('updated_at'))
+        if GLOBAL_SERVER_DATA.get('_enriched_key') == key:
+            return
+        enrich_inbounds_with_ownership(GLOBAL_SERVER_DATA.get('inbounds') or [])
+        GLOBAL_SERVER_DATA['_enriched_key'] = key
+    except Exception:
+        app.logger.exception("Failed to ensure snapshot enrichment")
+
+
 @app.route('/api/refresh')
 @login_required
 def api_refresh():
@@ -10298,57 +10314,57 @@ def api_refresh():
     debug_timing = _parse_bool(request.args.get('debug_timing'))
     t0 = time.perf_counter() if debug_timing else None
 
-    data = copy.deepcopy(GLOBAL_SERVER_DATA)
-    t_after_copy = time.perf_counter() if debug_timing else None
-
-    never_fetched = not data.get('last_update')
+    never_fetched = not GLOBAL_SERVER_DATA.get('last_update')
 
     # Kick off a refresh job only when cache has never been populated (app start / first load)
-    if not data.get('inbounds') and never_fetched and not GLOBAL_SERVER_DATA.get('is_updating') and not job:
+    if not GLOBAL_SERVER_DATA.get('inbounds') and never_fetched and not GLOBAL_SERVER_DATA.get('is_updating') and not job:
         job = enqueue_refresh_job(mode='full', server_id=server_id, force=False)
 
     # Return early with skeleton response only when data was never fetched yet.
     # If last_update is set but inbounds is empty (server has 0 inbounds), fall through
     # so the full (empty) payload is returned and the UI can clear its skeleton.
-    if not data.get('inbounds') and never_fetched:
+    if not GLOBAL_SERVER_DATA.get('inbounds') and never_fetched:
         return jsonify({
             "success": True,
             "inbounds": [],
             "stats": {"total_inbounds": 0, "active_inbounds": 0, "total_clients": 0,
                       "online_clients": 0, "active_clients": 0, "inactive_clients": 0, "not_started_clients": 0, "unlimited_expiry_clients": 0, "unlimited_volume_clients": 0, "total_traffic": "0 B",
                       "total_upload": "0 B", "total_download": "0 B"},
-            "servers": (data.get('servers_status') or []),
-            "server_count": len(data.get('servers_status') or []),
+            "servers": (GLOBAL_SERVER_DATA.get('servers_status') or []),
+            "server_count": len(GLOBAL_SERVER_DATA.get('servers_status') or []),
             "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
             "refresh_job": _summarize_job(job)
         }), (202 if job and job.get('state') in ('queued', 'running') else 200)
 
     user = db.session.get(Admin, session['admin_id'])
-    
+
     # === حالت سوپرادمین (یا ادمین معمولی غیر ریسلر) ===
     if user.role != 'reseller':
-        # Enrich with ownership using the in-memory cache (O(1) per client, no per-request DB query)
-        enrich_inbounds_with_ownership(data.get('inbounds') or [])
+        # Enrich the shared snapshot once per version, then serve the shared lists
+        # directly — no per-request deepcopy (that copy was the dominant latency at
+        # scale and made the skeleton linger). Read-only response, additive fields.
+        _ensure_snapshot_enriched()
 
-        # Admins/superadmins see all cached data
         resp = {
             "success": True,
-            "inbounds": data['inbounds'],
-            "stats": data['stats'],
-            "servers": data['servers_status'],
-            "server_count": len(data['servers_status']),
-            "last_update": data['last_update'],
+            "inbounds": GLOBAL_SERVER_DATA.get('inbounds') or [],
+            "stats": GLOBAL_SERVER_DATA.get('stats') or {},
+            "servers": GLOBAL_SERVER_DATA.get('servers_status') or [],
+            "server_count": len(GLOBAL_SERVER_DATA.get('servers_status') or []),
+            "last_update": GLOBAL_SERVER_DATA.get('last_update'),
             "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
             "refresh_job": _summarize_job(job),
         }
-        if debug_timing and t0 is not None and t_after_copy is not None:
+        if debug_timing and t0 is not None:
             resp['timing_ms'] = {
-                'deepcopy': round((t_after_copy - t0) * 1000.0, 2),
                 'total': round((time.perf_counter() - t0) * 1000.0, 2),
             }
         return jsonify(resp), (202 if job and job.get('state') in ('queued', 'running') else 200)
 
     # === حالت ریسلر ===
+    # The reseller path filters/annotates per-user, so it works on a private copy.
+    data = copy.deepcopy(GLOBAL_SERVER_DATA)
+
     # 1. دریافت دسترسی‌های سرور و اینباند
     allowed_map, assignments = get_reseller_access_maps(user)
     
