@@ -89,7 +89,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.3"
+APP_VERSION = "2.3.4"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -10829,6 +10829,85 @@ def api_add_client_inbounds(server_id):
         'server_id': server_id,
         'inbounds': items,
         'last_update': GLOBAL_SERVER_DATA.get('last_update'),
+    })
+
+
+@app.route('/api/client/inbound-assignments/<int:server_id>')
+@login_required
+def api_client_inbound_assignments(server_id):
+    """Authoritative source for the Edit-Client "Assigned inbounds" picker.
+
+    Computes v3-ness server-side (reads the DB API token directly, so it never
+    depends on a possibly-stale client cache) and returns the role-filtered
+    inbound list for the server plus the set of inbound ids the given client is
+    currently a member of. This makes the picker work even if the dashboard's
+    in-memory inbound cache for this server hasn't been populated yet.
+    """
+    user = db.session.get(Admin, session['admin_id'])
+    email = (request.args.get('email') or '').strip()
+    email_l = email.lower()
+
+    server = db.session.get(Server, server_id)
+    if not server:
+        return jsonify({'success': False, 'error': 'Server not found'}), 404
+
+    is_v3 = server_is_v3(server)
+
+    is_reseller = bool(user and user.role == 'reseller')
+    allowed_map, assignments = ('*', {})
+    owned_emails = None
+    if is_reseller:
+        allowed_map, assignments = get_reseller_access_maps(user)
+        owned_emails = {
+            (o.client_email or '').strip().lower()
+            for o in ClientOwnership.query.filter_by(reseller_id=user.id, server_id=server_id).all()
+            if o.client_email
+        }
+
+    items = []
+    assigned_ids = []
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id', -1)) != int(server_id):
+                continue
+        except Exception:
+            continue
+
+        inbound_id = inbound.get('id')
+        if inbound_id is None:
+            continue
+
+        if is_reseller:
+            try:
+                if not is_inbound_accessible(int(server_id), int(inbound_id), allowed_map, assignments):
+                    continue
+            except Exception:
+                continue
+
+        items.append({
+            'id': inbound_id,
+            'server_id': server_id,
+            'remark': inbound.get('remark') or f'Inbound {inbound_id}',
+            'port': inbound.get('port'),
+        })
+
+        if email_l:
+            for c in (inbound.get('clients') or []):
+                if not isinstance(c, dict):
+                    continue
+                if (c.get('email') or '').strip().lower() != email_l:
+                    continue
+                if owned_emails is not None and email_l not in owned_emails:
+                    continue
+                assigned_ids.append(inbound_id)
+                break
+
+    return jsonify({
+        'success': True,
+        'server_id': server_id,
+        'is_v3': bool(is_v3),
+        'inbounds': items,
+        'assigned_ids': assigned_ids,
     })
 
 

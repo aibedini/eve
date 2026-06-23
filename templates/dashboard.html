@@ -5235,37 +5235,16 @@
     // ── Edit modal: change which inbounds a v3 client is assigned to ──────────
     let _editClientInboundState = { serverId: null, email: '', clientUuid: '', originalIds: new Set(), isV3: false };
 
-    function _populateEditInboundMulti(serverId, email) {
+    function _renderEditInboundMulti(serverId, items, assignedIds) {
         const group = document.getElementById('edit-client-inbound-group');
         const list = document.getElementById('edit-client-inbound-multi-list');
-        _editClientInboundState = { serverId, email, clientUuid: '', originalIds: new Set(), isV3: false };
         if (!group || !list) return;
-
-        if (!_serverIsV3(serverId)) {
-            group.style.display = 'none';
-            list.innerHTML = '';
-            return;
-        }
-        _editClientInboundState.isV3 = true;
-
-        // Role-filtered cache → resellers only ever see inbounds they can access.
-        const inbounds = getCachedInboundsForServer(serverId);
-        const emailL = String(email || '').toLowerCase();
-        const assigned = new Set();
-        inbounds.forEach(ib => {
-            const c = (ib.clients || []).find(x => (x.email || '').toLowerCase() === emailL);
-            if (c) {
-                assigned.add(parseInt(ib.id));
-                if (!_editClientInboundState.clientUuid && c.id) _editClientInboundState.clientUuid = c.id;
-            }
-        });
+        if (!items.length) { group.style.display = 'none'; list.innerHTML = ''; return; }
+        const assigned = new Set((assignedIds || []).map(v => parseInt(v)).filter(Number.isFinite));
         _editClientInboundState.originalIds = assigned;
-
-        if (!inbounds.length) { group.style.display = 'none'; list.innerHTML = ''; return; }
-
         group.style.display = '';
         document.getElementById('edit-inbound-multi-dropdown').classList.add('hidden');
-        list.innerHTML = inbounds.map(ib => `
+        list.innerHTML = items.map(ib => `
             <div class="filter-item">
                 <label class="checkbox-label">
                     <input type="checkbox" class="edit-inbound-cb" value="${ib.id}" ${assigned.has(parseInt(ib.id)) ? 'checked' : ''} onchange="_updateEditInboundMultiLabel()">
@@ -5274,6 +5253,52 @@
                 </label>
             </div>`).join('');
         _updateEditInboundMultiLabel();
+    }
+
+    async function _populateEditInboundMulti(serverId, email) {
+        const group = document.getElementById('edit-client-inbound-group');
+        const list = document.getElementById('edit-client-inbound-multi-list');
+        _editClientInboundState = { serverId, email, clientUuid: '', originalIds: new Set(), isV3: false };
+        if (!group || !list) return;
+
+        // Hide while we resolve; the authoritative answer comes from the backend.
+        group.style.display = 'none';
+        list.innerHTML = '';
+
+        // Seed clientUuid from the local cache (needed by the save path).
+        const emailL = String(email || '').toLowerCase();
+        getCachedInboundsForServer(serverId).forEach(ib => {
+            const c = (ib.clients || []).find(x => (x.email || '').toLowerCase() === emailL);
+            if (c && !_editClientInboundState.clientUuid && c.id) _editClientInboundState.clientUuid = c.id;
+        });
+
+        // Ask the server: it computes v3-ness from the DB token and reads the
+        // authoritative inbound list + this client's memberships. This is robust
+        // even when the dashboard's in-memory cache for this server is empty or
+        // allServers hasn't loaded has_api_token yet.
+        try {
+            const resp = await fetch(`/api/client/inbound-assignments/${serverId}?email=${encodeURIComponent(email || '')}`, { cache: 'no-store' });
+            const data = await resp.json();
+            if (data && data.success) {
+                if (!data.is_v3) { group.style.display = 'none'; list.innerHTML = ''; return; }
+                _editClientInboundState.isV3 = true;
+                _renderEditInboundMulti(serverId, data.inbounds || [], data.assigned_ids || []);
+                return;
+            }
+        } catch (e) {
+            // fall through to the local-cache best effort below
+        }
+
+        // Fallback: local cache (older behavior) if the request failed entirely.
+        if (!_serverIsV3(serverId)) { group.style.display = 'none'; list.innerHTML = ''; return; }
+        _editClientInboundState.isV3 = true;
+        const inbounds = getCachedInboundsForServer(serverId);
+        const assigned = [];
+        inbounds.forEach(ib => {
+            const c = (ib.clients || []).find(x => (x.email || '').toLowerCase() === emailL);
+            if (c) assigned.push(parseInt(ib.id));
+        });
+        _renderEditInboundMulti(serverId, inbounds, assigned);
     }
 
     function toggleEditInboundDropdown(e) {
