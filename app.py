@@ -78,6 +78,14 @@ except Exception:
     ZoneInfo = None
     available_timezones = None
 from flask import Flask, render_template, jsonify, request, send_file, redirect, url_for, session, g, make_response, Response, stream_with_context
+try:
+    # Optional: HTTP response compression. The dashboard /api/refresh payload can be
+    # tens of MB of JSON; gzipping it at the app level (before it leaves gunicorn)
+    # cuts transfer size ~85-90% and, crucially, works even when an upstream CDN
+    # (e.g. Cloudflare) refuses to compress very large responses at the edge.
+    from flask_compress import Compress
+except Exception:
+    Compress = None
 from flask_sqlalchemy import SQLAlchemy
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -2266,6 +2274,28 @@ def _security_per_request_setup():
 
 app = Flask(__name__)
 app.json.ensure_ascii = False  # send emoji/Persian as real UTF-8, not \uXXXX escapes
+
+# Enable HTTP response compression (gzip/br) for text payloads. The biggest win is
+# the dashboard /api/refresh snapshot, which can be 20+ MB of JSON uncompressed.
+# Skip tiny responses and already-compressed binary types.
+if Compress is not None:
+    app.config.setdefault('COMPRESS_MIMETYPES', [
+        'application/json',
+        'application/javascript',
+        'text/html',
+        'text/css',
+        'text/plain',
+        'text/xml',
+        'image/svg+xml',
+    ])
+    app.config.setdefault('COMPRESS_MIN_SIZE', 1024)   # don't bother for sub-1KB bodies
+    app.config.setdefault('COMPRESS_LEVEL', 6)          # balanced CPU vs ratio
+    Compress(app)
+else:
+    try:
+        app.logger.warning('flask-compress not installed; HTTP responses will not be gzipped (large /api/refresh payloads stay uncompressed).')
+    except Exception:
+        pass
 # Trust one proxy hop (nginx SSL termination) so Flask sees correct scheme/host
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
