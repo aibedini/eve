@@ -857,10 +857,35 @@
                             <span class="checkmark"></span>
                             <span>On renewal (Renew SMS)</span>
                         </label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Background state reminders (uses the Monitor per-state templates)</label>
+                    <p class="text-secondary" style="margin:2px 0 8px; font-size:0.82rem;">
+                        A periodic scan messages each non-reseller account once per cooldown, using the
+                        matching template from <strong>Monitor → Message Templates</strong>. Edit the wording there.
+                    </p>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
                         <label class="checkbox-label" onclick="event.stopPropagation()">
-                            <input type="checkbox" id="sms-trigger-depletion" {% if sms_trigger_depletion %}checked{% endif %}>
+                            <input type="checkbox" id="sms-trigger-near-expiry" {% if sms_trigger_near_expiry %}checked{% endif %}>
                             <span class="checkmark"></span>
-                            <span>Near-expiry / low-volume reminder (background scan, Account Info SMS)</span>
+                            <span>⏳ Near expiry (Monitor “Soon”)</span>
+                        </label>
+                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <input type="checkbox" id="sms-trigger-low-volume" {% if sms_trigger_low_volume %}checked{% endif %}>
+                            <span class="checkmark"></span>
+                            <span>⚠️ Low volume (Monitor “Low”)</span>
+                        </label>
+                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <input type="checkbox" id="sms-trigger-expired" {% if sms_trigger_expired %}checked{% endif %}>
+                            <span class="checkmark"></span>
+                            <span>⛔ Expired (Monitor “Expired”)</span>
+                        </label>
+                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <input type="checkbox" id="sms-trigger-ended" {% if sms_trigger_ended %}checked{% endif %}>
+                            <span class="checkmark"></span>
+                            <span>🚫 Volume ended (Monitor “Ended”)</span>
                         </label>
                     </div>
                 </div>
@@ -899,6 +924,52 @@
 
                 <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
                     <button class="btn btn-primary" onclick="saveSmsSettings()">Save SMS Settings</button>
+                </div>
+
+                <hr style="border:none;border-top:1px solid var(--border-color, #2a2a3a);margin:22px 0 16px;">
+
+                <!-- Send queue / progress + history -->
+                <div class="form-group">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+                        <label style="margin:0;">Send queue &amp; log</label>
+                        <button class="btn btn-secondary" id="sms-scan-run-btn" onclick="runSmsScanNow()">Run scan now</button>
+                    </div>
+                    <p class="text-secondary" style="margin:4px 0 10px; font-size:0.82rem;">
+                        Watch who the background scan is messaging right now and review recent sends.
+                    </p>
+
+                    <div id="sms-scan-progress" style="display:none; background:rgba(99,102,241,0.06); border:1px solid rgba(99,102,241,0.25); border-radius:10px; padding:12px 14px; margin-bottom:12px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                            <span id="sms-scan-state" style="font-weight:600;">Idle</span>
+                            <span id="sms-scan-current" class="text-secondary" style="font-size:0.8rem;"></span>
+                        </div>
+                        <div style="background:rgba(148,163,184,0.18);border-radius:6px;height:8px;margin:10px 0 8px;overflow:hidden;">
+                            <div id="sms-scan-bar" style="height:100%;width:0%;background:#6366f1;transition:width .3s;"></div>
+                        </div>
+                        <div id="sms-scan-counts" class="text-secondary" style="font-size:0.82rem;display:flex;gap:14px;flex-wrap:wrap;"></div>
+                    </div>
+
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+                        <small class="text-secondary">Recent sends</small>
+                        <button class="btn btn-secondary" style="padding:3px 10px;font-size:0.78rem;" onclick="loadSmsLogs()">Refresh log</button>
+                    </div>
+                    <div style="overflow-x:auto;border:1px solid var(--border-color,#2a2a3a);border-radius:8px;">
+                        <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+                            <thead>
+                                <tr style="text-align:start;color:var(--text-secondary,#94a3b8);">
+                                    <th style="padding:8px 10px;text-align:start;">Time</th>
+                                    <th style="padding:8px 10px;text-align:start;">User</th>
+                                    <th style="padding:8px 10px;text-align:start;">Server</th>
+                                    <th style="padding:8px 10px;text-align:start;">State</th>
+                                    <th style="padding:8px 10px;text-align:start;">To</th>
+                                    <th style="padding:8px 10px;text-align:start;">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sms-logs-body">
+                                <tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2542,7 +2613,10 @@
             sms_gmweb_timeout: Number((document.getElementById('sms-timeout') || {}).value || 15),
             sms_trigger_created: !!(document.getElementById('sms-trigger-created') || {}).checked,
             sms_trigger_renew: !!(document.getElementById('sms-trigger-renew') || {}).checked,
-            sms_trigger_depletion: !!(document.getElementById('sms-trigger-depletion') || {}).checked,
+            sms_trigger_near_expiry: !!(document.getElementById('sms-trigger-near-expiry') || {}).checked,
+            sms_trigger_low_volume: !!(document.getElementById('sms-trigger-low-volume') || {}).checked,
+            sms_trigger_expired: !!(document.getElementById('sms-trigger-expired') || {}).checked,
+            sms_trigger_ended: !!(document.getElementById('sms-trigger-ended') || {}).checked,
             sms_depletion_expiry_days: Number((document.getElementById('sms-depletion-expiry-days') || {}).value || 3),
             sms_depletion_volume_gb: Number((document.getElementById('sms-depletion-volume-gb') || {}).value || 2),
             sms_depletion_cooldown_days: Number((document.getElementById('sms-depletion-cooldown-days') || {}).value || 7),
@@ -2568,6 +2642,111 @@
         } catch (e) {
             if (!silent) showToast('Network error', 'error');
             return false;
+        }
+    }
+
+    // ── SMS scan queue / progress / log ──────────────────────────────
+    let smsScanPollTimer = null;
+    const SMS_STATE_LABELS = {
+        near_expiry: '⏳ Near expiry', low_volume: '⚠️ Low volume',
+        expired: '⛔ Expired', ended: '🚫 Ended'
+    };
+
+    function renderSmsScanProgress(job) {
+        const box = document.getElementById('sms-scan-progress');
+        if (!box || !job || !job.state || job.state === 'idle') {
+            if (box) box.style.display = 'none';
+            return;
+        }
+        box.style.display = 'block';
+        const candidates = Number(job.candidates || 0);
+        const processed = Number(job.processed || 0);
+        const pct = candidates > 0 ? Math.min(100, Math.round((processed / candidates) * 100)) : (job.state === 'done' ? 100 : 0);
+        const stateEl = document.getElementById('sms-scan-state');
+        const running = job.state === 'running';
+        stateEl.textContent = running ? 'Scanning…' : (job.state === 'done' ? 'Done' : (job.state === 'error' ? 'Error' : job.state));
+        document.getElementById('sms-scan-bar').style.width = pct + '%';
+        document.getElementById('sms-scan-current').textContent = running && job.current ? ('Now: ' + job.current) : '';
+        const parts = [
+            `Will message up to <strong>${candidates}</strong>`,
+            `Sent <strong>${Number(job.sent || 0)}</strong>`,
+            `Remaining <strong>${Math.max(0, candidates - processed)}</strong>`,
+            `Failed ${Number(job.failed || 0)}`,
+            `Skipped (cooldown) ${Number(job.skipped_cooldown || 0)}`,
+        ];
+        if (job.stopped) parts.push(`<span style="color:#f59e0b;">Stopped: ${job.stopped}</span>`);
+        document.getElementById('sms-scan-counts').innerHTML = parts.join('');
+    }
+
+    function pollSmsScanStatus() {
+        if (smsScanPollTimer) clearTimeout(smsScanPollTimer);
+        fetch('/api/sms/scan/status')
+            .then(r => r.json())
+            .then(data => {
+                const job = (data && data.job) || {};
+                renderSmsScanProgress(job);
+                if (job.state === 'running') {
+                    smsScanPollTimer = setTimeout(pollSmsScanStatus, 1200);
+                } else {
+                    const btn = document.getElementById('sms-scan-run-btn');
+                    if (btn) { btn.disabled = false; btn.textContent = 'Run scan now'; }
+                    loadSmsLogs();
+                }
+            })
+            .catch(() => { /* keep UI calm on transient errors */ });
+    }
+
+    async function runSmsScanNow() {
+        const btn = document.getElementById('sms-scan-run-btn');
+        // Persist current form values first so the scan uses what's on screen.
+        const saved = await saveSmsSettings(true);
+        if (!saved) { showToast('Could not save SMS settings before scanning', 'error'); return; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+        try {
+            const res = await fetch('/api/sms/scan/run', { method: 'POST' });
+            const data = await res.json();
+            if (data && data.success) {
+                showToast('Scan started');
+                pollSmsScanStatus();
+            } else {
+                if (btn) { btn.disabled = false; btn.textContent = 'Run scan now'; }
+                showToast((data && data.error) ? data.error : 'Could not start scan', 'error');
+                if (data && data.job) renderSmsScanProgress(data.job);
+            }
+        } catch (e) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Run scan now'; }
+            showToast('Network error', 'error');
+        }
+    }
+
+    async function loadSmsLogs() {
+        const body = document.getElementById('sms-logs-body');
+        if (!body) return;
+        try {
+            const res = await fetch('/api/sms/logs?limit=100');
+            const data = await res.json();
+            const logs = (data && data.logs) || [];
+            if (!logs.length) {
+                body.innerHTML = '<tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>';
+                return;
+            }
+            const statusColor = { sent: '#22c55e', failed: '#ef4444', skipped: '#f59e0b' };
+            body.innerHTML = logs.map(row => {
+                let when = row.created_at || '';
+                try { when = new Date(row.created_at).toLocaleString(); } catch (_) {}
+                const sc = statusColor[row.status] || '#94a3b8';
+                const statusTxt = row.reason ? `${row.status} (${row.reason})` : row.status;
+                return `<tr style="border-top:1px solid var(--border-color,#2a2a3a);">
+                    <td style="padding:7px 10px;white-space:nowrap;">${escapeHtml(when)}</td>
+                    <td style="padding:7px 10px;">${escapeHtml(row.email || '')}</td>
+                    <td style="padding:7px 10px;">${escapeHtml(row.server_name || '')}</td>
+                    <td style="padding:7px 10px;white-space:nowrap;">${SMS_STATE_LABELS[row.state] || escapeHtml(row.state || '')}</td>
+                    <td style="padding:7px 10px;white-space:nowrap;">${escapeHtml(row.recipient || '')}</td>
+                    <td style="padding:7px 10px;color:${sc};white-space:nowrap;">${escapeHtml(statusTxt)}</td>
+                </tr>`;
+            }).join('');
+        } catch (e) {
+            body.innerHTML = '<tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">Could not load log.</td></tr>';
         }
     }
 
@@ -5382,6 +5561,11 @@
         _origSwitchTab(name);
         if (name === 'traffic_check' && !_tcData) loadTrafficCheck();
         if (name === 'supported_apps') loadSubApps();
+        if (name === 'sms') {
+            // Show recent sends and resume progress if a scan is in flight.
+            if (typeof loadSmsLogs === 'function') loadSmsLogs();
+            if (typeof pollSmsScanStatus === 'function') pollSmsScanStatus();
+        }
     };
 </script>
 

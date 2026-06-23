@@ -314,6 +314,12 @@ REFRESH_JOBS = {}  # job_id -> job dict
 REFRESH_JOBS_LOCK = threading.Lock()
 REFRESH_MAX_JOBS = 50
 
+# Automated SMS state-scan progress (in-memory; per-process). A single job at a
+# time — the worker (or a manual "run now") populates it so the UI can show how
+# many users will be messaged, how many are done, and what's left.
+SMS_SCAN_JOB = {'state': 'idle'}
+SMS_SCAN_JOB_LOCK = threading.Lock()
+
 # Bulk job tracking. Persist to a shared file so progress polling works across
 # gunicorn workers while the background worker updates the job.
 BULK_JOBS_FILE = os.path.join(tempfile.gettempdir(), 'eve_bulk_jobs.json')
@@ -4987,7 +4993,13 @@ SMS_GMWEB_API_KEY_KEY           = 'sms_gmweb_api_key'
 SMS_GMWEB_TIMEOUT_KEY           = 'sms_gmweb_timeout'
 SMS_TRIGGER_CREATED_KEY         = 'sms_trigger_created'
 SMS_TRIGGER_RENEW_KEY           = 'sms_trigger_renew'
-SMS_TRIGGER_DEPLETION_KEY       = 'sms_trigger_depletion'
+SMS_TRIGGER_DEPLETION_KEY       = 'sms_trigger_depletion'  # legacy combined trigger (back-compat)
+# Granular state triggers — map 1:1 to the monitor service-state tags so the
+# automated SMS uses the SAME per-state template the operator edits in Monitor.
+SMS_TRIGGER_NEAR_EXPIRY_KEY     = 'sms_trigger_near_expiry'  # monitor tag 'soon'
+SMS_TRIGGER_LOW_VOLUME_KEY      = 'sms_trigger_low_volume'   # monitor tag 'low'
+SMS_TRIGGER_EXPIRED_KEY         = 'sms_trigger_expired'      # monitor tag 'expired'
+SMS_TRIGGER_ENDED_KEY           = 'sms_trigger_ended'        # monitor tag 'ended'
 SMS_DEPLETION_EXPIRY_DAYS_KEY   = 'sms_depletion_expiry_days'
 SMS_DEPLETION_VOLUME_GB_KEY     = 'sms_depletion_volume_gb'
 SMS_DEPLETION_COOLDOWN_DAYS_KEY = 'sms_depletion_cooldown_days'
@@ -5005,6 +5017,8 @@ def _get_sms_runtime_settings() -> dict:
         SMS_TRIGGER_DEPLETION_KEY, SMS_DEPLETION_EXPIRY_DAYS_KEY,
         SMS_DEPLETION_VOLUME_GB_KEY, SMS_DEPLETION_COOLDOWN_DAYS_KEY,
         SMS_MIN_INTERVAL_SECONDS_KEY, SMS_DAILY_LIMIT_KEY,
+        SMS_TRIGGER_NEAR_EXPIRY_KEY, SMS_TRIGGER_LOW_VOLUME_KEY,
+        SMS_TRIGGER_EXPIRED_KEY, SMS_TRIGGER_ENDED_KEY,
     ]
     c = _get_system_configs_batch(keys)
 
@@ -5037,6 +5051,13 @@ def _get_sms_runtime_settings() -> dict:
         'trigger_created': _bool(SMS_TRIGGER_CREATED_KEY, True),
         'trigger_renew': _bool(SMS_TRIGGER_RENEW_KEY, True),
         'trigger_depletion': _bool(SMS_TRIGGER_DEPLETION_KEY, False),
+        # Granular state triggers. Back-compat: when none of the new keys are
+        # present yet, fall back to the legacy combined depletion flag for the
+        # two "near" states so existing installs keep behaving the same.
+        'trigger_near_expiry': _bool(SMS_TRIGGER_NEAR_EXPIRY_KEY, _bool(SMS_TRIGGER_DEPLETION_KEY, False)),
+        'trigger_low_volume': _bool(SMS_TRIGGER_LOW_VOLUME_KEY, _bool(SMS_TRIGGER_DEPLETION_KEY, False)),
+        'trigger_expired': _bool(SMS_TRIGGER_EXPIRED_KEY, False),
+        'trigger_ended': _bool(SMS_TRIGGER_ENDED_KEY, False),
         'depletion_expiry_days': _int(SMS_DEPLETION_EXPIRY_DAYS_KEY, 3, lo=0, hi=60),
         'depletion_volume_gb': _float(SMS_DEPLETION_VOLUME_GB_KEY, 2.0, lo=0.0, hi=1000.0),
         'depletion_cooldown_days': _int(SMS_DEPLETION_COOLDOWN_DAYS_KEY, 7, lo=1, hi=120),
@@ -5165,29 +5186,124 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
     threading.Thread(target=_worker, daemon=True).start()
 
 
-def _run_sms_depletion_scan() -> dict:
-    """Near-depletion SMS scan: message accounts (non-reseller-owned only) whose
-    time or volume is about to run out, once per cooldown window."""
+# Monitor service-state tags ↔ granular SMS trigger/state names. The tag side
+# matches get_monitor_alerts() and the template-key side matches the textareas
+# in Monitor → Message Templates, so the SMS uses the operator's own wording.
+SMS_MONITOR_TAG_TO_STATE = {'soon': 'near_expiry', 'low': 'low_volume', 'expired': 'expired', 'ended': 'ended'}
+SMS_STATE_TO_MONITOR_TPL = {'near_expiry': 'soon', 'low_volume': 'low', 'expired': 'expired', 'ended': 'ended'}
+
+
+def _mask_mobile(num: str | None) -> str:
+    digits = re.sub(r'\D', '', str(num or ''))
+    if len(digits) >= 7:
+        return f"{digits[:4]}***{digits[-3:]}"
+    return str(num or '')
+
+
+def _render_monitor_state_template(tpl: str | None, mvars: dict) -> str:
+    """Render a Monitor per-state template. Mirrors monitor.html buildMessage()
+    exactly (only {user} {rem} {time} {date} {server}), so an automated SMS reads
+    identically to a manual Monitor send."""
+    def _sub(m):
+        val = mvars.get(m.group(1))
+        return str(val) if val not in (None, '') else '-'
+    return re.sub(r'\{(user|rem|time|date|server)\}', _sub, tpl or '')
+
+
+def _sms_scan_set(**patch):
+    with SMS_SCAN_JOB_LOCK:
+        SMS_SCAN_JOB.update(patch)
+
+
+def _sms_scan_inc(field: str, n: int = 1):
+    with SMS_SCAN_JOB_LOCK:
+        SMS_SCAN_JOB[field] = int(SMS_SCAN_JOB.get(field, 0) or 0) + n
+
+
+def _classify_monitor_status(*, enabled: bool, total_bytes: int, remaining_bytes, remaining_gb,
+                             expiry_ts: int, expiry_info: dict, warning_days: int, warning_gb: float) -> str | None:
+    """Return the Monitor status tag ('ended'|'low'|'expired'|'soon'|'disabled'|None)
+    using the SAME precedence as get_monitor_alerts(). Keep in sync with it."""
+    status = None
+    status_rank = -1
+    if total_bytes > 0 and remaining_bytes is not None:
+        if remaining_bytes <= 0:
+            status, status_rank = 'ended', 3
+        elif remaining_gb is not None and remaining_gb < warning_gb:
+            status, status_rank = 'low', 2
+    if expiry_ts and expiry_info.get('type') == 'expired':
+        if status_rank < 4:
+            status, status_rank = 'expired', 4
+    elif expiry_ts and expiry_info.get('type') in ('today', 'soon'):
+        if int(expiry_info.get('days') or 0) <= warning_days and status_rank < 1:
+            status, status_rank = 'soon', 1
+    if not enabled and status in (None, 'low', 'soon'):
+        status = 'disabled'
+    return status
+
+
+def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto') -> dict:
+    """State-based automated SMS scan. For each non-reseller-owned account, derive
+    the Monitor service-state (near_expiry / low_volume / expired / ended), and if
+    that state's trigger is enabled, send the Monitor per-state template via GMweb —
+    once per cooldown window per (account, state). Updates SMS_SCAN_JOB so the UI can
+    show how many users will be messaged and live progress."""
     cfg = _get_sms_runtime_settings()
-    if not cfg.get('enabled') or not cfg.get('trigger_depletion'):
+    state_enabled = {
+        'near_expiry': bool(cfg.get('trigger_near_expiry')),
+        'low_volume': bool(cfg.get('trigger_low_volume')),
+        'expired': bool(cfg.get('trigger_expired')),
+        'ended': bool(cfg.get('trigger_ended')),
+    }
+    now_iso = _utc_iso_now()
+
+    if not cfg.get('enabled') or not any(state_enabled.values()):
+        _sms_scan_set(state='idle', reason='disabled', finished_at=now_iso)
         return {'scanned': 0, 'sent': 0, 'reason': 'disabled'}
     if not (cfg.get('base_url') and cfg.get('api_key')):
+        _sms_scan_set(state='idle', reason='gateway_not_configured', finished_at=now_iso)
         return {'scanned': 0, 'sent': 0, 'reason': 'gateway_not_configured'}
 
-    expiry_days = int(cfg.get('depletion_expiry_days') or 3)
-    volume_gb_thr = float(cfg.get('depletion_volume_gb') or 2.0)
+    jid = job_id or uuid.uuid4().hex
     cooldown_days = int(cfg.get('depletion_cooldown_days') or 7)
-    base_url = _public_base_url()
     cooldown_cut = datetime.utcnow() - timedelta(days=cooldown_days)
-    tpl_content = _get_sms_template_content(ACCOUNT_INFO_SMS_TEMPLATE_TYPE, DEFAULT_ACCOUNT_INFO_SMS_TEMPLATE)
+
+    # Match Monitor's visible set: same thresholds and same long-expired hiding.
+    mon = _get_monitor_settings()
+    mfilters = mon.get('filters', {}) if isinstance(mon, dict) else {}
+    mtemplates = mon.get('templates', {}) if isinstance(mon, dict) else {}
+    warning_days = int(mfilters.get('warning_days', 3) or 3)
+    warning_gb = float(mfilters.get('warning_gb', 2.0) or 2.0)
+    hide_days = int(mfilters.get('hide_days', 7) or 7)
+
+    # One scan at a time (worker + manual "run now" must not clobber each other).
+    with SMS_SCAN_JOB_LOCK:
+        if SMS_SCAN_JOB.get('state') == 'running':
+            return {'scanned': 0, 'sent': 0, 'reason': 'already_running'}
+
+    # Reset progress for this run.
+    with SMS_SCAN_JOB_LOCK:
+        SMS_SCAN_JOB.clear()
+        SMS_SCAN_JOB.update({
+            'id': jid, 'state': 'running', 'triggered_by': triggered_by,
+            'started_at': now_iso, 'finished_at': None,
+            'states_enabled': [k for k, v in state_enabled.items() if v],
+            'total_clients': 0, 'candidates': 0, 'processed': 0,
+            'sent': 0, 'failed': 0, 'skipped_cooldown': 0, 'skipped_rate': 0,
+            'per_state': {k: 0 for k in state_enabled},
+            'current': None, 'stopped': None,
+        })
 
     inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
-    scanned = 0
-    sent = 0
     seen = set()
+    candidates = []   # (sid_norm, email, email_l, server_name, state, recipient, mvars)
+    total_clients = 0
 
+    # Pass 1 — classify and collect everyone eligible (matching an enabled state +
+    # has a mobile + not reseller-owned). This gives the "will message up to N" count.
     for inbound in inbounds:
         sid = inbound.get('server_id')
+        server_name = inbound.get('server_name') or ''
         try:
             sid_norm = int(sid)
         except (TypeError, ValueError):
@@ -5201,14 +5317,12 @@ def _run_sms_depletion_scan() -> dict:
             if key in seen:
                 continue
             seen.add(key)
-            # Owner gate: skip reseller-owned accounts entirely.
+            total_clients += 1
+
             if _account_has_reseller_owner(sid_norm, email):
                 continue
-            recipient = _extract_iran_mobile_from_text(email, client.get('comment') or '')
-            if not recipient:
-                continue
-            scanned += 1
 
+            enabled = bool(client.get('enable', True))
             total_bytes = int(client.get('totalGB') or 0)
             try:
                 used = int(client.get('up') or 0) + int(client.get('down') or 0)
@@ -5221,57 +5335,121 @@ def _run_sms_depletion_scan() -> dict:
 
             expiry_ts = int(client.get('expiryTimestamp') or 0)
             exp = format_remaining_days(expiry_ts)
-            days_left = int(exp.get('days') or 0)
-            near_time = bool(expiry_ts and exp.get('type') in ('today', 'soon') and days_left <= expiry_days)
-            near_vol = bool(rem_gb is not None and 0 < rem_gb <= volume_gb_thr)
-            if not (near_time or near_vol):
+
+            status = _classify_monitor_status(
+                enabled=enabled, total_bytes=total_bytes, remaining_bytes=rem_bytes,
+                remaining_gb=rem_gb, expiry_ts=expiry_ts, expiry_info=exp,
+                warning_days=warning_days, warning_gb=warning_gb,
+            )
+            state = SMS_MONITOR_TAG_TO_STATE.get(status or '')
+            if not state or not state_enabled.get(state):
                 continue
 
-            try:
-                recent = WhatsappBotLog.query.filter(
-                    WhatsappBotLog.email == email_l,
-                    WhatsappBotLog.server_id == (sid_norm or 0),
-                    WhatsappBotLog.event == 'sms_depletion',
-                    WhatsappBotLog.sent_at >= cooldown_cut,
-                ).first()
-            except Exception:
-                recent = None
-            if recent:
-                continue
-
-            final_id = client.get('subId') or client.get('id') or ''
-            dash = (client.get('dash_sub_url') or '').strip()
-            if dash and not dash.startswith('http') and base_url:
-                dash = base_url + (dash if dash.startswith('/') else f"/{dash}")
-            elif not dash and base_url and final_id and sid_norm is not None:
-                dash = f"{base_url}/s/{sid_norm}/{final_id}"
-
-            tpl_vars = {
-                'email': email, 'account_name': email, 'service_name': email, 'user': email,
-                'remaining_time': exp.get('text') or '-',
-                'remaining_volume': client.get('remaining_formatted') or '-',
-                'dashboard_link': dash, 'sub_link': dash,
-                'server_name': inbound.get('server_name') or '',
-            }
-            text_msg = _render_text_template(tpl_content, tpl_vars)
-            if not (text_msg or '').strip():
-                continue
-
-            slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
-            if not slot_ok:
-                if slot_reason == 'daily_limit_reached':
-                    return {'scanned': scanned, 'sent': sent, 'stopped': slot_reason}
-                continue
-            res = _send_sms_via_gmweb(recipient, text_msg, cfg)
-            if res.get('sent'):
+            # Skip long-expired accounts, exactly like Monitor hides them.
+            if status == 'expired' and hide_days:
                 try:
-                    db.session.add(WhatsappBotLog(email=email_l, server_id=(sid_norm or 0), event='sms_depletion'))
-                    db.session.commit()
+                    days_ago = abs(int(exp.get('days') or 0))
                 except Exception:
-                    db.session.rollback()
-                sent += 1
+                    days_ago = 0
+                if days_ago > hide_days:
+                    continue
 
-    return {'scanned': scanned, 'sent': sent}
+            recipient = _extract_iran_mobile_from_text(email, client.get('comment') or '')
+            if not recipient:
+                continue
+
+            expiry_date = None
+            if expiry_ts and expiry_ts > 0:
+                try:
+                    expiry_date = format_jalali(datetime.utcfromtimestamp(expiry_ts / 1000))
+                except Exception:
+                    expiry_date = None
+            mvars = {
+                'user': email,
+                'rem': client.get('remaining_formatted') or 'Unlimited',
+                'time': exp.get('text') or '-',
+                'date': expiry_date or '-',
+                'server': server_name,
+            }
+            candidates.append((sid_norm, email, email_l, server_name, state, recipient, mvars))
+
+    _sms_scan_set(total_clients=total_clients, candidates=len(candidates))
+
+    sent = 0
+    # Pass 2 — cooldown gate + rate-limit + send + log per candidate.
+    for (sid_norm, email, email_l, server_name, state, recipient, mvars) in candidates:
+        _sms_scan_set(current=email)
+        _sms_scan_inc('processed')
+
+        event = f'sms_{state}'
+        try:
+            recent = WhatsappBotLog.query.filter(
+                WhatsappBotLog.email == email_l,
+                WhatsappBotLog.server_id == (sid_norm or 0),
+                WhatsappBotLog.event == event,
+                WhatsappBotLog.sent_at >= cooldown_cut,
+            ).first()
+        except Exception:
+            recent = None
+        if recent:
+            _sms_scan_inc('skipped_cooldown')
+            continue
+
+        tpl = (mtemplates.get(SMS_STATE_TO_MONITOR_TPL[state]) or '').strip()
+        if not tpl:
+            _sms_scan_inc('skipped_rate')  # no template configured for this state
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', 'no_template')
+            continue
+        text_msg = _render_monitor_state_template(tpl, mvars)
+        if not (text_msg or '').strip():
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', 'empty_message')
+            continue
+
+        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
+        if not slot_ok:
+            if slot_reason == 'daily_limit_reached':
+                _sms_scan_set(stopped=slot_reason, state='done', finished_at=_utc_iso_now(), current=None)
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', slot_reason)
+                return {'scanned': total_clients, 'sent': sent, 'stopped': slot_reason}
+            _sms_scan_inc('skipped_rate')
+            continue
+
+        res = _send_sms_via_gmweb(recipient, text_msg, cfg)
+        if res.get('sent'):
+            try:
+                db.session.add(WhatsappBotLog(email=email_l, server_id=(sid_norm or 0), event=event))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            sent += 1
+            _sms_scan_inc('sent')
+            with SMS_SCAN_JOB_LOCK:
+                ps = SMS_SCAN_JOB.get('per_state') or {}
+                ps[state] = int(ps.get(state, 0) or 0) + 1
+                SMS_SCAN_JOB['per_state'] = ps
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'sent', None)
+        else:
+            _sms_scan_inc('failed')
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', res.get('reason'))
+
+    _sms_scan_set(state='done', finished_at=_utc_iso_now(), current=None)
+    return {'scanned': total_clients, 'sent': sent, 'candidates': len(candidates)}
+
+
+def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, status, reason):
+    """Persist one audit row for the SMS send-log history. Best-effort."""
+    try:
+        db.session.add(SmsSendLog(
+            email=email_l, server_id=(sid_norm or 0), server_name=(server_name or '')[:255],
+            state=state, recipient=_mask_mobile(recipient), status=status,
+            reason=(str(reason)[:255] if reason else None), job_id=job_id,
+        ))
+        db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def sms_bot_worker():
@@ -5856,6 +6034,38 @@ class WhatsappBotLog(db.Model):
     server_id = db.Column(db.Integer, nullable=False)
     event = db.Column(db.String(32), nullable=False, default='depletion')
     sent_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class SmsSendLog(db.Model):
+    """Human-facing audit trail for the automated, state-based SMS scan. One row
+    per processed recipient (sent / failed / skipped) so the operator can see who
+    was messaged, for which monitor state, and why a send was or wasn't made.
+    Dedup/cooldown itself is enforced separately via WhatsappBotLog."""
+    __tablename__ = 'sms_send_log'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), nullable=False, index=True)
+    server_id = db.Column(db.Integer, nullable=False, default=0)
+    server_name = db.Column(db.String(255))
+    state = db.Column(db.String(32), nullable=False, index=True)  # near_expiry|low_volume|expired|ended
+    recipient = db.Column(db.String(32))               # masked mobile (e.g. 0912***4643)
+    status = db.Column(db.String(16), nullable=False)  # sent | failed | skipped
+    reason = db.Column(db.String(255))                 # failure/skip detail
+    job_id = db.Column(db.String(64), index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'email': self.email,
+            'server_id': self.server_id,
+            'server_name': self.server_name,
+            'state': self.state,
+            'recipient': self.recipient,
+            'status': self.status,
+            'reason': self.reason,
+            'job_id': self.job_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 def _add_health_log(level, category, message, action_taken=None, details=None, resolved=False):
@@ -11366,6 +11576,10 @@ def settings_page():
                          sms_trigger_created=sms_cfg.get('trigger_created', True),
                          sms_trigger_renew=sms_cfg.get('trigger_renew', True),
                          sms_trigger_depletion=sms_cfg.get('trigger_depletion', False),
+                         sms_trigger_near_expiry=sms_cfg.get('trigger_near_expiry', False),
+                         sms_trigger_low_volume=sms_cfg.get('trigger_low_volume', False),
+                         sms_trigger_expired=sms_cfg.get('trigger_expired', False),
+                         sms_trigger_ended=sms_cfg.get('trigger_ended', False),
                          sms_depletion_expiry_days=sms_cfg.get('depletion_expiry_days', 3),
                          sms_depletion_volume_gb=sms_cfg.get('depletion_volume_gb', 2.0),
                          sms_depletion_cooldown_days=sms_cfg.get('depletion_cooldown_days', 7),
@@ -19007,6 +19221,8 @@ def update_system_config():
             elif key in {
                 SMS_AUTOMATION_ENABLED_KEY, SMS_TRIGGER_CREATED_KEY,
                 SMS_TRIGGER_RENEW_KEY, SMS_TRIGGER_DEPLETION_KEY,
+                SMS_TRIGGER_NEAR_EXPIRY_KEY, SMS_TRIGGER_LOW_VOLUME_KEY,
+                SMS_TRIGGER_EXPIRED_KEY, SMS_TRIGGER_ENDED_KEY,
             }:
                 sanitized_value = 'true' if _parse_bool(value) else 'false'
             elif key == SMS_GMWEB_BASE_URL_KEY:
@@ -19141,6 +19357,66 @@ def sms_test_send():
     return jsonify({'success': False, 'recipient': recipient,
                     'error': f'Send failed ({res.get("reason") or "unknown"}).',
                     'status_code': res.get('status_code')}), 400
+
+
+@app.route('/api/sms/scan/run', methods=['POST'])
+@superadmin_required
+def sms_scan_run():
+    """Kick off the automated state-based SMS scan now (non-blocking). The UI then
+    polls /api/sms/scan/status to watch progress."""
+    cfg = _get_sms_runtime_settings()
+    if not cfg.get('enabled'):
+        return jsonify({'success': False, 'error': 'SMS automation is disabled. Enable it (and Save) first.'}), 400
+    if not (cfg.get('base_url') and cfg.get('api_key')):
+        return jsonify({'success': False, 'error': 'GMweb gateway is not configured.'}), 400
+    if not any(cfg.get(f'trigger_{s}') for s in ('near_expiry', 'low_volume', 'expired', 'ended')):
+        return jsonify({'success': False, 'error': 'No state triggers are enabled (near expiry / low volume / expired / ended).'}), 400
+
+    with SMS_SCAN_JOB_LOCK:
+        if SMS_SCAN_JOB.get('state') == 'running':
+            return jsonify({'success': False, 'error': 'A scan is already running.',
+                            'job': dict(SMS_SCAN_JOB)}), 409
+
+    jid = uuid.uuid4().hex
+
+    def _worker():
+        with app.app_context():
+            try:
+                _run_sms_depletion_scan(job_id=jid, triggered_by='manual')
+            except Exception:
+                app.logger.exception('[sms-scan] manual run failed')
+                _sms_scan_set(state='error', finished_at=_utc_iso_now())
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return jsonify({'success': True, 'job_id': jid})
+
+
+@app.route('/api/sms/scan/status', methods=['GET'])
+@superadmin_required
+def sms_scan_status():
+    """Live progress of the current/last SMS scan."""
+    with SMS_SCAN_JOB_LOCK:
+        job = dict(SMS_SCAN_JOB)
+    return jsonify({'success': True, 'job': job})
+
+
+@app.route('/api/sms/logs', methods=['GET'])
+@superadmin_required
+def sms_logs():
+    """Recent SMS send-log history (newest first)."""
+    try:
+        limit = max(1, min(int(request.args.get('limit', 100)), 1000))
+    except (TypeError, ValueError):
+        limit = 100
+    status_filter = (request.args.get('status') or '').strip().lower()
+    state_filter = (request.args.get('state') or '').strip().lower()
+    q = SmsSendLog.query
+    if status_filter in ('sent', 'failed', 'skipped'):
+        q = q.filter(SmsSendLog.status == status_filter)
+    if state_filter in ('near_expiry', 'low_volume', 'expired', 'ended'):
+        q = q.filter(SmsSendLog.state == state_filter)
+    rows = q.order_by(SmsSendLog.created_at.desc()).limit(limit).all()
+    return jsonify({'success': True, 'logs': [r.to_dict() for r in rows]})
 
 
 @app.route('/api/whatsapp/test-connection', methods=['POST'])
