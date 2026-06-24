@@ -2747,7 +2747,11 @@
     }
 
     async function runSmsScanNow() {
-        // Persist current form values first so the scan uses what's on screen.
+        // "Start now" means turn the SMS system ON: enable automation, then run
+        // immediately. Symmetric with "Stop & disable". Reflect it on the toggle
+        // and persist before the scan so the run isn't rejected as "disabled".
+        const enableToggle = document.getElementById('sms-enabled');
+        if (enableToggle) enableToggle.checked = true;
         const saved = await saveSmsSettings(true);
         if (!saved) { showToast('Could not save SMS settings before scanning', 'error'); return; }
         _setSmsRunBtn(true);
