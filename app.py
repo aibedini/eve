@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.29"
+APP_VERSION = "2.3.30"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -6065,6 +6065,11 @@ class Transaction(db.Model):
     type = db.Column(db.String(20))
     category = db.Column(db.String(16), default='usage', nullable=False)  # 'income', 'expense', 'usage'
     description = db.Column(db.String(255))
+    # Reseller-statement breakdown: what plan this purchase/renew was for. Filled
+    # for purchase/renew rows; null for deposits/reset/audit rows.
+    package_name = db.Column(db.String(120), nullable=True)  # package name, or 'Custom'
+    volume_gb = db.Column(db.Integer, nullable=True)         # GB (0 = unlimited)
+    days = db.Column(db.Integer, nullable=True)              # days (0 = unlimited)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     server = db.relationship('Server', backref='transactions', lazy=True)
@@ -6108,6 +6113,9 @@ class Transaction(db.Model):
             'amount': self.amount,
             'type': self.type,
             'description': self.description,
+            'package_name': self.package_name,
+            'volume_gb': self.volume_gb,
+            'days': self.days,
             'date': self.created_at.isoformat() if self.created_at else None,
             'date_jalali': format_jalali(self.created_at),
             'admin': admin_info
@@ -6669,6 +6677,19 @@ with app.app_context():
     except Exception as e:
         print(f"Migration error (transactions.sender_name): {e}")
 
+    # Ensure reseller-statement columns exist on transactions (older DBs)
+    try:
+        inspector = inspect(db.engine)
+        tx_columns = [c['name'] for c in inspector.get_columns('transactions')]
+        for _cn, _cd in (('package_name', 'VARCHAR(120)'), ('volume_gb', 'INTEGER'), ('days', 'INTEGER')):
+            if _cn not in tx_columns:
+                with db.engine.connect() as conn:
+                    conn.execute(text(f'ALTER TABLE transactions ADD COLUMN {_cn} {_cd}'))
+                    conn.commit()
+                print(f"Added {_cn} column to transactions table")
+    except Exception as e:
+        print(f"Migration error (transactions.package_name/volume_gb/days): {e}")
+
     # Ensure servers.hidden column exists (added for server hide/show feature)
     try:
         inspector = inspect(db.engine)
@@ -7143,7 +7164,7 @@ def get_config(key, default=0):
     conf = db.session.get(SystemConfig, key)
     return int(conf.value) if conf else default
 
-def log_transaction(user_id, amount, type, desc, server_id=None, card_id=None, sender_card=None, category='usage', client_email=None):
+def log_transaction(user_id, amount, type, desc, server_id=None, card_id=None, sender_card=None, category='usage', client_email=None, package_name=None, volume_gb=None, days=None):
     trans = Transaction(
         admin_id=user_id,
         amount=amount,
@@ -7153,7 +7174,10 @@ def log_transaction(user_id, amount, type, desc, server_id=None, card_id=None, s
         card_id=card_id,
         sender_card=sender_card,
         category=category,
-        client_email=client_email
+        client_email=client_email,
+        package_name=package_name,
+        volume_gb=volume_gb,
+        days=days
     )
     db.session.add(trans)
 
@@ -13328,6 +13352,7 @@ def renew_client(server_id, inbound_id, email):
     volume_gb_to_add = 0
     volume_provided = False
     description = ""
+    pkg_name = None
 
     try:
         if mode == 'package':
@@ -13339,6 +13364,7 @@ def renew_client(server_id, inbound_id, email):
             volume_gb_to_add = int(package.volume or 0)
             volume_provided = True
             price = calculate_reseller_price(user, package=package)
+            pkg_name = package.name
             description = f"Renew Package: {package.name} - {email}"
             if days_to_add < 0:
                 return _finish({"success": False, "error": "Package is misconfigured (negative days)"}, 400)
@@ -13373,6 +13399,7 @@ def renew_client(server_id, inbound_id, email):
                 vol_label = "Keep Volume"
             else:
                 vol_label = f"{volume_gb_to_add} GB" if volume_gb_to_add > 0 else "Unlimited Volume"
+            pkg_name = 'Custom'
             description = f"Renew Custom: {days_label}, {vol_label} - {email}"
     except (ValueError, TypeError) as e:
         return _finish({"success": False, "error": f"Invalid data: {e}"}, 400)
@@ -13756,16 +13783,16 @@ def renew_client(server_id, inbound_id, email):
                 card_id = data.get('card_id')
                 if is_free:
                     if user.role == 'reseller':
-                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
+                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
                     else:
-                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
+                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
                     db.session.commit()
                 elif price > 0:
                     if user.role == 'reseller':
                         user.credit -= price
-                        log_transaction(user.id, -price, 'renew', f"User Renewal (Credit Usage) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
+                        log_transaction(user.id, -price, 'renew', f"User Renewal (Credit Usage) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
                     else:
-                        log_transaction(user.id, price, 'renew', f"User Renewal (Income) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
+                        log_transaction(user.id, price, 'renew', f"User Renewal (Income) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
                     db.session.commit()
 
                 # Post-update verify (best-effort): fetch inbounds and confirm expiry/volume.
@@ -14828,20 +14855,23 @@ def add_client(server_id, inbound_id):
     days = 0
     volume_gb = 0
     description = ""
+    pkg_name = None
 
     if mode == 'package':
         pkg_id = data.get('package_id')
         package = db.session.get(Package, pkg_id)
         if not package: return jsonify({"success": False, "error": "Invalid Package"}), 400
-        
+
         price = calculate_reseller_price(user, package=package)
         days = package.days
         volume_gb = package.volume
+        pkg_name = package.name
         description = f"Purchase Package: {package.name} - {email}"
-        
+
     else:
         days = int(data.get('days', 30))
         volume_gb = int(data.get('volume', 0))
+        pkg_name = 'Custom'
 
         reseller_context_id = user.id if user.role == 'reseller' else None
         price, _cpg, _cpd, _tier = _calculate_minimum_price(
@@ -14915,13 +14945,13 @@ def add_client(server_id, inbound_id):
             sender_card = data.get('sender_card', '') or ''
             card_id = data.get('card_id')
             if is_free:
-                log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category=('usage' if user.role == 'reseller' else 'income'), client_email=email)
+                log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category=('usage' if user.role == 'reseller' else 'income'), client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
             elif price > 0:
                 if user.role == 'reseller':
                     user.credit -= price
-                    log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
+                    log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
                 else:
-                    log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
+                    log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
 
             # Ownership row per assigned inbound (price recorded once on the first)
             for _idx, _iid in enumerate(assign_ids):
@@ -15115,15 +15145,15 @@ def add_client(server_id, inbound_id):
             card_id = data.get('card_id')
             if is_free:
                 if user.role == 'reseller':
-                    log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
+                    log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
                 else:
-                    log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
+                    log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
             elif price > 0:
                 if user.role == 'reseller':
                     user.credit -= price
-                    log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
+                    log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
                 else:
-                    log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
+                    log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
             
             ownership = ClientOwnership(
                 reseller_id=user.id,
@@ -17084,6 +17114,107 @@ def get_finance_stats():
                 'total_expense': total_expense
             }
         })
+
+
+def _statement_pkg_from_desc(desc):
+    """Best-effort package name from a legacy transaction description (rows
+    created before the package_name column existed)."""
+    if not desc:
+        return None
+    s = str(desc)
+    for key in ('Purchase Package:', 'Renew Package:'):
+        if key in s:
+            return (s.split(key, 1)[1].rsplit(' - ', 1)[0].strip() or None)
+    if 'Custom' in s:
+        return 'Custom'
+    return None
+
+
+@app.route('/api/finance/reseller-statement', methods=['GET'])
+@login_required
+def reseller_statement():
+    """Per-reseller accounting statement over a Jalali date range: how many
+    accounts they created / renewed / reset, what it cost, broken down by package
+    and server, plus how much they deposited vs should have deposited. Superadmin
+    can pick any reseller; a reseller only ever sees their own figures."""
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 401
+
+    if user.role == 'superadmin' or user.is_superadmin:
+        target_id = request.args.get('user_id', type=int) or user.id
+    else:
+        target_id = user.id  # resellers are locked to their own statement
+    target = db.session.get(Admin, target_id)
+    if not target:
+        return jsonify({'success': False, 'error': 'Reseller not found'}), 404
+
+    start_dt = parse_jalali_date(request.args.get('start_date'), end_of_day=False)
+    end_dt = parse_jalali_date(request.args.get('end_date'), end_of_day=True)
+
+    q = Transaction.query.filter(Transaction.admin_id == target_id)
+    if start_dt:
+        q = q.filter(Transaction.created_at >= start_dt)
+    if end_dt:
+        q = q.filter(Transaction.created_at <= end_dt)
+    rows = q.order_by(Transaction.created_at.desc()).all()
+
+    SPEND_TYPES = ('purchase', 'renew', 'reset_traffic')
+    DEPOSIT_TYPES = ('manual_receipt', 'manual_receipt_auto', 'manual_receipt_reversal')
+
+    created = renewed = reset_cnt = 0
+    spent = 0
+    deposited = 0
+    by_package = {}
+    by_server = {}
+    out_rows = []
+
+    for r in rows:
+        amt = int(r.amount or 0)
+        t = r.type or ''
+        if t in SPEND_TYPES:
+            charge = -amt if amt < 0 else 0  # reseller credit usage is stored negative
+            spent += charge
+            if t == 'purchase':
+                created += 1
+            elif t == 'renew':
+                renewed += 1
+            else:
+                reset_cnt += 1
+            if t in ('purchase', 'renew'):
+                pname = r.package_name or _statement_pkg_from_desc(r.description) or '—'
+                b = by_package.setdefault(pname, {'count': 0, 'spent': 0, 'volume_gb': 0, 'days': 0})
+                b['count'] += 1
+                b['spent'] += charge
+                b['volume_gb'] += int(r.volume_gb or 0)
+                b['days'] += int(r.days or 0)
+            sname = (r.server.name if r.server else None) or '—'
+            sb = by_server.setdefault(sname, {'count': 0, 'spent': 0})
+            sb['count'] += 1
+            sb['spent'] += charge
+        elif t in DEPOSIT_TYPES:
+            deposited += amt  # deposits positive, reversals negative
+        out_rows.append(r.to_dict())
+
+    balance = deposited - spent  # negative => under-deposited (debt)
+    summary = {
+        'reseller': {'id': target.id, 'username': target.username,
+                     'role': target.role, 'credit': target.credit or 0},
+        'created': created, 'renewed': renewed, 'reset': reset_cnt,
+        'spent': spent, 'deposited': deposited,
+        'should_deposit': spent, 'balance': balance,
+        'row_count': len(rows),
+        'start_jalali': format_jalali(start_dt) if start_dt else None,
+        'end_jalali': format_jalali(end_dt) if end_dt else None,
+    }
+    by_package_list = sorted(({'package': k, **v} for k, v in by_package.items()),
+                             key=lambda x: x['spent'], reverse=True)
+    by_server_list = sorted(({'server': k, **v} for k, v in by_server.items()),
+                            key=lambda x: x['spent'], reverse=True)
+
+    return jsonify({'success': True, 'summary': summary,
+                    'by_package': by_package_list, 'by_server': by_server_list,
+                    'rows': out_rows})
 
 
 @app.route('/api/finance/overview', methods=['GET'])
