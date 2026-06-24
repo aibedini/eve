@@ -2344,9 +2344,17 @@
     }
 
     /* SMS Automation tab — stay usable on phones. The section is built with fixed
-       multi-column inline grids; on a narrow screen collapse them to one column
-       and stack the card header so nothing overflows or shrinks to unreadable. */
+       multi-column inline grids and a wide 6-column log table; on a narrow screen
+       collapse the grids to one column, stack the card header, give inputs/buttons
+       comfortable touch sizing, and turn the log table into stacked rows so nothing
+       overflows or shrinks to unreadable. */
     @media (max-width: 640px) {
+        /* Tighter card padding so content keeps its breathing room on a small screen */
+        #tab-sms .panel-card {
+            padding: 16px;
+        }
+
+        /* Header: stack title and the action buttons, buttons share the row full-width */
         #tab-sms .panel-card-header {
             flex-direction: column;
             align-items: stretch;
@@ -2358,8 +2366,77 @@
         #tab-sms .panel-card-header .btn {
             flex: 1;
         }
+
+        /* Any inline multi-column grid (triggers, thresholds, cooldowns, rate limits)
+           collapses to a single readable column */
         #tab-sms div[style*="grid-template-columns"] {
             grid-template-columns: 1fr !important;
+        }
+
+        /* Touch-friendly inputs: 16px font avoids iOS auto-zoom, taller hit area */
+        #tab-sms .form-control {
+            font-size: 16px;
+            min-height: 44px;
+        }
+
+        /* Buttons meet the 44px touch-target minimum */
+        #tab-sms .btn {
+            min-height: 44px;
+        }
+        /* …except the small inline "Refresh log" pill, which stays compact */
+        #tab-sms .btn[style*="font-size"] {
+            min-height: 0;
+        }
+
+        /* Send-queue header: label + Start/Stop buttons stack and go full-width */
+        #tab-sms #sms-scan-run-btn,
+        #tab-sms #sms-scan-stop-btn {
+            flex: 1;
+        }
+
+        /* Recent-sends log: drop the cramped 6-column table and render each entry
+           as a stacked card with inline field labels (from data-label on each cell). */
+        #tab-sms #sms-logs-body { display: block; }
+        #tab-sms table thead { display: none; }
+        #tab-sms #sms-logs-body tr {
+            display: block;
+            border: 1px solid var(--border-color, #2a2a3a);
+            border-radius: 8px;
+            padding: 4px 0;
+            margin-bottom: 10px;
+            background: rgba(148, 163, 184, 0.04);
+        }
+        #tab-sms #sms-logs-body td {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 12px;
+            white-space: normal !important;
+            text-align: end;
+            padding: 5px 12px !important;
+            word-break: break-word;
+        }
+        #tab-sms #sms-logs-body td::before {
+            content: attr(data-label);
+            color: var(--text-secondary, #94a3b8);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            flex-shrink: 0;
+            text-align: start;
+        }
+        /* Empty / error states span the whole "card", no label, centered */
+        #tab-sms #sms-logs-body td[colspan] {
+            display: block;
+            text-align: center !important;
+        }
+        #tab-sms #sms-logs-body td[colspan]::before { content: none; }
+        /* The table wrapper no longer needs its own frame once rows are cards */
+        #tab-sms #sms-logs-body td[data-label] { border: none; }
+        #tab-sms div[style*="overflow-x"] {
+            border: none !important;
+            border-radius: 0 !important;
+            overflow-x: visible !important;
         }
     }
 
@@ -2856,12 +2933,12 @@
                 const sc = statusColor[row.status] || '#94a3b8';
                 const statusTxt = row.reason ? `${row.status} (${row.reason})` : row.status;
                 return `<tr style="border-top:1px solid var(--border-color,#2a2a3a);">
-                    <td style="padding:7px 10px;white-space:nowrap;">${escapeHtml(when)}</td>
-                    <td style="padding:7px 10px;">${escapeHtml(row.email || '')}</td>
-                    <td style="padding:7px 10px;">${escapeHtml(row.server_name || '')}</td>
-                    <td style="padding:7px 10px;white-space:nowrap;">${SMS_STATE_LABELS[row.state] || escapeHtml(row.state || '')}</td>
-                    <td style="padding:7px 10px;white-space:nowrap;">${escapeHtml(row.recipient || '')}</td>
-                    <td style="padding:7px 10px;color:${sc};white-space:nowrap;">${escapeHtml(statusTxt)}</td>
+                    <td data-label="Time" style="padding:7px 10px;white-space:nowrap;">${escapeHtml(when)}</td>
+                    <td data-label="User" style="padding:7px 10px;">${escapeHtml(row.email || '')}</td>
+                    <td data-label="Server" style="padding:7px 10px;">${escapeHtml(row.server_name || '')}</td>
+                    <td data-label="State" style="padding:7px 10px;white-space:nowrap;">${SMS_STATE_LABELS[row.state] || escapeHtml(row.state || '')}</td>
+                    <td data-label="To" style="padding:7px 10px;white-space:nowrap;">${escapeHtml(row.recipient || '')}</td>
+                    <td data-label="Status" style="padding:7px 10px;color:${sc};white-space:nowrap;">${escapeHtml(statusTxt)}</td>
                 </tr>`;
             }).join('');
         } catch (e) {
