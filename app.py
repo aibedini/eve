@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.10"
+APP_VERSION = "2.3.12"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5003,6 +5003,7 @@ SMS_TRIGGER_ENDED_KEY           = 'sms_trigger_ended'        # monitor tag 'ende
 SMS_DEPLETION_EXPIRY_DAYS_KEY   = 'sms_depletion_expiry_days'
 SMS_DEPLETION_VOLUME_GB_KEY     = 'sms_depletion_volume_gb'
 SMS_DEPLETION_COOLDOWN_DAYS_KEY = 'sms_depletion_cooldown_days'
+SMS_EXPIRED_MAX_AGE_DAYS_KEY    = 'sms_expired_max_age_days'  # don't SMS accounts expired longer than this (0 = use Monitor hide_days)
 SMS_MIN_INTERVAL_SECONDS_KEY    = 'sms_min_interval_seconds'
 SMS_DAILY_LIMIT_KEY             = 'sms_daily_limit'
 
@@ -5016,6 +5017,7 @@ def _get_sms_runtime_settings() -> dict:
         SMS_GMWEB_TIMEOUT_KEY, SMS_TRIGGER_CREATED_KEY, SMS_TRIGGER_RENEW_KEY,
         SMS_TRIGGER_DEPLETION_KEY, SMS_DEPLETION_EXPIRY_DAYS_KEY,
         SMS_DEPLETION_VOLUME_GB_KEY, SMS_DEPLETION_COOLDOWN_DAYS_KEY,
+        SMS_EXPIRED_MAX_AGE_DAYS_KEY,
         SMS_MIN_INTERVAL_SECONDS_KEY, SMS_DAILY_LIMIT_KEY,
         SMS_TRIGGER_NEAR_EXPIRY_KEY, SMS_TRIGGER_LOW_VOLUME_KEY,
         SMS_TRIGGER_EXPIRED_KEY, SMS_TRIGGER_ENDED_KEY,
@@ -5061,6 +5063,7 @@ def _get_sms_runtime_settings() -> dict:
         'depletion_expiry_days': _int(SMS_DEPLETION_EXPIRY_DAYS_KEY, 3, lo=0, hi=60),
         'depletion_volume_gb': _float(SMS_DEPLETION_VOLUME_GB_KEY, 2.0, lo=0.0, hi=1000.0),
         'depletion_cooldown_days': _int(SMS_DEPLETION_COOLDOWN_DAYS_KEY, 7, lo=1, hi=120),
+        'expired_max_age_days': _int(SMS_EXPIRED_MAX_AGE_DAYS_KEY, 30, lo=0, hi=3650),
         'min_interval_seconds': _int(SMS_MIN_INTERVAL_SECONDS_KEY, 30, lo=0, hi=3600),
         'daily_limit': _int(SMS_DAILY_LIMIT_KEY, 200, lo=1, hi=100000),
     }
@@ -5191,6 +5194,9 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
 # in Monitor → Message Templates, so the SMS uses the operator's own wording.
 SMS_MONITOR_TAG_TO_STATE = {'soon': 'near_expiry', 'low': 'low_volume', 'expired': 'expired', 'ended': 'ended'}
 SMS_STATE_TO_MONITOR_TPL = {'near_expiry': 'soon', 'low_volume': 'low', 'expired': 'expired', 'ended': 'ended'}
+# Send priority across all automated SMS: volume-running-out first, then
+# time-running-out, then volume-ended (days still left), then fully expired last.
+SMS_STATE_PRIORITY = {'low_volume': 0, 'near_expiry': 1, 'ended': 2, 'expired': 3}
 
 
 def _mask_mobile(num: str | None) -> str:
@@ -5275,6 +5281,10 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     warning_days = int(mfilters.get('warning_days', 3) or 3)
     warning_gb = float(mfilters.get('warning_gb', 2.0) or 2.0)
     hide_days = int(mfilters.get('hide_days', 7) or 7)
+    # SMS-specific cap on how long-expired an account may be and still get messaged
+    # (stops a scan from suddenly texting people who expired years ago). 0 ⇒ fall
+    # back to Monitor's hide_days.
+    expired_max_age = int(cfg.get('expired_max_age_days') or 0) or hide_days
 
     # One scan at a time (worker + manual "run now" must not clobber each other).
     with SMS_SCAN_JOB_LOCK:
@@ -5345,13 +5355,13 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             if not state or not state_enabled.get(state):
                 continue
 
-            # Skip long-expired accounts, exactly like Monitor hides them.
-            if status == 'expired' and hide_days:
+            # Skip long-expired accounts: never text someone who expired ages ago.
+            if status == 'expired' and expired_max_age:
                 try:
                     days_ago = abs(int(exp.get('days') or 0))
                 except Exception:
                     days_ago = 0
-                if days_ago > hide_days:
+                if days_ago > expired_max_age:
                     continue
 
             recipient = _extract_iran_mobile_from_text(email, client.get('comment') or '')
@@ -5372,6 +5382,10 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 'server': server_name,
             }
             candidates.append((sid_norm, email, email_l, server_name, state, recipient, mvars))
+
+    # Send priority: volume-running-out → time-running-out → volume-ended →
+    # fully-expired. Within a state, original (scan) order is preserved.
+    candidates.sort(key=lambda c: SMS_STATE_PRIORITY.get(c[4], 99))
 
     _sms_scan_set(total_clients=total_clients, candidates=len(candidates))
 
@@ -11583,6 +11597,7 @@ def settings_page():
                          sms_depletion_expiry_days=sms_cfg.get('depletion_expiry_days', 3),
                          sms_depletion_volume_gb=sms_cfg.get('depletion_volume_gb', 2.0),
                          sms_depletion_cooldown_days=sms_cfg.get('depletion_cooldown_days', 7),
+                         sms_expired_max_age_days=sms_cfg.get('expired_max_age_days', 30),
                          sms_min_interval_seconds=sms_cfg.get('min_interval_seconds', 30),
                          sms_daily_limit=sms_cfg.get('daily_limit', 200),
                          whatsapp_deployment_region=whatsapp_cfg.get('deployment_region', 'outside'),
@@ -19241,6 +19256,8 @@ def update_system_config():
                 sanitized_value = str(_v)
             elif key == SMS_DEPLETION_COOLDOWN_DAYS_KEY:
                 sanitized_value = str(_parse_int(value, 7, min_value=1, max_value=120))
+            elif key == SMS_EXPIRED_MAX_AGE_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 30, min_value=0, max_value=3650))
             elif key == SMS_MIN_INTERVAL_SECONDS_KEY:
                 sanitized_value = str(_parse_int(value, 30, min_value=0, max_value=3600))
             elif key == SMS_DAILY_LIMIT_KEY:
@@ -20622,6 +20639,52 @@ def telegram_backup_job_status(job_id):
             return jsonify({'success': False, 'error': 'Job not found'}), 404
         return jsonify({'success': True, 'job': _summarize_telegram_backup_job(job)})
 
+def _refresh_update_cache_async():
+    """Populate UPDATE_CACHE from GitHub in a daemon thread (non-blocking).
+
+    Overview page must not block on a network call. We kick this off and return
+    immediately; the next page load reads the populated cache.
+    """
+    if UPDATE_CACHE.get('_refreshing'):
+        return
+    UPDATE_CACHE['_refreshing'] = True
+
+    def _work():
+        try:
+            resp = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                gh = resp.json()
+                latest_raw = gh.get('tag_name', '').strip().lstrip('vV')
+                update_available = False
+                is_beta = False
+                try:
+                    cur_parts = [int(x) for x in APP_VERSION.split('.')]
+                    lat_parts = [int(x) for x in latest_raw.split('.')]
+                    while len(cur_parts) < 3: cur_parts.append(0)
+                    while len(lat_parts) < 3: lat_parts.append(0)
+                    update_available = lat_parts > cur_parts
+                    is_beta = cur_parts > lat_parts
+                except Exception:
+                    pass
+                UPDATE_CACHE['data'] = {
+                    'current_version': APP_VERSION,
+                    'latest_version': latest_raw,
+                    'update_available': update_available,
+                    'is_beta': is_beta,
+                    'release_url': gh.get('html_url', ''),
+                }
+                UPDATE_CACHE['last_check'] = time.time()
+        except Exception:
+            pass
+        finally:
+            UPDATE_CACHE['_refreshing'] = False
+
+    threading.Thread(target=_work, daemon=True).start()
+
+
 @app.route('/api/settings/overview', methods=['GET'])
 @login_required
 def get_settings_overview():
@@ -20662,24 +20725,10 @@ def get_settings_overview():
             result['is_beta'] = bool(UPDATE_CACHE['data'].get('is_beta'))
             result['release_url'] = UPDATE_CACHE['data'].get('release_url', '')
         else:
-            resp = requests.get(
-                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-                timeout=4
-            )
-            if resp.status_code == 200:
-                gh = resp.json()
-                latest_raw = gh.get('tag_name', '').strip().lstrip('vV')
-                result['latest_version'] = latest_raw
-                result['release_url'] = gh.get('html_url', '')
-                try:
-                    cur_parts = [int(x) for x in APP_VERSION.split('.')]
-                    lat_parts = [int(x) for x in latest_raw.split('.')]
-                    while len(cur_parts) < 3: cur_parts.append(0)
-                    while len(lat_parts) < 3: lat_parts.append(0)
-                    result['update_available'] = lat_parts > cur_parts
-                    result['is_beta'] = cur_parts > lat_parts
-                except Exception:
-                    pass
+            # Cache empty (e.g. fresh restart) — refresh in background, don't block
+            # the page on a GitHub round-trip. Version badge shows "Unknown" until
+            # the next load picks up the populated cache.
+            _refresh_update_cache_async()
     except Exception:
         pass
 
