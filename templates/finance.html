@@ -853,6 +853,20 @@
         color: var(--text-primary); font-variant-numeric: tabular-nums;
     }
     .stmt-table td:not(:first-child), .stmt-table th:not(:first-child) { text-align: right; }
+    .stmt-pkg-row { cursor: pointer; transition: background 0.12s; }
+    .stmt-pkg-row:hover { background: rgba(99,102,241,0.08); }
+    .stmt-caret { display: inline-block; width: 1em; color: var(--text-secondary, #94a3b8); font-size: 0.8em; }
+    .stmt-subtable { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .stmt-subtable th {
+        text-align: left; padding: 6px 12px; color: var(--text-secondary, #94a3b8);
+        font-weight: 500; border-bottom: 1px solid var(--border-color, #2a2a3a);
+    }
+    .stmt-subtable td {
+        padding: 6px 12px; border-bottom: 1px solid rgba(148,163,184,0.12);
+        color: var(--text-primary); font-variant-numeric: tabular-nums;
+    }
+    .stmt-subtable th:not(:first-child), .stmt-subtable td:not(:first-child) { text-align: right; }
+    .stmt-subtable tr:last-child td { border-bottom: none; }
     @media (max-width: 900px) {
         .stmt-cards { grid-template-columns: repeat(2, 1fr); }
         .stmt-tables { grid-template-columns: 1fr; }
@@ -2207,12 +2221,13 @@
 
         function rowsCsv() {
             if (!lastData) return '';
-            const head = ['date_jalali', 'type', 'package', 'volume_gb', 'days', 'amount', 'client_email', 'server'];
+            const head = ['date_jalali', 'type', 'package', 'gift', 'volume_gb', 'days', 'amount', 'client_email', 'server'];
             const lines = [head.join(',')];
             (lastData.rows || []).forEach((r) => {
                 const cells = [
-                    r.date_jalali || '', r.type || '', r.package_name || '',
-                    r.volume_gb ?? '', r.days ?? '', r.amount ?? '',
+                    r.date_jalali || '', r.type || '', r.pkg || r.package_name || '',
+                    r.is_gift ? 'yes' : '', r.eff_volume_gb ?? r.volume_gb ?? '',
+                    r.eff_days ?? r.days ?? '', r.amount ?? '',
                     r.client_email || '', (r.server && r.server.name) || ''
                 ].map((c) => `"${String(c).replace(/"/g, '""')}"`);
                 lines.push(cells.join(','));
@@ -2230,6 +2245,40 @@
             a.download = `statement_${who}.csv`;
             a.click();
             URL.revokeObjectURL(a.href);
+        });
+
+        // Build the per-user breakdown for a package (the drill-down rows).
+        function pkgDetailRows(pkgName) {
+            const rs = (lastData.rows || []).filter((r) =>
+                (r.type === 'purchase' || r.type === 'renew') && (r.pkg || '—') === pkgName);
+            if (!rs.length) {
+                return '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:10px;">No line items.</td></tr>';
+            }
+            return rs.map((r) => {
+                const amt = Math.abs(Number(r.amount || 0));
+                const amtCell = r.is_gift
+                    ? '<span style="color:#a78bfa;font-weight:600;">🎁 Gift</span>'
+                    : money(amt);
+                const badge = r.type === 'renew' ? '🔄' : '✨';
+                return `<tr>
+                    <td>${badge} ${escapeAttr(r.client_email || '—')}</td>
+                    <td>${r.eff_volume_gb != null ? r.eff_volume_gb : 0}</td>
+                    <td>${r.eff_days != null ? r.eff_days : 0}</td>
+                    <td>${amtCell}</td>
+                    <td>${escapeAttr(r.date_jalali || '')}</td></tr>`;
+            }).join('');
+        }
+
+        // One delegated listener: clicking a package row expands its detail row.
+        $('stmt-by-package').addEventListener('click', (e) => {
+            const row = e.target.closest('.stmt-pkg-row');
+            if (!row) return;
+            const detail = row.nextElementSibling;
+            if (!detail || !detail.classList.contains('stmt-pkg-detail')) return;
+            const open = detail.style.display !== 'none';
+            detail.style.display = open ? 'none' : '';
+            const caret = row.querySelector('.stmt-caret');
+            if (caret) caret.textContent = open ? '▸' : '▾';
         });
 
         function render(data) {
@@ -2254,13 +2303,22 @@
             if (balK) balK.textContent = s.balance < 0 ? 'Balance (owes)' : 'Balance (credit)';
 
             const pkgBody = $('stmt-by-package');
+            const pkgLabel = (name) => (name === '—' ? '— (unspecified)' : name);
             pkgBody.innerHTML = (data.by_package || []).length
-                ? data.by_package.map((p) => `<tr>
-                    <td>${escapeAttr(p.package)}</td>
-                    <td>${p.count}</td>
-                    <td>${p.volume_gb}</td>
-                    <td>${p.days}</td>
-                    <td>${money(p.spent)}</td></tr>`).join('')
+                ? data.by_package.map((p) => {
+                    const gifts = p.gifts ? ` <span style="color:#a78bfa;">(${p.gifts}🎁)</span>` : '';
+                    return `<tr class="stmt-pkg-row" data-pkg="${escapeAttr(p.package)}" title="Click to see each user">
+                        <td><span class="stmt-caret">▸</span> ${escapeAttr(pkgLabel(p.package))}${gifts}</td>
+                        <td>${p.count}</td>
+                        <td>${p.volume_gb}</td>
+                        <td>${p.days}</td>
+                        <td>${money(p.spent)}</td></tr>
+                    <tr class="stmt-pkg-detail" style="display:none;"><td colspan="5" style="padding:0;background:rgba(148,163,184,0.05);">
+                        <table class="stmt-subtable"><thead><tr>
+                            <th>User</th><th>GB</th><th>Days</th><th>Amount</th><th>Date</th>
+                        </tr></thead><tbody>${pkgDetailRows(p.package)}</tbody></table>
+                    </td></tr>`;
+                }).join('')
                 : '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);">—</td></tr>';
 
             const srvBody = $('stmt-by-server');

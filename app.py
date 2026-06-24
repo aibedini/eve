@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.32"
+APP_VERSION = "2.3.33"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -17254,6 +17254,18 @@ def _statement_pkg_from_desc(desc):
     return None
 
 
+def _statement_plan_from_desc(desc):
+    """Best-effort (volume_gb, days) from a legacy custom-plan description like
+    'Custom Plan: 30 Days, 50 GB - email' or 'Renew Custom: 30 Days, 50 GB - …'.
+    Returns (None, None) when not present (e.g. 'Unlimited')."""
+    if not desc:
+        return (None, None)
+    s = str(desc)
+    dm = re.search(r'(\d+)\s*Days', s, re.IGNORECASE)
+    gm = re.search(r'(\d+)\s*GB', s, re.IGNORECASE)
+    return (int(gm.group(1)) if gm else None, int(dm.group(1)) if dm else None)
+
+
 @app.route('/api/finance/reseller-statement', methods=['GET'])
 @login_required
 def reseller_statement():
@@ -17286,6 +17298,33 @@ def reseller_statement():
     SPEND_TYPES = ('purchase', 'renew', 'reset_traffic')
     DEPOSIT_TYPES = ('manual_receipt', 'manual_receipt_auto', 'manual_receipt_reversal')
 
+    # Package name → (volume_gb, days) so legacy rows (no per-row columns) can
+    # still show their plan size, looked up from the Package definition.
+    pkg_lookup = {}
+    try:
+        for p in Package.query.all():
+            pkg_lookup[p.name] = (int(p.volume or 0), int(p.days or 0))
+    except Exception:
+        pkg_lookup = {}
+
+    def _eff_plan(r, pname):
+        """Effective (volume_gb, days) for a row: prefer the per-row columns, else
+        the Package definition, else parse the description. 0 when unknown."""
+        vol, days = r.volume_gb, r.days
+        if vol is None or days is None:
+            pv = pd = None
+            if pname and pname in pkg_lookup:
+                pv, pd = pkg_lookup[pname]
+            if pv is None or pd is None:
+                dv, dd = _statement_plan_from_desc(r.description)
+                pv = pv if pv is not None else dv
+                pd = pd if pd is not None else dd
+            if vol is None:
+                vol = pv
+            if days is None:
+                days = pd
+        return int(vol or 0), int(days or 0)
+
     created = renewed = reset_cnt = 0
     spent = 0
     deposited = 0
@@ -17296,6 +17335,9 @@ def reseller_statement():
     for r in rows:
         amt = int(r.amount or 0)
         t = r.type or ''
+        row_d = r.to_dict()
+        row_d['pkg'] = None
+        row_d['is_gift'] = False
         if t in SPEND_TYPES:
             charge = -amt if amt < 0 else 0  # reseller credit usage is stored negative
             spent += charge
@@ -17307,18 +17349,26 @@ def reseller_statement():
                 reset_cnt += 1
             if t in ('purchase', 'renew'):
                 pname = r.package_name or _statement_pkg_from_desc(r.description) or '—'
-                b = by_package.setdefault(pname, {'count': 0, 'spent': 0, 'volume_gb': 0, 'days': 0})
+                eff_vol, eff_days = _eff_plan(r, pname)
+                is_gift = (amt == 0) or ('(Free)' in (r.description or ''))
+                row_d['pkg'] = pname
+                row_d['eff_volume_gb'] = eff_vol
+                row_d['eff_days'] = eff_days
+                row_d['is_gift'] = is_gift
+                b = by_package.setdefault(pname, {'count': 0, 'spent': 0, 'volume_gb': 0, 'days': 0, 'gifts': 0})
                 b['count'] += 1
                 b['spent'] += charge
-                b['volume_gb'] += int(r.volume_gb or 0)
-                b['days'] += int(r.days or 0)
+                b['volume_gb'] += eff_vol
+                b['days'] += eff_days
+                if is_gift:
+                    b['gifts'] += 1
             sname = (r.server.name if r.server else None) or '—'
             sb = by_server.setdefault(sname, {'count': 0, 'spent': 0})
             sb['count'] += 1
             sb['spent'] += charge
         elif t in DEPOSIT_TYPES:
             deposited += amt  # deposits positive, reversals negative
-        out_rows.append(r.to_dict())
+        out_rows.append(row_d)
 
     balance = deposited - spent  # negative => under-deposited (debt)
     summary = {
