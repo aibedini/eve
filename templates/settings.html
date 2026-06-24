@@ -1612,7 +1612,16 @@
         gap: 24px;
         align-items: start;
     }
-    
+
+    /* A CSS grid item defaults to min-width:auto, so the 1fr content track
+       refuses to shrink below the intrinsic width of a wide child (the 6-column
+       SMS log table, long nowrap text). That pushes the whole column past the
+       viewport and gives a page-level horizontal scrollbar on otherwise roomy
+       widths like 1440px. min-width:0 lets the track shrink so inner
+       overflow-x:auto wrappers handle their own scrolling. */
+    .settings-content { min-width: 0; }
+    .settings-content .panel-card { min-width: 0; }
+
     @media (max-width: 768px) {
         .settings-layout {
             grid-template-columns: 1fr;
