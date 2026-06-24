@@ -989,7 +989,7 @@
 
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
                         <small class="text-secondary">Recent sends</small>
-                        <button class="btn btn-secondary" style="padding:3px 10px;font-size:0.78rem;" onclick="loadSmsLogs()">Refresh log</button>
+                        <button class="btn btn-secondary" style="padding:3px 10px;font-size:0.78rem;" onclick="refreshSmsPanel()">Refresh log</button>
                     </div>
                     <div style="overflow-x:auto;border:1px solid var(--border-color,#2a2a3a);border-radius:8px;">
                         <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
@@ -2733,6 +2733,13 @@
         if (job.stopped) parts.push(`<span style="color:#f59e0b;">Stopped: ${job.stopped}</span>`);
         document.getElementById('sms-scan-counts').innerHTML = parts.join('');
         _setSmsRunBtn(running);
+    }
+
+    // Manual "Refresh log": pull the latest scan status (what it's doing now /
+    // last result) AND reload the send log, immediately.
+    function refreshSmsPanel() {
+        pollSmsScanStatus();
+        loadSmsLogs();
     }
 
     function pollSmsScanStatus() {

@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.21"
+APP_VERSION = "2.3.22"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -319,6 +319,11 @@ REFRESH_MAX_JOBS = 50
 # many users will be messaged, how many are done, and what's left.
 SMS_SCAN_JOB = {'state': 'idle'}
 SMS_SCAN_JOB_LOCK = threading.Lock()
+# Mirror the scan job + cancel signal to Redis so every gunicorn worker sees the
+# same live progress and a Stop from any worker reaches the worker running the scan.
+SMS_SCAN_REDIS_KEY = 'eve:sms_scan_job'
+SMS_SCAN_CANCEL_REDIS_KEY = 'eve:sms_scan_cancel'
+SMS_SCAN_REDIS_TTL = 900
 
 # Bulk job tracking. Persist to a shared file so progress polling works across
 # gunicorn workers while the background worker updates the job.
@@ -5304,14 +5309,78 @@ def _render_monitor_state_template(tpl: str | None, mvars: dict) -> str:
     return re.sub(r'\{(user|rem|time|date|server)\}', _sub, tpl or '')
 
 
+def _sms_scan_persist_locked():
+    """Mirror the in-memory scan job to Redis so other workers can read live
+    progress. Caller holds SMS_SCAN_JOB_LOCK. Best-effort, no-op without Redis."""
+    client = get_redis()
+    if client is None:
+        return
+    try:
+        client.set(SMS_SCAN_REDIS_KEY,
+                   json.dumps(SMS_SCAN_JOB, default=str).encode('utf-8'),
+                   ex=SMS_SCAN_REDIS_TTL)
+    except Exception:
+        pass
+
+
+def _sms_scan_snapshot() -> dict:
+    """Current scan job as seen across all workers: Redis copy if present, else
+    this worker's in-memory dict."""
+    client = get_redis()
+    if client is not None:
+        try:
+            blob = client.get(SMS_SCAN_REDIS_KEY)
+            if blob:
+                return json.loads(blob)
+        except Exception:
+            pass
+    with SMS_SCAN_JOB_LOCK:
+        return dict(SMS_SCAN_JOB)
+
+
 def _sms_scan_set(**patch):
     with SMS_SCAN_JOB_LOCK:
         SMS_SCAN_JOB.update(patch)
+        _sms_scan_persist_locked()
 
 
 def _sms_scan_inc(field: str, n: int = 1):
     with SMS_SCAN_JOB_LOCK:
         SMS_SCAN_JOB[field] = int(SMS_SCAN_JOB.get(field, 0) or 0) + n
+        _sms_scan_persist_locked()
+
+
+def _sms_scan_cancel_set():
+    """Request cancellation reachable by whichever worker runs the scan."""
+    SMS_SCAN_CANCEL.set()
+    client = get_redis()
+    if client is not None:
+        try:
+            client.set(SMS_SCAN_CANCEL_REDIS_KEY, b'1', ex=SMS_SCAN_REDIS_TTL)
+        except Exception:
+            pass
+
+
+def _sms_scan_cancel_clear():
+    SMS_SCAN_CANCEL.clear()
+    client = get_redis()
+    if client is not None:
+        try:
+            client.delete(SMS_SCAN_CANCEL_REDIS_KEY)
+        except Exception:
+            pass
+
+
+def _sms_scan_cancelled() -> bool:
+    if SMS_SCAN_CANCEL.is_set():
+        return True
+    client = get_redis()
+    if client is not None:
+        try:
+            return client.get(SMS_SCAN_CANCEL_REDIS_KEY) is not None
+        except Exception:
+            return False
+    return False
 
 
 def _classify_monitor_status(*, enabled: bool, total_bytes: int, remaining_bytes, remaining_gb,
@@ -5373,13 +5442,13 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     # back to Monitor's hide_days.
     expired_max_age = int(cfg.get('expired_max_age_days') or 0) or hide_days
 
-    # One scan at a time (worker + manual "run now" must not clobber each other).
-    with SMS_SCAN_JOB_LOCK:
-        if SMS_SCAN_JOB.get('state') == 'running':
-            return {'scanned': 0, 'sent': 0, 'reason': 'already_running'}
+    # One scan at a time across ALL workers (worker + manual "run now" must not
+    # clobber each other). Check the shared Redis snapshot, not just local state.
+    if _sms_scan_snapshot().get('state') == 'running':
+        return {'scanned': 0, 'sent': 0, 'reason': 'already_running'}
 
     # Reset progress for this run (also clear any leftover cancel signal).
-    SMS_SCAN_CANCEL.clear()
+    _sms_scan_cancel_clear()
     with SMS_SCAN_JOB_LOCK:
         SMS_SCAN_JOB.clear()
         SMS_SCAN_JOB.update({
@@ -5485,7 +5554,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     sent = 0
     # Pass 2 — cooldown gate + rate-limit + send + log per candidate.
     for (sid_norm, email, email_l, server_name, state, recipient, mvars) in candidates:
-        if SMS_SCAN_CANCEL.is_set():
+        if _sms_scan_cancelled():
             _sms_scan_set(state='stopped', stopped='cancelled', finished_at=_utc_iso_now(), current=None)
             return {'scanned': total_clients, 'sent': sent, 'stopped': 'cancelled'}
         _sms_scan_set(current=email)
@@ -19552,10 +19621,10 @@ def sms_scan_run():
     if not any(cfg.get(f'trigger_{s}') for s in ('near_expiry', 'low_volume', 'expired', 'ended')):
         return jsonify({'success': False, 'error': 'No state triggers are enabled (near expiry / low volume / expired / ended).'}), 400
 
-    with SMS_SCAN_JOB_LOCK:
-        if SMS_SCAN_JOB.get('state') == 'running':
-            return jsonify({'success': False, 'error': 'A scan is already running.',
-                            'job': dict(SMS_SCAN_JOB)}), 409
+    running_job = _sms_scan_snapshot()
+    if running_job.get('state') == 'running':
+        return jsonify({'success': False, 'error': 'A scan is already running.',
+                        'job': running_job}), 409
 
     jid = uuid.uuid4().hex
 
@@ -19574,10 +19643,8 @@ def sms_scan_run():
 @app.route('/api/sms/scan/status', methods=['GET'])
 @superadmin_required
 def sms_scan_status():
-    """Live progress of the current/last SMS scan."""
-    with SMS_SCAN_JOB_LOCK:
-        job = dict(SMS_SCAN_JOB)
-    return jsonify({'success': True, 'job': job})
+    """Live progress of the current/last SMS scan (shared across all workers)."""
+    return jsonify({'success': True, 'job': _sms_scan_snapshot()})
 
 
 @app.route('/api/sms/scan/stop', methods=['POST'])
@@ -19586,7 +19653,7 @@ def sms_scan_stop():
     """Signal the running scan to abort after the current item, then disable
     SMS automation so no new scan starts automatically. The UI should reflect
     the disabled state by unchecking the toggle."""
-    SMS_SCAN_CANCEL.set()
+    _sms_scan_cancel_set()
     # Persist sms_automation_enabled = false so the background worker skips
     # future cycles and the toggle shows the correct state on next page load.
     try:
@@ -19598,9 +19665,7 @@ def sms_scan_stop():
         db.session.commit()
     except Exception:
         db.session.rollback()
-    with SMS_SCAN_JOB_LOCK:
-        job = dict(SMS_SCAN_JOB)
-    return jsonify({'success': True, 'job': job})
+    return jsonify({'success': True, 'job': _sms_scan_snapshot()})
 
 
 @app.route('/api/sms/logs', methods=['GET'])
