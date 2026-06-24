@@ -987,9 +987,12 @@
                         <div id="sms-scan-counts" class="text-secondary" style="font-size:0.82rem;display:flex;gap:14px;flex-wrap:wrap;"></div>
                     </div>
 
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
-                        <small class="text-secondary">Recent sends</small>
-                        <button class="btn btn-secondary" style="padding:3px 10px;font-size:0.78rem;" onclick="refreshSmsPanel()">Refresh log</button>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+                            <small class="text-secondary">Recent sends</small>
+                            <small id="sms-logs-updated" class="text-secondary" aria-live="polite" style="font-size:0.72rem;opacity:0.8;"></small>
+                        </div>
+                        <button class="btn btn-secondary" id="sms-logs-refresh-btn" style="padding:3px 10px;font-size:0.78rem;" onclick="refreshSmsPanel()">Refresh log</button>
                     </div>
                     <div style="overflow-x:auto;border:1px solid var(--border-color,#2a2a3a);border-radius:8px;">
                         <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
@@ -1003,10 +1006,19 @@
                                     <th style="padding:8px 10px;text-align:start;">Status</th>
                                 </tr>
                             </thead>
-                            <tbody id="sms-logs-body">
+                            <tbody id="sms-logs-body" aria-live="polite">
                                 <tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>
                             </tbody>
                         </table>
+                    </div>
+                    <!-- Pagination -->
+                    <div id="sms-logs-pager" style="display:none;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap;">
+                        <small id="sms-logs-range" class="text-secondary" style="font-size:0.78rem;"></small>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <button class="btn btn-secondary" id="sms-logs-prev" style="padding:4px 12px;font-size:0.8rem;" onclick="smsLogsGo(-1)" aria-label="Previous page">‹ Prev</button>
+                            <small id="sms-logs-pageinfo" class="text-secondary" style="font-size:0.78rem;min-width:84px;text-align:center;"></small>
+                            <button class="btn btn-secondary" id="sms-logs-next" style="padding:4px 12px;font-size:0.8rem;" onclick="smsLogsGo(1)" aria-label="Next page">Next ›</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2834,10 +2846,50 @@
     }
 
     // Manual "Refresh log": pull the latest scan status (what it's doing now /
-    // last result) AND reload the send log, immediately.
-    function refreshSmsPanel() {
-        pollSmsScanStatus();
+    // last result) AND reload the send log from the newest page, with visible
+    // button feedback so the action never feels dead even if nothing changed.
+    async function refreshSmsPanel() {
+        const btn = document.getElementById('sms-logs-refresh-btn');
+        const prev = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+        try {
+            smsLogPage = 0;            // jump back to newest entries
+            pollSmsScanStatus();
+            await loadSmsLogs();
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = prev || 'Refresh log'; }
+        }
+    }
+
+    // ── Send-log pagination ──────────────────────────────────────────
+    let smsLogPage = 0;               // 0-based page index, newest first
+    let smsLogTotal = 0;
+    const SMS_LOG_PAGE_SIZE = 20;
+
+    function smsLogsGo(dir) {
+        const maxPage = Math.max(0, Math.ceil(smsLogTotal / SMS_LOG_PAGE_SIZE) - 1);
+        const next = Math.min(maxPage, Math.max(0, smsLogPage + dir));
+        if (next === smsLogPage) return;
+        smsLogPage = next;
         loadSmsLogs();
+    }
+
+    function _renderSmsLogPager() {
+        const pager = document.getElementById('sms-logs-pager');
+        if (!pager) return;
+        if (smsLogTotal <= SMS_LOG_PAGE_SIZE) { pager.style.display = 'none'; return; }
+        pager.style.display = 'flex';
+        const pages = Math.max(1, Math.ceil(smsLogTotal / SMS_LOG_PAGE_SIZE));
+        const from = smsLogPage * SMS_LOG_PAGE_SIZE + 1;
+        const to = Math.min(smsLogTotal, (smsLogPage + 1) * SMS_LOG_PAGE_SIZE);
+        const rangeEl = document.getElementById('sms-logs-range');
+        const infoEl = document.getElementById('sms-logs-pageinfo');
+        const prevBtn = document.getElementById('sms-logs-prev');
+        const nextBtn = document.getElementById('sms-logs-next');
+        if (rangeEl) rangeEl.textContent = `${from}–${to} of ${smsLogTotal}`;
+        if (infoEl) infoEl.textContent = `Page ${smsLogPage + 1} / ${pages}`;
+        if (prevBtn) prevBtn.disabled = smsLogPage <= 0;
+        if (nextBtn) nextBtn.disabled = smsLogPage >= pages - 1;
     }
 
     function pollSmsScanStatus() {
@@ -2919,11 +2971,16 @@
         const body = document.getElementById('sms-logs-body');
         if (!body) return;
         try {
-            const res = await fetch('/api/sms/logs?limit=100');
+            const offset = smsLogPage * SMS_LOG_PAGE_SIZE;
+            const res = await fetch(`/api/sms/logs?limit=${SMS_LOG_PAGE_SIZE}&offset=${offset}`);
             const data = await res.json();
             const logs = (data && data.logs) || [];
+            smsLogTotal = Number((data && data.total) || logs.length);
+            const stampEl = document.getElementById('sms-logs-updated');
+            if (stampEl) stampEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
             if (!logs.length) {
                 body.innerHTML = '<tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>';
+                _renderSmsLogPager();
                 return;
             }
             const statusColor = { sent: '#22c55e', failed: '#ef4444', skipped: '#f59e0b' };
@@ -2941,6 +2998,7 @@
                     <td data-label="Status" style="padding:7px 10px;color:${sc};white-space:nowrap;">${escapeHtml(statusTxt)}</td>
                 </tr>`;
             }).join('');
+            _renderSmsLogPager();
         } catch (e) {
             body.innerHTML = '<tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">Could not load log.</td></tr>';
         }

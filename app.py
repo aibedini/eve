@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.26"
+APP_VERSION = "2.3.27"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -19703,11 +19703,15 @@ def sms_scan_stop():
 @app.route('/api/sms/logs', methods=['GET'])
 @superadmin_required
 def sms_logs():
-    """Recent SMS send-log history (newest first)."""
+    """Recent SMS send-log history (newest first), paginated."""
     try:
         limit = max(1, min(int(request.args.get('limit', 100)), 1000))
     except (TypeError, ValueError):
         limit = 100
+    try:
+        offset = max(0, int(request.args.get('offset', 0)))
+    except (TypeError, ValueError):
+        offset = 0
     status_filter = (request.args.get('status') or '').strip().lower()
     state_filter = (request.args.get('state') or '').strip().lower()
     q = SmsSendLog.query
@@ -19715,8 +19719,10 @@ def sms_logs():
         q = q.filter(SmsSendLog.status == status_filter)
     if state_filter in ('near_expiry', 'low_volume', 'expired', 'ended'):
         q = q.filter(SmsSendLog.state == state_filter)
-    rows = q.order_by(SmsSendLog.created_at.desc()).limit(limit).all()
-    return jsonify({'success': True, 'logs': [r.to_dict() for r in rows]})
+    total = q.count()
+    rows = q.order_by(SmsSendLog.created_at.desc()).offset(offset).limit(limit).all()
+    return jsonify({'success': True, 'logs': [r.to_dict() for r in rows],
+                    'total': total, 'offset': offset, 'limit': limit})
 
 
 @app.route('/api/whatsapp/test-connection', methods=['POST'])
