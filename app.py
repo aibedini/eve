@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.34"
+APP_VERSION = "2.3.35"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -17394,9 +17394,11 @@ def reseller_statement():
     by_server_list = sorted(({'server': k, **v} for k, v in by_server.items()),
                             key=lambda x: x['spent'], reverse=True)
 
-    return jsonify({'success': True, 'summary': summary,
+    resp = jsonify({'success': True, 'summary': summary,
                     'by_package': by_package_list, 'by_server': by_server_list,
                     'rows': out_rows})
+    resp.headers['Cache-Control'] = 'no-store, max-age=0'
+    return resp
 
 
 @app.route('/api/finance/overview', methods=['GET'])

@@ -2339,9 +2339,10 @@
             const end = normalizeDigits(($('stmt-end').value || '').trim());
             if (start) params.set('start_date', start);
             if (end) params.set('end_date', end);
+            params.set('_', Date.now());  // cache-bust: never reuse a stale GET response
             runBtn.disabled = true; runBtn.textContent = 'Loading…';
             try {
-                const res = await fetch('/api/finance/reseller-statement?' + params.toString());
+                const res = await fetch('/api/finance/reseller-statement?' + params.toString(), { cache: 'no-store' });
                 const data = await res.json();
                 if (!data || !data.success) {
                     showToast((data && data.error) || 'Could not load statement', 'error');
