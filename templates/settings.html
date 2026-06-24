@@ -911,6 +911,21 @@
                 </div>
 
                 <div class="form-group">
+                    <label>Unlimited accounts</label>
+                    <div class="refresh-toggle" style="gap:10px;">
+                        <label class="toggle-switch" style="margin:0;">
+                            <input type="checkbox" id="sms-skip-unlimited" {% if sms_skip_unlimited %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <span class="toggle-label">Skip accounts with unlimited volume or unlimited time</span>
+                    </div>
+                    <small class="text-secondary" style="display:block;margin-top:4px;">
+                        When on, the scan skips any account that has no volume cap <em>or</em> no expiry date —
+                        only fully-limited accounts (both a volume and a date) get messaged. Off = message them too (current behavior).
+                    </small>
+                </div>
+
+                <div class="form-group">
                     <label>Per-state resend cooldown (hours)</label>
                     <p class="text-secondary" style="margin:2px 0 8px; font-size:0.82rem;">
                         Min gap before the same user/uuid is messaged again for each state. Shared between SMS &amp; WhatsApp
@@ -2813,6 +2828,7 @@
             sms_quiet_enabled: !!(document.getElementById('sms-quiet-enabled') || {}).checked,
             sms_quiet_start_hour: Number((document.getElementById('sms-quiet-start') || {}).value || 0),
             sms_quiet_end_hour: Number((document.getElementById('sms-quiet-end') || {}).value || 0),
+            sms_skip_unlimited: !!(document.getElementById('sms-skip-unlimited') || {}).checked,
         };
     }
 

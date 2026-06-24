@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.36"
+APP_VERSION = "2.3.37"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5035,6 +5035,9 @@ SMS_SEND_PACE_SECONDS_KEY       = 'sms_send_pace_seconds'  # global gap between 
 SMS_QUIET_ENABLED_KEY = 'sms_quiet_enabled'
 SMS_QUIET_START_KEY   = 'sms_quiet_start_hour'  # 0-23, inclusive
 SMS_QUIET_END_KEY     = 'sms_quiet_end_hour'    # 0-23, exclusive
+# When on, the scan skips any account that is unlimited in either dimension
+# (no volume cap or no expiry date), so only fully-limited accounts get messaged.
+SMS_SKIP_UNLIMITED_KEY = 'sms_skip_unlimited'
 
 SMS_SEND_TRACKER = {'daily': {}, 'per_recipient': {}}
 SMS_SCAN_CANCEL = threading.Event()  # set → running scan aborts after current item
@@ -5056,6 +5059,7 @@ def _get_sms_runtime_settings() -> dict:
         SMS_TRIGGER_NEAR_EXPIRY_KEY, SMS_TRIGGER_LOW_VOLUME_KEY,
         SMS_TRIGGER_EXPIRED_KEY, SMS_TRIGGER_ENDED_KEY,
         SMS_QUIET_ENABLED_KEY, SMS_QUIET_START_KEY, SMS_QUIET_END_KEY,
+        SMS_SKIP_UNLIMITED_KEY,
     ]
     c = _get_system_configs_batch(keys)
 
@@ -5113,6 +5117,7 @@ def _get_sms_runtime_settings() -> dict:
         'quiet_enabled': _bool(SMS_QUIET_ENABLED_KEY, False),
         'quiet_start': _int(SMS_QUIET_START_KEY, 2, lo=0, hi=23),
         'quiet_end': _int(SMS_QUIET_END_KEY, 8, lo=0, hi=23),
+        'skip_unlimited': _bool(SMS_SKIP_UNLIMITED_KEY, False),
     }
 
 
@@ -5605,6 +5610,12 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             )
             state = SMS_MONITOR_TAG_TO_STATE.get(status or '')
             if not state or not state_enabled.get(state):
+                continue
+
+            # Operator option: skip accounts that are unlimited in either dimension
+            # (no volume cap or no expiry date). total_bytes<=0 ⇒ unlimited volume,
+            # expiry_ts<=0 ⇒ unlimited/no time.
+            if cfg.get('skip_unlimited') and (total_bytes <= 0 or expiry_ts <= 0):
                 continue
 
             # Skip long-expired accounts: never text someone who expired ages ago.
@@ -11974,6 +11985,7 @@ def settings_page():
                          sms_quiet_enabled=sms_cfg.get('quiet_enabled', False),
                          sms_quiet_start=sms_cfg.get('quiet_start', 2),
                          sms_quiet_end=sms_cfg.get('quiet_end', 8),
+                         sms_skip_unlimited=sms_cfg.get('skip_unlimited', False),
                          whatsapp_deployment_region=whatsapp_cfg.get('deployment_region', 'outside'),
                          whatsapp_enabled=whatsapp_cfg.get('enabled_requested', False),
                          whatsapp_provider=whatsapp_cfg.get('provider', 'baileys'),
@@ -19862,6 +19874,8 @@ def update_system_config():
                 sanitized_value = 'true' if _parse_bool(value) else 'false'
             elif key in {SMS_QUIET_START_KEY, SMS_QUIET_END_KEY}:
                 sanitized_value = str(_parse_int(value, 0, min_value=0, max_value=23))
+            elif key == SMS_SKIP_UNLIMITED_KEY:
+                sanitized_value = 'true' if _parse_bool(value) else 'false'
             else:
                 sanitized_value = sanitize_html(str(value))
 
