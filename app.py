@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.23"
+APP_VERSION = "2.3.24"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5256,27 +5256,51 @@ def _get_sms_template_content(template_type: str, default_text: str) -> str:
 
 
 def _fire_automation_sms(event_name: str, server_id, email: str, template_type: str,
-                         default_template: str, tpl_vars: dict, recipient_comment: str = '') -> None:
+                         default_template: str, tpl_vars: dict, recipient_comment: str = '',
+                         server_name: str = '') -> None:
     """Render the SMS template and send it via GMweb in a background thread, so
-    the create/renew request is never blocked. Gated to non-reseller accounts."""
+    the create/renew request is never blocked. Gated to non-reseller accounts.
+    Every outcome (sent / failed / skipped+reason) is written to the SMS send log
+    so transactional create/renew messages are visible there, not just the scan."""
     def _worker():
         with app.app_context():
             try:
+                sid_norm = None
+                try:
+                    sid_norm = int(server_id)
+                except (TypeError, ValueError):
+                    sid_norm = None
+                email_l = (email or '').strip().lower()
+
+                def _log(recipient, status, reason):
+                    _sms_log_row(None, email_l, sid_norm, server_name, event_name, recipient, status, reason)
+
                 cfg = _get_sms_runtime_settings()
-                ok, _r = _sms_should_send(event_name, server_id, email, cfg)
+                ok, reason = _sms_should_send(event_name, server_id, email, cfg)
                 if not ok:
+                    _log('', 'skipped', reason)
+                    return
+                if _comment_opted_out(recipient_comment, 'nosms'):
+                    _log('', 'skipped', 'opted_out')
                     return
                 recipient = _extract_iran_mobile_from_text(email, recipient_comment or None)
                 if not recipient:
+                    _log('', 'skipped', 'no_recipient')
                     return
-                slot_ok, _sr = _sms_take_send_slot(recipient, cfg)
+                slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
                 if not slot_ok:
+                    _log(recipient, 'skipped', slot_reason)
                     return
                 content = _get_sms_template_content(template_type, default_template)
                 text = _render_text_template(content, tpl_vars)
                 if not (text or '').strip():
+                    _log(recipient, 'skipped', 'empty_message')
                     return
-                _send_sms_via_gmweb(recipient, text, cfg)
+                res = _send_sms_via_gmweb(recipient, text, cfg)
+                if res.get('sent'):
+                    _log(recipient, 'sent', None)
+                else:
+                    _log(recipient, 'failed', res.get('reason'))
             except Exception:
                 app.logger.exception('[sms-automation] send failed')
     threading.Thread(target=_worker, daemon=True).start()
@@ -13919,7 +13943,8 @@ def renew_client(server_id, inbound_id, email):
                 # SMS automation (GMweb) — non-reseller-owned accounts only; runs
                 # in a background thread so it never delays the renew response.
                 _fire_automation_sms('renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
-                                     DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment)
+                                     DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,
+                                     server_name=getattr(server, 'name', '') or '')
                 whatsapp_meta = {
                     'enabled': whatsapp_runtime.get('enabled', False),
                     'deployment_region': whatsapp_runtime.get('deployment_region', 'outside'),
@@ -14949,7 +14974,8 @@ def add_client(server_id, inbound_id):
                                      'days': ('♾️' if days == 0 else f'{days}'), 'sub_link': sub_url,
                                      'dashboard_link': dash_sub_url, 'server_name': getattr(server, 'name', '') or '',
                                      'comment': data.get('comment', '') or '',
-                                 }, data.get('comment', '') or '')
+                                 }, data.get('comment', '') or '',
+                                 server_name=getattr(server, 'name', '') or '')
 
             return jsonify({
                 "success": True,
@@ -15188,7 +15214,8 @@ def add_client(server_id, inbound_id):
 
             # SMS automation (GMweb) on create — non-reseller-owned accounts only.
             _fire_automation_sms('created', server.id, email, CLIENT_CREATED_SMS_TEMPLATE_TYPE,
-                                 DEFAULT_CLIENT_CREATED_SMS_TEMPLATE, _cc_tpl_vars, data.get('comment', '') or '')
+                                 DEFAULT_CLIENT_CREATED_SMS_TEMPLATE, _cc_tpl_vars, data.get('comment', '') or '',
+                                 server_name=getattr(server, 'name', '') or '')
 
             return jsonify({
                 "success": True,
