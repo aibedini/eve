@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.15"
+APP_VERSION = "2.3.16"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -19462,7 +19462,12 @@ def sms_test_send():
 def sms_scan_run():
     """Kick off the automated state-based SMS scan now (non-blocking). The UI then
     polls /api/sms/scan/status to watch progress."""
-    cfg = _get_sms_runtime_settings()
+    try:
+        cfg = _get_sms_runtime_settings()
+    except Exception as exc:
+        app.logger.exception('[sms-scan/run] failed to read settings')
+        return jsonify({'success': False, 'error': f'Could not load SMS settings: {exc}'}), 500
+
     if not cfg.get('enabled'):
         return jsonify({'success': False, 'error': 'SMS automation is disabled. Enable it (and Save) first.'}), 400
     if not (cfg.get('base_url') and cfg.get('api_key')):
