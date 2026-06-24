@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.12"
+APP_VERSION = "2.3.13"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -1404,13 +1404,7 @@ def _run_bulk_job(job_id: str):
                     delta = data.get('days_delta')
                     ok, err, _status = _apply_client_limit_delta(user, server, inbound_id, email, days_delta=delta, volume_gb_delta=None)
                     if ok:
-                        try:
-                            MonitorMessageLog.query.filter_by(
-                                email=(email or '').strip().lower(), server_id=server_id
-                            ).delete()
-                            db.session.commit()
-                        except Exception:
-                            pass
+                        _clear_message_cooldown(email, server_id)
                 elif action == 'add_volume':
                     delta = data.get('volume_gb_delta')
                     ok, err, _status = _apply_client_limit_delta(user, server, inbound_id, email, days_delta=None, volume_gb_delta=delta)
@@ -4919,10 +4913,12 @@ def _run_whatsapp_depletion_scan() -> dict:
                 continue
 
             try:
+                # Event-agnostic so the WhatsApp cooldown is shared with the SMS
+                # automation: a user texted via SMS won't also get a WhatsApp ping
+                # inside the window (and vice-versa).
                 recent = WhatsappBotLog.query.filter(
                     WhatsappBotLog.email == email_l,
                     WhatsappBotLog.server_id == (sid_norm or 0),
-                    WhatsappBotLog.event == 'depletion',
                     WhatsappBotLog.sent_at >= cooldown_cut,
                 ).first()
             except Exception:
@@ -5002,7 +4998,14 @@ SMS_TRIGGER_EXPIRED_KEY         = 'sms_trigger_expired'      # monitor tag 'expi
 SMS_TRIGGER_ENDED_KEY           = 'sms_trigger_ended'        # monitor tag 'ended'
 SMS_DEPLETION_EXPIRY_DAYS_KEY   = 'sms_depletion_expiry_days'
 SMS_DEPLETION_VOLUME_GB_KEY     = 'sms_depletion_volume_gb'
-SMS_DEPLETION_COOLDOWN_DAYS_KEY = 'sms_depletion_cooldown_days'
+SMS_DEPLETION_COOLDOWN_DAYS_KEY = 'sms_depletion_cooldown_days'  # legacy fallback (days) for per-state cooldown
+# Per-state resend cooldown in HOURS — shared across SMS + WhatsApp so a user/uuid
+# is never double-messaged on either channel inside the window. Survives crashes
+# because it's enforced from the persisted WhatsappBotLog, not in-memory state.
+SMS_COOLDOWN_HOURS_NEAR_EXPIRY_KEY = 'sms_cooldown_hours_near_expiry'
+SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY  = 'sms_cooldown_hours_low_volume'
+SMS_COOLDOWN_HOURS_EXPIRED_KEY     = 'sms_cooldown_hours_expired'
+SMS_COOLDOWN_HOURS_ENDED_KEY       = 'sms_cooldown_hours_ended'
 SMS_EXPIRED_MAX_AGE_DAYS_KEY    = 'sms_expired_max_age_days'  # don't SMS accounts expired longer than this (0 = use Monitor hide_days)
 SMS_MIN_INTERVAL_SECONDS_KEY    = 'sms_min_interval_seconds'
 SMS_DAILY_LIMIT_KEY             = 'sms_daily_limit'
@@ -5017,6 +5020,8 @@ def _get_sms_runtime_settings() -> dict:
         SMS_GMWEB_TIMEOUT_KEY, SMS_TRIGGER_CREATED_KEY, SMS_TRIGGER_RENEW_KEY,
         SMS_TRIGGER_DEPLETION_KEY, SMS_DEPLETION_EXPIRY_DAYS_KEY,
         SMS_DEPLETION_VOLUME_GB_KEY, SMS_DEPLETION_COOLDOWN_DAYS_KEY,
+        SMS_COOLDOWN_HOURS_NEAR_EXPIRY_KEY, SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY,
+        SMS_COOLDOWN_HOURS_EXPIRED_KEY, SMS_COOLDOWN_HOURS_ENDED_KEY,
         SMS_EXPIRED_MAX_AGE_DAYS_KEY,
         SMS_MIN_INTERVAL_SECONDS_KEY, SMS_DAILY_LIMIT_KEY,
         SMS_TRIGGER_NEAR_EXPIRY_KEY, SMS_TRIGGER_LOW_VOLUME_KEY,
@@ -5063,6 +5068,14 @@ def _get_sms_runtime_settings() -> dict:
         'depletion_expiry_days': _int(SMS_DEPLETION_EXPIRY_DAYS_KEY, 3, lo=0, hi=60),
         'depletion_volume_gb': _float(SMS_DEPLETION_VOLUME_GB_KEY, 2.0, lo=0.0, hi=1000.0),
         'depletion_cooldown_days': _int(SMS_DEPLETION_COOLDOWN_DAYS_KEY, 7, lo=1, hi=120),
+        # Per-state resend gap in hours (shared SMS+WhatsApp). Default = legacy
+        # cooldown-days × 24 so existing installs keep the same spacing.
+        'cooldown_hours': {
+            'near_expiry': _int(SMS_COOLDOWN_HOURS_NEAR_EXPIRY_KEY, 24, lo=1, hi=8760),
+            'low_volume':  _int(SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY, 24, lo=1, hi=8760),
+            'expired':     _int(SMS_COOLDOWN_HOURS_EXPIRED_KEY, 48, lo=1, hi=8760),
+            'ended':       _int(SMS_COOLDOWN_HOURS_ENDED_KEY, 24, lo=1, hi=8760),
+        },
         'expired_max_age_days': _int(SMS_EXPIRED_MAX_AGE_DAYS_KEY, 30, lo=0, hi=3650),
         'min_interval_seconds': _int(SMS_MIN_INTERVAL_SECONDS_KEY, 30, lo=0, hi=3600),
         'daily_limit': _int(SMS_DAILY_LIMIT_KEY, 200, lo=1, hi=100000),
@@ -5087,6 +5100,45 @@ def _account_has_reseller_owner(server_id, email) -> bool:
         return row is not None
     except Exception:
         return False
+
+
+def _recent_bot_message_within(email_l: str, sid_norm, hours: int) -> bool:
+    """True if ANY automated message (SMS or WhatsApp, any state) went to this
+    (account, server) within the last `hours`. Event-agnostic on purpose so the
+    cooldown is shared across both channels. Reads the persisted WhatsappBotLog,
+    so it stays correct across crashes/restarts."""
+    try:
+        cut = datetime.utcnow() - timedelta(hours=max(int(hours or 0), 0))
+        return WhatsappBotLog.query.filter(
+            WhatsappBotLog.email == email_l,
+            WhatsappBotLog.server_id == (sid_norm or 0),
+            WhatsappBotLog.sent_at >= cut,
+        ).first() is not None
+    except Exception:
+        return False
+
+
+def _clear_message_cooldown(email: str, server_id) -> None:
+    """Reset all message counters/cooldowns for an account after a renewal so the
+    automation can message it again from scratch. Clears both the manual Monitor
+    send-counter (MonitorMessageLog) and the automation dedup log (WhatsappBotLog).
+    Best-effort; commits on its own."""
+    email_l = (email or '').strip().lower()
+    if not email_l:
+        return
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        sid = server_id
+    try:
+        MonitorMessageLog.query.filter_by(email=email_l, server_id=sid).delete()
+        WhatsappBotLog.query.filter_by(email=email_l, server_id=sid).delete()
+        db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def _sms_take_send_slot(recipient: str, cfg: dict) -> tuple[bool, str | None]:
@@ -5271,8 +5323,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         return {'scanned': 0, 'sent': 0, 'reason': 'gateway_not_configured'}
 
     jid = job_id or uuid.uuid4().hex
-    cooldown_days = int(cfg.get('depletion_cooldown_days') or 7)
-    cooldown_cut = datetime.utcnow() - timedelta(days=cooldown_days)
+    cooldown_hours = cfg.get('cooldown_hours') or {}
 
     # Match Monitor's visible set: same thresholds and same long-expired hiding.
     mon = _get_monitor_settings()
@@ -5396,16 +5447,9 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         _sms_scan_inc('processed')
 
         event = f'sms_{state}'
-        try:
-            recent = WhatsappBotLog.query.filter(
-                WhatsappBotLog.email == email_l,
-                WhatsappBotLog.server_id == (sid_norm or 0),
-                WhatsappBotLog.event == event,
-                WhatsappBotLog.sent_at >= cooldown_cut,
-            ).first()
-        except Exception:
-            recent = None
-        if recent:
+        # Per-state cooldown in hours, shared across SMS + WhatsApp (event-agnostic).
+        cd_hours = int(cooldown_hours.get(state, 24) or 24)
+        if _recent_bot_message_within(email_l, sid_norm, cd_hours):
             _sms_scan_inc('skipped_cooldown')
             continue
 
@@ -10804,8 +10848,7 @@ def monitor_reset_msg_count():
     if not email:
         return jsonify({'success': False, 'error': 'email required'}), 400
     try:
-        MonitorMessageLog.query.filter_by(email=email, server_id=server_id).delete()
-        db.session.commit()
+        _clear_message_cooldown(email, server_id)
         return jsonify({'success': True})
     except Exception as exc:
         db.session.rollback()
@@ -11597,6 +11640,10 @@ def settings_page():
                          sms_depletion_expiry_days=sms_cfg.get('depletion_expiry_days', 3),
                          sms_depletion_volume_gb=sms_cfg.get('depletion_volume_gb', 2.0),
                          sms_depletion_cooldown_days=sms_cfg.get('depletion_cooldown_days', 7),
+                         sms_cooldown_hours_near_expiry=(sms_cfg.get('cooldown_hours') or {}).get('near_expiry', 24),
+                         sms_cooldown_hours_low_volume=(sms_cfg.get('cooldown_hours') or {}).get('low_volume', 24),
+                         sms_cooldown_hours_expired=(sms_cfg.get('cooldown_hours') or {}).get('expired', 48),
+                         sms_cooldown_hours_ended=(sms_cfg.get('cooldown_hours') or {}).get('ended', 24),
                          sms_expired_max_age_days=sms_cfg.get('expired_max_age_days', 30),
                          sms_min_interval_seconds=sms_cfg.get('min_interval_seconds', 30),
                          sms_daily_limit=sms_cfg.get('daily_limit', 200),
@@ -13750,14 +13797,9 @@ def renew_client(server_id, inbound_id, email):
                 except Exception:
                     pass
 
-                # Clear monitor message log so the send counter resets after renewal
-                try:
-                    MonitorMessageLog.query.filter_by(
-                        email=email.strip().lower(), server_id=server_id
-                    ).delete()
-                    db.session.commit()
-                except Exception:
-                    pass
+                # Reset send counter + automation cooldown so a renewed account can
+                # be messaged again from scratch (both SMS and WhatsApp).
+                _clear_message_cooldown(email, server_id)
 
                 return _finish({"success": True, "copy_text": copy_text, "tpl_vars": _renew_tpl_vars, "verify": verify, "whatsapp": whatsapp_meta, "was_reactivated": _was_disabled})
 
@@ -19256,6 +19298,12 @@ def update_system_config():
                 sanitized_value = str(_v)
             elif key == SMS_DEPLETION_COOLDOWN_DAYS_KEY:
                 sanitized_value = str(_parse_int(value, 7, min_value=1, max_value=120))
+            elif key in {
+                SMS_COOLDOWN_HOURS_NEAR_EXPIRY_KEY, SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY,
+                SMS_COOLDOWN_HOURS_EXPIRED_KEY, SMS_COOLDOWN_HOURS_ENDED_KEY,
+            }:
+                _dflt = 48 if key == SMS_COOLDOWN_HOURS_EXPIRED_KEY else 24
+                sanitized_value = str(_parse_int(value, _dflt, min_value=1, max_value=8760))
             elif key == SMS_EXPIRED_MAX_AGE_DAYS_KEY:
                 sanitized_value = str(_parse_int(value, 30, min_value=0, max_value=3650))
             elif key == SMS_MIN_INTERVAL_SECONDS_KEY:

@@ -892,7 +892,7 @@
 
                 <div class="form-group">
                     <label>Near-expiry reminder thresholds</label>
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
                         <div>
                             <small class="text-secondary">Days before expiry</small>
                             <input type="number" id="sms-depletion-expiry-days" class="form-control" min="0" max="60" value="{{ sms_depletion_expiry_days }}">
@@ -901,15 +901,38 @@
                             <small class="text-secondary">Remaining volume (GB) ≤</small>
                             <input type="number" id="sms-depletion-volume-gb" class="form-control" min="0" max="1000" step="0.1" value="{{ sms_depletion_volume_gb }}">
                         </div>
-                        <div>
-                            <small class="text-secondary">Cooldown (days)</small>
-                            <input type="number" id="sms-depletion-cooldown-days" class="form-control" min="1" max="120" value="{{ sms_depletion_cooldown_days }}">
-                        </div>
                     </div>
+                    <input type="hidden" id="sms-depletion-cooldown-days" value="{{ sms_depletion_cooldown_days }}">
                     <div style="margin-top:10px;">
                         <small class="text-secondary">Don’t SMS accounts expired more than (days) ago</small>
                         <input type="number" id="sms-expired-max-age-days" class="form-control" min="0" max="3650" value="{{ sms_expired_max_age_days }}">
                         <small class="text-secondary" style="display:block;margin-top:4px;">Stops a scan from suddenly texting users who expired long ago (e.g. years back). 0 = use Monitor’s hide-after-days.</small>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Per-state resend cooldown (hours)</label>
+                    <p class="text-secondary" style="margin:2px 0 8px; font-size:0.82rem;">
+                        Min gap before the same user/uuid is messaged again for each state. Shared between SMS &amp; WhatsApp
+                        (no double-ping on both channels), persists across restarts, and resets when the account is renewed.
+                    </p>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+                        <div>
+                            <small class="text-secondary">⚠️ Low volume</small>
+                            <input type="number" id="sms-cooldown-hours-low-volume" class="form-control" min="1" max="8760" value="{{ sms_cooldown_hours_low_volume }}">
+                        </div>
+                        <div>
+                            <small class="text-secondary">⏳ Near expiry</small>
+                            <input type="number" id="sms-cooldown-hours-near-expiry" class="form-control" min="1" max="8760" value="{{ sms_cooldown_hours_near_expiry }}">
+                        </div>
+                        <div>
+                            <small class="text-secondary">🚫 Volume ended</small>
+                            <input type="number" id="sms-cooldown-hours-ended" class="form-control" min="1" max="8760" value="{{ sms_cooldown_hours_ended }}">
+                        </div>
+                        <div>
+                            <small class="text-secondary">⛔ Expired</small>
+                            <input type="number" id="sms-cooldown-hours-expired" class="form-control" min="1" max="8760" value="{{ sms_cooldown_hours_expired }}">
+                        </div>
                     </div>
                 </div>
 
@@ -2626,6 +2649,10 @@
             sms_depletion_expiry_days: Number((document.getElementById('sms-depletion-expiry-days') || {}).value || 3),
             sms_depletion_volume_gb: Number((document.getElementById('sms-depletion-volume-gb') || {}).value || 2),
             sms_depletion_cooldown_days: Number((document.getElementById('sms-depletion-cooldown-days') || {}).value || 7),
+            sms_cooldown_hours_near_expiry: Number((document.getElementById('sms-cooldown-hours-near-expiry') || {}).value || 24),
+            sms_cooldown_hours_low_volume: Number((document.getElementById('sms-cooldown-hours-low-volume') || {}).value || 24),
+            sms_cooldown_hours_expired: Number((document.getElementById('sms-cooldown-hours-expired') || {}).value || 48),
+            sms_cooldown_hours_ended: Number((document.getElementById('sms-cooldown-hours-ended') || {}).value || 24),
             sms_expired_max_age_days: Number((document.getElementById('sms-expired-max-age-days') || {}).value || 30),
             sms_min_interval_seconds: Number((document.getElementById('sms-min-interval') || {}).value || 30),
             sms_daily_limit: Number((document.getElementById('sms-daily-limit') || {}).value || 200),
