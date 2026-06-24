@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.14"
+APP_VERSION = "2.3.15"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5011,6 +5011,7 @@ SMS_MIN_INTERVAL_SECONDS_KEY    = 'sms_min_interval_seconds'
 SMS_DAILY_LIMIT_KEY             = 'sms_daily_limit'
 
 SMS_SEND_TRACKER = {'daily': {}, 'per_recipient': {}}
+SMS_SCAN_CANCEL = threading.Event()  # set → running scan aborts after current item
 SMS_SEND_TRACKER_LOCK = threading.Lock()
 
 
@@ -5342,7 +5343,8 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         if SMS_SCAN_JOB.get('state') == 'running':
             return {'scanned': 0, 'sent': 0, 'reason': 'already_running'}
 
-    # Reset progress for this run.
+    # Reset progress for this run (also clear any leftover cancel signal).
+    SMS_SCAN_CANCEL.clear()
     with SMS_SCAN_JOB_LOCK:
         SMS_SCAN_JOB.clear()
         SMS_SCAN_JOB.update({
@@ -5443,6 +5445,9 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     sent = 0
     # Pass 2 — cooldown gate + rate-limit + send + log per candidate.
     for (sid_norm, email, email_l, server_name, state, recipient, mvars) in candidates:
+        if SMS_SCAN_CANCEL.is_set():
+            _sms_scan_set(state='stopped', stopped='cancelled', finished_at=_utc_iso_now(), current=None)
+            return {'scanned': total_clients, 'sent': sent, 'stopped': 'cancelled'}
         _sms_scan_set(current=email)
         _sms_scan_inc('processed')
 
@@ -19488,6 +19493,29 @@ def sms_scan_run():
 @superadmin_required
 def sms_scan_status():
     """Live progress of the current/last SMS scan."""
+    with SMS_SCAN_JOB_LOCK:
+        job = dict(SMS_SCAN_JOB)
+    return jsonify({'success': True, 'job': job})
+
+
+@app.route('/api/sms/scan/stop', methods=['POST'])
+@superadmin_required
+def sms_scan_stop():
+    """Signal the running scan to abort after the current item, then disable
+    SMS automation so no new scan starts automatically. The UI should reflect
+    the disabled state by unchecking the toggle."""
+    SMS_SCAN_CANCEL.set()
+    # Persist sms_automation_enabled = false so the background worker skips
+    # future cycles and the toggle shows the correct state on next page load.
+    try:
+        cfg_row = db.session.get(SystemConfig, SMS_AUTOMATION_ENABLED_KEY)
+        if cfg_row:
+            cfg_row.value = 'false'
+        else:
+            db.session.add(SystemConfig(key=SMS_AUTOMATION_ENABLED_KEY, value='false'))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     with SMS_SCAN_JOB_LOCK:
         job = dict(SMS_SCAN_JOB)
     return jsonify({'success': True, 'job': job})
