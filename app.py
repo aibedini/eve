@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.35"
+APP_VERSION = "2.3.36"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -4271,19 +4271,29 @@ def _apply_template_conditionals(template: str | None, variables: dict) -> str:
     return _TEMPLATE_COND_RE.sub(_sub, template or '')
 
 
+class _SafeFormatDict(dict):
+    """Missing template placeholders render as '' instead of raising KeyError, so a
+    template that references a variable the caller didn't supply degrades to a blank
+    rather than dumping the raw, unrendered template (braces and all) to the user."""
+    def __missing__(self, key):
+        return ''
+
+
 def _render_text_template(template: str | None, variables: dict) -> str:
     """Render a python-format template with a safe fallback.
 
-    Supports optional {if_<name>}...{/if_<name>} conditional blocks.
+    Supports optional {if_<name>}...{/if_<name>} conditional blocks. Unknown
+    placeholders are blanked rather than raising, so a partially-matching template
+    never leaks raw {tokens} into the message.
     """
     raw = (template or '').strip() or DEFAULT_RENEW_TEMPLATE
     raw = _apply_template_conditionals(raw, variables)
     try:
-        return raw.format(**variables)
+        return raw.format_map(_SafeFormatDict(variables))
     except Exception:
-        # Fall back to the built-in default if user template is invalid.
+        # Last resort if the template has malformed syntax (e.g. a stray single brace).
         try:
-            return _apply_template_conditionals(DEFAULT_RENEW_TEMPLATE, variables).format(**variables)
+            return _apply_template_conditionals(DEFAULT_RENEW_TEMPLATE, variables).format_map(_SafeFormatDict(variables))
         except Exception:
             return DEFAULT_RENEW_TEMPLATE
 
@@ -15129,13 +15139,18 @@ def add_client(server_id, inbound_id):
                 copy_text = ''
 
             # SMS automation (GMweb) on create — non-reseller-owned accounts only.
+            _cc_days_label = ('♾️' if days == 0 else f'{days}')
+            _cc_volume_label = ('♾️' if volume_gb == 0 else f'{volume_gb} GB')
             _fire_automation_sms('created', server.id, email, CLIENT_CREATED_SMS_TEMPLATE_TYPE,
                                  DEFAULT_CLIENT_CREATED_SMS_TEMPLATE, {
                                      'service_name': email, 'email': email, 'protocol': proto_label,
-                                     'volume': ('♾️' if volume_gb == 0 else f'{volume_gb} GB'),
-                                     'days': ('♾️' if days == 0 else f'{days}'), 'sub_link': sub_url,
+                                     'volume': _cc_volume_label, 'volume_label': _cc_volume_label,
+                                     'days': _cc_days_label, 'days_label': _cc_days_label,
+                                     'sub_link': sub_url,
                                      'dashboard_link': dash_sub_url, 'server_name': getattr(server, 'name', '') or '',
                                      'comment': data.get('comment', '') or '',
+                                     # No gift on creation: keep {if_gift}…{/if_gift} blocks empty.
+                                     'gift_volume': '', 'gift_given': False,
                                  }, data.get('comment', '') or '',
                                  server_name=getattr(server, 'name', '') or '')
 
@@ -15351,11 +15366,15 @@ def add_client(server_id, inbound_id):
                 'email': email,
                 'protocol': inbound_data.get('protocol', 'vless'),
                 'volume': vol_label,
+                'volume_label': vol_label,
                 'days': days_label_cc,
+                'days_label': days_label_cc,
                 'sub_link': sub_url,
                 'dashboard_link': dash_sub_url,
                 'server_name': getattr(server, 'name', '') or '',
                 'comment': data.get('comment', '') or '',
+                # No gift on creation: keep {if_gift}…{/if_gift} blocks empty.
+                'gift_volume': '', 'gift_given': False,
                 # Account-Info-style aliases so account-info placeholders render too.
                 'account_name': email,
                 'remaining_time': days_label_cc,
