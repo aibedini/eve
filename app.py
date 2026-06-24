@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.13"
+APP_VERSION = "2.3.14"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -13978,20 +13978,42 @@ def add_admin():
     def _clean_url(v: str | None, *, limit: int = 1000) -> str:
         return (v or '').strip()[:limit]
 
+    def _opt_int(v):
+        """Parse an optional integer field; '' / None ⇒ None, bad value ⇒ error."""
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return int(v)
+
+    role = (data.get('role') or 'reseller').strip()
+    if role not in ('reseller', 'admin', 'superadmin'):
+        return jsonify({"success": False, "error": f"Invalid role '{role}'."}), 400
+
+    # Parse numeric fields up front so a bad value gives a clear, field-named
+    # message instead of a generic 500 from int() blowing up mid-build.
+    try:
+        credit = int(data.get('credit') or 0)
+        negative_credit_limit = max(0, int(data.get('negative_credit_limit') or 0))
+        discount_percent = int(data.get('discount_percent') or 0)
+        custom_cost_per_day = _opt_int(data.get('custom_cost_per_day'))
+        custom_cost_per_gb = _opt_int(data.get('custom_cost_per_gb'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False,
+                        "error": "Credit, discount and cost fields must be whole numbers."}), 400
+
     new_admin = Admin(
         username=username,
-        role=data.get('role', 'reseller'),
-        is_superadmin=(data.get('role') == 'superadmin'),
-        credit=int(data.get('credit', 0)),
+        role=role,
+        is_superadmin=(role == 'superadmin'),
+        credit=credit,
         allow_negative_credit=bool(data.get('allow_negative_credit', False)),
-        negative_credit_limit=max(0, int(data.get('negative_credit_limit', 0) or 0)),
+        negative_credit_limit=negative_credit_limit,
         allow_free_creation=bool(data.get('allow_free_creation', False)),
         whatsapp_automation_enabled=bool(data.get('whatsapp_automation_enabled', False)),
         allowed_servers=serialize_allowed_servers(data.get('allowed_servers', [])),
         enabled=data.get('enabled', True),
-        discount_percent=int(data.get('discount_percent', 0)),
-        custom_cost_per_day=int(data.get('custom_cost_per_day')) if data.get('custom_cost_per_day') is not None else None,
-        custom_cost_per_gb=int(data.get('custom_cost_per_gb')) if data.get('custom_cost_per_gb') is not None else None,
+        discount_percent=discount_percent,
+        custom_cost_per_day=custom_cost_per_day,
+        custom_cost_per_gb=custom_cost_per_gb,
         telegram_id=sanitize_html(data.get('telegram_id')),
         support_telegram=_clean_telegram_username(data.get('support_telegram')),
         support_whatsapp=_clean_whatsapp_number(data.get('support_whatsapp')),
@@ -14000,8 +14022,14 @@ def add_admin():
         channel_whatsapp=_clean_url(data.get('channel_whatsapp')),
     )
     new_admin.set_password(password)
-    db.session.add(new_admin)
-    db.session.commit()
+    try:
+        db.session.add(new_admin)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception('[add_admin] failed to save reseller')
+        return jsonify({"success": False,
+                        "error": f"Could not save user: {exc}"}), 500
     return jsonify({"success": True})
 
 @app.route('/api/admins/<int:admin_id>', methods=['PUT'])
