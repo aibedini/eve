@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.37"
+APP_VERSION = "2.3.38"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5026,6 +5026,7 @@ SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY  = 'sms_cooldown_hours_low_volume'
 SMS_COOLDOWN_HOURS_EXPIRED_KEY     = 'sms_cooldown_hours_expired'
 SMS_COOLDOWN_HOURS_ENDED_KEY       = 'sms_cooldown_hours_ended'
 SMS_EXPIRED_MAX_AGE_DAYS_KEY    = 'sms_expired_max_age_days'  # don't SMS accounts expired longer than this (0 = use Monitor hide_days)
+SMS_ENDED_MAX_AGE_DAYS_KEY      = 'sms_ended_max_age_days'    # stop SMS this many days after first 'ended' message (0 = no cutoff)
 SMS_MIN_INTERVAL_SECONDS_KEY    = 'sms_min_interval_seconds'
 SMS_DAILY_LIMIT_KEY             = 'sms_daily_limit'
 SMS_SEND_PACE_SECONDS_KEY       = 'sms_send_pace_seconds'  # global gap between ANY two sends so the gateway doesn't return HTTP 429
@@ -5053,7 +5054,7 @@ def _get_sms_runtime_settings() -> dict:
         SMS_DEPLETION_VOLUME_GB_KEY, SMS_DEPLETION_COOLDOWN_DAYS_KEY,
         SMS_COOLDOWN_HOURS_NEAR_EXPIRY_KEY, SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY,
         SMS_COOLDOWN_HOURS_EXPIRED_KEY, SMS_COOLDOWN_HOURS_ENDED_KEY,
-        SMS_EXPIRED_MAX_AGE_DAYS_KEY,
+        SMS_EXPIRED_MAX_AGE_DAYS_KEY, SMS_ENDED_MAX_AGE_DAYS_KEY,
         SMS_MIN_INTERVAL_SECONDS_KEY, SMS_DAILY_LIMIT_KEY,
         SMS_SEND_PACE_SECONDS_KEY,
         SMS_TRIGGER_NEAR_EXPIRY_KEY, SMS_TRIGGER_LOW_VOLUME_KEY,
@@ -5111,6 +5112,7 @@ def _get_sms_runtime_settings() -> dict:
             'ended':       _int(SMS_COOLDOWN_HOURS_ENDED_KEY, 24, lo=1, hi=8760),
         },
         'expired_max_age_days': _int(SMS_EXPIRED_MAX_AGE_DAYS_KEY, 30, lo=0, hi=3650),
+        'ended_max_age_days': _int(SMS_ENDED_MAX_AGE_DAYS_KEY, 0, lo=0, hi=3650),
         'min_interval_seconds': _int(SMS_MIN_INTERVAL_SECONDS_KEY, 30, lo=0, hi=3600),
         'daily_limit': _int(SMS_DAILY_LIMIT_KEY, 200, lo=1, hi=100000),
         'send_pace_seconds': _float(SMS_SEND_PACE_SECONDS_KEY, 3.0, lo=0.0, hi=60.0),
@@ -5189,6 +5191,22 @@ def _recent_bot_message_within(email_l: str, sid_norm, hours: int) -> bool:
         ).first() is not None
     except Exception:
         return False
+
+
+def _ended_first_contact(email_l: str, sid_norm) -> datetime | None:
+    """When this (account, server) was first messaged for the 'ended' state, read
+    from the persisted dedup log. Used to stop nagging a volume-ended account that
+    has no expiry date forever. Reset on renewal (the log is cleared), so the clock
+    restarts after each renew."""
+    try:
+        row = (WhatsappBotLog.query
+               .filter(WhatsappBotLog.email == email_l,
+                       WhatsappBotLog.server_id == (sid_norm or 0),
+                       WhatsappBotLog.event.ilike('%ended%'))
+               .order_by(WhatsappBotLog.sent_at.asc()).first())
+        return row.sent_at if row else None
+    except Exception:
+        return None
 
 
 def _comment_opted_out(comment: str | None, *tags: str) -> bool:
@@ -5351,18 +5369,9 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 if not (text or '').strip():
                     _log(recipient, 'skipped', 'empty_message')
                     return
-                # Quiet hours: park the message and flush it after the window ends,
-                # so the customer isn't texted at 3am but still gets the confirmation.
-                if _sms_in_quiet_hours(cfg):
-                    try:
-                        db.session.add(PendingSms(
-                            recipient=recipient, text=text, event_name=event_name,
-                            email=email_l, server_id=(sid_norm or 0), server_name=server_name))
-                        db.session.commit()
-                        _log(recipient, 'queued', 'quiet_hours')
-                    except Exception:
-                        db.session.rollback()
-                    return
+                # NOTE: quiet hours intentionally do NOT apply here. Create/renew are
+                # user-triggered confirmations and must go out immediately, even at
+                # night. Only the bulk depletion scan honours the quiet window.
                 slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
                 if not slot_ok:
                     _log(recipient, 'skipped', slot_reason)
@@ -5541,6 +5550,9 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     # (stops a scan from suddenly texting people who expired years ago). 0 ⇒ fall
     # back to Monitor's hide_days.
     expired_max_age = int(cfg.get('expired_max_age_days') or 0) or hide_days
+    # Optional cutoff for volume-ended (no-date) accounts: stop after N days since
+    # we first messaged them as 'ended'. 0 ⇒ no cutoff (message every cooldown).
+    ended_max_age = int(cfg.get('ended_max_age_days') or 0)
 
     # One scan at a time across ALL workers (worker + manual "run now" must not
     # clobber each other). Check the shared Redis snapshot, not just local state.
@@ -5625,6 +5637,13 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 except Exception:
                     days_ago = 0
                 if days_ago > expired_max_age:
+                    continue
+
+            # Stop nagging a volume-ended (no-date) account once it's been more than
+            # N days since we first messaged it as ended. First contact = anchor.
+            if status == 'ended' and ended_max_age:
+                first = _ended_first_contact(email_l, sid_norm)
+                if first and (datetime.utcnow() - first).days > ended_max_age:
                     continue
 
             # Operator opt-out: client comment tagged #nosms ⇒ never SMS them,
@@ -11979,6 +11998,7 @@ def settings_page():
                          sms_cooldown_hours_expired=(sms_cfg.get('cooldown_hours') or {}).get('expired', 48),
                          sms_cooldown_hours_ended=(sms_cfg.get('cooldown_hours') or {}).get('ended', 24),
                          sms_expired_max_age_days=sms_cfg.get('expired_max_age_days', 30),
+                         sms_ended_max_age_days=sms_cfg.get('ended_max_age_days', 0),
                          sms_min_interval_seconds=sms_cfg.get('min_interval_seconds', 30),
                          sms_daily_limit=sms_cfg.get('daily_limit', 200),
                          sms_send_pace_seconds=sms_cfg.get('send_pace_seconds', 3.0),
@@ -19860,6 +19880,8 @@ def update_system_config():
                 sanitized_value = str(_parse_int(value, _dflt, min_value=1, max_value=8760))
             elif key == SMS_EXPIRED_MAX_AGE_DAYS_KEY:
                 sanitized_value = str(_parse_int(value, 30, min_value=0, max_value=3650))
+            elif key == SMS_ENDED_MAX_AGE_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 0, min_value=0, max_value=3650))
             elif key == SMS_MIN_INTERVAL_SECONDS_KEY:
                 sanitized_value = str(_parse_int(value, 30, min_value=0, max_value=3600))
             elif key == SMS_DAILY_LIMIT_KEY:

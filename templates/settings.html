@@ -908,6 +908,11 @@
                         <input type="number" id="sms-expired-max-age-days" class="form-control" min="0" max="3650" value="{{ sms_expired_max_age_days }}">
                         <small class="text-secondary" style="display:block;margin-top:4px;">Stops a scan from suddenly texting users who expired long ago (e.g. years back). 0 = use Monitor’s hide-after-days.</small>
                     </div>
+                    <div style="margin-top:10px;">
+                        <small class="text-secondary">Stop “volume ended” SMS after (days)</small>
+                        <input type="number" id="sms-ended-max-age-days" class="form-control" min="0" max="3650" value="{{ sms_ended_max_age_days }}">
+                        <small class="text-secondary" style="display:block;margin-top:4px;">For volume-ended accounts with no expiry date (otherwise messaged every cooldown forever). Counts from the first “ended” SMS; resets when the account is renewed. 0 = no cutoff.</small>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -990,9 +995,10 @@
                         </div>
                     </div>
                     <small class="text-secondary" style="display:block;margin-top:4px;">
-                        Example: <strong>2 → 8</strong> means no SMS between 2:00 and 8:00 AM. Messages wait in the queue;
-                        the scan picks them up after the window, and create/renew texts are flushed automatically once it ends.
-                        Times are <strong>Asia/Tehran</strong>, 24-hour (independent of the panel timezone). A window can cross midnight (e.g. 23 → 6).
+                        Example: <strong>2 → 8</strong> means the background reminder scan sends no SMS between 2:00 and 8:00 AM —
+                        those accounts simply wait for the next scan after the window. <strong>Create / renew confirmations are NOT held</strong>:
+                        they always go out immediately, even at night. Times are <strong>Asia/Tehran</strong>, 24-hour
+                        (independent of the panel timezone). A window can cross midnight (e.g. 23 → 6).
                     </small>
                 </div>
 
@@ -2822,6 +2828,7 @@
             sms_cooldown_hours_expired: Number((document.getElementById('sms-cooldown-hours-expired') || {}).value || 48),
             sms_cooldown_hours_ended: Number((document.getElementById('sms-cooldown-hours-ended') || {}).value || 24),
             sms_expired_max_age_days: Number((document.getElementById('sms-expired-max-age-days') || {}).value || 30),
+            sms_ended_max_age_days: Number((document.getElementById('sms-ended-max-age-days') || {}).value || 0),
             sms_min_interval_seconds: Number((document.getElementById('sms-min-interval') || {}).value || 30),
             sms_daily_limit: Number((document.getElementById('sms-daily-limit') || {}).value || 200),
             sms_send_pace_seconds: Number((document.getElementById('sms-send-pace') || {}).value || 3),
