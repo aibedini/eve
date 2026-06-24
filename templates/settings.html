@@ -2761,9 +2761,12 @@
                 pollSmsScanStatus();
             } else {
                 _setSmsRunBtn(false);
+                // Prefer structured error → raw body snippet → generic fallback.
                 const msg = (data && data.error)
                     ? data.error
-                    : `Server error (HTTP ${res.status})`;
+                    : raw
+                        ? raw.replace(/<[^>]+>/g, ' ').trim().slice(0, 200)
+                        : `Server error (HTTP ${res.status})`;
                 showToast(msg, 'error');
                 if (data && data.job) renderSmsScanProgress(data.job);
             }
