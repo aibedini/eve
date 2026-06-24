@@ -2343,6 +2343,26 @@
         }
     }
 
+    /* SMS Automation tab — stay usable on phones. The section is built with fixed
+       multi-column inline grids; on a narrow screen collapse them to one column
+       and stack the card header so nothing overflows or shrinks to unreadable. */
+    @media (max-width: 640px) {
+        #tab-sms .panel-card-header {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 14px;
+        }
+        #tab-sms .panel-card-header > div[style*="flex"] {
+            width: 100%;
+        }
+        #tab-sms .panel-card-header .btn {
+            flex: 1;
+        }
+        #tab-sms div[style*="grid-template-columns"] {
+            grid-template-columns: 1fr !important;
+        }
+    }
+
     /* Traffic Check */
     .tc-period-btn {
         padding: 5px 13px;
