@@ -3095,19 +3095,47 @@
     }
 
     async function testSmsConnectionSettings() {
+        const btn = document.getElementById('sms-test-connection');
         // Persist current form values first so the test uses what's on screen.
         const saved = await saveSmsSettings(true);
         if (!saved) { showToast('Could not save SMS settings before testing', 'error'); return; }
+        const prev = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
         try {
-            const res = await fetch('/api/sms/test-connection', { method: 'POST' });
-            const data = await res.json();
-            if (data && data.success) {
+            let res;
+            try {
+                res = await fetch('/api/sms/test-connection', { method: 'POST', headers: { 'Accept': 'application/json' } });
+            } catch (netErr) {
+                // fetch only throws for a real transport failure (offline, DNS, TLS, panel down).
+                showToast('Cannot reach the Eve server (network/connection problem). Check your internet, or that the panel is up.', 'error');
+                return;
+            }
+            // Read as text first so a non-JSON error page (500/404 HTML) doesn't crash JSON.parse
+            // and turn into a meaningless "Network error".
+            const raw = await res.text();
+            let data = null;
+            try { data = raw ? JSON.parse(raw) : null; } catch (_) { data = null; }
+
+            if (!data) {
+                if (res.redirected || /\/login/.test(res.url) || res.status === 401) {
+                    showToast('Your session expired. Reload the page (Ctrl+F5) and log in again, then retry.', 'error');
+                } else if (res.status === 404) {
+                    showToast('Endpoint not found (HTTP 404). The server is on an older build — run git pull + restart, then hard-refresh (Ctrl+F5).', 'error');
+                } else {
+                    const snippet = raw ? raw.replace(/<[^>]+>/g, ' ').trim().slice(0, 160) : '';
+                    showToast(`Unexpected server response (HTTP ${res.status}).${snippet ? ' ' + snippet : ''}`, 'error');
+                }
+                return;
+            }
+
+            if (data.success) {
                 showToast(data.message || 'GMweb gateway is reachable', data.ready === false ? 'warning' : 'success');
             } else {
-                showToast((data && (data.error || data.message)) ? (data.error || data.message) : 'Gateway test failed', 'error');
+                showToast((data.error || data.message || 'Gateway test failed')
+                    + (data.status_code ? ` (gateway HTTP ${data.status_code})` : ''), 'error');
             }
-        } catch (e) {
-            showToast('Network error', 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = prev || 'Test Connection'; }
         }
     }
 
