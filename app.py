@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.40"
+APP_VERSION = "2.3.41"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5281,13 +5281,15 @@ def _sms_take_send_slot(recipient: str, cfg: dict) -> tuple[bool, str | None]:
     return True, None
 
 
-def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: str | None = None) -> dict:
+def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: str | None = None,
+                        idempotency_key: str | None = None) -> dict:
     """POST a single SMS to the GMweb-API gateway. The gateway queues it and
     returns 202 {jobId}; we treat 200/202 as accepted and don't track delivery.
 
     priority='high' tells the gateway to jump the queue (transactional create/renew
     confirmations go out next, ahead of a running bulk reminder campaign). Omit for
-    normal FIFO (the bulk scan)."""
+    normal FIFO (the bulk scan). idempotency_key, when reused across a retry of the
+    SAME logical message, makes the gateway dedupe so a network blip can't double-send."""
     cfg = cfg or _get_sms_runtime_settings()
     out = {'sent': False, 'reason': None, 'status_code': None}
     base = (cfg.get('base_url') or '').strip().rstrip('/')
@@ -5298,11 +5300,14 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     payload = {'to': to, 'text': text}
     if priority:
         payload['priority'] = priority
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    if idempotency_key:
+        headers['Idempotency-Key'] = idempotency_key
     try:
         resp = requests.post(
             f"{base}/send",
             json=payload,
-            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            headers=headers,
             timeout=int(cfg.get('timeout_seconds') or 15),
         )
         out['status_code'] = resp.status_code
@@ -5385,7 +5390,9 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                     return
                 # Transactional create/renew: high priority so the customer who just
                 # paid gets their confirmation next, ahead of any running bulk scan.
-                res = _send_sms_via_gmweb(recipient, text, cfg, priority='high')
+                # Stable idempotency key per fire so a network-retry can't double-send.
+                idem = f"tx-{event_name}-{sid_norm}-{email_l}-{int(time.time())}"
+                res = _send_sms_via_gmweb(recipient, text, cfg, priority='high', idempotency_key=idem)
                 if res.get('sent'):
                     _log(recipient, 'sent', None)
                 else:
@@ -5728,13 +5735,16 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             if gap > 0:
                 time.sleep(min(gap, 60))
 
-        res = _send_sms_via_gmweb(recipient, text_msg, cfg)
+        # Same idempotency key for the send and its 429-retry so the retry can't
+        # double-send. Scoped to this scan run (jid) so a later scan re-sends fresh.
+        scan_idem = f"scan-{jid}-{state}-{sid_norm}-{email_l}"
+        res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
         # Gateway rate-limited: back off once and retry. If still limited, stop the
         # whole run rather than hammering it with the rest of the batch (the next
         # scheduled scan resumes where this left off).
         if (not res.get('sent')) and res.get('status_code') == 429:
             time.sleep(5)
-            res = _send_sms_via_gmweb(recipient, text_msg, cfg)
+            res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
             if (not res.get('sent')) and res.get('status_code') == 429:
                 SMS_LAST_SEND_TS[0] = time.time()
                 _sms_scan_inc('failed')
@@ -5805,10 +5815,11 @@ def _flush_pending_sms() -> int:
             gap = pace - (time.time() - SMS_LAST_SEND_TS[0])
             if gap > 0:
                 time.sleep(min(gap, 60))
-        res = _send_sms_via_gmweb(r.recipient, r.text, cfg, priority='high')
+        flush_idem = f"flush-{r.id}"
+        res = _send_sms_via_gmweb(r.recipient, r.text, cfg, priority='high', idempotency_key=flush_idem)
         if (not res.get('sent')) and res.get('status_code') == 429:
             time.sleep(5)
-            res = _send_sms_via_gmweb(r.recipient, r.text, cfg, priority='high')
+            res = _send_sms_via_gmweb(r.recipient, r.text, cfg, priority='high', idempotency_key=flush_idem)
         SMS_LAST_SEND_TS[0] = time.time()
         if (not res.get('sent')) and res.get('status_code') == 429:
             break  # gateway throttling — stop, the rest stays queued for next tick
@@ -20011,7 +20022,8 @@ def sms_test_send():
 
     text = ('EVE panel — test SMS ✅\n'
             'پیام تستی پنل. اگر این پیام را دریافت کردید، اتوماسیون SMS درست کار می‌کند.')
-    res = _send_sms_via_gmweb(recipient, text, cfg, priority='high')
+    res = _send_sms_via_gmweb(recipient, text, cfg, priority='high',
+                              idempotency_key=f"test-{int(time.time())}")
     if res.get('sent'):
         src_label = 'your profile number' if source == 'superadmin_profile' else 'the panel contact number'
         return jsonify({'success': True, 'recipient': recipient, 'source': source,
