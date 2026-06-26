@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.45"
+APP_VERSION = "2.3.46"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -14378,7 +14378,14 @@ def renew_client(server_id, inbound_id, email):
                 break
 
         app.logger.warning(f"Renew failed for {email}: {'; '.join(errors)}")
-        return _finish({"success": False, "error": "Client update endpoint returned error"}, 400)
+        # Surface the REAL panel error (was a useless generic string), so the UI
+        # shows what actually went wrong instead of "Server error (HTTP 400)".
+        detail = '; '.join(str(e) for e in errors) or 'Client update failed on the panel'
+        if 'duplicate subid' in detail.lower():
+            detail += (' — این اکانت subId تکراری دارد (با یک اکانت دیگر یکسان شده) و پنل اجازه‌ی '
+                       'آپدیت نمی‌دهد. در پنل، subId این کلاینت را یکتا کن (یا اکانت را دوباره بساز)، '
+                       'سپس تمدید کن.')
+        return _finish({"success": False, "error": detail}, 400)
     except Exception as e:
         app.logger.error(f"Renew error: {str(e)}")
         return _finish({"success": False, "error": str(e)}, 400)
