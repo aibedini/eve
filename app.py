@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.43"
+APP_VERSION = "2.3.44"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -12732,7 +12732,7 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
         if server_is_v3(server):
             ok, _vr, verr = v3_update_client(server, session_obj, email, target_client)
             if ok:
-                patch_cached_client(server.id, email, enable=bool(enable))
+                patch_cached_client(server.id, email, enable=bool(enable), comment=target_client.get('comment'))
                 return True, None, 200
             return False, f"v3 toggle failed: {verr}", 502
 
@@ -12774,7 +12774,7 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
                     user.credit -= price
                     log_transaction(user.id, -price, 'renew', description or f"Renew client {email}", server_id=server.id)
                     db.session.commit()
-                patch_cached_client(server.id, email, enable=bool(enable))
+                patch_cached_client(server.id, email, enable=bool(enable), comment=target_client.get('comment'))
                 return True, None, 200
 
             errors.append(f"{template}: {resp.status_code}")
@@ -14021,6 +14021,10 @@ def renew_client(server_id, inbound_id, email):
         target_client['expiryTime'] = new_expiry
         target_client['totalGB'] = new_volume
         target_client['enable'] = True
+        # Renew = active customer again → strip the #nosms/#nopm opt-out tags that
+        # the disable flow added, so automation messaging resumes (mirrors the
+        # manual enable toggle). No-op when the comment has no such tags.
+        target_client['comment'] = _toggle_optout_tags(target_client.get('comment'), add=False)
 
         client_id = target_client.get('id', target_client.get('password', email))
 
@@ -14355,6 +14359,7 @@ def renew_client(server_id, inbound_id, email):
                         total_gb_bytes=int(target_client.get('totalGB') or 0),
                         expiry_ts=int(target_client.get('expiryTime') or 0),
                         enable=(True if _was_disabled else None),
+                        comment=target_client.get('comment'),
                         up=(0 if reset_traffic else None),
                         down=(0 if reset_traffic else None))
                 except Exception:
