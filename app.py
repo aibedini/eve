@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.42"
+APP_VERSION = "2.3.43"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5312,7 +5312,12 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
         payload['priority'] = priority
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     if idempotency_key:
-        headers['Idempotency-Key'] = idempotency_key
+        # HTTP headers must be latin-1. Emails can contain emoji (e.g. 📶plus300…)
+        # and the key embeds the email, so strip any non-latin-1 chars — otherwise
+        # requests raises UnicodeEncodeError and the send silently fails. Stable
+        # transform (same input → same key) keeps retry de-duplication intact.
+        safe_key = str(idempotency_key).encode('latin-1', 'ignore').decode('latin-1') or 'k'
+        headers['Idempotency-Key'] = safe_key
     try:
         resp = requests.post(
             f"{base}/send",
