@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.46"
+APP_VERSION = "2.3.47"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -8193,6 +8193,13 @@ def _v3_client_payload(client: dict) -> dict:
     for k in ('tgId', 'limitIp', 'reset'):
         if c.get(k) in ('', None):
             c[k] = 0
+    # 3x-ui v3.4+ made model.Client.Security non-omitempty: a client object with
+    # no `security` deserializes to "" and the node-add path panics → the API
+    # returns an empty 200 and the client is silently NOT added. Default it to
+    # xray's standard "auto" (ignored by VLESS/Trojan, valid for VMess); harmless
+    # on older panels. Only set when missing so an explicit value is preserved.
+    if not c.get('security'):
+        c['security'] = 'auto'
     if isinstance(c.get('email'), str):
         c['email'] = _v3_sanitize_email(c['email'])
     return c
