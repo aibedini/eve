@@ -930,6 +930,35 @@
                     </small>
                 </div>
 
+                <div class="form-group" style="border:1px solid var(--border-color); border-radius:10px; padding:12px; background:var(--bg-dark);">
+                    <label>👑 Royalty SMS (idle, un-connected accounts)</label>
+                    <div class="refresh-toggle" style="gap:10px; margin-top:4px;">
+                        <label class="toggle-switch" style="margin:0;">
+                            <input type="checkbox" id="sms-trigger-royalty" {% if sms_trigger_royalty %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <span class="toggle-label">Nudge owner-less accounts that are active but used zero traffic in the window</span>
+                    </div>
+                    <small class="text-secondary" style="display:block;margin-top:6px;">
+                        Only <strong>system / superadmin</strong> accounts (no reseller owner) are messaged. Uses the
+                        <strong>Royalty Info SMS</strong> template. Shares the same daily cap — depletion alerts go first, royalty takes the leftover budget.
+                    </small>
+                    <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:10px;">
+                        <div>
+                            <small class="text-secondary">Idle window (days) — no traffic since</small>
+                            <input type="number" id="sms-royalty-days" class="form-control" min="1" max="365" value="{{ sms_royalty_days }}">
+                        </div>
+                        <div>
+                            <small class="text-secondary">Cooldown (days) — don’t re-send within</small>
+                            <input type="number" id="sms-royalty-cooldown-days" class="form-control" min="1" max="365" value="{{ sms_royalty_cooldown_days }}">
+                        </div>
+                    </div>
+                    <small class="text-secondary" style="display:block;margin-top:6px;">
+                        Big lists are fine: e.g. 1500 idle users at 200/day drain over ~8 days, <strong>each user once</strong>.
+                        Already-messaged users are <strong>skipped and logged</strong> (reason “cooldown”) so the list stays fair — no spam, no stalling.
+                    </small>
+                </div>
+
                 <div class="form-group">
                     <label>Per-state resend cooldown (hours)</label>
                     <p class="text-secondary" style="margin:2px 0 8px; font-size:0.82rem;">
@@ -2836,6 +2865,9 @@
             sms_quiet_start_hour: Number((document.getElementById('sms-quiet-start') || {}).value || 0),
             sms_quiet_end_hour: Number((document.getElementById('sms-quiet-end') || {}).value || 0),
             sms_skip_unlimited: !!(document.getElementById('sms-skip-unlimited') || {}).checked,
+            sms_trigger_royalty: !!(document.getElementById('sms-trigger-royalty') || {}).checked,
+            sms_royalty_days: Number((document.getElementById('sms-royalty-days') || {}).value || 3),
+            sms_royalty_cooldown_days: Number((document.getElementById('sms-royalty-cooldown-days') || {}).value || 30),
         };
     }
 

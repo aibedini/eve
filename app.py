@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.3.41"
+APP_VERSION = "2.3.42"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -5039,6 +5039,12 @@ SMS_QUIET_END_KEY     = 'sms_quiet_end_hour'    # 0-23, exclusive
 # When on, the scan skips any account that is unlimited in either dimension
 # (no volume cap or no expiry date), so only fully-limited accounts get messaged.
 SMS_SKIP_UNLIMITED_KEY = 'sms_skip_unlimited'
+# Royalty SMS: nudge owner-less idle accounts (enabled, zero traffic since the
+# window start). Big lists drain over days under the shared daily cap; a long
+# cooldown keeps it fair (each user once per window) — skips are logged.
+SMS_TRIGGER_ROYALTY_KEY        = 'sms_trigger_royalty'
+SMS_ROYALTY_DAYS_KEY           = 'sms_royalty_days'           # idle window (days)
+SMS_ROYALTY_COOLDOWN_DAYS_KEY  = 'sms_royalty_cooldown_days'  # don't re-royalty within N days
 
 SMS_SEND_TRACKER = {'daily': {}, 'per_recipient': {}}
 SMS_SCAN_CANCEL = threading.Event()  # set → running scan aborts after current item
@@ -5061,6 +5067,7 @@ def _get_sms_runtime_settings() -> dict:
         SMS_TRIGGER_EXPIRED_KEY, SMS_TRIGGER_ENDED_KEY,
         SMS_QUIET_ENABLED_KEY, SMS_QUIET_START_KEY, SMS_QUIET_END_KEY,
         SMS_SKIP_UNLIMITED_KEY,
+        SMS_TRIGGER_ROYALTY_KEY, SMS_ROYALTY_DAYS_KEY, SMS_ROYALTY_COOLDOWN_DAYS_KEY,
     ]
     c = _get_system_configs_batch(keys)
 
@@ -5120,6 +5127,9 @@ def _get_sms_runtime_settings() -> dict:
         'quiet_start': _int(SMS_QUIET_START_KEY, 2, lo=0, hi=23),
         'quiet_end': _int(SMS_QUIET_END_KEY, 8, lo=0, hi=23),
         'skip_unlimited': _bool(SMS_SKIP_UNLIMITED_KEY, False),
+        'trigger_royalty': _bool(SMS_TRIGGER_ROYALTY_KEY, False),
+        'royalty_days': _int(SMS_ROYALTY_DAYS_KEY, 3, lo=1, hi=365),
+        'royalty_cooldown_days': _int(SMS_ROYALTY_COOLDOWN_DAYS_KEY, 30, lo=1, hi=365),
     }
 
 
@@ -5774,6 +5784,156 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     return {'scanned': total_clients, 'sent': sent, 'candidates': len(candidates)}
 
 
+def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto') -> dict:
+    """Royalty SMS: nudge owner-less idle accounts (enabled, zero traffic since the
+    royalty window start) once per long cooldown, capped by the SHARED daily budget.
+
+    Runs AFTER the depletion scan so urgent alerts take the budget first; whatever
+    daily quota remains flows to royalty. The cap+cooldown+resume loop IS the queue:
+    a 1500-name list drains a few hundred a day (daily cap), each user exactly once
+    (royalty cooldown), every send AND every cooldown-skip written to the SMS log —
+    so a huge list spreads fairly over several days instead of spamming or stalling."""
+    cfg = _get_sms_runtime_settings()
+    now_iso = _utc_iso_now()
+    if not cfg.get('enabled') or not cfg.get('trigger_royalty'):
+        return {'scanned': 0, 'sent': 0, 'reason': 'disabled'}
+    if not (cfg.get('base_url') and cfg.get('api_key')):
+        return {'scanned': 0, 'sent': 0, 'reason': 'gateway_not_configured'}
+    if _sms_in_quiet_hours(cfg):
+        return {'scanned': 0, 'sent': 0, 'reason': 'quiet_hours'}
+    if _sms_scan_snapshot().get('state') == 'running':
+        return {'scanned': 0, 'sent': 0, 'reason': 'already_running'}
+
+    admin = Admin.query.filter(or_(Admin.is_superadmin == True, Admin.role == 'superadmin')).first()
+    if not admin:
+        return {'scanned': 0, 'sent': 0, 'reason': 'no_superadmin'}
+
+    days = int(cfg.get('royalty_days') or 3)
+    cd_hours = int(cfg.get('royalty_cooldown_days') or 30) * 24
+
+    try:
+        # reseller_filter=0 → only owner-less (system/superadmin) accounts.
+        idle = _compute_royalty_idle(admin.id, days, None, 0)
+    except Exception as exc:
+        app.logger.warning(f"[sms-royalty] idle compute failed: {exc}")
+        return {'scanned': 0, 'sent': 0, 'reason': 'idle_query_failed'}
+
+    base_url = _public_base_url()
+    jid = job_id or uuid.uuid4().hex
+    content = _get_sms_template_content(ROYALTY_INFO_SMS_TEMPLATE_TYPE, DEFAULT_ROYALTY_INFO_SMS_TEMPLATE)
+
+    _sms_scan_cancel_clear()
+    with SMS_SCAN_JOB_LOCK:
+        SMS_SCAN_JOB.clear()
+        SMS_SCAN_JOB.update({
+            'id': jid, 'state': 'running', 'triggered_by': triggered_by, 'kind': 'royalty',
+            'started_at': now_iso, 'finished_at': None, 'states_enabled': ['royalty'],
+            'total_clients': len(idle), 'candidates': 0, 'processed': 0,
+            'sent': 0, 'failed': 0, 'skipped_cooldown': 0, 'skipped_rate': 0,
+            'per_state': {'royalty': 0}, 'current': None, 'stopped': None,
+        })
+
+    # Pass 1 — eligible: has a mobile, not opted out, not reseller-owned.
+    candidates = []
+    for it in idle:
+        email = (it.get('email') or '').strip()
+        email_l = email.lower()
+        if not email_l:
+            continue
+        try:
+            sid_norm = int(it.get('server_id'))
+        except (TypeError, ValueError):
+            sid_norm = None
+        if _account_has_reseller_owner(sid_norm, email):
+            continue
+        if _comment_opted_out(it.get('comment'), 'nosms'):
+            continue
+        recipient = _extract_iran_mobile_from_text(email, it.get('comment') or '')
+        if not recipient:
+            continue
+        dash = (it.get('dash_sub_url') or it.get('sub_url') or '').strip()
+        if dash and not dash.startswith('http') and base_url:
+            dash = base_url + (dash if dash.startswith('/') else f"/{dash}")
+        tpl_vars = {
+            'email': email, 'account_name': email, 'service_name': email, 'user': email,
+            'dashboard_link': dash, 'sub_link': dash,
+            'remaining_time': '-', 'remaining_volume': it.get('remaining_formatted') or '-',
+            'server_name': it.get('server_name') or '',
+        }
+        candidates.append((sid_norm, email, email_l, it.get('server_name') or '', recipient, tpl_vars))
+
+    _sms_scan_set(candidates=len(candidates))
+
+    sent = 0
+    for (sid_norm, email, email_l, server_name, recipient, tpl_vars) in candidates:
+        if _sms_scan_cancelled():
+            _sms_scan_set(state='stopped', stopped='cancelled', finished_at=_utc_iso_now(), current=None)
+            return {'scanned': len(idle), 'sent': sent, 'stopped': 'cancelled'}
+        _sms_scan_set(current=email)
+        _sms_scan_inc('processed')
+
+        # Fairness: skip anyone messaged (any automation) inside the cooldown, log why.
+        if _recent_bot_message_within(email_l, sid_norm, cd_hours):
+            _sms_scan_inc('skipped_cooldown')
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'skipped', 'cooldown')
+            continue
+
+        text_msg = _render_text_template(content, tpl_vars)
+        if not (text_msg or '').strip():
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'skipped', 'empty_message')
+            continue
+
+        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
+        if not slot_ok:
+            if slot_reason == 'daily_limit_reached':
+                # Out of today's budget — stop; the next scheduled run resumes the rest
+                # (cooldown skips everyone already sent), so the list keeps draining.
+                _sms_scan_set(stopped=slot_reason, state='done', finished_at=_utc_iso_now(), current=None)
+                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'skipped', slot_reason)
+                return {'scanned': len(idle), 'sent': sent, 'stopped': slot_reason}
+            _sms_scan_inc('skipped_rate')
+            continue
+
+        pace = float(cfg.get('send_pace_seconds') or 0)
+        if pace > 0 and SMS_LAST_SEND_TS[0] > 0:
+            gap = pace - (time.time() - SMS_LAST_SEND_TS[0])
+            if gap > 0:
+                time.sleep(min(gap, 60))
+
+        scan_idem = f"royalty-{jid}-{sid_norm}-{email_l}"
+        res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
+        if (not res.get('sent')) and res.get('status_code') == 429:
+            time.sleep(5)
+            res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
+            if (not res.get('sent')) and res.get('status_code') == 429:
+                SMS_LAST_SEND_TS[0] = time.time()
+                _sms_scan_inc('failed')
+                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', 'http_429')
+                _sms_scan_set(stopped='gateway_rate_limited', state='done',
+                              finished_at=_utc_iso_now(), current=None)
+                return {'scanned': len(idle), 'sent': sent, 'stopped': 'gateway_rate_limited'}
+        SMS_LAST_SEND_TS[0] = time.time()
+        if res.get('sent'):
+            try:
+                db.session.add(WhatsappBotLog(email=email_l, server_id=(sid_norm or 0), event='sms_royalty'))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            sent += 1
+            _sms_scan_inc('sent')
+            with SMS_SCAN_JOB_LOCK:
+                ps = SMS_SCAN_JOB.get('per_state') or {}
+                ps['royalty'] = int(ps.get('royalty', 0) or 0) + 1
+                SMS_SCAN_JOB['per_state'] = ps
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'sent', None)
+        else:
+            _sms_scan_inc('failed')
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', res.get('reason'))
+
+    _sms_scan_set(state='done', finished_at=_utc_iso_now(), current=None)
+    return {'scanned': len(idle), 'sent': sent, 'candidates': len(candidates)}
+
+
 def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, status, reason):
     """Persist one audit row for the SMS send-log history. Best-effort."""
     try:
@@ -5848,6 +6008,10 @@ def sms_bot_worker():
                 result = _run_sms_depletion_scan()
                 if result.get('sent'):
                     app.logger.info(f"[sms-bot] depletion scan sent={result.get('sent')} scanned={result.get('scanned')}")
+                # Royalty runs on the leftover daily budget (depletion took priority).
+                roy = _run_sms_royalty_scan()
+                if roy.get('sent'):
+                    app.logger.info(f"[sms-bot] royalty scan sent={roy.get('sent')} scanned={roy.get('scanned')}")
         except Exception as exc:
             try:
                 app.logger.warning(f"[sms-bot] scan error: {exc}")
@@ -12026,6 +12190,9 @@ def settings_page():
                          sms_quiet_start=sms_cfg.get('quiet_start', 2),
                          sms_quiet_end=sms_cfg.get('quiet_end', 8),
                          sms_skip_unlimited=sms_cfg.get('skip_unlimited', False),
+                         sms_trigger_royalty=sms_cfg.get('trigger_royalty', False),
+                         sms_royalty_days=sms_cfg.get('royalty_days', 3),
+                         sms_royalty_cooldown_days=sms_cfg.get('royalty_cooldown_days', 30),
                          whatsapp_deployment_region=whatsapp_cfg.get('deployment_region', 'outside'),
                          whatsapp_enabled=whatsapp_cfg.get('enabled_requested', False),
                          whatsapp_provider=whatsapp_cfg.get('provider', 'baileys'),
@@ -19918,6 +20085,12 @@ def update_system_config():
                 sanitized_value = str(_parse_int(value, 0, min_value=0, max_value=23))
             elif key == SMS_SKIP_UNLIMITED_KEY:
                 sanitized_value = 'true' if _parse_bool(value) else 'false'
+            elif key == SMS_TRIGGER_ROYALTY_KEY:
+                sanitized_value = 'true' if _parse_bool(value) else 'false'
+            elif key == SMS_ROYALTY_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 3, min_value=1, max_value=365))
+            elif key == SMS_ROYALTY_COOLDOWN_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 30, min_value=1, max_value=365))
             else:
                 sanitized_value = sanitize_html(str(value))
 
