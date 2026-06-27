@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.4.1"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -15384,11 +15384,16 @@ def add_client(server_id, inbound_id):
             # SMS automation (GMweb) on create — non-reseller-owned accounts only.
             _cc_days_label = ('♾️' if days == 0 else f'{days}')
             _cc_volume_label = ('♾️' if volume_gb == 0 else f'{volume_gb} GB')
+            _cc_volume_num = ('♾️' if volume_gb == 0 else str(volume_gb))
             _fire_automation_sms('created', server.id, email, CLIENT_CREATED_SMS_TEMPLATE_TYPE,
                                  DEFAULT_CLIENT_CREATED_SMS_TEMPLATE, {
-                                     'service_name': email, 'email': email, 'protocol': proto_label,
+                                     'service_name': email, 'account_name': email, 'email': email, 'protocol': proto_label,
                                      'volume': _cc_volume_label, 'volume_label': _cc_volume_label,
                                      'days': _cc_days_label, 'days_label': _cc_days_label,
+                                     # Account-info-style aliases used by many SMS templates
+                                     # ({remaining_volume}GB{remaining_time}روز). Number-only so a
+                                     # template that appends its own GB/روز reads right.
+                                     'remaining_volume': _cc_volume_num, 'remaining_time': _cc_days_label,
                                      'sub_link': sub_url,
                                      'dashboard_link': dash_sub_url, 'server_name': getattr(server, 'name', '') or '',
                                      'comment': data.get('comment', '') or '',
@@ -15619,9 +15624,11 @@ def add_client(server_id, inbound_id):
                 # No gift on creation: keep {if_gift}…{/if_gift} blocks empty.
                 'gift_volume': '', 'gift_given': False,
                 # Account-Info-style aliases so account-info placeholders render too.
+                # Number-only volume/time so a template that appends its own GB/روز
+                # (e.g. "{remaining_volume}GB{remaining_time}روز") doesn't double the unit.
                 'account_name': email,
                 'remaining_time': days_label_cc,
-                'remaining_volume': vol_label,
+                'remaining_volume': ('♾️' if volume_gb == 0 else str(volume_gb)),
                 # Channel links resolved by role (superadmin→global, reseller→own).
                 'telegram_channel': _cc_ch_links.get('telegram_channel', ''),
                 'whatsapp_channel': _cc_ch_links.get('whatsapp_channel', ''),
