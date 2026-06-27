@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.2"
+APP_VERSION = "2.4.3"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -2395,6 +2395,18 @@ def add_security_headers(response):
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
     response.headers.setdefault('Referrer-Policy', 'same-origin')
     response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+
+    # The subscription route (/s/...) must be LIVE for everyone — both the HTML
+    # manager page AND the VPN-app config. Force no-store on EVERY /s/ response
+    # (all branches/return paths) so neither the browser nor the CDN (WCDN) serves
+    # a stale copy. Covers the "mobile shows disabled, desktop active" cache bug.
+    try:
+        if request.path.startswith('/s/'):
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+    except Exception:
+        pass
 
     nonce = getattr(g, 'csp_nonce', None) or ''
     
