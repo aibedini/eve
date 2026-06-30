@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.5"
+APP_VERSION = "2.4.6"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -2405,6 +2405,22 @@ def add_security_headers(response):
             response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
+    except Exception:
+        pass
+
+    # The CDN (WCDN) replaces ANY non-2xx response with its own HTML error page,
+    # throwing away our JSON {success:false, error:"..."} body — so the UI only
+    # saw "Server error (HTTP 4xx)" with no reason. For business errors on /api/
+    # JSON responses, downgrade the status to 200 so the CDN passes the body
+    # through; the real code is kept in X-Eve-Status. Auth/404/5xx are untouched.
+    try:
+        if (response.status_code in (400, 402, 409, 422)
+                and (response.content_type or '').startswith('application/json')
+                and (request.path or '').startswith('/api/')):
+            _payload = response.get_json(silent=True)
+            if isinstance(_payload, dict) and _payload.get('success') is False:
+                response.headers['X-Eve-Status'] = str(response.status_code)
+                response.status_code = 200
     except Exception:
         pass
 

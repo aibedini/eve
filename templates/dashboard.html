@@ -4687,7 +4687,10 @@
                 }
                 queueSilentServerRefresh(serverId);
             } else {
-                showCreditAwareError(data.error || 'Error renewing', response.status);
+                // Business errors are downgraded to HTTP 200 by the server (so the
+                // CDN doesn't swallow the JSON); the real code is in X-Eve-Status.
+                const realStatus = Number(response.headers.get('X-Eve-Status')) || response.status;
+                showCreditAwareError(data.error || 'Error renewing', realStatus);
             }
         } catch (error) {
             showToast('Error: ' + error.message, 'error');
