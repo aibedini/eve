@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.3"
+APP_VERSION = "2.4.4"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -13024,8 +13024,23 @@ def edit_client(server_id, inbound_id, email):
         persist_detected_panel_type(server, detected_type)
             
         target_client, fetched_inbound_row_edit = find_client(inbounds, inbound_id, email)
+        if not target_client and server_is_v3(server):
+            # Spaced-name client: panel stores it space-free → retry sanitized.
+            _ce = _v3_sanitize_email(email)
+            if _ce and _ce != email:
+                target_client, fetched_inbound_row_edit = find_client(inbounds, inbound_id, _ce)
+                if target_client:
+                    email = _ce
         if not target_client:
             return jsonify({"success": False, "error": "Client not found"}), 404
+
+        # v3.4+ rejects any client email containing a space (validateClientEmail),
+        # so the edit/rename silently fails. Force the new email space-free first,
+        # then apply the rest of the edit — "fix the name, then do whatever".
+        if server_is_v3(server):
+            _clean_new = _v3_sanitize_email(new_email)
+            if _clean_new:
+                new_email = _clean_new
 
         # Check for duplicate email on the same server (excluding current client)
         if new_email != email:
@@ -14199,6 +14214,15 @@ def renew_client(server_id, inbound_id, email):
                         verify["error"] = v_err or "verify_fetch_failed"
                     else:
                         v_client, v_inbound = find_client(v_inbounds, inbound_id, email)
+                        if not v_client and server_is_v3(server):
+                            # v3 stores the email space-free; after a spaced-email
+                            # rename the lookup must use the sanitized form, else
+                            # verify wrongly reports "not verified".
+                            _vc = _v3_sanitize_email(email)
+                            if _vc and _vc != email:
+                                v_client, v_inbound = find_client(v_inbounds, inbound_id, _vc)
+                                if v_client:
+                                    email = _vc
                         if not v_client:
                             verify["ok"] = False
                             verify["error"] = "client_not_found_after_update"

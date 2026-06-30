@@ -1056,6 +1056,9 @@
                     </div>
                 </div>
                 <small class="text-secondary" style="display:block; margin-top:6px;">Saving applies the checked inbounds. Unchecking removes the client from that inbound.</small>
+                <div id="edit-inbound-no-assign-warn" style="display:none; margin-top:8px; padding:8px 10px; border-radius:8px; background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.35); color:#fbbf24; font-size:0.82rem; line-height:1.5;">
+                    ⚠️ این کاربر به <b>هیچ اینباندی</b> assign نشده. روی پنل‌های <b>x-ui نسخه ۳ به بعد</b> این مهم است — مطمئن شو حداقل یک اینباند تیک خورده باشد. (روی نسخه‌های پایین‌تر از ۳ مهم نیست.)
+                </div>
             </div>
 
             {% if is_superadmin %}
@@ -5302,9 +5305,15 @@
             const resp = await fetch(`/api/client/inbound-assignments/${serverId}?email=${encodeURIComponent(email || '')}`, { cache: 'no-store' });
             const data = await resp.json();
             if (data && data.success) {
-                if (!data.is_v3) { group.style.display = 'none'; list.innerHTML = ''; return; }
+                const _warn = document.getElementById('edit-inbound-no-assign-warn');
+                if (!data.is_v3) {
+                    if (_warn) _warn.style.display = 'none';
+                    group.style.display = 'none'; list.innerHTML = ''; return;
+                }
                 _editClientInboundState.isV3 = true;
                 _renderEditInboundMulti(serverId, data.inbounds || [], data.assigned_ids || []);
+                // v3 server + client assigned to no inbound → warn (matters on v3+).
+                if (_warn) _warn.style.display = ((data.assigned_ids || []).length === 0) ? 'block' : 'none';
                 return;
             }
         } catch (e) {
