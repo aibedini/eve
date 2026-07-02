@@ -1042,12 +1042,14 @@
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
                         <label style="margin:0;">Send queue &amp; log</label>
                         <div style="display:flex;gap:8px;align-items:center;">
+                            <button class="btn btn-success" id="sms-promote-high-btn" onclick="promoteDelayedHighSms()" title="Release all delayed high-priority messages and move them to the front">⚡ High first</button>
                             <button class="btn btn-primary" id="sms-scan-run-btn" onclick="runSmsScanNow()">▶ Start now</button>
                             <button class="btn btn-danger" id="sms-scan-stop-btn" onclick="stopSmsScan()" style="display:none;">⏹ Stop &amp; disable</button>
                         </div>
                     </div>
                     <p class="text-secondary" style="margin:4px 0 10px; font-size:0.82rem;">
                         Press <strong>Start now</strong> to begin sending immediately (otherwise the background scan runs every 30 min).
+                        <strong>High first</strong> releases delayed high-priority messages and moves them to the front of the GMweb queue.
                         <strong>Stop &amp; disable</strong> aborts a running scan and turns off SMS automation.
                         Send priority: low volume → near expiry → volume ended (days left) → expired.
                     </p>
@@ -3022,6 +3024,13 @@
             .then(data => {
                 const job = (data && data.job) || {};
                 renderSmsScanProgress(job);
+                const promoteBtn = document.getElementById('sms-promote-high-btn');
+                if (promoteBtn) {
+                    const pendingHigh = Number((data && data.pending_high) || 0);
+                    promoteBtn.title = pendingHigh > 0
+                        ? `${pendingHigh} local delayed high-priority message(s), plus any delayed jobs in GMweb`
+                        : 'Release all delayed high-priority messages and move them to the front';
+                }
                 if (job.state === 'running') {
                     smsScanPollTimer = setTimeout(pollSmsScanStatus, 1200);
                 } else {
@@ -3063,6 +3072,40 @@
         } catch (e) {
             _setSmsRunBtn(false);
             showToast('Could not reach server: ' + (e && e.message ? e.message : String(e)), 'error');
+        }
+    }
+
+    async function promoteDelayedHighSms() {
+        const btn = document.getElementById('sms-promote-high-btn');
+        const prev = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = 'Promoting…'; }
+        try {
+            const res = await fetch('/api/sms/queue/promote-high', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' },
+            });
+            const raw = await res.text();
+            let data = null;
+            try { data = raw ? JSON.parse(raw) : null; } catch (_) { data = null; }
+            if (res.ok && data && data.success) {
+                const gatewayCount = Number(data.promoted || 0);
+                const localCount = Number(data.local_pending_released || 0);
+                const countText = gatewayCount || localCount
+                    ? ` (${gatewayCount} gateway, ${localCount} local)`
+                    : '';
+                showToast('Delayed high-priority messages moved to front' + countText);
+                pollSmsScanStatus();
+                loadSmsLogs();
+            } else {
+                const message = (data && data.error)
+                    ? data.error
+                    : `Promote failed (HTTP ${res.status})`;
+                showToast(message, 'error');
+            }
+        } catch (e) {
+            showToast('Could not reach server: ' + (e && e.message ? e.message : String(e)), 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = prev || '⚡ High first'; }
         }
     }
 

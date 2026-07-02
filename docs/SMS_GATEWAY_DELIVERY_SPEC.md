@@ -35,6 +35,29 @@ Content-Type: application/json
 { "to": "09123456789", "text": "..." }
 ```
 
+**Promote delayed high-priority jobs (queue control):**
+```http
+POST {BASE}/queue/promote-high
+Authorization: Bearer {API_KEY}
+Content-Type: application/json
+
+{
+  "all": true,
+  "priority": "high",
+  "states": ["delayed"],
+  "releaseDelayed": true,
+  "position": "front"
+}
+```
+
+Expected `200`/`202` response:
+```json
+{ "success": true, "promoted": 12 }
+```
+
+This operation must mutate existing queued jobs rather than enqueue copies. It
+sets their due time to now and places them before normal-priority work.
+
 **How Eve interprets the result today:**
 - HTTP `200` or `202` → Eve marks the row **`sent`**.
 - Any other status → **`failed`** with reason `http_<code>` (e.g. `http_429`).

@@ -5363,6 +5363,63 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     return out
 
 
+def _promote_delayed_high_sms(cfg: dict | None = None) -> dict:
+    """Ask GMweb to release every delayed high-priority job to the queue front.
+
+    This mutates existing gateway jobs; it deliberately does not resubmit SMS
+    payloads, so pressing the queue button cannot create duplicate messages.
+    Gateway contract: POST /queue/promote-high with releaseDelayed/all enabled.
+    """
+    cfg = cfg or _get_sms_runtime_settings()
+    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    api_key = (cfg.get('api_key') or '').strip()
+    if not base or not api_key:
+        return {'success': False, 'reason': 'gateway_not_configured', 'status_code': None}
+
+    try:
+        resp = requests.post(
+            f"{base}/queue/promote-high",
+            json={
+                'all': True,
+                'priority': 'high',
+                'states': ['delayed'],
+                'releaseDelayed': True,
+                'position': 'front',
+            },
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            timeout=int(cfg.get('timeout_seconds') or 15),
+        )
+    except Exception as exc:
+        return {'success': False, 'reason': f'gateway_error: {exc}', 'status_code': None}
+
+    try:
+        body = resp.json() if resp.content else {}
+    except Exception:
+        body = {}
+    if resp.status_code in (200, 202):
+        promoted = body.get('promoted') if isinstance(body, dict) else None
+        if promoted is None and isinstance(body, dict):
+            promoted = body.get('count')
+        return {
+            'success': True,
+            'status_code': resp.status_code,
+            'promoted': int(promoted or 0),
+            'gateway': body if isinstance(body, dict) else {},
+        }
+
+    if resp.status_code == 404:
+        reason = 'gateway_missing_promote_endpoint'
+    else:
+        detail = None
+        if isinstance(body, dict):
+            detail = body.get('error') or body.get('message')
+        reason = detail or f'gateway_http_{resp.status_code}'
+    return {'success': False, 'reason': reason, 'status_code': resp.status_code}
+
+
 def _sms_should_send(event_name: str, server_id, email: str, cfg: dict | None = None) -> tuple[bool, str | None]:
     cfg = cfg or _get_sms_runtime_settings()
     if not cfg.get('enabled'):
@@ -6000,14 +6057,14 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
             pass
 
 
-def _flush_pending_sms() -> int:
+def _flush_pending_sms(force: bool = False) -> int:
     """Send SMS that were parked during quiet hours, oldest first, once the window
     has ended. Respects the same per-recipient slot, daily limit, global pace and
     429 back-off as the scan. Returns the number sent. Safe to call every tick."""
     cfg = _get_sms_runtime_settings()
     if not cfg.get('enabled') or not (cfg.get('base_url') and cfg.get('api_key')):
         return 0
-    if _sms_in_quiet_hours(cfg):
+    if _sms_in_quiet_hours(cfg) and not force:
         return 0  # still inside the window — keep holding
     try:
         rows = PendingSms.query.order_by(PendingSms.created_at.asc()).limit(500).all()
@@ -20595,7 +20652,61 @@ def sms_scan_run():
 @superadmin_required
 def sms_scan_status():
     """Live progress of the current/last SMS scan (shared across all workers)."""
-    return jsonify({'success': True, 'job': _sms_scan_snapshot()})
+    try:
+        pending_high = PendingSms.query.count()
+    except Exception:
+        pending_high = 0
+    return jsonify({
+        'success': True,
+        'job': _sms_scan_snapshot(),
+        'pending_high': pending_high,
+    })
+
+
+@app.route('/api/sms/queue/promote-high', methods=['POST'])
+@superadmin_required
+def sms_queue_promote_high():
+    """Move all delayed high-priority GMweb jobs to the queue front now."""
+    cfg = _get_sms_runtime_settings()
+    result = _promote_delayed_high_sms(cfg)
+    if not result.get('success'):
+        reason = result.get('reason') or 'gateway_rejected_request'
+        if reason == 'gateway_missing_promote_endpoint':
+            message = (
+                'GMweb does not support POST /queue/promote-high yet. '
+                'Update the gateway, then press this button again.'
+            )
+        else:
+            message = f'Could not promote the GMweb queue: {reason}'
+        return jsonify({
+            'success': False,
+            'error': message,
+            'reason': reason,
+            'status_code': result.get('status_code'),
+        }), 502
+
+    # Normally transactional jobs are already inside GMweb. If an older Eve
+    # build left any high-priority rows locally, release those too, without
+    # making this request wait for paced network sends.
+    try:
+        local_pending = PendingSms.query.count()
+    except Exception:
+        local_pending = 0
+    if local_pending:
+        def _worker():
+            with app.app_context():
+                try:
+                    _flush_pending_sms(force=True)
+                except Exception:
+                    app.logger.exception('[sms-queue] forced local high flush failed')
+        threading.Thread(target=_worker, daemon=True).start()
+
+    return jsonify({
+        'success': True,
+        'promoted': result.get('promoted', 0),
+        'local_pending_released': local_pending,
+        'message': 'Delayed high-priority messages moved to the front.',
+    })
 
 
 @app.route('/api/sms/scan/stop', methods=['POST'])
