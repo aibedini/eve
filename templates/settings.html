@@ -2898,7 +2898,7 @@
     const SMS_STATE_LABELS = {
         near_expiry: '⏳ Near expiry', low_volume: '⚠️ Low volume',
         expired: '⛔ Expired', ended: '🚫 Ended',
-        renew: '🔄 Renew', created: '✨ Created'
+        renew: '🔄 Renew', created: '✨ Created', test: '🧪 Test'
     };
 
     // Server timestamps are UTC. Parse robustly: a naive ISO (no timezone) is
@@ -3150,18 +3150,29 @@
                 _renderSmsLogPager();
                 return;
             }
-            const statusColor = { sent: '#22c55e', failed: '#ef4444', skipped: '#f59e0b', queued: '#38bdf8' };
+            const statusColor = {
+                sent: '#22c55e', completed: '#22c55e', failed: '#ef4444',
+                skipped: '#f59e0b', queued: '#38bdf8', waiting: '#38bdf8',
+                processing: '#a78bfa', sending: '#a78bfa', delayed: '#f59e0b'
+            };
             body.innerHTML = logs.map(row => {
                 const when = formatJalaliTehran(row.created_at);
                 const sc = statusColor[row.status] || '#94a3b8';
-                const statusTxt = row.reason ? `${row.status} (${row.reason})` : row.status;
+                const taskParts = [row.status || ''];
+                if (row.gateway_state && row.gateway_state !== row.status) taskParts.push(row.gateway_state);
+                if (row.stage) taskParts.push(row.stage);
+                let statusTxt = taskParts.filter(Boolean).join(' · ');
+                if (row.reason) statusTxt += ` (${row.reason})`;
+                const taskRef = row.request_id
+                    ? `<div style="font-size:10px;color:var(--text-secondary,#94a3b8);margin-top:2px;">${escapeHtml(row.request_id)}${row.gateway_job_id ? ` / job ${escapeHtml(row.gateway_job_id)}` : ''}</div>`
+                    : '';
                 return `<tr style="border-top:1px solid var(--border-color,#2a2a3a);">
                     <td data-label="Time" style="padding:7px 10px;white-space:nowrap;">${escapeHtml(when)}</td>
                     <td data-label="User" style="padding:7px 10px;">${escapeHtml(row.email || '')}</td>
                     <td data-label="Server" style="padding:7px 10px;">${escapeHtml(row.server_name || '')}</td>
                     <td data-label="State" style="padding:7px 10px;white-space:nowrap;">${SMS_STATE_LABELS[row.state] || escapeHtml(row.state || '')}</td>
                     <td data-label="To" style="padding:7px 10px;white-space:nowrap;">${escapeHtml(row.recipient || '')}</td>
-                    <td data-label="Status" style="padding:7px 10px;color:${sc};white-space:nowrap;">${escapeHtml(statusTxt)}</td>
+                    <td data-label="Status" style="padding:7px 10px;color:${sc};white-space:nowrap;">${escapeHtml(statusTxt)}${taskRef}</td>
                 </tr>`;
             }).join('');
             _renderSmsLogPager();

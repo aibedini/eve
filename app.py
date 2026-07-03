@@ -5322,14 +5322,19 @@ def _sms_take_send_slot(recipient: str, cfg: dict) -> tuple[bool, str | None]:
 def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: str | None = None,
                         idempotency_key: str | None = None) -> dict:
     """POST a single SMS to the GMweb-API gateway. The gateway queues it and
-    returns 202 {jobId}; we treat 200/202 as accepted and don't track delivery.
+    returns 200/202 with a stable requestId. Delivery is tracked separately by
+    the SMS status worker; legacy gateways without requestId remain supported.
 
     priority='high' tells the gateway to jump the queue (transactional create/renew
     confirmations go out next, ahead of a running bulk reminder campaign). Omit for
     normal FIFO (the bulk scan). idempotency_key, when reused across a retry of the
     SAME logical message, makes the gateway dedupe so a network blip can't double-send."""
     cfg = cfg or _get_sms_runtime_settings()
-    out = {'sent': False, 'reason': None, 'status_code': None}
+    out = {
+        'sent': False, 'reason': None, 'status_code': None,
+        'request_id': None, 'job_id': None, 'status_url': None,
+        'status': None,
+    }
     base = (cfg.get('base_url') or '').strip().rstrip('/')
     api_key = (cfg.get('api_key') or '').strip()
     if not base or not api_key:
@@ -5356,6 +5361,17 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
         out['status_code'] = resp.status_code
         if resp.status_code in (200, 202):
             out['sent'] = True
+            try:
+                body = resp.json() if resp.content else {}
+            except (TypeError, ValueError):
+                body = {}
+            if isinstance(body, dict):
+                out['request_id'] = body.get('requestId')
+                out['job_id'] = str(body.get('jobId')) if body.get('jobId') is not None else None
+                out['status_url'] = body.get('statusUrl')
+                out['status'] = body.get('status')
+            if out['request_id'] and not out['status_url']:
+                out['status_url'] = f"/send/status/{out['request_id']}"
         else:
             out['reason'] = f'http_{resp.status_code}'
     except Exception as e:
@@ -5420,6 +5436,13 @@ def _promote_delayed_high_sms(cfg: dict | None = None) -> dict:
     return {'success': False, 'reason': reason, 'status_code': resp.status_code}
 
 
+def _sms_accepted_status(send_result: dict) -> str:
+    """A new gateway acceptance is queued; old gateways had no status API."""
+    if send_result.get('request_id'):
+        return str(send_result.get('status') or 'queued')[:16]
+    return 'sent'
+
+
 def _sms_should_send(event_name: str, server_id, email: str, cfg: dict | None = None) -> tuple[bool, str | None]:
     cfg = cfg or _get_sms_runtime_settings()
     if not cfg.get('enabled'):
@@ -5461,8 +5484,9 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                     sid_norm = None
                 email_l = (email or '').strip().lower()
 
-                def _log(recipient, status, reason):
-                    _sms_log_row(None, email_l, sid_norm, server_name, event_name, recipient, status, reason)
+                def _log(recipient, status, reason, gateway_result=None):
+                    _sms_log_row(None, email_l, sid_norm, server_name, event_name,
+                                 recipient, status, reason, gateway_result)
 
                 cfg = _get_sms_runtime_settings()
                 ok, reason = _sms_should_send(event_name, server_id, email, cfg)
@@ -5511,7 +5535,7 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 idem = f"tx-{event_name}-{sid_norm}-{email_l}-{int(time.time())}"
                 res = _send_sms_via_gmweb(recipient, text, cfg, priority='high', idempotency_key=idem)
                 if res.get('sent'):
-                    _log(recipient, 'sent', None)
+                    _log(recipient, _sms_accepted_status(res), None, res)
                 else:
                     _log(recipient, 'failed', res.get('reason'))
             except Exception:
@@ -5882,7 +5906,8 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 ps = SMS_SCAN_JOB.get('per_state') or {}
                 ps[state] = int(ps.get(state, 0) or 0) + 1
                 SMS_SCAN_JOB['per_state'] = ps
-            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'sent', None)
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                         _sms_accepted_status(res), None, res)
         else:
             _sms_scan_inc('failed')
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', res.get('reason'))
@@ -6032,7 +6057,8 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
                 ps = SMS_SCAN_JOB.get('per_state') or {}
                 ps['royalty'] = int(ps.get('royalty', 0) or 0) + 1
                 SMS_SCAN_JOB['per_state'] = ps
-            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'sent', None)
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
+                         _sms_accepted_status(res), None, res)
         else:
             _sms_scan_inc('failed')
             _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', res.get('reason'))
@@ -6041,20 +6067,130 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
     return {'scanned': len(idle), 'sent': sent, 'candidates': len(candidates)}
 
 
-def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, status, reason):
+def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, status, reason,
+                 gateway_result: dict | None = None):
     """Persist one audit row for the SMS send-log history. Best-effort."""
     try:
-        db.session.add(SmsSendLog(
+        gateway_result = gateway_result or {}
+        row = SmsSendLog(
             email=email_l, server_id=(sid_norm or 0), server_name=(server_name or '')[:255],
             state=state, recipient=_mask_mobile(recipient), status=status,
             reason=(str(reason)[:255] if reason else None), job_id=job_id,
-        ))
+            request_id=(str(gateway_result.get('request_id'))[:128]
+                        if gateway_result.get('request_id') else None),
+            gateway_job_id=(str(gateway_result.get('job_id'))[:64]
+                            if gateway_result.get('job_id') else None),
+            status_url=(str(gateway_result.get('status_url'))[:512]
+                        if gateway_result.get('status_url') else None),
+            terminal=(False if gateway_result.get('request_id') else None),
+        )
+        db.session.add(row)
         db.session.commit()
+        return row.id
     except Exception:
         try:
             db.session.rollback()
         except Exception:
             pass
+        return None
+
+
+def _sms_status_endpoint(base_url: str, row) -> str:
+    status_url = (row.status_url or '').strip()
+    if status_url.startswith('http://') or status_url.startswith('https://'):
+        # Never let gateway response data turn the poller into an arbitrary
+        # URL fetcher. Absolute status URLs are accepted only on the configured
+        # gateway origin; otherwise use the documented requestId endpoint.
+        if status_url.startswith(base_url.rstrip('/') + '/'):
+            return status_url
+        status_url = ''
+    if not status_url and row.request_id:
+        status_url = f'/send/status/{row.request_id}'
+    return f"{base_url.rstrip('/')}/{status_url.lstrip('/')}"
+
+
+def _refresh_pending_sms_statuses(limit: int = 100) -> int:
+    """Poll accepted GMweb tasks and persist their latest delivery state."""
+    cfg = _get_sms_runtime_settings()
+    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    api_key = (cfg.get('api_key') or '').strip()
+    if not base or not api_key:
+        return 0
+    rows = SmsSendLog.query.filter(
+        SmsSendLog.request_id.isnot(None),
+        or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
+    ).order_by(SmsSendLog.created_at.asc()).limit(max(1, min(int(limit), 500))).all()
+    if not rows:
+        return 0
+
+    changed = 0
+    headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
+    timeout = int(cfg.get('timeout_seconds') or 15)
+    for row in rows:
+        try:
+            resp = requests.get(_sms_status_endpoint(base, row), headers=headers, timeout=timeout)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            if not isinstance(data, dict):
+                continue
+
+            previous = (row.status, row.gateway_state, row.stage, row.terminal,
+                        row.successful, row.reason, row.gateway_job_id)
+            if data.get('status'):
+                row.status = str(data['status'])[:16]
+            if data.get('state') is not None:
+                row.gateway_state = str(data['state'])[:32]
+            row.stage = str(data['stage'])[:64] if data.get('stage') is not None else None
+            if data.get('jobId') is not None:
+                row.gateway_job_id = str(data['jobId'])[:64]
+            if data.get('terminal') is not None:
+                row.terminal = bool(data['terminal'])
+            if data.get('successful') is not None:
+                row.successful = bool(data['successful'])
+            if data.get('currentAt') is not None:
+                row.gateway_current_at = str(data['currentAt'])[:64]
+            if data.get('sentAt') is not None:
+                row.gateway_sent_at = str(data['sentAt'])[:64]
+            failed_reason = data.get('failedReason')
+            if failed_reason:
+                row.reason = str(failed_reason)[:255]
+            elif row.terminal and row.successful:
+                row.reason = None
+            row.updated_at = datetime.utcnow()
+
+            current = (row.status, row.gateway_state, row.stage, row.terminal,
+                       row.successful, row.reason, row.gateway_job_id)
+            if current != previous:
+                changed += 1
+        except Exception as exc:
+            app.logger.debug(f'[sms-status] poll failed request_id={row.request_id}: {exc}')
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return 0
+    return changed
+
+
+def sms_status_worker():
+    """Continuously reconcile queued SMS tasks, including after Eve restarts."""
+    while True:
+        pending = False
+        try:
+            with app.app_context():
+                pending = SmsSendLog.query.filter(
+                    SmsSendLog.request_id.isnot(None),
+                    or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
+                ).first() is not None
+                if pending:
+                    _refresh_pending_sms_statuses()
+        except Exception as exc:
+            try:
+                app.logger.warning(f'[sms-status] worker error: {exc}')
+            except Exception:
+                pass
+        time.sleep(2 if pending else 5)
 
 
 def _flush_pending_sms(force: bool = False) -> int:
@@ -6092,7 +6228,8 @@ def _flush_pending_sms(force: bool = False) -> int:
             break  # gateway throttling — stop, the rest stays queued for next tick
         try:
             if res.get('sent'):
-                _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name, r.recipient, 'sent', 'quiet_flush')
+                _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name,
+                             r.recipient, _sms_accepted_status(res), None, res)
                 sent += 1
             else:
                 _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name, r.recipient, 'failed', res.get('reason'))
@@ -6715,10 +6852,20 @@ class SmsSendLog(db.Model):
     server_name = db.Column(db.String(255))
     state = db.Column(db.String(32), nullable=False, index=True)  # near_expiry|low_volume|expired|ended
     recipient = db.Column(db.String(32))               # masked mobile (e.g. 0912***4643)
-    status = db.Column(db.String(16), nullable=False)  # sent | failed | skipped
+    status = db.Column(db.String(16), nullable=False)  # queued | sent | failed | skipped
     reason = db.Column(db.String(255))                 # failure/skip detail
     job_id = db.Column(db.String(64), index=True)
+    request_id = db.Column(db.String(128), index=True)
+    gateway_job_id = db.Column(db.String(64))
+    status_url = db.Column(db.String(512))
+    gateway_state = db.Column(db.String(32))
+    stage = db.Column(db.String(64))
+    terminal = db.Column(db.Boolean)
+    successful = db.Column(db.Boolean)
+    gateway_current_at = db.Column(db.String(64))
+    gateway_sent_at = db.Column(db.String(64))
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     def to_dict(self):
         return {
@@ -6731,10 +6878,19 @@ class SmsSendLog(db.Model):
             'status': self.status,
             'reason': self.reason,
             'job_id': self.job_id,
+            'request_id': self.request_id,
+            'gateway_job_id': self.gateway_job_id,
+            'gateway_state': self.gateway_state,
+            'stage': self.stage,
+            'terminal': self.terminal,
+            'successful': self.successful,
+            'gateway_current_at': self.gateway_current_at,
+            'gateway_sent_at': self.gateway_sent_at,
             # Stored as naive UTC (datetime.utcnow). Emit an explicit 'Z' so the
             # browser parses it as UTC and can convert to the viewer's timezone
             # (Asia/Tehran) instead of mis-reading it as local time.
             'created_at': (self.created_at.isoformat() + 'Z') if self.created_at else None,
+            'updated_at': (self.updated_at.isoformat() + 'Z') if self.updated_at else None,
         }
 
 
@@ -7079,6 +7235,39 @@ with app.app_context():
                 conn.commit()
         except Exception as _idx_err:
             print(f"Migration error (index {_idx_name}): {_idx_err}")
+
+    # Delivery tracking returned by GMweb /send and /send/status/:requestId.
+    # Existing installations already have sms_send_log, so add columns in place.
+    try:
+        inspector = inspect(db.engine)
+        if 'sms_send_log' in set(inspector.get_table_names()):
+            _sms_cols = {c['name'] for c in inspector.get_columns('sms_send_log')}
+            _sms_new_cols = (
+                ('request_id', 'VARCHAR(128)'),
+                ('gateway_job_id', 'VARCHAR(64)'),
+                ('status_url', 'VARCHAR(512)'),
+                ('gateway_state', 'VARCHAR(32)'),
+                ('stage', 'VARCHAR(64)'),
+                ('terminal', 'BOOLEAN'),
+                ('successful', 'BOOLEAN'),
+                ('gateway_current_at', 'VARCHAR(64)'),
+                ('gateway_sent_at', 'VARCHAR(64)'),
+                ('updated_at', 'TIMESTAMP'),
+            )
+            for _cn, _ct in _sms_new_cols:
+                if _cn not in _sms_cols:
+                    with db.engine.connect() as conn:
+                        conn.execute(text(f'ALTER TABLE sms_send_log ADD COLUMN {_cn} {_ct}'))
+                        conn.commit()
+                    print(f'Migration: added sms_send_log.{_cn}')
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    'CREATE INDEX IF NOT EXISTS ix_sms_send_log_request_id '
+                    'ON sms_send_log (request_id)'
+                ))
+                conn.commit()
+    except Exception as _sms_migration_error:
+        print(f'Migration error (sms_send_log delivery tracking): {_sms_migration_error}')
 
     # Ensure announcements columns exist — each in its own try so one failure
     # doesn't prevent the others from running.
@@ -20600,9 +20789,14 @@ def sms_test_send():
     res = _send_sms_via_gmweb(recipient, text, cfg, priority='high',
                               idempotency_key=f"test-{int(time.time())}")
     if res.get('sent'):
+        _sms_log_row(None, (getattr(user, 'username', None) or 'test').strip().lower(),
+                     0, 'Eve', 'test', recipient, _sms_accepted_status(res), None, res)
         src_label = 'your profile number' if source == 'superadmin_profile' else 'the panel contact number'
+        message = ('Test SMS queued' if res.get('request_id') else 'Test SMS sent')
         return jsonify({'success': True, 'recipient': recipient, 'source': source,
-                        'message': f'Test SMS sent to {recipient} ({src_label}).'})
+                        'request_id': res.get('request_id'), 'job_id': res.get('job_id'),
+                        'status': _sms_accepted_status(res),
+                        'message': f'{message} for {recipient} ({src_label}).'})
     return jsonify({'success': False, 'recipient': recipient,
                     'error': f'Send failed ({res.get("reason") or "unknown"}).',
                     'status_code': res.get('status_code')}), 400
@@ -24729,6 +24923,15 @@ def ensure_background_threads_started():
             print(f"Failed to start sms bot thread: {e}")
     else:
         print("[Singleton] sms_bot_worker already owned by another worker, skipping.")
+
+    # Singleton: reconcile queued GMweb tasks and persist their terminal status.
+    if _claim_singleton('sms_status_worker'):
+        try:
+            threading.Thread(target=sms_status_worker, daemon=True).start()
+        except Exception as e:
+            print(f"Failed to start sms status thread: {e}")
+    else:
+        print("[Singleton] sms_status_worker already owned by another worker, skipping.")
 
 if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
     # Start threads on module import (works under gunicorn as well)
