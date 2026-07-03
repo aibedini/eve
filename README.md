@@ -192,7 +192,8 @@ The dashboard is available at `http://localhost:5000`.
 .
 ├── app.py                  # Primary Flask app (routes, billing, automations, APIs)
 ├── setup.sh                # One-line installer for Ubuntu/Debian
-├── pyproject.toml / uv.lock# Python deps + exact locking
+├── requirements.txt        # Runtime Python dependencies
+├── pyproject.toml          # Python project metadata
 ├── templates/              # Jinja2 views
 │   ├── base.html           # Layout + sidebar + wallet pill
 │   ├── dashboard.html      # Main dashboard, client modals, JS helpers
@@ -212,8 +213,9 @@ The dashboard is available at `http://localhost:5000`.
 │   ├── client_portal.html  # End-user portal
 │   └── error.html          # Friendly error surface
 ├── static/                 # Unified dark theme + responsive styles, assets
-├── graphify-out/           # Code knowledge graph (architecture map)
-├── DOCKER.md / INSTALL.md / CHANGELOG.md / RELEASE_NOTES.md
+├── DOCKER.md               # Docker and restricted/offline deployment
+├── OFFLINE_INSTALL.md      # Native offline installation guide
+├── CHANGELOG.md / RELEASE_NOTES.md
 └── README.md               # You are here
 ```
 
@@ -227,10 +229,6 @@ The dashboard is available at `http://localhost:5000`.
 - Mobile: ✅ iOS Safari, Chrome Android
 
 ---
-
-## 📜 License
-
-MIT License — see [LICENSE](LICENSE).
 
 ## 🤝 Contributing
 
