@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.11"
+APP_VERSION = "2.4.12"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -7852,12 +7852,16 @@ def _select_subscription_package(packages: list[dict], daily_gb: float,
         if days not in (0,) and days < 28:
             continue
         horizon_days = days if days > 0 else 31
-        required_gb = max(0.0, float(daily_gb)) * horizon_days * (1.0 + safety_margin)
-        candidates.append((package, days, volume, price, required_gb))
+        required_gb = max(0.0, float(daily_gb)) * horizon_days
+        buffered_gb = required_gb * (1.0 + safety_margin)
+        candidates.append((package, days, volume, price, required_gb, buffered_gb))
 
     if not candidates:
         return None, 0.0
 
+    # Eligibility follows the user's point forecast. The uncertainty buffer is
+    # diagnostic only; using it as a hard threshold silently upsells a 9.4 GB
+    # forecast from a 10 GB package to 20 GB.
     finite_fits = [item for item in candidates if item[2] > 0 and item[2] >= item[4]]
     pool = finite_fits or [item for item in candidates if item[2] == 0]
     if not pool:
@@ -7868,7 +7872,7 @@ def _select_subscription_package(packages: list[dict], daily_gb: float,
     lo_price, hi_price = min(prices), max(prices)
 
     def _score(item):
-        _package, days, volume, price, required = item
+        _package, days, volume, price, required, _buffered = item
         if volume == 0:
             excess = 1.25  # unlimited is useful, but only after finite fits fail
         else:
@@ -7878,7 +7882,7 @@ def _select_subscription_package(packages: list[dict], daily_gb: float,
         return excess + (0.20 * duration_penalty) + (0.04 * price_penalty), price
 
     selected = min(pool, key=_score)
-    return selected[0], selected[4]
+    return selected[0], selected[5]
 
 
 def _build_subscription_package_recommendation(server_id: int, sub_id: str,
