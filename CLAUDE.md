@@ -7,6 +7,14 @@ Version scheme: `2.x.y` (single source of truth: `APP_VERSION` in `app.py`).
 - **Do NOT cut a release until the user explicitly says so.** Never create a git tag, push a tag, or create/edit a GitHub release on your own. Committing (with the `y` bump) is fine and expected; releasing is not.
 - When the user does ask to release: bump `x`, reset `y`, update CHANGELOG.md and RELEASE_NOTES.md, then create the tag and GitHub release.
 
+## Upgrade maintenance
+
+- Long-running data cleanup must use the durable `system_migrations` ledger; never rely only on the app version.
+- Migrations must be idempotent and resumable, advance their cursor atomically with each data batch, and validate converted data before deleting the source.
+- `eve-maintenance.service` is the standard post-update runner. Keep the in-app worker fallback for upgrades launched by an older in-memory `eve` CLI.
+- Show a warning before required maintenance: it may take time and the panel can be slower or briefly unavailable.
+- Prune stale `${APP_DIR}.bak.*` directories before creating the next update backup, and retain at most two afterward.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

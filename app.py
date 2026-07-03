@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.8"
+APP_VERSION = "2.4.9"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -3945,6 +3945,23 @@ class SystemSetting(db.Model):
     __tablename__ = 'system_settings'
     key = db.Column(db.String(50), primary_key=True)
     value = db.Column(db.Text)
+
+
+class SystemMigration(db.Model):
+    """Durable progress ledger for long-running, resumable data migrations."""
+    __tablename__ = 'system_migrations'
+    id = db.Column(db.Integer, primary_key=True)
+    migration_id = db.Column(db.String(120), nullable=False, unique=True, index=True)
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    phase = db.Column(db.String(64), nullable=True)
+    cursor_json = db.Column(db.Text, nullable=True)
+    processed_rows = db.Column(db.BigInteger, nullable=False, default=0)
+    total_rows = db.Column(db.BigInteger, nullable=True)
+    details_json = db.Column(db.Text, nullable=True)
+    last_error = db.Column(db.Text, nullable=True)
+    started_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    finished_at = db.Column(db.DateTime, nullable=True)
 
 
 class VolumeRulePreset(db.Model):
@@ -23664,7 +23681,15 @@ def get_current_user_info():
 
 @app.context_processor
 def inject_version():
-    return dict(app_version=APP_VERSION)
+    maintenance_notice = None
+    try:
+        status = get_usage_migration_status()
+        if status.get('required'):
+            maintenance_notice = status
+    except Exception:
+        # Requests must remain available while an older schema is bootstrapping.
+        db.session.rollback()
+    return dict(app_version=APP_VERSION, maintenance_notice=maintenance_notice)
 
 @app.route('/api/check-update', methods=['GET'])
 @login_required
@@ -24264,6 +24289,7 @@ _USAGE_ROLLUP_INTERVAL_MIN = 60
 _USAGE_HOURLY_RETENTION_HOURS = 48
 _USAGE_DAILY_RETENTION_DAYS = 365
 _USAGE_LEGACY_MIGRATION_KEY = 'usage_rollup_migration_v1'
+_USAGE_LEGACY_MIGRATION_ID = 'usage-snapshots-to-rollups-v1'
 _USAGE_TEHRAN_OFFSET = timedelta(hours=3, minutes=30)
 
 
@@ -24455,14 +24481,51 @@ def _take_usage_snapshots():
     return _collect_usage_rollups()
 
 
-def _legacy_usage_table_exists():
+def _legacy_usage_table_name():
     try:
-        return 'usage_snapshots' in set(inspect(db.engine).get_table_names())
+        tables = set(inspect(db.engine).get_table_names())
+        if 'usage_snapshots' in tables:
+            return 'usage_snapshots'
+        if 'usage_snapshots_legacy' in tables:
+            return 'usage_snapshots_legacy'
     except Exception:
-        return False
+        pass
+    return None
 
 
-def _migrate_legacy_usage_snapshots():
+def _legacy_usage_table_exists():
+    return bool(_legacy_usage_table_name())
+
+
+def _usage_migration_record(create=True):
+    record = SystemMigration.query.filter_by(migration_id=_USAGE_LEGACY_MIGRATION_ID).first()
+    if record is None and create:
+        record = SystemMigration(migration_id=_USAGE_LEGACY_MIGRATION_ID, status='pending', phase='preflight')
+        db.session.add(record)
+        db.session.commit()
+    return record
+
+
+def get_usage_migration_status():
+    """Return a JSON-safe status for the maintenance CLI and diagnostics."""
+    table_name = _legacy_usage_table_name()
+    record = _usage_migration_record(create=False)
+    return {
+        'migrationId': _USAGE_LEGACY_MIGRATION_ID,
+        'required': bool(table_name),
+        'sourceTable': table_name,
+        'status': record.status if record else ('pending' if table_name else 'complete'),
+        'phase': record.phase if record else None,
+        'processedRows': int(record.processed_rows or 0) if record else 0,
+        'totalRows': int(record.total_rows) if record and record.total_rows is not None else None,
+        'lastError': record.last_error if record else None,
+        'startedAt': record.started_at.isoformat() if record and record.started_at else None,
+        'updatedAt': record.updated_at.isoformat() if record and record.updated_at else None,
+        'finishedAt': record.finished_at.isoformat() if record and record.finished_at else None,
+    }
+
+
+def _migrate_legacy_usage_snapshots_v248():
     """Stream raw legacy rows into rollups, then remove the obsolete table."""
     if not _legacy_usage_table_exists():
         _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
@@ -24602,22 +24665,281 @@ def _migrate_legacy_usage_snapshots():
     print('[UsageRollup] legacy migration complete; raw table dropped')
 
 
+def _migrate_legacy_usage_snapshots(finalize=True, batch_accounts=10):
+    """Convert raw snapshots in resumable batches, validate, then reclaim them."""
+    source_table = _legacy_usage_table_name()
+    if not source_table:
+        _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
+        record = _usage_migration_record(create=False)
+        if record and record.status != 'complete':
+            record.status = 'complete'
+            record.phase = 'cleanup_complete'
+            record.finished_at = datetime.utcnow()
+        db.session.commit()
+        return get_usage_migration_status()
+
+    lock_fd = None
+    try:
+        import fcntl
+        lock_fd = open('/tmp/eve-usage-migration.lock', 'a+')
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print('[UsageRollup] migration already running in another process')
+            lock_fd.close()
+            return get_usage_migration_status()
+    except (ImportError, OSError):
+        if lock_fd:
+            lock_fd.close()
+        lock_fd = None
+
+    record = _usage_migration_record()
+    try:
+        try:
+            cursor = json.loads(record.cursor_json or '{}')
+        except Exception:
+            cursor = {}
+        cursor_server = cursor.get('server_id')
+        cursor_sub = cursor.get('sub_id')
+
+        if not cursor and not int(record.processed_rows or 0):
+            # A pre-ledger 2.4.8 attempt may have left partial targets behind.
+            UsageHourly.query.delete(synchronize_session=False)
+            UsageDaily.query.delete(synchronize_session=False)
+            UsageCounterState.query.delete(synchronize_session=False)
+            record.total_rows = int(db.session.execute(
+                text(f'SELECT COUNT(*) FROM {source_table}')
+            ).scalar() or 0)
+            db.session.commit()
+
+        record.status = 'running'
+        record.phase = 'backfill'
+        record.started_at = record.started_at or datetime.utcnow()
+        record.last_error = None
+        _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'running')
+        db.session.commit()
+        print(f'[UsageRollup] migrating {source_table}; resume={cursor or "start"}')
+
+        hourly_cutoff = datetime.utcnow() - timedelta(hours=_USAGE_HOURLY_RETENTION_HOURS)
+        daily_cutoff = _usage_tehran_date(datetime.utcnow()) - timedelta(days=_USAGE_DAILY_RETENTION_DAYS)
+        while True:
+            params = {'limit': max(1, min(int(batch_accounts), 1000))}
+            where = ''
+            if cursor_server is not None:
+                where = ('WHERE (server_id > :cursor_server OR '
+                         '(server_id = :cursor_server AND sub_id > :cursor_sub))')
+                params.update(cursor_server=cursor_server, cursor_sub=cursor_sub)
+            keys = db.session.execute(text(f'''
+                SELECT server_id, sub_id FROM {source_table} {where}
+                GROUP BY server_id, sub_id
+                ORDER BY server_id, sub_id
+                LIMIT :limit
+            '''), params).fetchall()
+            if not keys:
+                break
+
+            last_server, last_sub = int(keys[-1][0]), str(keys[-1][1])
+            range_params = {'last_server': last_server, 'last_sub': last_sub}
+            lower = ''
+            if cursor_server is not None:
+                lower = ('AND (server_id > :cursor_server OR '
+                         '(server_id = :cursor_server AND sub_id > :cursor_sub))')
+                range_params.update(cursor_server=cursor_server, cursor_sub=cursor_sub)
+            rows = db.session.execute(text(f'''
+                SELECT server_id, sub_id, inbound_tag, recorded_at,
+                       upload_bytes, download_bytes, total_bytes,
+                       remaining_bytes, volume_limit_bytes
+                FROM {source_table}
+                WHERE (server_id < :last_server OR
+                       (server_id = :last_server AND sub_id <= :last_sub))
+                  {lower}
+                ORDER BY server_id, sub_id, recorded_at, total_bytes DESC, id DESC
+            '''), range_params).fetchall()
+
+            for model in (UsageHourly, UsageDaily, UsageCounterState):
+                conditions = [and_(model.server_id == int(k[0]), model.sub_id == str(k[1])) for k in keys]
+                model.query.filter(or_(*conditions)).delete(synchronize_session=False)
+
+            daily_batch, hourly_batch, state_batch = [], [], []
+            current_key = current_ts = None
+            prev_up = prev_down = None
+            day_acc = hour_acc = last_point = None
+
+            def finish_hour():
+                nonlocal hour_acc
+                if hour_acc:
+                    hourly_batch.append(UsageHourly(**hour_acc))
+                    hour_acc = None
+
+            def finish_day():
+                nonlocal day_acc
+                if day_acc:
+                    daily_batch.append(UsageDaily(**day_acc))
+                    day_acc = None
+
+            def finish_account():
+                if current_key is None:
+                    return
+                finish_hour()
+                finish_day()
+                if last_point:
+                    state_batch.append(UsageCounterState(
+                        server_id=current_key[0], sub_id=current_key[1], inbound_tag=last_point['tag'],
+                        upload_bytes=last_point['up'], download_bytes=last_point['down'],
+                        total_bytes=last_point['up'] + last_point['down'],
+                        remaining_bytes=last_point['remaining'], volume_limit_bytes=last_point['limit'],
+                        observed_at=last_point['ts'],
+                    ))
+
+            for row in rows:
+                key = (int(row[0]), str(row[1]))
+                ts = _coerce_usage_datetime(row[3])
+                if key != current_key:
+                    finish_account()
+                    current_key, current_ts = key, None
+                    prev_up = prev_down = None
+                    day_acc = hour_acc = last_point = None
+                if ts == current_ts:
+                    continue
+                current_ts = ts
+                up, down = int(row[4] or 0), int(row[5] or 0)
+                delta_up = _usage_delta(up, prev_up) if prev_up is not None else 0
+                delta_down = _usage_delta(down, prev_down) if prev_down is not None else 0
+                day = _usage_tehran_date(ts)
+                hour = ts.replace(minute=0, second=0, microsecond=0)
+                tag = row[2]
+
+                if day >= daily_cutoff:
+                    if day_acc is None or day_acc['usage_date'] != day:
+                        finish_day()
+                        day_acc = dict(
+                            server_id=key[0], sub_id=key[1], inbound_tag=tag, usage_date=day,
+                            upload_bytes=0, download_bytes=0,
+                            opening_upload_bytes=(prev_up if prev_up is not None else up),
+                            opening_download_bytes=(prev_down if prev_down is not None else down),
+                            closing_upload_bytes=up, closing_download_bytes=down,
+                            remaining_bytes=row[7], volume_limit_bytes=row[8], sample_count=0,
+                            first_observed_at=ts, last_observed_at=ts,
+                        )
+                    day_acc['upload_bytes'] += delta_up
+                    day_acc['download_bytes'] += delta_down
+                    day_acc['closing_upload_bytes'] = up
+                    day_acc['closing_download_bytes'] = down
+                    day_acc['remaining_bytes'] = row[7]
+                    day_acc['volume_limit_bytes'] = row[8]
+                    day_acc['inbound_tag'] = tag
+                    day_acc['sample_count'] += 1
+                    day_acc['last_observed_at'] = ts
+
+                if ts >= hourly_cutoff:
+                    if hour_acc is None or hour_acc['bucket_at'] != hour:
+                        finish_hour()
+                        hour_acc = dict(
+                            server_id=key[0], sub_id=key[1], inbound_tag=tag, bucket_at=hour,
+                            upload_bytes=0, download_bytes=0, remaining_bytes=row[7],
+                            volume_limit_bytes=row[8], sample_count=0, updated_at=ts,
+                        )
+                    hour_acc['upload_bytes'] += delta_up
+                    hour_acc['download_bytes'] += delta_down
+                    hour_acc['remaining_bytes'] = row[7]
+                    hour_acc['volume_limit_bytes'] = row[8]
+                    hour_acc['inbound_tag'] = tag
+                    hour_acc['sample_count'] += 1
+                    hour_acc['updated_at'] = ts
+
+                prev_up, prev_down = up, down
+                last_point = {'tag': tag, 'up': up, 'down': down,
+                              'remaining': row[7], 'limit': row[8], 'ts': ts}
+
+            finish_account()
+            db.session.bulk_save_objects(daily_batch)
+            db.session.bulk_save_objects(hourly_batch)
+            db.session.bulk_save_objects(state_batch)
+            record.cursor_json = json.dumps({'server_id': last_server, 'sub_id': last_sub})
+            record.processed_rows = int(record.processed_rows or 0) + len(rows)
+            record.updated_at = datetime.utcnow()
+            db.session.commit()
+            cursor_server, cursor_sub = last_server, last_sub
+            print(f'[UsageRollup] progress {record.processed_rows:,}/{record.total_rows or 0:,} rows')
+
+        record.phase = 'validation'
+        db.session.commit()
+        source_rows = int(db.session.execute(text(f'SELECT COUNT(*) FROM {source_table}')).scalar() or 0)
+        source_accounts = int(db.session.execute(text(f'''
+            SELECT COUNT(*) FROM (
+                SELECT server_id, sub_id FROM {source_table} GROUP BY server_id, sub_id
+            ) AS legacy_accounts
+        ''')).scalar() or 0)
+        target_accounts = int(UsageCounterState.query.count())
+        if int(record.processed_rows or 0) != source_rows:
+            raise RuntimeError(f'row validation failed: source={source_rows}, processed={record.processed_rows}')
+        if target_accounts < source_accounts:
+            raise RuntimeError(f'account validation failed: source={source_accounts}, target={target_accounts}')
+
+        record.status = 'ready'
+        record.phase = 'validated'
+        record.details_json = json.dumps({'sourceRows': source_rows, 'sourceAccounts': source_accounts,
+                                          'targetAccounts': target_accounts})
+        db.session.commit()
+        if finalize:
+            with db.engine.begin() as conn:
+                conn.execute(text(f'DROP TABLE {source_table}'))
+            record.status = 'complete'
+            record.phase = 'cleanup_complete'
+            record.finished_at = datetime.utcnow()
+            _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
+            db.session.commit()
+            print('[UsageRollup] validation passed; legacy source dropped')
+        return get_usage_migration_status()
+    except Exception as exc:
+        db.session.rollback()
+        record = _usage_migration_record()
+        record.status = 'failed'
+        record.last_error = str(exc)[:4000]
+        record.updated_at = datetime.utcnow()
+        _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'failed')
+        db.session.commit()
+        raise
+    finally:
+        if lock_fd:
+            try:
+                import fcntl
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_fd.close()
+
+
 def usage_snapshot_worker():
     """Singleton daemon maintaining compact hourly and daily usage rollups."""
     print(f'[UsageRollup] singleton worker started (PID={os.getpid()})')
+    # Give the post-update systemd unit first chance to own the migration. Old
+    # updater scripts do not install that unit, so this becomes their fallback.
     try:
         with app.app_context():
-            if _get_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, '') != 'complete' or _legacy_usage_table_exists():
-                _migrate_legacy_usage_snapshots()
-    except Exception as exc:
-        print(f'[UsageRollup] legacy migration failed: {exc}')
+            maintenance_needed = _legacy_usage_table_exists()
+    except Exception:
+        maintenance_needed = False
+    if maintenance_needed:
+        time.sleep(15)
+    while True:
         try:
             with app.app_context():
-                db.session.rollback()
-                _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'failed')
-                db.session.commit()
-        except Exception:
-            pass
+                if (_get_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, '') == 'complete'
+                        and not _legacy_usage_table_exists()):
+                    break
+                _migrate_legacy_usage_snapshots()
+                if not _legacy_usage_table_exists():
+                    break
+        except Exception as exc:
+            print(f'[UsageRollup] legacy migration failed: {exc}')
+            try:
+                with app.app_context():
+                    db.session.rollback()
+            except Exception:
+                pass
+        # If systemd owns the migration lock, do not let live collection write
+        # into the same rollup tables. Retry until maintenance finishes.
+        time.sleep(30)
 
     waited = 0
     while waited < 600 and not GLOBAL_SERVER_DATA.get('inbounds'):

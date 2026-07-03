@@ -1143,7 +1143,74 @@ EOF
     systemctl daemon-reload
     systemctl enable ${SERVICE_NAME}
     systemctl restart ${SERVICE_NAME}
+    install_maintenance_service
     print_success "Service started"
+}
+
+install_maintenance_service() {
+    cat > /usr/local/sbin/eve-maintenance-root <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+keep=2
+i=0
+while IFS= read -r backup; do
+    [ -n "\$backup" ] || continue
+    i=\$((i + 1))
+    [ "\$i" -le "\$keep" ] && continue
+    case "\$backup" in
+        ${APP_DIR}.bak.[0-9]*) rm -rf -- "\$backup" ;;
+        *) echo "Refusing unexpected backup path: \$backup" >&2; exit 1 ;;
+    esac
+done < <(find /opt -maxdepth 1 -type d -name '$(basename "$APP_DIR").bak.*' -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
+EOF
+    chmod 750 /usr/local/sbin/eve-maintenance-root
+
+    cat > /etc/systemd/system/eve-maintenance.service <<EOF
+[Unit]
+Description=Eve resumable data maintenance
+After=network.target postgresql.service
+ConditionPathExists=${APP_DIR}/maintenance.py
+
+[Service]
+Type=oneshot
+User=${APP_USER}
+Group=${APP_USER}
+WorkingDirectory=${APP_DIR}
+Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DISABLE_BACKGROUND_THREADS=true"
+EnvironmentFile=${ENV_FILE}
+ExecStartPre=+/usr/local/sbin/eve-maintenance-root
+ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/maintenance.py run
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable eve-maintenance.service >/dev/null 2>&1 || true
+}
+
+show_maintenance_preflight() {
+    [ -x "${APP_DIR}/venv/bin/python" ] || return 0
+    [ -f "${APP_DIR}/maintenance.py" ] || return 0
+    local plan
+    plan=$(cd "$APP_DIR" && sudo -u "$APP_USER" env DISABLE_BACKGROUND_THREADS=true \
+        "${APP_DIR}/venv/bin/python" "${APP_DIR}/maintenance.py" plan 2>/dev/null || true)
+    if echo "$plan" | grep -q '"required": true'; then
+        print_warning "One-time usage-history compaction is required."
+        print_warning "It can take time on large databases; the panel may be slower or briefly unavailable."
+        echo "$plan" | grep -E '"(sourceSizeBytes|diskFreeBytes|processedRows|totalRows|status)"' || true
+    fi
+}
+
+start_maintenance_service() {
+    install_maintenance_service
+    [ "${1:-}" = "preflight-shown" ] || show_maintenance_preflight
+    systemctl restart --no-block eve-maintenance.service
+    print_warning "Maintenance runs safely in the background. Progress: journalctl -u eve-maintenance -f"
 }
 
 setup_nginx() {
@@ -2058,6 +2125,9 @@ do_online_update() {
     # Backup before pulling so we can roll back on migration failure
     local _BAK_TS; _BAK_TS="$(date +%s)"
     if [ -d "$APP_DIR" ]; then
+        # Reclaim stale copies before creating another one. This matters most on
+        # exactly the full-disk systems that need the compaction migration.
+        prune_app_backups 1
         print_warning "Backing up current installation..."
         if rsync -a --exclude='.env' --exclude='instance/' --exclude='venv/' \
             "$APP_DIR/" "${APP_DIR}.bak.${_BAK_TS}/" 2>/dev/null; then
@@ -2082,9 +2152,26 @@ do_online_update() {
     fi
     setup_nginx
     patch_nginx_backup_location
+    show_maintenance_preflight
     systemctl restart "${SERVICE_NAME}"
+    start_maintenance_service preflight-shown
     install_eve_cli
     print_success "Updated and service restarted"
+}
+
+run_latest_online_update() {
+    # The installed CLI may predate a critical preflight/cleanup fix. Execute a
+    # freshly downloaded copy for the whole update instead of replacing the
+    # current shell script halfway through its run.
+    local latest_script
+    latest_script=$(mktemp /tmp/eve-update-runner-XXXXXX.sh)
+    if curl -o "$latest_script" -fsSL "${REPO_URL%.git}/raw/main/setup.sh"; then
+        chmod +x "$latest_script"
+        exec bash "$latest_script" --online-update
+    fi
+    rm -f "$latest_script"
+    print_warning "Could not bootstrap the latest updater; using the installed updater."
+    do_online_update
 }
 
 update_self() {
@@ -2285,8 +2372,10 @@ offline_update() {
         return 1
     fi
 
-    # Backup (skip .env, database, venv)
+    # Backup (skip .env, database, venv). Free stale copies first so the new
+    # backup cannot turn a nearly-full disk into an outage.
     local BAK_TS; BAK_TS="$(date +%s)"
+    prune_app_backups 1
     print_warning "Backing up current installation..."
     if rsync -a \
         --exclude='.env' --exclude='instance/' --exclude='venv/' \
@@ -2378,6 +2467,7 @@ offline_update() {
     sleep 2
     if systemctl is-active --quiet "${SERVICE_NAME}"; then
         print_success "Service is running"
+        start_maintenance_service
     else
         print_error "Service failed to start"
         print_warning "Logs: journalctl -u ${SERVICE_NAME} -n 50"
@@ -2497,7 +2587,7 @@ show_menu() {
             2)
                 require_root
                 detect_os
-                do_online_update
+                run_latest_online_update
                 read -rp "  Press Enter to return to menu..." _dummy
                 ;;
             3)
@@ -2563,7 +2653,10 @@ uninstall_project() {
     print_header "Uninstalling Eve X-UI Manager"
     systemctl stop ${SERVICE_NAME} || true
     systemctl disable ${SERVICE_NAME} || true
+    systemctl disable --now eve-maintenance.service 2>/dev/null || true
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    rm -f /etc/systemd/system/eve-maintenance.service
+    rm -f /usr/local/sbin/eve-maintenance-root
     systemctl daemon-reload
     rm -rf "$APP_DIR"
     rm -rf "$LOG_DIR"
@@ -2579,7 +2672,12 @@ uninstall_project() {
 # Entry point — non-interactive if args given, else show menu
 # ──────────────────────────────────────────────────────────────
 
-if [ $# -gt 0 ]; then
+if [ "${1:-}" = "--online-update" ]; then
+    require_root
+    detect_os
+    do_online_update
+    exit $?
+elif [ $# -gt 0 ]; then
     require_root
     detect_os
     reset_admin_defaults
