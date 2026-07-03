@@ -4449,9 +4449,13 @@
     // Verified once the first request finishes. No double charge happens server-side.
     function showRenewInProgress(serverId, inboundId, email, note) {
         try { closeRenewModal(); } catch (e) {}
+        // Never leave the previous successful renewal wired to this modal. It
+        // could otherwise send both the old account text and old phone number.
+        _sendCtxRenew = null;
         lastRenewContext = {
             serverId: String(serverId), inboundId: String(inboundId), email: String(email),
             expectedExpiryTime: null, expectedTotalGB: null,
+            awaitingResult: true,
         };
         const prev = document.getElementById('renew-prev-state');
         if (prev) prev.innerHTML = `<span style="color:#818cf8;font-weight:600;">${escapeHtml(email)}</span>`;
@@ -4474,20 +4478,44 @@
             btn.innerText = 'Checking...';
         }
         try {
-            const { serverId, inboundId, email, expectedExpiryTime, expectedTotalGB } = lastRenewContext;
+            const { serverId, inboundId, email, expectedExpiryTime, expectedTotalGB, awaitingResult } = lastRenewContext;
             const resp = await fetch(`/api/client/${serverId}/${inboundId}/${encodeURIComponent(email)}/renew/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     expected_expiryTime: expectedExpiryTime,
-                    expected_totalGB: expectedTotalGB
+                    expected_totalGB: expectedTotalGB,
+                    awaiting_result: Boolean(awaitingResult)
                 })
             });
             const data = await resp.json();
             if (data && data.success && data.verify) {
                 renderRenewApiStatus(data);
-                if (data.verify.ok) showToast('Verified');
-                else showToast('Not verified', 'error');
+                if (data.verify.ok) {
+                    const successText = (typeof data.copy_text === 'string' && data.copy_text.trim())
+                        ? data.copy_text
+                        : document.getElementById('renew-success-text').innerText;
+                    document.getElementById('renew-success-text').innerText = successText;
+
+                    const currentClient = _lookupClientVolume(serverId, inboundId, email);
+                    _sendCtxRenew = {
+                        email: String(email || ''),
+                        comment: (data.client_comment || currentClient?.comment || ''),
+                        phone: (currentClient?.phone || ''),
+                        group: 'renew',
+                        tplVars: data.tpl_vars || {},
+                        fallback: successText,
+                    };
+                    lastRenewContext.expectedExpiryTime = data.verify.expected?.expiryTime ?? expectedExpiryTime;
+                    lastRenewContext.expectedTotalGB = data.verify.expected?.totalGB ?? expectedTotalGB;
+                    lastRenewContext.awaitingResult = false;
+                    showToast('Verified');
+                } else if (data.verify.error === 'renew_still_in_progress' || data.verify.error === 'renew_result_not_applied_yet') {
+                    renderRenewApiStatus({}, { inProgress: true });
+                    showToast('Renewal is still being applied. Re-check in a moment.');
+                } else {
+                    showToast('Not verified', 'error');
+                }
             } else {
                 showToast((data && data.error) ? data.error : 'Verify failed', 'error');
             }

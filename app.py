@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.9"
+APP_VERSION = "2.4.10"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -14019,6 +14019,54 @@ def _release_renew_lock(key: str) -> None:
         pass
 
 
+def _renew_result_key(lock_key: str) -> str:
+    return lock_key.replace('renew:lock:', 'renew:result:', 1)
+
+
+def _clear_renew_result(lock_key: str) -> None:
+    """Discard the previous completed result when a genuinely new renew starts."""
+    r = get_redis()
+    if r is None:
+        return
+    try:
+        r.delete(_renew_result_key(lock_key))
+    except Exception:
+        pass
+
+
+def _store_renew_result(lock_key: str, payload: dict, ttl: int = 180) -> None:
+    """Keep the exact successful response for duplicate-request Re-checks.
+
+    The duplicate request cannot reconstruct the original package/message from a
+    panel read-back alone. Redis is already required for the cross-worker renew
+    lock, so keeping this short-lived result beside that lock also works when the
+    retry and the original request land on different gunicorn workers.
+    """
+    r = get_redis()
+    if r is None:
+        return
+    try:
+        r.set(_renew_result_key(lock_key), json.dumps(payload, ensure_ascii=False), ex=ttl)
+    except Exception:
+        pass
+
+
+def _load_renew_result(lock_key: str) -> dict | None:
+    r = get_redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(_renew_result_key(lock_key))
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode('utf-8')
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 def _fire_renew_postcheck(server_id: int, inbound_id: int, email: str,
                           client_snapshot: dict) -> None:
     """Reconcile a completed renew without holding the browser request open.
@@ -14318,6 +14366,10 @@ def renew_client(server_id, inbound_id, email):
         # than a red error toast, and never double-charge.
         return _finish({"success": False, "code": "renew_in_progress", "error": _msg,
                         "server_id": server_id, "inbound_id": inbound_id, "email": email}, 409)
+
+    # This is a new renewal, not a duplicate retry. Do not let a short-lived
+    # result from the previous renewal satisfy this one's Re-check.
+    _clear_renew_result(_renew_lock_key)
 
     try:
         if not target_client:
@@ -14936,6 +14988,13 @@ def renew_client(server_id, inbound_id, email):
                 if whatsapp_scheduled:
                     _fire_renew_whatsapp(server.id, email, _wa_text, _client_comment)
 
+                _store_renew_result(_renew_lock_key, {
+                    "copy_text": copy_text,
+                    "tpl_vars": _renew_tpl_vars,
+                    "verify": verify,
+                    "client_comment": _client_comment,
+                    "was_reactivated": _was_disabled,
+                })
                 return _finish({"success": True, "copy_text": copy_text, "tpl_vars": _renew_tpl_vars, "verify": verify, "whatsapp": whatsapp_meta, "was_reactivated": _was_disabled})
 
             errors.append(f"{template}: {resp.status_code}")
@@ -14994,6 +15053,7 @@ def verify_renew_client(server_id, inbound_id, email):
 
     expected_expiry = data.get('expected_expiryTime', None)
     expected_total = data.get('expected_totalGB', None)
+    awaiting_result = bool(data.get('awaiting_result', False))
     try:
         expected_expiry = None if expected_expiry is None else int(expected_expiry)
     except Exception:
@@ -15021,6 +15081,8 @@ def verify_renew_client(server_id, inbound_id, email):
         'expected': {'expiryTime': expected_expiry, 'totalGB': expected_total},
         'observed': {'expiryTime': None, 'totalGB': None},
     }
+
+    renew_lock_key = f"renew:lock:{server_id}:{(email or '').strip().lower()}"
 
     try:
         t_v0 = time.perf_counter()
@@ -15055,15 +15117,43 @@ def verify_renew_client(server_id, inbound_id, email):
         except Exception:
             verify['observed']['totalGB'] = None
 
-        # If expected values are not provided, we just return observed.
-        if expected_expiry is None and expected_total is None:
+        completed_result = _load_renew_result(renew_lock_key)
+        completed_verify = (completed_result or {}).get('verify') or {}
+        completed_expected = completed_verify.get('expected') or {}
+
+        # A duplicate/while-running request has no expected values of its own.
+        # It is verified only when the original request has stored its exact
+        # successful result and the panel read-back matches that result.
+        if awaiting_result:
+            cached_expiry = completed_expected.get('expiryTime')
+            cached_total = completed_expected.get('totalGB')
+            if not completed_result or (cached_expiry is None and cached_total is None):
+                verify['ok'] = False
+                verify['error'] = 'renew_still_in_progress'
+            else:
+                ok_exp = cached_expiry is None or verify['observed']['expiryTime'] == int(cached_expiry)
+                ok_vol = cached_total is None or verify['observed']['totalGB'] == int(cached_total)
+                verify['expected'] = {'expiryTime': cached_expiry, 'totalGB': cached_total}
+                verify['ok'] = bool(ok_exp and ok_vol)
+                if not verify['ok']:
+                    verify['error'] = 'renew_result_not_applied_yet'
+        elif expected_expiry is None and expected_total is None:
             verify['ok'] = True
         else:
             ok_exp = True if expected_expiry is None else (verify['observed']['expiryTime'] == expected_expiry)
             ok_vol = True if expected_total is None else (verify['observed']['totalGB'] == expected_total)
             verify['ok'] = bool(ok_exp and ok_vol)
 
-        return _finish({'success': True, 'verify': verify, 'timing': {'login_ms': login_ms, 'verify_fetch_ms': verify_fetch_ms}})
+        payload = {'success': True, 'verify': verify,
+                   'timing': {'login_ms': login_ms, 'verify_fetch_ms': verify_fetch_ms}}
+        if verify.get('ok') and completed_result:
+            payload.update({
+                'copy_text': completed_result.get('copy_text') or '',
+                'tpl_vars': completed_result.get('tpl_vars') or {},
+                'client_comment': completed_result.get('client_comment') or '',
+                'was_reactivated': bool(completed_result.get('was_reactivated', False)),
+            })
+        return _finish(payload)
     except Exception as exc:
         verify['ok'] = False
         verify['error'] = str(exc)
