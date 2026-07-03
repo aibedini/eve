@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.12"
+APP_VERSION = "2.4.13"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -7834,8 +7834,8 @@ def _build_sub_page_packages(owner) -> list[dict]:
 
 
 def _select_subscription_package(packages: list[dict], daily_gb: float,
-                                 safety_margin: float) -> tuple[dict | None, float]:
-    """Pick the smallest sensible package that is likely to cover its term.
+                                 safety_margin: float) -> tuple[dict | None, dict | None, float]:
+    """Pick a best-fit package and an optional peace-of-mind alternative.
 
     Candidate generation keeps monthly/unlimited-duration offers. Scoring favors
     low excess volume, a duration close to 31 days, and then price. Unlimited
@@ -7857,7 +7857,7 @@ def _select_subscription_package(packages: list[dict], daily_gb: float,
         candidates.append((package, days, volume, price, required_gb, buffered_gb))
 
     if not candidates:
-        return None, 0.0
+        return None, None, 0.0
 
     # Eligibility follows the user's point forecast. The uncertainty buffer is
     # diagnostic only; using it as a hard threshold silently upsells a 9.4 GB
@@ -7866,23 +7866,34 @@ def _select_subscription_package(packages: list[dict], daily_gb: float,
     pool = finite_fits or [item for item in candidates if item[2] == 0]
     if not pool:
         # Labelling an undersized package as "for you" would be misleading.
-        return None, max(item[4] for item in candidates)
+        return None, None, max(item[4] for item in candidates)
 
-    prices = [item[3] for item in pool]
-    lo_price, hi_price = min(prices), max(prices)
+    def _choose(candidate_pool, requirement_index):
+        prices = [item[3] for item in candidate_pool]
+        lo_price, hi_price = min(prices), max(prices)
 
-    def _score(item):
-        _package, days, volume, price, required, _buffered = item
-        if volume == 0:
-            excess = 1.25  # unlimited is useful, but only after finite fits fail
-        else:
-            excess = max(0.0, (volume - required) / max(required, 1.0))
-        duration_penalty = abs((days if days > 0 else 31) - 31) / 31.0
-        price_penalty = ((price - lo_price) / (hi_price - lo_price)) if hi_price > lo_price else 0.0
-        return excess + (0.20 * duration_penalty) + (0.04 * price_penalty), price
+        def _score(item):
+            _package, days, volume, price, required, buffered = item
+            target = required if requirement_index == 4 else buffered
+            if volume == 0:
+                excess = 1.25  # unlimited is useful, but only after finite fits fail
+            else:
+                excess = max(0.0, (volume - target) / max(target, 1.0))
+            duration_penalty = abs((days if days > 0 else 31) - 31) / 31.0
+            price_penalty = ((price - lo_price) / (hi_price - lo_price)) if hi_price > lo_price else 0.0
+            return excess + (0.20 * duration_penalty) + (0.04 * price_penalty), price
 
-    selected = min(pool, key=_score)
-    return selected[0], selected[5]
+        return min(candidate_pool, key=_score)
+
+    selected = _choose(pool, 4)
+
+    buffered_fits = [item for item in candidates if item[2] > 0 and item[2] >= item[5]]
+    comfort_pool = buffered_fits or [item for item in candidates if item[2] == 0]
+    comfort = _choose(comfort_pool, 5) if comfort_pool else None
+    if comfort and comfort[0].get('id') == selected[0].get('id'):
+        comfort = None
+
+    return selected[0], (comfort[0] if comfort else None), selected[5]
 
 
 def _build_subscription_package_recommendation(server_id: int, sub_id: str,
@@ -7957,7 +7968,7 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
     else:
         confidence, safety_margin = 'early', 0.20
 
-    selected, buffered_requirement = _select_subscription_package(
+    selected, comfort, buffered_requirement = _select_subscription_package(
         packages, average_daily_gb, safety_margin,
     )
     if not selected:
@@ -7965,8 +7976,11 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
 
     projected_31d_gb = average_daily_gb * 31.0
     return {
-        'model_version': 'usage-fit-v1',
+        'model_version': 'usage-fit-v2',
         'package_id': int(selected.get('id')),
+        'package_name': str(selected.get('name') or ''),
+        'comfort_package_id': int(comfort.get('id')) if comfort else None,
+        'comfort_package_name': str(comfort.get('name') or '') if comfort else '',
         'average_daily_gb': round(average_daily_gb, 2),
         'projected_31d_gb': round(projected_31d_gb, 1),
         'buffered_requirement_gb': round(buffered_requirement, 1),
@@ -19548,8 +19562,10 @@ def client_subscription(server_id, sub_id):
     )
     if renewal_recommendation:
         recommended_id = renewal_recommendation.get('package_id')
+        comfort_id = renewal_recommendation.get('comfort_package_id')
         for package in sub_packages_payload:
             package['is_personalized'] = package.get('id') == recommended_id
+            package['is_comfort'] = bool(comfort_id and package.get('id') == comfort_id)
 
     _sub_html = render_template(
         'subscription.html',
