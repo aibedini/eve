@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.7"
+APP_VERSION = "2.4.8"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -2495,7 +2495,7 @@ def _is_postgres_db() -> bool:
 
 # Heavy analytics/log tables whose ROW DATA is excluded from "clean" backups.
 # Schema is preserved; the data regenerates on its own after a restore.
-_ANALYTICS_EXCLUDE_TABLES = ('usage_snapshots', 'health_logs')
+_ANALYTICS_EXCLUDE_TABLES = ('usage_counter_state', 'usage_hourly', 'usage_daily', 'health_logs')
 
 
 def _pg_dump_backup(dest_path: str, exclude_analytics: bool = True) -> None:
@@ -2615,7 +2615,7 @@ def _pg_restore_backup(backup_path: str) -> None:
 def _create_database_backup_file(prefix: str, exclude_analytics: bool = True) -> str:
     """Create a DB backup in BACKUP_DIR and return filename.
 
-    exclude_analytics=True (default) drops the huge usage_snapshots / health_logs
+    exclude_analytics=True (default) drops regenerable usage rollups / health_logs
     row data so backups stay small; the schema is kept and data regenerates.
     """
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -3971,29 +3971,73 @@ class VolumeRulePreset(db.Model):
         }
 
 
-class UsageSnapshot(db.Model):
-    """Hourly usage snapshot per subscription. No personal data stored."""
-    __tablename__ = 'usage_snapshots'
+class UsageCounterState(db.Model):
+    """Latest observed counter per account; updated in place, never appended."""
+    __tablename__ = 'usage_counter_state'
     id = db.Column(db.Integer, primary_key=True)
-    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=False, index=True)
-    sub_id = db.Column(db.String(128), nullable=False, index=True)
-    inbound_tag = db.Column(db.String(256), nullable=True, index=True)
-    recorded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    sub_id = db.Column(db.String(128), nullable=False)
+    inbound_tag = db.Column(db.String(256), nullable=True)
     upload_bytes = db.Column(db.BigInteger, nullable=False, default=0)
     download_bytes = db.Column(db.BigInteger, nullable=False, default=0)
     total_bytes = db.Column(db.BigInteger, nullable=False, default=0)
     remaining_bytes = db.Column(db.BigInteger, nullable=True)
     volume_limit_bytes = db.Column(db.BigInteger, nullable=True)
+    observed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
 
     __table_args__ = (
-        db.Index('ix_usage_snapshots_server_sub', 'server_id', 'sub_id'),
-        db.Index('ix_usage_snapshots_server_inbound', 'server_id', 'inbound_tag'),
-        # Drives the royalty "idle" baseline query: earliest snapshot per
-        # (server_id, sub_id) at/after a window start. Without this the query
-        # full-scans + sorts the whole table (slow at 10k+ users / long windows).
-        db.Index('ix_usage_snapshots_sub_time', 'server_id', 'sub_id', 'recorded_at'),
-        db.Index('ix_usage_snapshots_recorded_at', 'recorded_at'),
+        db.UniqueConstraint('server_id', 'sub_id', name='uq_usage_counter_server_sub'),
     )
+
+
+class UsageHourly(db.Model):
+    """Mutable hourly rollup, retained for only 48 hours."""
+    __tablename__ = 'usage_hourly'
+    id = db.Column(db.Integer, primary_key=True)
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    sub_id = db.Column(db.String(128), nullable=False)
+    inbound_tag = db.Column(db.String(256), nullable=True)
+    bucket_at = db.Column(db.DateTime, nullable=False, index=True)
+    upload_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    download_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    remaining_bytes = db.Column(db.BigInteger, nullable=True)
+    volume_limit_bytes = db.Column(db.BigInteger, nullable=True)
+    sample_count = db.Column(db.Integer, nullable=False, default=0)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('server_id', 'sub_id', 'bucket_at', name='uq_usage_hourly_server_sub_bucket'),
+    )
+
+
+class UsageDaily(db.Model):
+    """One compact account-level row per Tehran day, retained for one year."""
+    __tablename__ = 'usage_daily'
+    id = db.Column(db.Integer, primary_key=True)
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    sub_id = db.Column(db.String(128), nullable=False)
+    inbound_tag = db.Column(db.String(256), nullable=True)
+    usage_date = db.Column(db.Date, nullable=False, index=True)
+    upload_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    download_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    opening_upload_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    opening_download_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    closing_upload_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    closing_download_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    remaining_bytes = db.Column(db.BigInteger, nullable=True)
+    volume_limit_bytes = db.Column(db.BigInteger, nullable=True)
+    sample_count = db.Column(db.Integer, nullable=False, default=0)
+    first_observed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    last_observed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('server_id', 'sub_id', 'usage_date', name='uq_usage_daily_server_sub_date'),
+        db.Index('ix_usage_daily_sub_date', 'sub_id', 'usage_date'),
+    )
+
+    @property
+    def total_bytes(self):
+        return int(self.closing_upload_bytes or 0) + int(self.closing_download_bytes or 0)
 
 
 class RenewalEvent(db.Model):
@@ -7220,22 +7264,6 @@ with app.app_context():
     except Exception as e:
         print(f"Migration error: {e}")
 
-    # Royalty/idle performance: ensure the snapshot baseline index exists on
-    # already-migrated DBs (db.create_all only adds indexes for new tables).
-    # CREATE INDEX IF NOT EXISTS is supported by both SQLite and PostgreSQL.
-    for _idx_name, _idx_cols in (
-        ('ix_usage_snapshots_sub_time', 'server_id, sub_id, recorded_at'),
-        ('ix_usage_snapshots_recorded_at', 'recorded_at'),
-    ):
-        try:
-            with db.engine.connect() as conn:
-                conn.execute(text(
-                    f'CREATE INDEX IF NOT EXISTS {_idx_name} ON usage_snapshots ({_idx_cols})'
-                ))
-                conn.commit()
-        except Exception as _idx_err:
-            print(f"Migration error (index {_idx_name}): {_idx_err}")
-
     # Delivery tracking returned by GMweb /send and /send/status/:requestId.
     # Existing installations already have sms_send_log, so add columns in place.
     try:
@@ -7422,19 +7450,6 @@ with app.app_context():
                     _conn.commit()
     except Exception as _te:
         print(f"Migration error (price_tiers assigned_reseller_ids): {_te}")
-
-    # Add inbound_tag to usage_snapshots (older DBs)
-    try:
-        inspector = inspect(db.engine)
-        if 'usage_snapshots' in set(inspector.get_table_names()):
-            _snap_cols = [c['name'] for c in inspector.get_columns('usage_snapshots')]
-            if 'inbound_tag' not in _snap_cols:
-                with db.engine.connect() as _conn:
-                    _conn.execute(text('ALTER TABLE usage_snapshots ADD COLUMN inbound_tag VARCHAR(256)'))
-                    _conn.commit()
-                print("Added inbound_tag column to usage_snapshots table")
-    except Exception as _spe:
-        print(f"Migration error (usage_snapshots.inbound_tag): {_spe}")
 
     # Add icon_url and is_recommended to sub_app_configs (older DBs)
     try:
@@ -10346,35 +10361,19 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
     is_reseller = bool(user and user.role == 'reseller')
     window_start = datetime.utcnow() - timedelta(days=days)
 
-    # 1) Earliest snapshot per (server_id, sub_id) at/after window_start → baseline.
-    #    Key perf point: the earliest snapshot for each sub lands within ~1 day of
-    #    window_start (snapshots are hourly), so we only scan a 1-day bracket right
-    #    after the window start instead of every row from window_start to now. This
-    #    makes the cost constant regardless of how long `days` is — a 30-day window
-    #    is as fast as a 1-day window. (A sub with a >1-day snapshot gap right at
-    #    the boundary just gets no baseline and is skipped — conservative.)
-    #    Pushing server_id into the WHERE clause (when a single server is picked)
-    #    further narrows the scan via the (server_id, sub_id, recorded_at) index.
+    # One compact daily row contains the account counters at day start, so the
+    # idle scan stays constant-cost regardless of the requested history window.
     baseline = {}  # (server_id, sub_id) -> total_bytes
-    baseline_end = window_start + timedelta(days=1)
-    params = {'start': window_start, 'end': baseline_end}
-    server_clause = ''
-    if server_filter is not None:
-        server_clause = 'AND server_id = :sid'
-        params['sid'] = server_filter
+    start_date = _usage_tehran_date(window_start)
     try:
-        rows = db.session.execute(text(
-            f"""
-            SELECT server_id, sub_id, total_bytes FROM (
-                SELECT server_id, sub_id, total_bytes,
-                       ROW_NUMBER() OVER (PARTITION BY server_id, sub_id ORDER BY recorded_at ASC) AS rn
-                FROM usage_snapshots
-                WHERE recorded_at >= :start AND recorded_at < :end {server_clause}
-            ) t WHERE rn = 1
-            """
-        ), params).fetchall()
+        q = UsageDaily.query.filter(UsageDaily.usage_date == start_date)
+        if server_filter is not None:
+            q = q.filter(UsageDaily.server_id == server_filter)
+        rows = q.all()
         for r in rows:
-            baseline[(int(r[0]), str(r[1]))] = int(r[2] or 0)
+            baseline[(int(r.server_id), str(r.sub_id))] = (
+                int(r.opening_upload_bytes or 0) + int(r.opening_download_bytes or 0)
+            )
     except Exception as exc:
         app.logger.warning(f"royalty baseline query failed: {exc}")
         raise RoyaltyBaselineError(str(exc))
@@ -10388,6 +10387,10 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
     idle = []
     seen_clients = set()  # one card per user per server (v3 assigns one user to many inbounds)
     snapshot = GLOBAL_SERVER_DATA.get('inbounds') or []
+    canonical_totals = {
+        key: int(point['total_bytes'] or 0)
+        for key, point in _usage_account_points(snapshot).items()
+    }
     for inbound in snapshot:
         try:
             sid = int(inbound.get('server_id'))
@@ -10405,7 +10408,8 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
             base = baseline.get((sid, sub_id))
             if base is None:
                 continue  # no history at window start → can't classify
-            current_total = int(c.get('up', 0) or 0) + int(c.get('down', 0) or 0)
+            current_total = canonical_totals.get((sid, sub_id),
+                                                  int(c.get('up', 0) or 0) + int(c.get('down', 0) or 0))
             if current_total != base:
                 continue  # had traffic → not idle
 
@@ -12568,20 +12572,11 @@ def save_subscription_page_settings():
 @user_management_required
 def get_general_settings():
     thresholds = _get_dashboard_status_thresholds()
+    # Last compact rollup timestamp (across all accounts).
     try:
-        snapshot_interval = int(_get_or_create_system_setting(
-            USAGE_SNAPSHOT_INTERVAL_KEY, str(_USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN)) or _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN)
-        snapshot_interval = max(5, min(120, snapshot_interval))
-    except Exception:
-        snapshot_interval = _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN
-    # Last snapshot timestamp (across all servers/subs)
-    try:
-        last_snap = (UsageSnapshot.query
-                     .order_by(UsageSnapshot.recorded_at.desc())
-                     .with_entities(UsageSnapshot.recorded_at)
-                     .first())
-        last_snapshot_at = (last_snap.recorded_at.isoformat() + 'Z') if last_snap else None
-        total_snapshots = UsageSnapshot.query.count()
+        last_at = db.session.query(func.max(UsageCounterState.observed_at)).scalar()
+        last_snapshot_at = (last_at.isoformat() + 'Z') if last_at else None
+        total_snapshots = UsageDaily.query.count() + UsageHourly.query.count()
     except Exception:
         last_snapshot_at = None
         total_snapshots = 0
@@ -12597,7 +12592,7 @@ def get_general_settings():
         'near_expiry_days': thresholds.get('near_expiry_days', 3),
         'near_expiry_hours': thresholds.get('near_expiry_hours', 0),
         'low_volume_gb': thresholds.get('low_volume_gb', 1.0),
-        'snapshot_interval_minutes': snapshot_interval,
+        'snapshot_interval_minutes': _USAGE_ROLLUP_INTERVAL_MIN,
         'last_snapshot_at': last_snapshot_at,
         'total_snapshots': total_snapshots,
         'panel_domain': panel_domain,
@@ -12637,8 +12632,6 @@ def save_general_settings():
         low_volume_gb = 1.0
     low_volume_gb = max(0.01, min(low_volume_gb, 1024.0))
 
-    snapshot_interval = _parse_int(data.get('snapshot_interval_minutes'), _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN, min_value=5, max_value=120)
-
     # Domain update + nginx reload
     new_domain = (data.get('panel_domain') or '').strip()
     old_domain = (_get_or_create_system_setting(PANEL_DOMAIN_SETTING_KEY, '') or '').strip()
@@ -12665,7 +12658,6 @@ def save_general_settings():
     _set_system_setting_value(GENERAL_EXPIRY_WARNING_DAYS_KEY, str(near_expiry_days))
     _set_system_setting_value(GENERAL_EXPIRY_WARNING_HOURS_KEY, str(near_expiry_hours))
     _set_system_setting_value(GENERAL_LOW_VOLUME_WARNING_GB_KEY, str(low_volume_gb))
-    _set_system_setting_value(USAGE_SNAPSHOT_INTERVAL_KEY, str(snapshot_interval))
     if new_domain:
         _set_system_setting_value(PANEL_DOMAIN_SETTING_KEY, new_domain)
     db.session.commit()
@@ -12683,7 +12675,7 @@ def save_general_settings():
         'near_expiry_days': near_expiry_days,
         'near_expiry_hours': near_expiry_hours,
         'low_volume_gb': low_volume_gb,
-        'snapshot_interval_minutes': snapshot_interval,
+        'snapshot_interval_minutes': _USAGE_ROLLUP_INTERVAL_MIN,
         'panel_domain': new_domain or old_domain,
         'is_ip': is_ip,
         'nginx_updated': nginx_updated,
@@ -15405,7 +15397,9 @@ def delete_server(server_id):
             announcement_servers.delete().where(announcement_servers.c.server_id == server_id)
         )
         ClientOwnership.query.filter_by(server_id=server_id).delete(synchronize_session=False)
-        UsageSnapshot.query.filter_by(server_id=server_id).delete(synchronize_session=False)
+        UsageCounterState.query.filter_by(server_id=server_id).delete(synchronize_session=False)
+        UsageHourly.query.filter_by(server_id=server_id).delete(synchronize_session=False)
+        UsageDaily.query.filter_by(server_id=server_id).delete(synchronize_session=False)
         RenewalEvent.query.filter_by(server_id=server_id).delete(synchronize_session=False)
         PriceTier.query.filter_by(server_id=server_id).delete(synchronize_session=False)
         Transaction.query.filter_by(server_id=server_id).update(
@@ -18443,12 +18437,73 @@ def get_finance_overview():
     })
 
 
+def _subscription_rollup_history(server_id: int, sub_id: str, period: str):
+    now = datetime.utcnow()
+    today = _usage_tehran_date(now)
+    since_date = today - timedelta(days=366 if period == 'month' else 30)
+    rows = (UsageDaily.query
+            .filter_by(server_id=server_id, sub_id=sub_id)
+            .filter(UsageDaily.usage_date >= since_date)
+            .order_by(UsageDaily.usage_date.asc())
+            .all())
+
+    buckets = {}
+    for row in rows:
+        key = row.usage_date.strftime('%Y-%m') if period == 'month' else row.usage_date.isoformat()
+        item = buckets.setdefault(key, {
+            'delta_upload': 0, 'delta_download': 0, 'delta_total': 0,
+            'remaining': None, 'volume_limit': None, 'date': row.usage_date,
+        })
+        item['delta_upload'] += int(row.upload_bytes or 0)
+        item['delta_download'] += int(row.download_bytes or 0)
+        item['delta_total'] += int(row.upload_bytes or 0) + int(row.download_bytes or 0)
+        item['remaining'] = row.remaining_bytes
+        item['volume_limit'] = row.volume_limit_bytes
+        item['date'] = row.usage_date
+
+    history = []
+    for key, item in buckets.items():
+        local_midnight = datetime.combine(item['date'], datetime.min.time())
+        recorded_at = local_midnight - _USAGE_TEHRAN_OFFSET
+        history.append({
+            'period_key': key, 'recorded_at': recorded_at.isoformat() + 'Z',
+            'delta_upload': item['delta_upload'], 'delta_download': item['delta_download'],
+            'delta_total': item['delta_total'], 'remaining': item['remaining'],
+            'volume_limit': item['volume_limit'], 'is_cumulative': False,
+        })
+    history.reverse()
+
+    renewals = (RenewalEvent.query.filter_by(server_id=server_id, sub_id=sub_id)
+                .order_by(RenewalEvent.renewed_at.desc()).limit(30).all())
+    renewal_rows, seen = [], set()
+    for row in renewals:
+        key = (row.renewed_at.replace(second=0, microsecond=0), row.volume_bytes, row.days,
+               row.is_unlimited_volume, row.is_unlimited_time)
+        if key in seen:
+            continue
+        seen.add(key)
+        renewal_rows.append({
+            'renewed_at': row.renewed_at.isoformat() + 'Z', 'volume_bytes': row.volume_bytes,
+            'days': row.days, 'is_unlimited_volume': row.is_unlimited_volume,
+            'is_unlimited_time': row.is_unlimited_time,
+        })
+
+    state = UsageCounterState.query.filter_by(server_id=server_id, sub_id=sub_id).first()
+    return jsonify({
+        'success': True, 'period': period, 'history': history, 'renewals': renewal_rows,
+        'snapshot_count': len(rows),
+        'latest_remaining': state.remaining_bytes if state else None,
+        'latest_volume_limit': state.volume_limit_bytes if state else None,
+        'latest_recorded_at': (state.observed_at.isoformat() + 'Z') if state else None,
+    })
+
+
 @app.route('/sub/history/<int:server_id>/<sub_id>')
 def sub_usage_history(server_id, sub_id):
-    """Return usage snapshots + renewal events for a subscription.
+    """Return compact daily/monthly usage rollups and renewal events.
 
     Query params:
-      period: hour (last 24h raw) | day (last 30d, by day) | month (last 12m, by month)
+      period: day (last 30d) | month (last 12m)
     """
     normalized_sub_id = str(sub_id or '').strip()
     if not normalized_sub_id or any(c in normalized_sub_id for c in ('/', '\\', '?', '#', '@', ':')):
@@ -18459,197 +18514,10 @@ def sub_usage_history(server_id, sub_id):
         return jsonify({'success': False, 'error': 'Server not found'}), 404
 
     period = (request.args.get('period') or 'day').strip().lower()
-    if period not in ('5min', 'hour', 'day', 'month'):
+    if period not in ('day', 'month'):
         period = 'day'
 
-    now_utc = datetime.utcnow()
-    if period == '5min':
-        since = now_utc - timedelta(hours=3)    # last 3h at 5-min granularity
-    elif period == 'hour':
-        since = now_utc - timedelta(hours=48)   # 48h window so daily boundary is visible
-    elif period == 'month':
-        since = now_utc - timedelta(days=366)
-    else:
-        since = now_utc - timedelta(days=30)
-
-    snapshots = (UsageSnapshot.query
-                 .filter_by(server_id=server_id, sub_id=normalized_sub_id)
-                 .filter(UsageSnapshot.recorded_at >= since)
-                 .order_by(UsageSnapshot.recorded_at.asc())
-                 .all())
-
-    # Prepend the last snapshot before the window as a baseline for delta computation
-    if snapshots:
-        baseline = (UsageSnapshot.query
-                    .filter_by(server_id=server_id, sub_id=normalized_sub_id)
-                    .filter(UsageSnapshot.recorded_at < since)
-                    .order_by(UsageSnapshot.recorded_at.desc())
-                    .first())
-        if baseline:
-            snapshots = [baseline] + list(snapshots)
-
-    # Compute per-snapshot deltas.
-    # has_baseline = True when snapshots[0] was prepended from before the window.
-    has_baseline = len(snapshots) > 1 and snapshots[0].recorded_at < since
-    delta_rows = []
-
-    if not snapshots:
-        pass
-    elif len(snapshots) == 1:
-        # Single snapshot, no baseline — expose its cumulative totals directly.
-        snap = snapshots[0]
-        delta_rows.append({
-            'ts': snap.recorded_at,
-            'delta_upload': snap.upload_bytes,
-            'delta_download': snap.download_bytes,
-            'delta_total': snap.total_bytes,
-            'remaining': snap.remaining_bytes,
-            'volume_limit': snap.volume_limit_bytes,
-            'cumulative': snap.total_bytes,
-            'is_cumulative': True,
-        })
-    else:
-        # When there is no baseline before the window, snap[0]'s absolute values
-        # would otherwise be invisible (only used as the prev of the first delta).
-        # Expose them as a dedicated cumulative row so historical context is never lost.
-        if not has_baseline:
-            snap0 = snapshots[0]
-            delta_rows.append({
-                'ts': snap0.recorded_at,
-                'delta_upload': snap0.upload_bytes,
-                'delta_download': snap0.download_bytes,
-                'delta_total': snap0.total_bytes,
-                'remaining': snap0.remaining_bytes,
-                'volume_limit': snap0.volume_limit_bytes,
-                'cumulative': snap0.total_bytes,
-                'is_cumulative': True,
-            })
-
-        for i in range(1, len(snapshots)):
-            prev = snapshots[i - 1]
-            curr = snapshots[i]
-            delta_up   = max(curr.upload_bytes   - prev.upload_bytes,   0)
-            delta_down = max(curr.download_bytes - prev.download_bytes, 0)
-            # Use latest non-null remaining; fall back to prev if curr has none
-            remaining = curr.remaining_bytes
-            if remaining is None:
-                remaining = prev.remaining_bytes
-            delta_rows.append({
-                'ts': curr.recorded_at,
-                'delta_upload': delta_up,
-                'delta_download': delta_down,
-                'delta_total': delta_up + delta_down,
-                'remaining': remaining,
-                'volume_limit': curr.volume_limit_bytes or prev.volume_limit_bytes,
-                'cumulative': curr.total_bytes,
-                'is_cumulative': False,
-            })
-
-    # Aggregate by period using Tehran timezone label (UTC+3:30)
-    _TEHRAN_OFFSET = timedelta(hours=3, minutes=30)
-
-    def _tehran_date(ts):
-        local = ts + _TEHRAN_OFFSET
-        return local.strftime('%Y-%m-%d')
-
-    def _tehran_hour_key(ts):
-        local = ts + _TEHRAN_OFFSET
-        return local.strftime('%Y-%m-%dT%H')
-
-    def _tehran_5min_key(ts):
-        local = ts + _TEHRAN_OFFSET
-        bucket_min = (local.minute // 5) * 5
-        return local.strftime('%Y-%m-%dT%H:') + str(bucket_min).zfill(2)
-
-    def _tehran_month_key(ts):
-        local = ts + _TEHRAN_OFFSET
-        return local.strftime('%Y-%m')
-
-    from collections import defaultdict, OrderedDict
-
-    def _aggregate(key_fn):
-        bucket = OrderedDict()
-        for r in delta_rows:
-            k = key_fn(r['ts'])
-            if k not in bucket:
-                bucket[k] = {'delta_upload': 0, 'delta_download': 0, 'delta_total': 0,
-                              'remaining': None, 'volume_limit': None, 'ts_example': r['ts'],
-                              'is_cumulative': False}
-            bucket[k]['delta_upload'] += r['delta_upload']
-            bucket[k]['delta_download'] += r['delta_download']
-            bucket[k]['delta_total'] += r['delta_total']
-            bucket[k]['remaining'] = r['remaining']
-            bucket[k]['volume_limit'] = r['volume_limit']
-            if r.get('is_cumulative'):
-                bucket[k]['is_cumulative'] = True
-        return bucket
-
-    if period == '5min':
-        bucket = _aggregate(_tehran_5min_key)
-    elif period == 'hour':
-        bucket = _aggregate(_tehran_hour_key)
-    elif period == 'month':
-        bucket = _aggregate(_tehran_month_key)
-    else:  # day
-        bucket = _aggregate(_tehran_date)
-
-    history_rows = []
-    for k, v in bucket.items():
-        history_rows.append({
-            'period_key': k,
-            'recorded_at': v['ts_example'].isoformat() + 'Z',
-            'delta_upload': v['delta_upload'],
-            'delta_download': v['delta_download'],
-            'delta_total': v['delta_total'],
-            'remaining': v['remaining'],
-            'volume_limit': v['volume_limit'],
-            'is_cumulative': v.get('is_cumulative', False),
-        })
-    # Most recent first
-    history_rows.reverse()
-
-    renewals = (RenewalEvent.query
-                .filter_by(server_id=server_id, sub_id=normalized_sub_id)
-                .order_by(RenewalEvent.renewed_at.desc())
-                .limit(30)
-                .all())
-
-    # Collapse near-identical renewals (same minute + same volume/days) that v3
-    # could have recorded once per inbound before dedup was added.
-    renewal_rows = []
-    _seen_renewals = set()
-    for r in renewals:
-        _key = (
-            r.renewed_at.replace(second=0, microsecond=0).isoformat(),
-            r.volume_bytes, r.days, r.is_unlimited_volume, r.is_unlimited_time,
-        )
-        if _key in _seen_renewals:
-            continue
-        _seen_renewals.add(_key)
-        renewal_rows.append({
-            'renewed_at': r.renewed_at.isoformat() + 'Z',
-            'volume_bytes': r.volume_bytes,
-            'days': r.days,
-            'is_unlimited_volume': r.is_unlimited_volume,
-            'is_unlimited_time': r.is_unlimited_time,
-        })
-
-    # Latest snapshot for current state
-    latest = (UsageSnapshot.query
-              .filter_by(server_id=server_id, sub_id=normalized_sub_id)
-              .order_by(UsageSnapshot.recorded_at.desc())
-              .first())
-
-    return jsonify({
-        'success': True,
-        'period': period,
-        'history': history_rows,
-        'renewals': renewal_rows,
-        'snapshot_count': len(snapshots),
-        'latest_remaining': latest.remaining_bytes if latest else None,
-        'latest_volume_limit': latest.volume_limit_bytes if latest else None,
-        'latest_recorded_at': (latest.recorded_at.isoformat() + 'Z') if latest else None,
-    })
+    return _subscription_rollup_history(server_id, normalized_sub_id, period)
 
 
 def _fa_digits(value) -> str:
@@ -22299,14 +22167,11 @@ def get_settings_overview():
     result['ssl_expiry'] = ssl_expiry
     result['ssl_issuer'] = ssl_issuer
 
-    # Last usage snapshot
+    # Last compact usage rollup
     try:
-        last_snap = (UsageSnapshot.query
-                     .order_by(UsageSnapshot.recorded_at.desc())
-                     .with_entities(UsageSnapshot.recorded_at)
-                     .first())
-        result['last_snapshot_at'] = (last_snap.recorded_at.isoformat() + 'Z') if last_snap else None
-        result['total_snapshots'] = UsageSnapshot.query.count()
+        last_at = db.session.query(func.max(UsageCounterState.observed_at)).scalar()
+        result['last_snapshot_at'] = (last_at.isoformat() + 'Z') if last_at else None
+        result['total_snapshots'] = UsageDaily.query.count() + UsageHourly.query.count()
     except Exception:
         result['last_snapshot_at'] = None
         result['total_snapshots'] = 0
@@ -22447,10 +22312,154 @@ def traffic_check_page():
                            role=session.get('role', 'admin'))
 
 
+def _traffic_check_from_rollups(period, from_dt, to_dt, sub_email):
+    role = session.get('role', 'admin')
+    is_superadmin = session.get('is_superadmin', False)
+    admin_id = session.get('admin_id')
+    allowed_server_ids = None
+    allowed_sub_ids = None
+
+    if not is_superadmin and role == 'reseller':
+        user = db.session.get(Admin, admin_id)
+        if not user:
+            return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+        allowed_map, assignments = get_reseller_access_maps(user)
+        if allowed_map != '*':
+            allowed_server_ids = set()
+            for raw in list(allowed_map.keys()) + list(assignments.keys()):
+                try:
+                    allowed_server_ids.add(int(raw))
+                except (TypeError, ValueError):
+                    pass
+        ownerships = ClientOwnership.query.filter_by(reseller_id=admin_id).all()
+        owned_emails = {(o.client_email or '').lower() for o in ownerships if o.client_email}
+        owned_uuids = {(o.client_uuid or '').lower() for o in ownerships if o.client_uuid}
+        allowed_sub_ids = set()
+        for inbound in GLOBAL_SERVER_DATA.get('inbounds') or []:
+            sid = inbound.get('server_id')
+            if allowed_server_ids is not None and sid not in allowed_server_ids:
+                continue
+            for client in inbound.get('clients') or []:
+                if ((client.get('email') or '').lower() in owned_emails
+                        or (client.get('id') or '').lower() in owned_uuids):
+                    sub_id = str(client.get('subId') or client.get('id') or '').strip()
+                    if sub_id:
+                        allowed_sub_ids.add(sub_id)
+
+    live = {}
+    inbound_info = {}
+    email_matches = set()
+    resolved_email = None
+    for inbound in GLOBAL_SERVER_DATA.get('inbounds') or []:
+        try:
+            server_id = int(inbound.get('server_id'))
+        except (TypeError, ValueError):
+            continue
+        tag = (inbound.get('remark') or '').strip()
+        inbound_info[(server_id, tag)] = {
+            'port': str(inbound.get('port') or ''), 'id': str(inbound.get('id') or '')
+        }
+        for client in inbound.get('clients') or []:
+            sub_id = str(client.get('subId') or client.get('id') or '').strip()
+            if not sub_id:
+                continue
+            email = (client.get('email') or '').strip()
+            remaining = client.get('remaining_bytes', -1)
+            live[(server_id, sub_id)] = {
+                'email': email, 'tag': tag,
+                'remaining': int(remaining) if remaining is not None and remaining >= 0 else None,
+                'status': 'disabled' if not client.get('enable', True) else None,
+            }
+            if sub_email and email.lower() == sub_email:
+                email_matches.add(sub_id)
+                resolved_email = email
+
+    if sub_email and not email_matches:
+        return jsonify({'success': True, 'servers': [], 'period': period,
+                        'from': from_dt.isoformat() + 'Z', 'to': to_dt.isoformat() + 'Z',
+                        'message': f'No client found with email: {sub_email}'})
+
+    from_date = _usage_tehran_date(from_dt)
+    # Range endpoints such as "yesterday" end exactly at Tehran midnight and
+    # must not pull the next day's bucket.
+    to_date = _usage_tehran_date(to_dt - timedelta(microseconds=1))
+    q = UsageDaily.query.filter(UsageDaily.usage_date >= from_date,
+                                UsageDaily.usage_date <= to_date)
+    if allowed_server_ids is not None:
+        q = q.filter(UsageDaily.server_id.in_(list(allowed_server_ids)))
+    if sub_email:
+        q = q.filter(UsageDaily.sub_id.in_(list(email_matches)))
+    elif allowed_sub_ids is not None:
+        q = q.filter(UsageDaily.sub_id.in_(list(allowed_sub_ids)))
+    rows = q.all()
+
+    server_names = {s.id: s.name for s in Server.query.all()
+                    if allowed_server_ids is None or s.id in allowed_server_ids}
+    result = {}
+    first_seen = {}
+    for row in rows:
+        current = live.get((row.server_id, row.sub_id), {})
+        tag = row.inbound_tag or current.get('tag') or '(unknown)'
+        group = result.setdefault(row.server_id, {}).setdefault(tag, {
+            'download': 0, 'upload': 0, '_clients': {}
+        })
+        up, down = int(row.upload_bytes or 0), int(row.download_bytes or 0)
+        group['upload'] += up
+        group['download'] += down
+        client = group['_clients'].setdefault(row.sub_id, {
+            'email': current.get('email') or (row.sub_id[:12] + '…'),
+            'download': 0, 'upload': 0, 'total': 0,
+            'remaining': current.get('remaining'),
+            'status': current.get('status') if current else 'deleted',
+        })
+        client['upload'] += up
+        client['download'] += down
+        client['total'] += up + down
+        seen = first_seen.get(row.server_id)
+        if seen is None or row.first_observed_at < seen:
+            first_seen[row.server_id] = row.first_observed_at
+
+    servers_out = []
+    for server_id, groups in result.items():
+        inbounds = []
+        for tag, values in groups.items():
+            clients = sorted(values['_clients'].values(), key=lambda item: -item['total'])
+            remaining_raw = sum(int(item['remaining'] or 0) for item in clients)
+            info = inbound_info.get((server_id, tag), {})
+            total = values['upload'] + values['download']
+            inbounds.append({
+                'inbound_tag': tag, 'port': info.get('port', ''), 'inbound_id': info.get('id', ''),
+                'download': values['download'], 'upload': values['upload'], 'total': total,
+                'clients': len(clients), 'remaining_raw': remaining_raw,
+                'remaining': format_bytes(remaining_raw) if remaining_raw > 0 else None,
+                'client_list': clients,
+            })
+        inbounds.sort(key=lambda item: -item['total'])
+        remaining_raw = sum(item['remaining_raw'] for item in inbounds)
+        first = first_seen.get(server_id)
+        servers_out.append({
+            'server_id': server_id, 'server_name': server_names.get(server_id, f'Server {server_id}'),
+            'total': sum(item['total'] for item in inbounds),
+            'download': sum(item['download'] for item in inbounds),
+            'upload': sum(item['upload'] for item in inbounds),
+            'remaining_raw': remaining_raw,
+            'remaining': format_bytes(remaining_raw) if remaining_raw > 0 else None,
+            'inbounds': inbounds,
+            'first_snapshot_at': (first.isoformat() + 'Z') if first else None,
+            'effective_from': from_dt.isoformat() + 'Z',
+        })
+    servers_out.sort(key=lambda item: -item['total'])
+    return jsonify({
+        'success': True, 'period': period, 'from': from_dt.isoformat() + 'Z',
+        'to': to_dt.isoformat() + 'Z', 'servers': servers_out,
+        'sub_email': sub_email or None, 'email_resolved_name': resolved_email,
+    })
+
+
 @app.route('/api/traffic-check', methods=['GET'])
 @login_required
 def traffic_check():
-    """Aggregate snapshot traffic deltas by server → inbound for a given period.
+    """Aggregate compact daily traffic rollups by server and inbound.
     Optional ?sub_email=x filters to a single client's usage."""
     _TEHRAN_OFFSET = timedelta(hours=3, minutes=30)
 
@@ -22486,339 +22495,7 @@ def traffic_check():
         from_dt = now_teh.replace(hour=0, minute=0, second=0, microsecond=0) - _TEHRAN_OFFSET
         to_dt = now_utc
 
-    try:
-        # RBAC: determine what servers/clients this user is allowed to see
-        _rbac_role = session.get('role', 'admin')
-        _rbac_is_superadmin = session.get('is_superadmin', False)
-        _rbac_admin_id = session.get('admin_id')
-        _rbac_server_ids = None  # None = no restriction (admin/superadmin)
-        _rbac_sub_ids = None     # None = no restriction
-
-        if not _rbac_is_superadmin and _rbac_role == 'reseller':
-            _rbac_user = Admin.query.get(_rbac_admin_id)
-            if not _rbac_user:
-                return jsonify({'success': False, 'error': 'Unauthorized'}), 403
-            _allowed_map, _assignments = get_reseller_access_maps(_rbac_user)
-
-            if _allowed_map != '*':
-                _rbac_server_ids = set()
-                for _sk in list(_allowed_map.keys()) + list(_assignments.keys()):
-                    try:
-                        _rbac_server_ids.add(int(_sk))
-                    except Exception:
-                        pass
-
-            _ownerships = ClientOwnership.query.filter_by(reseller_id=_rbac_admin_id).all()
-            _owned_emails = {(o.client_email or '').lower() for o in _ownerships if o.client_email}
-            _owned_uuids = {(o.client_uuid or '').lower() for o in _ownerships if o.client_uuid}
-            _rbac_sub_ids = set()
-            for _inb in (GLOBAL_SERVER_DATA.get('inbounds') or []):
-                _inb_srv_id = _inb.get('server_id')
-                if _rbac_server_ids is not None and _inb_srv_id not in _rbac_server_ids:
-                    continue
-                _inb_id_val = None
-                try:
-                    _inb_id_val = int(_inb.get('id'))
-                except Exception:
-                    pass
-                if _allowed_map != '*' and not is_inbound_accessible(_inb_srv_id, _inb_id_val, _allowed_map, _assignments):
-                    continue
-                for _cli in _inb.get('clients', []):
-                    _email = (_cli.get('email') or '').lower()
-                    _uuid = (_cli.get('id') or '').lower()
-                    if _email in _owned_emails or _uuid in _owned_uuids:
-                        _sid = str(_cli.get('subId') or _cli.get('id') or '').strip()
-                        if _sid:
-                            _rbac_sub_ids.add(_sid)
-
-        servers_map = {s.id: s.name for s in Server.query.all()
-                       if _rbac_server_ids is None or s.id in _rbac_server_ids}
-
-        # Build inbound port lookup from live cache
-        _inbound_port_map = {}  # {server_id: {remark: {'port': str, 'id': str}}}
-        for _inb in (GLOBAL_SERVER_DATA.get('inbounds') or []):
-            _srv_id = _inb.get('server_id')
-            if _srv_id is None:
-                continue
-            _remark = (_inb.get('remark') or '').strip()
-            _port = str(_inb.get('port') or '')
-            _inb_id = str(_inb.get('id') or '')
-            _inbound_port_map.setdefault(_srv_id, {})[_remark] = {'port': _port, 'id': _inb_id}
-
-        # Optional: filter by email → find matching sub_ids from cache
-        email_sub_ids = None
-        email_resolved_name = None
-        if sub_email:
-            email_sub_ids = set()
-            for _inb in (GLOBAL_SERVER_DATA.get('inbounds') or []):
-                _inb_srv_id = _inb.get('server_id')
-                if _rbac_server_ids is not None and _inb_srv_id not in _rbac_server_ids:
-                    continue
-                for _cli in _inb.get('clients', []):
-                    if (_cli.get('email') or '').strip().lower() == sub_email:
-                        _sid = str(_cli.get('subId') or _cli.get('id') or '').strip()
-                        if _sid:
-                            if _rbac_sub_ids is not None and _sid not in _rbac_sub_ids:
-                                continue
-                            email_sub_ids.add(_sid)
-                            email_resolved_name = (_cli.get('email') or sub_email)
-            if not email_sub_ids:
-                return jsonify({'success': True, 'servers': [], 'period': period,
-                                'from': from_dt.isoformat() + 'Z', 'to': to_dt.isoformat() + 'Z',
-                                'message': f'No client found with email: {sub_email}'})
-
-        # All (server_id, inbound_tag, sub_id) combos with data at or before to_dt
-        q = (db.session.query(
-                UsageSnapshot.server_id,
-                UsageSnapshot.inbound_tag,
-                UsageSnapshot.sub_id
-            )
-            .filter(UsageSnapshot.recorded_at <= to_dt)
-        )
-        if email_sub_ids is not None:
-            q = q.filter(UsageSnapshot.sub_id.in_(list(email_sub_ids)))
-        elif _rbac_sub_ids is not None:
-            q = q.filter(UsageSnapshot.sub_id.in_(list(_rbac_sub_ids)))
-        if _rbac_server_ids is not None:
-            q = q.filter(UsageSnapshot.server_id.in_(list(_rbac_server_ids)))
-        active_subs = q.distinct().all()
-
-        if not active_subs:
-            return jsonify({'success': True, 'servers': [], 'period': period,
-                            'from': from_dt.isoformat() + 'Z', 'to': to_dt.isoformat() + 'Z',
-                            'sub_email': sub_email or None, 'email_resolved_name': email_resolved_name})
-
-        # Deduplicate: same sub_id may appear under NULL tag (old snapshots) AND a real tag.
-        # Keep the non-null tag per (server_id, sub_id) to avoid double-counting.
-        _dedup: dict = {}
-        for _sid, _tag, _sub in active_subs:
-            _key = (_sid, _sub)
-            if _key not in _dedup or (_dedup[_key] is None and _tag):
-                _dedup[_key] = _tag
-        active_subs = [(_sid, _tag, _sub) for (_sid, _sub), _tag in _dedup.items()]
-
-        all_sub_ids = list({sub_id for _, _, sub_id in active_subs})
-
-        # ── Build lookups from live cache (memory reads, no SQL) ───────────────
-        # sub_id → email for client list display
-        sub_id_to_email = {}
-        # (server_id, sub_id) → inbound_tag: resolve unknown tags from live data
-        sub_id_to_live_tag = {}
-        # sub_id → remaining_bytes (None = unlimited)
-        sub_id_to_remaining = {}
-        # sub_id → 'active' | 'disabled' (absent = deleted — not in live cache)
-        sub_id_to_status = {}
-        for _inb in (GLOBAL_SERVER_DATA.get('inbounds') or []):
-            _srv_id = _inb.get('server_id')
-            _remark = (_inb.get('remark') or '').strip()
-            for _cli in _inb.get('clients', []):
-                _sid = str(_cli.get('subId') or _cli.get('id') or '').strip()
-                if not _sid:
-                    continue
-                _email = (_cli.get('email') or '').strip()
-                if _email:
-                    sub_id_to_email[_sid] = _email
-                if _srv_id is not None and _remark:
-                    sub_id_to_live_tag[(_srv_id, _sid)] = _remark
-                _rem = _cli.get('remaining_bytes', -1)
-                if _rem is not None and _rem >= 0:
-                    sub_id_to_remaining[_sid] = int(_rem)
-                sub_id_to_status[_sid] = 'disabled' if not _cli.get('enable', True) else 'active'
-
-        # ── BULK QUERY 1: endpoint — latest snapshot per (server_id, sub_id) ≤ to_dt ──
-        ep_max_sq = (db.session.query(
-                UsageSnapshot.server_id,
-                UsageSnapshot.sub_id,
-                func.max(UsageSnapshot.recorded_at).label('max_at')
-            )
-            .filter(UsageSnapshot.sub_id.in_(all_sub_ids))
-            .filter(UsageSnapshot.recorded_at <= to_dt)
-            .group_by(UsageSnapshot.server_id, UsageSnapshot.sub_id)
-            .subquery('ep_max')
-        )
-        endpoint_map = {
-            (s.server_id, s.sub_id): s
-            for s in db.session.query(UsageSnapshot).join(ep_max_sq, and_(
-                UsageSnapshot.server_id == ep_max_sq.c.server_id,
-                UsageSnapshot.sub_id   == ep_max_sq.c.sub_id,
-                UsageSnapshot.recorded_at == ep_max_sq.c.max_at
-            )).all()
-        }
-
-        # ── BULK QUERY 2: baseline — latest snapshot per (server_id, sub_id) ≤ from_dt ──
-        bl_max_sq = (db.session.query(
-                UsageSnapshot.server_id,
-                UsageSnapshot.sub_id,
-                func.max(UsageSnapshot.recorded_at).label('max_at')
-            )
-            .filter(UsageSnapshot.sub_id.in_(all_sub_ids))
-            .filter(UsageSnapshot.recorded_at <= from_dt)
-            .group_by(UsageSnapshot.server_id, UsageSnapshot.sub_id)
-            .subquery('bl_max')
-        )
-        baseline_map = {
-            (s.server_id, s.sub_id): s
-            for s in db.session.query(UsageSnapshot).join(bl_max_sq, and_(
-                UsageSnapshot.server_id == bl_max_sq.c.server_id,
-                UsageSnapshot.sub_id   == bl_max_sq.c.sub_id,
-                UsageSnapshot.recorded_at == bl_max_sq.c.max_at
-            )).all()
-        }
-
-        # ── BULK QUERY 3: first-in-range — for subs with no baseline before from_dt ──
-        no_bl_sub_ids = list({sub_id for server_id, _, sub_id in active_subs
-                               if (server_id, sub_id) not in baseline_map
-                               and (server_id, sub_id) in endpoint_map})
-        first_in_range_map = {}
-        if no_bl_sub_ids:
-            fir_min_sq = (db.session.query(
-                    UsageSnapshot.server_id,
-                    UsageSnapshot.sub_id,
-                    func.min(UsageSnapshot.recorded_at).label('min_at')
-                )
-                .filter(UsageSnapshot.sub_id.in_(no_bl_sub_ids))
-                .filter(UsageSnapshot.recorded_at >= from_dt, UsageSnapshot.recorded_at <= to_dt)
-                .group_by(UsageSnapshot.server_id, UsageSnapshot.sub_id)
-                .subquery('fir_min')
-            )
-            first_in_range_map = {
-                (s.server_id, s.sub_id): s
-                for s in db.session.query(UsageSnapshot).join(fir_min_sq, and_(
-                    UsageSnapshot.server_id == fir_min_sq.c.server_id,
-                    UsageSnapshot.sub_id   == fir_min_sq.c.sub_id,
-                    UsageSnapshot.recorded_at == fir_min_sq.c.min_at
-                )).all()
-            }
-
-        # ── BULK QUERY 4: first-ever snapshot per server ──────────────────────
-        server_first_snap = {
-            r[0]: r[1]
-            for r in db.session.query(
-                UsageSnapshot.server_id,
-                func.min(UsageSnapshot.recorded_at)
-            ).filter(UsageSnapshot.server_id.in_(list(servers_map.keys())))
-             .group_by(UsageSnapshot.server_id).all()
-        }
-
-        # ── Aggregation (pure Python, no SQL) ─────────────────────────────────
-        result_map = {}
-        server_effective_from = {}
-
-        for server_id, inbound_tag, sub_id in active_subs:
-            # Resolve tag — fall back to live cache for old NULL tags
-            tag = inbound_tag or sub_id_to_live_tag.get((server_id, sub_id)) or '(unknown)'
-
-            endpoint = endpoint_map.get((server_id, sub_id))
-            if not endpoint:
-                continue
-
-            baseline = baseline_map.get((server_id, sub_id))
-            effective_baseline_at = from_dt
-            if baseline is None:
-                baseline = first_in_range_map.get((server_id, sub_id))
-                if baseline:
-                    effective_baseline_at = baseline.recorded_at
-
-            base_dl = baseline.download_bytes if baseline else 0
-            base_ul = baseline.upload_bytes if baseline else 0
-            end_dl = endpoint.download_bytes
-            end_ul = endpoint.upload_bytes
-
-            # Handle counter reset (renewal / counter went backwards)
-            delta_dl = end_dl - base_dl if end_dl >= base_dl else end_dl
-            delta_ul = end_ul - base_ul if end_ul >= base_ul else end_ul
-            delta_total = delta_dl + delta_ul
-
-            if delta_total <= 0:
-                continue
-
-            cur_eff = server_effective_from.get(server_id)
-            if cur_eff is None or effective_baseline_at < cur_eff:
-                server_effective_from[server_id] = effective_baseline_at
-
-            if server_id not in result_map:
-                result_map[server_id] = {}
-            if tag not in result_map[server_id]:
-                _port_info = _inbound_port_map.get(server_id, {}).get(inbound_tag or tag, {})
-                result_map[server_id][tag] = {
-                    'download': 0, 'upload': 0, 'total': 0, 'clients': 0,
-                    'remaining_raw': 0,
-                    'port': _port_info.get('port', ''),
-                    'inbound_id': _port_info.get('id', ''),
-                    'client_list': [],
-                }
-
-            result_map[server_id][tag]['download'] += delta_dl
-            result_map[server_id][tag]['upload'] += delta_ul
-            result_map[server_id][tag]['total'] += delta_total
-            result_map[server_id][tag]['clients'] += 1
-            _client_rem = sub_id_to_remaining.get(sub_id)
-            if _client_rem is not None:
-                result_map[server_id][tag]['remaining_raw'] += _client_rem
-
-            client_email = sub_id_to_email.get(sub_id, '')
-            _live_status = sub_id_to_status.get(sub_id)  # None = not in live cache = deleted
-            result_map[server_id][tag]['client_list'].append({
-                'email': client_email or (sub_id[:12] + '…') if sub_id else '—',
-                'download': delta_dl,
-                'upload': delta_ul,
-                'total': delta_total,
-                'remaining': _client_rem,
-                'status': 'deleted' if _live_status is None else ('disabled' if _live_status == 'disabled' else None),
-            })
-
-        servers_out = []
-        for server_id, inbounds_map in sorted(result_map.items(), key=lambda x: -sum(v['total'] for v in x[1].values())):
-            inbounds_out = sorted([
-                {
-                    'inbound_tag': tag,
-                    'port': data['port'],
-                    'inbound_id': data['inbound_id'],
-                    'download': data['download'],
-                    'upload': data['upload'],
-                    'total': data['total'],
-                    'clients': data['clients'],
-                    'remaining_raw': data['remaining_raw'],
-                    'remaining': format_bytes(data['remaining_raw']) if data['remaining_raw'] > 0 else None,
-                    'client_list': sorted(data['client_list'], key=lambda c: -c['total']),
-                }
-                for tag, data in inbounds_map.items()
-            ], key=lambda x: -x['total'])
-
-            srv_total = sum(i['total'] for i in inbounds_out)
-            srv_dl = sum(i['download'] for i in inbounds_out)
-            srv_ul = sum(i['upload'] for i in inbounds_out)
-            srv_remaining_raw = sum(i['remaining_raw'] for i in inbounds_out)
-            first_at = server_first_snap.get(server_id)
-            eff_from = server_effective_from.get(server_id)
-
-            servers_out.append({
-                'server_id': server_id,
-                'server_name': servers_map.get(server_id, f'Server {server_id}'),
-                'total': srv_total,
-                'download': srv_dl,
-                'upload': srv_ul,
-                'remaining_raw': srv_remaining_raw,
-                'remaining': format_bytes(srv_remaining_raw) if srv_remaining_raw > 0 else None,
-                'inbounds': inbounds_out,
-                'first_snapshot_at': (first_at.isoformat() + 'Z') if first_at else None,
-                'effective_from': (eff_from.isoformat() + 'Z') if eff_from else None,
-            })
-
-        return jsonify({
-            'success': True,
-            'period': period,
-            'from': from_dt.isoformat() + 'Z',
-            'to': to_dt.isoformat() + 'Z',
-            'servers': servers_out,
-            'sub_email': sub_email or None,
-            'email_resolved_name': email_resolved_name,
-        })
-    except Exception as e:
-        app.logger.exception("traffic_check error")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
+    return _traffic_check_from_rollups(period, from_dt, to_dt, sub_email)
 @app.route('/api/settings/ssl/diagnose', methods=['GET'])
 @login_required
 def diagnose_ssl():
@@ -24580,233 +24257,395 @@ def health_watchdog():
                     pass
 
 
-_USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN = 60  # large installs otherwise grow by millions of rows/day
-_USAGE_SNAPSHOT_RETENTION_DAYS = 14  # bounded history for small production disks
-USAGE_SNAPSHOT_INTERVAL_KEY = 'usage_snapshot_interval_minutes'
+# Compact usage rollups supersede the append-only raw snapshot implementation
+# above. Keeping the compatibility name lets the manual refresh endpoint call
+# the new collector while rolling upgrades are in progress.
+_USAGE_ROLLUP_INTERVAL_MIN = 60
+_USAGE_HOURLY_RETENTION_HOURS = 48
+_USAGE_DAILY_RETENTION_DAYS = 365
+_USAGE_LEGACY_MIGRATION_KEY = 'usage_rollup_migration_v1'
+_USAGE_TEHRAN_OFFSET = timedelta(hours=3, minutes=30)
+
+
+def _usage_tehran_date(value: datetime):
+    return (value + _USAGE_TEHRAN_OFFSET).date()
+
+
+def _seconds_until_next_usage_hour(value=None):
+    local = (value or datetime.utcnow()) + _USAGE_TEHRAN_OFFSET
+    next_hour = local.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    return max(1, int((next_hour - local).total_seconds()))
+
+
+def _coerce_usage_datetime(value):
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    return parsed.replace(tzinfo=None)
+
+
+def _usage_account_points(inbounds):
+    """Collapse v3's repeated account across inbounds to one canonical counter."""
+    points = {}
+    for inbound in inbounds or []:
+        try:
+            server_id = int(inbound.get('server_id'))
+        except (TypeError, ValueError):
+            continue
+        tag = (inbound.get('remark') or inbound.get('tag') or '').strip() or f"inbound-{inbound.get('id', '')}"
+        for client in inbound.get('clients') or []:
+            sub_id = str(client.get('subId') or client.get('id') or '').strip()
+            if not sub_id:
+                continue
+            up = max(0, int(client.get('up') or 0))
+            down = max(0, int(client.get('down') or 0))
+            total = up + down
+            try:
+                limit = int(client.get('totalGB') or 0) or None
+            except (TypeError, ValueError):
+                limit = None
+            if limit and limit > 9_223_372_036_854_775_807:
+                limit = None
+            point = {
+                'server_id': server_id, 'sub_id': sub_id, 'inbound_tag': tag,
+                'upload_bytes': up, 'download_bytes': down, 'total_bytes': total,
+                'remaining_bytes': max(limit - total, 0) if limit else None,
+                'volume_limit_bytes': limit, 'client': client,
+            }
+            key = (server_id, sub_id)
+            previous = points.get(key)
+            if previous is None or (total, tag) > (previous['total_bytes'], previous['inbound_tag']):
+                points[key] = point
+    return points
+
+
+def _usage_delta(current, previous):
+    current = max(0, int(current or 0))
+    previous = max(0, int(previous or 0))
+    return current - previous if current >= previous else current
+
+
+def _renewal_from_counter_reset(point, now):
+    client = point.get('client') or {}
+    try:
+        expiry_ts = int(client.get('expiryTimestamp') or client.get('expiryTime') or 0)
+    except (TypeError, ValueError):
+        expiry_ts = 0
+    days = None
+    unlimited_time = False
+    if expiry_ts > 0:
+        days = max((datetime.utcfromtimestamp(expiry_ts / 1000) - now).days, 0)
+    elif expiry_ts < 0:
+        days = max(int(round(abs(expiry_ts) / 86400000.0)), 0)
+    else:
+        unlimited_time = True
+    return RenewalEvent(
+        server_id=point['server_id'], sub_id=point['sub_id'], renewed_at=now,
+        volume_bytes=point['volume_limit_bytes'], days=days,
+        is_unlimited_volume=(point['volume_limit_bytes'] is None),
+        is_unlimited_time=unlimited_time,
+    )
+
+
+def _collect_usage_rollups():
+    """Update bounded hourly/daily aggregates without appending raw samples."""
+    inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+    if not inbounds:
+        print('[UsageRollup] cache empty; skipping collection')
+        return False
+    now = datetime.utcnow()
+    bucket_at = now.replace(minute=0, second=0, microsecond=0)
+    usage_date = _usage_tehran_date(now)
+    points = _usage_account_points(inbounds)
+    if not points:
+        return False
+
+    if db.engine.dialect.name == 'postgresql':
+        locked = db.session.execute(text('SELECT pg_try_advisory_xact_lock(73519041)')).scalar()
+        if not locked:
+            db.session.rollback()
+            return False
+
+    states = {(r.server_id, r.sub_id): r for r in UsageCounterState.query.all()}
+    hourly = {(r.server_id, r.sub_id): r for r in UsageHourly.query.filter_by(bucket_at=bucket_at).all()}
+    daily = {(r.server_id, r.sub_id): r for r in UsageDaily.query.filter_by(usage_date=usage_date).all()}
+    renewal_count = 0
+
+    for key, point in points.items():
+        state = states.get(key)
+        if state is None:
+            state = UsageCounterState(
+                server_id=point['server_id'], sub_id=point['sub_id'],
+                inbound_tag=point['inbound_tag'], upload_bytes=point['upload_bytes'],
+                download_bytes=point['download_bytes'], total_bytes=point['total_bytes'],
+                remaining_bytes=point['remaining_bytes'], volume_limit_bytes=point['volume_limit_bytes'],
+                observed_at=now,
+            )
+            db.session.add(state)
+            states[key] = state
+            delta_up = delta_down = 0
+            opening_up, opening_down = point['upload_bytes'], point['download_bytes']
+        else:
+            delta_up = _usage_delta(point['upload_bytes'], state.upload_bytes)
+            delta_down = _usage_delta(point['download_bytes'], state.download_bytes)
+            opening_up, opening_down = state.upload_bytes, state.download_bytes
+            if point['total_bytes'] < int(state.total_bytes or 0) and int(state.total_bytes or 0) > 0:
+                db.session.add(_renewal_from_counter_reset(point, now))
+                renewal_count += 1
+
+        hour = hourly.get(key)
+        if hour is None:
+            hour = UsageHourly(
+                server_id=point['server_id'], sub_id=point['sub_id'], inbound_tag=point['inbound_tag'],
+                bucket_at=bucket_at, upload_bytes=delta_up, download_bytes=delta_down,
+                remaining_bytes=point['remaining_bytes'], volume_limit_bytes=point['volume_limit_bytes'],
+                sample_count=1, updated_at=now,
+            )
+            db.session.add(hour)
+            hourly[key] = hour
+        else:
+            hour.upload_bytes += delta_up
+            hour.download_bytes += delta_down
+            hour.inbound_tag = point['inbound_tag']
+            hour.remaining_bytes = point['remaining_bytes']
+            hour.volume_limit_bytes = point['volume_limit_bytes']
+            hour.sample_count += 1
+            hour.updated_at = now
+
+        day = daily.get(key)
+        if day is None:
+            day = UsageDaily(
+                server_id=point['server_id'], sub_id=point['sub_id'], inbound_tag=point['inbound_tag'],
+                usage_date=usage_date, upload_bytes=delta_up, download_bytes=delta_down,
+                opening_upload_bytes=opening_up, opening_download_bytes=opening_down,
+                closing_upload_bytes=point['upload_bytes'], closing_download_bytes=point['download_bytes'],
+                remaining_bytes=point['remaining_bytes'], volume_limit_bytes=point['volume_limit_bytes'],
+                sample_count=1, first_observed_at=now, last_observed_at=now,
+            )
+            db.session.add(day)
+            daily[key] = day
+        else:
+            day.upload_bytes += delta_up
+            day.download_bytes += delta_down
+            day.inbound_tag = point['inbound_tag']
+            day.closing_upload_bytes = point['upload_bytes']
+            day.closing_download_bytes = point['download_bytes']
+            day.remaining_bytes = point['remaining_bytes']
+            day.volume_limit_bytes = point['volume_limit_bytes']
+            day.sample_count += 1
+            day.last_observed_at = now
+
+        state.inbound_tag = point['inbound_tag']
+        state.upload_bytes = point['upload_bytes']
+        state.download_bytes = point['download_bytes']
+        state.total_bytes = point['total_bytes']
+        state.remaining_bytes = point['remaining_bytes']
+        state.volume_limit_bytes = point['volume_limit_bytes']
+        state.observed_at = now
+
+    UsageHourly.query.filter(UsageHourly.bucket_at < now - timedelta(hours=_USAGE_HOURLY_RETENTION_HOURS)).delete(synchronize_session=False)
+    UsageDaily.query.filter(UsageDaily.usage_date < usage_date - timedelta(days=_USAGE_DAILY_RETENTION_DAYS)).delete(synchronize_session=False)
+    UsageCounterState.query.filter(UsageCounterState.observed_at < now - timedelta(days=30)).delete(synchronize_session=False)
+    db.session.commit()
+    print(f'[UsageRollup] updated accounts={len(points)} renewals={renewal_count}')
+    return True
 
 
 def _take_usage_snapshots():
-    """Read GLOBAL_SERVER_DATA and save one UsageSnapshot per active client per server."""
+    return _collect_usage_rollups()
+
+
+def _legacy_usage_table_exists():
     try:
-        inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
-        if not inbounds:
-            print("[UsageSnapshot] _take_usage_snapshots: no inbounds in cache, skipping.")
+        return 'usage_snapshots' in set(inspect(db.engine).get_table_names())
+    except Exception:
+        return False
+
+
+def _migrate_legacy_usage_snapshots():
+    """Stream raw legacy rows into rollups, then remove the obsolete table."""
+    if not _legacy_usage_table_exists():
+        _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
+        db.session.commit()
+        return
+    print('[UsageRollup] migrating legacy usage_snapshots...')
+    _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'running')
+    UsageHourly.query.delete(synchronize_session=False)
+    UsageDaily.query.delete(synchronize_session=False)
+    UsageCounterState.query.delete(synchronize_session=False)
+    db.session.commit()
+
+    sql = text('''
+        SELECT server_id, sub_id, inbound_tag, recorded_at,
+               upload_bytes, download_bytes, total_bytes,
+               remaining_bytes, volume_limit_bytes
+        FROM usage_snapshots
+        ORDER BY server_id, sub_id, recorded_at, total_bytes DESC, id DESC
+    ''')
+    now = datetime.utcnow()
+    hourly_cutoff = now - timedelta(hours=_USAGE_HOURLY_RETENTION_HOURS)
+    daily_batch, hourly_batch, state_batch = [], [], []
+    current_key = current_ts = None
+    prev_up = prev_down = None
+    day_acc = hour_acc = last_point = None
+    processed = 0
+
+    def flush_batches(force=False):
+        wrote = False
+        for batch in (daily_batch, hourly_batch, state_batch):
+            if batch and (force or len(batch) >= 1000):
+                db.session.bulk_save_objects(batch)
+                batch.clear()
+                wrote = True
+        if wrote:
+            db.session.commit()
+
+    def finish_hour():
+        nonlocal hour_acc
+        if hour_acc:
+            hourly_batch.append(UsageHourly(**hour_acc))
+            hour_acc = None
+
+    def finish_day():
+        nonlocal day_acc
+        if day_acc:
+            daily_batch.append(UsageDaily(**day_acc))
+            day_acc = None
+
+    def finish_account():
+        if current_key is None:
             return
-        now = datetime.utcnow()
-        new_snapshots = []
-        renewals = []
-        # On v3 (sanaei) the same subId/email exists across multiple inbounds,
-        # so a single renewal would otherwise be detected once per inbound and
-        # produce duplicate "Renewed" cards. Record at most one renewal per
-        # sub_id per run.
-        _renewal_seen_subs = set()
-        for inbound in inbounds:
-            server_id = inbound.get('server_id')
-            if not server_id:
-                continue
-            inbound_tag = (inbound.get('remark') or inbound.get('tag') or '').strip() or f"inbound-{inbound.get('id', '')}"
-            for client in inbound.get('clients', []):
-                sub_id = str(client.get('subId') or '').strip()
-                if not sub_id:
-                    sub_id = str(client.get('id') or '').strip()
-                if not sub_id:
+        finish_hour()
+        finish_day()
+        if last_point:
+            state_batch.append(UsageCounterState(
+                server_id=current_key[0], sub_id=current_key[1], inbound_tag=last_point['tag'],
+                upload_bytes=last_point['up'], download_bytes=last_point['down'],
+                total_bytes=last_point['up'] + last_point['down'],
+                remaining_bytes=last_point['remaining'], volume_limit_bytes=last_point['limit'],
+                observed_at=last_point['ts'],
+            ))
+        flush_batches()
+
+    with db.engine.connect().execution_options(stream_results=True) as conn:
+        result = conn.execute(sql)
+        while True:
+            rows = result.fetchmany(5000)
+            if not rows:
+                break
+            processed += len(rows)
+            if processed % 1_000_000 < len(rows):
+                print(f'[UsageRollup] migrated {processed:,} legacy rows')
+            for row in rows:
+                key = (int(row[0]), str(row[1]))
+                ts = _coerce_usage_datetime(row[3])
+                if key != current_key:
+                    finish_account()
+                    current_key, current_ts = key, None
+                    prev_up = prev_down = None
+                    day_acc = hour_acc = last_point = None
+                if ts == current_ts:
                     continue
+                current_ts = ts
+                up, down = int(row[4] or 0), int(row[5] or 0)
+                delta_up = _usage_delta(up, prev_up) if prev_up is not None else 0
+                delta_down = _usage_delta(down, prev_down) if prev_down is not None else 0
+                day = _usage_tehran_date(ts)
+                hour = ts.replace(minute=0, second=0, microsecond=0)
+                tag = row[2]
 
-                up = int(client.get('up') or 0)
-                down = int(client.get('down') or 0)
-                total_used = up + down
-                # totalGB in 3x-ui API is stored in BYTES (the field name is a historical misnomer).
-                # All other code in this project (process_inbounds, renewal, etc.) treats it as bytes.
-                # DO NOT multiply by 1024^3 — that causes bigint overflow in PostgreSQL.
-                try:
-                    volume_limit_bytes = int(client.get('totalGB') or 0) or None
-                except Exception:
-                    volume_limit_bytes = None
-                # Cap at PostgreSQL bigint max to guard against any corrupt panel values
-                _PG_BIGINT_MAX = 9_223_372_036_854_775_807
-                if volume_limit_bytes and volume_limit_bytes > _PG_BIGINT_MAX:
-                    volume_limit_bytes = None
-                remaining_bytes = max(volume_limit_bytes - total_used, 0) if volume_limit_bytes else None
+                if day_acc is None or day_acc['usage_date'] != day:
+                    finish_day()
+                    day_acc = dict(
+                        server_id=key[0], sub_id=key[1], inbound_tag=tag, usage_date=day,
+                        upload_bytes=0, download_bytes=0,
+                        opening_upload_bytes=(prev_up if prev_up is not None else up),
+                        opening_download_bytes=(prev_down if prev_down is not None else down),
+                        closing_upload_bytes=up, closing_download_bytes=down,
+                        remaining_bytes=row[7], volume_limit_bytes=row[8], sample_count=0,
+                        first_observed_at=ts, last_observed_at=ts,
+                    )
+                day_acc['upload_bytes'] += delta_up
+                day_acc['download_bytes'] += delta_down
+                day_acc['closing_upload_bytes'] = up
+                day_acc['closing_download_bytes'] = down
+                day_acc['remaining_bytes'] = row[7]
+                day_acc['volume_limit_bytes'] = row[8]
+                day_acc['inbound_tag'] = tag
+                day_acc['sample_count'] += 1
+                day_acc['last_observed_at'] = ts
 
-                # Renewal detection: compare with the most recent snapshot
-                prev = (UsageSnapshot.query
-                        .filter_by(server_id=server_id, sub_id=sub_id)
-                        .order_by(UsageSnapshot.recorded_at.desc())
-                        .first())
+                if ts >= hourly_cutoff:
+                    if hour_acc is None or hour_acc['bucket_at'] != hour:
+                        finish_hour()
+                        hour_acc = dict(
+                            server_id=key[0], sub_id=key[1], inbound_tag=tag, bucket_at=hour,
+                            upload_bytes=0, download_bytes=0, remaining_bytes=row[7],
+                            volume_limit_bytes=row[8], sample_count=0, updated_at=ts,
+                        )
+                    hour_acc['upload_bytes'] += delta_up
+                    hour_acc['download_bytes'] += delta_down
+                    hour_acc['remaining_bytes'] = row[7]
+                    hour_acc['volume_limit_bytes'] = row[8]
+                    hour_acc['inbound_tag'] = tag
+                    hour_acc['sample_count'] += 1
+                    hour_acc['updated_at'] = ts
 
-                if prev:
-                    prev_total = prev.total_bytes
-                    prev_limit = prev.volume_limit_bytes or 0
-                    # Traffic reset (current total_used < previous) = quota refill / renewal
-                    if total_used < prev_total and prev_total > 0 and sub_id not in _renewal_seen_subs:
-                        _renewal_seen_subs.add(sub_id)
-                        try:
-                            expiry_ts = int(client.get('expiryTimestamp') or client.get('expiryTime') or 0)
-                            days = None
-                            is_unlimited_time = False
-                            if expiry_ts > 0:
-                                expiry_dt = datetime.utcfromtimestamp(expiry_ts / 1000)
-                                delta_days = (expiry_dt - now).days
-                                days = max(delta_days, 0)
-                            elif expiry_ts < 0:
-                                # "Start after first use": 3x-ui stores the duration
-                                # as a negative number of milliseconds until the
-                                # timer starts on first connect. Show that duration.
-                                days = max(int(round(abs(expiry_ts) / 86400000.0)), 0)
-                            else:
-                                is_unlimited_time = True
-                            renewals.append(RenewalEvent(
-                                server_id=server_id,
-                                sub_id=sub_id,
-                                renewed_at=now,
-                                volume_bytes=volume_limit_bytes,
-                                days=days,
-                                is_unlimited_volume=(volume_limit_bytes is None),
-                                is_unlimited_time=is_unlimited_time,
-                            ))
-                        except Exception:
-                            pass
-
-                new_snapshots.append(UsageSnapshot(
-                    server_id=server_id,
-                    sub_id=sub_id,
-                    inbound_tag=inbound_tag,
-                    recorded_at=now,
-                    upload_bytes=up,
-                    download_bytes=down,
-                    total_bytes=total_used,
-                    remaining_bytes=remaining_bytes,
-                    volume_limit_bytes=volume_limit_bytes,
-                ))
-
-        if new_snapshots:
-            db.session.bulk_save_objects(new_snapshots)
-        if renewals:
-            db.session.bulk_save_objects(renewals)
-        if new_snapshots or renewals:
-            db.session.commit()
-            print(f"[UsageSnapshot] Saved {len(new_snapshots)} snapshots, {len(renewals)} renewals.")
-        else:
-            print("[UsageSnapshot] No snapshots to save (all clients may lack sub_id).")
-
-        # Prune old snapshots
-        cutoff = now - timedelta(days=_USAGE_SNAPSHOT_RETENTION_DAYS)
-        deleted = UsageSnapshot.query.filter(UsageSnapshot.recorded_at < cutoff).delete()
-        if deleted:
-            db.session.commit()
-            print(f"[UsageSnapshot] Pruned {deleted} old snapshots.")
-        return True
-    except Exception as exc:
-        try:
-            db.session.rollback()
-        except Exception:
-            pass
-        print(f"[UsageSnapshot] Error in _take_usage_snapshots: {exc}")
-        raise  # re-raise so the caller (worker) knows this cycle failed
+                prev_up, prev_down = up, down
+                last_point = {'tag': tag, 'up': up, 'down': down, 'remaining': row[7], 'limit': row[8], 'ts': ts}
+    finish_account()
+    flush_batches(force=True)
+    with db.engine.begin() as conn:
+        conn.execute(text('DROP TABLE usage_snapshots'))
+    _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
+    db.session.commit()
+    print('[UsageRollup] legacy migration complete; raw table dropped')
 
 
 def usage_snapshot_worker():
-    """Singleton background daemon: takes periodic usage snapshots.
+    """Singleton daemon maintaining compact hourly and daily usage rollups."""
+    print(f'[UsageRollup] singleton worker started (PID={os.getpid()})')
+    try:
+        with app.app_context():
+            if _get_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, '') != 'complete' or _legacy_usage_table_exists():
+                _migrate_legacy_usage_snapshots()
+    except Exception as exc:
+        print(f'[UsageRollup] legacy migration failed: {exc}')
+        try:
+            with app.app_context():
+                db.session.rollback()
+                _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'failed')
+                db.session.commit()
+        except Exception:
+            pass
 
-    Runs in exactly ONE gunicorn worker (whichever wins _claim_singleton).
-    No dedup guard needed — only one writer exists.
-    Errors are written to the health log so admins can see them.
-    """
-    print(f"[UsageSnapshot] Singleton worker started (PID={os.getpid()}), waiting for server data...")
-
-    # Wait up to 10 minutes for background_data_fetcher to populate cache
-    _waited = 0
-    while _waited < 600:
-        if GLOBAL_SERVER_DATA.get('inbounds'):
-            break
+    waited = 0
+    while waited < 600 and not GLOBAL_SERVER_DATA.get('inbounds'):
         time.sleep(30)
-        _waited += 30
-
+        waited += 30
     if not GLOBAL_SERVER_DATA.get('inbounds'):
-        # Cache still empty — fetch once before starting cycles
-        print("[UsageSnapshot] Cache empty after 10 min, fetching now...")
         try:
             with app.app_context():
                 fetch_and_update_global_data(force=True)
         except Exception as exc:
-            print(f"[UsageSnapshot] Initial fetch error: {exc}")
-
-    # Take initial snapshot immediately on startup
-    try:
-        with app.app_context():
-            print("[UsageSnapshot] Taking initial snapshot...")
-            _take_usage_snapshots()
-            print("[UsageSnapshot] Initial snapshot done.")
-    except Exception as exc:
-        print(f"[UsageSnapshot] Initial snapshot error: {exc}")
-        try:
-            with app.app_context():
-                _add_health_log('warning', 'snapshot',
-                                'Initial usage snapshot failed',
-                                details={'error': str(exc)})
-        except Exception:
-            pass
+            print(f'[UsageRollup] initial fetch failed: {exc}')
 
     while True:
         try:
-            # Read interval from DB in a fresh context
-            interval_min = _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN
-            try:
-                with app.app_context():
-                    _raw = _get_or_create_system_setting(
-                        USAGE_SNAPSHOT_INTERVAL_KEY,
-                        str(_USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN)
-                    )
-                    interval_min = max(5, min(120, int(_raw or _USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN)))
-            except Exception:
-                pass
-
-            print(f"[UsageSnapshot] Next snapshot in {interval_min} min...")
-            time.sleep(interval_min * 60)
-
-            # Refresh cache if empty (singleton worker may not serve HTTP requests)
-            if not GLOBAL_SERVER_DATA.get('inbounds'):
-                print("[UsageSnapshot] Cache empty, fetching fresh server data...")
-                try:
-                    with app.app_context():
-                        fetch_and_update_global_data(force=True)
-                except Exception as exc:
-                    print(f"[UsageSnapshot] Fetch error: {exc}")
-
-            # Take snapshot
-            try:
-                with app.app_context():
-                    _take_usage_snapshots()
-                print(f"[UsageSnapshot] Cycle complete (interval={interval_min}m).")
-                # Log success to system logs every cycle
-                try:
-                    with app.app_context():
-                        n_clients = len([
-                            c for ib in (GLOBAL_SERVER_DATA.get('inbounds') or [])
-                            for c in ib.get('clients', [])
-                            if str(c.get('subId') or c.get('id') or '').strip()
-                        ])
-                        _add_health_log('info', 'snapshot',
-                                        f'Usage snapshot saved ({n_clients} clients)',
-                                        details={'interval_min': interval_min})
-                except Exception:
-                    pass
-            except Exception as exc:
-                print(f"[UsageSnapshot] Snapshot error: {exc}")
-                try:
-                    with app.app_context():
-                        _add_health_log('warning', 'snapshot',
-                                        'Usage snapshot failed',
-                                        details={'error': str(exc), 'interval_min': interval_min})
-                except Exception:
-                    pass
-
+            with app.app_context():
+                _collect_usage_rollups()
+            # Align collection to Tehran hour boundaries. In particular, the
+            # 00:00 sample closes the previous day with minimal attribution skew.
+            time.sleep(_seconds_until_next_usage_hour())
         except Exception as exc:
-            print(f"[UsageSnapshot] Worker loop error: {exc}")
+            print(f'[UsageRollup] worker error: {exc}')
             try:
-                time.sleep(60)
+                with app.app_context():
+                    db.session.rollback()
+                    _add_health_log('warning', 'snapshot', 'Usage rollup failed', details={'error': str(exc)})
             except Exception:
                 pass
+            time.sleep(60)
 
 
 # File handles kept open so fcntl locks are held for the process lifetime.

@@ -173,24 +173,6 @@
                     <small class="text-secondary">Clients with remaining volume less than this are marked as: حجم رو به اتمامه &nbsp;—&nbsp; مثال: 0.2 = 200 MB</small>
                 </div>
 
-                <div class="form-group" style="margin-top: 18px; margin-bottom: 0;">
-                    <label>Usage Snapshot Interval (minutes) — فاصله ثبت مصرف</label>
-                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                        <input type="number" id="general-snapshot-interval" class="form-input" min="5" max="120" step="5" value="30" style="max-width:120px;">
-                        <span style="font-size:0.82rem;color:#94a3b8;">هر چند دقیقه مصرف ذخیره شود (۵–۱۲۰ دقیقه)</span>
-                        <button id="snapshot-now-btn" onclick="triggerSnapshotNow()" class="btn btn-secondary" style="padding:6px 14px;font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                            Snapshot Now
-                        </button>
-                    </div>
-                    <small class="text-secondary">Lower = more accurate history but higher DB load. Recommended: 15–30 min.</small>
-                    <div id="snapshot-now-result" style="margin-top:8px;font-size:0.83rem;display:none; line-height:1.6;"></div>
-                    <div id="snapshot-last-info" style="margin-top:6px;font-size:0.8rem;color:#64748b;display:none;">
-                        Last snapshot: <span id="snapshot-last-time" style="color:#94a3b8;"></span>
-                        &nbsp;·&nbsp; Total records: <span id="snapshot-total-count" style="color:#94a3b8;"></span>
-                    </div>
-                </div>
-
                 <div class="form-group" style="margin-top: 16px; margin-bottom: 0;">
                     <button class="btn btn-primary" onclick="saveGeneralSettings()">Save</button>
                 </div>
@@ -1352,7 +1334,7 @@
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>Traffic Check</h2>
-                        <p class="text-secondary">Traffic usage per server and inbound — based on usage snapshots.</p>
+                        <p class="text-secondary">Traffic usage per server and inbound — based on compact daily rollups.</p>
                     </div>
                     <button class="btn btn-primary" onclick="loadTrafficCheck()" id="tc-refresh-btn">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg>
@@ -3431,9 +3413,6 @@
                 const lowVolumeInput = document.getElementById('general-low-volume-gb');
                 if (lowVolumeInput) { lowVolumeInput.value = Number(data.low_volume_gb ?? 1); updateLowVolumeHint(); }
 
-                const snapshotInput = document.getElementById('general-snapshot-interval');
-                if (snapshotInput) snapshotInput.value = Number(data.snapshot_interval_minutes ?? 30);
-
                 // Show last snapshot info
                 const lastInfo = document.getElementById('snapshot-last-info');
                 const lastTimeEl = document.getElementById('snapshot-last-time');
@@ -3555,7 +3534,6 @@
         const nearDays = parseInt((document.getElementById('general-near-expiry-days') || {}).value || '3', 10);
         const nearHours = parseInt((document.getElementById('general-near-expiry-hours') || {}).value || '0', 10);
         const lowVolumeGb = parseFloat((document.getElementById('general-low-volume-gb') || {}).value || '1');
-        const snapshotInterval = parseInt((document.getElementById('general-snapshot-interval') || {}).value || '30', 10);
         const panelDomain = ((document.getElementById('general-panel-domain') || {}).value || '').trim();
 
         try {
@@ -3568,7 +3546,6 @@
                     near_expiry_days: Number.isFinite(nearDays) ? nearDays : 3,
                     near_expiry_hours: Number.isFinite(nearHours) ? nearHours : 0,
                     low_volume_gb: Number.isFinite(lowVolumeGb) ? lowVolumeGb : 1,
-                    snapshot_interval_minutes: Number.isFinite(snapshotInterval) ? snapshotInterval : 30,
                     panel_domain: panelDomain,
                 })
             });
@@ -3584,9 +3561,6 @@
                 if (nearHoursInput) nearHoursInput.value = Number(data.near_expiry_hours ?? 0);
                 const lowVolumeInput = document.getElementById('general-low-volume-gb');
                 if (lowVolumeInput) lowVolumeInput.value = Number(data.low_volume_gb ?? 1);
-                const snapshotEl = document.getElementById('general-snapshot-interval');
-                if (snapshotEl) snapshotEl.value = Number(data.snapshot_interval_minutes ?? 30);
-
                 _applyDomainState(data);
 
                 // Feedback about nginx update
@@ -3791,7 +3765,7 @@
                 <div class="overview-card">
                     <div class="overview-card-title">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-                        Last Snapshot
+                        Last Usage Rollup
                     </div>
                     ${d.last_snapshot_at ? (() => {
                         const sd = new Date(d.last_snapshot_at);
@@ -3800,7 +3774,7 @@
                         return `<div class="overview-card-value" style="font-size:0.95rem">${sd.toLocaleTimeString()}</div>
                     <div class="overview-card-sub">${agoStr} &nbsp;·&nbsp; ${(d.total_snapshots||0).toLocaleString()} rows</div>`;
                     })() : `<div class="overview-card-value" style="font-size:0.95rem;color:#94a3b8">—</div>
-                    <div class="overview-card-sub">No snapshots yet</div>`}
+                    <div class="overview-card-sub">No usage rollups yet</div>`}
                 </div>
             </div>`;
         } catch (e) {

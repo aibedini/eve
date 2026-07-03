@@ -511,9 +511,7 @@
 
             <!-- Period filter tabs -->
             <div class="flex gap-2 mb-4 flex-wrap">
-                <button onclick="switchHistoryPeriod('5min')" id="hist-tab-5min" class="hist-tab-btn px-3 py-1.5 text-xs font-medium rounded-lg text-muted hover:bg-white/5 hover:text-white transition-colors">{{ '۵ دقیقه' if is_fa else '5 Min' }}</button>
                 <button onclick="switchHistoryPeriod('day')" id="hist-tab-day" class="hist-tab-btn active px-3 py-1.5 text-xs font-medium rounded-lg bg-white/10 text-white transition-colors">{{ 'روزانه' if is_fa else 'Daily' }}</button>
-                <button onclick="switchHistoryPeriod('hour')" id="hist-tab-hour" class="hist-tab-btn px-3 py-1.5 text-xs font-medium rounded-lg text-muted hover:bg-white/5 hover:text-white transition-colors">{{ 'ساعتی' if is_fa else 'Hourly' }}</button>
                 <button onclick="switchHistoryPeriod('month')" id="hist-tab-month" class="hist-tab-btn px-3 py-1.5 text-xs font-medium rounded-lg text-muted hover:bg-white/5 hover:text-white transition-colors">{{ 'ماهانه' if is_fa else 'Monthly' }}</button>
             </div>
 
@@ -1123,11 +1121,6 @@
             const [jy, jm, jd] = _g2j(tehran.getUTCFullYear(), tehran.getUTCMonth()+1, tehran.getUTCDate());
             const months = IS_FA ? _JALALI_MONTHS_FA : _JALALI_MONTHS_EN;
             if (period === 'month') return `${months[jm-1]} ${jy}`;
-            if (period === 'hour' || period === '5min') {
-                const h = String(tehran.getUTCHours()).padStart(2,'0');
-                const mn = String(tehran.getUTCMinutes()).padStart(2,'0');
-                return `${jd} ${months[jm-1]} ${h}:${mn}`;
-            }
             return `${jd} ${months[jm-1]} ${jy}`;
         }
 
