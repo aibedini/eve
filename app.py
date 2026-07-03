@@ -97,7 +97,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.10"
+APP_VERSION = "2.4.11"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 
@@ -7831,6 +7831,148 @@ def _build_sub_page_packages(owner) -> list[dict]:
             'price': int(price or 0),
         })
     return out
+
+
+def _select_subscription_package(packages: list[dict], daily_gb: float,
+                                 safety_margin: float) -> tuple[dict | None, float]:
+    """Pick the smallest sensible package that is likely to cover its term.
+
+    Candidate generation keeps monthly/unlimited-duration offers. Scoring favors
+    low excess volume, a duration close to 31 days, and then price. Unlimited
+    volume is a fallback only when no finite package can cover the forecast.
+    """
+    candidates = []
+    for package in packages or []:
+        try:
+            days = int(package.get('days') or 0)
+            volume = int(package.get('volume') or 0)
+            price = max(0, int(package.get('price') or 0))
+        except (TypeError, ValueError):
+            continue
+        if days not in (0,) and days < 28:
+            continue
+        horizon_days = days if days > 0 else 31
+        required_gb = max(0.0, float(daily_gb)) * horizon_days * (1.0 + safety_margin)
+        candidates.append((package, days, volume, price, required_gb))
+
+    if not candidates:
+        return None, 0.0
+
+    finite_fits = [item for item in candidates if item[2] > 0 and item[2] >= item[4]]
+    pool = finite_fits or [item for item in candidates if item[2] == 0]
+    if not pool:
+        # Labelling an undersized package as "for you" would be misleading.
+        return None, max(item[4] for item in candidates)
+
+    prices = [item[3] for item in pool]
+    lo_price, hi_price = min(prices), max(prices)
+
+    def _score(item):
+        _package, days, volume, price, required = item
+        if volume == 0:
+            excess = 1.25  # unlimited is useful, but only after finite fits fail
+        else:
+            excess = max(0.0, (volume - required) / max(required, 1.0))
+        duration_penalty = abs((days if days > 0 else 31) - 31) / 31.0
+        price_penalty = ((price - lo_price) / (hi_price - lo_price)) if hi_price > lo_price else 0.0
+        return excess + (0.20 * duration_penalty) + (0.04 * price_penalty), price
+
+    selected = min(pool, key=_score)
+    return selected[0], selected[4]
+
+
+def _build_subscription_package_recommendation(server_id: int, sub_id: str,
+                                               packages: list[dict], *,
+                                               terminal: bool = False) -> dict | None:
+    """Build an explainable, uncertainty-aware 31-day usage recommendation.
+
+    The observation window starts at the latest detected renewal, or 31 days
+    ago when no renewal exists. For an already-ended account, elapsed time stops
+    at its last meaningful usage; this correctly handles a plan consumed in only
+    a few days instead of diluting the average with idle days after exhaustion.
+    """
+    if not packages:
+        return None
+
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=31)
+    try:
+        latest_renewal = (RenewalEvent.query
+                          .filter_by(server_id=int(server_id), sub_id=str(sub_id))
+                          .filter(RenewalEvent.renewed_at >= cutoff)
+                          .order_by(RenewalEvent.renewed_at.desc())
+                          .first())
+        anchor = max(cutoff, latest_renewal.renewed_at) if latest_renewal else cutoff
+        rows = (UsageDaily.query
+                .filter_by(server_id=int(server_id), sub_id=str(sub_id))
+                .filter(UsageDaily.last_observed_at >= anchor)
+                .order_by(UsageDaily.usage_date.asc())
+                .all())
+        state = UsageCounterState.query.filter_by(server_id=int(server_id), sub_id=str(sub_id)).first()
+    except Exception:
+        return None
+
+    if not rows:
+        return None
+
+    meaningful_threshold = 1024 * 1024  # ignore counter noise below 1 MB/day
+    total_bytes = 0
+    meaningful_rows = []
+    total_samples = 0
+    for row in rows:
+        delta = max(0, int(row.upload_bytes or 0)) + max(0, int(row.download_bytes or 0))
+        total_bytes += delta
+        total_samples += max(0, int(row.sample_count or 0))
+        if delta >= meaningful_threshold:
+            meaningful_rows.append(row)
+
+    # Avoid confident-looking personalization from a nearly empty/noisy trace.
+    if total_bytes < 100 * 1024 * 1024 or not meaningful_rows or total_samples < 2:
+        return None
+
+    first_at = max(anchor, meaningful_rows[0].first_observed_at or anchor)
+    last_active_at = meaningful_rows[-1].last_observed_at or first_at
+    if terminal:
+        end_at = last_active_at
+    else:
+        observed_at = state.observed_at if state and state.observed_at else rows[-1].last_observed_at
+        end_at = max(last_active_at, min(observed_at or now, now))
+
+    # A one-day floor prevents a partial first day from projecting an absurd
+    # monthly amount while preserving the requested "used it in 3 days" signal.
+    basis_days = min(31.0, max(1.0, (end_at - first_at).total_seconds() / 86400.0))
+    average_daily_gb = (total_bytes / float(1024 ** 3)) / basis_days
+    if average_daily_gb <= 0:
+        return None
+
+    covered_dates = len({row.usage_date for row in rows})
+    if basis_days >= 14 and covered_dates >= 10:
+        confidence, safety_margin = 'high', 0.10
+    elif basis_days >= 5 and covered_dates >= 4:
+        confidence, safety_margin = 'medium', 0.15
+    else:
+        confidence, safety_margin = 'early', 0.20
+
+    selected, buffered_requirement = _select_subscription_package(
+        packages, average_daily_gb, safety_margin,
+    )
+    if not selected:
+        return None
+
+    projected_31d_gb = average_daily_gb * 31.0
+    return {
+        'model_version': 'usage-fit-v1',
+        'package_id': int(selected.get('id')),
+        'average_daily_gb': round(average_daily_gb, 2),
+        'projected_31d_gb': round(projected_31d_gb, 1),
+        'buffered_requirement_gb': round(buffered_requirement, 1),
+        'basis_days': round(basis_days, 1),
+        'covered_days': covered_dates,
+        'confidence': confidence,
+        'safety_margin_percent': int(round(safety_margin * 100)),
+        'source': 'current_cycle' if latest_renewal else 'last_31_days',
+        'fast_cycle': bool(terminal and basis_days <= 7),
+    }
 
 
 def get_config(key, default=0):
@@ -19394,6 +19536,16 @@ def client_subscription(server_id, sub_id):
 
     # Renewal packages to show on the sub page, based on the account owner.
     sub_packages_payload = _build_sub_page_packages(sub_owner_reseller)
+    renewal_recommendation = _build_subscription_package_recommendation(
+        server.id,
+        normalized_sub_id,
+        sub_packages_payload,
+        terminal=subscription_state.get('tag') in ('expired', 'ended'),
+    )
+    if renewal_recommendation:
+        recommended_id = renewal_recommendation.get('package_id')
+        for package in sub_packages_payload:
+            package['is_personalized'] = package.get('id') == recommended_id
 
     _sub_html = render_template(
         'subscription.html',
@@ -19406,6 +19558,7 @@ def client_subscription(server_id, sub_id):
         active_online_chat_script=active_online_chat_script,
         backup_configs=backup_configs_payload,
         sub_packages=sub_packages_payload,
+        renewal_recommendation=renewal_recommendation,
         page_lang=page_lang,
         server_id=server_id,
         sub_id=normalized_sub_id,

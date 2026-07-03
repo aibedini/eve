@@ -73,7 +73,7 @@
             padding: 16px 10px 12px; border-radius: 16px;
             border: 1px solid rgba(255,255,255,0.08);
             background: rgba(255,255,255,0.03);
-            cursor: pointer; transition: all 0.2s; text-align: center;
+            cursor: pointer; transition: all 0.2s; text-align: center; position: relative;
         }
         .pkg-renew-card:hover {
             background: rgba(99,102,241,0.10); border-color: rgba(99,102,241,0.45);
@@ -91,6 +91,24 @@
             box-shadow: 0 2px 8px rgba(99,102,241,0.3); transition: background 0.2s;
         }
         .pkg-renew-card:hover .pkg-renew-cta { background: #4f46e5; }
+        .pkg-renew-card.personalized {
+            order: -1;
+            border-color: rgba(74,222,128,0.72);
+            background: linear-gradient(155deg, rgba(34,197,94,0.16), rgba(99,102,241,0.10));
+            box-shadow: 0 0 24px rgba(34,197,94,0.16);
+            padding-top: 28px;
+        }
+        .pkg-personalized-badge {
+            position: absolute; top: 7px; right: 8px;
+            border-radius: 999px; padding: 3px 7px;
+            background: rgba(34,197,94,0.94); color: #052e16;
+            font-size: 9px; line-height: 1.4; font-weight: 900; white-space: nowrap;
+        }
+        .pkg-recommendation-reason {
+            margin-top: 12px; padding: 11px 12px; border-radius: 12px;
+            background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.22);
+            color: rgba(220,252,231,0.94); font-size: 11px; line-height: 1.8;
+        }
         .renew-highlight { border-color: rgba(99,102,241,0.5) !important; box-shadow: 0 0 24px rgba(99,102,241,0.18); }
         /* Renewal channel choice modal */
         .renew-modal-overlay {
@@ -275,13 +293,16 @@
                     </p>
                     <div class="pkg-renew-grid">
                         {% for p in sub_packages %}
-                        <div class="pkg-renew-card{% if not has_support %} pkg-renew-card--no-contact{% endif %}"
+                        <div class="pkg-renew-card{% if p.is_personalized %} personalized{% endif %}{% if not has_support %} pkg-renew-card--no-contact{% endif %}"
                                 data-name="{{ p.name }}"
                                 data-days="{{ p.days }}"
                                 data-volume="{{ p.volume }}"
                                 data-price="{{ p.price }}"
                                 onclick="{% if has_support %}openRenewRequest(this){% endif %}"
                                 style="{% if not has_support %}cursor:default; opacity:0.75;{% endif %}">
+                            {% if p.is_personalized %}
+                            <span class="pkg-personalized-badge">{{ 'متناسب شما' if is_fa else 'Made for you' }}</span>
+                            {% endif %}
                             <span class="pkg-renew-name">{{ p.name }}</span>
                             <span class="pkg-renew-meta">
                                 <span>{{ ('∞' if p.days == 0 else (p.days|string ~ (' روز' if is_fa else 'd'))) }}</span>
@@ -295,6 +316,17 @@
                         </div>
                         {% endfor %}
                     </div>
+                    {% if renewal_recommendation %}
+                    <div class="pkg-recommendation-reason" style="direction:{{ 'rtl' if is_fa else 'ltr' }}; text-align:{{ 'right' if is_fa else 'left' }};">
+                        {% if is_fa %}
+                            با توجه به میانگین مصرف روزانه شما ({{ renewal_recommendation.average_daily_gb }} گیگ)، مصرف ۳۱ روز آینده حدود {{ renewal_recommendation.projected_31d_gb }} گیگ برآورد می‌شود؛ برای همین این بسته را متناسب شما پیشنهاد می‌کنیم.
+                            <span style="display:block; color:rgba(167,243,208,0.72); margin-top:2px;">مبنای تحلیل: {{ renewal_recommendation.basis_days }} روز از {{ 'چرخه فعلی' if renewal_recommendation.source == 'current_cycle' else '۳۱ روز گذشته' }} • {{ 'اطمینان بالا' if renewal_recommendation.confidence == 'high' else ('اطمینان متوسط' if renewal_recommendation.confidence == 'medium' else 'برآورد اولیه') }}{% if renewal_recommendation.fast_cycle %} — مصرف سریع بسته در محاسبه لحاظ شده{% endif %}.</span>
+                        {% else %}
+                            Your average daily usage is {{ renewal_recommendation.average_daily_gb }} GB, so your next 31 days are estimated at about {{ renewal_recommendation.projected_31d_gb }} GB. This package is the best fit for that pattern.
+                            <span style="display:block; color:rgba(167,243,208,0.72); margin-top:2px;">Based on {{ renewal_recommendation.basis_days }} days from {{ 'your current cycle' if renewal_recommendation.source == 'current_cycle' else 'the last 31 days' }} • {{ 'high confidence' if renewal_recommendation.confidence == 'high' else ('medium confidence' if renewal_recommendation.confidence == 'medium' else 'early estimate') }}{% if renewal_recommendation.fast_cycle %}; rapid plan consumption was accounted for{% endif %}.</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
