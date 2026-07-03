@@ -1109,6 +1109,19 @@ EOF
 
 setup_systemd() {
     print_header "Step 9: Systemd service"
+    # GLOBAL_SERVER_DATA is a large per-process cache. Three workers can consume
+    # most of a 4 GB VPS, so size the process count to RAM while allowing an
+    # explicit override for larger/busier installations.
+    local gunicorn_workers="${GUNICORN_WORKERS:-}"
+    if [ -z "$gunicorn_workers" ]; then
+        local mem_kb
+        mem_kb="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null)"
+        if [ "${mem_kb:-0}" -ge 6291456 ]; then
+            gunicorn_workers=3
+        else
+            gunicorn_workers=2
+        fi
+    fi
     cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=Eve X-UI Manager
@@ -1120,8 +1133,8 @@ Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=${ENV_FILE}
-# Recommended: increase workers if you have >1 CPU core
-ExecStart=${APP_DIR}/venv/bin/gunicorn --workers 3 --threads 4 --worker-class gthread --timeout 120 --graceful-timeout 30 --bind 0.0.0.0:${APP_PORT} app:app
+# Override auto-sizing by running setup with GUNICORN_WORKERS=N.
+ExecStart=${APP_DIR}/venv/bin/gunicorn --workers ${gunicorn_workers} --threads 4 --worker-class gthread --timeout 120 --graceful-timeout 30 --bind 0.0.0.0:${APP_PORT} app:app
 Restart=always
 
 [Install]

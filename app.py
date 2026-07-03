@@ -24580,8 +24580,8 @@ def health_watchdog():
                     pass
 
 
-_USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN = 30  # default: 30 minutes
-_USAGE_SNAPSHOT_RETENTION_DAYS = 90  # keep 90 days of history
+_USAGE_SNAPSHOT_INTERVAL_DEFAULT_MIN = 60  # large installs otherwise grow by millions of rows/day
+_USAGE_SNAPSHOT_RETENTION_DAYS = 14  # bounded history for small production disks
 USAGE_SNAPSHOT_INTERVAL_KEY = 'usage_snapshot_interval_minutes'
 
 
