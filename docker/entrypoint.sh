@@ -39,13 +39,18 @@ export SESSION_SECRET="${SESSION_SECRET:-$(generate_hex 32)}"
 export SERVER_PASSWORD_KEY="${SERVER_PASSWORD_KEY:-$(generate_fernet)}"
 export API_PORT="${API_PORT:-5000}"
 export FLASK_ENV="${FLASK_ENV:-production}"
-export DISABLE_BACKGROUND_THREADS="${DISABLE_BACKGROUND_THREADS:-true}"
+export DISABLE_BACKGROUND_THREADS=1
+export EVE_PROCESS_ROLE="${EVE_PROCESS_ROLE:-web}"
 
 if [ -n "${DATABASE_URL:-}" ] && echo "$DATABASE_URL" | grep -qi '^postgresql'; then
     echo "Waiting for PostgreSQL..."
     until pg_isready -d "$DATABASE_URL" >/dev/null 2>&1; do
         sleep 2
     done
+fi
+
+if [ "$EVE_PROCESS_ROLE" = "background" ]; then
+    exec python background_worker.py
 fi
 
 if [ -f init_db.py ]; then
@@ -56,10 +61,34 @@ if [ -f migrations.py ]; then
     python migrations.py
 fi
 
-export DISABLE_BACKGROUND_THREADS="${RUN_BACKGROUND_THREADS_DISABLED:-false}"
+unset DISABLE_BACKGROUND_THREADS
+
+gunicorn_workers="${GUNICORN_WORKERS:-}"
+if [ -z "$gunicorn_workers" ]; then
+    memory_bytes=""
+    if [ -r /sys/fs/cgroup/memory.max ]; then
+        memory_bytes="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"
+        [ "$memory_bytes" = "max" ] && memory_bytes=""
+    elif [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+        memory_bytes="$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || true)"
+    fi
+    if [ -z "$memory_bytes" ]; then
+        memory_kb="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || true)"
+        memory_bytes="$(( ${memory_kb:-0} * 1024 ))"
+    fi
+    if [ "${memory_bytes:-0}" -lt 6442450944 ]; then
+        gunicorn_workers=1
+    elif [ "$memory_bytes" -lt 12884901888 ]; then
+        gunicorn_workers=2
+    else
+        gunicorn_workers=3
+    fi
+fi
+
+echo "Starting web role with ${gunicorn_workers} Gunicorn worker(s) and ${GUNICORN_THREADS:-4} threads."
 
 exec gunicorn \
-    --workers "${GUNICORN_WORKERS:-3}" \
+    --workers "$gunicorn_workers" \
     --threads "${GUNICORN_THREADS:-4}" \
     --worker-class gthread \
     --timeout "${GUNICORN_TIMEOUT:-120}" \

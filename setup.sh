@@ -1109,23 +1109,26 @@ EOF
 
 setup_systemd() {
     print_header "Step 9: Systemd service"
-    # GLOBAL_SERVER_DATA is a large per-process cache. Three workers can consume
-    # most of a 4 GB VPS, so size the process count to RAM while allowing an
-    # explicit override for larger/busier installations.
+    local restart_now="${1:-true}"
+    # A dedicated background process owns one large snapshot. Size only the web
+    # processes here so small VPSes keep two copies total, not three or four.
     local gunicorn_workers="${GUNICORN_WORKERS:-}"
     if [ -z "$gunicorn_workers" ]; then
         local mem_kb
         mem_kb="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null)"
-        if [ "${mem_kb:-0}" -ge 6291456 ]; then
+        if [ "${mem_kb:-0}" -ge 12582912 ]; then
             gunicorn_workers=3
-        else
+        elif [ "${mem_kb:-0}" -ge 6291456 ]; then
             gunicorn_workers=2
+        else
+            gunicorn_workers=1
         fi
     fi
     cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=Eve X-UI Manager
 After=network.target
+Wants=${SERVICE_NAME}-background.service
 
 [Service]
 User=${APP_USER}
@@ -1133,6 +1136,7 @@ Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=${ENV_FILE}
+Environment="EVE_PROCESS_ROLE=web"
 # Override auto-sizing by running setup with GUNICORN_WORKERS=N.
 ExecStart=${APP_DIR}/venv/bin/gunicorn --workers ${gunicorn_workers} --threads 4 --worker-class gthread --timeout 120 --graceful-timeout 30 --bind 0.0.0.0:${APP_PORT} app:app
 Restart=always
@@ -1140,11 +1144,36 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
+    cat > /etc/systemd/system/${SERVICE_NAME}-background.service <<EOF
+[Unit]
+Description=Eve X-UI Manager Background Workers
+After=network.target
+PartOf=${SERVICE_NAME}.service
+
+[Service]
+User=${APP_USER}
+Group=${APP_USER}
+WorkingDirectory=${APP_DIR}
+Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=${ENV_FILE}
+Environment="EVE_PROCESS_ROLE=background"
+ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/background_worker.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
     systemctl daemon-reload
     systemctl enable ${SERVICE_NAME}
-    systemctl restart ${SERVICE_NAME}
+    systemctl enable ${SERVICE_NAME}-background
+    if [ "$restart_now" = "true" ]; then
+        systemctl restart ${SERVICE_NAME}
+        print_success "Web and background services started"
+    else
+        print_success "Web and background service definitions updated"
+    fi
     install_maintenance_service
-    print_success "Service started"
 }
 
 install_maintenance_service() {
@@ -2150,6 +2179,7 @@ do_online_update() {
         _offer_rollback "${APP_DIR}.bak.${_BAK_TS}"
         return 1
     fi
+    setup_systemd false
     setup_nginx
     patch_nginx_backup_location
     show_maintenance_preflight
@@ -2453,6 +2483,7 @@ offline_update() {
         rm -rf "$TMPDIR"
         return 1
     fi
+    setup_systemd false
 
     # Update eve CLI from the ZIP
     if [ -f "$EXTRACT_ROOT/setup.sh" ]; then
@@ -2653,8 +2684,10 @@ uninstall_project() {
     print_header "Uninstalling Eve X-UI Manager"
     systemctl stop ${SERVICE_NAME} || true
     systemctl disable ${SERVICE_NAME} || true
+    systemctl disable --now ${SERVICE_NAME}-background 2>/dev/null || true
     systemctl disable --now eve-maintenance.service 2>/dev/null || true
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    rm -f /etc/systemd/system/${SERVICE_NAME}-background.service
     rm -f /etc/systemd/system/eve-maintenance.service
     rm -f /usr/local/sbin/eve-maintenance-root
     systemctl daemon-reload

@@ -4,6 +4,7 @@ set -euo pipefail
 APP_IMAGE="${APP_IMAGE:-ghcr.io/yoyoraya/eve-xui-manager:latest}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
+REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
 OUT_DIR="${OUT_DIR:-docker-offline-bundle}"
 OUT_FILE="${OUT_FILE:-eve-docker-offline-bundle.tar.gz}"
 
@@ -29,12 +30,14 @@ docker build -t "$APP_IMAGE" .
 echo "-- Pulling runtime images"
 docker pull "$POSTGRES_IMAGE"
 docker pull "$CADDY_IMAGE"
+docker pull "$REDIS_IMAGE"
 
 echo "-- Saving Docker images"
 docker save -o "$OUT_DIR/docker-images.tar" \
     "$APP_IMAGE" \
     "$POSTGRES_IMAGE" \
-    "$CADDY_IMAGE"
+    "$CADDY_IMAGE" \
+    "$REDIS_IMAGE"
 
 cp docker-compose.yml "$OUT_DIR/docker-compose.yml"
 cp .env.docker.example "$OUT_DIR/.env.example"
@@ -60,6 +63,7 @@ Included images:
   - ${APP_IMAGE}
   - ${POSTGRES_IMAGE}
   - ${CADDY_IMAGE}
+  - ${REDIS_IMAGE}
 
 The target server only needs Docker + Docker Compose plugin installed.
 Ubuntu 20.04/22.04/24.04 are supported because the app runs inside containers.

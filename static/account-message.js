@@ -66,15 +66,31 @@
         try { return new URL(raw, window.location.origin).href; } catch (_) { return raw; }
     }
 
-    const DEFAULT_TEMPLATE = [
+    const DEFAULT_TEMPLATE = ((document.documentElement.lang || 'en') === 'fa' ? [
         'اطلاعات اکانت شما',
         'اسم اکانت: {email}',
         'مدت زمان باقی مانده: {remaining_time}',
         'حجم باقی مانده: {remaining_volume}',
         'لینک dash sub: {dashboard_link}',
         '',
-        'لطفا از طریق لینک بالا به سرویس خود متصل شین .'
-    ].join('\n');
+        'لطفاً از طریق لینک بالا به سرویس خود متصل شوید.'
+    ] : [
+        'Your account information',
+        'Account name: {email}',
+        'Remaining time: {remaining_time}',
+        'Remaining volume: {remaining_volume}',
+        'Dashboard link: {dashboard_link}',
+        '',
+        'Use the link above to connect to your service.'
+    ]).join('\n');
+
+    const EMPTY_RECOMMENDATION = {
+        recommendation: '', recommendation_given: false,
+        recommended_package: '', recommended_volume: '', recommended_days: '',
+        recommended_price: '', recommended_daily_usage: '', recommended_31d_usage: '',
+        comfort_recommendation: '', comfort_recommendation_given: false,
+        comfort_package: '', comfort_volume: '', comfort_days: '', comfort_price: '',
+    };
 
     const templateCache = {};   // channel -> { content, telegram_channel, whatsapp_channel }
     async function getTemplate(channel) {
@@ -96,11 +112,27 @@
         return templateCache[channel];
     }
 
+    async function loadRecommendation(client) {
+        if (!client || client.recommendation_vars || !client.server_id || !client.sub_id) return client || {};
+        try {
+            const params = new URLSearchParams({
+                server_id: String(client.server_id), sub_id: String(client.sub_id),
+                email: String(client.email || ''), terminal: client.terminal ? '1' : '0',
+            });
+            const res = await fetch(`/api/package-recommendation/template-vars?${params.toString()}`);
+            const data = await res.json();
+            client.recommendation_vars = (data && data.success && data.variables) ? data.variables : {};
+        } catch (_) {
+            client.recommendation_vars = {};
+        }
+        return client;
+    }
+
     function renderMessage(templateObj, client) {
         const tpl = (templateObj && templateObj.content) ? templateObj.content : DEFAULT_TEMPLATE;
         const telegramCh = (templateObj && templateObj.telegram_channel) || '';
         const whatsappCh = (templateObj && templateObj.whatsapp_channel) || '';
-        const values = {
+        const values = Object.assign({}, EMPTY_RECOMMENDATION, client.recommendation_vars || {}, {
             email: client.email || '-',
             account_name: client.email || '-',
             service_name: client.email || '-',
@@ -115,7 +147,7 @@
             // {if_gift}...{/if_gift} conditional block (dropped when no gift).
             gift_volume: (client.gift_volume !== undefined && client.gift_volume !== null) ? String(client.gift_volume) : '',
             gift_given: !!client.gift_given || !!(client.gift_volume && Number(client.gift_volume) > 0),
-        };
+        });
         return applyConditionals(tpl, values).replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) =>
             Object.prototype.hasOwnProperty.call(values, k) ? values[k] : m);
     }
@@ -276,8 +308,9 @@
     }
 
     // opts.templateType: 'royalty' uses royalty_info templates instead of account_info
-    function open(client, opts) {
+    async function open(client, opts) {
         opts = opts || {};
+        await loadRecommendation(client);
         const phones = extractNumbers(
             { label: 'Account name', value: client.email },
             { label: 'Comment', value: client.comment },

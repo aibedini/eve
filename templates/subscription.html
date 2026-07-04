@@ -1138,6 +1138,8 @@
         let _historyRows = [];
         let _historyRenewalLabels = new Set();
         let _historyPage = 0;
+        let _historyPages = [];
+        let _historyAbortController = null;
 
         // ── Jalali (Shamsi) conversion ─────────────────────────────────
         const _JALALI_MONTHS_FA = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
@@ -1184,29 +1186,38 @@
 
         function switchHistoryPeriod(period) {
             _historyPeriod = period;
+            _historyPages = [];
+            _historyPage = 0;
             document.querySelectorAll('.hist-tab-btn').forEach(b => {
                 b.className = 'hist-tab-btn px-3 py-1.5 text-xs font-medium rounded-lg text-muted hover:bg-white/5 hover:text-white transition-colors';
             });
             const active = document.getElementById(`hist-tab-${period}`);
             if (active) active.className = 'hist-tab-btn active px-3 py-1.5 text-xs font-medium rounded-lg bg-white/10 text-white transition-colors';
-            loadUsageHistory();
+            loadUsageHistory(null, false);
         }
 
-        async function loadUsageHistory() {
+        async function loadUsageHistory(cursor = null, append = false) {
             const loadingEl = document.getElementById('history-loading');
             const tbody = document.getElementById('history-tbody');
             const emptyEl = document.getElementById('history-empty');
             const renewalContainer = document.getElementById('renewal-events-container');
 
-            if (loadingEl) { loadingEl.textContent = IS_FA ? 'در حال بارگزاری...' : 'Loading...'; loadingEl.style.display = ''; }
+            if (_historyAbortController) _historyAbortController.abort();
+            _historyAbortController = new AbortController();
+            if (loadingEl) { loadingEl.textContent = IS_FA ? 'در حال بارگذاری...' : 'Loading...'; loadingEl.style.display = ''; }
             if (emptyEl) emptyEl.classList.add('hidden');
-            if (tbody) tbody.innerHTML = '';
-            if (renewalContainer) renewalContainer.classList.add('hidden');
+            if (!append && tbody) tbody.innerHTML = '';
+            if (!append && renewalContainer) renewalContainer.classList.add('hidden');
             const pagerEl = document.getElementById('history-pagination');
-            if (pagerEl) { pagerEl.style.display = 'none'; pagerEl.innerHTML = ''; }
+            if (!append && pagerEl) { pagerEl.style.display = 'none'; pagerEl.innerHTML = ''; }
 
             try {
-                const resp = await fetch(`/sub/history/${HISTORY_SERVER_ID}/${encodeURIComponent(HISTORY_SUB_ID)}?period=${_historyPeriod}`);
+                const params = new URLSearchParams({ period: _historyPeriod, limit: String(HISTORY_PAGE_SIZE) });
+                if (cursor) params.set('cursor', cursor);
+                const resp = await fetch(`/sub/history/${HISTORY_SERVER_ID}/${encodeURIComponent(HISTORY_SUB_ID)}?${params.toString()}`, {
+                    signal: _historyAbortController.signal,
+                    cache: 'no-store',
+                });
                 const data = await resp.json();
                 if (loadingEl) loadingEl.style.display = 'none';
 
@@ -1215,28 +1226,16 @@
                     return;
                 }
 
-                // Renewal events — single compact inline line (icon + title + details)
-                if (data.renewals && data.renewals.length > 0 && renewalContainer) {
-                    renewalContainer.classList.remove('hidden');
-                    renewalContainer.innerHTML = data.renewals.map(r => {
-                        const volText = r.is_unlimited_volume ? (IS_FA?'نامحدود':'Unlimited') : fmtBytes(r.volume_bytes);
-                        const timeText = r.is_unlimited_time ? (IS_FA?'نامحدود':'Unlimited') : (r.days!=null?(IS_FA?`${r.days} روز`:`${r.days} days`):'—');
-                        return `<div class="flex items-center px-3 py-1.5 rounded-lg bg-success/10 border border-success/20" style="font-size:.75rem; line-height:1.4; flex-wrap:wrap; gap:6px;">
-                            <svg class="text-success shrink-0" style="width:13px;height:13px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                            <span class="font-semibold text-success">${IS_FA?'تمدید شد':'Renewed'} — ${fmtJalali(r.renewed_at, 'day')}</span>
-                            <span class="text-muted">· ${IS_FA?'حجم':'Vol'}: ${volText} · ${IS_FA?'مدت':'Duration'}: ${timeText}</span>
-                        </div>`;
-                    }).join('');
+                const page = { rows: data.history || [], renewals: data.renewals || [], pageInfo: data.page_info || {} };
+                if (append) {
+                    _historyPages = _historyPages.slice(0, _historyPage + 1);
+                    _historyPages.push(page);
+                    _historyPage += 1;
+                } else {
+                    _historyPages = [page];
+                    _historyPage = 0;
                 }
-
-                // Build the set of date labels (in the current period's format) on
-                // which a renewal happened, so the table can flag those rows.
-                _historyRenewalLabels = new Set(
-                    (data.renewals || []).map(r => fmtJalali(r.renewed_at, _historyPeriod))
-                );
-
-                _historyRows = data.history || [];
-                _historyPage = 0;
+                _historyRows = page.rows;
                 if (_historyRows.length === 0) {
                     if (emptyEl) emptyEl.classList.remove('hidden');
                     renderHistoryPage();
@@ -1244,6 +1243,7 @@
                 }
                 renderHistoryPage();
             } catch (e) {
+                if (e && e.name === 'AbortError') return;
                 if (loadingEl) loadingEl.style.display = 'none';
                 if (emptyEl) { emptyEl.textContent = IS_FA ? 'خطا در بارگزاری.' : 'Failed to load history.'; emptyEl.classList.remove('hidden'); }
             }
@@ -1254,12 +1254,11 @@
             const pager = document.getElementById('history-pagination');
             if (!tbody) return;
 
-            const total = _historyRows.length;
-            const pageCount = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
-            if (_historyPage > pageCount - 1) _historyPage = pageCount - 1;
-            if (_historyPage < 0) _historyPage = 0;
-            const start = _historyPage * HISTORY_PAGE_SIZE;
-            const pageRows = _historyRows.slice(start, start + HISTORY_PAGE_SIZE);
+            const page = _historyPages[_historyPage] || { rows: [], renewals: [], pageInfo: {} };
+            _historyRows = page.rows || [];
+            _historyRenewalLabels = new Set((page.renewals || []).map(r => fmtJalali(r.renewed_at, _historyPeriod)));
+            renderHistoryRenewals(page.renewals || []);
+            const pageRows = _historyRows;
 
             tbody.innerHTML = pageRows.map(row => {
                 const leftColor = (row.remaining!=null && row.volume_limit && (row.remaining/row.volume_limit)<0.1)
@@ -1283,26 +1282,57 @@
                 </tr>`;
             }).join('');
 
-            // Pagination controls (only when more than one page)
             if (!pager) return;
-            if (total <= HISTORY_PAGE_SIZE) {
+            const hasOlder = !!page.pageInfo?.has_more;
+            const hasNewer = _historyPage > 0;
+            if (!hasOlder && !hasNewer) {
                 pager.style.display = 'none';
                 pager.innerHTML = '';
                 return;
             }
             pager.style.cssText = 'display:flex; align-items:center; justify-content:center; gap:10px; margin-top:12px; font-size:.75rem;';
-            const prevOff = _historyPage <= 0;
-            const nextOff = _historyPage >= pageCount - 1;
+            const prevOff = !hasNewer;
+            const nextOff = !hasOlder;
             const btnStyle = (off) => `padding:4px 12px; border-radius:8px; background:rgba(255,255,255,0.06); color:#fff; border:none; ${off ? 'opacity:.3; cursor:not-allowed;' : 'cursor:pointer;'}`;
             pager.innerHTML = `
-                <button style="${btnStyle(prevOff)}" ${prevOff?'disabled':''} onclick="changeHistoryPage(-1)">${IS_FA?'قبلی':'Prev'}</button>
-                <span class="text-muted">${IS_FA?`صفحه ${_historyPage+1} از ${pageCount}`:`Page ${_historyPage+1} of ${pageCount}`}</span>
-                <button style="${btnStyle(nextOff)}" ${nextOff?'disabled':''} onclick="changeHistoryPage(1)">${IS_FA?'بعدی':'Next'}</button>`;
+                <button aria-label="${IS_FA?'روزهای جدیدتر':'Newer records'}" style="${btnStyle(prevOff)} min-height:44px;" ${prevOff?'disabled':''} onclick="changeHistoryPage(-1)">${IS_FA?'جدیدتر':'Newer'}</button>
+                <span class="text-muted">${IS_FA?`صفحه ${_historyPage+1}`:`Page ${_historyPage+1}`}</span>
+                <button aria-label="${IS_FA?'روزهای قدیمی‌تر':'Older records'}" style="${btnStyle(nextOff)} min-height:44px;" ${nextOff?'disabled':''} onclick="changeHistoryPage(1)">${IS_FA?'قدیمی‌تر':'Older'}</button>`;
         }
 
         function changeHistoryPage(delta) {
-            _historyPage += delta;
-            renderHistoryPage();
+            if (delta < 0 && _historyPage > 0) {
+                _historyPage -= 1;
+                renderHistoryPage();
+                document.getElementById('usage-history-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+            if (delta > 0) {
+                if (_historyPages[_historyPage + 1]) {
+                    _historyPage += 1;
+                    renderHistoryPage();
+                    document.getElementById('usage-history-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    return;
+                }
+                const cursor = _historyPages[_historyPage]?.pageInfo?.end_cursor;
+                if (cursor) loadUsageHistory(cursor, true);
+            }
+        }
+
+        function renderHistoryRenewals(renewals) {
+            const container = document.getElementById('renewal-events-container');
+            if (!container) return;
+            if (!renewals.length) { container.classList.add('hidden'); container.innerHTML = ''; return; }
+            container.classList.remove('hidden');
+            container.innerHTML = renewals.map(r => {
+                const volText = r.is_unlimited_volume ? (IS_FA?'نامحدود':'Unlimited') : fmtBytes(r.volume_bytes);
+                const timeText = r.is_unlimited_time ? (IS_FA?'نامحدود':'Unlimited') : (r.days!=null?(IS_FA?`${r.days} روز`:`${r.days} days`):'—');
+                return `<div class="flex items-center px-3 py-1.5 rounded-lg bg-success/10 border border-success/20" style="font-size:.75rem;line-height:1.4;flex-wrap:wrap;gap:6px;">
+                    <svg class="text-success shrink-0" style="width:13px;height:13px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    <span class="font-semibold text-success">${IS_FA?'تمدید شد':'Renewed'} — ${fmtJalali(r.renewed_at, 'day')}</span>
+                    <span class="text-muted">· ${IS_FA?'حجم':'Vol'}: ${volText} · ${IS_FA?'مدت':'Duration'}: ${timeText}</span>
+                </div>`;
+            }).join('');
         }
 
         function closePopupAnnouncement() {

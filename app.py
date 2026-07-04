@@ -97,9 +97,12 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.13"
+APP_VERSION = "2.4.15"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
+PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
+if PROCESS_ROLE not in ('combined', 'web', 'background'):
+    PROCESS_ROLE = 'combined'
 
 # Simple in-memory cache for update checks
 UPDATE_CACHE = {
@@ -124,20 +127,27 @@ GLOBAL_SERVER_DATA = {
 # missing/unreachable, the app transparently falls back to per-worker fetching.
 REDIS_URL = (os.environ.get('REDIS_URL') or '').strip()
 REDIS_SNAPSHOT_KEY = 'eve:server_data_snapshot'
+REDIS_SNAPSHOT_MANIFEST_KEY = 'eve:server_data_manifest'
+REDIS_SERVER_SNAPSHOT_PREFIX = 'eve:server_data:'
 _REDIS_CLIENT = None
 _REDIS_CHECKED = False
+_REDIS_RETRY_AFTER = 0.0
 _REDIS_LOCK = threading.Lock()
 
 
 def get_redis():
     """Return a connected redis client, or None if unavailable.
     Result is cached; a failed connection disables Redis for the process."""
-    global _REDIS_CLIENT, _REDIS_CHECKED
+    global _REDIS_CLIENT, _REDIS_CHECKED, _REDIS_RETRY_AFTER
     if _REDIS_CHECKED:
         return _REDIS_CLIENT
+    if _REDIS_CLIENT is None and time.monotonic() < _REDIS_RETRY_AFTER:
+        return None
     with _REDIS_LOCK:
         if _REDIS_CHECKED:
             return _REDIS_CLIENT
+        if _REDIS_CLIENT is None and time.monotonic() < _REDIS_RETRY_AFTER:
+            return None
         _REDIS_CHECKED = True
         if not REDIS_URL:
             _REDIS_CLIENT = None
@@ -153,6 +163,8 @@ def get_redis():
         except Exception as _re:
             print(f"[Redis] unavailable ({_re}); using per-worker in-memory cache.")
             _REDIS_CLIENT = None
+            _REDIS_CHECKED = False
+            _REDIS_RETRY_AFTER = time.monotonic() + 10.0
         return _REDIS_CLIENT
 
 
@@ -161,28 +173,105 @@ def redis_enabled() -> bool:
 
 
 REDIS_SNAPSHOT_VERSION_KEY = 'eve:server_data_version'
-REDIS_SNAPSHOT_TTL = 180  # seconds; expires if the fetcher dies
+REDIS_SNAPSHOT_TTL = 600  # survives panel backoff while still expiring stale cache
+REDIS_REFRESH_QUEUE_KEY = 'eve:refresh:queue'
+REDIS_REFRESH_PROCESSING_KEY = 'eve:refresh:processing'
+REDIS_REFRESH_JOB_PREFIX = 'eve:refresh:job:'
+REDIS_REFRESH_SCOPE_PREFIX = 'eve:refresh:scope:'
+REDIS_REFRESH_JOB_TTL = 900
 _LAST_LOADED_SNAPSHOT_VERSION = None
+_LAST_LOADED_SERVER_VERSIONS = {}
+_PUBLISHED_SERVER_VERSIONS = {}
 
 
-def publish_snapshot_to_redis() -> bool:
-    """Serialize the current GLOBAL_SERVER_DATA snapshot to Redis (compressed).
-    Called only by the singleton fetcher. Returns True on success."""
+def _redis_server_snapshot_key(server_id: int) -> str:
+    return f'{REDIS_SERVER_SNAPSHOT_PREFIX}{int(server_id)}'
+
+
+def publish_snapshot_to_redis(changed_server_ids=None) -> bool:
+    """Publish a small manifest plus independently compressed server blocks.
+
+    ``changed_server_ids`` limits expensive serialization to servers replaced by
+    the latest fetch. ``None`` performs a full publish for write-through callers;
+    an empty iterable updates only manifest metadata.
+    """
+    global _PUBLISHED_SERVER_VERSIONS
     client = get_redis()
     if client is None:
         return False
     try:
         import pickle, zlib
-        payload = {
-            'inbounds': GLOBAL_SERVER_DATA.get('inbounds') or [],
+        publish_all = changed_server_ids is None
+        changed = set()
+        if not publish_all:
+            for sid in changed_server_ids:
+                try:
+                    changed.add(int(sid))
+                except Exception:
+                    continue
+
+        blocks = defaultdict(list)
+        active_server_ids = set()
+        for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+            try:
+                sid = int(inbound.get('server_id'))
+                active_server_ids.add(sid)
+                if publish_all or sid in changed:
+                    blocks[sid].append(inbound)
+            except Exception:
+                continue
+        if publish_all:
+            changed = set(blocks)
+
+        # Other web processes can write-through one server after an edit. Merge
+        # the authoritative versions on every publish so this process never
+        # rolls such a newer server block back while publishing another server.
+        try:
+            old_manifest_blob = client.get(REDIS_SNAPSHOT_MANIFEST_KEY)
+            if old_manifest_blob:
+                old_manifest = pickle.loads(zlib.decompress(old_manifest_blob))
+                _PUBLISHED_SERVER_VERSIONS.update({
+                    int(k): str(v) for k, v in (old_manifest.get('server_versions') or {}).items()
+                })
+        except Exception:
+            pass
+
+        for status in (GLOBAL_SERVER_DATA.get('servers_status') or []):
+            try:
+                active_server_ids.add(int(status.get('server_id')))
+            except Exception:
+                continue
+        _PUBLISHED_SERVER_VERSIONS = {
+            sid: version for sid, version in _PUBLISHED_SERVER_VERSIONS.items()
+            if sid in active_server_ids
+        }
+
+        version = str(time.time_ns())
+        pipe = client.pipeline()
+        for sid in changed:
+            block_blob = zlib.compress(
+                pickle.dumps(blocks.get(sid, []), protocol=pickle.HIGHEST_PROTOCOL), 1
+            )
+            pipe.set(_redis_server_snapshot_key(sid), block_blob, ex=REDIS_SNAPSHOT_TTL)
+            _PUBLISHED_SERVER_VERSIONS[sid] = version
+
+        # Refresh TTLs for unchanged blocks referenced by the manifest.
+        for sid in _PUBLISHED_SERVER_VERSIONS:
+            if sid not in changed:
+                pipe.expire(_redis_server_snapshot_key(sid), REDIS_SNAPSHOT_TTL)
+
+        manifest = {
+            'format': 2,
+            'version': version,
+            'server_versions': _PUBLISHED_SERVER_VERSIONS,
             'stats': GLOBAL_SERVER_DATA.get('stats') or {},
             'servers_status': GLOBAL_SERVER_DATA.get('servers_status') or [],
             'last_update': GLOBAL_SERVER_DATA.get('last_update'),
         }
-        blob = zlib.compress(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL), 1)
-        version = str(time.time())
-        pipe = client.pipeline()
-        pipe.set(REDIS_SNAPSHOT_KEY, blob, ex=REDIS_SNAPSHOT_TTL)
+        manifest_blob = zlib.compress(
+            pickle.dumps(manifest, protocol=pickle.HIGHEST_PROTOCOL), 1
+        )
+        pipe.set(REDIS_SNAPSHOT_MANIFEST_KEY, manifest_blob, ex=REDIS_SNAPSHOT_TTL)
         pipe.set(REDIS_SNAPSHOT_VERSION_KEY, version, ex=REDIS_SNAPSHOT_TTL)
         pipe.execute()
         return True
@@ -195,7 +284,7 @@ def load_snapshot_from_redis(force: bool = False) -> bool:
     """Pull the shared snapshot from Redis into local GLOBAL_SERVER_DATA, but
     only when the version changed (cheap version check first). Returns True if
     the local cache was updated."""
-    global _LAST_LOADED_SNAPSHOT_VERSION
+    global _LAST_LOADED_SNAPSHOT_VERSION, _LAST_LOADED_SERVER_VERSIONS
     client = get_redis()
     if client is None:
         return False
@@ -205,15 +294,58 @@ def load_snapshot_from_redis(force: bool = False) -> bool:
             return False
         if not force and version == _LAST_LOADED_SNAPSHOT_VERSION:
             return False  # nothing new — skip the expensive decompress
-        blob = client.get(REDIS_SNAPSHOT_KEY)
-        if not blob:
-            return False
         import pickle, zlib
-        payload = pickle.loads(zlib.decompress(blob))
-        GLOBAL_SERVER_DATA['inbounds'] = payload.get('inbounds') or []
-        GLOBAL_SERVER_DATA['stats'] = payload.get('stats') or {}
-        GLOBAL_SERVER_DATA['servers_status'] = payload.get('servers_status') or []
-        GLOBAL_SERVER_DATA['last_update'] = payload.get('last_update')
+        manifest_blob = client.get(REDIS_SNAPSHOT_MANIFEST_KEY)
+        if manifest_blob:
+            manifest = pickle.loads(zlib.decompress(manifest_blob))
+            server_versions = {
+                int(k): str(v) for k, v in (manifest.get('server_versions') or {}).items()
+            }
+
+            current_blocks = defaultdict(list)
+            for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                try:
+                    current_blocks[int(inbound.get('server_id'))].append(inbound)
+                except Exception:
+                    continue
+
+            new_blocks = {}
+            for sid, server_version in server_versions.items():
+                if (not force and _LAST_LOADED_SERVER_VERSIONS.get(sid) == server_version
+                        and sid in current_blocks):
+                    new_blocks[sid] = current_blocks[sid]
+                    continue
+                block_blob = client.get(_redis_server_snapshot_key(sid))
+                if block_blob:
+                    new_blocks[sid] = pickle.loads(zlib.decompress(block_blob))
+                elif sid in current_blocks:
+                    # Keep the last good local block if Redis is between writes.
+                    new_blocks[sid] = current_blocks[sid]
+
+            ordered_ids = []
+            for status in (manifest.get('servers_status') or []):
+                try:
+                    ordered_ids.append(int(status.get('server_id')))
+                except Exception:
+                    continue
+            ordered_ids.extend(sid for sid in new_blocks if sid not in ordered_ids)
+            GLOBAL_SERVER_DATA['inbounds'] = [
+                inbound for sid in ordered_ids for inbound in new_blocks.get(sid, [])
+            ]
+            GLOBAL_SERVER_DATA['stats'] = manifest.get('stats') or {}
+            GLOBAL_SERVER_DATA['servers_status'] = manifest.get('servers_status') or []
+            GLOBAL_SERVER_DATA['last_update'] = manifest.get('last_update')
+            _LAST_LOADED_SERVER_VERSIONS = server_versions
+        else:
+            # Rolling-upgrade compatibility with snapshots written by v1 workers.
+            blob = client.get(REDIS_SNAPSHOT_KEY)
+            if not blob:
+                return False
+            payload = pickle.loads(zlib.decompress(blob))
+            GLOBAL_SERVER_DATA['inbounds'] = payload.get('inbounds') or []
+            GLOBAL_SERVER_DATA['stats'] = payload.get('stats') or {}
+            GLOBAL_SERVER_DATA['servers_status'] = payload.get('servers_status') or []
+            GLOBAL_SERVER_DATA['last_update'] = payload.get('last_update')
         _LAST_LOADED_SNAPSHOT_VERSION = version
         return True
     except Exception as e:
@@ -1557,6 +1689,72 @@ def _prune_refresh_jobs_locked():
             deleted += 1
 
 
+def _refresh_job_redis_key(job_id: str) -> str:
+    return f'{REDIS_REFRESH_JOB_PREFIX}{job_id}'
+
+
+def _refresh_scope_redis_key(scope_key: str) -> str:
+    return f'{REDIS_REFRESH_SCOPE_PREFIX}{scope_key}'
+
+
+def _get_refresh_job(job_id: str):
+    """Read refresh state from Redis when available, with local fallback."""
+    client = get_redis()
+    if client is not None:
+        try:
+            raw = client.get(_refresh_job_redis_key(job_id))
+            if raw:
+                if isinstance(raw, bytes):
+                    raw = raw.decode('utf-8')
+                job = json.loads(raw)
+                if isinstance(job, dict):
+                    return job
+        except Exception as exc:
+            app.logger.warning('Failed to read refresh job %s from Redis: %s', job_id, exc)
+    with REFRESH_JOBS_LOCK:
+        job = REFRESH_JOBS.get(job_id)
+        return copy.deepcopy(job) if job else None
+
+
+def _store_refresh_job(job: dict):
+    """Persist lightweight refresh progress for every web worker to poll."""
+    if not isinstance(job, dict) or not job.get('id'):
+        return
+    job_copy = copy.deepcopy(job)
+    with REFRESH_JOBS_LOCK:
+        REFRESH_JOBS[job_copy['id']] = job_copy
+        _prune_refresh_jobs_locked()
+    client = get_redis()
+    if client is not None:
+        try:
+            client.set(
+                _refresh_job_redis_key(job_copy['id']),
+                json.dumps(job_copy, ensure_ascii=False, default=str),
+                ex=REDIS_REFRESH_JOB_TTL,
+            )
+        except Exception as exc:
+            app.logger.warning('Failed to persist refresh job %s: %s', job_copy['id'], exc)
+
+
+def _release_refresh_scope(job: dict):
+    client = get_redis()
+    if client is None or not isinstance(job, dict):
+        return
+    scope_key = job.get('scope_key')
+    job_id = str(job.get('id') or '')
+    if not scope_key or not job_id:
+        return
+    key = _refresh_scope_redis_key(scope_key)
+    try:
+        # Delete only our own claim; a newer job may already own this scope.
+        current = client.get(key)
+        current = current.decode('utf-8') if isinstance(current, bytes) else str(current or '')
+        if current == job_id:
+            client.delete(key)
+    except Exception as exc:
+        app.logger.warning('Failed to release refresh scope %s: %s', scope_key, exc)
+
+
 def _backoff_get(server_id: int) -> dict:
     try:
         return REFRESH_BACKOFF.get(int(server_id)) or {}
@@ -1663,12 +1861,12 @@ def _update_reachability_status(servers, force: bool = False):
 
 
 def _run_refresh_job(job_id: str):
-    with REFRESH_JOBS_LOCK:
-        job = REFRESH_JOBS.get(job_id)
-        if not job:
-            return
-        job['state'] = 'running'
-        job['started_at'] = _utc_iso_now()
+    job = _get_refresh_job(job_id)
+    if not job:
+        return
+    job['state'] = 'running'
+    job['started_at'] = _utc_iso_now()
+    _store_refresh_job(job)
 
     try:
         # Important: background threads must run inside app context for SQLAlchemy.
@@ -1679,8 +1877,11 @@ def _run_refresh_job(job_id: str):
                     mode = (job.get('mode') or 'full').strip().lower()
                     server_id = job.get('server_id')
                     force = bool(job.get('force'))
+                    changed_server_ids = []
 
-                    if mode == 'status':
+                    if mode == 'usage_snapshot':
+                        _run_snapshot_with_progress()
+                    elif mode == 'status':
                         servers_q = Server.query.filter_by(enabled=True).filter(
                             (Server.hidden == False) | (Server.hidden == None))
                         if server_id:
@@ -1692,35 +1893,34 @@ def _run_refresh_job(job_id: str):
                             try:
                                 fetch_and_update_server_data(int(server_id))
                                 _backoff_record_success(int(server_id))
+                                changed_server_ids = [int(server_id)]
                             except Exception as e:
                                 _backoff_record_failure(int(server_id), str(e))
                                 raise
                         else:
                             fetch_and_update_global_data(force=force)
                     # Propagate manual-refresh results to other workers (Redis mode).
-                    publish_snapshot_to_redis()
+                    publish_snapshot_to_redis(changed_server_ids)
                 finally:
                     GLOBAL_SERVER_DATA['is_updating'] = False
 
-        with REFRESH_JOBS_LOCK:
-            job = REFRESH_JOBS.get(job_id) or {}
-            job['state'] = 'done'
-            job['finished_at'] = _utc_iso_now()
-            REFRESH_JOBS[job_id] = job
-            _prune_refresh_jobs_locked()
+        job = _get_refresh_job(job_id) or job
+        job['state'] = 'done'
+        job['finished_at'] = _utc_iso_now()
+        _store_refresh_job(job)
     except Exception as e:
-        with REFRESH_JOBS_LOCK:
-            job = REFRESH_JOBS.get(job_id) or {}
-            job['state'] = 'error'
-            job['error'] = str(e)
-            job['finished_at'] = _utc_iso_now()
-            REFRESH_JOBS[job_id] = job
-            _prune_refresh_jobs_locked()
+        job = _get_refresh_job(job_id) or job
+        job['state'] = 'error'
+        job['error'] = str(e)
+        job['finished_at'] = _utc_iso_now()
+        _store_refresh_job(job)
+    finally:
+        _release_refresh_scope(job)
 
 
 def enqueue_refresh_job(mode: str = 'full', server_id=None, force: bool = False):
     mode_norm = (mode or 'full').strip().lower()
-    if mode_norm not in ('full', 'status'):
+    if mode_norm not in ('full', 'status', 'usage_snapshot'):
         mode_norm = 'full'
 
     sid = None
@@ -1731,32 +1931,99 @@ def enqueue_refresh_job(mode: str = 'full', server_id=None, force: bool = False)
         sid = None
 
     scope_key = f"{mode_norm}:{sid if sid is not None else 'all'}"
-    with REFRESH_JOBS_LOCK:
-        for existing in REFRESH_JOBS.values():
-            if existing.get('scope_key') == scope_key and existing.get('state') in ('queued', 'running'):
-                return existing
+    client = get_redis()
+    if client is not None:
+        try:
+            scope_redis_key = _refresh_scope_redis_key(scope_key)
+            existing_id = client.get(scope_redis_key)
+            if existing_id:
+                existing_id = existing_id.decode('utf-8') if isinstance(existing_id, bytes) else str(existing_id)
+                existing = _get_refresh_job(existing_id)
+                if existing and existing.get('state') in ('queued', 'running'):
+                    return existing
+                client.delete(scope_redis_key)
+        except Exception as exc:
+            app.logger.warning('Failed to inspect refresh queue scope: %s', exc)
 
-        job_id = secrets.token_hex(8)
-        job = {
-            'id': job_id,
-            'scope_key': scope_key,
-            'mode': mode_norm,
-            'server_id': sid,
-            'force': bool(force),
-            'state': 'queued',
-            'created_at': _utc_iso_now(),
-            'created_at_ts': time.time(),
-            'started_at': None,
-            'finished_at': None,
-            'progress': {},
-            'error': None,
-        }
-        REFRESH_JOBS[job_id] = job
-        _prune_refresh_jobs_locked()
+    job_id = secrets.token_hex(8)
+    job = {
+        'id': job_id,
+        'scope_key': scope_key,
+        'mode': mode_norm,
+        'server_id': sid,
+        'force': bool(force),
+        'state': 'queued',
+        'created_at': _utc_iso_now(),
+        'created_at_ts': time.time(),
+        'started_at': None,
+        'finished_at': None,
+        'progress': {},
+        'error': None,
+    }
+    _store_refresh_job(job)
+
+    if client is not None:
+        try:
+            claimed = client.set(
+                _refresh_scope_redis_key(scope_key), job_id,
+                nx=True, ex=REDIS_REFRESH_JOB_TTL,
+            )
+            if not claimed:
+                existing_id = client.get(_refresh_scope_redis_key(scope_key))
+                if existing_id:
+                    existing_id = existing_id.decode('utf-8') if isinstance(existing_id, bytes) else str(existing_id)
+                    existing = _get_refresh_job(existing_id)
+                    if existing:
+                        return existing
+            client.rpush(REDIS_REFRESH_QUEUE_KEY, job_id)
+            client.expire(REDIS_REFRESH_QUEUE_KEY, REDIS_REFRESH_JOB_TTL)
+            return job
+        except Exception as exc:
+            app.logger.error('Failed to enqueue refresh in Redis; using local worker: %s', exc)
 
     t = threading.Thread(target=_run_refresh_job, args=(job_id,), daemon=True)
     t.start()
     return job
+
+
+def refresh_queue_worker():
+    """Execute refresh requests outside Gunicorn web workers."""
+    client = get_redis()
+    if client is None:
+        app.logger.error('Refresh queue worker requires Redis; worker stopped.')
+        return
+    print(f'[RefreshQueue] worker started (PID={os.getpid()})')
+    try:
+        # Recover jobs atomically reserved by a previous background process that
+        # exited before acknowledging completion.
+        abandoned = client.lrange(REDIS_REFRESH_PROCESSING_KEY, 0, -1)
+        for raw_job_id in abandoned:
+            job_id = raw_job_id.decode('utf-8') if isinstance(raw_job_id, bytes) else str(raw_job_id)
+            job = _get_refresh_job(job_id)
+            if job and job.get('state') in ('queued', 'running'):
+                job['state'] = 'queued'
+                job['started_at'] = None
+                _store_refresh_job(job)
+                client.lpush(REDIS_REFRESH_QUEUE_KEY, job_id)
+        if abandoned:
+            client.delete(REDIS_REFRESH_PROCESSING_KEY)
+    except Exception as exc:
+        app.logger.warning('Failed to recover refresh queue reservations: %s', exc)
+
+    while True:
+        try:
+            raw_job_id = client.rpoplpush(REDIS_REFRESH_QUEUE_KEY, REDIS_REFRESH_PROCESSING_KEY)
+            if not raw_job_id:
+                time.sleep(0.5)
+                continue
+            job_id = raw_job_id.decode('utf-8') if isinstance(raw_job_id, bytes) else str(raw_job_id)
+            try:
+                _run_refresh_job(job_id)
+            finally:
+                client.lrem(REDIS_REFRESH_PROCESSING_KEY, 1, raw_job_id)
+        except Exception as exc:
+            app.logger.exception('Refresh queue worker failed: %s', exc)
+            time.sleep(2)
 
 
 def _recompute_global_stats_from_server_statuses(server_statuses):
@@ -2040,7 +2307,7 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
         return False
     if changed and publish:
         try:
-            publish_snapshot_to_redis()
+            publish_snapshot_to_redis([server_id])
         except Exception:
             pass
     return changed
@@ -2087,7 +2354,7 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
         return False
     if removed and publish:
         try:
-            publish_snapshot_to_redis()
+            publish_snapshot_to_redis([server_id])
         except Exception:
             pass
     return removed
@@ -2142,7 +2409,7 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
         return False
     if done and publish:
         try:
-            publish_snapshot_to_redis()
+            publish_snapshot_to_redis([server_id])
         except Exception:
             pass
     return done
@@ -5048,6 +5315,13 @@ def _run_whatsapp_depletion_scan() -> dict:
                 'dashboard_link': dash, 'sub_link': dash,
                 'server_name': inbound.get('server_name') or '',
             }
+            ended_template = cfg.get('bot_tpl_ended') or ''
+            if _template_wants_recommendation(ended_template):
+                vars_dict.update(_recommendation_template_vars(
+                    sid_norm, final_id, email,
+                    terminal=bool((rem_gb is not None and rem_gb <= 0) or
+                                  (expiry_ts and expiry_ts <= int(time.time() * 1000))),
+                ))
             text_msg = _whatsapp_render_bot_template('depletion', vars_dict, cfg)
             if not text_msg:
                 continue
@@ -5310,18 +5584,61 @@ def _ended_first_contact(email_l: str, sid_norm) -> datetime | None:
 
 def _comment_opted_out(comment: str | None, *tags: str) -> bool:
     """True if the client comment contains an opt-out hashtag (e.g. #nosms / #nopm)
-    anywhere in the text — even mixed with a phone number or other notes. The tag
-    is matched as a token: a trailing ASCII letter/digit (#nosmsx, #nosms2) does NOT
-    count, but a space / end / Persian char right after the tag does. '#' optionally
-    followed by a space so '# nosms' also works."""
+    anywhere in the text, even when surrounded by other notes. Matching is
+    deliberately substring-based and case-insensitive: once the literal tag is
+    present, automation must fail closed. '# nosms' is accepted too."""
     s = (comment or '').lower()
     if '#' not in s:
         return False
     for t in tags:
         core = re.escape(t.lstrip('#').lower())
-        if re.search(r'#\s*' + core + r'(?![a-z0-9])', s):
+        if re.search(r'#\s*' + core, s):
             return True
     return False
+
+
+SMS_COMMENT_OPTOUT_TAGS = ('nosms', 'nopm')
+
+
+def _sms_comment_opted_out(comment: str | None) -> bool:
+    """Both tags suppress SMS automation; #nopm is a global private-message opt-out."""
+    return _comment_opted_out(comment, *SMS_COMMENT_OPTOUT_TAGS)
+
+
+def _sms_account_opted_out(server_id, email: str, fallback_comment: str = '',
+                           refresh_shared: bool = False) -> bool:
+    """Re-check the newest cached comment before handing an SMS to GMweb.
+
+    Queue candidates carry a comment snapshot which can become stale while they
+    wait behind pacing/rate limits. In Redis mode, pull any newer server block,
+    then inspect every matching copy of the account. If the account is not in the
+    cache yet (e.g. a just-created client), fall back to the event comment.
+    """
+    if refresh_shared:
+        try:
+            load_snapshot_from_redis()
+        except Exception:
+            pass
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        sid = server_id
+    email_l = (email or '').strip().lower()
+    found = False
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id', -1)) != int(sid):
+                continue
+        except (TypeError, ValueError):
+            if inbound.get('server_id') != sid:
+                continue
+        for client in (inbound.get('clients') or []):
+            if (client.get('email') or '').strip().lower() != email_l:
+                continue
+            found = True
+            if _sms_comment_opted_out(client.get('comment')):
+                return True
+    return _sms_comment_opted_out(fallback_comment) if not found else False
 
 
 def _toggle_optout_tags(comment: str | None, add: bool) -> str:
@@ -5554,7 +5871,7 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 if not ok:
                     _log('', 'skipped', reason)
                     return
-                if _comment_opted_out(recipient_comment, 'nosms'):
+                if _sms_comment_opted_out(recipient_comment):
                     _log('', 'skipped', 'opted_out')
                     return
                 recipient = _extract_iran_mobile_from_text(email, recipient_comment or None)
@@ -5579,6 +5896,11 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 except Exception:
                     pass
                 content = _get_sms_template_content(template_type, default_template)
+                if _template_wants_recommendation(content):
+                    tpl_vars.update(_recommendation_template_vars(
+                        sid_norm, tpl_vars.get('_sub_id'), email,
+                        terminal=event_name in ('expired', 'ended'),
+                    ))
                 text = _render_text_template(content, tpl_vars)
                 if not (text or '').strip():
                     _log(recipient, 'skipped', 'empty_message')
@@ -5586,6 +5908,11 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 # NOTE: quiet hours intentionally do NOT apply here. Create/renew are
                 # user-triggered confirmations and must go out immediately, even at
                 # night. Only the bulk depletion scan honours the quiet window.
+                # Final fail-closed check after queueing/rate gates. The comment
+                # may have changed since this background thread was created.
+                if _sms_account_opted_out(server_id, email, recipient_comment, refresh_shared=True):
+                    _log(recipient, 'skipped', 'opted_out_recheck')
+                    return
                 slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
                 if not slot_ok:
                     _log(recipient, 'skipped', slot_reason)
@@ -5622,13 +5949,12 @@ def _mask_mobile(num: str | None) -> str:
 
 
 def _render_monitor_state_template(tpl: str | None, mvars: dict) -> str:
-    """Render a Monitor per-state template. Mirrors monitor.html buildMessage()
-    exactly (only {user} {rem} {time} {date} {server}), so an automated SMS reads
-    identically to a manual Monitor send."""
-    def _sub(m):
-        val = mvars.get(m.group(1))
-        return str(val) if val not in (None, '') else '-'
-    return re.sub(r'\{(user|rem|time|date|server)\}', _sub, tpl or '')
+    """Render a Monitor state template with shared conditional semantics."""
+    values = dict(mvars or {})
+    for key in ('user', 'rem', 'time', 'date', 'server'):
+        if values.get(key) in (None, ''):
+            values[key] = '-'
+    return _render_text_template(tpl, values)
 
 
 def _sms_scan_persist_locked():
@@ -5866,7 +6192,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
 
             # Operator opt-out: client comment tagged #nosms ⇒ never SMS them,
             # regardless of state/enable/expiry (e.g. user said "won't renew").
-            if _comment_opted_out(client.get('comment'), 'nosms'):
+            if _sms_comment_opted_out(client.get('comment')):
                 continue
 
             recipient = _extract_iran_mobile_from_text(email, client.get('comment') or '')
@@ -5885,8 +6211,10 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 'time': exp.get('text') or '-',
                 'date': expiry_date or '-',
                 'server': server_name,
+                '_sub_id': client.get('subId') or client.get('id') or '',
             }
-            candidates.append((sid_norm, email, email_l, server_name, state, recipient, mvars))
+            candidates.append((sid_norm, email, email_l, server_name, state, recipient, mvars,
+                               client.get('comment') or ''))
 
     # Send priority: volume-running-out → time-running-out → volume-ended →
     # fully-expired. Within a state, original (scan) order is preserved.
@@ -5896,12 +6224,17 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
 
     sent = 0
     # Pass 2 — cooldown gate + rate-limit + send + log per candidate.
-    for (sid_norm, email, email_l, server_name, state, recipient, mvars) in candidates:
+    for (sid_norm, email, email_l, server_name, state, recipient, mvars, queued_comment) in candidates:
         if _sms_scan_cancelled():
             _sms_scan_set(state='stopped', stopped='cancelled', finished_at=_utc_iso_now(), current=None)
             return {'scanned': total_clients, 'sent': sent, 'stopped': 'cancelled'}
         _sms_scan_set(current=email)
         _sms_scan_inc('processed')
+
+        if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                         'skipped', 'opted_out_recheck')
+            continue
 
         event = f'sms_{state}'
         # Per-state cooldown in hours, shared across SMS + WhatsApp (event-agnostic).
@@ -5915,6 +6248,11 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             _sms_scan_inc('skipped_rate')  # no template configured for this state
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', 'no_template')
             continue
+        if _template_wants_recommendation(tpl):
+            mvars.update(_recommendation_template_vars(
+                sid_norm, mvars.get('_sub_id'), email,
+                terminal=state in ('expired', 'ended'),
+            ))
         text_msg = _render_monitor_state_template(tpl, mvars)
         if not (text_msg or '').strip():
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', 'empty_message')
@@ -5937,6 +6275,13 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             if gap > 0:
                 time.sleep(min(gap, 60))
 
+        # Re-check after pacing as well: a tag added while this candidate waited
+        # must stop the request before it reaches the provider queue.
+        if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                         'skipped', 'opted_out_recheck')
+            continue
+
         # Same idempotency key for the send and its 429-retry so the retry can't
         # double-send. Scoped to this scan run (jid) so a later scan re-sends fresh.
         scan_idem = f"scan-{jid}-{state}-{sid_norm}-{email_l}"
@@ -5946,6 +6291,10 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         # scheduled scan resumes where this left off).
         if (not res.get('sent')) and res.get('status_code') == 429:
             time.sleep(5)
+            if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                             'skipped', 'opted_out_recheck')
+                continue
             res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
             if (not res.get('sent')) and res.get('status_code') == 429:
                 SMS_LAST_SEND_TS[0] = time.time()
@@ -6039,7 +6388,7 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
             sid_norm = None
         if _account_has_reseller_owner(sid_norm, email):
             continue
-        if _comment_opted_out(it.get('comment'), 'nosms'):
+        if _sms_comment_opted_out(it.get('comment')):
             continue
         recipient = _extract_iran_mobile_from_text(email, it.get('comment') or '')
         if not recipient:
@@ -6053,17 +6402,23 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
             'remaining_time': '-', 'remaining_volume': it.get('remaining_formatted') or '-',
             'server_name': it.get('server_name') or '',
         }
-        candidates.append((sid_norm, email, email_l, it.get('server_name') or '', recipient, tpl_vars))
+        candidates.append((sid_norm, email, email_l, it.get('server_name') or '', recipient,
+                           tpl_vars, it.get('comment') or ''))
 
     _sms_scan_set(candidates=len(candidates))
 
     sent = 0
-    for (sid_norm, email, email_l, server_name, recipient, tpl_vars) in candidates:
+    for (sid_norm, email, email_l, server_name, recipient, tpl_vars, queued_comment) in candidates:
         if _sms_scan_cancelled():
             _sms_scan_set(state='stopped', stopped='cancelled', finished_at=_utc_iso_now(), current=None)
             return {'scanned': len(idle), 'sent': sent, 'stopped': 'cancelled'}
         _sms_scan_set(current=email)
         _sms_scan_inc('processed')
+
+        if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
+                         'skipped', 'opted_out_recheck')
+            continue
 
         # Fairness: skip anyone messaged (any automation) inside the cooldown, log why.
         if _recent_bot_message_within(email_l, sid_norm, cd_hours):
@@ -6093,10 +6448,19 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
             if gap > 0:
                 time.sleep(min(gap, 60))
 
+        if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
+                         'skipped', 'opted_out_recheck')
+            continue
+
         scan_idem = f"royalty-{jid}-{sid_norm}-{email_l}"
         res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
         if (not res.get('sent')) and res.get('status_code') == 429:
             time.sleep(5)
+            if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
+                             'skipped', 'opted_out_recheck')
+                continue
             res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
             if (not res.get('sent')) and res.get('status_code') == 429:
                 SMS_LAST_SEND_TS[0] = time.time()
@@ -6269,6 +6633,15 @@ def _flush_pending_sms(force: bool = False) -> int:
         return 0
     sent = 0
     for r in rows:
+        if _sms_account_opted_out(r.server_id, r.email, refresh_shared=True):
+            try:
+                _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name,
+                             r.recipient, 'skipped', 'opted_out_recheck')
+                db.session.delete(r)
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            continue
         slot_ok, slot_reason = _sms_take_send_slot(r.recipient, cfg)
         if not slot_ok:
             if slot_reason == 'daily_limit_reached':
@@ -7979,8 +8352,14 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
         'model_version': 'usage-fit-v2',
         'package_id': int(selected.get('id')),
         'package_name': str(selected.get('name') or ''),
+        'package_volume': int(selected.get('volume') or 0),
+        'package_days': int(selected.get('days') or 0),
+        'package_price': int(selected.get('price') or 0),
         'comfort_package_id': int(comfort.get('id')) if comfort else None,
         'comfort_package_name': str(comfort.get('name') or '') if comfort else '',
+        'comfort_package_volume': int(comfort.get('volume') or 0) if comfort else 0,
+        'comfort_package_days': int(comfort.get('days') or 0) if comfort else 0,
+        'comfort_package_price': int(comfort.get('price') or 0) if comfort else 0,
         'average_daily_gb': round(average_daily_gb, 2),
         'projected_31d_gb': round(projected_31d_gb, 1),
         'buffered_requirement_gb': round(buffered_requirement, 1),
@@ -7991,6 +8370,94 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
         'source': 'current_cycle' if latest_renewal else 'last_31_days',
         'fast_cycle': bool(terminal and basis_days <= 7),
     }
+
+
+RECOMMENDATION_TEMPLATE_TOKENS = (
+    '{if_recommendation}', '{recommended_package}', '{recommended_volume}',
+    '{recommended_days}', '{recommended_price}', '{recommended_daily_usage}',
+    '{recommended_31d_usage}', '{if_comfort_recommendation}',
+    '{comfort_package}', '{comfort_volume}', '{comfort_days}', '{comfort_price}',
+)
+
+
+def _template_wants_recommendation(template: str | None) -> bool:
+    raw = str(template or '')
+    return any(token in raw for token in RECOMMENDATION_TEMPLATE_TOKENS)
+
+
+def _empty_recommendation_template_vars() -> dict:
+    return {
+        'recommendation': '', 'recommendation_given': False,
+        'recommended_package': '', 'recommended_volume': '',
+        'recommended_days': '', 'recommended_price': '',
+        'recommended_daily_usage': '', 'recommended_31d_usage': '',
+        'comfort_recommendation': '', 'comfort_recommendation_given': False,
+        'comfort_package': '', 'comfort_volume': '',
+        'comfort_days': '', 'comfort_price': '',
+    }
+
+
+def _recommendation_template_vars(server_id, sub_id: str, email: str = '', *,
+                                  terminal: bool = False) -> dict:
+    """Return safe template variables backed by the subscription recommender.
+
+    Missing/insufficient usage history is represented by false conditional flags,
+    so `{if_recommendation}...{/if_recommendation}` disappears cleanly.
+    """
+    values = _empty_recommendation_template_vars()
+    try:
+        sid = int(server_id)
+        account_sub_id = str(sub_id or '').strip()
+        if not account_sub_id:
+            return values
+
+        owner = None
+        email_l = str(email or '').strip().lower()
+        if email_l:
+            ownership = ClientOwnership.query.filter(
+                ClientOwnership.server_id == sid,
+                func.lower(ClientOwnership.client_email) == email_l,
+            ).first()
+            if ownership and ownership.reseller and ownership.reseller.role == 'reseller':
+                owner = ownership.reseller
+
+        recommendation = _build_subscription_package_recommendation(
+            sid, account_sub_id, _build_sub_page_packages(owner), terminal=terminal,
+        )
+        if not recommendation:
+            return values
+
+        def _volume(value):
+            amount = int(value or 0)
+            return 'Unlimited' if amount == 0 else str(amount)
+
+        def _days(value):
+            amount = int(value or 0)
+            return 'Unlimited' if amount == 0 else str(amount)
+
+        values.update({
+            'recommendation': recommendation.get('package_name') or '',
+            'recommendation_given': True,
+            'recommended_package': recommendation.get('package_name') or '',
+            'recommended_volume': _volume(recommendation.get('package_volume')),
+            'recommended_days': _days(recommendation.get('package_days')),
+            'recommended_price': f"{int(recommendation.get('package_price') or 0):,}",
+            'recommended_daily_usage': str(recommendation.get('average_daily_gb') or ''),
+            'recommended_31d_usage': str(recommendation.get('projected_31d_gb') or ''),
+        })
+        if recommendation.get('comfort_package_id'):
+            values.update({
+                'comfort_recommendation': recommendation.get('comfort_package_name') or '',
+                'comfort_recommendation_given': True,
+                'comfort_package': recommendation.get('comfort_package_name') or '',
+                'comfort_volume': _volume(recommendation.get('comfort_package_volume')),
+                'comfort_days': _days(recommendation.get('comfort_package_days')),
+                'comfort_price': f"{int(recommendation.get('comfort_package_price') or 0):,}",
+            })
+        return values
+    except Exception:
+        app.logger.exception('Failed to build package recommendation template variables')
+        return values
 
 
 def get_config(key, default=0):
@@ -9100,7 +9567,7 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
             remove_cached_client(server.id, email, client_uuid=base_client.get('id'),
                                  inbound_id=_iid, publish=False)
         if added or removed:
-            publish_snapshot_to_redis()
+            publish_snapshot_to_redis([server.id])
     except Exception:
         pass
 
@@ -10228,7 +10695,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                     "remaining_formatted": remaining_formatted,
                     "volume_status": volume_status,
                     "service_state": account_state.get('key', 'active'),
-                    "service_state_label": account_state.get('label', 'فعاله'),
+                    "service_state_label": account_state.get('label', 'فعاله' if panel_lang == 'fa' else 'Active'),
                     "service_state_emoji": account_state.get('emoji', '✅'),
                     "service_state_tag": account_state.get('tag', 'ok'),
                     "expiryTime": expiry_info['text'],
@@ -10425,14 +10892,15 @@ def client_change_password():
 
     error = None
     if request.method == 'POST':
+        is_fa = _get_panel_ui_lang() == 'fa'
         new_pw = request.form.get('new_password', '')
         confirm_pw = request.form.get('confirm_password', '')
         if len(new_pw) < 8:
-            error = 'رمز عبور باید حداقل ۸ کاراکتر باشد'
+            error = 'رمز عبور باید حداقل ۸ کاراکتر باشد' if is_fa else 'Password must be at least 8 characters.'
         elif new_pw != confirm_pw:
-            error = 'تکرار رمز عبور مطابقت ندارد'
+            error = 'تکرار رمز عبور مطابقت ندارد' if is_fa else 'Password confirmation does not match.'
         elif new_pw in (user.mobile, user.mobile.lstrip('+'), user.mobile[3:]):
-            error = 'رمز عبور نمی‌تواند همان شماره موبایل باشد'
+            error = 'رمز عبور نمی‌تواند همان شماره موبایل باشد' if is_fa else 'Password cannot be the same as the mobile number.'
         else:
             user.set_password(new_pw)
             user.must_change_password = False
@@ -10629,6 +11097,7 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
                 'server_name': server_name,
                 'inbound_id': inbound.get('id'),
                 'client_uuid': str(c.get('id') or ''),
+                'sub_id': str(c.get('subId') or c.get('id') or ''),
                 'sub_url': c.get('sub_url') or '',
                 'dash_sub_url': c.get('dash_sub_url') or '',
                 'expiryTime': c.get('expiryTime') or '',
@@ -11792,6 +12261,7 @@ def get_monitor_alerts():
                 except Exception:
                     expiry_date = None
 
+            sub_id_value = client.get('subId') or client.get('id') or ''
             alerts.append({
                 'server_id': sid,
                 'server_name': inbound.get('server_name'),
@@ -11810,6 +12280,7 @@ def get_monitor_alerts():
                 'wa_count': msg_counts.get((sid_norm or 0, email_l), {}).get('whatsapp', 0),
                 'sub_url': client.get('sub_url') or '',
                 'dash_sub_url': client.get('dash_sub_url') or '',
+                'sub_id': sub_id_value,
             })
 
     alerts.sort(key=lambda row: (
@@ -11887,8 +12358,7 @@ def trigger_monitor_refresh():
 @app.route('/api/monitor/job/<job_id>', methods=['GET'])
 @login_required
 def get_monitor_job_status(job_id):
-    with REFRESH_JOBS_LOCK:
-        job = REFRESH_JOBS.get(job_id)
+    job = _get_refresh_job(job_id)
     if not job:
         return jsonify({'success': False, 'error': 'Job not found'})
     return jsonify({'success': True, 'job': job})
@@ -12010,11 +12480,10 @@ def api_refresh():
     if wait and job:
         start = time.time()
         while (time.time() - start) < wait_timeout:
-            with REFRESH_JOBS_LOCK:
-                cur = REFRESH_JOBS.get(job.get('id'))
-                if cur and cur.get('state') in ('done', 'error'):
-                    job = cur
-                    break
+            cur = _get_refresh_job(job.get('id'))
+            if cur and cur.get('state') in ('done', 'error'):
+                job = cur
+                break
             time.sleep(0.15)
 
     debug_timing = _parse_bool(request.args.get('debug_timing'))
@@ -12238,9 +12707,7 @@ def api_refresh():
 @login_required
 @limiter.exempt
 def api_refresh_job(job_id):
-    with REFRESH_JOBS_LOCK:
-        job = REFRESH_JOBS.get(job_id)
-        job_copy = copy.deepcopy(job) if job else None
+    job_copy = _get_refresh_job(job_id)
     if not job_copy:
         return jsonify({"success": False, "error": "Job not found"}), 404
     resp = make_response(jsonify({
@@ -12370,11 +12837,10 @@ def api_refresh_single_server(server_id):
         if wait and job:
             start = time.time()
             while (time.time() - start) < 2.0:
-                with REFRESH_JOBS_LOCK:
-                    cur = REFRESH_JOBS.get(job.get('id'))
-                    if cur and cur.get('state') in ('done', 'error'):
-                        job = cur
-                        break
+                cur = _get_refresh_job(job.get('id'))
+                if cur and cur.get('state') in ('done', 'error'):
+                    job = cur
+                    break
                 time.sleep(0.15)
 
     # Pull this server's cached block (if present)
@@ -13116,11 +13582,14 @@ def _user_can_afford(user, price: int) -> tuple[bool, str | None]:
     min_bal = -(abs(neg_limit)) if allow_neg else 0
     if cur - price < min_bal:
         shortfall = (cur - price) - min_bal
+        if _get_panel_ui_lang() == 'fa':
+            return False, (
+                f"موجودی کافی نیست — اعتبار فعلی: {cur:,} T، "
+                f"هزینه: {price:,} T، کسری: {abs(shortfall):,} T"
+            )
         return False, (
-            f"موجودی کافی نیست — اعتبار فعلی: {cur:,} T، "
-            f"هزینه: {price:,} T، "
-            f"کسری: {abs(shortfall):,} T"
-            f" (Insufficient credit: balance {cur:,} T, cost {price:,} T)"
+            f"Insufficient credit — current balance: {cur:,} T, "
+            f"cost: {price:,} T, shortfall: {abs(shortfall):,} T"
         )
     return True, None
 
@@ -13555,7 +14024,8 @@ def edit_client(server_id, inbound_id, email):
             if not ok_v3:
                 detail = verr or 'panel rejected update'
                 app.logger.warning(f"v3 edit client failed for {email}: {detail}")
-                return jsonify({"success": False, "error": f"پنل خطا برگرداند: {detail}"}), 502
+                prefix = 'پنل خطا برگرداند' if _get_panel_ui_lang() == 'fa' else 'The panel returned an error'
+                return jsonify({"success": False, "error": f"{prefix}: {detail}"}), 502
             success = True
         elif 'id' not in target_client:
             # Shadowsocks clients have no UUID — use full inbound update.
@@ -13571,7 +14041,8 @@ def edit_client(server_id, inbound_id, email):
             if not _ok_push_edit:
                 detail = _push_err_edit or 'shadowsocks inbound update failed'
                 app.logger.warning(f"Edit client failed for {email}: {detail}")
-                return jsonify({"success": False, "error": f"آپدیت ناموفق بود — {detail}"}), 400
+                prefix = 'آپدیت ناموفق بود' if _get_panel_ui_lang() == 'fa' else 'Update failed'
+                return jsonify({"success": False, "error": f"{prefix} — {detail}"}), 400
             success = True
         else:
             update_payload = {
@@ -13620,7 +14091,8 @@ def edit_client(server_id, inbound_id, email):
             if not success:
                 detail = '; '.join(errors) or 'no endpoint succeeded'
                 app.logger.warning(f"Edit client failed for {email}: {detail}")
-                return jsonify({"success": False, "error": f"آپدیت ناموفق بود — {detail}"}), 400
+                prefix = 'آپدیت ناموفق بود' if _get_panel_ui_lang() == 'fa' else 'Update failed'
+                return jsonify({"success": False, "error": f"{prefix} — {detail}"}), 400
 
         if success:
             # Update ownership if exists
@@ -14145,6 +14617,7 @@ def client_last_renewal(email):
             gcreated = g.created_at
             last_gift = {
                 'date_jalali': format_jalali(gcreated) if gcreated else None,
+                'date_iso': gcreated.isoformat() if gcreated else None,
                 'days_ago': (now - gcreated).days if gcreated else None,
                 'gift_gb': gb,
                 'admin_username': (g.admin.username if getattr(g, 'admin', None) else ''),
@@ -14343,6 +14816,7 @@ def renew_client(server_id, inbound_id, email):
     """Renew client expiry and/or volume"""
     t0 = time.perf_counter()
     renewal_trace_id = secrets.token_hex(4)
+    panel_is_fa = _get_panel_ui_lang() == 'fa'
     timing = {
         "total_ms": None,
         "used_cache_client": False,
@@ -14469,8 +14943,7 @@ def renew_client(server_id, inbound_id, email):
     if gift_volume_gb > 0:
         volume_gb_to_add += gift_volume_gb
         volume_provided = True
-        _is_fa = (session.get('panel_lang') or _get_panel_ui_lang() or 'en') == 'fa'
-        gift_note = f"+{gift_volume_gb} گیگ هدیه رویالتی" if _is_fa else f"+{gift_volume_gb} GB for Royalty"
+        gift_note = f"+{gift_volume_gb} گیگ هدیه رویالتی" if panel_is_fa else f"+{gift_volume_gb} GB for Royalty"
         description = f"{description} ({gift_note})"
 
     try:
@@ -15046,9 +15519,10 @@ def renew_client(server_id, inbound_id, email):
                 # - Unlimited (0): Persian label
                 # - Not started (<0): show "N days after first use"
                 if new_expiry == 0:
-                    date_label = "نامحدود"
+                    date_label = "نامحدود" if panel_is_fa else "Unlimited"
                 elif new_expiry < 0:
-                    date_label = f"{msg_days} روز بعد از اولین اتصال"
+                    date_label = (f"{msg_days} روز بعد از اولین اتصال" if panel_is_fa
+                                  else f"{msg_days} days after first connection")
                 else:
                     try:
                         expiry_dt_utc = datetime.utcfromtimestamp(int(new_expiry) / 1000)
@@ -15090,7 +15564,11 @@ def renew_client(server_id, inbound_id, email):
                     # Channel links resolved by role (superadmin→global, reseller→own).
                     'telegram_channel': _ch_links.get('telegram_channel', ''),
                     'whatsapp_channel': _ch_links.get('whatsapp_channel', ''),
+                    '_sub_id': final_id,
                 }
+                _renew_tpl_vars.update(_recommendation_template_vars(
+                    server.id, final_id, email, terminal=False,
+                ))
                 copy_text = _render_text_template(tpl_content, _renew_tpl_vars)
 
                 whatsapp_runtime = _get_whatsapp_runtime_settings()
@@ -15168,9 +15646,9 @@ def renew_client(server_id, inbound_id, email):
         # shows what actually went wrong instead of "Server error (HTTP 400)".
         detail = '; '.join(str(e) for e in errors) or 'Client update failed on the panel'
         if 'duplicate subid' in detail.lower():
-            detail += (' — این اکانت subId تکراری دارد (با یک اکانت دیگر یکسان شده) و پنل اجازه‌ی '
-                       'آپدیت نمی‌دهد. در پنل، subId این کلاینت را یکتا کن (یا اکانت را دوباره بساز)، '
-                       'سپس تمدید کن.')
+            detail += ((' — این اکانت subId تکراری دارد و پنل اجازه‌ی آپدیت نمی‌دهد. در پنل، subId را یکتا کنید و دوباره تمدید کنید.'
+                        if panel_is_fa else
+                        ' — This account has a duplicate subId, so the panel rejected the update. Make its subId unique in the panel, then retry the renewal.'))
         _release_renew_lock(_renew_lock_key)  # failed → allow an immediate retry
         return _finish({"success": False, "error": detail}, 400)
     except Exception as e:
@@ -18704,15 +19182,37 @@ def get_finance_overview():
     })
 
 
-def _subscription_rollup_history(server_id: int, sub_id: str, period: str):
-    now = datetime.utcnow()
-    today = _usage_tehran_date(now)
-    since_date = today - timedelta(days=366 if period == 'month' else 30)
-    rows = (UsageDaily.query
-            .filter_by(server_id=server_id, sub_id=sub_id)
-            .filter(UsageDaily.usage_date >= since_date)
-            .order_by(UsageDaily.usage_date.asc())
-            .all())
+def _history_cursor_encode(period: str, boundary_date) -> str:
+    payload = json.dumps({'v': 1, 'p': period, 'd': boundary_date.isoformat()}, separators=(',', ':'))
+    return base64.urlsafe_b64encode(payload.encode('utf-8')).decode('ascii').rstrip('=')
+
+
+def _history_cursor_decode(raw: str | None, period: str):
+    if not raw:
+        return None
+    try:
+        padded = str(raw) + ('=' * (-len(str(raw)) % 4))
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
+        if payload.get('v') != 1 or payload.get('p') != period:
+            return None
+        return datetime.strptime(str(payload.get('d') or ''), '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _subscription_rollup_history(server_id: int, sub_id: str, period: str,
+                                 cursor: str | None = None, page_size: int = 10):
+    cursor_date = _history_cursor_decode(cursor, period)
+    query = UsageDaily.query.filter_by(server_id=server_id, sub_id=sub_id)
+    if cursor:
+        if cursor_date is None:
+            return jsonify({'success': False, 'error': 'Invalid history cursor'}), 400
+        query = query.filter(UsageDaily.usage_date < cursor_date)
+
+    # Daily pages need N+1 rows. Monthly pages read at most N+1 complete months
+    # worth of compact daily rollups, still bounded and independent of history age.
+    row_limit = (page_size + 1) if period == 'day' else ((page_size + 1) * 32)
+    rows = (query.order_by(UsageDaily.usage_date.desc()).limit(row_limit).all())
 
     buckets = {}
     for row in rows:
@@ -18738,10 +19238,34 @@ def _subscription_rollup_history(server_id: int, sub_id: str, period: str):
             'delta_total': item['delta_total'], 'remaining': item['remaining'],
             'volume_limit': item['volume_limit'], 'is_cumulative': False,
         })
-    history.reverse()
+    history.sort(key=lambda item: item['recorded_at'], reverse=True)
+    has_more = len(history) > page_size
+    history = history[:page_size]
 
-    renewals = (RenewalEvent.query.filter_by(server_id=server_id, sub_id=sub_id)
-                .order_by(RenewalEvent.renewed_at.desc()).limit(30).all())
+    end_cursor = None
+    if history:
+        boundary = (datetime.strptime(history[-1]['period_key'], '%Y-%m').date().replace(day=1)
+                    if period == 'month'
+                    else datetime.strptime(history[-1]['period_key'], '%Y-%m-%d').date())
+        end_cursor = _history_cursor_encode(period, boundary)
+
+    renew_query = RenewalEvent.query.filter_by(server_id=server_id, sub_id=sub_id)
+    if history:
+        if period == 'month':
+            newest_date = datetime.strptime(history[0]['period_key'], '%Y-%m').date().replace(day=1)
+            oldest_date = datetime.strptime(history[-1]['period_key'], '%Y-%m').date().replace(day=1)
+            upper_date = (newest_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+        else:
+            newest_date = datetime.strptime(history[0]['period_key'], '%Y-%m-%d').date()
+            oldest_date = datetime.strptime(history[-1]['period_key'], '%Y-%m-%d').date()
+            upper_date = newest_date + timedelta(days=1)
+        lower = datetime.combine(oldest_date, datetime.min.time()) - _USAGE_TEHRAN_OFFSET
+        upper = datetime.combine(upper_date, datetime.min.time()) - _USAGE_TEHRAN_OFFSET
+        renew_query = renew_query.filter(
+            RenewalEvent.renewed_at >= lower,
+            RenewalEvent.renewed_at < upper,
+        )
+    renewals = renew_query.order_by(RenewalEvent.renewed_at.desc()).limit(30).all()
     renewal_rows, seen = [], set()
     for row in renewals:
         key = (row.renewed_at.replace(second=0, microsecond=0), row.volume_bytes, row.days,
@@ -18759,6 +19283,11 @@ def _subscription_rollup_history(server_id: int, sub_id: str, period: str):
     return jsonify({
         'success': True, 'period': period, 'history': history, 'renewals': renewal_rows,
         'snapshot_count': len(rows),
+        'page_info': {
+            'has_more': has_more,
+            'end_cursor': end_cursor,
+            'page_size': page_size,
+        },
         'latest_remaining': state.remaining_bytes if state else None,
         'latest_volume_limit': state.volume_limit_bytes if state else None,
         'latest_recorded_at': (state.observed_at.isoformat() + 'Z') if state else None,
@@ -18770,7 +19299,9 @@ def sub_usage_history(server_id, sub_id):
     """Return compact daily/monthly usage rollups and renewal events.
 
     Query params:
-      period: day (last 30d) | month (last 12m)
+      period: day | month
+      cursor: opaque cursor returned by page_info.end_cursor
+      limit: page size (5..31, default 10)
     """
     normalized_sub_id = str(sub_id or '').strip()
     if not normalized_sub_id or any(c in normalized_sub_id for c in ('/', '\\', '?', '#', '@', ':')):
@@ -18784,7 +19315,12 @@ def sub_usage_history(server_id, sub_id):
     if period not in ('day', 'month'):
         period = 'day'
 
-    return _subscription_rollup_history(server_id, normalized_sub_id, period)
+    cursor = (request.args.get('cursor') or '').strip() or None
+    page_size = _parse_int(request.args.get('limit'), 10, min_value=5, max_value=31)
+
+    return _subscription_rollup_history(
+        server_id, normalized_sub_id, period, cursor=cursor, page_size=page_size,
+    )
 
 
 def _fa_digits(value) -> str:
@@ -21640,7 +22176,38 @@ def _account_info_template_vars():
         '{dashboard_link}', '{sub_link}', '{server_name}',
         '{telegram_channel}', '{whatsapp_channel}',
         '{gift_volume}', '{if_gift}...{/if_gift}',
+        '{recommended_package}', '{recommended_volume}', '{recommended_days}',
+        '{recommended_price}', '{recommended_daily_usage}', '{recommended_31d_usage}',
+        '{if_recommendation}...{/if_recommendation}',
+        '{comfort_package}', '{comfort_volume}', '{comfort_days}', '{comfort_price}',
+        '{if_comfort_recommendation}...{/if_comfort_recommendation}',
     ]
+
+
+@app.route('/api/package-recommendation/template-vars', methods=['GET'])
+@login_required
+def get_package_recommendation_template_vars():
+    """Recommendation variables for manual WhatsApp/SMS template rendering."""
+    try:
+        server_id = int(request.args.get('server_id') or 0)
+    except (TypeError, ValueError):
+        server_id = 0
+    sub_id = str(request.args.get('sub_id') or '').strip()
+    email = str(request.args.get('email') or '').strip()
+    terminal = str(request.args.get('terminal') or '').strip().lower() in ('1', 'true', 'yes')
+    if not server_id or not sub_id:
+        return jsonify({'success': True, 'variables': _empty_recommendation_template_vars()})
+
+    admin = db.session.get(Admin, session.get('admin_id'))
+    allowed_server_ids = {int(item.id) for item in get_accessible_servers(admin)} if admin else set()
+    if not admin or server_id not in allowed_server_ids:
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    return jsonify({
+        'success': True,
+        'variables': _recommendation_template_vars(
+            server_id, sub_id, email, terminal=terminal,
+        ),
+    })
 
 
 def _account_info_channel_links(admin: 'Admin') -> dict:
@@ -22517,6 +23084,7 @@ def _run_snapshot_with_progress():
                         without = [ib for ib in existing if int(ib.get('server_id', -1)) != int(srv.id)]
                         GLOBAL_SERVER_DATA['inbounds'] = without + list(processed or [])
                         GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+                        publish_snapshot_to_redis([srv.id])
                 except Exception:
                     pass  # keep going for other servers
 
@@ -22558,7 +23126,7 @@ def _run_snapshot_with_progress():
 @app.route('/api/usage-snapshot/trigger', methods=['POST'])
 @user_management_required
 def trigger_usage_snapshot():
-    """Start a background snapshot task and return immediately."""
+    """Queue a usage snapshot in the dedicated background process."""
     current = _read_snap_progress()
     if current.get('status') == 'running':
         return jsonify({'success': False, 'error': 'A snapshot task is already running.'}), 409
@@ -22571,9 +23139,8 @@ def trigger_usage_snapshot():
         'fetched_fresh': False,
         'error': None,
     })
-    t = threading.Thread(target=_run_snapshot_with_progress, daemon=True)
-    t.start()
-    return jsonify({'success': True, 'status': 'started'})
+    job = enqueue_refresh_job(mode='usage_snapshot', force=True)
+    return jsonify({'success': True, 'status': 'started', 'job_id': job.get('id')})
 
 
 @app.route('/api/usage-snapshot/progress', methods=['GET'])
@@ -23602,7 +24169,12 @@ def get_renew_templates():
         'templates': [t.to_dict() for t in templates],
         'available_vars': [
             '{email}', '{days}', '{days_label}', '{volume}', '{volume_label}', '{date}', '{server_name}', '{mode}', '{dashboard_link}',
-            '{gift_volume}', '{if_gift}...{/if_gift}'
+            '{gift_volume}', '{if_gift}...{/if_gift}',
+            '{recommended_package}', '{recommended_volume}', '{recommended_days}',
+            '{recommended_price}', '{recommended_daily_usage}', '{recommended_31d_usage}',
+            '{if_recommendation}...{/if_recommendation}',
+            '{comfort_package}', '{comfort_volume}', '{comfort_days}', '{comfort_price}',
+            '{if_comfort_recommendation}...{/if_comfort_recommendation}'
         ]
     })
 
@@ -24049,6 +24621,12 @@ def background_data_fetcher():
     Fetches from panels, processes, and (if Redis is on) publishes the snapshot.
     """
     ensure_background_threads_started()
+    # Warm the dedicated process from the previous Redis snapshot so failed or
+    # backoff-skipped panels retain their last good server block.
+    try:
+        load_snapshot_from_redis(force=True)
+    except Exception:
+        pass
     while True:
         with app.app_context():
             # Avoid overlapping with a manual refresh job.
@@ -24240,6 +24818,7 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
         # fills in progressively instead of waiting for the whole fan-out.
         pending_ids = {int(s['id']) for s in server_dicts}
         last_publish = 0.0
+        dirty_server_ids = set()
         if server_dicts:
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 future_to_id = {executor.submit(fetch_worker, s): int(s['id']) for s in server_dicts}
@@ -24257,9 +24836,11 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
                     except Exception:
                         app.logger.exception(f"Failed to apply fetch result for server {sid}")
                     _commit_snapshot()
+                    dirty_server_ids.add(sid)
                     nowt = time.time()
                     if nowt - last_publish >= 1.0:
-                        publish_snapshot_to_redis()
+                        publish_snapshot_to_redis(dirty_server_ids)
+                        dirty_server_ids.clear()
                         last_publish = nowt
 
         # Defensive: any server that never produced a result → timeout entry.
@@ -24268,7 +24849,7 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
 
         # Final authoritative commit + publish to the other workers (no-op w/o Redis).
         _commit_snapshot()
-        publish_snapshot_to_redis()
+        publish_snapshot_to_redis(dirty_server_ids)
 
     except Exception as e:
         print(f"Background fetch error: {e}")
@@ -25211,7 +25792,8 @@ def usage_snapshot_worker():
     if not GLOBAL_SERVER_DATA.get('inbounds'):
         try:
             with app.app_context():
-                fetch_and_update_global_data(force=True)
+                with GLOBAL_REFRESH_LOCK:
+                    fetch_and_update_global_data(force=True)
         except Exception as exc:
             print(f'[UsageRollup] initial fetch failed: {exc}')
 
@@ -25265,18 +25847,28 @@ def _claim_singleton(name):
 def ensure_background_threads_started():
     """Start background threads once per process.
 
-    Singleton threads (scheduler, watchdog): only the gunicorn worker that
-    wins the fcntl lock runs them — prevents duplicate health logs, double
-    backups, and triple notifications.
-
-    Per-worker threads (data fetcher, snapshot): run in every worker because
-    they populate per-process memory caches; the snapshot worker has its own
-    jitter + DB dedup to avoid duplicate writes.
+    Dedicated web processes only read Redis snapshots. The background process
+    owns refresh, scheduling and automation threads. ``combined`` retains the
+    singleton-lock behavior used by development and legacy installations.
     """
     global BACKGROUND_THREADS_STARTED
     if BACKGROUND_THREADS_STARTED:
         return
     BACKGROUND_THREADS_STARTED = True
+
+    # Dedicated Gunicorn web processes only deserialize the shared snapshot.
+    # Panel fan-out, scheduled jobs and automations belong to the background
+    # process so request-serving workers do not inherit their memory peaks.
+    if PROCESS_ROLE == 'web':
+        try:
+            threading.Thread(target=snapshot_reader_worker, daemon=True).start()
+            if redis_enabled():
+                print('[ProcessRole] web worker reads snapshots from Redis.')
+            else:
+                print('[ProcessRole] Redis unavailable; snapshot reader will keep retrying.')
+        except Exception as e:
+            print(f'Failed to start snapshot reader thread: {e}')
+        return
 
     # Singleton: only one worker runs the scheduler (auto-backup, etc.)
     if _claim_singleton('scheduler'):
@@ -25299,12 +25891,18 @@ def ensure_background_threads_started():
                 print("[Redis] this worker is the data fetcher (singleton).")
             except Exception as e:
                 print(f"Failed to start data fetcher thread: {e}")
-        else:
             try:
-                threading.Thread(target=snapshot_reader_worker, daemon=True).start()
-                print("[Redis] this worker reads the shared snapshot.")
+                threading.Thread(target=refresh_queue_worker, daemon=True).start()
+                print("[Redis] refresh queue worker started.")
             except Exception as e:
-                print(f"Failed to start snapshot reader thread: {e}")
+                print(f"Failed to start refresh queue worker: {e}")
+        else:
+            if PROCESS_ROLE == 'combined':
+                try:
+                    threading.Thread(target=snapshot_reader_worker, daemon=True).start()
+                    print("[Redis] this worker reads the shared snapshot.")
+                except Exception as e:
+                    print(f"Failed to start snapshot reader thread: {e}")
     else:
         # Per-worker: every worker fetches server data into its own memory cache
         try:

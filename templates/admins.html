@@ -1171,7 +1171,7 @@
                                 <small>T</small>
                             </div>
                         </div>
-                        ${admin.allow_negative_credit ? `<span style="font-size:0.72rem; color:#fbbf24; background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.3); border-radius:6px; padding:1px 6px; margin-top:3px; display:inline-block;" title="Max debt: ${(admin.negative_credit_limit||0).toLocaleString()} T">اعتبار منفی تا ${(admin.negative_credit_limit||0).toLocaleString()} T</span>` : ''}
+                        ${admin.allow_negative_credit ? `<span style="font-size:0.72rem; color:#fbbf24; background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.3); border-radius:6px; padding:1px 6px; margin-top:3px; display:inline-block;" title="Max debt: ${(admin.negative_credit_limit||0).toLocaleString()} T">{{ 'اعتبار منفی تا' if panel_lang == 'fa' else 'Negative credit up to' }} ${(admin.negative_credit_limit||0).toLocaleString()} T</span>` : ''}
                         <p class="admin-meta" style="margin-top: 5px;">
                             Last Login: ${formatJalaliDate(admin.last_login)}
                         </p>

@@ -77,7 +77,7 @@
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h3>Message Templates</h3>
-                        <p class="text-secondary">Variables: {user}, {rem}, {time}, {date}, {server}</p>
+                        <p class="text-secondary">Variables: {user}, {rem}, {time}, {date}, {server}, {recommended_package}, {recommended_volume}, {recommended_days}, {recommended_price}, {recommended_daily_usage}, {recommended_31d_usage}, {if_recommendation}...{/if_recommendation}</p>
                     </div>
                 </div>
                 <div class="monitor-accordion">
@@ -622,37 +622,33 @@
             if (!template) {
                 template = (channel === 'whatsapp' ? royaltyTemplates.whatsapp : royaltyTemplates.sms) || '';
             }
-            if (template) {
-                // Support both monitor vars ({user}) and royalty vars ({email})
-                return template
-                    .replace(/\{email\}/g, alert.email || '-')
-                    .replace(/\{account_name\}/g, alert.email || '-')
-                    .replace(/\{user\}/g, alert.email || '-')
-                    .replace(/\{server_name\}/g, alert.server_name || '-')
-                    .replace(/\{server\}/g, alert.server_name || '-')
-                    .replace(/\{remaining_time\}/g, alert.time_left || '-')
-                    .replace(/\{remaining_volume\}/g, alert.remaining || '-')
-                    .replace(/\{rem\}/g, alert.remaining || '-')
-                    .replace(/\{time\}/g, alert.time_left || '-')
-                    .replace(/\{date\}/g, alert.expiry_date || '-')
-                    .replace(/\{dashboard_link\}/g, alert.dash_sub_url || '')
-                    .replace(/\{sub_link\}/g, alert.sub_url || '')
-                    .replace(/\{telegram_channel\}/g, '')
-                    .replace(/\{whatsapp_channel\}/g, '')
-                    .replace(/\{gift_volume\}/g, '')
-                    .replace(/\{if_gift\}[\s\S]*?\{\/if_gift\}/g, '');
-            }
+            if (template) return renderMonitorTemplate(template, alert);
         }
 
         template = templates[alert.status] || '';
-        const vars = {
-            user: alert.email || '-',
-            rem: alert.remaining || '-',
-            time: alert.time_left || '-',
-            date: alert.expiry_date || '-',
-            server: alert.server_name || '-'
-        };
-        return template.replace(/\{(user|rem|time|date|server)\}/g, (match, key) => vars[key] || '-');
+        return renderMonitorTemplate(template, alert);
+    }
+
+    function renderMonitorTemplate(template, alert) {
+        const recommendation = alert.recommendation_vars || {};
+        const vars = Object.assign({}, recommendation, {
+            email: alert.email || '-', account_name: alert.email || '-', user: alert.email || '-',
+            server_name: alert.server_name || '-', server: alert.server_name || '-',
+            remaining_time: alert.time_left || '-', time: alert.time_left || '-',
+            remaining_volume: alert.remaining || '-', rem: alert.remaining || '-',
+            date: alert.expiry_date || '-', dashboard_link: alert.dash_sub_url || '',
+            sub_link: alert.sub_url || '', telegram_channel: '', whatsapp_channel: '',
+            gift_volume: '', gift_given: false,
+        });
+        const conditioned = String(template || '').replace(
+            /(\n?)\{if_([a-zA-Z0-9_]+)\}([\s\S]*?)\{\/if_\2\}/g,
+            (match, lead, name, inner) => {
+                const flag = vars[name + '_given'] !== undefined ? vars[name + '_given'] : vars[name];
+                return flag ? lead + inner : '';
+            }
+        );
+        return conditioned.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) =>
+            Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : '');
     }
 
     function toLatinDigits(value) {
@@ -718,7 +714,7 @@
         return `https://wa.me/${clean}?text=${encodeURIComponent(message)}`;
     }
 
-    function sendMonitorMessage(button, channel) {
+    async function sendMonitorMessage(button, channel) {
         let alert = {};
         try {
             alert = JSON.parse(decodeURIComponent(button?.dataset?.monitorAlert || '%7B%7D'));
@@ -733,12 +729,28 @@
             return;
         }
 
+        // Only one clicked account is evaluated. This avoids an N+1 recommendation
+        // query when the Monitor list contains thousands of rows.
+        const pendingWindow = phones.length === 1 ? window.open('', '_blank') : null;
+        if (alert.server_id && alert.sub_id) {
+            try {
+                const params = new URLSearchParams({
+                    server_id: String(alert.server_id), sub_id: String(alert.sub_id),
+                    email: String(alert.email || ''),
+                    terminal: ['expired', 'ended'].includes(alert.status) ? '1' : '0',
+                });
+                const response = await fetch(`/api/package-recommendation/template-vars?${params.toString()}`);
+                const data = await response.json();
+                alert.recommendation_vars = data?.success ? (data.variables || {}) : {};
+            } catch (_) { alert.recommendation_vars = {}; }
+        }
         const message = buildMessage(alert, channel);
         const openTarget = (phone) => {
             const href = channel === 'sms'
                 ? buildSmsLink(phone.display, message)
                 : buildWaLink(phone.number, message);
-            window.open(href, '_blank', 'noopener');
+            if (pendingWindow && !pendingWindow.closed) pendingWindow.location.href = href;
+            else window.open(href, '_blank', 'noopener');
 
             // Log the send and update msg_count optimistically
             fetch('/api/monitor/log_message', {

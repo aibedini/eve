@@ -5,7 +5,7 @@ set -euo pipefail
 # The resulting archive contains:
 #   - Docker Engine + Compose plugin .deb packages (downloaded in a clean
 #     Ubuntu 22.04 container so all transitive deps are captured)
-#   - Eve app, PostgreSQL 16, and Caddy 2 Docker images
+#   - Eve app, PostgreSQL 16, Redis 7, and Caddy 2 Docker images
 #   - docker-compose.yml, Caddyfile, example .env, and the installer
 #
 # Requirements (on the build machine):
@@ -20,6 +20,7 @@ set -euo pipefail
 APP_IMAGE="${APP_IMAGE:-ghcr.io/yoyoraya/eve-xui-manager:latest}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
+REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
 OUT_DIR="${OUT_DIR:-eve-full-offline-bundle}"
 OUT_FILE="${OUT_FILE:-eve-full-offline-bundle.tar.gz}"
 
@@ -77,12 +78,14 @@ docker build -t "$APP_IMAGE" .
 echo "-- Pulling runtime images"
 docker pull "$POSTGRES_IMAGE"
 docker pull "$CADDY_IMAGE"
+docker pull "$REDIS_IMAGE"
 
 echo "-- Saving Docker images to tar"
 docker save -o "$OUT_DIR/docker-images.tar" \
     "$APP_IMAGE" \
     "$POSTGRES_IMAGE" \
-    "$CADDY_IMAGE"
+    "$CADDY_IMAGE" \
+    "$REDIS_IMAGE"
 
 # ---- Step 2: Copy config files and installer ----
 cp docker-compose.yml        "$OUT_DIR/docker-compose.yml"
@@ -98,7 +101,7 @@ Ubuntu 22.04 (Jammy) amd64
 
 This archive contains everything a bare Ubuntu 22.04 server needs:
   - Docker Engine + Docker Compose plugin (.deb packages in docker-debs/)
-  - Eve app, PostgreSQL 16, Caddy 2 (Docker images in docker-images.tar)
+  - Eve app, PostgreSQL 16, Redis 7, Caddy 2 (Docker images in docker-images.tar)
   - Configuration templates and an interactive installer
 
 Quick start:
@@ -116,6 +119,7 @@ Included Docker images:
   - ${APP_IMAGE}
   - ${POSTGRES_IMAGE}
   - ${CADDY_IMAGE}
+  - ${REDIS_IMAGE}
 EOF
 
 # ---- Step 3: Create archive ----

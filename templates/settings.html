@@ -129,7 +129,7 @@
                     <label>Panel Language</label>
                     <select id="general-panel-lang" class="form-select">
                         <option value="en">English</option>
-                        <option value="fa">فارسی (Persian)</option>
+                        <option value="fa">{{ 'فارسی' if panel_lang == 'fa' else 'Persian' }}</option>
                     </select>
                     <small class="text-secondary">Controls dashboard status language in the admin panel.</small>
                 </div>
@@ -138,7 +138,7 @@
                     <label>Subscription Page Language</label>
                     <select id="subscription-page-lang" class="form-select" onchange="saveSubscriptionPageSettings()">
                         <option value="en">English</option>
-                        <option value="fa">Persian (فارسی)</option>
+                        <option value="fa">{{ 'فارسی' if panel_lang == 'fa' else 'Persian' }}</option>
                     </select>
                     <small class="text-secondary">Controls the public subscription page language shown to clients.</small>
                 </div>
@@ -161,7 +161,7 @@
                             <small class="text-secondary">Hours</small>
                         </div>
                     </div>
-                    <small class="text-secondary">Clients with remaining time less than this are marked as: انقضا نزدیکه</small>
+                    <small class="text-secondary">{{ 'کاربرانی که زمان باقی‌مانده‌شان کمتر از این مقدار باشد با «انقضا نزدیک است» مشخص می‌شوند.' if panel_lang == 'fa' else 'Clients with less remaining time are marked as “Expiring Soon”.' }}</small>
                 </div>
 
                 <div class="form-group" style="margin-top: 18px; margin-bottom: 0;">
@@ -170,7 +170,7 @@
                         <input type="number" id="general-low-volume-gb" class="form-input" min="0.01" max="1024" step="0.01" value="1" oninput="updateLowVolumeHint()" style="max-width:160px;">
                         <span id="low-volume-hint" style="font-size:0.82rem;color:#94a3b8;white-space:nowrap;"></span>
                     </div>
-                    <small class="text-secondary">Clients with remaining volume less than this are marked as: حجم رو به اتمامه &nbsp;—&nbsp; مثال: 0.2 = 200 MB</small>
+                    <small class="text-secondary">{{ 'کاربرانی که حجم باقی‌مانده‌شان کمتر از این مقدار باشد با «حجم رو به اتمام است» مشخص می‌شوند — مثال: 0.2 = 200 MB' if panel_lang == 'fa' else 'Clients with less remaining volume are marked as “Low Volume” — example: 0.2 = 200 MB.' }}</small>
                 </div>
 
                 <div class="form-group" style="margin-top: 16px; margin-bottom: 0;">
@@ -216,7 +216,7 @@
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>Renew Template</h2>
-                        <p class="text-secondary">Customize the copy text shown after a successful renew. Supports variables like {email}, {days_label}, {volume_label}, {date}. Use {if_gift}...{/if_gift} to show a line only when a gift volume was given (e.g. 🎁 +{gift_volume} گیگ هدیه).</p>
+                        <p class="text-secondary">Customize the copy text shown after a successful renew. Supports variables like {email}, {days_label}, {volume_label}, {date}. Use {if_gift}...{/if_gift} to show a line only when gift volume was given (for example, 🎁 +{gift_volume} GB gift).</p>
                     </div>
                     <button class="btn btn-primary" onclick="openRenewTemplateModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
@@ -749,7 +749,7 @@
                     </div>
 
                     <h3 style="margin:18px 0 4px; font-size:0.98rem;">Bot templates</h3>
-                    <p class="text-secondary" style="margin:0 0 12px; font-size:0.82rem;">Dedicated WhatsApp-bot messages per scenario. Placeholders: <code>{email}</code> <code>{remaining_time}</code> <code>{remaining_volume}</code> <code>{dashboard_link}</code> <code>{volume}</code> <code>{days}</code> <code>{date}</code>.</p>
+                    <p class="text-secondary" style="margin:0 0 12px; font-size:0.82rem;">Dedicated WhatsApp-bot messages per scenario. Placeholders: <code>{email}</code> <code>{remaining_time}</code> <code>{remaining_volume}</code> <code>{dashboard_link}</code> <code>{volume}</code> <code>{days}</code> <code>{date}</code>. Smart package variables are also supported; wrap them in <code>{if_recommendation}...{/if_recommendation}</code> so the block is hidden when usage data is insufficient.</p>
                     <div class="form-group">
                         <label>Created</label>
                         <textarea id="wa-bot-tpl-created" class="form-input" rows="3">{{ whatsapp_bot_tpl_created }}</textarea>
@@ -1444,8 +1444,8 @@
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                 <div class="form-group">
-                    <label>Title (فارسی)</label>
-                    <input type="text" id="sa-app-title-fa" class="form-input" style="direction:rtl;" placeholder="عنوان فارسی">
+                    <label>{{ 'عنوان (فارسی)' if panel_lang == 'fa' else 'Title (Persian)' }}</label>
+                    <input type="text" id="sa-app-title-fa" class="form-input" style="direction:rtl;" placeholder="{{ 'عنوان فارسی' if panel_lang == 'fa' else 'Persian title' }}">
                 </div>
                 <div class="form-group">
                     <label>Title (English)</label>
@@ -1454,8 +1454,8 @@
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                 <div class="form-group">
-                    <label>Description (فارسی)</label>
-                    <textarea id="sa-app-desc-fa" class="form-input" rows="4" style="direction:rtl;font-family:inherit;" placeholder="راهنمای نصب به فارسی..."></textarea>
+                    <label>{{ 'توضیحات (فارسی)' if panel_lang == 'fa' else 'Description (Persian)' }}</label>
+                    <textarea id="sa-app-desc-fa" class="form-input" rows="4" style="direction:rtl;font-family:inherit;" placeholder="{{ 'راهنمای نصب به فارسی...' if panel_lang == 'fa' else 'Installation guide in Persian...' }}"></textarea>
                 </div>
                 <div class="form-group">
                     <label>Description (English)</label>
@@ -2759,7 +2759,7 @@
             if (!gateway) {
                 const setup = await autoConfigureWhatsAppGatewaySettings({ silent: true });
                 if (!setup.success) {
-                    showToast('WhatsApp gateway آماده نیست. لطفاً چند دقیقه بعد دوباره تلاش کنید.', 'error');
+                    showToast({{ ('درگاه واتساپ آماده نیست. لطفاً چند دقیقه بعد دوباره تلاش کنید.' if panel_lang == 'fa' else 'The WhatsApp gateway is not ready. Please try again in a few minutes.')|tojson }}, 'error');
                     return;
                 }
             }
@@ -3264,7 +3264,7 @@
         if (!gateway) {
             const setup = await autoConfigureWhatsAppGatewaySettings({ silent: true });
             if (!setup.success) {
-                showToast('اتصال خودکار به WhatsApp gateway انجام نشد. لطفاً بعداً دوباره تست بزنید.', 'error');
+                showToast({{ ('اتصال خودکار به درگاه واتساپ انجام نشد. لطفاً بعداً دوباره آزمایش کنید.' if panel_lang == 'fa' else 'Automatic WhatsApp gateway connection failed. Please test again later.')|tojson }}, 'error');
                 return;
             }
         }
@@ -3312,7 +3312,7 @@
             if (!silent) {
                 const message = (data && data.error)
                     ? String(data.error)
-                    : 'تنظیم خودکار WhatsApp gateway انجام نشد. لطفاً کمی بعد دوباره تلاش کنید.';
+                    : {{ ('تنظیم خودکار درگاه واتساپ انجام نشد. لطفاً کمی بعد دوباره تلاش کنید.' if panel_lang == 'fa' else 'Automatic WhatsApp gateway setup failed. Please try again shortly.')|tojson }};
                 showToast(message, 'error');
             }
             return { success: false };
@@ -5126,7 +5126,19 @@
         mode: 'custom',
         dashboard_link: 'https://example.com/s/1/uuid',
         gift_volume: '5',
-        gift_given: true
+        gift_given: true,
+        recommendation_given: true,
+        recommended_package: '31 Days - 10 GB',
+        recommended_volume: '10',
+        recommended_days: '31',
+        recommended_price: '150,000',
+        recommended_daily_usage: '0.3',
+        recommended_31d_usage: '9.4',
+        comfort_recommendation_given: true,
+        comfort_package: '31 Days - 20 GB',
+        comfort_volume: '20',
+        comfort_days: '31',
+        comfort_price: '270,000'
     };
 
     let renewTemplatesCache = [];
@@ -5339,8 +5351,23 @@
             '{server_name}':       'Germany 1',
             '{telegram_channel}':  accountMessageChannelLinks?.telegram_channel || 't.me/yourchannel',
             '{whatsapp_channel}':  accountMessageChannelLinks?.whatsapp_channel || 'wa.me/yourchannel',
+            '{recommended_package}': '31 Days - 10 GB',
+            '{recommended_volume}': '10',
+            '{recommended_days}': '31',
+            '{recommended_price}': '150,000',
+            '{recommended_daily_usage}': '0.3',
+            '{recommended_31d_usage}': '9.4',
+            '{comfort_package}': '31 Days - 20 GB',
+            '{comfort_volume}': '20',
+            '{comfort_days}': '31',
+            '{comfort_price}': '270,000',
         };
-        return String(content || '').replace(/\{[a-zA-Z0-9_]+\}/g, match => (
+        const flags = { recommendation: true, comfort_recommendation: true, gift: false };
+        const conditioned = String(content || '').replace(
+            /(\n?)\{if_([a-zA-Z0-9_]+)\}([\s\S]*?)\{\/if_\2\}/g,
+            (match, lead, name, inner) => flags[name] ? lead + inner : ''
+        );
+        return conditioned.replace(/\{[a-zA-Z0-9_]+\}/g, match => (
             Object.prototype.hasOwnProperty.call(vars, match) ? vars[match] : match
         ));
     }
@@ -5885,8 +5912,8 @@
             const [y, m, day] = gregorianToJalali(tehDate.getFullYear(), tehDate.getMonth()+1, tehDate.getDate());
             const hh = String(tehDate.getUTCHours()).padStart(2,'0');
             const mm = String(tehDate.getUTCMinutes()).padStart(2,'0');
-            const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
-            return `${day} ${monthNames[m-1]} ${y}، ${hh}:${mm}`;
+            const monthNames = {{ (['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'] if panel_lang == 'fa' else ['Farvardin','Ordibehesht','Khordad','Tir','Mordad','Shahrivar','Mehr','Aban','Azar','Dey','Bahman','Esfand'])|tojson }};
+            return `${day} ${monthNames[m-1]} ${y}{{ '،' if panel_lang == 'fa' else ',' }} ${hh}:${mm}`;
         } catch(e) { return isoStr; }
     }
 

@@ -214,15 +214,15 @@
 
                     <div class="form-group">
                         <label>Renew Template</label>
-                        <textarea id="whatsapp-template-renew" class="form-input" rows="2" placeholder="سلام {user}، تمدید شما با موفقیت انجام شد.">{{ whatsapp_template_renew }}</textarea>
+                        <textarea id="whatsapp-template-renew" class="form-input" rows="2" placeholder="{{ 'سلام {user}، تمدید شما با موفقیت انجام شد.' if panel_lang == 'fa' else 'Hello {user}, your renewal was completed successfully.' }}">{{ whatsapp_template_renew }}</textarea>
                     </div>
                     <div class="form-group">
                         <label>Welcome Template</label>
-                        <textarea id="whatsapp-template-welcome" class="form-input" rows="2" placeholder="سلام {user}، اشتراک شما فعال شد.">{{ whatsapp_template_welcome }}</textarea>
+                        <textarea id="whatsapp-template-welcome" class="form-input" rows="2" placeholder="{{ 'سلام {user}، اشتراک شما فعال شد.' if panel_lang == 'fa' else 'Hello {user}, your subscription is active.' }}">{{ whatsapp_template_welcome }}</textarea>
                     </div>
                     <div class="form-group">
                         <label>Pre-expiry Template</label>
-                        <textarea id="whatsapp-template-pre-expiry" class="form-input" rows="2" placeholder="سلام {user}، اشتراک شما تا {time_left} دیگر منقضی می‌شود.">{{ whatsapp_template_pre_expiry }}</textarea>
+                        <textarea id="whatsapp-template-pre-expiry" class="form-input" rows="2" placeholder="{{ 'سلام {user}، اشتراک شما تا {time_left} دیگر منقضی می‌شود.' if panel_lang == 'fa' else 'Hello {user}, your subscription expires in {time_left}.' }}">{{ whatsapp_template_pre_expiry }}</textarea>
                     </div>
                     <div class="form-actions" style="display: flex; justify-content: flex-end;">
                         <button class="btn btn-primary" onclick="saveContactInfo()">Save Contact & WhatsApp Settings</button>
@@ -268,7 +268,7 @@
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>Backup Config</h2>
-                        <p class="text-secondary">کانفیگ‌های پشتیبان که زیر پروفایل کاربر در صفحه ساب نمایش داده میشن و قابل کپی هستن.</p>
+                        <p class="text-secondary">{{ 'کانفیگ‌های پشتیبان که زیر پروفایل کاربر در صفحه اشتراک نمایش داده می‌شوند و قابل کپی هستند.' if panel_lang == 'fa' else 'Backup configurations shown below the client profile on the subscription page and available for copying.' }}</p>
                     </div>
                     <button class="btn btn-success" onclick="openBackupConfigModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
@@ -1036,7 +1036,7 @@
                     <input type="checkbox" id="edit-recommended">
                     <span class="slider"></span>
                 </div>
-                <span>Mark as Recommended (shows "پیشنهادی" badge)</span>
+                <span>{{ 'علامت‌گذاری به‌عنوان پیشنهادی (نشان «پیشنهادی»)' if panel_lang == 'fa' else 'Mark as Recommended (shows the “Recommended” badge)' }}</span>
             </label>
 
             <div class="form-actions">
@@ -1362,7 +1362,7 @@
 
             <div class="form-group" id="announcement-button-text-wrap" style="display:none; margin-top:12px;">
                 <label>Popup button text</label>
-                <input type="text" id="announcement-button-text" class="form-input" placeholder="e.g. Got it / متوجه شدم" maxlength="120">
+                <input type="text" id="announcement-button-text" class="form-input" placeholder="{{ 'مثلاً متوجه شدم' if panel_lang == 'fa' else 'e.g. Got it' }}" maxlength="120">
                 <small style="color: var(--text-secondary);">Label of the button that closes the popup. Leave empty for a default.</small>
             </div>
 
@@ -1457,7 +1457,7 @@
                         </div>
                         <div class="server-title">
                             <h3>${app.name}${app.is_recommended ? ' <span style="font-size:10px;padding:2px 6px;background:rgba(251,146,60,0.2);color:#fb923c;border-radius:999px;font-weight:600;">Recommended</span>' : ''}</h3>
-                            <p class="server-url" style="direction: rtl; text-align: right; margin-top: 2px;">${app.title_fa || 'بدون عنوان'}</p>
+                            <p class="server-url" style="direction: rtl; text-align: right; margin-top: 2px;">${app.title_fa || {{ ('بدون عنوان' if panel_lang == 'fa' else 'Untitled')|tojson }}}</p>
                         </div>
                     </div>
                 </div>
@@ -2265,7 +2265,7 @@
             <h3 style="margin:0 0 16px;font-size:1rem;color:#f1f5f9;">Insert Inline Button</h3>
             <div class="form-group" style="margin-bottom:12px;">
                 <label style="font-size:0.82rem;color:#94a3b8;">Button label</label>
-                <input id="ann-btn-label" class="form-input" placeholder="e.g. دریافت کانفیگ" style="margin-top:4px;">
+                <input id="ann-btn-label" class="form-input" placeholder="{{ 'مثلاً دریافت کانفیگ' if panel_lang == 'fa' else 'e.g. Get Configuration' }}" style="margin-top:4px;">
             </div>
             <div class="form-group" style="margin-bottom:16px;">
                 <label style="font-size:0.82rem;color:#94a3b8;">URL (optional)</label>

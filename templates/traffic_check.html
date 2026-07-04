@@ -419,18 +419,18 @@ jdp-container .jdp-year select {
         <div id="tc-custom-range" class="tc-custom-range-box" style="display:none;">
             <div class="tc-custom-inner">
                 <div class="tc-custom-row">
-                    <label class="tc-picker-label" for="picker-from">از تاریخ</label>
+                    <label class="tc-picker-label" for="picker-from">{{ 'از تاریخ' if panel_lang == 'fa' else 'From' }}</label>
                     <input type="text" id="picker-from" data-jdp class="tc-select tc-picker-input"
                            placeholder="1405/01/01 00:00">
                 </div>
                 <div class="tc-custom-row">
-                    <label class="tc-picker-label" for="picker-to">تا تاریخ</label>
+                    <label class="tc-picker-label" for="picker-to">{{ 'تا تاریخ' if panel_lang == 'fa' else 'To' }}</label>
                     <input type="text" id="picker-to" data-jdp class="tc-select tc-picker-input"
                            placeholder="1405/01/31 23:59">
                 </div>
                 <button class="btn btn-primary" onclick="loadTrafficCheck()" style="align-self:end;">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg>
-                    بارگذاری بازه
+                    {{ 'بارگذاری بازه' if panel_lang == 'fa' else 'Load Range' }}
                 </button>
             </div>
         </div>
@@ -447,8 +447,13 @@ jdp-container .jdp-year select {
             background:rgba(251,191,36,0.07); font-size:0.84rem; color:#fbbf24; line-height:1.5;">
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
     <span>
-        شما در حالت <strong>رسلر</strong> هستید — فقط ترافیک اکانت‌های اسایین‌شده به شما نمایش داده می‌شود.
-        اگر اینباندی فقط بخشی از اکانت‌هایش به شما تعلق دارد، مجموع آن اینباند فقط سهم شما را نشان می‌دهد.
+        {% if panel_lang == 'fa' %}
+        شما در حالت <strong>فروشنده</strong> هستید — فقط ترافیک اکانت‌های اختصاص‌داده‌شده به شما نمایش داده می‌شود.
+        اگر فقط بخشی از اکانت‌های یک اینباند متعلق به شما باشد، مجموع آن اینباند فقط سهم شما را نشان می‌دهد.
+        {% else %}
+        You are viewing this page as a <strong>reseller</strong>. Only traffic belonging to clients assigned to you is shown.
+        If only some clients in an inbound belong to you, its totals include only your share.
+        {% endif %}
     </span>
 </div>
 {% endif %}
@@ -470,7 +475,11 @@ jdp-container .jdp-year select {
 <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='jalalidatepicker.min.js') }}"></script>
 <script nonce="{{ csp_nonce }}">
 // ── Jalali helpers ──────────────────────────────────────────────
-const J_MONTHS = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+const TC_FA = {{ (panel_lang == 'fa')|tojson }};
+const tcT = (en, fa) => TC_FA ? fa : en;
+const J_MONTHS = TC_FA
+    ? ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند']
+    : ['Farvardin','Ordibehesht','Khordad','Tir','Mordad','Shahrivar','Mehr','Aban','Azar','Dey','Bahman','Esfand'];
 
 // Correct algorithm (extracted from jalalidatepicker.min.js)
 function gregorianToJalali(gy, gm, gd) {
@@ -515,7 +524,7 @@ function jalaliFromUtcIso(isoStr) {
         const [jy, jm, jd] = gregorianToJalali(teh.getUTCFullYear(), teh.getUTCMonth()+1, teh.getUTCDate());
         const hh = String(teh.getUTCHours()).padStart(2,'0');
         const mm = String(teh.getUTCMinutes()).padStart(2,'0');
-        return `${jd} ${J_MONTHS[jm-1]} ${jy}، ${hh}:${mm}`;
+        return `${jd} ${J_MONTHS[jm-1]} ${jy}${TC_FA ? '،' : ','} ${hh}:${mm}`;
     } catch(e) { return isoStr; }
 }
 
@@ -633,7 +642,7 @@ async function loadTrafficCheck() {
             `<span style="opacity:0.5;">←</span>` +
             `<span>${jalaliFromUtcIso(d.to)}</span>` +
             (d.sub_email ? `<span style="color:#60a5fa;"> · ${esc(d.sub_email)}</span>` : '') +
-            `<span style="margin-left:auto; color:var(--text-secondary); font-size:0.76rem; white-space:nowrap;" id="tc-loaded-at">⏱ بارگذاری: ${jalaliFromUtcIso(_lastLoadedAt.toISOString())}</span>`;
+            `<span style="margin-left:auto; color:var(--text-secondary); font-size:0.76rem; white-space:nowrap;" id="tc-loaded-at">⏱ ${tcT('Loaded', 'بارگذاری')}: ${jalaliFromUtcIso(_lastLoadedAt.toISOString())}</span>`;
 
         tcRender();
     } catch(e) {
@@ -686,7 +695,7 @@ function tcRender() {
         }
 
         const firstSnapLabel = srv.first_snapshot_at
-            ? `<span>اولین snapshot: ${jalaliFromUtcIso(srv.first_snapshot_at)}</span>`
+            ? `<span>${tcT('First snapshot', 'اولین اسنپ‌شات')}: ${jalaliFromUtcIso(srv.first_snapshot_at)}</span>`
             : '';
 
         const ibRows = srv.inbounds.map((ib, ibIdx) => {
@@ -697,7 +706,7 @@ function tcRender() {
             if (isUnknown) {
                 const portPart = ib.port ? `Port ${esc(String(ib.port))}` : 'Unknown';
                 const idPart   = ib.inbound_id ? ` / ID ${esc(String(ib.inbound_id))}` : '';
-                nameHtml = `<span style="color:var(--text-secondary);font-style:italic;" title="این inbound تگ ذخیره‌شده‌ای ندارد — احتمالاً snapshot قبل از ذخیره تگ گرفته شده">${portPart}${idPart} ⓘ</span>`;
+                nameHtml = `<span style="color:var(--text-secondary);font-style:italic;" title="${tcT('This inbound has no saved tag; its snapshot was probably recorded before the tag was stored.', 'این اینباند تگ ذخیره‌شده‌ای ندارد؛ احتمالاً اسنپ‌شات قبل از ذخیره تگ گرفته شده است.')}">${portPart}${idPart} ⓘ</span>`;
             } else {
                 const portBadge = ib.port ? `<span style="color:var(--text-secondary);font-size:0.76rem;font-weight:400;">:${esc(String(ib.port))}</span>` : '';
                 nameHtml = `${esc(ib.inbound_tag)}${portBadge}`;
@@ -705,16 +714,16 @@ function tcRender() {
             const clients = ib.client_list || [];
             const hasClients = clients.length > 0;
             const toggleBtn = hasClients ? `
-                <button class="tc-inbound-toggle" id="${ibId}-toggle" onclick="tcToggleClients('${ibId}')" title="نمایش/پنهان کلاینت‌ها">
+                <button class="tc-inbound-toggle" id="${ibId}-toggle" onclick="tcToggleClients('${ibId}')" title="${tcT('Show/hide clients', 'نمایش/پنهان‌کردن کاربران')}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                    ${ib.clients} کلاینت
-                </button>` : `<span style="color:var(--text-secondary);font-size:0.78rem;">${ib.clients} کلاینت</span>`;
+                    ${ib.clients} ${tcT('clients', 'کاربر')}
+                </button>` : `<span style="color:var(--text-secondary);font-size:0.78rem;">${ib.clients} ${tcT('clients', 'کاربر')}</span>`;
 
             const clientRows = hasClients ? clients.map(c => {
                 const statusBadge = c.status === 'deleted'
-                    ? `<span style="font-size:.68rem;padding:1px 6px;border-radius:8px;background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3);white-space:nowrap;">حذف شده</span>`
+                    ? `<span style="font-size:.68rem;padding:1px 6px;border-radius:8px;background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3);white-space:nowrap;">${tcT('Deleted', 'حذف‌شده')}</span>`
                     : c.status === 'disabled'
-                    ? `<span style="font-size:.68rem;padding:1px 6px;border-radius:8px;background:rgba(148,163,184,.12);color:#94a3b8;border:1px solid rgba(148,163,184,.25);white-space:nowrap;">غیرفعال</span>`
+                    ? `<span style="font-size:.68rem;padding:1px 6px;border-radius:8px;background:rgba(148,163,184,.12);color:#94a3b8;border:1px solid rgba(148,163,184,.25);white-space:nowrap;">${tcT('Disabled', 'غیرفعال')}</span>`
                     : '';
                 return `
                 <div class="tc-client-row">

@@ -8,7 +8,7 @@
         <div class="panel-card-header">
             <div class="header-content">
                 <h2>My Packages</h2>
-                <p class="text-secondary">پکیج‌های خودت رو بساز و انتخاب کن کدوم پکیج‌ها در صفحه ساب مشتری‌هات دیده بشن.</p>
+                <p class="text-secondary">{{ 'پکیج‌های خودتان را بسازید و انتخاب کنید کدام پکیج‌ها در صفحه اشتراک مشتری نمایش داده شوند.' if panel_lang == 'fa' else 'Create your own packages and choose which ones appear on customer subscription pages.' }}</p>
             </div>
             <button class="btn btn-success" onclick="openMyPkgModal()">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
@@ -32,7 +32,7 @@
             <input type="hidden" id="my-pkg-id">
             <div class="form-group">
                 <label>Package Name</label>
-                <input type="text" id="my-pkg-name" class="form-input" placeholder="مثلا: یک‌ماهه ۵۰ گیگ">
+                <input type="text" id="my-pkg-name" class="form-input" placeholder="{{ 'مثلاً: یک‌ماهه ۵۰ گیگ' if panel_lang == 'fa' else 'e.g., 1 Month 50GB' }}">
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
@@ -49,7 +49,7 @@
                 <input type="text" id="my-pkg-price" class="form-input" placeholder="150,000" inputmode="numeric" oninput="formatNum(this); checkMyPriceWarn()">
                 <div id="my-pkg-price-hint" style="margin-top:6px; font-size:0.82rem; color:var(--text-secondary); display:none;"></div>
                 <div id="my-pkg-price-warn" class="alert alert-warning" style="margin-top:6px; display:none; padding:8px 12px; font-size:0.84rem; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3); border-radius:8px; color:#fbbf24;">
-                    ⚠️ قیمت پایین‌تر از حداقل تعرفه سیستم است و ذخیره نمی‌شود.
+                    {{ '⚠️ قیمت پایین‌تر از حداقل تعرفه سیستم است و ذخیره نمی‌شود.' if panel_lang == 'fa' else '⚠️ The price is below the system minimum and cannot be saved.' }}
                 </div>
             </div>
             <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:4px;">
@@ -57,7 +57,7 @@
                     <input type="checkbox" id="my-pkg-show-on-sub">
                     <span class="slider"></span>
                 </div>
-                <span>نمایش در صفحه ساب مشتری</span>
+                <span>{{ 'نمایش در صفحه اشتراک مشتری' if panel_lang == 'fa' else 'Show on customer subscription page' }}</span>
             </label>
             <div class="form-actions">
                 <button class="btn btn-secondary" type="button" onclick="closeMyPkgModal()">Cancel</button>
@@ -116,6 +116,8 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}">
+    const MY_PKG_FA = {{ (panel_lang == 'fa')|tojson }};
+    const myPkgT = (en, fa) => MY_PKG_FA ? fa : en;
     let _myPkgs = [];
     let _myMinPrice = null;
     let _myMinDebounce = null;
@@ -143,17 +145,17 @@
     function renderMyPackages() {
         const c = document.getElementById('my-pkg-container');
         if (!_myPkgs.length) {
-            c.innerHTML = '<div class="empty-state">هنوز پکیجی نداری. روی "New Package" بزن یا پکیج‌های اختصاص‌داده‌شده اینجا میان.</div>';
+            c.innerHTML = `<div class="empty-state">${myPkgT('You have no packages yet. Create one or wait for an assigned package.', 'هنوز پکیجی ندارید. یک پکیج بسازید یا منتظر پکیج اختصاص‌داده‌شده باشید.')}</div>`;
             return;
         }
         c.innerHTML = _myPkgs.map(p => {
-            const daysStr = p.days === 0 ? '∞' : p.days + ' روز';
+            const daysStr = p.days === 0 ? '∞' : myPkgT(`${p.days} days`, `${p.days} روز`);
             const volStr  = p.volume === 0 ? '∞' : p.volume + ' GB';
             const ownBadge = p.is_own
-                ? '<span class="scope-badge scope-personal">مال خودم</span>'
-                : '<span class="scope-badge scope-assigned">اختصاص‌داده‌شده</span>';
+                ? `<span class="scope-badge scope-personal">${myPkgT('Mine', 'مال خودم')}</span>`
+                : `<span class="scope-badge scope-assigned">${myPkgT('Assigned', 'اختصاص‌داده‌شده')}</span>`;
             const subBadge = p.sub_shown
-                ? '<span class="scope-badge scope-sub" title="در صفحه ساب مشتری دیده می‌شود">🌐 در ساب</span>'
+                ? `<span class="scope-badge scope-sub" title="${myPkgT('Visible on customer subscription pages', 'در صفحه اشتراک مشتری دیده می‌شود')}">🌐 ${myPkgT('On subscription page', 'در اشتراک')}</span>`
                 : '';
             const ownActions = p.is_own
                 ? `<button class="action-icon" title="Edit" onclick="editMyPkg(${p.id})">${EDIT_ICON}</button>
@@ -169,7 +171,7 @@
                     ${ownBadge}
                     ${subBadge}
                     <div class="pkg-price">${Number(p.price).toLocaleString()} T</div>
-                    <label class="sub-toggle" title="نمایش در صفحه ساب مشتری">
+                    <label class="sub-toggle" title="${myPkgT('Show on customer subscription page', 'نمایش در صفحه اشتراک مشتری')}">
                         <div class="toggle-switch">
                             <input type="checkbox" ${p.sub_shown ? 'checked' : ''} onchange="toggleSub(${p.id}, this.checked, this)">
                             <span class="slider"></span>
@@ -238,7 +240,7 @@
             if (data.success) {
                 _myMinPrice = data.min_price;
                 hint.style.display = '';
-                hint.textContent = `حداقل قیمت (تعرفه سیستم): ${Number(data.min_price).toLocaleString()} تومان`;
+                hint.textContent = myPkgT(`Minimum system price: ${Number(data.min_price).toLocaleString()} Toman`, `حداقل قیمت (تعرفه سیستم): ${Number(data.min_price).toLocaleString()} تومان`);
                 checkMyPriceWarn();
             }
         } catch (e) {}
@@ -255,9 +257,9 @@
         const days = unNum(document.getElementById('my-pkg-days').value);
         const volume = unNum(document.getElementById('my-pkg-vol').value);
         const price = unNum(document.getElementById('my-pkg-price').value);
-        if (!name || !price) { showToast('نام و قیمت لازمه', 'error'); return; }
+        if (!name || !price) { showToast(myPkgT('Name and price are required', 'نام و قیمت الزامی است'), 'error'); return; }
         if (_myMinPrice && days && volume && price < _myMinPrice) {
-            showToast(`قیمت نباید کمتر از ${Number(_myMinPrice).toLocaleString()} تومان باشه`, 'error');
+            showToast(myPkgT(`Price cannot be below ${Number(_myMinPrice).toLocaleString()} Toman`, `قیمت نباید کمتر از ${Number(_myMinPrice).toLocaleString()} تومان باشد`), 'error');
             return;
         }
         const body = { name, days, volume, price, show_on_sub: document.getElementById('my-pkg-show-on-sub').checked };
@@ -267,7 +269,7 @@
             const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
             const data = await res.json();
             if (!data.success) { showToast(data.error || 'Save failed', 'error'); return; }
-            showToast(id ? 'ذخیره شد' : 'پکیج ساخته شد', 'success');
+            showToast(id ? myPkgT('Saved', 'ذخیره شد') : myPkgT('Package created', 'پکیج ساخته شد'), 'success');
             closeMyPkgModal();
             loadMyPackages();
         } catch (e) { showToast('Network error', 'error'); }
@@ -275,12 +277,12 @@
 
     async function deleteMyPkg(id) {
         const p = _myPkgs.find(x => x.id === id);
-        if (!confirm(`حذف پکیج "${p ? p.name : id}"؟`)) return;
+        if (!confirm(myPkgT(`Delete package "${p ? p.name : id}"?`, `پکیج «${p ? p.name : id}» حذف شود؟`))) return;
         try {
             const res = await fetch(`/api/my-packages/${id}`, { method: 'DELETE' });
             const data = await res.json();
             if (!data.success) { showToast(data.error || 'Delete failed', 'error'); return; }
-            showToast('حذف شد', 'success');
+            showToast(myPkgT('Deleted', 'حذف شد'), 'success');
             loadMyPackages();
         } catch (e) { showToast('Network error', 'error'); }
     }

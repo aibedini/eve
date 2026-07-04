@@ -112,7 +112,7 @@ bash scripts/docker/build-offline-bundle.sh
 
 ### ⚙️ Operations & Reliability
 
-- **Multi-worker ready**: gunicorn with **Redis-shared** scan progress and cancel signals across workers.
+- **Memory-aware runtime**: RAM-sized Gunicorn web workers read per-server Redis snapshots while refresh, scheduling, and automations run in a dedicated background process.
 - **Zero-downtime schema updates**: columns/tables are auto-migrated on startup.
 - **Compressed responses**: gzip/brotli to keep large payloads fast.
 
@@ -124,7 +124,7 @@ bash scripts/docker/build-offline-bundle.sh
 
 - 🐍 Python 3.11+
 - 🐘 PostgreSQL
-- 🧰 Redis (recommended, for multi-worker background jobs)
+- 🧰 Redis (required for the production web/background split; optional only for single-process development)
 
 ### Setup
 
@@ -175,7 +175,7 @@ The dashboard is available at `http://localhost:5000`.
 - `INITIAL_ADMIN_PASSWORD` — initial admin password (default: `admin`)
 
 **Optional**
-- `REDIS_URL` — enable cross-worker background jobs and shared scan state
+- `REDIS_URL` — shared per-server snapshots and background-job queue
 - `XUI_HOST` / `XUI_USERNAME` / `XUI_PASSWORD` — default X-UI panel host & credentials
 
 ### Per-Server Settings

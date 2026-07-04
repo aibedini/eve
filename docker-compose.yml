@@ -9,7 +9,9 @@ services:
       INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
-      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+      EVE_PROCESS_ROLE: web
+      REDIS_URL: redis://redis:6379/0
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-}
       GUNICORN_THREADS: ${GUNICORN_THREADS:-4}
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
     volumes:
@@ -19,6 +21,39 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  background:
+    image: ${EVE_IMAGE:-ghcr.io/yoyoraya/eve-xui-manager:latest}
+    restart: unless-stopped
+    environment:
+      FLASK_ENV: production
+      EVE_PROCESS_ROLE: background
+      DATABASE_URL: postgresql://eve_manager:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/eve_manager
+      REDIS_URL: redis://redis:6379/0
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+    volumes:
+      - eve_data:/app/instance
+      - eve_uploads:/app/static/uploads
+      - eve_app_files:/app/static/app-files
+    depends_on:
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "volatile-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   db:
     image: postgres:16-alpine

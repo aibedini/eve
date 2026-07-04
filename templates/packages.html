@@ -39,10 +39,10 @@
                     </button>
                 </div>
                 <div class="pkg-filter-bar">
-                    <span class="pkg-filter-label-text">نمایش بر اساس مالک:</span>
+                    <span class="pkg-filter-label-text">{{ 'نمایش بر اساس مالک:' if panel_lang == 'fa' else 'Filter by owner:' }}</span>
                     <div class="pkg-owner-filter">
                         <button type="button" class="pkg-filter-trigger" onclick="togglePkgOwnerMenu(event)">
-                            <span id="pkg-owner-filter-label">همه</span>
+                            <span id="pkg-owner-filter-label">{{ 'همه' if panel_lang == 'fa' else 'All' }}</span>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                         </button>
                         <div id="pkg-owner-filter-menu" class="pkg-filter-menu hidden"></div>
@@ -157,7 +157,7 @@
                 <input type="text" id="pkg-price" class="form-input" placeholder="100,000" oninput="formatNumberInput(this); checkPriceWarning()">
                 <div id="pkg-price-hint" style="margin-top:6px; font-size:0.82rem; color:var(--text-secondary); display:none;"></div>
                 <div id="pkg-price-warn" class="alert alert-warning" style="margin-top:6px; display:none; padding:8px 12px; font-size:0.84rem;">
-                    ⚠️ ضرر میکنی! قیمت پایین‌تر از حداقل هزینه محاسبه‌شده است.
+                    {{ '⚠️ ضرر می‌کنید! قیمت پایین‌تر از حداقل هزینه محاسبه‌شده است.' if panel_lang == 'fa' else '⚠️ This price is below the calculated minimum cost.' }}
                 </div>
             </div>
             <div class="form-group">
@@ -383,6 +383,8 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}">
+const PKG_FA = {{ (panel_lang == 'fa')|tojson }};
+const pkgT = (en, fa) => PKG_FA ? fa : en;
 /* ─── State ────────────────────────────────────────────────── */
 let _pkgCache   = [];
 let _tierCache  = [];
@@ -421,9 +423,9 @@ function buildPkgOwnerMenu() {
             <input type="checkbox" value="${val}" ${checked ? 'checked' : ''} onchange="onPkgOwnerToggle('${val}', this.checked)">
             <span>${escHtml(label)}</span>
         </label>`;
-    let html = row('all', 'همه', _pkgOwnerFilter.size === 0);
+    let html = row('all', pkgT('All', 'همه'), _pkgOwnerFilter.size === 0);
     html += '<div class="pkg-filter-divider"></div>';
-    if (hasAdminOwned) html += row('admin', 'ادمین / سیستم', _pkgOwnerFilter.has('admin'));
+    if (hasAdminOwned) html += row('admin', pkgT('Admin / System', 'ادمین / سیستم'), _pkgOwnerFilter.has('admin'));
     _resellerCache.filter(r => ownerIds.has(r.id)).forEach(r => {
         html += row(String(r.id), r.username, _pkgOwnerFilter.has(r.id));
     });
@@ -444,13 +446,13 @@ function onPkgOwnerToggle(val, checked) {
 
 function updatePkgFilterLabel() {
     const lbl = document.getElementById('pkg-owner-filter-label');
-    if (_pkgOwnerFilter.size === 0) { lbl.textContent = 'همه'; return; }
+    if (_pkgOwnerFilter.size === 0) { lbl.textContent = pkgT('All', 'همه'); return; }
     const names = [..._pkgOwnerFilter].map(k => {
-        if (k === 'admin') return 'ادمین';
+        if (k === 'admin') return pkgT('Admin', 'ادمین');
         const r = _resellerCache.find(r => r.id === k);
         return r ? r.username : ('#' + k);
     });
-    lbl.textContent = names.length <= 2 ? names.join('، ') : `${names.length} مالک`;
+    lbl.textContent = names.length <= 2 ? names.join(PKG_FA ? '، ' : ', ') : pkgT(`${names.length} owners`, `${names.length} مالک`);
 }
 
 // Close the filter menu when clicking outside it.
@@ -499,7 +501,7 @@ function fmtPkgDate(iso) {
     if (!iso) return null;
     const d = new Date(iso);
     if (isNaN(d)) return null;
-    return d.toLocaleDateString('fa-IR', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString(PKG_FA ? 'fa-IR' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function renderPackages(body) {
@@ -513,26 +515,26 @@ function renderPackages(body) {
         : _pkgCache.filter(p => _pkgOwnerFilter.has(_pkgOwnerKey(p)));
     const countEl = document.getElementById('pkg-filter-count');
     if (countEl) countEl.textContent = (_pkgOwnerFilter.size === 0)
-        ? `${_pkgCache.length} پکیج`
-        : `${list.length} از ${_pkgCache.length} پکیج`;
+        ? pkgT(`${_pkgCache.length} packages`, `${_pkgCache.length} پکیج`)
+        : pkgT(`${list.length} of ${_pkgCache.length} packages`, `${list.length} از ${_pkgCache.length} پکیج`);
     if (!list.length) {
-        body.innerHTML = '<div class="empty-state">برای این فیلتر پکیجی پیدا نشد.</div>';
+        body.innerHTML = `<div class="empty-state">${pkgT('No packages match this filter.', 'برای این فیلتر پکیجی پیدا نشد.')}</div>`;
         return;
     }
     body.innerHTML = list.map(p => {
         const scopeClass = 'scope-' + (p.scope || 'global');
         const scopeLabel = (p.scope || 'global').charAt(0).toUpperCase() + (p.scope||'global').slice(1);
-        const daysStr    = p.days   === 0 ? '∞' : p.days + ' روز';
+        const daysStr    = p.days   === 0 ? '∞' : pkgT(`${p.days} days`, `${p.days} روز`);
         const volStr     = p.volume === 0 ? '∞' : p.volume + ' GB';
         const isReseller = p.created_by && _resellerCache.some(r => r.id === p.created_by);
         const ownerBadge = isReseller
-            ? `<span class="scope-badge scope-owner" title="پکیج اختصاصی این رسلر">👤 ${escHtml(p.created_by_username || ('#'+p.created_by))}</span>`
+            ? `<span class="scope-badge scope-owner" title="${pkgT('Package owned by this reseller', 'پکیج اختصاصی این رسلر')}">👤 ${escHtml(p.created_by_username || ('#'+p.created_by))}</span>`
             : '';
         const createdStr = (p.created_by_username && !isReseller)
             ? `<span>👤 ${escHtml(p.created_by_username)}${p.created_at ? ' · ' + fmtPkgDate(p.created_at) : ''}</span>`
             : (p.created_at ? `<span>📅 ${fmtPkgDate(p.created_at)}</span>` : '');
         const updatedStr = p.updated_at
-            ? `<span style="color:var(--warning, #fbbf24);">✏️ ویرایش: ${fmtPkgDate(p.updated_at)}</span>`
+            ? `<span style="color:var(--warning, #fbbf24);">✏️ ${pkgT('Edited', 'ویرایش')}: ${fmtPkgDate(p.updated_at)}</span>`
             : '';
         return `
         <div class="pkg-item">
@@ -636,7 +638,7 @@ async function _fetchMinPrice() {
         if (data.success) {
             _cachedMinPrice = data.min_price;
             hint.style.display = '';
-            hint.textContent   = `حداقل هزینه: ${Number(data.min_price).toLocaleString()} تومان`;
+            hint.textContent   = pkgT(`Minimum cost: ${Number(data.min_price).toLocaleString()} Toman`, `حداقل هزینه: ${Number(data.min_price).toLocaleString()} تومان`);
             checkPriceWarning();
         }
     } catch(e) {}

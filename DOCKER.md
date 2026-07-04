@@ -34,12 +34,19 @@ INITIAL_ADMIN_PASSWORD=change-this-admin-password
 
 You can start from `.env.docker.example`.
 
+The Compose stack runs request handling and background work separately. Gunicorn
+worker count is selected from the container memory limit (or host RAM) unless
+`GUNICORN_WORKERS` is explicitly set: 1 below 6 GiB, 2 below 12 GiB, otherwise 3.
+Redis is an ephemeral coordination/cache service; PostgreSQL remains the source
+of truth.
+
 ## Online Install
 
 ```bash
 docker compose pull
 docker compose up -d
 docker compose logs -f app
+docker compose logs -f background
 ```
 
 Open `https://YOUR_DOMAIN`.
@@ -149,15 +156,17 @@ On an online machine:
 docker pull ghcr.io/yoyoraya/eve-xui-manager:latest
 docker pull postgres:16-alpine
 docker pull caddy:2-alpine
+docker pull redis:7-alpine
 docker save -o eve-docker-images.tar \
   ghcr.io/yoyoraya/eve-xui-manager:latest \
   postgres:16-alpine \
-  caddy:2-alpine
+  caddy:2-alpine \
+  redis:7-alpine
 ```
 
 If GHCR is private, either make the package public in GitHub Packages or run `docker login ghcr.io` on the online machine before pulling.
 
-GitHub Actions also uploads `eve-xui-manager-image-amd64` as an artifact. You can download that tar from the workflow run, load it, and then save it together with `postgres:16-alpine` and `caddy:2-alpine`.
+GitHub Actions also uploads `eve-xui-manager-image-amd64` as an artifact. You can download that tar from the workflow run, load it, and then save it together with `postgres:16-alpine`, `redis:7-alpine`, and `caddy:2-alpine`.
 
 Copy these files to the restricted server:
 
@@ -172,6 +181,7 @@ On the restricted server:
 docker load -i eve-docker-images.tar
 docker compose up -d
 docker compose logs -f app
+docker compose logs -f background
 ```
 
 No GitHub, PyPI, or apt package download is needed after the images are loaded.

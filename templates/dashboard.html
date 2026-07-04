@@ -1057,7 +1057,7 @@
                 </div>
                 <small class="text-secondary" style="display:block; margin-top:6px;">Saving applies the checked inbounds. Unchecking removes the client from that inbound.</small>
                 <div id="edit-inbound-no-assign-warn" style="display:none; margin-top:8px; padding:8px 10px; border-radius:8px; background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.35); color:#fbbf24; font-size:0.82rem; line-height:1.5;">
-                    ⚠️ این کاربر به <b>هیچ اینباندی</b> assign نشده. روی پنل‌های <b>x-ui نسخه ۳ به بعد</b> این مهم است — مطمئن شو حداقل یک اینباند تیک خورده باشد. (روی نسخه‌های پایین‌تر از ۳ مهم نیست.)
+                    {% if panel_lang == 'fa' %}⚠️ این کاربر به <b>هیچ اینباندی</b> اختصاص داده نشده است. در پنل‌های <b>x-ui نسخه ۳ به بعد</b> حداقل یک اینباند باید انتخاب شود.{% else %}⚠️ This client is assigned to <b>no inbound</b>. On <b>x-ui v3+</b>, at least one inbound must be selected.{% endif %}
                 </div>
             </div>
 
@@ -1697,15 +1697,23 @@
             return true;
         }
 
-        const DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE = [
+        const DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE = ((document.documentElement.lang || 'en') === 'fa' ? [
                 'اطلاعات اکانت شما',
                 'اسم اکانت: {email}',
                 'مدت زمان باقی مانده: {remaining_time}',
                 'حجم باقی مانده: {remaining_volume}',
                 'لینک dash sub: {dashboard_link}',
                 '',
-                'لطفا از طریق لینک بالا به سرویس خود متصل شین .'
-            ].join('\n');
+                'لطفاً از طریق لینک بالا به سرویس خود متصل شوید.'
+            ] : [
+                'Your account information',
+                'Account name: {email}',
+                'Remaining time: {remaining_time}',
+                'Remaining volume: {remaining_volume}',
+                'Dashboard link: {dashboard_link}',
+                '',
+                'Use the link above to connect to your service.'
+            ]).join('\n');
         let accountInfoTemplateCache = {};
 
         // Cache stores { content, telegram_channel, whatsapp_channel }
@@ -1737,7 +1745,13 @@
             const telegramCh = (typeof templateObj === 'object') ? (templateObj?.telegram_channel || '') : '';
             const whatsappCh = (typeof templateObj === 'object') ? (templateObj?.whatsapp_channel || '') : '';
 
-            const values = {
+            const values = Object.assign({
+                recommendation: '', recommendation_given: false,
+                recommended_package: '', recommended_volume: '', recommended_days: '',
+                recommended_price: '', recommended_daily_usage: '', recommended_31d_usage: '',
+                comfort_recommendation: '', comfort_recommendation_given: false,
+                comfort_package: '', comfort_volume: '', comfort_days: '', comfort_price: '',
+            }, client?.recommendation_vars || {}, {
                 email:             client?.email || '-',
                 account_name:      client?.email || '-',
                 service_name:      client?.email || '-',
@@ -1748,7 +1762,7 @@
                 server_name:       client?.server_name || '',
                 telegram_channel:  telegramCh,
                 whatsapp_channel:  whatsappCh,
-            };
+            });
             return _applyTplConditionals(String(templateStr), values).replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => (
                 Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
             ));
@@ -1763,7 +1777,10 @@
                 remaining_formatted: client?.remaining_formatted || '',
                 dash_sub_url: client?.dash_sub_url || '',
                 sub_url: client?.sub_url || '',
-                server_name: client?.server_name || ''
+                server_name: client?.server_name || '',
+                server_id: client?.server_id || 0,
+                sub_id: client?.subId || client?.sub_id || client?.id || '',
+                terminal: ['expired', 'ended'].includes(client?.service_state_tag || '')
             }));
             return `
                 <button class="action-btn success" data-client-message="${payload}" onclick="openClientAccountMessageChannel(this)" title="Send account info">
@@ -1993,9 +2010,24 @@
             }
         }
 
-        function openClientAccountMessageChannel(button) {
+        async function _hydrateClientRecommendation(client) {
+            if (!client?.server_id || !client?.sub_id || client.recommendation_vars) return client;
             try {
-                const client = JSON.parse(decodeURIComponent(button?.dataset?.clientMessage || '%7B%7D'));
+                const params = new URLSearchParams({
+                    server_id: String(client.server_id), sub_id: String(client.sub_id),
+                    email: String(client.email || ''), terminal: client.terminal ? '1' : '0',
+                });
+                const res = await fetch(`/api/package-recommendation/template-vars?${params.toString()}`);
+                const data = await res.json();
+                client.recommendation_vars = data?.success ? (data.variables || {}) : {};
+            } catch (_) { client.recommendation_vars = {}; }
+            return client;
+        }
+
+        async function openClientAccountMessageChannel(button) {
+            try {
+                const client = await _hydrateClientRecommendation(JSON.parse(decodeURIComponent(button?.dataset?.clientMessage || '%7B%7D')));
+                button.dataset.clientMessage = encodeURIComponent(JSON.stringify(client));
                 const phones = extractWhatsAppNumbers(
                     { label: 'Account name', value: client.email },
                     { label: 'Comment', value: client.comment },
@@ -3180,7 +3212,7 @@
             <td class="action-cell"><div class="action-buttons">
                 <button class="action-btn" onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${sid}, '${client.subId || client.id || ''}')" title="QR Code"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
                 <button class="action-btn renew" onclick="openRenewModal(${sid}, '${firstIbId}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="Renew"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></button>
-                ${renderAccountMessageButton(client)}
+                ${renderAccountMessageButton({...client, server_id: sid})}
                 <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${sid}, '${firstIbId}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${toggleIcon}</svg></button>
                 <button class="action-btn warning" onclick="openResetModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0})" title="Reset Traffic"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg></button>
                 <button class="action-btn" onclick="openEditClientModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="Edit Client"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>
@@ -4244,6 +4276,9 @@
             }
 
             const amountStr = Number(last.amount || 0).toLocaleString();
+            const renewalDate = isFa
+                ? (last.date_jalali || '')
+                : (last.date_iso ? new Date(last.date_iso).toLocaleString('en-US') : '');
             const cardLine = (last.sender_card || last.dest_card)
                 ? `<div>💳 ${isFa ? 'کارت' : 'Card'}: <span dir="ltr">${escapeHtml(last.sender_card || '—')}</span>${last.dest_card ? ` → ${escapeHtml(last.dest_card)}` : ''}</div>`
                 : '';
@@ -4264,7 +4299,7 @@
 
             box.innerHTML = `
                 <div style="font-weight:700; margin-bottom:4px;">${head}</div>
-                <div>📅 ${escapeHtml(last.date_jalali || '')} <span style="opacity:0.8;">(${ago})</span></div>
+                <div>📅 ${escapeHtml(renewalDate)} <span style="opacity:0.8;">(${ago})</span></div>
                 <div>💰 ${isFa ? 'مبلغ' : 'Amount'}: ${amountStr} T</div>
                 ${cardLine}
                 ${last.admin_username ? `<div style="opacity:0.75;">👤 ${escapeHtml(last.admin_username)}</div>` : ''}
@@ -4288,9 +4323,12 @@
                 ? (isFa ? ` (${g.days_ago} روز پیش)` : ` (${g.days_ago}d ago)`)
                 : '';
             const by = g.admin_username ? ` • 👤 ${escapeHtml(g.admin_username)}` : '';
+            const giftDate = isFa
+                ? (g.date_jalali || '')
+                : (g.date_iso ? new Date(g.date_iso).toLocaleString('en-US') : '');
             hist.innerHTML = isFa
-                ? `🎁 توجه: این یوزر قبلاً ${gb}هدیه گرفته — 📅 ${escapeHtml(g.date_jalali || '')}${days}${by}.<br>گیفت معمولاً یک‌بار داده می‌شود؛ در صورت تمایل خاموش کنید.`
-                : `🎁 Heads up: this user already received ${gb}a gift — 📅 ${escapeHtml(g.date_jalali || '')}${days}${by}.<br>Gifts are usually given once; turn off if not intended.`;
+                ? `🎁 توجه: این یوزر قبلاً ${gb}هدیه گرفته — 📅 ${escapeHtml(giftDate)}${days}${by}.<br>گیفت معمولاً یک‌بار داده می‌شود؛ در صورت تمایل خاموش کنید.`
+                : `🎁 Heads up: this user already received ${gb}a gift — 📅 ${escapeHtml(giftDate)}${days}${by}.<br>Gifts are usually given once; turn off if not intended.`;
             hist.style.display = 'block';
         } else {
             hist.style.display = 'none';
@@ -4634,12 +4672,17 @@
                 renderRenewApiStatus(data);
 
                 const fallbackVolLabel = (finalVolume === null) ? '—' : `${finalVolume}GB`;
-                const fallbackText = `🔰${email}\n⌛${finalDays} Days 📊${fallbackVolLabel}\nتمدید شد`;
+                const renewIsFa = (document.documentElement.lang || 'en') === 'fa';
+                const fallbackText = renewIsFa
+                    ? `🔰${email}\n⌛${finalDays} روز 📊${fallbackVolLabel}\nتمدید شد`
+                    : `🔰${email}\n⌛${finalDays} Days 📊${fallbackVolLabel}\nRenewed`;
                 let successText = (data && typeof data.copy_text === 'string' && data.copy_text.trim())
                     ? data.copy_text
                     : fallbackText;
                 if (data && data.was_reactivated) {
-                    successText += '\n✅ کاربر از حالت غیرفعال خارج و اکتیو شد';
+                    successText += renewIsFa
+                        ? '\n✅ کاربر دوباره فعال شد'
+                        : '\n✅ The client was reactivated';
                 }
                 document.getElementById('renew-success-text').innerText = successText;
                 const _renewClientData = _lookupClientVolume(
@@ -5673,7 +5716,7 @@
         return _clientCreatedTemplateCache;
     }
 
-    const DEFAULT_NEW_CLIENT_TEMPLATE = `😍 سفارش جدید شما
+    const DEFAULT_NEW_CLIENT_TEMPLATE = (document.documentElement.lang || 'en') === 'fa' ? `😍 سفارش جدید شما
 
 اطلاعات سرویس
 📡 پروتکل: {protocol}
@@ -5682,6 +5725,20 @@
 ⏰ مدت: {days}
 
 لینک های اتصال
+
+🌐 Subscription:
+{sub_link}
+
+🌐 Dashboard:
+{dashboard_link}` : `😍 Your new order
+
+Service information
+📡 Protocol: {protocol}
+🔮 Service name: {service_name}
+🔋 Volume: {volume}
+⏰ Duration: {days}
+
+Connection links
 
 🌐 Subscription:
 {sub_link}

@@ -17,8 +17,8 @@ dependencies = [
     "bleach>=6.0.0",
     "cryptography>=42.0.0",
     "psycopg2-binary>=2.9.10",
+    "redis>=5.0.0",
 ]
 
 [tool.setuptools]
 py-modules = ["app", "main"]
-

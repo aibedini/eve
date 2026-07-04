@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="fa" dir="rtl" data-theme="dark">
+<html lang="{{ panel_lang or 'en' }}" dir="{{ panel_dir or 'ltr' }}" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>پورتال کاربری - Eve Manager</title>
+    <title>{{ 'پورتال کاربری' if panel_lang == 'fa' else 'Client Portal' }} - Eve Manager</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
     <script nonce="{{ csp_nonce }}">
         (function () {
@@ -152,7 +152,7 @@
                 </svg>
                 {{ user.mobile }}
             </span>
-            <a href="{{ url_for('client_logout') }}" class="btn-logout">خروج</a>
+            <a href="{{ url_for('client_logout') }}" class="btn-logout">{{ 'خروج' if panel_lang == 'fa' else 'Log out' }}</a>
         </div>
     </nav>
 
@@ -167,8 +167,8 @@
                 </svg>
             </div>
             <div class="welcome-text">
-                <h2>خوش آمدید{% if user.display_name %} ، {{ user.display_name }}{% endif %}</h2>
-                <p>پورتال کاربری شما در Eve Manager</p>
+                <h2>{{ 'خوش آمدید' if panel_lang == 'fa' else 'Welcome' }}{% if user.display_name %}{{ '، ' if panel_lang == 'fa' else ', ' }}{{ user.display_name }}{% endif %}</h2>
+                <p>{{ 'پورتال کاربری شما در Eve Manager' if panel_lang == 'fa' else 'Your Eve Manager client portal' }}</p>
                 <div class="mobile-tag">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -190,31 +190,31 @@
                     <line x1="12" y1="16" x2="12" y2="12"/>
                     <line x1="12" y1="8" x2="12.01" y2="8"/>
                 </svg>
-                اطلاعات حساب
+                {{ 'اطلاعات حساب' if panel_lang == 'fa' else 'Account Information' }}
             </div>
             <div class="info-row">
-                <span class="label">وضعیت</span>
+                <span class="label">{{ 'وضعیت' if panel_lang == 'fa' else 'Status' }}</span>
                 <span class="val">
                     {% if user.enabled %}
-                    <span class="badge badge-ok">فعال</span>
+                    <span class="badge badge-ok">{{ 'فعال' if panel_lang == 'fa' else 'Active' }}</span>
                     {% else %}
-                    <span class="badge badge-off">غیرفعال</span>
+                    <span class="badge badge-off">{{ 'غیرفعال' if panel_lang == 'fa' else 'Disabled' }}</span>
                     {% endif %}
                 </span>
             </div>
             <div class="info-row">
-                <span class="label">شماره موبایل</span>
+                <span class="label">{{ 'شماره موبایل' if panel_lang == 'fa' else 'Mobile Number' }}</span>
                 <span class="val">{{ user.mobile }}</span>
             </div>
             {% if user.display_name %}
             <div class="info-row">
-                <span class="label">نام نمایشی</span>
+                <span class="label">{{ 'نام نمایشی' if panel_lang == 'fa' else 'Display Name' }}</span>
                 <span class="val">{{ user.display_name }}</span>
             </div>
             {% endif %}
             {% if user.last_login %}
             <div class="info-row">
-                <span class="label">آخرین ورود</span>
+                <span class="label">{{ 'آخرین ورود' if panel_lang == 'fa' else 'Last Login' }}</span>
                 <span class="val">{{ user.last_login.strftime('%Y-%m-%d %H:%M') }}</span>
             </div>
             {% endif %}
@@ -228,7 +228,7 @@
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
                     <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                 </svg>
-                تغییر رمز عبور
+                {{ 'تغییر رمز عبور' if panel_lang == 'fa' else 'Change Password' }}
             </a>
         </div>
     </div>

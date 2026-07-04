@@ -231,7 +231,7 @@
             {% if maintenance_notice %}
             <div role="status" style="margin: 14px 20px 0; padding: 12px 16px; border: 1px solid rgba(245, 158, 11, .45); border-radius: 10px; background: rgba(245, 158, 11, .12); color: var(--text-primary);">
                 {% if panel_lang == 'fa' %}
-                فشرده‌سازی یک‌باره‌ی تاریخچه مصرف در حال انجام است. این فرایند ممکن است زمان‌بر باشد و پنل موقتاً کند یا برای مدت کوتاهی خارج از دسترس شود؛ اطلاعات از بین نمی‌روند و کار پس از ری‌استارت ادامه پیدا می‌کند.
+                {% if panel_lang == 'fa' %}فشرده‌سازی یک‌باره‌ی تاریخچه مصرف در حال انجام است. این فرایند ممکن است زمان‌بر باشد و پنل موقتاً کند یا برای مدت کوتاهی خارج از دسترس شود؛ اطلاعات از بین نمی‌روند و کار پس از ری‌استارت ادامه پیدا می‌کند.{% else %}Usage history is being compacted. The panel may be slower or briefly unavailable; no data will be lost, and the task resumes after a restart.{% endif %}
                 {% else %}
                 One-time usage-history compaction is running. The panel may be slower or briefly unavailable; no data is lost and work resumes after a restart.
                 {% endif %}
