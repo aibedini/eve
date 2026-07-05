@@ -1539,7 +1539,11 @@
 
     const selectedExpiryFilters = new Set(); // not_started | unlimited | expired | today | lt_days | gt_days
     const expandedInboundKeys = new Set(); // `${server_id}:${inbound_id}` -> expanded client list
-    let _searchPlaceholderShown = false; // true while the heavy list is swapped for a search placeholder
+    let _clientSearchIndex = [];
+    let _clientSearchIndexSource = null;
+    let _clientSearchRevision = 0;
+    let _clientSearchController = null;
+    const _clientSearchCache = new Map();
     let _inboundsRenderToken = 0;         // cancels stale chunked renders
     let expiryLessThanDays = 7;
     let expiryGreaterThanDays = 30;
@@ -2222,7 +2226,11 @@
                 prefetchAllLastUsers();
             });
         });
-        document.getElementById('global-search-input').addEventListener('input', () => performGlobalSearch(false));
+        const globalSearchInput = document.getElementById('global-search-input');
+        globalSearchInput.addEventListener('input', event => {
+            if (!event.isComposing) performGlobalSearch(false);
+        });
+        globalSearchInput.addEventListener('compositionend', () => performGlobalSearch(false));
         if (IS_SUPERADMIN) {
             loadResellersForModal();
             loadResellersForBulk();
@@ -2438,6 +2446,7 @@
 
         allInboundsData = merge(allInboundsData);
         inboundsData = allInboundsData;
+        invalidateClientSearchIndex();
     }
 
     function getCachedInboundsForServer(serverId) {
@@ -2556,6 +2565,7 @@
         const iid = String(inboundId);
         const em = String(email || '').toLowerCase();
         if (!Number.isFinite(sid) || !em) return false;
+        invalidateClientSearchIndex();
 
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render')) ? Boolean(options.render) : true;
 
@@ -2754,6 +2764,7 @@
         const oldEm = String(oldEmail || '').toLowerCase();
         const newEm = String(newEmail || '').trim();
         if (!Number.isFinite(sid) || !oldEm || !newEm) return false;
+        invalidateClientSearchIndex();
 
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render')) ? Boolean(options.render) : true;
 
@@ -2827,6 +2838,7 @@
         const sid = parseInt(serverId);
         const em = String(email || '').toLowerCase();
         if (!Number.isFinite(sid) || !em) return false;
+        invalidateClientSearchIndex();
 
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render')) ? Boolean(options.render) : true;
 
@@ -3061,6 +3073,7 @@
 
                 if (shouldApplySnapshotNow) {
                     allInboundsData = data.inbounds;
+                    invalidateClientSearchIndex();
                     inboundsData = data.inbounds;
                     serverStatuses = data.servers || [];
 
@@ -6280,34 +6293,6 @@ Connection links
         // Keep container CSS state in sync even when other filters re-run
         applyDisabledVisibility();
 
-        function _localSearchFromCache(query) {
-            const q = String(query || '').trim().toLowerCase();
-            if (!q) return [];
-            const out = [];
-            const inbounds = Array.isArray(allInboundsData) ? allInboundsData : [];
-            for (const inbound of inbounds) {
-                const clients = Array.isArray(inbound?.clients) ? inbound.clients : [];
-                for (const client of clients) {
-                    const em = String(client?.email || '').toLowerCase();
-                    const cm = String(client?.comment || '').toLowerCase();
-                    if (!em.includes(q) && !cm.includes(q)) continue;
-                    out.push({
-                        server_id: inbound.server_id,
-                        inbound_id: inbound.id,
-                        server_name: inbound.server_name,
-                        inbound: {
-                            remark: inbound.remark,
-                            protocol: inbound.protocol,
-                            port: inbound.port,
-                            enable: inbound.enable,
-                        },
-                        client: client,
-                    });
-                }
-            }
-            return out;
-        }
-        
         // If we have search results, filter them
         const searchResultsDiv = document.getElementById('search-results');
         if (searchResultsDiv.style.display !== 'none') {
@@ -6315,8 +6300,8 @@ Connection links
             // Use local cached data to update immediately after actions.
             const searchInput = document.getElementById('global-search-input');
             if (searchInput.value.trim().length > 0) {
-                const q = searchInput.value.trim().toLowerCase();
-                const local = _localSearchFromCache(q);
+                const q = normalizeClientSearchQuery(searchInput.value);
+                const local = searchClientsLocally(q);
                 displaySearchResults(local, q);
                 return;
             }
@@ -6667,87 +6652,168 @@ Connection links
 
     let searchTimeout = null;
 
+    const CLIENT_SEARCH_DEBOUNCE_MS = 200;
+
+    function normalizeClientSearchQuery(value) {
+        const latinDigits = toEnglishDigits(String(value || ''));
+        try { return latinDigits.normalize('NFKC').trim().toLocaleLowerCase('en-US'); }
+        catch (_) { return latinDigits.trim().toLowerCase(); }
+    }
+
+    function invalidateClientSearchIndex() {
+        _clientSearchIndexSource = null;
+        _clientSearchIndex = [];
+        _clientSearchCache.clear();
+    }
+
+    function ensureClientSearchIndex() {
+        if (_clientSearchIndexSource === allInboundsData) return _clientSearchIndex;
+        const index = [];
+        for (const inbound of (Array.isArray(allInboundsData) ? allInboundsData : [])) {
+            for (const client of (Array.isArray(inbound?.clients) ? inbound.clients : [])) {
+                const email = normalizeClientSearchQuery(client?.email || '');
+                const comment = normalizeClientSearchQuery(client?.comment || '');
+                index.push({
+                    email,
+                    comment,
+                    haystack: `${email}\n${comment}`,
+                    result: {
+                        server_id: inbound.server_id,
+                        inbound_id: inbound.id,
+                        server_name: inbound.server_name,
+                        inbound: {
+                            remark: inbound.remark,
+                            protocol: inbound.protocol,
+                            port: inbound.port,
+                            enable: inbound.enable,
+                        },
+                        client,
+                    },
+                });
+            }
+        }
+        _clientSearchIndex = index;
+        _clientSearchIndexSource = allInboundsData;
+        _clientSearchCache.clear();
+        return index;
+    }
+
+    function searchClientsLocally(query) {
+        const q = normalizeClientSearchQuery(query);
+        if (!q) return [];
+        if (_clientSearchCache.has(q)) return _clientSearchCache.get(q);
+        const tokens = q.split(/\s+/).filter(Boolean);
+        const ranked = [];
+        for (const item of ensureClientSearchIndex()) {
+            if (!tokens.every(token => item.haystack.includes(token))) continue;
+            const score = item.email === q ? 0
+                : item.email.startsWith(q) ? 1
+                : item.email.includes(q) ? 2
+                : item.comment.startsWith(q) ? 3 : 4;
+            ranked.push({ score, result: item.result });
+        }
+        ranked.sort((a, b) => a.score - b.score);
+        // Render cap protects the DOM, but rank the complete snapshot first so
+        // an exact match near the end can never be hidden by earlier partials.
+        const results = ranked.slice(0, 1000).map(item => item.result);
+        _clientSearchCache.set(q, results);
+        if (_clientSearchCache.size > 20) {
+            _clientSearchCache.delete(_clientSearchCache.keys().next().value);
+        }
+        return results;
+    }
+
     async function performGlobalSearch(immediate = false) {
         const searchInput = document.getElementById('global-search-input');
         const clearBtn = document.getElementById('clear-search-btn');
-        // Convert Persian/Arabic digits to ASCII *in the box itself* so phone
-        // numbers typed/pasted in Persian (۰۹۱۲…) become English (0912…) and
-        // match the stored English digits. Digit replacement is 1:1 in length,
-        // so we can restore the caret position after rewriting the value.
-        const _converted = toEnglishDigits(searchInput.value);
-        if (_converted !== searchInput.value) {
-            const _caret = searchInput.selectionStart;
-            searchInput.value = _converted;
-            try { searchInput.setSelectionRange(_caret, _caret); } catch (e) {}
+        const converted = toEnglishDigits(searchInput.value);
+        if (converted !== searchInput.value) {
+            const caret = searchInput.selectionStart;
+            searchInput.value = converted;
+            try { searchInput.setSelectionRange(caret, caret); } catch (_) {}
         }
-        const query = searchInput.value.trim().toLowerCase();
+        const query = normalizeClientSearchQuery(searchInput.value);
+        clearBtn.classList.toggle('hidden', !searchInput.value.length);
 
-        // Toggle clear button visibility
-        if (searchInput.value.length > 0) {
-            clearBtn.classList.remove('hidden');
-        } else {
-            clearBtn.classList.add('hidden');
-        }
-        
         if (searchTimeout) clearTimeout(searchTimeout);
+        if (_clientSearchController) _clientSearchController.abort();
+        const revision = ++_clientSearchRevision;
 
-        if (query.length === 0) {
-            clearSearch(false); // Pass false to avoid refreshing data immediately if not needed
+        if (!query) {
+            clearSearch(false);
             return;
         }
 
-        // Drop the heavy main list IMMEDIATELY when typing starts. With thousands
-        // of client rows in the DOM, keeping them painted makes every keystroke
-        // janky on mobile. Replace once with a light placeholder so typing stays
-        // smooth during the debounce; the search result fills it in shortly.
-        if (!_searchPlaceholderShown) {
-            _inboundsRenderToken++; // abort any in-flight chunked main-list render
-            const c = document.getElementById('inbounds-container');
-            if (c) {
-                c.innerHTML = '<div class="empty-state" style="padding:48px 16px;"><div class="spinner" style="margin:0 auto 12px;"></div><h3>Searching…</h3></div>';
-            }
-            _searchPlaceholderShown = true;
+        // Replace both the summary and rows immediately. Keeping the previous
+        // query visible during debounce caused the stale Backspace result.
+        _inboundsRenderToken++;
+        const resultsDiv = document.getElementById('search-results');
+        const resultsText = document.getElementById('search-results-text');
+        const selectAll = document.getElementById('search-select-all-btn');
+        resultsDiv.style.display = 'flex';
+        resultsText.textContent = `Searching for "${query}"…`;
+        if (selectAll) selectAll.style.display = 'none';
+        const container = document.getElementById('inbounds-container');
+        if (container) {
+            container.innerHTML = '<div class="empty-state" style="padding:48px 16px;"><div class="spinner" style="margin:0 auto 12px;"></div><h3>Searching…</h3></div>';
         }
 
         const runSearch = async () => {
+            if (Array.isArray(allInboundsData) && allInboundsData.length) {
+                const results = searchClientsLocally(query);
+                if (revision !== _clientSearchRevision
+                        || query !== normalizeClientSearchQuery(searchInput.value)) return;
+                displaySearchResults(results, query);
+                return;
+            }
+
+            // Only a cold-start fallback uses the API. Superseded requests are
+            // aborted, and the revision guard makes stale responses harmless.
+            const controller = new AbortController();
+            _clientSearchController = controller;
             try {
-                const response = await fetch(`/api/clients/search?email=${encodeURIComponent(query)}`);
+                const response = await fetch(`/api/clients/search?email=${encodeURIComponent(query)}`, {
+                    signal: controller.signal,
+                    cache: 'no-store',
+                });
                 const data = await response.json();
-                if (data.success && data.results.length > 0) {
-                    displaySearchResults(data.results, query);
-                } else {
+                if (revision !== _clientSearchRevision
+                        || query !== normalizeClientSearchQuery(searchInput.value)) return;
+                displaySearchResults(data.success ? (data.results || []) : [], query);
+            } catch (error) {
+                if (error?.name !== 'AbortError' && revision === _clientSearchRevision) {
                     displaySearchResults([], query);
                 }
-            } catch (error) {
-                console.error('Search error:', error);
+            } finally {
+                if (_clientSearchController === controller) _clientSearchController = null;
             }
         };
 
-        if (immediate) {
-            await runSearch();
-            return;
-        }
-
-        searchTimeout = setTimeout(runSearch, 500); // 500ms debounce
+        if (immediate) return runSearch();
+        searchTimeout = setTimeout(runSearch, CLIENT_SEARCH_DEBOUNCE_MS);
     }
 
     function clearSearch(shouldRefresh = true) {
-        const searchResultsDiv = document.getElementById('search-results');
-        const wasShowingResults = searchResultsDiv.style.display !== 'none';
-
+        if (searchTimeout) clearTimeout(searchTimeout);
+        if (_clientSearchController) _clientSearchController.abort();
+        _clientSearchController = null;
+        _clientSearchRevision++;
         document.getElementById('global-search-input').value = '';
-        searchResultsDiv.style.display = 'none';
+        document.getElementById('search-results').style.display = 'none';
         document.getElementById('clear-search-btn').classList.add('hidden');
-        _searchPlaceholderShown = false;
-        
-        if (shouldRefresh) {
-            refreshData();
-        } else if (wasShowingResults) {
-            refreshData(true);
+
+        // Clearing a search must not trigger a redundant refresh request. The
+        // authorized snapshot is already local; restore it through current filters.
+        if (Array.isArray(allInboundsData) && allInboundsData.length) {
+            updateInbounds(filterInbounds(allInboundsData));
+            applyDisabledVisibility();
+        } else if (shouldRefresh) {
+            refreshData(true, { mode: 'full', poll: true });
         }
     }
 
     function displaySearchResults(results, query) {
+        if (normalizeClientSearchQuery(document.getElementById('global-search-input')?.value) !== query) return;
         const searchResultsDiv = document.getElementById('search-results');
         const searchResultsText = document.getElementById('search-results-text');
         const clearBtn = document.getElementById('clear-search-btn');

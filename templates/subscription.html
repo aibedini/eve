@@ -314,7 +314,13 @@
                                 onclick="{% if has_support %}openRenewRequest(this){% endif %}"
                                 style="{% if not has_support %}cursor:default; opacity:0.75;{% endif %}">
                             {% if p.is_personalized %}
-                            <span class="pkg-personalized-badge">{{ 'متناسب شما' if is_fa else 'Made for you' }}</span>
+                            <span class="pkg-personalized-badge">
+                                {% if renewal_recommendation and renewal_recommendation.capacity_limited %}
+                                    {{ 'بیشترین حجم موجود' if is_fa else 'Largest available' }}
+                                {% else %}
+                                    {{ 'متناسب شما' if is_fa else 'Made for you' }}
+                                {% endif %}
+                            </span>
                             {% elif p.is_comfort %}
                             <span class="pkg-comfort-badge">{{ 'پیشنهاد خیال راحت' if is_fa else 'Peace of mind' }}</span>
                             {% endif %}
@@ -334,11 +340,19 @@
                     {% if renewal_recommendation %}
                     <div class="pkg-recommendation-reason" style="direction:{{ 'rtl' if is_fa else 'ltr' }}; text-align:{{ 'right' if is_fa else 'left' }};">
                         {% if is_fa %}
+                            {% if renewal_recommendation.capacity_limited %}
+                            میانگین مصرف روزانه شما {{ renewal_recommendation.average_daily_gb }} گیگ است و مصرف ۳۱ روز آینده حدود {{ renewal_recommendation.projected_31d_gb }} گیگ برآورد می‌شود. هیچ‌کدام از بسته‌های فعلی به‌تنهایی این مقدار را کامل پوشش نمی‌دهند؛ بنابراین بسته «{{ renewal_recommendation.package_name }}» را به‌عنوان بیشترین حجم موجود پیشنهاد می‌کنیم.
+                            {% else %}
                             با توجه به میانگین مصرف روزانه شما ({{ renewal_recommendation.average_daily_gb }} گیگ)، مصرف ۳۱ روز آینده حدود {{ renewal_recommendation.projected_31d_gb }} گیگ برآورد می‌شود؛ برای همین این بسته را متناسب شما پیشنهاد می‌کنیم.
+                            {% endif %}
                             <span style="display:block; color:rgba(167,243,208,0.72); margin-top:2px;">مبنای تحلیل: {{ renewal_recommendation.basis_days }} روز از {{ 'چرخه فعلی' if renewal_recommendation.source == 'current_cycle' else '۳۱ روز گذشته' }} • {{ 'اطمینان بالا' if renewal_recommendation.confidence == 'high' else ('اطمینان متوسط' if renewal_recommendation.confidence == 'medium' else 'برآورد اولیه') }}{% if renewal_recommendation.fast_cycle %} — مصرف سریع بسته در محاسبه لحاظ شده{% endif %}.</span>
                             {% if renewal_recommendation.comfort_package_id %}<span style="display:block; color:#fde68a; margin-top:5px;">اگر بابت تمام‌شدن حجم استرس می‌گیرید، بسته «{{ renewal_recommendation.comfort_package_name }}» را بگیرید تا با حاشیه اطمینان {{ renewal_recommendation.safety_margin_percent }}٪ خیالتان راحت‌تر باشد.</span>{% endif %}
                         {% else %}
+                            {% if renewal_recommendation.capacity_limited %}
+                            Your average daily usage is {{ renewal_recommendation.average_daily_gb }} GB and the next 31 days are estimated at {{ renewal_recommendation.projected_31d_gb }} GB. No current package covers that amount alone, so “{{ renewal_recommendation.package_name }}” is recommended as the largest available option.
+                            {% else %}
                             Your average daily usage is {{ renewal_recommendation.average_daily_gb }} GB, so your next 31 days are estimated at about {{ renewal_recommendation.projected_31d_gb }} GB. This package is the best fit for that pattern.
+                            {% endif %}
                             <span style="display:block; color:rgba(167,243,208,0.72); margin-top:2px;">Based on {{ renewal_recommendation.basis_days }} days from {{ 'your current cycle' if renewal_recommendation.source == 'current_cycle' else 'the last 31 days' }} • {{ 'high confidence' if renewal_recommendation.confidence == 'high' else ('medium confidence' if renewal_recommendation.confidence == 'medium' else 'early estimate') }}{% if renewal_recommendation.fast_cycle %}; rapid plan consumption was accounted for{% endif %}.</span>
                             {% if renewal_recommendation.comfort_package_id %}<span style="display:block; color:#fde68a; margin-top:5px;">If running out of data makes you nervous, choose “{{ renewal_recommendation.comfort_package_name }}” for an extra {{ renewal_recommendation.safety_margin_percent }}% safety buffer and more peace of mind.</span>{% endif %}
                         {% endif %}
