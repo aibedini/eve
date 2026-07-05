@@ -975,7 +975,7 @@
                             <input type="number" id="sms-min-interval" class="form-control" min="0" max="3600" value="{{ sms_min_interval_seconds }}">
                         </div>
                         <div>
-                            <small class="text-secondary">Max SMS per day</small>
+                            <small class="text-secondary">Max billable SMS segments per day</small>
                             <input type="number" id="sms-daily-limit" class="form-control" min="1" max="100000" value="{{ sms_daily_limit }}">
                         </div>
                         <div>
@@ -983,7 +983,8 @@
                             <input type="number" id="sms-send-pace" class="form-control" min="0" max="60" step="0.5" value="{{ sms_send_pace_seconds }}">
                         </div>
                     </div>
-                    <small class="text-secondary" style="display:block;margin-top:4px;">The gateway returns HTTP 429 if sends are too fast. 3s ≈ 20 SMS/min. Increase if you still see 429 in the log.</small>
+                    <small class="text-secondary" style="display:block;margin-top:4px;">Daily limit counts actual SMS segments, not API requests: GSM-7 uses 160 chars (153 multipart); Persian/Unicode uses 70 UTF-16 units (67 multipart). The gateway returns HTTP 429 if sends are too fast. 3s ≈ 20 requests/min.</small>
+                    <small id="sms-segments-today" class="text-secondary" style="display:block;margin-top:4px;font-weight:600;"></small>
                 </div>
 
                 <div class="form-group">
@@ -1063,11 +1064,12 @@
                                     <th style="padding:8px 10px;text-align:start;">Server</th>
                                     <th style="padding:8px 10px;text-align:start;">State</th>
                                     <th style="padding:8px 10px;text-align:start;">To</th>
+                                    <th style="padding:8px 10px;text-align:start;">SMS</th>
                                     <th style="padding:8px 10px;text-align:start;">Status</th>
                                 </tr>
                             </thead>
                             <tbody id="sms-logs-body" aria-live="polite">
-                                <tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>
+                                <tr><td colspan="7" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -3019,6 +3021,10 @@
                     _setSmsRunBtn(false);
                     loadSmsLogs();
                 }
+                const segmentEl = document.getElementById('sms-segments-today');
+                if (segmentEl && data) {
+                    segmentEl.textContent = `Today: ${Number(data.segments_used_today || 0)} / ${Number(data.segment_daily_limit || 0)} SMS segments used`;
+                }
             })
             .catch(() => { /* keep UI calm on transient errors */ });
     }
@@ -3128,7 +3134,7 @@
             const stampEl = document.getElementById('sms-logs-updated');
             if (stampEl) stampEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
             if (!logs.length) {
-                body.innerHTML = '<tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>';
+                body.innerHTML = '<tr><td colspan="7" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>';
                 _renderSmsLogPager();
                 return;
             }
@@ -3148,18 +3154,22 @@
                 const taskRef = row.request_id
                     ? `<div style="font-size:10px;color:var(--text-secondary,#94a3b8);margin-top:2px;">${escapeHtml(row.request_id)}${row.gateway_job_id ? ` / job ${escapeHtml(row.gateway_job_id)}` : ''}</div>`
                     : '';
+                const segmentText = row.segment_count
+                    ? `${Number(row.segment_count)} × ${escapeHtml(row.message_encoding || 'SMS')}`
+                    : '—';
                 return `<tr style="border-top:1px solid var(--border-color,#2a2a3a);">
                     <td data-label="Time" style="padding:7px 10px;white-space:nowrap;">${escapeHtml(when)}</td>
                     <td data-label="User" style="padding:7px 10px;">${escapeHtml(row.email || '')}</td>
                     <td data-label="Server" style="padding:7px 10px;">${escapeHtml(row.server_name || '')}</td>
                     <td data-label="State" style="padding:7px 10px;white-space:nowrap;">${SMS_STATE_LABELS[row.state] || escapeHtml(row.state || '')}</td>
                     <td data-label="To" style="padding:7px 10px;white-space:nowrap;">${escapeHtml(row.recipient || '')}</td>
+                    <td data-label="SMS" style="padding:7px 10px;white-space:nowrap;font-weight:600;">${segmentText}</td>
                     <td data-label="Status" style="padding:7px 10px;color:${sc};white-space:nowrap;">${escapeHtml(statusTxt)}${taskRef}</td>
                 </tr>`;
             }).join('');
             _renderSmsLogPager();
         } catch (e) {
-            body.innerHTML = '<tr><td colspan="6" class="text-secondary" style="padding:12px;text-align:center;">Could not load log.</td></tr>';
+            body.innerHTML = '<tr><td colspan="7" class="text-secondary" style="padding:12px;text-align:center;">Could not load log.</td></tr>';
         }
     }
 
@@ -5387,7 +5397,7 @@
 
     function isGsm7Text(text) {
         const basic = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\u001bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
-        const extended = "^{}\\[~]|€";
+        const extended = "\f^{}\\[~]|€";
         return Array.from(String(text || '')).every(ch => basic.includes(ch) || extended.includes(ch));
     }
 
@@ -5396,17 +5406,18 @@
         const gsm = isGsm7Text(value);
         let units = 0;
         if (gsm) {
-            const extended = "^{}\\[~]|€";
+            const extended = "\f^{}\\[~]|€";
             Array.from(value).forEach(ch => { units += extended.includes(ch) ? 2 : 1; });
         } else {
-            units = Array.from(value).length;
+            // UCS-2 providers bill UTF-16 code units; an emoji is two units.
+            units = value.length;
         }
         const singleLimit = gsm ? 160 : 70;
         const segmentLimit = gsm ? 153 : 67;
-        const segments = units <= singleLimit ? 1 : Math.ceil(units / segmentLimit);
+        const segments = units === 0 ? 0 : (units <= singleLimit ? 1 : Math.ceil(units / segmentLimit));
         const usedInSegment = segments === 1 ? units : units % segmentLimit || segmentLimit;
         return {
-            encoding: gsm ? 'GSM-7' : 'Unicode',
+            encoding: gsm ? 'GSM-7' : 'UCS-2',
             units,
             segments,
             remaining: (segments === 1 ? singleLimit : segmentLimit) - usedInSegment
@@ -5417,7 +5428,7 @@
         const counter = document.getElementById('account-message-sms-counter');
         const channel = document.getElementById('account-message-template-channel')?.value || 'whatsapp';
         if (!counter) return;
-        if (channel !== 'sms' && channel !== 'royalty_sms') {
+        if (channel !== 'sms' && !channel.endsWith('_sms')) {
             counter.classList.add('hidden');
             counter.textContent = '';
             return;

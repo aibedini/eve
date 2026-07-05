@@ -1331,6 +1331,23 @@
         text-overflow: ellipsis;
         white-space: nowrap;
     }
+    .ib-country-flag {
+        display: inline-flex;
+        align-items: center;
+        vertical-align: -0.12em;
+        margin-inline-end: 3px;
+    }
+    .ib-country-flag img {
+        display: block;
+        width: 1.22em;
+        height: 0.92em;
+        border-radius: 2px;
+        object-fit: cover;
+        box-shadow: 0 0 0 1px rgba(255,255,255,.12);
+    }
+    .ib-country-flag-native { display: none; }
+    .ib-country-flag.flag-fallback img { display: none; }
+    .ib-country-flag.flag-fallback .ib-country-flag-native { display: inline; }
     .inbound-name-line .ib-proto-dot {
         flex-shrink: 0;
         width: 6px;
@@ -1395,6 +1412,9 @@
     }
 
     @media (max-width: 860px) {
+        /* Mobile emoji fonts already render regional indicators correctly. */
+        .ib-country-flag img { display: none; }
+        .ib-country-flag .ib-country-flag-native { display: inline; }
         .bulk-volume-rule-head {
             display: none !important;
         }
@@ -3188,13 +3208,39 @@
     // so it keeps working for collapsed cards whose rows aren't in the DOM.
     const _cardRowData = new Map();   // key -> { items, buildRow, keyOf, objOf, enableOf }
     const ROW_BATCH = 60;             // client rows appended per scroll step
+    const INBOUND_FLAG_ASSET_BASE = {{ url_for('static', filename='flags/4x3/') | tojson }};
+
+    function _regionalFlagCode(flag) {
+        const points = Array.from(flag || '', ch => ch.codePointAt(0));
+        if (points.length !== 2 || points.some(cp => cp < 0x1F1E6 || cp > 0x1F1FF)) return '';
+        return points.map(cp => String.fromCharCode(97 + cp - 0x1F1E6)).join('');
+    }
+
+    function renderInboundName(name) {
+        const safe = escapeHtml(String(name || ''));
+        return safe.replace(/[\u{1F1E6}-\u{1F1FF}]{2}/gu, flag => {
+            const code = _regionalFlagCode(flag);
+            if (!code) return flag;
+            return `<span class="ib-country-flag" title="${code.toUpperCase()}">` +
+                `<span class="ib-country-flag-native" aria-hidden="true">${flag}</span>` +
+                `<img src="${INBOUND_FLAG_ASSET_BASE}${code}.svg" alt="${flag}" decoding="async">` +
+                `</span>`;
+        });
+    }
+
+    document.addEventListener('error', event => {
+        const image = event.target;
+        if (image instanceof HTMLImageElement && image.closest('.ib-country-flag')) {
+            image.closest('.ib-country-flag').classList.add('flag-fallback');
+        }
+    }, true);
 
     function _v3ClientRowHtml(client, ibs, sid, cardKey) {
         const firstIbId = ibs[0]?.id || client.inbound_id || '';
         const ibPillsHtml = ibs.map(ib => {
             const proto = (ib.protocol || '').toUpperCase();
             const name = ib.remark || ('Inbound ' + ib.id);
-            return `<span class="inbound-name-line ${(ib.protocol || '').toLowerCase()}" title="${escapeHtml(proto + ' · ' + name)}"><span class="ib-proto-dot"></span><span class="ib-name-text">${escapeHtml(name)}</span></span>`;
+            return `<span class="inbound-name-line ${(ib.protocol || '').toLowerCase()}" title="${escapeHtml(proto + ' · ' + name)}"><span class="ib-proto-dot"></span><span class="ib-name-text">${renderInboundName(name)}</span></span>`;
         }).join('');
         const assignBtn = IS_SUPERADMIN ? `<button class="action-btn" onclick="openAssignModal(${sid}, '${client.email}', '${firstIbId}', '${client.id || ''}')" title="Assign Owner"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 11h-2.5a2.5 2.5 0 0 0 0 5H22"></path></svg></button>` : '';
         const toggleIcon = client.enable
@@ -3394,7 +3440,7 @@
         const activeCount = entries.filter(e => e.client.enable).length;
 
         const ibTagsHtml = serverInbounds.map(ib =>
-            `<span class="v3-ib-tag ${(ib.protocol || '').toLowerCase()}">${escapeHtml(ib.protocol)} · ${escapeHtml(ib.remark)}</span>`
+            `<span class="v3-ib-tag ${(ib.protocol || '').toLowerCase()}">${escapeHtml(ib.protocol)} · ${renderInboundName(ib.remark)}</span>`
         ).join('');
 
         const SVG_HIDE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>`;

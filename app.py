@@ -6,6 +6,7 @@ load_dotenv()  # Load environment variables from .env file
 import io
 import re
 import json
+import math
 import sqlite3
 import base64
 import requests
@@ -97,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.15"
+APP_VERSION = "2.4.16"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -5412,7 +5413,144 @@ SMS_ROYALTY_COOLDOWN_DAYS_KEY  = 'sms_royalty_cooldown_days'  # don't re-royalty
 SMS_SEND_TRACKER = {'daily': {}, 'per_recipient': {}}
 SMS_SCAN_CANCEL = threading.Event()  # set → running scan aborts after current item
 SMS_LAST_SEND_TS = [0.0]             # monotonic-ish wall clock of the previous send (global pace)
-SMS_SEND_TRACKER_LOCK = threading.Lock()
+SMS_SEND_TRACKER_LOCK = threading.RLock()
+
+_GSM7_BASIC = set(
+    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ "
+    "!\"#¤%&'()*+,-./0123456789:;<=>?¡"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
+)
+_GSM7_EXTENDED = set("\f^{}\\[~]|€")
+
+
+def _sms_segment_info(message: str | None) -> dict:
+    """Calculate billable SMS segments using GSM-7/UCS-2 concatenation rules."""
+    value = str(message or '')
+    gsm7 = all(ch in _GSM7_BASIC or ch in _GSM7_EXTENDED for ch in value)
+    if gsm7:
+        units = sum(2 if ch in _GSM7_EXTENDED else 1 for ch in value)
+        single_limit, multipart_limit, encoding = 160, 153, 'GSM-7'
+    else:
+        # Providers count Unicode SMS in UTF-16/UCS-2 code units. Emoji outside
+        # the BMP consume two units, which Python len() alone would undercount.
+        units = len(value.encode('utf-16-be')) // 2
+        single_limit, multipart_limit, encoding = 70, 67, 'UCS-2'
+    segments = 0 if units == 0 else (1 if units <= single_limit else math.ceil(units / multipart_limit))
+    return {
+        'sms_encoding': encoding,
+        'sms_units': units,
+        'sms_characters': len(value),
+        'sms_segments': segments,
+    }
+
+
+def _sms_tehran_day() -> tuple[str, datetime, datetime]:
+    now_utc = datetime.utcnow()
+    if ZoneInfo is not None:
+        try:
+            tz = ZoneInfo('Asia/Tehran')
+            local = now_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+            start_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_local = start_local + timedelta(days=1)
+            return (start_local.date().isoformat(),
+                    start_local.astimezone(timezone.utc).replace(tzinfo=None),
+                    end_local.astimezone(timezone.utc).replace(tzinfo=None))
+        except Exception:
+            pass
+    local = now_utc + timedelta(hours=3, minutes=30)
+    start_utc = datetime.combine(local.date(), datetime.min.time()) - timedelta(hours=3, minutes=30)
+    return local.date().isoformat(), start_utc, start_utc + timedelta(days=1)
+
+
+def _sms_db_segments_used_today() -> int:
+    try:
+        _day, start_utc, end_utc = _sms_tehran_day()
+        # A gateway-accepted request keeps consuming the submission budget even
+        # if delivery later becomes terminal/failed; immediate failures and
+        # pre-send skips never consume it.
+        accepted = or_(
+            SmsSendLog.request_id.isnot(None),
+            ~SmsSendLog.status.in_(('failed', 'skipped')),
+        )
+        total = db.session.query(func.sum(func.coalesce(SmsSendLog.segment_count, 1))).filter(
+            SmsSendLog.created_at >= start_utc,
+            SmsSendLog.created_at < end_utc,
+            accepted,
+        ).scalar()
+        return max(0, int(total or 0))
+    except Exception:
+        return 0
+
+
+def _sms_segment_counter_key(day: str) -> str:
+    return f'eve:sms:segments:{day}'
+
+
+def _sms_reserve_daily_segments(segments: int, daily_limit: int) -> bool:
+    segments = max(1, int(segments or 1))
+    day, _start, _end = _sms_tehran_day()
+    client = get_redis()
+    if client is not None:
+        try:
+            key = _sms_segment_counter_key(day)
+            if not client.exists(key):
+                client.set(key, _sms_db_segments_used_today(), nx=True, ex=172800)
+            result = client.eval(
+                "local c=tonumber(redis.call('GET',KEYS[1]) or '0'); "
+                "local n=tonumber(ARGV[1]); local lim=tonumber(ARGV[2]); "
+                "if c+n>lim then return -1 end; "
+                "redis.call('INCRBY',KEYS[1],n); redis.call('EXPIRE',KEYS[1],ARGV[3]); return c+n",
+                1, key, segments, daily_limit, 172800,
+            )
+            return int(result) >= 0
+        except Exception:
+            pass
+    with SMS_SEND_TRACKER_LOCK:
+        daily = SMS_SEND_TRACKER.get('daily') or {}
+        if daily.get('date') != day:
+            SMS_SEND_TRACKER['daily'] = {'date': day, 'count': _sms_db_segments_used_today()}
+        used = int((SMS_SEND_TRACKER.get('daily') or {}).get('count') or 0)
+        if used + segments > daily_limit:
+            return False
+        SMS_SEND_TRACKER['daily'] = {'date': day, 'count': used + segments}
+    return True
+
+
+def _sms_refund_daily_segments(segments: int) -> None:
+    segments = max(1, int(segments or 1))
+    day, _start, _end = _sms_tehran_day()
+    client = get_redis()
+    if client is not None:
+        try:
+            client.eval(
+                "local c=tonumber(redis.call('GET',KEYS[1]) or '0'); "
+                "local n=math.max(0,c-tonumber(ARGV[1])); redis.call('SET',KEYS[1],n,'EX',ARGV[2]); return n",
+                1, _sms_segment_counter_key(day), segments, 172800,
+            )
+            return
+        except Exception:
+            pass
+    with SMS_SEND_TRACKER_LOCK:
+        daily = SMS_SEND_TRACKER.get('daily') or {}
+        if daily.get('date') == day:
+            daily['count'] = max(0, int(daily.get('count') or 0) - segments)
+            SMS_SEND_TRACKER['daily'] = daily
+
+
+def _sms_daily_segments_used() -> int:
+    day, _start, _end = _sms_tehran_day()
+    client = get_redis()
+    if client is not None:
+        try:
+            value = client.get(_sms_segment_counter_key(day))
+            if value is not None:
+                return max(0, int(value))
+        except Exception:
+            pass
+    daily = SMS_SEND_TRACKER.get('daily') or {}
+    if daily.get('date') == day:
+        return max(0, int(daily.get('count') or 0))
+    return _sms_db_segments_used_today()
 
 
 def _get_sms_runtime_settings() -> dict:
@@ -5675,25 +5813,19 @@ def _clear_message_cooldown(email: str, server_id) -> None:
             pass
 
 
-def _sms_take_send_slot(recipient: str, cfg: dict) -> tuple[bool, str | None]:
+def _sms_take_send_slot(recipient: str, cfg: dict, segments: int = 1) -> tuple[bool, str | None]:
     now_ts = time.time()
-    today = datetime.utcnow().strftime('%Y-%m-%d')
     min_interval = int(cfg.get('min_interval_seconds') or 0)
     daily_limit = int(cfg.get('daily_limit') or 200)
     with SMS_SEND_TRACKER_LOCK:
-        daily = SMS_SEND_TRACKER.get('daily') or {}
-        if daily.get('date') != today:
-            SMS_SEND_TRACKER['daily'] = {'date': today, 'count': 0}
-        count = int((SMS_SEND_TRACKER.get('daily') or {}).get('count') or 0)
-        if count >= daily_limit:
-            return False, 'daily_limit_reached'
         per = SMS_SEND_TRACKER.get('per_recipient') or {}
         last = float(per.get(recipient) or 0.0)
         if min_interval > 0 and last > 0 and (now_ts - last) < min_interval:
             return False, 'recipient_rate_limited'
+        if not _sms_reserve_daily_segments(segments, daily_limit):
+            return False, 'daily_limit_reached'
         per[recipient] = now_ts
         SMS_SEND_TRACKER['per_recipient'] = per
-        SMS_SEND_TRACKER['daily'] = {'date': today, 'count': count + 1}
     return True, None
 
 
@@ -5712,6 +5844,7 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
         'sent': False, 'reason': None, 'status_code': None,
         'request_id': None, 'job_id': None, 'status_url': None,
         'status': None,
+        **_sms_segment_info(text),
     }
     base = (cfg.get('base_url') or '').strip().rstrip('/')
     api_key = (cfg.get('api_key') or '').strip()
@@ -5913,9 +6046,11 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 if _sms_account_opted_out(server_id, email, recipient_comment, refresh_shared=True):
                     _log(recipient, 'skipped', 'opted_out_recheck')
                     return
-                slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
+                segment_info = _sms_segment_info(text)
+                segments = segment_info['sms_segments']
+                slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments)
                 if not slot_ok:
-                    _log(recipient, 'skipped', slot_reason)
+                    _log(recipient, 'skipped', slot_reason, segment_info)
                     return
                 # Transactional create/renew: high priority so the customer who just
                 # paid gets their confirmation next, ahead of any running bulk scan.
@@ -5925,7 +6060,8 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 if res.get('sent'):
                     _log(recipient, _sms_accepted_status(res), None, res)
                 else:
-                    _log(recipient, 'failed', res.get('reason'))
+                    _sms_refund_daily_segments(segments)
+                    _log(recipient, 'failed', res.get('reason'), res)
             except Exception:
                 app.logger.exception('[sms-automation] send failed')
     threading.Thread(target=_worker, daemon=True).start()
@@ -6258,11 +6394,13 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', 'empty_message')
             continue
 
-        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
+        segment_info = _sms_segment_info(text_msg)
+        segments = segment_info['sms_segments']
+        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments)
         if not slot_ok:
             if slot_reason == 'daily_limit_reached':
                 _sms_scan_set(stopped=slot_reason, state='done', finished_at=_utc_iso_now(), current=None)
-                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', slot_reason)
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', slot_reason, segment_info)
                 return {'scanned': total_clients, 'sent': sent, 'stopped': slot_reason}
             _sms_scan_inc('skipped_rate')
             continue
@@ -6278,8 +6416,9 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         # Re-check after pacing as well: a tag added while this candidate waited
         # must stop the request before it reaches the provider queue.
         if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+            _sms_refund_daily_segments(segments)
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
-                         'skipped', 'opted_out_recheck')
+                         'skipped', 'opted_out_recheck', segment_info)
             continue
 
         # Same idempotency key for the send and its 429-retry so the retry can't
@@ -6292,14 +6431,16 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         if (not res.get('sent')) and res.get('status_code') == 429:
             time.sleep(5)
             if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+                _sms_refund_daily_segments(segments)
                 _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
-                             'skipped', 'opted_out_recheck')
+                             'skipped', 'opted_out_recheck', segment_info)
                 continue
             res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
             if (not res.get('sent')) and res.get('status_code') == 429:
+                _sms_refund_daily_segments(segments)
                 SMS_LAST_SEND_TS[0] = time.time()
                 _sms_scan_inc('failed')
-                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', 'http_429')
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', 'http_429', res)
                 _sms_scan_set(stopped='gateway_rate_limited', state='done',
                               finished_at=_utc_iso_now(), current=None)
                 return {'scanned': total_clients, 'sent': sent, 'stopped': 'gateway_rate_limited'}
@@ -6319,8 +6460,9 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
                          _sms_accepted_status(res), None, res)
         else:
+            _sms_refund_daily_segments(segments)
             _sms_scan_inc('failed')
-            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', res.get('reason'))
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', res.get('reason'), res)
 
     _sms_scan_set(state='done', finished_at=_utc_iso_now(), current=None)
     return {'scanned': total_clients, 'sent': sent, 'candidates': len(candidates)}
@@ -6431,13 +6573,15 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
             _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'skipped', 'empty_message')
             continue
 
-        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg)
+        segment_info = _sms_segment_info(text_msg)
+        segments = segment_info['sms_segments']
+        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments)
         if not slot_ok:
             if slot_reason == 'daily_limit_reached':
                 # Out of today's budget — stop; the next scheduled run resumes the rest
                 # (cooldown skips everyone already sent), so the list keeps draining.
                 _sms_scan_set(stopped=slot_reason, state='done', finished_at=_utc_iso_now(), current=None)
-                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'skipped', slot_reason)
+                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'skipped', slot_reason, segment_info)
                 return {'scanned': len(idle), 'sent': sent, 'stopped': slot_reason}
             _sms_scan_inc('skipped_rate')
             continue
@@ -6449,8 +6593,9 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
                 time.sleep(min(gap, 60))
 
         if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+            _sms_refund_daily_segments(segments)
             _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
-                         'skipped', 'opted_out_recheck')
+                         'skipped', 'opted_out_recheck', segment_info)
             continue
 
         scan_idem = f"royalty-{jid}-{sid_norm}-{email_l}"
@@ -6458,14 +6603,16 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
         if (not res.get('sent')) and res.get('status_code') == 429:
             time.sleep(5)
             if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
+                _sms_refund_daily_segments(segments)
                 _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
-                             'skipped', 'opted_out_recheck')
+                             'skipped', 'opted_out_recheck', segment_info)
                 continue
             res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
             if (not res.get('sent')) and res.get('status_code') == 429:
+                _sms_refund_daily_segments(segments)
                 SMS_LAST_SEND_TS[0] = time.time()
                 _sms_scan_inc('failed')
-                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', 'http_429')
+                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', 'http_429', res)
                 _sms_scan_set(stopped='gateway_rate_limited', state='done',
                               finished_at=_utc_iso_now(), current=None)
                 return {'scanned': len(idle), 'sent': sent, 'stopped': 'gateway_rate_limited'}
@@ -6485,8 +6632,9 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
             _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
                          _sms_accepted_status(res), None, res)
         else:
+            _sms_refund_daily_segments(segments)
             _sms_scan_inc('failed')
-            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', res.get('reason'))
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', res.get('reason'), res)
 
     _sms_scan_set(state='done', finished_at=_utc_iso_now(), current=None)
     return {'scanned': len(idle), 'sent': sent, 'candidates': len(candidates)}
@@ -6508,6 +6656,14 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
             status_url=(str(gateway_result.get('status_url'))[:512]
                         if gateway_result.get('status_url') else None),
             terminal=(False if gateway_result.get('request_id') else None),
+            segment_count=(int(gateway_result.get('sms_segments'))
+                           if gateway_result.get('sms_segments') is not None else None),
+            message_encoding=(str(gateway_result.get('sms_encoding'))[:16]
+                              if gateway_result.get('sms_encoding') else None),
+            unit_count=(int(gateway_result.get('sms_units'))
+                        if gateway_result.get('sms_units') is not None else None),
+            character_count=(int(gateway_result.get('sms_characters'))
+                             if gateway_result.get('sms_characters') is not None else None),
         )
         db.session.add(row)
         db.session.commit()
@@ -6642,7 +6798,9 @@ def _flush_pending_sms(force: bool = False) -> int:
             except Exception:
                 db.session.rollback()
             continue
-        slot_ok, slot_reason = _sms_take_send_slot(r.recipient, cfg)
+        segment_info = _sms_segment_info(r.text)
+        segments = segment_info['sms_segments']
+        slot_ok, slot_reason = _sms_take_send_slot(r.recipient, cfg, segments)
         if not slot_ok:
             if slot_reason == 'daily_limit_reached':
                 break  # out of budget today; retry next tick
@@ -6659,6 +6817,7 @@ def _flush_pending_sms(force: bool = False) -> int:
             res = _send_sms_via_gmweb(r.recipient, r.text, cfg, priority='high', idempotency_key=flush_idem)
         SMS_LAST_SEND_TS[0] = time.time()
         if (not res.get('sent')) and res.get('status_code') == 429:
+            _sms_refund_daily_segments(segments)
             break  # gateway throttling — stop, the rest stays queued for next tick
         try:
             if res.get('sent'):
@@ -6666,7 +6825,9 @@ def _flush_pending_sms(force: bool = False) -> int:
                              r.recipient, _sms_accepted_status(res), None, res)
                 sent += 1
             else:
-                _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name, r.recipient, 'failed', res.get('reason'))
+                _sms_refund_daily_segments(segments)
+                _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name,
+                             r.recipient, 'failed', res.get('reason'), res)
             db.session.delete(r)
             db.session.commit()
         except Exception:
@@ -7298,6 +7459,10 @@ class SmsSendLog(db.Model):
     successful = db.Column(db.Boolean)
     gateway_current_at = db.Column(db.String(64))
     gateway_sent_at = db.Column(db.String(64))
+    segment_count = db.Column(db.Integer)
+    message_encoding = db.Column(db.String(16))
+    unit_count = db.Column(db.Integer)
+    character_count = db.Column(db.Integer)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -7320,6 +7485,10 @@ class SmsSendLog(db.Model):
             'successful': self.successful,
             'gateway_current_at': self.gateway_current_at,
             'gateway_sent_at': self.gateway_sent_at,
+            'segment_count': self.segment_count,
+            'message_encoding': self.message_encoding,
+            'unit_count': self.unit_count,
+            'character_count': self.character_count,
             # Stored as naive UTC (datetime.utcnow). Emit an explicit 'Z' so the
             # browser parses it as UTC and can convert to the viewer's timezone
             # (Asia/Tehran) instead of mis-reading it as local time.
@@ -7670,6 +7839,10 @@ with app.app_context():
                 ('successful', 'BOOLEAN'),
                 ('gateway_current_at', 'VARCHAR(64)'),
                 ('gateway_sent_at', 'VARCHAR(64)'),
+                ('segment_count', 'INTEGER'),
+                ('message_encoding', 'VARCHAR(16)'),
+                ('unit_count', 'INTEGER'),
+                ('character_count', 'INTEGER'),
                 ('updated_at', 'TIMESTAMP'),
             )
             for _cn, _ct in _sms_new_cols:
@@ -8274,10 +8447,11 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
                                                terminal: bool = False) -> dict | None:
     """Build an explainable, uncertainty-aware 31-day usage recommendation.
 
-    The observation window starts at the latest detected renewal, or 31 days
-    ago when no renewal exists. For an already-ended account, elapsed time stops
-    at its last meaningful usage; this correctly handles a plan consumed in only
-    a few days instead of diluting the average with idle days after exhaustion.
+    The latest renewal cycle is preferred when it contains enough evidence. If
+    that cycle is new/sparse, the model falls back to all usage from the last 31
+    days. Account state never gates eligibility: active, ending, ended and
+    expired accounts are treated identically. Only a truly usage-free 31-day
+    window produces no recommendation.
     """
     if not packages:
         return None
@@ -8290,32 +8464,57 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
                           .filter(RenewalEvent.renewed_at >= cutoff)
                           .order_by(RenewalEvent.renewed_at.desc())
                           .first())
-        anchor = max(cutoff, latest_renewal.renewed_at) if latest_renewal else cutoff
-        rows = (UsageDaily.query
-                .filter_by(server_id=int(server_id), sub_id=str(sub_id))
-                .filter(UsageDaily.last_observed_at >= anchor)
-                .order_by(UsageDaily.usage_date.asc())
-                .all())
+        rows_31d = (UsageDaily.query
+                    .filter_by(server_id=int(server_id), sub_id=str(sub_id))
+                    .filter(UsageDaily.last_observed_at >= cutoff)
+                    .order_by(UsageDaily.usage_date.asc())
+                    .all())
         state = UsageCounterState.query.filter_by(server_id=int(server_id), sub_id=str(sub_id)).first()
     except Exception:
         return None
 
-    if not rows:
+    if not rows_31d:
         return None
 
-    meaningful_threshold = 1024 * 1024  # ignore counter noise below 1 MB/day
-    total_bytes = 0
-    meaningful_rows = []
-    total_samples = 0
-    for row in rows:
-        delta = max(0, int(row.upload_bytes or 0)) + max(0, int(row.download_bytes or 0))
-        total_bytes += delta
-        total_samples += max(0, int(row.sample_count or 0))
-        if delta >= meaningful_threshold:
-            meaningful_rows.append(row)
+    def _evidence(candidate_rows):
+        total = 0
+        samples = 0
+        active_rows = []
+        for usage_row in candidate_rows:
+            delta = (max(0, int(usage_row.upload_bytes or 0))
+                     + max(0, int(usage_row.download_bytes or 0)))
+            total += delta
+            samples += max(0, int(usage_row.sample_count or 0))
+            if delta > 0:
+                active_rows.append(usage_row)
+        return total, samples, active_rows
 
-    # Avoid confident-looking personalization from a nearly empty/noisy trace.
-    if total_bytes < 100 * 1024 * 1024 or not meaningful_rows or total_samples < 2:
+    cycle_anchor = max(cutoff, latest_renewal.renewed_at) if latest_renewal else None
+    cycle_rows = ([row for row in rows_31d
+                   if (row.last_observed_at or datetime.min) >= cycle_anchor]
+                  if cycle_anchor else [])
+    cycle_total, cycle_samples, cycle_active = _evidence(cycle_rows)
+    full_total, full_samples, full_active = _evidence(rows_31d)
+
+    # A mature current cycle gives the cleanest daily rate. A sparse/new cycle
+    # is not a reason to hide the recommendation: use the complete 31-day view.
+    cycle_is_reliable = bool(
+        cycle_active and cycle_samples >= 2 and cycle_total >= 100 * 1024 * 1024
+    )
+    if cycle_anchor and cycle_is_reliable:
+        rows = cycle_rows
+        total_bytes, total_samples, meaningful_rows = cycle_total, cycle_samples, cycle_active
+        anchor = cycle_anchor
+        source = 'current_cycle'
+    else:
+        rows = rows_31d
+        total_bytes, total_samples, meaningful_rows = full_total, full_samples, full_active
+        anchor = cutoff
+        source = 'last_31_days'
+
+    # Any real traffic is enough to calculate a recommendation. Zero usage is
+    # the only intentional no-recommendation outcome.
+    if total_bytes <= 0 or not meaningful_rows:
         return None
 
     first_at = max(anchor, meaningful_rows[0].first_observed_at or anchor)
@@ -8367,8 +8566,8 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
         'covered_days': covered_dates,
         'confidence': confidence,
         'safety_margin_percent': int(round(safety_margin * 100)),
-        'source': 'current_cycle' if latest_renewal else 'last_31_days',
-        'fast_cycle': bool(terminal and basis_days <= 7),
+        'source': source,
+        'fast_cycle': bool(source == 'current_cycle' and terminal and basis_days <= 7),
     }
 
 
@@ -21470,6 +21669,14 @@ def sms_test_send():
 
     text = ('EVE panel — test SMS ✅\n'
             'پیام تستی پنل. اگر این پیام را دریافت کردید، اتوماسیون SMS درست کار می‌کند.')
+    segment_info = _sms_segment_info(text)
+    segments = segment_info['sms_segments']
+    slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments)
+    if not slot_ok:
+        _sms_log_row(None, (getattr(user, 'username', None) or 'test').strip().lower(),
+                     0, 'Eve', 'test', recipient, 'skipped', slot_reason, segment_info)
+        return jsonify({'success': False, 'recipient': recipient,
+                        'error': 'Daily SMS segment limit reached.'}), 429
     res = _send_sms_via_gmweb(recipient, text, cfg, priority='high',
                               idempotency_key=f"test-{int(time.time())}")
     if res.get('sent'):
@@ -21481,6 +21688,9 @@ def sms_test_send():
                         'request_id': res.get('request_id'), 'job_id': res.get('job_id'),
                         'status': _sms_accepted_status(res),
                         'message': f'{message} for {recipient} ({src_label}).'})
+    _sms_refund_daily_segments(segments)
+    _sms_log_row(None, (getattr(user, 'username', None) or 'test').strip().lower(),
+                 0, 'Eve', 'test', recipient, 'failed', res.get('reason'), res)
     return jsonify({'success': False, 'recipient': recipient,
                     'error': f'Send failed ({res.get("reason") or "unknown"}).',
                     'status_code': res.get('status_code')}), 400
@@ -21538,6 +21748,8 @@ def sms_scan_status():
         'success': True,
         'job': _sms_scan_snapshot(),
         'pending_high': pending_high,
+        'segments_used_today': _sms_daily_segments_used(),
+        'segment_daily_limit': int(_get_sms_runtime_settings().get('daily_limit') or 200),
     })
 
 
