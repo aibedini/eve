@@ -98,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.17"
+APP_VERSION = "2.4.18"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -5470,8 +5470,9 @@ def _sms_db_segments_used_today() -> int:
         # pre-send skips never consume it.
         accepted = or_(
             SmsSendLog.request_id.isnot(None),
-            ~SmsSendLog.status.in_(('failed', 'skipped')),
+            ~SmsSendLog.status.in_(('failed', 'skipped', 'cancelled')),
         )
+        accepted = and_(accepted, ~SmsSendLog.status.in_(('failed', 'skipped', 'cancelled')))
         total = db.session.query(func.sum(func.coalesce(SmsSendLog.segment_count, 1))).filter(
             SmsSendLog.created_at >= start_utc,
             SmsSendLog.created_at < end_utc,
@@ -5945,6 +5946,176 @@ def _promote_delayed_high_sms(cfg: dict | None = None) -> dict:
             detail = body.get('error') or body.get('message')
         reason = detail or f'gateway_http_{resp.status_code}'
     return {'success': False, 'reason': reason, 'status_code': resp.status_code}
+
+
+def _cancel_sms_via_gmweb(reference: str, cfg: dict | None = None) -> dict:
+    """Cancel one queued GMweb SMS by requestId/job reference.
+
+    GMweb contract (0.3.23+): POST /send/cancel/:reference. The gateway only
+    cancels jobs that have not started yet (waiting/paused/delayed). Active or
+    already-completed messages return ok=false/not_cancellable and must continue
+    to be reconciled by the normal status poller.
+    """
+    cfg = cfg or _get_sms_runtime_settings()
+    out = {
+        'ok': False, 'cancelled': False, 'reason': None, 'status_code': None,
+        'status': None, 'state': None, 'terminal': None, 'successful': None,
+    }
+    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    api_key = (cfg.get('api_key') or '').strip()
+    ref = (reference or '').strip()
+    if not base or not api_key:
+        out['reason'] = 'gateway_not_configured'
+        return out
+    if not ref:
+        out['reason'] = 'missing_reference'
+        return out
+    try:
+        resp = requests.post(
+            f"{base}/send/cancel/{quote(ref, safe='')}",
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Accept': 'application/json',
+            },
+            timeout=min(int(cfg.get('timeout_seconds') or 15), 5),
+        )
+        out['status_code'] = resp.status_code
+        try:
+            body = resp.json() if resp.content else {}
+        except Exception:
+            body = {}
+        if isinstance(body, dict):
+            out['status'] = body.get('status')
+            out['state'] = body.get('state')
+            if body.get('terminal') is not None:
+                out['terminal'] = bool(body.get('terminal'))
+            if body.get('successful') is not None:
+                out['successful'] = bool(body.get('successful'))
+            out['reason'] = body.get('reason') or body.get('error') or body.get('message')
+            ok_value = bool(body.get('ok') if body.get('ok') is not None else body.get('success'))
+            status_value = str(body.get('status') or body.get('state') or '').strip().lower()
+            out['ok'] = ok_value
+            out['cancelled'] = (
+                resp.status_code in (200, 202)
+                and ok_value
+                and status_value == 'cancelled'
+            )
+        elif resp.status_code in (200, 202):
+            out['ok'] = True
+            out['cancelled'] = True
+            out['status'] = 'cancelled'
+            out['state'] = 'cancelled'
+            out['terminal'] = True
+    except Exception as exc:
+        out['reason'] = f'gateway_error: {exc}'
+    if not out.get('reason') and not out.get('cancelled') and out.get('status_code') not in (200, 202):
+        out['reason'] = f"http_{out.get('status_code')}"
+    return out
+
+
+def _cancel_pending_sms_for_account(server_id, email: str, *, reason: str = 'client_disabled') -> dict:
+    """Best-effort SMS queue cleanup when an operator disables an account.
+
+    Removes Eve-local delayed SMS rows and asks GMweb to cancel every non-terminal
+    accepted send for the same (server_id, email). This is intentionally
+    best-effort: disabling the x-ui account must not fail just because the SMS
+    gateway is down or a queued SMS already became active.
+    """
+    email_l = (email or '').strip().lower()
+    if not email_l:
+        return {'local_cancelled': 0, 'gateway_cancelled': 0, 'not_cancellable': 0, 'failed': 0}
+    try:
+        sid_norm = int(server_id or 0)
+    except (TypeError, ValueError):
+        sid_norm = 0
+
+    result = {'local_cancelled': 0, 'gateway_cancelled': 0, 'not_cancellable': 0, 'failed': 0}
+
+    # Eve-local queue: messages parked during quiet hours have not reached GMweb
+    # yet, so deleting them is a true cancel.
+    try:
+        local_rows = PendingSms.query.filter(
+            PendingSms.server_id == sid_norm,
+            func.lower(PendingSms.email) == email_l,
+        ).all()
+        for row in local_rows:
+            _sms_log_row(None, email_l, sid_norm, row.server_name, row.event_name,
+                         row.recipient, 'cancelled', f'{reason}: local_pending')
+            db.session.delete(row)
+            result['local_cancelled'] += 1
+        if local_rows:
+            db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        result['failed'] += 1
+        try:
+            app.logger.warning('[sms-cancel] local pending cleanup failed for %s/%s: %s',
+                               sid_norm, email_l, exc)
+        except Exception:
+            pass
+
+    cfg = _get_sms_runtime_settings()
+    if not (cfg.get('base_url') and cfg.get('api_key')):
+        return result
+
+    try:
+        rows = SmsSendLog.query.filter(
+            SmsSendLog.server_id == sid_norm,
+            func.lower(SmsSendLog.email) == email_l,
+            SmsSendLog.request_id.isnot(None),
+            or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
+            ~SmsSendLog.status.in_(('failed', 'skipped', 'cancelled', 'delivered', 'completed')),
+        ).order_by(SmsSendLog.created_at.asc()).limit(100).all()
+    except Exception as exc:
+        result['failed'] += 1
+        try:
+            app.logger.warning('[sms-cancel] pending lookup failed for %s/%s: %s',
+                               sid_norm, email_l, exc)
+        except Exception:
+            pass
+        return result
+
+    for row in rows:
+        reference = (row.request_id or row.gateway_job_id or '').strip()
+        if not reference:
+            continue
+        res = _cancel_sms_via_gmweb(reference, cfg)
+        now = datetime.utcnow()
+        try:
+            if res.get('cancelled'):
+                row.status = 'cancelled'
+                row.gateway_state = str(res.get('state') or 'cancelled')[:32]
+                row.stage = 'cancelled_by_eve'
+                row.terminal = True
+                row.successful = False
+                row.reason = str(reason)[:255]
+                row.updated_at = now
+                result['gateway_cancelled'] += 1
+                try:
+                    _sms_refund_daily_segments(int(row.segment_count or 1))
+                except Exception:
+                    pass
+            else:
+                row.reason = str(f"cancel_not_cancellable: {res.get('reason') or 'unknown'}")[:255]
+                row.updated_at = now
+                if (res.get('reason') or '').lower() in ('not_cancellable', 'already_active'):
+                    result['not_cancellable'] += 1
+                else:
+                    result['failed'] += 1
+        except Exception:
+            result['failed'] += 1
+
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        result['failed'] += 1
+        try:
+            app.logger.warning('[sms-cancel] commit failed for %s/%s: %s',
+                               sid_norm, email_l, exc)
+        except Exception:
+            pass
+    return result
 
 
 def _sms_accepted_status(send_result: dict) -> str:
@@ -13999,6 +14170,8 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
             ok, _vr, verr = v3_update_client(server, session_obj, email, target_client)
             if ok:
                 patch_cached_client(server.id, email, enable=bool(enable), comment=target_client.get('comment'))
+                if not enable:
+                    _cancel_pending_sms_for_account(server.id, email, reason='client_disabled')
                 return True, None, 200
             return False, f"v3 toggle failed: {verr}", 502
 
@@ -14041,6 +14214,8 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
                     log_transaction(user.id, -price, 'renew', description or f"Renew client {email}", server_id=server.id)
                     db.session.commit()
                 patch_cached_client(server.id, email, enable=bool(enable), comment=target_client.get('comment'))
+                if not enable:
+                    _cancel_pending_sms_for_account(server.id, email, reason='client_disabled')
                 return True, None, 200
 
             errors.append(f"{template}: {resp.status_code}")
@@ -14859,7 +15034,10 @@ def bulk_client_job(job_id):
             if not session.get('is_superadmin', False):
                 return jsonify({'success': False, 'error': 'Access denied'}), 403
 
-        return jsonify({'success': True, 'job': _summarize_bulk_job(job)})
+        resp = jsonify({'success': True, 'job': _summarize_bulk_job(job)})
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        resp.headers['Pragma'] = 'no-cache'
+        return resp
 
 
 @app.route('/api/client/<email>/last-renewal', methods=['GET'])
@@ -21972,7 +22150,7 @@ def sms_logs():
     status_filter = (request.args.get('status') or '').strip().lower()
     state_filter = (request.args.get('state') or '').strip().lower()
     q = SmsSendLog.query
-    if status_filter in ('sent', 'failed', 'skipped'):
+    if status_filter in ('sent', 'failed', 'skipped', 'cancelled'):
         q = q.filter(SmsSendLog.status == status_filter)
     if state_filter in ('near_expiry', 'low_volume', 'expired', 'ended'):
         q = q.filter(SmsSendLog.state == state_filter)

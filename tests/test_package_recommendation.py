@@ -13,10 +13,18 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 from app import (  # noqa: E402
     GLOBAL_SERVER_DATA,
+    PendingSms,
     RenewalEvent,
+    SMS_GMWEB_API_KEY_KEY,
+    SMS_GMWEB_BASE_URL_KEY,
+    SMS_GMWEB_TIMEOUT_KEY,
+    SmsSendLog,
+    SystemConfig,
     app,
     db,
     _build_subscription_package_recommendation,
+    _cancel_pending_sms_for_account,
+    _cancel_sms_via_gmweb,
     _select_subscription_package,
 )
 
@@ -45,6 +53,16 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             os.unlink(_DB_FILE.name)
         except OSError:
             pass
+
+    def tearDown(self):
+        SmsSendLog.query.delete()
+        PendingSms.query.delete()
+        SystemConfig.query.filter(SystemConfig.key.in_([
+            SMS_GMWEB_BASE_URL_KEY,
+            SMS_GMWEB_API_KEY_KEY,
+            SMS_GMWEB_TIMEOUT_KEY,
+        ])).delete(synchronize_session=False)
+        db.session.commit()
 
     def test_forecast_above_catalog_uses_largest_available(self):
         selected, comfort, _ = _select_subscription_package(
@@ -132,6 +150,93 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             )
         self.assertIsNotNone(recommendation)
         self.assertEqual(recommendation['package_id'], 1)
+
+    def test_cancel_sms_via_gmweb_uses_request_id_endpoint(self):
+        class FakeResponse:
+            status_code = 200
+            content = b'{}'
+
+            @staticmethod
+            def json():
+                return {
+                    'ok': True,
+                    'requestId': 'send_123',
+                    'status': 'cancelled',
+                    'state': 'cancelled',
+                    'terminal': True,
+                }
+
+        with patch('app.requests.post', return_value=FakeResponse()) as post:
+            result = _cancel_sms_via_gmweb(
+                'send_123',
+                {'base_url': 'https://gmweb.test', 'api_key': 'gmw_secret', 'timeout_seconds': 7},
+            )
+
+        self.assertTrue(result['cancelled'])
+        post.assert_called_once()
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], 'https://gmweb.test/send/cancel/send_123')
+        self.assertEqual(kwargs['headers']['Authorization'], 'Bearer gmw_secret')
+
+    def test_disable_cancel_marks_pending_gateway_and_local_sms(self):
+        for key, value in (
+            (SMS_GMWEB_BASE_URL_KEY, 'https://gmweb.test'),
+            (SMS_GMWEB_API_KEY_KEY, 'gmw_secret'),
+            (SMS_GMWEB_TIMEOUT_KEY, '7'),
+        ):
+            db.session.merge(SystemConfig(key=key, value=value))
+        db.session.add(SmsSendLog(
+            email='g326-0912464258',
+            server_id=8,
+            server_name='ECO1',
+            state='ended',
+            recipient='9891***258',
+            status='queued',
+            request_id='send_123',
+            gateway_job_id='413',
+            terminal=False,
+            segment_count=2,
+            message_encoding='UCS-2',
+        ))
+        db.session.add(PendingSms(
+            email='g326-0912464258',
+            server_id=8,
+            server_name='ECO1',
+            event_name='renew',
+            recipient='+98912464258',
+            text='pending text',
+        ))
+        db.session.commit()
+
+        class FakeResponse:
+            status_code = 200
+            content = b'{}'
+
+            @staticmethod
+            def json():
+                return {
+                    'ok': True,
+                    'requestId': 'send_123',
+                    'status': 'cancelled',
+                    'state': 'cancelled',
+                    'terminal': True,
+                }
+
+        with patch('app.requests.post', return_value=FakeResponse()) as post:
+            result = _cancel_pending_sms_for_account(8, 'g326-0912464258')
+
+        self.assertEqual(result['gateway_cancelled'], 1)
+        self.assertEqual(result['local_cancelled'], 1)
+        post.assert_called_once()
+
+        gateway_row = SmsSendLog.query.filter_by(request_id='send_123').one()
+        self.assertEqual(gateway_row.status, 'cancelled')
+        self.assertEqual(gateway_row.gateway_state, 'cancelled')
+        self.assertEqual(gateway_row.stage, 'cancelled_by_eve')
+        self.assertTrue(gateway_row.terminal)
+        self.assertFalse(gateway_row.successful)
+        self.assertEqual(PendingSms.query.count(), 0)
+        self.assertEqual(SmsSendLog.query.filter_by(status='cancelled').count(), 2)
 
 
 if __name__ == '__main__':
