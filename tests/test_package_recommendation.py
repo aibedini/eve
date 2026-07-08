@@ -25,6 +25,12 @@ from app import (  # noqa: E402
     _build_subscription_package_recommendation,
     _cancel_pending_sms_for_account,
     _cancel_sms_via_gmweb,
+    _cancel_stale_account_sms,
+    _run_sms_depletion_scan,
+    _sms_db_segment_stats_today,
+    _sms_db_segments_used_today,
+    _sms_gateway_ready,
+    _sms_reserve_daily_segments,
     _select_subscription_package,
 )
 
@@ -237,6 +243,194 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertFalse(gateway_row.successful)
         self.assertEqual(PendingSms.query.count(), 0)
         self.assertEqual(SmsSendLog.query.filter_by(status='cancelled').count(), 2)
+
+    def test_renew_cancel_only_stale_automation_sms(self):
+        for key, value in (
+            (SMS_GMWEB_BASE_URL_KEY, 'https://gmweb.test'),
+            (SMS_GMWEB_API_KEY_KEY, 'gmw_secret'),
+            (SMS_GMWEB_TIMEOUT_KEY, '7'),
+        ):
+            db.session.merge(SystemConfig(key=key, value=value))
+        rows = [
+            SmsSendLog(
+                email='stale-user',
+                server_id=12,
+                server_name='ECO2',
+                state='ended',
+                recipient='9891***001',
+                status='queued',
+                request_id='send_stale',
+                terminal=False,
+                segment_count=1,
+            ),
+            SmsSendLog(
+                email='stale-user',
+                server_id=12,
+                server_name='ECO2',
+                state='renew',
+                recipient='9891***001',
+                status='queued',
+                request_id='send_renew',
+                terminal=False,
+                segment_count=1,
+            ),
+            SmsSendLog(
+                email='stale-user',
+                server_id=12,
+                server_name='ECO2',
+                state='created',
+                recipient='9891***001',
+                status='queued',
+                request_id='send_created',
+                terminal=False,
+                segment_count=1,
+            ),
+        ]
+        db.session.add_all(rows)
+        db.session.add(PendingSms(
+            email='stale-user',
+            server_id=12,
+            server_name='ECO2',
+            event_name='renew',
+            recipient='+98910000001',
+            text='new renew confirmation',
+        ))
+        db.session.commit()
+
+        class FakeResponse:
+            status_code = 200
+            content = b'{}'
+
+            @staticmethod
+            def json():
+                return {'ok': True, 'status': 'cancelled', 'state': 'cancelled', 'terminal': True}
+
+        with patch('app.requests.post', return_value=FakeResponse()) as post:
+            result = _cancel_stale_account_sms(12, 'stale-user', reason='renew_success')
+
+        self.assertEqual(result['gateway_cancelled'], 1)
+        self.assertEqual(result['local_cancelled'], 0)
+        post.assert_called_once()
+        args, _kwargs = post.call_args
+        self.assertEqual(args[0], 'https://gmweb.test/send/cancel/send_stale')
+
+        self.assertEqual(SmsSendLog.query.filter_by(request_id='send_stale').one().status, 'cancelled')
+        self.assertEqual(SmsSendLog.query.filter_by(request_id='send_renew').one().status, 'queued')
+        self.assertEqual(SmsSendLog.query.filter_by(request_id='send_created').one().status, 'queued')
+        self.assertEqual(PendingSms.query.filter_by(event_name='renew').count(), 1)
+
+    def test_sms_scan_stops_before_sending_when_gateway_unpaired(self):
+        for key, value in (
+            (SMS_GMWEB_BASE_URL_KEY, 'https://gmweb.test'),
+            (SMS_GMWEB_API_KEY_KEY, 'gmw_secret'),
+            (SMS_GMWEB_TIMEOUT_KEY, '7'),
+            ('sms_automation_enabled', 'true'),
+        ):
+            db.session.merge(SystemConfig(key=key, value=value))
+        db.session.commit()
+
+        class FakeResponse:
+            status_code = 503
+
+        with patch('app.requests.get', return_value=FakeResponse()) as get, \
+             patch('app._send_sms_via_gmweb') as send:
+            ready, reason, status = _sms_gateway_ready({
+                'base_url': 'https://gmweb.test',
+                'api_key': 'gmw_secret',
+                'timeout_seconds': 7,
+            })
+            result = _run_sms_depletion_scan(
+                job_id='unpaired-test',
+                triggered_by='manual',
+                states=['low_volume', 'ended'],
+            )
+
+        self.assertFalse(ready)
+        self.assertEqual(reason, 'gateway_not_paired')
+        self.assertEqual(status, 503)
+        self.assertEqual(result['reason'], 'gateway_not_paired')
+        send.assert_not_called()
+        get.assert_called()
+
+    def test_sms_daily_limit_counts_completed_segments_only(self):
+        db.session.add_all([
+            SmsSendLog(
+                email='failed-unpaired',
+                server_id=1,
+                server_name='ECO1',
+                state='low_volume',
+                recipient='9891***001',
+                status='failed',
+                gateway_state='checking_paired',
+                stage='failed',
+                request_id='send_failed',
+                terminal=True,
+                successful=False,
+                segment_count=2,
+            ),
+            SmsSendLog(
+                email='queued-user',
+                server_id=1,
+                server_name='ECO1',
+                state='near_expiry',
+                recipient='9891***002',
+                status='queued',
+                gateway_state='queued',
+                stage='queued',
+                request_id='send_queued',
+                terminal=False,
+                segment_count=3,
+            ),
+            SmsSendLog(
+                email='completed-user',
+                server_id=1,
+                server_name='ECO1',
+                state='ended',
+                recipient='9891***003',
+                status='sent',
+                gateway_state='completed',
+                stage='completed',
+                request_id='send_completed',
+                terminal=True,
+                successful=True,
+                segment_count=1,
+            ),
+            SmsSendLog(
+                email='legacy-sent-user',
+                server_id=1,
+                server_name='ECO1',
+                state='renew',
+                recipient='9891***004',
+                status='sent',
+                stage='sent',
+                terminal=True,
+                segment_count=1,
+            ),
+            SmsSendLog(
+                email='skipped-user',
+                server_id=1,
+                server_name='ECO1',
+                state='expired',
+                recipient='9891***005',
+                status='skipped',
+                gateway_state='daily_limit_reached',
+                stage='skipped',
+                terminal=True,
+                successful=False,
+                segment_count=4,
+            ),
+        ])
+        db.session.commit()
+
+        stats = _sms_db_segment_stats_today()
+
+        self.assertEqual(stats['submitted'], 6)
+        self.assertEqual(stats['completed'], 2)
+        self.assertEqual(stats['failed'], 6)
+        self.assertEqual(stats['inflight'], 3)
+        self.assertEqual(_sms_db_segments_used_today(), 2)
+        self.assertTrue(_sms_reserve_daily_segments(1, 3))
+        self.assertFalse(_sms_reserve_daily_segments(2, 3))
 
 
 if __name__ == '__main__':

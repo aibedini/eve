@@ -98,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.18"
+APP_VERSION = "2.4.19"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -5463,24 +5463,63 @@ def _sms_tehran_day() -> tuple[str, datetime, datetime]:
 
 
 def _sms_db_segments_used_today() -> int:
+    return _sms_db_segment_stats_today().get('completed', 0)
+
+
+def _sms_db_segment_stats_today() -> dict:
+    """Daily SMS segment accounting in Tehran time.
+
+    submitted: accepted by GMweb / attempted through a status-capable gateway.
+    completed: billable-successful sends only; this is the daily limit basis.
+    failed: terminal failed sends; not billable and must not consume the daily cap.
+    inflight: accepted by GMweb but still not terminal.
+    """
+    stats = {'submitted': 0, 'completed': 0, 'failed': 0, 'inflight': 0}
     try:
         _day, start_utc, end_utc = _sms_tehran_day()
-        # A gateway-accepted request keeps consuming the submission budget even
-        # if delivery later becomes terminal/failed; immediate failures and
-        # pre-send skips never consume it.
-        accepted = or_(
-            SmsSendLog.request_id.isnot(None),
-            ~SmsSendLog.status.in_(('failed', 'skipped', 'cancelled')),
-        )
-        accepted = and_(accepted, ~SmsSendLog.status.in_(('failed', 'skipped', 'cancelled')))
-        total = db.session.query(func.sum(func.coalesce(SmsSendLog.segment_count, 1))).filter(
+        base = SmsSendLog.query.filter(
             SmsSendLog.created_at >= start_utc,
             SmsSendLog.created_at < end_utc,
-            accepted,
-        ).scalar()
-        return max(0, int(total or 0))
+        )
+        rows = base.with_entities(
+            SmsSendLog.status,
+            SmsSendLog.gateway_state,
+            SmsSendLog.terminal,
+            SmsSendLog.successful,
+            SmsSendLog.request_id,
+            SmsSendLog.segment_count,
+        ).all()
+        success_states = {'sent', 'completed', 'delivered'}
+        failed_states = {'failed', 'expired', 'cancelled'}
+        for status, gateway_state, terminal, successful, request_id, segment_count in rows:
+            seg = max(1, int(segment_count or 1))
+            st = str(status or '').strip().lower()
+            gw = str(gateway_state or '').strip().lower()
+            has_request = bool(request_id)
+            if has_request:
+                stats['submitted'] += seg
+
+            is_completed = (
+                successful is True
+                or (terminal is True and (st in success_states or gw in success_states))
+                or (not has_request and st == 'sent')
+                or st in {'completed', 'delivered'}
+            )
+            is_failed = (
+                st in failed_states
+                or gw in failed_states
+                or successful is False
+                or (terminal is True and successful is not True and not is_completed)
+            )
+            if is_completed:
+                stats['completed'] += seg
+            elif is_failed:
+                stats['failed'] += seg
+            elif has_request and terminal is not True:
+                stats['inflight'] += seg
     except Exception:
-        return 0
+        pass
+    return {k: max(0, int(v or 0)) for k, v in stats.items()}
 
 
 def _sms_segment_counter_key(day: str) -> str:
@@ -5489,68 +5528,20 @@ def _sms_segment_counter_key(day: str) -> str:
 
 def _sms_reserve_daily_segments(segments: int, daily_limit: int) -> bool:
     segments = max(1, int(segments or 1))
-    day, _start, _end = _sms_tehran_day()
-    client = get_redis()
-    if client is not None:
-        try:
-            key = _sms_segment_counter_key(day)
-            if not client.exists(key):
-                client.set(key, _sms_db_segments_used_today(), nx=True, ex=172800)
-            result = client.eval(
-                "local c=tonumber(redis.call('GET',KEYS[1]) or '0'); "
-                "local n=tonumber(ARGV[1]); local lim=tonumber(ARGV[2]); "
-                "if c+n>lim then return -1 end; "
-                "redis.call('INCRBY',KEYS[1],n); redis.call('EXPIRE',KEYS[1],ARGV[3]); return c+n",
-                1, key, segments, daily_limit, 172800,
-            )
-            return int(result) >= 0
-        except Exception:
-            pass
-    with SMS_SEND_TRACKER_LOCK:
-        daily = SMS_SEND_TRACKER.get('daily') or {}
-        if daily.get('date') != day:
-            SMS_SEND_TRACKER['daily'] = {'date': day, 'count': _sms_db_segments_used_today()}
-        used = int((SMS_SEND_TRACKER.get('daily') or {}).get('count') or 0)
-        if used + segments > daily_limit:
-            return False
-        SMS_SEND_TRACKER['daily'] = {'date': day, 'count': used + segments}
-    return True
+    # Daily cap is billable/completed SMS, not mere requests accepted by GMweb.
+    # If Google Messages is unpaired or a queued send later fails, it must not
+    # burn the day's budget. We therefore don't "reserve" here; status polling
+    # moves rows into the completed bucket when the gateway confirms success.
+    return (_sms_db_segments_used_today() + segments) <= int(daily_limit or 0)
 
 
 def _sms_refund_daily_segments(segments: int) -> None:
-    segments = max(1, int(segments or 1))
-    day, _start, _end = _sms_tehran_day()
-    client = get_redis()
-    if client is not None:
-        try:
-            client.eval(
-                "local c=tonumber(redis.call('GET',KEYS[1]) or '0'); "
-                "local n=math.max(0,c-tonumber(ARGV[1])); redis.call('SET',KEYS[1],n,'EX',ARGV[2]); return n",
-                1, _sms_segment_counter_key(day), segments, 172800,
-            )
-            return
-        except Exception:
-            pass
-    with SMS_SEND_TRACKER_LOCK:
-        daily = SMS_SEND_TRACKER.get('daily') or {}
-        if daily.get('date') == day:
-            daily['count'] = max(0, int(daily.get('count') or 0) - segments)
-            SMS_SEND_TRACKER['daily'] = daily
+    # Kept for old call sites. The new daily cap is computed from completed
+    # status rows, so failed/cancelled/unpaired requests need no counter refund.
+    return None
 
 
 def _sms_daily_segments_used() -> int:
-    day, _start, _end = _sms_tehran_day()
-    client = get_redis()
-    if client is not None:
-        try:
-            value = client.get(_sms_segment_counter_key(day))
-            if value is not None:
-                return max(0, int(value))
-        except Exception:
-            pass
-    daily = SMS_SEND_TRACKER.get('daily') or {}
-    if daily.get('date') == day:
-        return max(0, int(daily.get('count') or 0))
     return _sms_db_segments_used_today()
 
 
@@ -6013,7 +6004,11 @@ def _cancel_sms_via_gmweb(reference: str, cfg: dict | None = None) -> dict:
     return out
 
 
-def _cancel_pending_sms_for_account(server_id, email: str, *, reason: str = 'client_disabled') -> dict:
+STALE_ACCOUNT_SMS_STATES = ('near_expiry', 'low_volume', 'expired', 'ended', 'royalty')
+
+
+def _cancel_pending_sms_for_account(server_id, email: str, *, reason: str = 'client_disabled',
+                                    states: tuple[str, ...] | list[str] | set[str] | None = None) -> dict:
     """Best-effort SMS queue cleanup when an operator disables an account.
 
     Removes Eve-local delayed SMS rows and asks GMweb to cancel every non-terminal
@@ -6030,14 +6025,24 @@ def _cancel_pending_sms_for_account(server_id, email: str, *, reason: str = 'cli
         sid_norm = 0
 
     result = {'local_cancelled': 0, 'gateway_cancelled': 0, 'not_cancellable': 0, 'failed': 0}
+    state_filter = None
+    if states is not None:
+        state_filter = {
+            str(s or '').strip().lower()
+            for s in states
+            if str(s or '').strip()
+        }
 
     # Eve-local queue: messages parked during quiet hours have not reached GMweb
     # yet, so deleting them is a true cancel.
     try:
-        local_rows = PendingSms.query.filter(
+        local_q = PendingSms.query.filter(
             PendingSms.server_id == sid_norm,
             func.lower(PendingSms.email) == email_l,
-        ).all()
+        )
+        if state_filter:
+            local_q = local_q.filter(func.lower(PendingSms.event_name).in_(state_filter))
+        local_rows = local_q.all()
         for row in local_rows:
             _sms_log_row(None, email_l, sid_norm, row.server_name, row.event_name,
                          row.recipient, 'cancelled', f'{reason}: local_pending')
@@ -6059,13 +6064,16 @@ def _cancel_pending_sms_for_account(server_id, email: str, *, reason: str = 'cli
         return result
 
     try:
-        rows = SmsSendLog.query.filter(
+        q = SmsSendLog.query.filter(
             SmsSendLog.server_id == sid_norm,
             func.lower(SmsSendLog.email) == email_l,
             SmsSendLog.request_id.isnot(None),
             or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
             ~SmsSendLog.status.in_(('failed', 'skipped', 'cancelled', 'delivered', 'completed')),
-        ).order_by(SmsSendLog.created_at.asc()).limit(100).all()
+        )
+        if state_filter:
+            q = q.filter(func.lower(SmsSendLog.state).in_(state_filter))
+        rows = q.order_by(SmsSendLog.created_at.asc()).limit(100).all()
     except Exception as exc:
         result['failed'] += 1
         try:
@@ -6116,6 +6124,18 @@ def _cancel_pending_sms_for_account(server_id, email: str, *, reason: str = 'cli
         except Exception:
             pass
     return result
+
+
+def _cancel_stale_account_sms(server_id, email: str, *, reason: str) -> dict:
+    """Cancel obsolete account-state SMS after a successful create/renew.
+
+    A renewal or same-email recreation makes old depletion/royalty alerts wrong,
+    but must not cancel the fresh transactional `renew`/`created` confirmation
+    that is about to be queued.
+    """
+    return _cancel_pending_sms_for_account(
+        server_id, email, reason=reason, states=STALE_ACCOUNT_SMS_STATES,
+    )
 
 
 def _sms_accepted_status(send_result: dict) -> str:
@@ -6243,9 +6263,49 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
 # in Monitor → Message Templates, so the SMS uses the operator's own wording.
 SMS_MONITOR_TAG_TO_STATE = {'soon': 'near_expiry', 'low': 'low_volume', 'expired': 'expired', 'ended': 'ended'}
 SMS_STATE_TO_MONITOR_TPL = {'near_expiry': 'soon', 'low_volume': 'low', 'expired': 'expired', 'ended': 'ended'}
-# Send priority across all automated SMS: volume-running-out first, then
-# time-running-out, then volume-ended (days still left), then fully expired last.
-SMS_STATE_PRIORITY = {'low_volume': 0, 'near_expiry': 1, 'ended': 2, 'expired': 3}
+# Send priority across automated SMS. Manual "Start now" can override this order.
+# Default: volume running out → volume ended → time ended → time running out.
+SMS_STATE_PRIORITY = {'low_volume': 0, 'ended': 1, 'expired': 2, 'near_expiry': 3}
+SMS_SCAN_STATES = ('near_expiry', 'low_volume', 'expired', 'ended')
+SMS_MANUAL_DEFAULT_STATES = ('low_volume', 'ended', 'expired', 'near_expiry')
+
+
+def _normalize_sms_scan_states(raw_states) -> list[str]:
+    valid = set(SMS_SCAN_STATES)
+    out = []
+    if isinstance(raw_states, str):
+        raw_states = [s.strip() for s in raw_states.split(',')]
+    if not isinstance(raw_states, (list, tuple, set)):
+        return out
+    for state in raw_states:
+        s = str(state or '').strip().lower().replace('-', '_')
+        if s in valid and s not in out:
+            out.append(s)
+    return out
+
+
+def _sms_gateway_ready(cfg: dict | None = None) -> tuple[bool, str | None, int | None]:
+    """Return whether GMweb is paired/ready before draining rate-limit budget."""
+    cfg = cfg or _get_sms_runtime_settings()
+    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    api_key = (cfg.get('api_key') or '').strip()
+    if not base or not api_key:
+        return False, 'gateway_not_configured', None
+    try:
+        resp = requests.get(
+            f"{base}/ready",
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=min(int(cfg.get('timeout_seconds') or 15), 5),
+        )
+    except Exception as exc:
+        return False, f'gateway_ready_failed: {exc}', None
+    if resp.status_code == 200:
+        return True, None, resp.status_code
+    if resp.status_code == 401:
+        return False, 'gateway_auth_failed', resp.status_code
+    if resp.status_code == 503:
+        return False, 'gateway_not_paired', resp.status_code
+    return False, f'gateway_not_ready_http_{resp.status_code}', resp.status_code
 
 
 def _mask_mobile(num: str | None) -> str:
@@ -6360,19 +6420,26 @@ def _classify_monitor_status(*, enabled: bool, total_bytes: int, remaining_bytes
     return status
 
 
-def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto') -> dict:
+def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto',
+                            states: list[str] | tuple[str, ...] | None = None) -> dict:
     """State-based automated SMS scan. For each non-reseller-owned account, derive
     the Monitor service-state (near_expiry / low_volume / expired / ended), and if
     that state's trigger is enabled, send the Monitor per-state template via GMweb —
     once per cooldown window per (account, state). Updates SMS_SCAN_JOB so the UI can
     show how many users will be messaged and live progress."""
     cfg = _get_sms_runtime_settings()
-    state_enabled = {
-        'near_expiry': bool(cfg.get('trigger_near_expiry')),
-        'low_volume': bool(cfg.get('trigger_low_volume')),
-        'expired': bool(cfg.get('trigger_expired')),
-        'ended': bool(cfg.get('trigger_ended')),
-    }
+    manual_states = _normalize_sms_scan_states(states)
+    if states is not None:
+        state_enabled = {s: (s in manual_states) for s in SMS_SCAN_STATES}
+        priority_map = {s: i for i, s in enumerate(manual_states)}
+    else:
+        state_enabled = {
+            'near_expiry': bool(cfg.get('trigger_near_expiry')),
+            'low_volume': bool(cfg.get('trigger_low_volume')),
+            'expired': bool(cfg.get('trigger_expired')),
+            'ended': bool(cfg.get('trigger_ended')),
+        }
+        priority_map = SMS_STATE_PRIORITY
     now_iso = _utc_iso_now()
 
     if not cfg.get('enabled') or not any(state_enabled.values()):
@@ -6381,6 +6448,12 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     if not (cfg.get('base_url') and cfg.get('api_key')):
         _sms_scan_set(state='idle', reason='gateway_not_configured', finished_at=now_iso)
         return {'scanned': 0, 'sent': 0, 'reason': 'gateway_not_configured'}
+    ready, ready_reason, ready_status = _sms_gateway_ready(cfg)
+    if not ready:
+        _sms_scan_set(state='idle', reason=ready_reason or 'gateway_not_ready',
+                      gateway_status=ready_status, finished_at=now_iso)
+        return {'scanned': 0, 'sent': 0, 'reason': ready_reason or 'gateway_not_ready',
+                'gateway_status': ready_status}
     # Quiet hours: don't send now. Candidates keep their cooldown untouched, so the
     # next run after the window picks them up — a true "send after 8am" queue.
     if _sms_in_quiet_hours(cfg):
@@ -6418,6 +6491,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             'id': jid, 'state': 'running', 'triggered_by': triggered_by,
             'started_at': now_iso, 'finished_at': None,
             'states_enabled': [k for k, v in state_enabled.items() if v],
+            'manual_states': manual_states if states is not None else None,
             'total_clients': 0, 'candidates': 0, 'processed': 0,
             'sent': 0, 'failed': 0, 'skipped_cooldown': 0, 'skipped_rate': 0,
             'per_state': {k: 0 for k in state_enabled},
@@ -6525,7 +6599,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
 
     # Send priority: volume-running-out → time-running-out → volume-ended →
     # fully-expired. Within a state, original (scan) order is preserved.
-    candidates.sort(key=lambda c: SMS_STATE_PRIORITY.get(c[4], 99))
+    candidates.sort(key=lambda c: priority_map.get(c[4], 99))
 
     _sms_scan_set(total_clients=total_clients, candidates=len(candidates))
 
@@ -6654,6 +6728,10 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
         return {'scanned': 0, 'sent': 0, 'reason': 'disabled'}
     if not (cfg.get('base_url') and cfg.get('api_key')):
         return {'scanned': 0, 'sent': 0, 'reason': 'gateway_not_configured'}
+    ready, ready_reason, ready_status = _sms_gateway_ready(cfg)
+    if not ready:
+        return {'scanned': 0, 'sent': 0, 'reason': ready_reason or 'gateway_not_ready',
+                'gateway_status': ready_status}
     if _sms_in_quiet_hours(cfg):
         return {'scanned': 0, 'sent': 0, 'reason': 'quiet_hours'}
     if _sms_scan_snapshot().get('state') == 'running':
@@ -6954,6 +7032,9 @@ def _flush_pending_sms(force: bool = False) -> int:
         return 0
     if _sms_in_quiet_hours(cfg) and not force:
         return 0  # still inside the window — keep holding
+    ready, _ready_reason, _ready_status = _sms_gateway_ready(cfg)
+    if not ready:
+        return 0
     try:
         rows = PendingSms.query.order_by(PendingSms.created_at.asc()).limit(500).all()
     except Exception:
@@ -16102,6 +16183,7 @@ def renew_client(server_id, inbound_id, email):
 
                 # SMS automation (GMweb) — non-reseller-owned accounts only; runs
                 # in a background thread so it never delays the renew response.
+                _cancel_stale_account_sms(server.id, email, reason='renew_success')
                 _fire_automation_sms('renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
                                      DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,
                                      server_name=getattr(server, 'name', '') or '')
@@ -17185,6 +17267,7 @@ def add_client(server_id, inbound_id):
             _cc_days_label = ('♾️' if days == 0 else f'{days}')
             _cc_volume_label = ('♾️' if volume_gb == 0 else f'{volume_gb} GB')
             _cc_volume_num = ('♾️' if volume_gb == 0 else str(volume_gb))
+            _cancel_stale_account_sms(server.id, email, reason='client_created')
             _fire_automation_sms('created', server.id, email, CLIENT_CREATED_SMS_TEMPLATE_TYPE,
                                  DEFAULT_CLIENT_CREATED_SMS_TEMPLATE, {
                                      'service_name': email, 'account_name': email, 'email': email, 'protocol': proto_label,
@@ -17444,6 +17527,7 @@ def add_client(server_id, inbound_id):
                 copy_text = ''
 
             # SMS automation (GMweb) on create — non-reseller-owned accounts only.
+            _cancel_stale_account_sms(server.id, email, reason='client_created')
             _fire_automation_sms('created', server.id, email, CLIENT_CREATED_SMS_TEMPLATE_TYPE,
                                  DEFAULT_CLIENT_CREATED_SMS_TEMPLATE, _cc_tpl_vars, data.get('comment', '') or '',
                                  server_name=getattr(server, 'name', '') or '')
@@ -22022,12 +22106,30 @@ def sms_scan_run():
         app.logger.exception('[sms-scan/run] failed to read settings')
         return jsonify({'success': False, 'error': f'Could not load SMS settings: {exc}'}), 500
 
+    try:
+        payload = request.get_json(silent=True) or {}
+    except Exception:
+        payload = {}
+    requested_states = _normalize_sms_scan_states(payload.get('states'))
+
     if not cfg.get('enabled'):
         return jsonify({'success': False, 'error': 'SMS automation is disabled. Enable it (and Save) first.'}), 400
     if not (cfg.get('base_url') and cfg.get('api_key')):
         return jsonify({'success': False, 'error': 'GMweb gateway is not configured.'}), 400
-    if not any(cfg.get(f'trigger_{s}') for s in ('near_expiry', 'low_volume', 'expired', 'ended')):
+    if not requested_states and not any(cfg.get(f'trigger_{s}') for s in SMS_SCAN_STATES):
         return jsonify({'success': False, 'error': 'No state triggers are enabled (near expiry / low volume / expired / ended).'}), 400
+    if payload.get('states') is not None and not requested_states:
+        return jsonify({'success': False, 'error': 'Select at least one reminder state to start.'}), 400
+    ready, ready_reason, ready_status = _sms_gateway_ready(cfg)
+    if not ready:
+        if ready_reason == 'gateway_not_paired':
+            message = 'GMweb is reachable but Google Messages is not paired/ready. Pair it first, then start again.'
+        elif ready_reason == 'gateway_auth_failed':
+            message = 'GMweb rejected the API key (401). Check the project API key.'
+        else:
+            message = f'GMweb is not ready: {ready_reason or "unknown"}'
+        return jsonify({'success': False, 'error': message,
+                        'reason': ready_reason, 'gateway_status': ready_status}), 400
     if _sms_in_quiet_hours(cfg):
         return jsonify({'success': False,
                         'error': f"Quiet hours are active ({int(cfg.get('quiet_start', 0)):02d}:00–{int(cfg.get('quiet_end', 0)):02d}:00 Tehran). Sends are paused and resume automatically after the window. Turn off quiet hours to send now."}), 400
@@ -22042,13 +22144,17 @@ def sms_scan_run():
     def _worker():
         with app.app_context():
             try:
-                _run_sms_depletion_scan(job_id=jid, triggered_by='manual')
+                _run_sms_depletion_scan(
+                    job_id=jid,
+                    triggered_by='manual',
+                    states=requested_states if payload.get('states') is not None else None,
+                )
             except Exception:
                 app.logger.exception('[sms-scan] manual run failed')
                 _sms_scan_set(state='error', finished_at=_utc_iso_now())
 
     threading.Thread(target=_worker, daemon=True).start()
-    return jsonify({'success': True, 'job_id': jid})
+    return jsonify({'success': True, 'job_id': jid, 'states': requested_states})
 
 
 @app.route('/api/sms/scan/status', methods=['GET'])
@@ -22059,11 +22165,16 @@ def sms_scan_status():
         pending_high = PendingSms.query.count()
     except Exception:
         pending_high = 0
+    segment_stats = _sms_db_segment_stats_today()
     return jsonify({
         'success': True,
         'job': _sms_scan_snapshot(),
         'pending_high': pending_high,
-        'segments_used_today': _sms_daily_segments_used(),
+        'segments_used_today': segment_stats.get('completed', 0),
+        'segments_completed_today': segment_stats.get('completed', 0),
+        'segments_submitted_today': segment_stats.get('submitted', 0),
+        'segments_failed_today': segment_stats.get('failed', 0),
+        'segments_inflight_today': segment_stats.get('inflight', 0),
         'segment_daily_limit': int(_get_sms_runtime_settings().get('daily_limit') or 200),
     })
 

@@ -1034,8 +1034,37 @@
                         Press <strong>Start now</strong> to begin sending immediately (otherwise the background scan runs every 30 min).
                         <strong>High first</strong> releases delayed high-priority messages and moves them to the front of the GMweb queue.
                         <strong>Stop &amp; disable</strong> aborts a running scan and turns off SMS automation.
-                        Send priority: low volume → near expiry → volume ended (days left) → expired.
+                        Start-now priority follows the selected order below.
                     </p>
+
+                    <div style="border:1px solid var(--border-color,#2a2a3a); border-radius:10px; padding:10px 12px; margin-bottom:12px; background:rgba(15,23,42,0.35);">
+                        <div style="font-weight:600;margin-bottom:6px;">Start now states / priority</div>
+                        <div class="text-secondary" style="font-size:0.8rem;margin-bottom:8px;">
+                            Eve sends checked states in this order. Use this after pairing GMweb again to resume only the urgent buckets. Royalty is not included here.
+                        </div>
+                        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">
+                            <label class="checkbox-label" onclick="event.stopPropagation()">
+                                <input type="checkbox" class="sms-run-state" value="low_volume" checked>
+                                <span class="checkmark"></span>
+                                <span>1. Low volume</span>
+                            </label>
+                            <label class="checkbox-label" onclick="event.stopPropagation()">
+                                <input type="checkbox" class="sms-run-state" value="ended" checked>
+                                <span class="checkmark"></span>
+                                <span>2. Volume ended</span>
+                            </label>
+                            <label class="checkbox-label" onclick="event.stopPropagation()">
+                                <input type="checkbox" class="sms-run-state" value="expired" checked>
+                                <span class="checkmark"></span>
+                                <span>3. Expired</span>
+                            </label>
+                            <label class="checkbox-label" onclick="event.stopPropagation()">
+                                <input type="checkbox" class="sms-run-state" value="near_expiry" checked>
+                                <span class="checkmark"></span>
+                                <span>4. Near expiry</span>
+                            </label>
+                        </div>
+                    </div>
 
                     <div id="sms-scan-progress" style="display:none; background:rgba(99,102,241,0.06); border:1px solid rgba(99,102,241,0.25); border-radius:10px; padding:12px 14px; margin-bottom:12px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
@@ -2922,6 +2951,13 @@
         if (stopBtn) { stopBtn.style.display = running ? '' : 'none'; stopBtn.disabled = false; }
     }
 
+    function getSmsRunStates() {
+        return Array.from(document.querySelectorAll('.sms-run-state'))
+            .filter(cb => cb.checked)
+            .map(cb => String(cb.value || '').trim())
+            .filter(Boolean);
+    }
+
     function renderSmsScanProgress(job) {
         const box = document.getElementById('sms-scan-progress');
         if (!box || !job || !job.state || job.state === 'idle') {
@@ -2949,6 +2985,9 @@
             `Failed ${Number(job.failed || 0)}`,
             `Skipped (cooldown) ${Number(job.skipped_cooldown || 0)}`,
         ];
+        if (Array.isArray(job.states_enabled) && job.states_enabled.length) {
+            parts.unshift(`States <strong>${job.states_enabled.map(s => SMS_STATE_LABELS[s] || s).join(' → ')}</strong>`);
+        }
         if (job.stopped) parts.push(`<span style="color:#f59e0b;">Stopped: ${job.stopped}</span>`);
         document.getElementById('sms-scan-counts').innerHTML = parts.join('');
         _setSmsRunBtn(running);
@@ -3023,7 +3062,12 @@
                 }
                 const segmentEl = document.getElementById('sms-segments-today');
                 if (segmentEl && data) {
-                    segmentEl.textContent = `Today: ${Number(data.segments_used_today || 0)} / ${Number(data.segment_daily_limit || 0)} SMS segments used`;
+                    const completed = Number(data.segments_completed_today ?? data.segments_used_today ?? 0);
+                    const submitted = Number(data.segments_submitted_today || 0);
+                    const failed = Number(data.segments_failed_today || 0);
+                    const inflight = Number(data.segments_inflight_today || 0);
+                    const limit = Number(data.segment_daily_limit || 0);
+                    segmentEl.textContent = `Today: ${completed} / ${limit} completed SMS segments · ${submitted} submitted · ${inflight} in queue · ${failed} failed`;
                 }
             })
             .catch(() => { /* keep UI calm on transient errors */ });
@@ -3037,9 +3081,18 @@
         if (enableToggle) enableToggle.checked = true;
         const saved = await saveSmsSettings(true);
         if (!saved) { showToast('Could not save SMS settings before scanning', 'error'); return; }
+        const states = getSmsRunStates();
+        if (!states.length) {
+            showToast('Select at least one Start-now state', 'error');
+            return;
+        }
         _setSmsRunBtn(true);
         try {
-            const res = await fetch('/api/sms/scan/run', { method: 'POST' });
+            const res = await fetch('/api/sms/scan/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ states })
+            });
             let data = null;
             const raw = await res.text();
             try { data = JSON.parse(raw); } catch (_) { data = null; }
