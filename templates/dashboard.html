@@ -5038,6 +5038,29 @@
         document.getElementById('add-client-modal').classList.remove('hidden');
     }
 
+    function escapePackageHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[ch]));
+    }
+
+    function escapePackageAttr(value) {
+        return escapePackageHtml(value);
+    }
+
+    function packageNameDir(value) {
+        return /[\u0590-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(String(value ?? '')) ? 'rtl' : 'ltr';
+    }
+
+    function renderPackageTitle(name) {
+        const dir = packageNameDir(name);
+        return `<div dir="${dir}" style="font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; line-height: 1.35; color: var(--text-secondary); width: 100%; text-align: center; unicode-bidi: isolate; overflow-wrap: anywhere;">${escapePackageHtml(name || '')}</div>`;
+    }
+
     async function loadPackages() {
         const container = document.getElementById('packages-list');
         if (!container) return;
@@ -5053,10 +5076,10 @@
             }
 
             container.innerHTML = pkgs.map(p => `
-                <div class="pkg-card" data-package-id="${p.id}" data-package-price="${p.price}" onclick="selectPackage(this, ${p.id}, ${p.price})" 
+                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" onclick="selectPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0})"
                      style="border: 1px solid var(--border-color); padding: 8px; border-radius: 6px; cursor: pointer; transition: 0.2s; background: var(--bg-dark); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 60px;">
-                    <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; line-height: 1.2; color: var(--text-secondary);">${p.name}</div>
-                    <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${p.price.toLocaleString()} T</div>
+                    ${renderPackageTitle(p.name)}
+                    <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${(Number(p.price) || 0).toLocaleString()} T</div>
                 </div>
             `).join('');
 
@@ -5127,10 +5150,10 @@
             }
 
             container.innerHTML = pkgs.map(p => `
-                <div class="pkg-card" data-package-id="${p.id}" data-package-price="${p.price}" onclick="selectRenewPackage(this, ${p.id}, ${p.price}, ${p.days}, ${p.volume}, '${p.name}')"
+                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-package-name="${escapePackageAttr(p.name || '')}" onclick="selectRenewPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0}, ${Number(p.days) || 0}, ${Number(p.volume) || 0})"
                      style="border: 1px solid var(--border-color); padding: 8px; border-radius: 6px; cursor: pointer; transition: 0.2s; background: var(--bg-dark); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 60px;">
-                    <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; line-height: 1.2; color: var(--text-secondary);">${p.name}</div>
-                    <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${p.price.toLocaleString()} T</div>
+                    ${renderPackageTitle(p.name)}
+                    <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${(Number(p.price) || 0).toLocaleString()} T</div>
                 </div>
             `).join('');
 
@@ -5167,7 +5190,7 @@
         selectedRenewPackageId = id;
         selectedRenewPackageDays = days;
         selectedRenewPackageVolume = volume;
-        selectedRenewPackageName = name;
+        selectedRenewPackageName = name ?? el.dataset.packageName ?? '';
         el.style.borderColor = 'var(--primary)';
         el.style.backgroundColor = 'rgba(99, 102, 241, 0.1)';
         refreshRenewPriceDisplay(price);
