@@ -2650,6 +2650,18 @@ def method_not_allowed(e):
     return e
 
 
+@app.errorhandler(429)
+def too_many_requests(e):
+    if _want_json():
+        retry_after = getattr(e, 'retry_after', None)
+        message = getattr(e, 'description', None) or 'Too many requests. Please wait a moment and try again.'
+        payload = {'success': False, 'error': message}
+        if retry_after is not None:
+            payload['retry_after'] = retry_after
+        return jsonify(payload), 429
+    return e
+
+
 @app.errorhandler(500)
 def internal_server_error(e):
     if _want_json():
@@ -2673,6 +2685,22 @@ def add_security_headers(response):
             response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
+    except Exception:
+        pass
+
+    # Finance data is edited interactively and must reflect deletes/updates
+    # immediately. Do not let browsers or proxies reuse stale payment rows.
+    try:
+        live_finance_path = (
+            request.path == '/finance'
+            or request.path.startswith('/api/payments')
+            or request.path.startswith('/api/finance/')
+        )
+        if live_finance_path:
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            response.headers['Surrogate-Control'] = 'no-store'
     except Exception:
         pass
 

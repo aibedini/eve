@@ -1381,6 +1381,24 @@
         return params.toString();
     };
 
+    const financeFetch = (url, options = {}) => {
+        const method = String(options.method || 'GET').toUpperCase();
+        let nextUrl = url;
+        if (method === 'GET') {
+            const parsed = new URL(url, window.location.origin);
+            parsed.searchParams.set('_', Date.now().toString());
+            nextUrl = parsed.pathname + parsed.search + parsed.hash;
+        }
+        return fetch(nextUrl, {
+            ...options,
+            cache: 'no-store',
+            headers: {
+                'Cache-Control': 'no-cache',
+                ...(options.headers || {})
+            }
+        });
+    };
+
     const buildOverviewQuery = (extraParams = {}) => {
         const params = new URLSearchParams();
         // Reuse a subset of filters (month overview should follow card/user/server selections)
@@ -1518,7 +1536,7 @@
         if (summaryBlock) summaryBlock.style.display = 'none';
 
         const query = buildOverviewQuery({ range: 'month', year, month });
-        const response = await fetch(`/api/finance/overview?${query}`);
+        const response = await financeFetch(`/api/finance/overview?${query}`);
         const data = await response.json();
         if (!response.ok || !data.success) {
             overviewFeed.innerHTML = `<div class="overview-empty">Failed to load overview.</div>`;
@@ -1533,7 +1551,7 @@
         overviewMonthSelect.innerHTML = '<option value="" selected>Loading…</option>';
 
         const query = buildOverviewQuery({ range: '12m' });
-        const response = await fetch(`/api/finance/overview?${query}`);
+        const response = await financeFetch(`/api/finance/overview?${query}`);
         const data = await response.json();
         if (!response.ok || !data.success) {
             overviewMonthSelect.innerHTML = '<option value="" selected>Failed to load months</option>';
@@ -1722,7 +1740,7 @@
         try {
             const params = new URLSearchParams();
             Object.entries(filters).forEach(([key, value]) => { if (value) params.append(key, value); });
-            const response = await fetch(`/api/finance/stats?${params}`);
+            const response = await financeFetch(`/api/finance/stats?${params}`);
             const data = await response.json();
             const stats = data.stats || {};
 
@@ -1784,7 +1802,7 @@
         try {
             setLoadingState();
             const query = buildQueryString();
-            const response = await fetch(`/api/payments?${query}`);
+            const response = await financeFetch(`/api/payments?${query}`);
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || 'Failed to load');
 
@@ -1987,7 +2005,7 @@
                 method = 'PUT';
             }
 
-            const response = await fetch(url, {
+            const response = await financeFetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
@@ -2021,7 +2039,7 @@
             const entryId = String(id);
             let entry = (lastLoadedEntries || []).find(p => String(p.id) === entryId);
             if (!entry) {
-                const response = await fetch(`/api/payments?limit=1000`);
+                const response = await financeFetch(`/api/payments?limit=1000`);
                 const data = await response.json();
                 entry = (data.payments || []).find(p => String(p.id) === entryId);
             }
@@ -2090,7 +2108,7 @@
             const entryId = String(id);
             let entry = (lastLoadedEntries || []).find(p => String(p.id) === entryId);
             if (!entry) {
-                const response = await fetch(`/api/payments?limit=1000`);
+                const response = await financeFetch(`/api/payments?limit=1000`);
                 const data = await response.json();
                 entry = (data.payments || []).find(p => String(p.id) === entryId);
             }
@@ -2135,14 +2153,21 @@
         confirmBtn.innerHTML = '<span style="opacity: 0.7;">Deleting...</span>';
 
         try {
-            let url = `/api/payments/${paymentToDelete}`;
-            if (String(paymentToDelete).startsWith('tx-')) {
-                url = `/api/transactions/${String(paymentToDelete).slice(3)}`;
+            const deletedEntryId = String(paymentToDelete);
+            let url = `/api/payments/${deletedEntryId}`;
+            if (deletedEntryId.startsWith('tx-')) {
+                url = `/api/transactions/${deletedEntryId.slice(3)}`;
             }
-            const response = await fetch(url, { method: 'DELETE' });
+            const response = await financeFetch(url, { method: 'DELETE' });
             const result = await response.json();
 
             if (!response.ok) throw new Error(result.error || 'Failed to delete');
+
+            lastLoadedEntries = (lastLoadedEntries || []).filter(p => String(p.id) !== deletedEntryId);
+            renderPayments(lastLoadedEntries);
+            totalItems = Math.max(0, totalItems - 1);
+            updatePaginationUI();
+            if (countLabel) countLabel.textContent = `${totalItems} payments found.`;
 
             closeDeleteModal();
             
@@ -2151,8 +2176,9 @@
                 showToast('Payment deleted successfully');
             } catch (e) { /* ignore */ }
 
-            loadPayments();
-            loadStats();
+            await loadPayments();
+            await loadStats();
+            if (isOverviewOpen()) ensureOverviewLoaded({ forceMonthsReload: true });
         } catch (error) {
             alert('Error: ' + error.message);
         } finally {
@@ -2342,7 +2368,7 @@
             params.set('_', Date.now());  // cache-bust: never reuse a stale GET response
             runBtn.disabled = true; runBtn.textContent = 'Loading…';
             try {
-                const res = await fetch('/api/finance/reseller-statement?' + params.toString(), { cache: 'no-store' });
+                const res = await financeFetch('/api/finance/reseller-statement?' + params.toString());
                 const data = await res.json();
                 if (!data || !data.success) {
                     showToast((data && data.error) || 'Could not load statement', 'error');

@@ -4109,30 +4109,119 @@
         }
     }
 
-    async function toggleClient(serverId, inboundId, email, enable) {
-        // Optimistic update: apply immediately to avoid waiting for refresh
-        patchLocalClient(serverId, inboundId, email, { enable: enable });
+    async function readDashboardJsonResponse(response) {
+        let rawText = '';
+        try {
+            rawText = await response.text();
+        } catch (e) {
+            return {
+                success: false,
+                error: `Server response could not be read (HTTP ${response.status})`
+            };
+        }
+
+        if (!rawText) return {};
 
         try {
-            const response = await fetch(`/api/client/${serverId}/${inboundId}/toggle`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: email, enable: enable })
-            });
-            
-            const data = await response.json();
-            if (data.success) {
-                showToast(enable ? 'Client enabled' : 'Client disabled');
-                queueSilentServerRefresh(serverId);
-            } else {
-                // Revert on failure
-                patchLocalClient(serverId, inboundId, email, { enable: !enable });
-                showToast(data.error || 'Error', 'error');
+            return JSON.parse(rawText);
+        } catch (e) {
+            const preview = rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 220);
+            return {
+                success: false,
+                error: `Server returned a non-JSON response (HTTP ${response.status})${preview ? ': ' + preview : ''}`
+            };
+        }
+    }
+
+    const toggleClientQueue = new Map();
+
+    function toggleClientQueueKey(serverId, inboundId, email) {
+        return `${serverId}:${inboundId}:${String(email || '').trim().toLowerCase()}`;
+    }
+
+    function getLocalClientComment(serverId, inboundId, email) {
+        const direct = getLocalClientRef(serverId, inboundId, email);
+        if (direct) return direct.comment || '';
+
+        const sid = parseInt(serverId);
+        const em = String(email || '').trim().toLowerCase();
+        for (const inbound of (allInboundsData || [])) {
+            if (parseInt(inbound?.server_id) !== sid) continue;
+            const clients = Array.isArray(inbound.clients) ? inbound.clients : [];
+            const client = clients.find(c => String(c?.email || '').trim().toLowerCase() === em);
+            if (client) return client.comment || '';
+        }
+        return '';
+    }
+
+    function toggleOptoutTags(comment, enable) {
+        const cleaned = String(comment || '')
+            .replace(/\s*#\s*(?:nosms|nopm)(?![a-z0-9])/gi, '')
+            .trim();
+        return enable ? cleaned : `${cleaned} #nosms #nopm`.trim();
+    }
+
+    function patchToggleState(serverId, inboundId, email, enable) {
+        const nextComment = toggleOptoutTags(getLocalClientComment(serverId, inboundId, email), Boolean(enable));
+        patchLocalClient(serverId, inboundId, email, {
+            enable: Boolean(enable),
+            comment: nextComment
+        });
+    }
+
+    async function sendToggleClientRequest(serverId, inboundId, email, enable) {
+        const response = await fetch(`/api/client/${serverId}/${inboundId}/toggle`, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Cache-Control': 'no-cache'
+            },
+            body: JSON.stringify({ email: email, enable: Boolean(enable) })
+        });
+
+        const data = await readDashboardJsonResponse(response);
+        if (!response.ok || !data.success) {
+            throw new Error((data && data.error) || `Toggle failed (HTTP ${response.status})`);
+        }
+        return data;
+    }
+
+    async function toggleClient(serverId, inboundId, email, enable) {
+        const key = toggleClientQueueKey(serverId, inboundId, email);
+        const desired = Boolean(enable);
+
+        patchToggleState(serverId, inboundId, email, desired);
+
+        const existing = toggleClientQueue.get(key);
+        if (existing) {
+            existing.desired = desired;
+            return;
+        }
+
+        const state = { desired };
+        toggleClientQueue.set(key, state);
+
+        try {
+            while (true) {
+                const target = Boolean(state.desired);
+                state.inFlightTarget = target;
+                await sendToggleClientRequest(serverId, inboundId, email, target);
+
+                if (Boolean(state.desired) === target) {
+                    showToast(target ? 'Client enabled' : 'Client disabled');
+                    break;
+                }
             }
+            queueSilentServerRefresh(serverId);
         } catch (error) {
-            // Revert on error
-            patchLocalClient(serverId, inboundId, email, { enable: !enable });
-            showToast('Error: ' + error.message, 'error');
+            const failedTarget = Boolean(state.inFlightTarget);
+            patchToggleState(serverId, inboundId, email, !failedTarget);
+            showToast('Error: ' + (error.message || 'Toggle failed'), 'error');
+            queueSilentServerRefresh(serverId);
+        } finally {
+            toggleClientQueue.delete(key);
         }
     }
 
