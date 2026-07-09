@@ -2688,15 +2688,23 @@ def add_security_headers(response):
     except Exception:
         pass
 
-    # Finance data is edited interactively and must reflect deletes/updates
-    # immediately. Do not let browsers or proxies reuse stale payment rows.
+    # Finance/package data is edited interactively and must reflect updates
+    # immediately. Do not let browsers or proxies reuse stale rows.
     try:
         live_finance_path = (
             request.path == '/finance'
             or request.path.startswith('/api/payments')
             or request.path.startswith('/api/finance/')
         )
-        if live_finance_path:
+        live_package_path = (
+            request.path in ('/packages', '/my-packages')
+            or request.path.startswith('/api/packages')
+            or request.path.startswith('/api/my-packages')
+            or request.path.startswith('/api/price-tiers')
+            or request.path.startswith('/admin/packages')
+            or request.path == '/admin/config'
+        )
+        if live_finance_path or live_package_path:
             response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'

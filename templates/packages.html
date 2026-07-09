@@ -455,6 +455,25 @@ function updatePkgFilterLabel() {
     lbl.textContent = names.length <= 2 ? names.join(PKG_FA ? '، ' : ', ') : pkgT(`${names.length} owners`, `${names.length} مالک`);
 }
 
+function packageFetch(url, options = {}) {
+    const method = String(options.method || 'GET').toUpperCase();
+    let nextUrl = url;
+    if (method === 'GET') {
+        const parsed = new URL(url, window.location.origin);
+        parsed.searchParams.set('_', Date.now().toString());
+        nextUrl = parsed.pathname + parsed.search + parsed.hash;
+    }
+    return fetch(nextUrl, {
+        ...options,
+        cache: 'no-store',
+        headers: {
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+            ...(options.headers || {})
+        }
+    });
+}
+
 // Close the filter menu when clicking outside it.
 document.addEventListener('click', (e) => {
     const wrap = e.target.closest('.pkg-owner-filter');
@@ -479,7 +498,7 @@ function pkgSwitchTab(name, evt) {
 async function loadResellerList() {
     if (_resellerCache.length) return;
     try {
-        const res  = await fetch('/api/admins');
+        const res  = await packageFetch('/api/admins');
         const data = await res.json();
         _resellerCache = data.filter(a => a.role === 'reseller');
     } catch(e) { console.error(e); }
@@ -488,7 +507,7 @@ async function loadResellerList() {
 async function loadPackages() {
     const body = document.getElementById('pkg-list-body');
     try {
-        const res  = await fetch(`/api/packages?_=${Date.now()}`, { cache: 'no-store' });
+        const res  = await packageFetch('/api/packages');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         _pkgCache  = await res.json();
         renderPackages(body);
@@ -632,7 +651,7 @@ async function _fetchMinPrice() {
     if (vol === null && days === null) { hint.style.display = 'none'; _cachedMinPrice = null; return; }
     if (vol === 0 || days === 0)       { hint.style.display = 'none'; _cachedMinPrice = null; return; }
     try {
-        const res  = await fetch(`/api/packages/min-price?volume_gb=${vol}&days=${days}`);
+        const res  = await packageFetch(`/api/packages/min-price?volume_gb=${vol}&days=${days}`);
         if (!res.ok) return;
         const data = await res.json();
         if (data.success) {
@@ -686,7 +705,7 @@ async function submitPackage() {
     try {
         const url    = _editPkgId ? `/admin/packages/${_editPkgId}` : '/admin/packages';
         const method = _editPkgId ? 'PUT' : 'POST';
-        const res    = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        const res    = await packageFetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
         const saved = await res.json().catch(() => ({}));
         if (!res.ok || saved.success === false) {
             showToast(saved.error || 'Error saving package', 'error');
@@ -695,7 +714,7 @@ async function submitPackage() {
 
         showToast(_editPkgId ? 'Package updated' : 'Package created');
         closePkgModal();
-        loadPackages();
+        await loadPackages();
     } catch(e) { showToast('Error: ' + (e.message || 'Connection failed'), 'error'); }
 }
 
@@ -703,8 +722,8 @@ async function deletePackage(id) {
     const pkg = _pkgCache.find(p => p.id === id);
     if (!pkg || !confirm(`Delete package "${pkg.name}"?`)) return;
     try {
-        const res = await fetch(`/admin/packages/${id}`, { method: 'DELETE' });
-        if (res.ok) { showToast('Package deleted'); loadPackages(); }
+        const res = await packageFetch(`/admin/packages/${id}`, { method: 'DELETE' });
+        if (res.ok) { showToast('Package deleted'); await loadPackages(); }
         else showToast('Error deleting package', 'error');
     } catch(e) { showToast('Error: ' + (e.message || 'Connection failed'), 'error'); }
 }
@@ -766,7 +785,7 @@ async function toggleResellerPkg(pkgId, resId, currentlyAssigned) {
     }
     const newScope = ids.length ? 'assigned' : 'personal';
     try {
-        const res = await fetch(`/admin/packages/${pkgId}/assign`, {
+        const res = await packageFetch(`/admin/packages/${pkgId}/assign`, {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ scope: newScope, reseller_ids: ids })
@@ -789,7 +808,7 @@ async function saveBaseConfig() {
         cost_per_day_unlimited: unformatNumber(document.getElementById('conf-cost-day-unlimited').value)
     };
     try {
-        const res = await fetch('/admin/config', {
+        const res = await packageFetch('/admin/config', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify(data)
         });
@@ -802,7 +821,7 @@ async function saveBaseConfig() {
 async function loadTiers() {
     const body = document.getElementById('tier-list-body');
     try {
-        const res   = await fetch('/api/price-tiers');
+        const res   = await packageFetch('/api/price-tiers');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data  = await res.json();
         _tierCache  = data.tiers || [];
@@ -930,12 +949,12 @@ async function submitTier() {
     try {
         const url    = _editTierId ? `/api/price-tiers/${_editTierId}` : '/api/price-tiers';
         const method = _editTierId ? 'PUT' : 'POST';
-        const res    = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+        const res    = await packageFetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
         const json   = await res.json();
         if (json.success) {
             showToast(_editTierId ? 'Tier updated' : 'Tier created');
             closeTierModal();
-            loadTiers();
+            await loadTiers();
         } else showToast(json.error || 'Error saving tier', 'error');
     } catch(e) { showToast('Error: ' + (e.message || 'Connection failed'), 'error'); }
 }
@@ -944,9 +963,9 @@ async function deleteTier(id) {
     const tier = _tierCache.find(t => t.id === id);
     if (!tier || !confirm(`Delete tier "${tier.name}"?`)) return;
     try {
-        const res = await fetch(`/api/price-tiers/${id}`, { method: 'DELETE' });
+        const res = await packageFetch(`/api/price-tiers/${id}`, { method: 'DELETE' });
         const json = await res.json();
-        if (json.success) { showToast('Tier deleted'); loadTiers(); }
+        if (json.success) { showToast('Tier deleted'); await loadTiers(); }
         else showToast('Error deleting tier', 'error');
     } catch(e) { showToast('Error: ' + (e.message || 'Connection failed'), 'error'); }
 }
