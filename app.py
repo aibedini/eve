@@ -98,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.21"
+APP_VERSION = "2.4.22"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -18886,6 +18886,87 @@ def get_payments():
     })
 
 
+def _finance_request_filters() -> dict:
+    return {
+        'type': (request.args.get('type') or '').strip(),
+        'direction': (request.args.get('direction') or '').strip(),
+        'search': (request.args.get('search') or '').strip(),
+        'start_dt': parse_jalali_date(request.args.get('start_date'), end_of_day=False),
+        'end_dt': parse_jalali_date(request.args.get('end_date'), end_of_day=True),
+    }
+
+
+def _empty_query(q):
+    return q.filter(text('1=0'))
+
+
+def _apply_finance_tx_filters(q, filters: dict, *, date_column=None,
+                              allow_income=True, allow_expense=True):
+    """Apply the same user-visible Finance filters used by the list endpoint.
+
+    Overview/stat cards must not silently include rows that the current Finance
+    list has filtered out; otherwise an edit can appear in totals while being
+    invisible in the table.
+    """
+    date_column = date_column or Transaction.created_at
+    direction_filter = filters.get('direction') or ''
+    type_filter = filters.get('type') or ''
+    search_term = filters.get('search') or ''
+
+    if direction_filter == 'income' and not allow_income:
+        return _empty_query(q)
+    if direction_filter == 'expense' and not allow_expense:
+        return _empty_query(q)
+
+    if type_filter:
+        if type_filter in ('payment', 'receipt'):
+            return _empty_query(q)
+        q = q.filter(Transaction.type == type_filter)
+
+    if search_term:
+        pattern = f"%{search_term}%"
+        q = q.filter(or_(
+            Transaction.description.ilike(pattern),
+            Transaction.sender_card.ilike(pattern),
+            Transaction.sender_name.ilike(pattern),
+            Transaction.client_email.ilike(pattern),
+            Transaction.type.ilike(pattern)
+        ))
+
+    if filters.get('start_dt'):
+        q = q.filter(date_column >= filters['start_dt'])
+    if filters.get('end_dt'):
+        q = q.filter(date_column <= filters['end_dt'])
+    return q
+
+
+def _apply_finance_payment_filters(q, filters: dict, *, date_column=None):
+    date_column = date_column or Payment.payment_date
+    direction_filter = filters.get('direction') or ''
+    type_filter = filters.get('type') or ''
+    search_term = filters.get('search') or ''
+
+    if direction_filter == 'expense':
+        return _empty_query(q)
+    if type_filter and type_filter != 'payment':
+        return _empty_query(q)
+
+    if search_term:
+        pattern = f"%{search_term}%"
+        q = q.filter(or_(
+            Payment.description.ilike(pattern),
+            Payment.sender_card.ilike(pattern),
+            Payment.sender_name.ilike(pattern),
+            Payment.client_email.ilike(pattern)
+        ))
+
+    if filters.get('start_dt'):
+        q = q.filter(date_column >= filters['start_dt'])
+    if filters.get('end_dt'):
+        q = q.filter(date_column <= filters['end_dt'])
+    return q
+
+
 @app.route('/api/payments', methods=['POST'])
 @login_required
 def add_payment():
@@ -19248,6 +19329,7 @@ def get_finance_stats():
     card_id = request.args.get('card_id', type=int)
     server_id = request.args.get('server_id', type=int)
     target_user_id = request.args.get('user_id', type=int)
+    finance_filters = _finance_request_filters()
 
     excluded_types_upper = {'SERVER_COST', 'SERVER_RENEWAL', 'SERVER_TRAFFIC'}
 
@@ -19265,6 +19347,8 @@ def get_finance_stats():
         if server_id:
             charge_query = charge_query.filter(Transaction.server_id == server_id)
             usage_query = usage_query.filter(Transaction.server_id == server_id)
+        charge_query = _apply_finance_tx_filters(charge_query, finance_filters, allow_expense=False)
+        usage_query = _apply_finance_tx_filters(usage_query, finance_filters, allow_income=False)
 
         def sum_amount(q, start_time=None):
             if start_time:
@@ -19357,12 +19441,14 @@ def get_finance_stats():
             tx_income_query = tx_income_query.filter(Transaction.card_id == card_id)
         if server_id:
             tx_income_query = tx_income_query.filter(Transaction.server_id == server_id)
+        tx_income_query = _apply_finance_tx_filters(tx_income_query, finance_filters, allow_expense=False)
 
         pay_income_query = Payment.query.filter(Payment.amount > 0)
         if target_user_id:
             pay_income_query = pay_income_query.filter(Payment.admin_id == target_user_id)
         if card_id:
             pay_income_query = pay_income_query.filter(Payment.card_id == card_id)
+        pay_income_query = _apply_finance_payment_filters(pay_income_query, finance_filters)
 
         def sum_tx_income(start_time=None, end_time=None):
             q = db.session.query(func.coalesce(func.sum(Transaction.amount), 0)).filter(
@@ -19410,6 +19496,7 @@ def get_finance_stats():
             expense_query = expense_query.filter(Transaction.card_id == card_id)
         if server_id:
             expense_query = expense_query.filter(Transaction.server_id == server_id)
+        expense_query = _apply_finance_tx_filters(expense_query, finance_filters, allow_income=False)
 
         total_expense = db.session.query(func.coalesce(func.sum(Transaction.amount), 0)).filter(
             Transaction.id.in_(expense_query.with_entities(Transaction.id))
@@ -19685,6 +19772,12 @@ def get_finance_overview():
     card_id = request.args.get('card_id', type=int)
     server_id = request.args.get('server_id', type=int)
     target_user_id = request.args.get('user_id', type=int)
+    finance_filters = _finance_request_filters()
+    # The overview has its own Jalali month/window selector. Date chips on the
+    # table should not collapse that month, but search/type/direction still need
+    # to match the visible Finance context.
+    finance_filters['start_dt'] = None
+    finance_filters['end_dt'] = None
 
     tehran_offset = timedelta(hours=3, minutes=30)
     now_utc = datetime.utcnow()
@@ -19807,6 +19900,7 @@ def get_finance_overview():
 
     tx_query = tx_query.filter(Transaction.created_at >= start_utc, Transaction.created_at < end_utc)
     tx_query = tx_query.filter(Transaction.type != 'audit')
+    tx_query = _apply_finance_tx_filters(tx_query, finance_filters)
 
     tx_rows = tx_query.all()
 
@@ -19818,6 +19912,7 @@ def get_finance_overview():
             pay_query = pay_query.filter(Payment.admin_id == target_user_id)
     if card_id:
         pay_query = pay_query.filter(Payment.card_id == card_id)
+    pay_query = _apply_finance_payment_filters(pay_query, finance_filters)
     pay_rows = pay_query.all()
 
     income_map = {k: 0 for k in keys}
@@ -19843,12 +19938,12 @@ def get_finance_overview():
             continue
 
         amount = int(tx.amount or 0)
-        if amount > 0:
+        if amount > 0 and finance_filters.get('direction') != 'expense':
             tx_type = (tx.type or '')
             if tx_type and str(tx_type).upper() in excluded_types_upper:
                 continue
             income_map[bucket_key] += amount
-        elif amount < 0:
+        elif amount < 0 and finance_filters.get('direction') != 'income':
             expense_map[bucket_key] += abs(amount)
 
     for pay in pay_rows:
@@ -19863,7 +19958,7 @@ def get_finance_overview():
             continue
 
         amount = int(pay.amount or 0)
-        if amount > 0:
+        if amount > 0 and finance_filters.get('direction') != 'expense':
             income_map[bucket_key] += amount
 
     income_series = [int(income_map[k] or 0) for k in keys]

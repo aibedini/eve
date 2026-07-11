@@ -1401,17 +1401,21 @@
 
     const buildOverviewQuery = (extraParams = {}) => {
         const params = new URLSearchParams();
-        // Reuse a subset of filters (month overview should follow card/user/server selections)
+        // Reuse the visible Finance context. Date chips stay table/stats scoped;
+        // the overview has its own Jalali month selector.
         if (filters.card_id) params.append('card_id', filters.card_id);
         if (filters.server_id) params.append('server_id', filters.server_id);
         if (filters.user_id) params.append('user_id', filters.user_id);
+        if (filters.search) params.append('search', filters.search);
+        if (filters.direction) params.append('direction', filters.direction);
+        if (filters.type) params.append('type', filters.type);
         Object.entries(extraParams).forEach(([k, v]) => {
             if (v !== null && v !== undefined && v !== '') params.append(k, String(v));
         });
         return params.toString();
     };
 
-    const getOverviewKey = () => `${filters.card_id || ''}|${filters.server_id || ''}|${filters.user_id || ''}`;
+    const getOverviewKey = () => `${filters.card_id || ''}|${filters.server_id || ''}|${filters.user_id || ''}|${filters.search || ''}|${filters.direction || ''}|${filters.type || ''}`;
 
     const isOverviewOpen = () => !!(overviewDetails && overviewDetails.open);
 
@@ -2021,8 +2025,11 @@
                 else showToast('Payment updated successfully');
             } catch (e) {}
 
+            updateFiltersFromInputs();
+            currentPage = 1;
             loadPayments();
             loadStats();
+            if (isOverviewOpen()) ensureOverviewLoaded({ forceMonthsReload: true });
         } catch (error) {
             if (errorBox) {
                 errorBox.textContent = error.message || 'An error occurred';
@@ -2176,6 +2183,8 @@
                 showToast('Payment deleted successfully');
             } catch (e) { /* ignore */ }
 
+            updateFiltersFromInputs();
+            currentPage = 1;
             await loadPayments();
             await loadStats();
             if (isOverviewOpen()) ensureOverviewLoaded({ forceMonthsReload: true });
