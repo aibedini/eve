@@ -22,6 +22,7 @@ from app import (  # noqa: E402
     SystemConfig,
     app,
     db,
+    add_cached_client,
     _build_subscription_package_recommendation,
     _cancel_pending_sms_for_account,
     _cancel_sms_via_gmweb,
@@ -76,6 +77,40 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         )
         self.assertEqual(selected['id'], 4)
         self.assertIsNone(comfort)
+
+    def test_new_client_is_appended_as_latest_user_in_every_target_inbound(self):
+        previous = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [
+            {'server_id': 10, 'id': 7, 'clients': [{'email': 'g275'}], 'active_count': 1},
+            {'server_id': 10, 'id': 8, 'clients': [{'email': 'old'}], 'active_count': 1},
+        ]
+        raw_client = {
+            'id': 'uuid-g276', 'email': 'g276', 'enable': True,
+            'expiryTime': 0, 'totalGB': 0, 'comment': '',
+        }
+        try:
+            changed = add_cached_client(10, [7, 8], raw_client, publish=False)
+            self.assertTrue(changed)
+            self.assertEqual(GLOBAL_SERVER_DATA['inbounds'][0]['clients'][-1]['email'], 'g276')
+            self.assertEqual(GLOBAL_SERVER_DATA['inbounds'][1]['clients'][-1]['email'], 'g276')
+            self.assertEqual(GLOBAL_SERVER_DATA['inbounds'][0]['client_count'], 2)
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous
+
+    def test_new_client_write_through_is_idempotent(self):
+        previous = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': 10, 'id': 7,
+            'clients': [{'id': 'uuid-g276', 'email': 'g276'}],
+        }]
+        try:
+            changed = add_cached_client(
+                10, [7], {'id': 'uuid-g276', 'email': 'g276'}, publish=False,
+            )
+            self.assertFalse(changed)
+            self.assertEqual(len(GLOBAL_SERVER_DATA['inbounds'][0]['clients']), 1)
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous
 
     def test_live_counter_prevents_hourly_rollup_blind_spot(self):
         recommendation = _build_subscription_package_recommendation(

@@ -98,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.20"
+APP_VERSION = "2.4.21"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2305,6 +2305,78 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
     except Exception as exc:
         app.logger.debug(f"patch_cached_client failed: {exc}")
+        return False
+    if changed and publish:
+        try:
+            publish_snapshot_to_redis([server_id])
+        except Exception:
+            pass
+    return changed
+
+
+def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
+    """Write-through: append a newly-created client to every target inbound.
+
+    Client arrays are kept in panel creation order, so appending here makes the
+    recent-user endpoints (which iterate them in reverse) immediately accurate.
+    This also publishes the change to Redis for other gunicorn workers instead
+    of relying on the browser's short-lived optimistic override.
+    """
+    changed = False
+    try:
+        sid = int(server_id)
+        target_ids = {int(iid) for iid in (inbound_ids or [])}
+        if not target_ids or not isinstance(raw_client, dict):
+            return False
+        email_l = str(raw_client.get('email') or '').strip().lower()
+        uuid_l = str(raw_client.get('id') or '').strip().lower()
+        if not email_l and not uuid_l:
+            return False
+
+        with GLOBAL_REFRESH_LOCK:
+            thresholds = _get_dashboard_status_thresholds()
+            lang = _get_panel_ui_lang()
+            for ib in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                try:
+                    if int(ib.get('server_id', -1)) != sid or int(ib.get('id', -1)) not in target_ids:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+
+                clients = ib.setdefault('clients', [])
+                duplicate = False
+                for cd in clients:
+                    ce = str(cd.get('email') or '').strip().lower()
+                    cu = str(cd.get('id') or '').strip().lower()
+                    if (email_l and ce == email_l) or (uuid_l and cu == uuid_l):
+                        duplicate = True
+                        break
+                if duplicate:
+                    continue
+
+                raw = copy.deepcopy(raw_client)
+                cached = {
+                    'server_id': sid,
+                    'inbound_id': int(ib.get('id')),
+                    'email': raw.get('email'),
+                    'id': raw.get('id'),
+                    'up': 0,
+                    'down': 0,
+                    'up_formatted': format_bytes(0),
+                    'down_formatted': format_bytes(0),
+                    'raw_client': raw,
+                }
+                _recompute_cached_client(cached, thresholds, lang)
+                clients.append(cached)
+                ib['client_count'] = len(clients)
+                if raw.get('enable', True):
+                    ib['active_count'] = int(ib.get('active_count') or 0) + 1
+                changed = True
+
+            if changed:
+                GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+    except Exception as exc:
+        app.logger.debug(f"add_cached_client failed: {exc}")
         return False
     if changed and publish:
         try:
@@ -17260,6 +17332,7 @@ def add_client(server_id, inbound_id):
                     pass
             db.session.commit()
             invalidate_ownership_cache()
+            add_cached_client(server.id, assign_ids, new_client)
 
             # Links from subId (one subscription aggregates all assigned inbounds)
             parsed_host = urlparse(server.host)
@@ -17479,6 +17552,7 @@ def add_client(server_id, inbound_id):
 
             db.session.commit()
             invalidate_ownership_cache()
+            add_cached_client(server.id, [inbound_id], new_client)
 
             # Generate Links for Response
             parsed_host = urlparse(server.host)
