@@ -135,6 +135,8 @@ APP_DIR="/opt/eve-xui-manager"
 REPO_URL="${EVE_REPO_URL:-https://github.com/yoyoraya/eve-xui-manager.git}"
 GITHUB_TOKEN="${EVE_GITHUB_TOKEN:-}"
 GIT_USERNAME="${EVE_GIT_USERNAME:-x-access-token}"
+GIT_TOKEN_FILE="/etc/eve-manager/github-token"
+GIT_USERNAME_FILE="/etc/eve-manager/github-username"
 PYTHON_VERSION="3.11"
 APP_PORT="5000"
 ENV_FILE="$APP_DIR/.env"
@@ -805,8 +807,39 @@ cleanup_git_auth() {
     GIT_AUTH_DIR=""
 }
 
+import_legacy_remote_auth() {
+    # Older installs may have been cloned with https://user:token@github.com/...
+    # Migrate that credential once, then clone_or_update_repo sanitizes origin.
+    [ -z "$GITHUB_TOKEN" ] || return 0
+    [ -d "$APP_DIR/.git" ] || return 0
+    local old_url authority userinfo
+    old_url=$(git -C "$APP_DIR" remote get-url origin 2>/dev/null || true)
+    case "$old_url" in
+        https://*:*@*)
+            authority=${old_url#https://}
+            userinfo=${authority%%@*}
+            GIT_USERNAME=${userinfo%%:*}
+            GITHUB_TOKEN=${userinfo#*:}
+            ;;
+    esac
+}
+
 prepare_git_auth() {
     cleanup_git_auth
+    # An install-time token is saved once with root-only permissions so the
+    # interactive `eve` update menu never asks for credentials again.
+    if [ -n "$GITHUB_TOKEN" ]; then
+        mkdir -p /etc/eve-manager
+        chmod 700 /etc/eve-manager
+        printf '%s' "$GITHUB_TOKEN" > "$GIT_TOKEN_FILE"
+        printf '%s' "$GIT_USERNAME" > "$GIT_USERNAME_FILE"
+        chmod 600 "$GIT_TOKEN_FILE" "$GIT_USERNAME_FILE"
+    elif [ -r "$GIT_TOKEN_FILE" ]; then
+        GITHUB_TOKEN=$(cat "$GIT_TOKEN_FILE")
+        if [ -r "$GIT_USERNAME_FILE" ]; then
+            GIT_USERNAME=$(cat "$GIT_USERNAME_FILE")
+        fi
+    fi
     [ -n "$GITHUB_TOKEN" ] || return 0
 
     # Keep credentials out of the remote URL, command line and final install.
@@ -820,15 +853,17 @@ case "${1:-}" in
     *)          cat "$(dirname "$0")/token" ;;
 esac
 ASKPASS
-    chown -R "$APP_USER:$APP_USER" "$GIT_AUTH_DIR"
     chmod 700 "$GIT_AUTH_DIR" "$GIT_AUTH_DIR/askpass.sh"
     chmod 600 "$GIT_AUTH_DIR/username" "$GIT_AUTH_DIR/token"
 }
 
-git_as_app() {
+git_for_update() {
     local timeout_seconds="${1:-0}"
     shift || true
-    local -a cmd=(sudo -u "$APP_USER" env GIT_TERMINAL_PROMPT=0)
+    # Git is an installer concern, not an application-runtime concern. Running
+    # it as root reuses credentials from the original installation and avoids
+    # the old root-vs-evemgr credential split that broke menu updates.
+    local -a cmd=(env GIT_TERMINAL_PROMPT=0)
     if [ -n "${GIT_AUTH_DIR:-}" ]; then
         cmd+=(GIT_ASKPASS="$GIT_AUTH_DIR/askpass.sh")
     fi
@@ -850,6 +885,7 @@ print_git_fetch_help() {
 
 clone_or_update_repo() {
     print_header "Step 6: Fetch application"
+    import_legacy_remote_auth
     prepare_git_auth
     trap cleanup_git_auth EXIT
     git config --global --add safe.directory "$APP_DIR" || true
@@ -857,25 +893,26 @@ clone_or_update_repo() {
     if [ -d "$APP_DIR/.git" ]; then
         print_warning "Repository exists, pulling latest changes"
         # Apply mirrors/SSH overrides during upgrades too, not only first clone.
-        git_as_app 0 -C "$APP_DIR" remote set-url origin "$REPO_URL"
-        if ! git_as_app 240 -C "$APP_DIR" fetch --all --prune --tags --progress; then
+        git_for_update 0 -C "$APP_DIR" remote set-url origin "$REPO_URL"
+        if ! git_for_update 240 -C "$APP_DIR" fetch --all --prune --tags --progress; then
             print_error "git fetch failed or timed out (240s)"
             print_git_fetch_help
             exit 1
         fi
-        git_as_app 0 -C "$APP_DIR" reset --hard origin/main
+        git_for_update 0 -C "$APP_DIR" reset --hard origin/main
     elif [ -d "$APP_DIR" ] && [ "$(ls -A "$APP_DIR")" ]; then
         print_warning "Directory $APP_DIR exists but is not a git repo. Backing up..."
         mv "$APP_DIR" "${APP_DIR}.bak.$(date +%s)"
         prune_app_backups 2
         mkdir -p "$APP_DIR"
         chown "$APP_USER:$APP_USER" "$APP_DIR"
-        git_as_app 240 clone "$REPO_URL" "$APP_DIR"
+        git_for_update 240 clone "$REPO_URL" "$APP_DIR"
     else
         mkdir -p "$APP_DIR"
         chown "$APP_USER:$APP_USER" "$APP_DIR"
-        git_as_app 240 clone "$REPO_URL" "$APP_DIR"
+        git_for_update 240 clone "$REPO_URL" "$APP_DIR"
     fi
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     cleanup_git_auth
     trap - EXIT
     print_success "Source code synced"
@@ -2235,14 +2272,26 @@ do_online_update() {
 
 run_latest_online_update() {
     # The installed CLI may predate a critical preflight/cleanup fix. Execute a
-    # freshly downloaded copy for the whole update instead of replacing the
-    # current shell script halfway through its run.
+    # freshly fetched copy for the whole update. Git authentication is shared
+    # with the real update, so this also works for a private repository.
     local latest_script
     latest_script=$(mktemp /tmp/eve-update-runner-XXXXXX.sh)
-    if curl -o "$latest_script" -fsSL "${REPO_URL%.git}/raw/main/setup.sh"; then
+    import_legacy_remote_auth
+    prepare_git_auth
+    trap cleanup_git_auth EXIT
+    git config --global --add safe.directory "$APP_DIR" || true
+    if [ -d "$APP_DIR/.git" ] \
+            && git_for_update 0 -C "$APP_DIR" remote set-url origin "$REPO_URL" \
+            && git_for_update 240 -C "$APP_DIR" fetch origin main --prune --quiet \
+            && git_for_update 0 -C "$APP_DIR" show origin/main:setup.sh > "$latest_script" \
+            && [ -s "$latest_script" ]; then
+        cleanup_git_auth
+        trap - EXIT
         chmod +x "$latest_script"
         exec bash "$latest_script" --online-update
     fi
+    cleanup_git_auth
+    trap - EXIT
     rm -f "$latest_script"
     print_warning "Could not bootstrap the latest updater; using the installed updater."
     do_online_update
@@ -2250,7 +2299,20 @@ run_latest_online_update() {
 
 update_self() {
     print_header "Updating Script (Online)"
-    if curl -o "$0" -fsSL "${REPO_URL%.git}/raw/main/setup.sh"; then
+    local latest_script
+    latest_script=$(mktemp /tmp/eve-self-update-XXXXXX.sh)
+    import_legacy_remote_auth
+    prepare_git_auth
+    trap cleanup_git_auth EXIT
+    git config --global --add safe.directory "$APP_DIR" || true
+    if [ -d "$APP_DIR/.git" ] \
+            && git_for_update 0 -C "$APP_DIR" remote set-url origin "$REPO_URL" \
+            && git_for_update 240 -C "$APP_DIR" fetch origin main --prune --quiet \
+            && git_for_update 0 -C "$APP_DIR" show origin/main:setup.sh > "$latest_script" \
+            && [ -s "$latest_script" ]; then
+        cleanup_git_auth
+        trap - EXIT
+        cp "$latest_script" "$0"
         chmod +x "$0"
         if [ -f /usr/local/bin/eve ]; then
             cp "$0" /usr/local/bin/eve
@@ -2259,9 +2321,12 @@ update_self() {
         fi
         print_success "Script updated — re-run 'eve' or 'bash setup.sh'"
     else
-        print_error "Download failed. Check internet / GitHub access."
+        cleanup_git_auth
+        trap - EXIT
+        print_error "Update fetch failed. Check repository access."
         print_warning "If GitHub is blocked, use option [3] Offline Update instead."
     fi
+    rm -f "$latest_script"
     exit 0
 }
 
@@ -2337,12 +2402,12 @@ install_eve_cli() {
             print_warning "  Run manually: cp /path/to/setup.sh /usr/local/bin/eve && chmod +x /usr/local/bin/eve"
             return
         fi
-        print_warning "Cannot copy piped script — downloading eve CLI from repo..."
-        if curl -o "$TARGET" -fsSL "${REPO_URL%.git}/raw/main/setup.sh"; then
+        print_warning "Cannot copy piped script — installing CLI from the synced application..."
+        if [ -f "$APP_DIR/setup.sh" ] && cp "$APP_DIR/setup.sh" "$TARGET"; then
             chmod +x "$TARGET"
             print_success "eve CLI installed — type 'eve' to manage your panel"
         else
-            print_warning "Could not download (GitHub blocked?). Copy setup.sh to /usr/local/bin/eve manually."
+            print_warning "Could not install eve CLI from $APP_DIR/setup.sh"
         fi
         return
     fi
