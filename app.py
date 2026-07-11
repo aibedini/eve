@@ -98,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.22"
+APP_VERSION = "2.4.23"
 GITHUB_REPO = "yoyoraya/eve-xui-manager"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -556,6 +556,8 @@ REFRESH_MAX_BACKOFF_SEC = 300
 # Session cache for X-UI panels to speed up API calls
 XUI_SESSION_CACHE = {}  # server_id -> {'session': requests.Session, 'expiry': float}
 XUI_SESSION_TTL = 600  # 10 minutes cache
+XUI_CAPABILITY_CACHE = {}  # server_id -> {'v3_clients': bool, 'expiry': float}
+XUI_CAPABILITY_TTL = 600
 
 WHATSAPP_SEND_TRACKER = {
     'per_recipient': {},
@@ -1578,14 +1580,11 @@ def _run_bulk_job(job_id: str):
                                 snap['expiryTime'] = -remaining_ms
                                 ok, err, _status = _post_client_update(server, inbound_id, email, snap)
                 elif action == 'set_inbounds':
-                    if not server_is_v3(server):
-                        ok, err, _status = False, 'Server is not v3', 400
-                    else:
-                        _mode = (data.get('inbound_mode') or 'set').lower()
-                        _tids = data.get('inbound_ids') or []
-                        ok, err, _status, _info = _reconcile_client_inbounds(
-                            user, server, email, client_uuid, _tids, _mode)
-                        skipped = bool(ok and _status == 204)
+                    _mode = (data.get('inbound_mode') or 'set').lower()
+                    _tids = data.get('inbound_ids') or []
+                    ok, err, _status, _info = _reconcile_client_inbounds(
+                        user, server, email, client_uuid, _tids, _mode)
+                    skipped = bool(ok and _status == 204)
                 elif action == 'assign_owner':
                     email_l = (email or '').lower()
                     try:
@@ -3924,8 +3923,8 @@ class Server(db.Model):
     sub_path = db.Column(db.String(50), default='/sub/')
     json_path = db.Column(db.String(50), default='/json/')
     sub_port = db.Column(db.Integer, nullable=True)
-    # 3x-ui v3+ API token (Bearer). When set, EVE authenticates with the token
-    # (skips cookie login + CSRF) and uses the v3 /panel/api/clients/* endpoints.
+    # Optional 3x-ui v3+ API token (Bearer). When absent, capability-detected v3
+    # panels use cookie login + CSRF with the same /panel/api/clients/* endpoints.
     api_token = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -3942,6 +3941,7 @@ class Server(db.Model):
             'json_path': self.json_path,
             'sub_port': self.sub_port,
             'has_api_token': bool((self.api_token or '').strip()),
+            'supports_v3_clients': bool(server_is_v3(self)),
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
@@ -9791,8 +9791,73 @@ def get_server_api_token(server) -> str:
         return raw
 
 
-def server_is_v3(server) -> bool:
-    """A server is treated as 3x-ui v3+ when it has an API token configured."""
+def _remember_v3_capability(server, supported: bool):
+    try:
+        sid = int(getattr(server, 'id'))
+    except (TypeError, ValueError):
+        return
+    XUI_CAPABILITY_CACHE[sid] = {
+        'v3_clients': bool(supported),
+        'expiry': time.time() + XUI_CAPABILITY_TTL,
+    }
+
+
+def _probe_v3_client_api(server, session_obj, *, force=False) -> bool:
+    """Detect the first-class v3 client API by capability, not credentials.
+
+    API tokens are a strong v3 signal, but cookie-authenticated v3 panels expose
+    the same API and must not be sent to the removed legacy updateClient routes.
+    The deliberately missing email keeps the probe side-effect free and small.
+    A JSON response from the route (including "client not found") proves the
+    controller exists; a 404/HTML login page means it does not.
+    """
+    try:
+        sid = int(getattr(server, 'id'))
+    except (TypeError, ValueError):
+        sid = None
+    if not force and sid is not None:
+        cached = XUI_CAPABILITY_CACHE.get(sid)
+        if cached and time.time() < float(cached.get('expiry') or 0):
+            return bool(cached.get('v3_clients'))
+
+    base, webpath = extract_base_and_webpath(server.host)
+    url = f"{base}{webpath}/panel/api/clients/get/__eve_capability_probe__"
+    supported = False
+    try:
+        resp = session_obj.get(url, verify=False, timeout=(3, 8),
+                               headers={'Accept': 'application/json'})
+        payload, parse_error = _safe_response_json(resp)
+        supported = (
+            resp.status_code == 200
+            and not parse_error
+            and isinstance(payload, dict)
+            and ('success' in payload or 'obj' in payload or 'msg' in payload)
+        )
+    except Exception:
+        # A transient probe failure must not overwrite a previously known result.
+        if sid is not None and sid in XUI_CAPABILITY_CACHE:
+            return bool(XUI_CAPABILITY_CACHE[sid].get('v3_clients'))
+        return False
+    _remember_v3_capability(server, supported)
+    return supported
+
+
+def server_is_v3(server, session_obj=None, *, force_probe=False) -> bool:
+    """Return whether the panel supports the first-class v3 client API.
+
+    Authentication mode and API generation are intentionally independent:
+    Bearer-token and cookie+CSRF sessions can both be v3.
+    """
+    try:
+        cached = XUI_CAPABILITY_CACHE.get(int(getattr(server, 'id')))
+        if cached and time.time() < float(cached.get('expiry') or 0):
+            return bool(cached.get('v3_clients'))
+    except (TypeError, ValueError):
+        pass
+    if session_obj is not None:
+        return _probe_v3_client_api(server, session_obj, force=force_probe)
+    # Before the first authenticated probe, a configured token is a useful UI
+    # hint. Network mutations always pass a session and therefore verify it.
     return bool(get_server_api_token(server))
 
 
@@ -10022,6 +10087,25 @@ def v3_add_client(server, session_obj, client: dict, inbound_ids: list):
                     {"client": _v3_client_payload(client), "inboundIds": list(inbound_ids or [])})
 
 
+def v3_attach_client(server, session_obj, email, inbound_ids: list):
+    """Use the panel's protocol-aware attach path (notably for WireGuard)."""
+    email = _v3_fix_spaced_email(server, session_obj, email)
+    return _v3_post(
+        server, session_obj,
+        f"/panel/api/clients/{quote(email, safe='')}/attach",
+        {"inboundIds": list(inbound_ids or [])},
+    )
+
+
+def v3_detach_client(server, session_obj, email, inbound_ids: list):
+    email = _v3_fix_spaced_email(server, session_obj, email)
+    return _v3_post(
+        server, session_obj,
+        f"/panel/api/clients/{quote(email, safe='')}/detach",
+        {"inboundIds": list(inbound_ids or [])},
+    )
+
+
 # ── Multi-inbound membership reconciliation (v3) ─────────────────────────────
 # A v3 client's "inbound membership" is the set of inbounds whose
 # settings.clients[] contain that email/uuid. We change membership by editing
@@ -10223,6 +10307,36 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
 
     base_client = dict(next(iter(membership.values())))
     added, removed, errors = [], [], []
+    native_membership_used = False
+
+    # Modern v3 panels own the protocol-specific attach logic. This is essential
+    # for 3.4.2+ WireGuard, where the panel generates a keypair and allocates an
+    # address in the inbound's peer subnet. Older v3 builds that do not expose
+    # attach/detach return 404 and fall through to the full-inbound compatibility
+    # path below. Validation/runtime errors are not bypassed by that fallback.
+    if server_is_v3(server, session_obj):
+        if to_add:
+            requested_add = sorted(to_add)
+            ok_attach, _attach_response, attach_error = v3_attach_client(
+                server, session_obj, email, requested_add)
+            if ok_attach:
+                added.extend(requested_add)
+                native_membership_used = True
+                to_add = set()
+            elif '404' not in str(attach_error or ''):
+                errors.append(f"attach: {attach_error or 'panel rejected attach'}")
+                to_add = set()
+        if to_remove:
+            requested_remove = sorted(to_remove)
+            ok_detach, _detach_response, detach_error = v3_detach_client(
+                server, session_obj, email, requested_remove)
+            if ok_detach:
+                removed.extend(requested_remove)
+                native_membership_used = True
+                to_remove = set()
+            elif '404' not in str(detach_error or ''):
+                errors.append(f"detach: {detach_error or 'panel rejected detach'}")
+                to_remove = set()
 
     for iid in sorted(to_add):
         ib = inbound_by_id[iid]
@@ -10248,16 +10362,20 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
     except Exception:
         db.session.rollback()
 
-    # Write-through cache: reflect membership changes instantly (no panel re-fetch).
+    # Native attach may have generated protocol credentials (WireGuard key/IP),
+    # so refresh authoritative data instead of cloning a stale VLESS-style row.
     try:
-        for _iid in added:
-            clone_cached_client_into_inbound(server.id, _iid, email,
-                                             client_uuid=base_client.get('id'), publish=False)
-        for _iid in removed:
-            remove_cached_client(server.id, email, client_uuid=base_client.get('id'),
-                                 inbound_id=_iid, publish=False)
-        if added or removed:
-            publish_snapshot_to_redis([server.id])
+        if native_membership_used:
+            fetch_and_update_server_data(server.id)
+        else:
+            for _iid in added:
+                clone_cached_client_into_inbound(server.id, _iid, email,
+                                                 client_uuid=base_client.get('id'), publish=False)
+            for _iid in removed:
+                remove_cached_client(server.id, email, client_uuid=base_client.get('id'),
+                                     inbound_id=_iid, publish=False)
+            if added or removed:
+                publish_snapshot_to_redis([server.id])
     except Exception:
         pass
 
@@ -10311,6 +10429,7 @@ def _autoupgrade_http_to_https(server):
         return False
     try:
         XUI_SESSION_CACHE.pop(server.id, None)  # drop any session built on the old scheme
+        XUI_CAPABILITY_CACHE.pop(server.id, None)
     except Exception:
         pass
     return True
@@ -10389,6 +10508,7 @@ def get_xui_session(server):
     # it to the session and skip the cookie-login dance entirely.
     if _api_token:
         session_obj.headers.update({'Authorization': f'Bearer {_api_token}'})
+        _probe_v3_client_api(server, session_obj, force=True)
         XUI_SESSION_CACHE[server.id] = {'session': session_obj, 'expiry': now + XUI_SESSION_TTL, 'auth_key': _auth_key}
         return session_obj, None
 
@@ -10455,6 +10575,9 @@ def get_xui_session(server):
                 'expiry': now + XUI_SESSION_TTL,
                 'auth_key': _auth_key,
             }
+            # Cookie login is fully supported by v3. Detect the API generation
+            # now so every later mutation chooses the correct endpoint family.
+            _probe_v3_client_api(server, session_obj, force=True)
             return session_obj, None
 
         msg = None
@@ -11132,6 +11255,39 @@ def generate_client_link(client, inbound, server_host):
                 return f"ss://{userinfo}@{host}:{port}{q}#{remark}"
             return None
 
+        if protocol == 'wireguard':
+            private_key = client.get('privateKey') or client.get('password') or ''
+            if not private_key:
+                return None
+            server_public_key = settings.get('publicKey') or settings.get('pubKey') or ''
+            if not server_public_key and settings.get('secretKey'):
+                try:
+                    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+                    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+                    raw_secret = str(settings['secretKey']).strip()
+                    raw_secret += '=' * (-len(raw_secret) % 4)
+                    secret_bytes = base64.b64decode(raw_secret)
+                    public_bytes = X25519PrivateKey.from_private_bytes(secret_bytes).public_key().public_bytes(
+                        Encoding.Raw, PublicFormat.Raw)
+                    server_public_key = base64.b64encode(public_bytes).decode()
+                except Exception:
+                    server_public_key = ''
+
+            allowed_ips = client.get('allowedIPs') or []
+            if isinstance(allowed_ips, str):
+                allowed_ips = [part.strip() for part in allowed_ips.split(',') if part.strip()]
+            params = {
+                'publickey': server_public_key,
+                'address': allowed_ips[0] if allowed_ips else '',
+                'mtu': settings.get('mtu') or '',
+                'dns': settings.get('dns') or '',
+                'presharedkey': client.get('preSharedKey') or '',
+                'keepalive': client.get('keepAlive') or '',
+            }
+            query = urlencode({k: str(v) for k, v in params.items() if v not in ('', None, 0)})
+            suffix = f"?{query}" if query else ''
+            return f"wireguard://{quote(str(private_key), safe='')}@{host}:{port}{suffix}#{remark}"
+
         return None
     except Exception as exc:
         app.logger.debug(f"Link gen failed: {exc}")
@@ -11162,7 +11318,7 @@ def build_subscription_configs(server, sub_id, fallback_client=None, fallback_in
         session_obj = None
 
     # 1) v3 authoritative endpoint — covers all attached inbounds at once.
-    if session_obj and sub_id and server_is_v3(server):
+    if session_obj and sub_id and server_is_v3(server, session_obj):
         try:
             ok, j, _e = _v3_get(server, session_obj, f"/panel/api/clients/subLinks/{quote(sub_id)}")
             if ok and isinstance(j, dict):
@@ -13715,8 +13871,8 @@ def api_add_client_inbounds(server_id):
 def api_client_inbound_assignments(server_id):
     """Authoritative source for the Edit-Client "Assigned inbounds" picker.
 
-    Computes v3-ness server-side (reads the DB API token directly, so it never
-    depends on a possibly-stale client cache) and returns the role-filtered
+    Computes v3 capability server-side (Bearer or cookie authentication) and
+    returns the role-filtered
     inbound list for the server plus the set of inbound ids the given client is
     currently a member of. This makes the picker work even if the dashboard's
     in-memory inbound cache for this server hasn't been populated yet.
@@ -13729,7 +13885,9 @@ def api_client_inbound_assignments(server_id):
     if not server:
         return jsonify({'success': False, 'error': 'Server not found'}), 404
 
-    is_v3 = server_is_v3(server)
+    panel_session, panel_error = get_xui_session(server)
+    is_v3 = bool(panel_session and not panel_error
+                 and server_is_v3(server, panel_session))
 
     is_reseller = bool(user and user.role == 'reseller')
     allowed_map, assignments = ('*', {})
@@ -14837,9 +14995,6 @@ def set_client_inbounds(server_id, email):
         return jsonify({"success": False, "error": "User not found"}), 401
 
     server = Server.query.get_or_404(server_id)
-    if not server_is_v3(server):
-        return jsonify({"success": False,
-                        "error": "Editing inbound assignment requires a 3x-ui v3 panel (API token)."}), 400
 
     data = request.get_json(silent=True) or {}
     mode = (data.get('mode') or 'set').lower()
@@ -16802,6 +16957,7 @@ def update_server(server_id):
     db.session.commit()
     # Token change alters auth — drop any cached session so the next call re-auths.
     XUI_SESSION_CACHE.pop(server_id, None)
+    XUI_CAPABILITY_CACHE.pop(server_id, None)
     return jsonify({"success": True})
 
 
@@ -16862,6 +17018,7 @@ def delete_server(server_id):
         }), 500
 
     XUI_SESSION_CACHE.pop(server_id, None)
+    XUI_CAPABILITY_CACHE.pop(server_id, None)
     REFRESH_BACKOFF.pop(server_id, None)
     invalidate_ownership_cache()
     GLOBAL_SERVER_DATA['inbounds'] = [
@@ -16893,7 +17050,7 @@ def test_server_connection(server_id):
         "success": True,
         "panel_type": detected_type or server.panel_type,
         "inbound_count": len(inbounds or []),
-        "auth": "token" if server_is_v3(server) else "login",
+        "auth": "token" if get_server_api_token(server) else "login",
     })
 
 

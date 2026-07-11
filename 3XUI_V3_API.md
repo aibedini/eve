@@ -1,5 +1,7 @@
 # 3x-ui v3 API Reference
 
+> Compatibility audit refreshed against the upstream OpenAPI and source tags through **v3.4.2**. Older v3 and legacy encoded inbound JSON remain supported.
+
 > منبع: OpenAPI 3.0.3 زندهٔ پنل (`/{webBasePath}/panel/api/openapi.json`) — تست‌شده روی 3x-ui **v3.3.1**.
 > `info.title = "3X-UI Panel API"`, `version = "3.x"`.
 

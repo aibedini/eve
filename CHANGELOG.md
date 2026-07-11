@@ -4,6 +4,12 @@ All notable changes to Eve - Xui Manager are documented in this file.
 
 ## [Unreleased]
 
+### 3x-ui compatibility
+- Detect the first-class v3 client API by endpoint capability instead of treating API Token presence as the panel version; cookie + CSRF and Bearer authentication are both supported.
+- Use native client attach/detach endpoints when available, with a 404-only legacy fallback, so 3.4.2+ WireGuard clients receive panel-generated keys and addresses safely.
+- Add WireGuard subscription-link fallback generation and preserve legacy string-encoded as well as modern nested inbound JSON.
+- Add compatibility contract tests for legacy panels, tokenless v3 panels, native membership endpoints, and WireGuard links.
+
 ## [2.4.0] - 2026-06-26
 
 > Big release since **2.3.0** — a whole new **SMS Automation** subsystem, **3x-ui v3.4+** support, reseller **finance statements**, and major dashboard **performance** work.
