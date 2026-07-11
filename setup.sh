@@ -142,8 +142,14 @@ APP_PORT="5000"
 ENV_FILE="$APP_DIR/.env"
 LOG_DIR="/var/log/$SERVICE_NAME"
 SELF_SIGNED_SSL_DIR="/etc/ssl/eve-manager"
-DOMAIN="${1:-}"
-ENVIRONMENT="${2:-production}"
+DOMAIN=""
+ENVIRONMENT="production"
+# Operational flags are not positional install arguments. Treating
+# --online-update as a domain used to overwrite nginx with that literal value.
+if [ -n "${1:-}" ] && [[ "${1:-}" != --* ]]; then
+    DOMAIN="$1"
+    ENVIRONMENT="${2:-production}"
+fi
 INSTALL_SOURCE="github"  # Can be "github" or "zip"
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd -P 2>/dev/null || pwd)"
@@ -1328,15 +1334,24 @@ setup_nginx() {
     
     # Ensure domain exists to prevent errors during update
     if [ -z "$DOMAIN" ]; then
+        if [ -r /etc/eve-manager/domain ]; then
+            DOMAIN=$(tr -d '\r\n' < /etc/eve-manager/domain)
+        fi
         if [ -f "/etc/nginx/sites-available/${SERVICE_NAME}" ]; then
             # Try to read domain from previous config
-            DOMAIN=$(grep "server_name" /etc/nginx/sites-available/${SERVICE_NAME} | head -n 1 | awk '{print $2}' | tr -d ';')
+            [ -n "$DOMAIN" ] || DOMAIN=$(grep "server_name" /etc/nginx/sites-available/${SERVICE_NAME} | head -n 1 | awk '{print $2}' | tr -d ';')
         fi
+        [[ "$DOMAIN" == --* ]] && DOMAIN=""
         # If still empty, ask
         if [ -z "$DOMAIN" ]; then
              ask_domain
         fi
     fi
+
+    mkdir -p /etc/eve-manager
+    chmod 700 /etc/eve-manager
+    printf '%s' "$DOMAIN" > /etc/eve-manager/domain
+    chmod 600 /etc/eve-manager/domain
 
     rm -f /etc/nginx/sites-enabled/default
     SSL_FULLCHAIN="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
