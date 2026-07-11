@@ -2427,7 +2427,10 @@ install_eve_cli() {
         return
     fi
 
-    if cp "$SRC" "$TARGET" && chmod +x "$TARGET"; then
+    if [ "$(readlink -f "$SRC" 2>/dev/null)" = "$(readlink -f "$TARGET" 2>/dev/null)" ]; then
+        chmod +x "$TARGET"
+        print_success "eve CLI already current"
+    elif cp "$SRC" "$TARGET" && chmod +x "$TARGET"; then
         print_success "eve CLI installed — type 'eve' to manage your panel"
     else
         print_warning "Could not install eve CLI (permission denied?)"

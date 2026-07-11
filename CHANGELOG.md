@@ -5,6 +5,7 @@ All notable changes to Eve - Xui Manager are documented in this file.
 ## [Unreleased]
 
 ### Installer
+- Treat an already-running `/usr/local/bin/eve` as current instead of attempting to copy the CLI onto itself and printing a false permission warning.
 - Keep operational flags out of positional domain parsing and persist the validated panel domain root-only, preventing online updates from rewriting nginx as `server_name --online-update`.
 - Support private GitHub repositories through a root-only persisted install credential plus an ephemeral askpass flow, so the `eve` update menu needs no repeated credential entry and no secret is embedded in the origin URL.
 - Run installer-owned Git operations as root to reuse the original installation credential instead of losing access by switching to the runtime-only `evemgr` account.
