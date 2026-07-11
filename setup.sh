@@ -133,6 +133,8 @@ SERVICE_NAME="eve-manager"
 APP_USER="evemgr"
 APP_DIR="/opt/eve-xui-manager"
 REPO_URL="${EVE_REPO_URL:-https://github.com/yoyoraya/eve-xui-manager.git}"
+GITHUB_TOKEN="${EVE_GITHUB_TOKEN:-}"
+GIT_USERNAME="${EVE_GIT_USERNAME:-x-access-token}"
 PYTHON_VERSION="3.11"
 APP_PORT="5000"
 ENV_FILE="$APP_DIR/.env"
@@ -794,46 +796,88 @@ clone_or_update_repo_from_zip() {
     print_success "Source code extracted from ZIP"
 }
 
+GIT_AUTH_DIR=""
+
+cleanup_git_auth() {
+    if [ -n "${GIT_AUTH_DIR:-}" ] && [ -d "$GIT_AUTH_DIR" ]; then
+        rm -rf -- "$GIT_AUTH_DIR"
+    fi
+    GIT_AUTH_DIR=""
+}
+
+prepare_git_auth() {
+    cleanup_git_auth
+    [ -n "$GITHUB_TOKEN" ] || return 0
+
+    # Keep credentials out of the remote URL, command line and final install.
+    GIT_AUTH_DIR=$(mktemp -d /tmp/eve-git-auth-XXXXXX)
+    printf '%s' "$GIT_USERNAME" > "$GIT_AUTH_DIR/username"
+    printf '%s' "$GITHUB_TOKEN" > "$GIT_AUTH_DIR/token"
+    cat > "$GIT_AUTH_DIR/askpass.sh" <<'ASKPASS'
+#!/usr/bin/env bash
+case "${1:-}" in
+    *Username*) cat "$(dirname "$0")/username" ;;
+    *)          cat "$(dirname "$0")/token" ;;
+esac
+ASKPASS
+    chown -R "$APP_USER:$APP_USER" "$GIT_AUTH_DIR"
+    chmod 700 "$GIT_AUTH_DIR" "$GIT_AUTH_DIR/askpass.sh"
+    chmod 600 "$GIT_AUTH_DIR/username" "$GIT_AUTH_DIR/token"
+}
+
+git_as_app() {
+    local timeout_seconds="${1:-0}"
+    shift || true
+    local -a cmd=(sudo -u "$APP_USER" env GIT_TERMINAL_PROMPT=0)
+    if [ -n "${GIT_AUTH_DIR:-}" ]; then
+        cmd+=(GIT_ASKPASS="$GIT_AUTH_DIR/askpass.sh")
+    fi
+    cmd+=(git "$@")
+    if [ "$timeout_seconds" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
+        timeout "$timeout_seconds" "${cmd[@]}"
+    else
+        "${cmd[@]}"
+    fi
+}
+
+print_git_fetch_help() {
+    echo "Troubleshooting:"
+    echo "  - Private GitHub repo: export EVE_GITHUB_TOKEN=<fine-grained-token-with-Contents-read>"
+    echo "  - SSH deploy key: EVE_REPO_URL=git@github.com:yoyoraya/eve-xui-manager.git bash setup.sh"
+    echo "  - Mirror: EVE_REPO_URL=<mirror-url> bash setup.sh"
+    echo "  - Connectivity: curl -I https://github.com"
+}
+
 clone_or_update_repo() {
     print_header "Step 6: Fetch application"
+    prepare_git_auth
+    trap cleanup_git_auth EXIT
     git config --global --add safe.directory "$APP_DIR" || true
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     if [ -d "$APP_DIR/.git" ]; then
         print_warning "Repository exists, pulling latest changes"
-        # Fetch can appear to "hang" on slow/blocked networks. Show progress and time out.
-        if command -v timeout >/dev/null 2>&1; then
-            if ! sudo -u "$APP_USER" env GIT_TERMINAL_PROMPT=0 timeout 240 git -C "$APP_DIR" fetch --all --prune --tags --progress; then
-                print_error "git fetch failed or timed out (240s)"
-                echo "Troubleshooting:" 
-                echo "  - Check connectivity: curl -I https://github.com" 
-                echo "  - Check DNS: resolvectl status (or /etc/resolv.conf)" 
-                echo "  - If GitHub is blocked/slow, try VPN or set a faster DNS (1.1.1.1 / 8.8.8.8)." 
-                echo "  - You can override repo URL: EVE_REPO_URL=<mirror-url> bash setup.sh" 
-                exit 1
-            fi
-        else
-            if ! sudo -u "$APP_USER" env GIT_TERMINAL_PROMPT=0 git -C "$APP_DIR" fetch --all --prune --tags --progress; then
-                print_error "git fetch failed"
-                echo "Troubleshooting:" 
-                echo "  - Check connectivity: curl -I https://github.com" 
-                echo "  - If GitHub is blocked/slow, try VPN or set a faster DNS." 
-                echo "  - You can override repo URL: EVE_REPO_URL=<mirror-url> bash setup.sh" 
-                exit 1
-            fi
+        # Apply mirrors/SSH overrides during upgrades too, not only first clone.
+        git_as_app 0 -C "$APP_DIR" remote set-url origin "$REPO_URL"
+        if ! git_as_app 240 -C "$APP_DIR" fetch --all --prune --tags --progress; then
+            print_error "git fetch failed or timed out (240s)"
+            print_git_fetch_help
+            exit 1
         fi
-        sudo -u "$APP_USER" git -C "$APP_DIR" reset --hard origin/main
-    elif [ -d "$APP_DIR" ] && [ "$(ls -A $APP_DIR)" ]; then
+        git_as_app 0 -C "$APP_DIR" reset --hard origin/main
+    elif [ -d "$APP_DIR" ] && [ "$(ls -A "$APP_DIR")" ]; then
         print_warning "Directory $APP_DIR exists but is not a git repo. Backing up..."
         mv "$APP_DIR" "${APP_DIR}.bak.$(date +%s)"
         prune_app_backups 2
         mkdir -p "$APP_DIR"
         chown "$APP_USER:$APP_USER" "$APP_DIR"
-        sudo -u "$APP_USER" git clone "$REPO_URL" "$APP_DIR"
+        git_as_app 240 clone "$REPO_URL" "$APP_DIR"
     else
         mkdir -p "$APP_DIR"
         chown "$APP_USER:$APP_USER" "$APP_DIR"
-        sudo -u "$APP_USER" git clone "$REPO_URL" "$APP_DIR"
+        git_as_app 240 clone "$REPO_URL" "$APP_DIR"
     fi
+    cleanup_git_auth
+    trap - EXIT
     print_success "Source code synced"
 }
 

@@ -4,6 +4,10 @@ All notable changes to Eve - Xui Manager are documented in this file.
 
 ## [Unreleased]
 
+### Installer
+- Support private GitHub repositories through an ephemeral `EVE_GITHUB_TOKEN` askpass flow without embedding credentials in the persisted origin URL.
+- Apply `EVE_REPO_URL` to existing installations during upgrades and report authentication-specific recovery steps when fetch fails.
+
 ### 3x-ui compatibility
 - Detect the first-class v3 client API by endpoint capability instead of treating API Token presence as the panel version; cookie + CSRF and Bearer authentication are both supported.
 - Use native client attach/detach endpoints when available, with a 404-only legacy fallback, so 3.4.2+ WireGuard clients receive panel-generated keys and addresses safely.
