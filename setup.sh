@@ -2408,7 +2408,11 @@ show_banner() {
 
 install_eve_cli() {
     local TARGET="/usr/local/bin/eve"
-    local SRC="$0"
+    # The synced application is authoritative. $0 may still be the old CLI
+    # path while an update runner is executing, which made cp target itself and
+    # left the menu script one version behind.
+    local SRC="$APP_DIR/setup.sh"
+    [ -f "$SRC" ] || SRC="$0"
 
     # When piped through bash (e.g. curl | bash), $0 is /dev/stdin
     if [ ! -f "$SRC" ] || [[ "$SRC" == /dev/std* ]] || [[ "$SRC" == /proc/* ]]; then
