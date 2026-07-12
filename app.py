@@ -98,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.30"
+APP_VERSION = "2.4.31"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -7705,6 +7705,85 @@ class CustomerAccount(db.Model):
         if verified:
             self.phone_verified_at = datetime.utcnow()
         return canonical
+
+
+class ServiceOwnership(db.Model):
+    """The single end-customer owner of a stable panel client identity."""
+    __tablename__ = 'service_ownerships'
+    __table_args__ = (
+        db.UniqueConstraint('server_id', 'client_uuid', name='uq_service_ownership_identity'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer_accounts.id'), nullable=False, index=True)
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=False, index=True)
+    client_uuid = db.Column(db.String(100), nullable=False)
+    client_email_snapshot = db.Column(db.String(255), nullable=True, index=True)
+    reseller_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True, index=True)
+    verification_method = db.Column(db.String(32), nullable=False, default='admin')
+    verified_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
+    verified_at = db.Column(db.DateTime, nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer = db.relationship('CustomerAccount', backref=db.backref('service_ownerships', lazy=True))
+    server = db.relationship('Server')
+
+    @property
+    def is_active(self):
+        return self.revoked_at is None
+
+
+class ServiceDelegation(db.Model):
+    """Revocable, limited access granted by a service owner to another customer."""
+    __tablename__ = 'service_delegations'
+    __table_args__ = (
+        db.UniqueConstraint('service_ownership_id', 'delegate_customer_id',
+                            name='uq_service_delegation_customer'),
+    )
+    ALLOWED_PERMISSIONS = frozenset({
+        'view_status', 'receive_subscription', 'renew',
+        'create_ticket', 'receive_notifications',
+    })
+
+    id = db.Column(db.Integer, primary_key=True)
+    service_ownership_id = db.Column(
+        db.Integer, db.ForeignKey('service_ownerships.id', ondelete='CASCADE'), nullable=False, index=True,
+    )
+    delegate_customer_id = db.Column(
+        db.Integer, db.ForeignKey('customer_accounts.id'), nullable=False, index=True,
+    )
+    invited_by_customer_id = db.Column(
+        db.Integer, db.ForeignKey('customer_accounts.id'), nullable=False, index=True,
+    )
+    permissions_json = db.Column(db.Text, nullable=False, default='{}')
+    invite_token_hash = db.Column(db.String(64), nullable=True, unique=True, index=True)
+    invite_expires_at = db.Column(db.DateTime, nullable=True)
+    accepted_at = db.Column(db.DateTime, nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    ownership = db.relationship('ServiceOwnership', backref=db.backref('delegations', lazy=True))
+
+    def set_permissions(self, permissions: dict | None):
+        source = permissions if isinstance(permissions, dict) else {}
+        safe = {key: bool(source.get(key, False)) for key in sorted(self.ALLOWED_PERMISSIONS)}
+        self.permissions_json = json.dumps(safe, separators=(',', ':'), sort_keys=True)
+        return safe
+
+    def get_permissions(self):
+        try:
+            source = json.loads(self.permissions_json or '{}')
+        except (TypeError, ValueError):
+            source = {}
+        if not isinstance(source, dict):
+            source = {}
+        return {key: bool(source.get(key, False)) for key in sorted(self.ALLOWED_PERMISSIONS)}
+
+    @property
+    def is_active(self):
+        return self.accepted_at is not None and self.revoked_at is None
 
 
 class ClientPortalUser(db.Model):

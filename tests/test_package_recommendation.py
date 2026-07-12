@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from unittest.mock import patch
+from sqlalchemy.exc import IntegrityError
 
 
 _DB_FILE = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
@@ -16,6 +17,9 @@ from app import (  # noqa: E402
     GLOBAL_SERVER_DATA,
     PendingSms,
     RenewalEvent,
+    Server,
+    ServiceDelegation,
+    ServiceOwnership,
     SMS_GMWEB_API_KEY_KEY,
     SMS_GMWEB_BASE_URL_KEY,
     SMS_GMWEB_TIMEOUT_KEY,
@@ -64,6 +68,8 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             pass
 
     def tearDown(self):
+        ServiceDelegation.query.delete()
+        ServiceOwnership.query.delete()
         CustomerAccount.query.delete()
         SmsSendLog.query.delete()
         PendingSms.query.delete()
@@ -115,6 +121,58 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         customer = CustomerAccount()
         with self.assertRaises(ValueError):
             customer.set_primary_phone('not-a-mobile')
+
+    def test_service_ownership_is_unique_per_stable_panel_identity(self):
+        customer = CustomerAccount(primary_phone='989195292411')
+        other = CustomerAccount(primary_phone='989121234567')
+        server = Server(name='Ownership Test', host='https://example.test', username='u', password='p')
+        db.session.add_all([customer, other, server])
+        db.session.flush()
+        db.session.add(ServiceOwnership(
+            customer_id=customer.id, server_id=server.id,
+            client_uuid='client-stable-id', client_email_snapshot='g276-09195292411',
+        ))
+        db.session.commit()
+
+        db.session.add(ServiceOwnership(
+            customer_id=other.id, server_id=server.id,
+            client_uuid='client-stable-id', client_email_snapshot='renamed-client',
+        ))
+        with self.assertRaises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+    def test_service_delegation_filters_permissions_and_is_revocable(self):
+        owner = CustomerAccount(primary_phone='989195292411')
+        delegate = CustomerAccount(primary_phone='989121234567')
+        server = Server(name='Delegation Test', host='https://example.test', username='u', password='p')
+        db.session.add_all([owner, delegate, server])
+        db.session.flush()
+        ownership = ServiceOwnership(
+            customer_id=owner.id, server_id=server.id, client_uuid='family-service',
+        )
+        db.session.add(ownership)
+        db.session.flush()
+        delegation = ServiceDelegation(
+            service_ownership_id=ownership.id,
+            delegate_customer_id=delegate.id,
+            invited_by_customer_id=owner.id,
+            accepted_at=datetime.utcnow(),
+        )
+        safe = delegation.set_permissions({
+            'view_status': True, 'create_ticket': True, 'transfer_ownership': True,
+        })
+        db.session.add(delegation)
+        db.session.commit()
+
+        self.assertTrue(delegation.is_active)
+        self.assertTrue(safe['view_status'])
+        self.assertTrue(safe['create_ticket'])
+        self.assertNotIn('transfer_ownership', delegation.get_permissions())
+        self.assertFalse(delegation.get_permissions()['renew'])
+
+        delegation.revoked_at = datetime.utcnow()
+        self.assertFalse(delegation.is_active)
 
     def test_new_client_is_appended_as_latest_user_in_every_target_inbound(self):
         previous = GLOBAL_SERVER_DATA.get('inbounds')
