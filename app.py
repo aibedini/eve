@@ -96,9 +96,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, quote, urlencode, unquote
 from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.32"
+APP_VERSION = "2.4.33"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -7949,6 +7950,114 @@ def review_ownership_claim_item(item_id: int, reviewer, *, approve: bool,
         'claim_status': claim.status,
         'service_ownership_id': ownership.id,
     }
+
+
+class TelegramBotInstance(db.Model):
+    """Tenant-scoped interactive Telegram bot configuration."""
+    __tablename__ = 'telegram_bot_instances'
+    id = db.Column(db.Integer, primary_key=True)
+    scope_key = db.Column(db.String(80), nullable=False, unique=True, index=True)
+    owner_type = db.Column(db.String(20), nullable=False, default='system', index=True)
+    owner_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True, index=True)
+    display_name = db.Column(db.String(120), nullable=False, default='Eve Central Bot')
+    token_encrypted = db.Column(db.Text, nullable=True)
+    bot_user_id = db.Column(db.BigInteger, nullable=True, index=True)
+    bot_username = db.Column(db.String(64), nullable=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=False)
+    test_mode = db.Column(db.Boolean, nullable=False, default=True)
+    enabled_languages_json = db.Column(db.Text, nullable=False, default='["fa","en"]')
+    default_language = db.Column(db.String(12), nullable=False, default='fa')
+    connection_mode = db.Column(db.String(24), nullable=False, default='proxy_first')
+    transport_mode = db.Column(db.String(24), nullable=False, default='polling')
+    last_test_status = db.Column(db.String(24), nullable=True)
+    last_test_route = db.Column(db.String(120), nullable=True)
+    last_test_latency_ms = db.Column(db.Integer, nullable=True)
+    last_test_error = db.Column(db.Text, nullable=True)
+    last_test_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def enabled_languages(self):
+        try:
+            values = json.loads(self.enabled_languages_json or '[]')
+        except (TypeError, ValueError):
+            values = []
+        return [lang for lang in ('fa', 'en') if lang in values] or ['fa']
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'scope_key': self.scope_key,
+            'owner_type': self.owner_type,
+            'owner_admin_id': self.owner_admin_id,
+            'display_name': self.display_name,
+            'token_configured': bool(self.token_encrypted),
+            'bot_user_id': self.bot_user_id,
+            'bot_username': self.bot_username,
+            'enabled': bool(self.enabled),
+            'test_mode': bool(self.test_mode),
+            'enabled_languages': self.enabled_languages(),
+            'default_language': self.default_language,
+            'connection_mode': self.connection_mode,
+            'transport_mode': self.transport_mode,
+            'last_test_status': self.last_test_status,
+            'last_test_route': self.last_test_route,
+            'last_test_latency_ms': self.last_test_latency_ms,
+            'last_test_error': self.last_test_error,
+            'last_test_at': self.last_test_at.isoformat() if self.last_test_at else None,
+        }
+
+
+class TelegramProxyEndpoint(db.Model):
+    """One encrypted proxy candidate in a bot's failover pool."""
+    __tablename__ = 'telegram_proxy_endpoints'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'host', 'port', name='uq_telegram_bot_proxy'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    proxy_type = db.Column(db.String(16), nullable=False, default='socks5')
+    host = db.Column(db.String(255), nullable=False)
+    port = db.Column(db.Integer, nullable=False)
+    username_encrypted = db.Column(db.Text, nullable=True)
+    password_encrypted = db.Column(db.Text, nullable=True)
+    priority = db.Column(db.Integer, nullable=False, default=100, index=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    health_status = db.Column(db.String(24), nullable=False, default='unknown', index=True)
+    last_latency_ms = db.Column(db.Integer, nullable=True)
+    failure_count = db.Column(db.Integer, nullable=False, default=0)
+    last_error = db.Column(db.Text, nullable=True)
+    last_success_at = db.Column(db.DateTime, nullable=True)
+    last_failure_at = db.Column(db.DateTime, nullable=True)
+    cooldown_until = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    bot = db.relationship('TelegramBotInstance', backref=db.backref(
+        'proxy_endpoints', lazy=True, cascade='all, delete-orphan',
+    ))
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'proxy_type': self.proxy_type,
+            'host': self.host,
+            'port': self.port,
+            'username_configured': bool(self.username_encrypted),
+            'password_configured': bool(self.password_encrypted),
+            'priority': self.priority,
+            'enabled': bool(self.enabled),
+            'health_status': self.health_status,
+            'last_latency_ms': self.last_latency_ms,
+            'failure_count': int(self.failure_count or 0),
+            'last_error': self.last_error,
+            'last_success_at': self.last_success_at.isoformat() if self.last_success_at else None,
+            'last_failure_at': self.last_failure_at.isoformat() if self.last_failure_at else None,
+            'cooldown_until': self.cooldown_until.isoformat() if self.cooldown_until else None,
+        }
 
 
 class ClientPortalUser(db.Model):
@@ -24013,6 +24122,271 @@ def cleanup_backups_now():
         days = _parse_int(days, 14, min_value=1, max_value=3650)
     result = _cleanup_old_backups(days)
     return jsonify({'success': True, 'days': days, **result})
+
+
+def _central_telegram_bot(create=False):
+    bot = TelegramBotInstance.query.filter_by(scope_key='system').first()
+    if bot is None and create:
+        bot = TelegramBotInstance(scope_key='system', owner_type='system')
+        db.session.add(bot)
+        db.session.commit()
+    return bot
+
+
+def _encrypt_telegram_secret(value: str) -> str:
+    if not _get_server_password_fernet():
+        raise RuntimeError('SERVER_PASSWORD_KEY is required before Telegram secrets can be saved')
+    return encrypt_server_password(value)
+
+
+def _decrypt_telegram_secret(value: str | None) -> str:
+    return decrypt_server_password(value or '')
+
+
+def _validate_telegram_token(token: str) -> bool:
+    left, sep, right = (token or '').strip().partition(':')
+    return bool(sep and left.isdigit() and 5 <= len(left) <= 20 and len(right) >= 20
+                and re.fullmatch(r'[A-Za-z0-9_-]+', right))
+
+
+def _telegram_proxy_mapping(endpoint: TelegramProxyEndpoint) -> dict:
+    scheme = 'socks5h' if endpoint.proxy_type == 'socks5' else 'http'
+    username = _decrypt_telegram_secret(endpoint.username_encrypted)
+    password = _decrypt_telegram_secret(endpoint.password_encrypted)
+    base = f'{scheme}://{endpoint.host}:{int(endpoint.port)}'
+    url = _inject_proxy_credentials(base, username, password)
+    return {'http': url, 'https': url}
+
+
+def _telegram_bot_attempt(token: str, route_name: str, proxies=None) -> dict:
+    started = time.perf_counter()
+    try:
+        response = _telegram_get_me(token, proxies=proxies, timeout_sec=10)
+        latency = max(0, int((time.perf_counter() - started) * 1000))
+        try:
+            body = response.json() if response.content else {}
+        except Exception:
+            body = {}
+        result = body.get('result') if isinstance(body, dict) else None
+        if response.status_code == 200 and isinstance(body, dict) and body.get('ok') and isinstance(result, dict):
+            return {
+                'success': True, 'route': route_name, 'latency_ms': latency,
+                'bot_user_id': result.get('id'), 'bot_username': result.get('username'),
+                'bot_name': result.get('first_name'),
+            }
+        description = body.get('description') if isinstance(body, dict) else None
+        return {
+            'success': False, 'route': route_name, 'latency_ms': latency,
+            'error': description or f'Telegram returned HTTP {response.status_code}',
+        }
+    except Exception as exc:
+        return {
+            'success': False, 'route': route_name,
+            'latency_ms': max(0, int((time.perf_counter() - started) * 1000)),
+            'error': str(exc)[:500],
+        }
+
+
+def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_proxy_id=None) -> dict:
+    token = _decrypt_telegram_secret(bot.token_encrypted)
+    if not token or token.startswith(SERVER_PASSWORD_PREFIX):
+        return {'success': False, 'error': 'Bot token is not configured or cannot be decrypted', 'attempts': []}
+
+    proxies = TelegramProxyEndpoint.query.filter_by(bot_instance_id=bot.id, enabled=True)
+    if only_proxy_id is not None:
+        proxies = proxies.filter_by(id=int(only_proxy_id))
+    proxy_rows = proxies.order_by(TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc()).all()
+    attempts = []
+    if only_proxy_id is not None:
+        order = [('proxy', row) for row in proxy_rows]
+    elif route == 'direct':
+        order = [('direct', None)]
+    elif bot.connection_mode == 'direct_only':
+        order = [('direct', None)]
+    elif bot.connection_mode == 'proxy_only':
+        order = [('proxy', row) for row in proxy_rows]
+    elif bot.connection_mode == 'proxy_first':
+        order = [('proxy', row) for row in proxy_rows] + [('direct', None)]
+    else:
+        order = [('direct', None)] + [('proxy', row) for row in proxy_rows]
+
+    for kind, proxy in order:
+        route_name = 'direct' if proxy is None else f'{proxy.proxy_type}://{proxy.host}:{proxy.port}'
+        result = _telegram_bot_attempt(
+            token, route_name, proxies=(_telegram_proxy_mapping(proxy) if proxy else None),
+        )
+        attempts.append(result)
+        now = datetime.utcnow()
+        if proxy:
+            proxy.last_latency_ms = result.get('latency_ms')
+            if result['success']:
+                proxy.health_status = 'healthy'
+                proxy.failure_count = 0
+                proxy.last_error = None
+                proxy.last_success_at = now
+            else:
+                proxy.health_status = 'failed'
+                proxy.failure_count = int(proxy.failure_count or 0) + 1
+                proxy.last_error = result.get('error')
+                proxy.last_failure_at = now
+        if result['success']:
+            bot.bot_user_id = result.get('bot_user_id')
+            bot.bot_username = result.get('bot_username')
+            bot.last_test_status = 'healthy'
+            bot.last_test_route = result.get('route')
+            bot.last_test_latency_ms = result.get('latency_ms')
+            bot.last_test_error = None
+            bot.last_test_at = now
+            db.session.commit()
+            return {**result, 'attempts': attempts}
+
+    bot.last_test_status = 'failed'
+    bot.last_test_route = attempts[-1].get('route') if attempts else None
+    bot.last_test_latency_ms = attempts[-1].get('latency_ms') if attempts else None
+    bot.last_test_error = attempts[-1].get('error') if attempts else 'No usable route configured'
+    bot.last_test_at = datetime.utcnow()
+    db.session.commit()
+    return {'success': False, 'error': bot.last_test_error, 'attempts': attempts}
+
+
+def _telegram_proxy_from_payload(proxy, data):
+    proxy_type = str(data.get('proxy_type') or proxy.proxy_type or 'socks5').strip().lower()
+    if proxy_type not in ('socks5', 'http'):
+        raise ValueError('Proxy type must be socks5 or http')
+    host = str(data.get('host') or proxy.host or '').strip()
+    if not host or len(host) > 255 or any(char in host for char in '/?#@'):
+        raise ValueError('A valid proxy host is required')
+    try:
+        port = int(data.get('port') if data.get('port') is not None else proxy.port)
+        priority = int(data.get('priority') if data.get('priority') is not None else proxy.priority)
+    except (TypeError, ValueError):
+        raise ValueError('Proxy port and priority must be whole numbers')
+    if port < 1 or port > 65535:
+        raise ValueError('Proxy port must be between 1 and 65535')
+    proxy.proxy_type = proxy_type
+    proxy.host = host
+    proxy.port = port
+    proxy.priority = max(0, min(priority, 10000))
+    if 'enabled' in data:
+        proxy.enabled = bool(data.get('enabled'))
+    for field, attr in (('username', 'username_encrypted'), ('password', 'password_encrypted')):
+        value = str(data.get(field) or '').strip()
+        if value:
+            setattr(proxy, attr, _encrypt_telegram_secret(value))
+    return proxy
+
+
+@app.route('/api/settings/telegram-bots', methods=['GET'])
+@superadmin_required
+def get_telegram_bot_settings():
+    bot = _central_telegram_bot(create=True)
+    proxies = TelegramProxyEndpoint.query.filter_by(bot_instance_id=bot.id).order_by(
+        TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc(),
+    ).all()
+    return jsonify({'success': True, 'bot': bot.to_safe_dict(),
+                    'proxies': [proxy.to_safe_dict() for proxy in proxies]})
+
+
+@app.route('/api/settings/telegram-bots', methods=['POST'])
+@superadmin_required
+def save_telegram_bot_settings():
+    bot = _central_telegram_bot(create=True)
+    data = request.get_json(silent=True) or {}
+    display_name = str(data.get('display_name') or bot.display_name or '').strip()[:120]
+    if not display_name:
+        return jsonify({'success': False, 'error': 'Bot display name is required'}), 400
+    token = str(data.get('bot_token') or '').strip()
+    if token and not _validate_telegram_token(token):
+        return jsonify({'success': False, 'error': 'Bot token format is invalid'}), 400
+    languages = data.get('enabled_languages')
+    if not isinstance(languages, list):
+        languages = bot.enabled_languages()
+    languages = [lang for lang in ('fa', 'en') if lang in languages]
+    if not languages:
+        return jsonify({'success': False, 'error': 'At least one bot language must be enabled'}), 400
+    default_language = str(data.get('default_language') or bot.default_language or 'fa').strip().lower()
+    if default_language not in languages:
+        return jsonify({'success': False, 'error': 'Default language must be enabled'}), 400
+    connection_mode = str(data.get('connection_mode') or bot.connection_mode or 'proxy_first').strip().lower()
+    if connection_mode not in ('auto', 'direct_only', 'proxy_first', 'proxy_only'):
+        return jsonify({'success': False, 'error': 'Invalid connection mode'}), 400
+    try:
+        if token:
+            bot.token_encrypted = _encrypt_telegram_secret(token)
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    bot.display_name = display_name
+    bot.enabled = bool(data.get('enabled', bot.enabled))
+    bot.test_mode = bool(data.get('test_mode', bot.test_mode))
+    bot.enabled_languages_json = json.dumps(languages, separators=(',', ':'))
+    bot.default_language = default_language
+    bot.connection_mode = connection_mode
+    bot.transport_mode = 'polling'
+    if bot.enabled and not bot.token_encrypted:
+        return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
+    db.session.commit()
+    return jsonify({'success': True, 'bot': bot.to_safe_dict()})
+
+
+@app.route('/api/settings/telegram-bots/test', methods=['POST'])
+@superadmin_required
+def test_telegram_bot_settings():
+    bot = _central_telegram_bot(create=True)
+    route = str((request.get_json(silent=True) or {}).get('route') or 'configured').strip().lower()
+    if route not in ('direct', 'configured'):
+        return jsonify({'success': False, 'error': 'Invalid diagnostic route'}), 400
+    return jsonify(_telegram_bot_diagnostic(bot, route=route))
+
+
+@app.route('/api/settings/telegram-bots/proxies', methods=['POST'])
+@superadmin_required
+def create_telegram_bot_proxy():
+    bot = _central_telegram_bot(create=True)
+    proxy = TelegramProxyEndpoint(bot_instance_id=bot.id)
+    try:
+        _telegram_proxy_from_payload(proxy, request.get_json(silent=True) or {})
+        db.session.add(proxy)
+        db.session.commit()
+    except (ValueError, RuntimeError) as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'This proxy already exists'}), 409
+    return jsonify({'success': True, 'proxy': proxy.to_safe_dict()})
+
+
+@app.route('/api/settings/telegram-bots/proxies/<int:proxy_id>', methods=['PUT', 'DELETE'])
+@superadmin_required
+def update_telegram_bot_proxy(proxy_id):
+    bot = _central_telegram_bot(create=True)
+    proxy = TelegramProxyEndpoint.query.filter_by(id=proxy_id, bot_instance_id=bot.id).first()
+    if not proxy:
+        return jsonify({'success': False, 'error': 'Proxy not found'}), 404
+    if request.method == 'DELETE':
+        db.session.delete(proxy)
+        db.session.commit()
+        return jsonify({'success': True})
+    try:
+        _telegram_proxy_from_payload(proxy, request.get_json(silent=True) or {})
+        db.session.commit()
+    except (ValueError, RuntimeError) as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'This proxy already exists'}), 409
+    return jsonify({'success': True, 'proxy': proxy.to_safe_dict()})
+
+
+@app.route('/api/settings/telegram-bots/proxies/<int:proxy_id>/test', methods=['POST'])
+@superadmin_required
+def test_telegram_bot_proxy(proxy_id):
+    bot = _central_telegram_bot(create=True)
+    proxy = TelegramProxyEndpoint.query.filter_by(id=proxy_id, bot_instance_id=bot.id).first()
+    if not proxy:
+        return jsonify({'success': False, 'error': 'Proxy not found'}), 404
+    return jsonify(_telegram_bot_diagnostic(bot, only_proxy_id=proxy.id))
 
 
 @app.route('/api/settings/telegram-backup', methods=['GET'])

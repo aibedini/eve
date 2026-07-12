@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 from sqlalchemy.exc import IntegrityError
+from cryptography.fernet import Fernet
 
 
 _DB_FILE = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
@@ -24,6 +25,8 @@ from app import (  # noqa: E402
     ServiceDelegation,
     ServiceOwnership,
     TelegramIdentity,
+    TelegramBotInstance,
+    TelegramProxyEndpoint,
     SMS_GMWEB_API_KEY_KEY,
     SMS_GMWEB_BASE_URL_KEY,
     SMS_GMWEB_TIMEOUT_KEY,
@@ -44,6 +47,8 @@ from app import (  # noqa: E402
     _select_subscription_package,
     normalize_iran_mobile,
     review_ownership_claim_item,
+    _telegram_bot_diagnostic,
+    _telegram_proxy_from_payload,
 )
 
 
@@ -73,6 +78,8 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             pass
 
     def tearDown(self):
+        TelegramProxyEndpoint.query.delete()
+        TelegramBotInstance.query.delete()
         OwnershipClaimItem.query.delete()
         OwnershipClaim.query.delete()
         TelegramIdentity.query.delete()
@@ -290,6 +297,111 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(item.rejection_reason, 'Phone ownership not proven')
         self.assertEqual(item.reviewed_by_admin_id, reviewer.id)
         self.assertEqual(claim.status, 'rejected')
+
+    def test_telegram_bot_and_proxy_safe_dicts_never_expose_secrets(self):
+        bot = TelegramBotInstance(scope_key='system', token_encrypted='enc:secret')
+        db.session.add(bot)
+        db.session.flush()
+        proxy = TelegramProxyEndpoint(
+            bot_instance_id=bot.id, proxy_type='socks5', host='127.0.0.1', port=1080,
+            username_encrypted='enc:user', password_encrypted='enc:password',
+        )
+        db.session.add(proxy)
+        db.session.commit()
+
+        bot_payload = bot.to_safe_dict()
+        proxy_payload = proxy.to_safe_dict()
+        self.assertTrue(bot_payload['token_configured'])
+        self.assertNotIn('token', bot_payload)
+        self.assertTrue(proxy_payload['password_configured'])
+        self.assertNotIn('password', proxy_payload)
+        self.assertNotIn('username', proxy_payload)
+
+    def test_proxy_payload_encrypts_credentials_and_blank_preserves_them(self):
+        fernet = Fernet(Fernet.generate_key())
+        proxy = TelegramProxyEndpoint(proxy_type='socks5', priority=100, enabled=True)
+        with patch('app._get_server_password_fernet', return_value=fernet):
+            _telegram_proxy_from_payload(proxy, {
+                'proxy_type': 'socks5', 'host': 'proxy.test', 'port': 1080,
+                'username': 'alice', 'password': 'secret', 'priority': 10,
+            })
+            encrypted_password = proxy.password_encrypted
+            _telegram_proxy_from_payload(proxy, {
+                'host': 'proxy.test', 'port': 1080, 'username': '', 'password': '',
+            })
+        self.assertTrue(encrypted_password.startswith('enc:'))
+        self.assertEqual(proxy.password_encrypted, encrypted_password)
+
+    def test_configured_diagnostic_falls_back_from_proxy_to_direct(self):
+        fernet = Fernet(Fernet.generate_key())
+        with patch('app._get_server_password_fernet', return_value=fernet):
+            bot = TelegramBotInstance(
+                scope_key='system', connection_mode='proxy_first',
+                token_encrypted='enc:' + fernet.encrypt(b'123456:abcdefghijklmnopqrstuvwxyz').decode(),
+            )
+            db.session.add(bot)
+            db.session.flush()
+            proxy = TelegramProxyEndpoint(
+                bot_instance_id=bot.id, proxy_type='socks5', host='proxy.test', port=1080,
+            )
+            db.session.add(proxy)
+            db.session.commit()
+
+            class GoodResponse:
+                status_code = 200
+                content = b'{}'
+
+                @staticmethod
+                def json():
+                    return {'ok': True, 'result': {'id': 42, 'username': 'eve_test_bot', 'first_name': 'Eve'}}
+
+            def fake_get_me(_token, proxies=None, timeout_sec=10):
+                if proxies:
+                    raise ConnectionError('proxy unavailable')
+                return GoodResponse()
+
+            with patch('app._telegram_get_me', side_effect=fake_get_me):
+                result = _telegram_bot_diagnostic(bot, route='configured')
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['route'], 'direct')
+        self.assertEqual(len(result['attempts']), 2)
+        self.assertEqual(proxy.health_status, 'failed')
+        self.assertEqual(bot.bot_username, 'eve_test_bot')
+
+    def test_telegram_bot_settings_api_masks_saved_token(self):
+        reviewer = Admin(
+            username='claim-test-ui-admin', role='superadmin', is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add(reviewer)
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+
+        fernet = Fernet(Fernet.generate_key())
+        with patch('app._get_server_password_fernet', return_value=fernet):
+            response = client.post('/api/settings/telegram-bots', json={
+                'display_name': 'Eve Test Bot',
+                'bot_token': '123456:abcdefghijklmnopqrstuvwxyz',
+                'enabled': False,
+                'test_mode': True,
+                'enabled_languages': ['fa', 'en'],
+                'default_language': 'fa',
+                'connection_mode': 'proxy_first',
+            })
+            saved = response.get_json()
+            loaded = client.get('/api/settings/telegram-bots').get_json()
+            settings_page = client.get('/settings')
+
+        self.assertTrue(saved['success'])
+        self.assertTrue(loaded['success'])
+        self.assertTrue(loaded['bot']['token_configured'])
+        self.assertNotIn('bot_token', loaded['bot'])
+        self.assertNotIn('token_encrypted', loaded['bot'])
+        self.assertEqual(settings_page.status_code, 200)
+        self.assertIn(b'tab-telegram_bots', settings_page.data)
 
     def test_new_client_is_appended_as_latest_user_in_every_target_inbound(self):
         previous = GLOBAL_SERVER_DATA.get('inbounds')
