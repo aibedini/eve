@@ -12,6 +12,7 @@ os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 from app import (  # noqa: E402
+    CustomerAccount,
     GLOBAL_SERVER_DATA,
     PendingSms,
     RenewalEvent,
@@ -33,6 +34,7 @@ from app import (  # noqa: E402
     _sms_gateway_ready,
     _sms_reserve_daily_segments,
     _select_subscription_package,
+    normalize_iran_mobile,
 )
 
 
@@ -62,6 +64,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             pass
 
     def tearDown(self):
+        CustomerAccount.query.delete()
         SmsSendLog.query.delete()
         PendingSms.query.delete()
         SystemConfig.query.filter(SystemConfig.key.in_([
@@ -77,6 +80,41 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         )
         self.assertEqual(selected['id'], 4)
         self.assertIsNone(comfort)
+
+    def test_iran_mobile_normalization_accepts_supported_prefixes(self):
+        expected = '989195292411'
+        for value in (
+            '09195292411', '9195292411', '+989195292411',
+            '00989195292411', '98 919 529 2411', '۰۹۱۹۵۲۹۲۴۱۱',
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(normalize_iran_mobile(value), expected)
+
+    def test_iran_mobile_normalization_extracts_from_client_label(self):
+        self.assertEqual(normalize_iran_mobile('g276-09195292411'), '989195292411')
+        self.assertEqual(normalize_iran_mobile('customer_9195292411'), '989195292411')
+
+    def test_iran_mobile_normalization_rejects_incomplete_or_landline_values(self):
+        for value in ('', None, '0919529241', '02188776655', 'account-1234567890'):
+            with self.subTest(value=value):
+                self.assertEqual(normalize_iran_mobile(value), '')
+
+    def test_customer_account_stores_only_canonical_verified_phone(self):
+        customer = CustomerAccount(display_name='Test Customer')
+        canonical = customer.set_primary_phone('۰۹۱۹ ۵۲۹ ۲۴۱۱', verified=True)
+        db.session.add(customer)
+        db.session.commit()
+
+        self.assertEqual(canonical, '989195292411')
+        self.assertEqual(customer.primary_phone, canonical)
+        self.assertIsNotNone(customer.phone_verified_at)
+        self.assertEqual(customer.status, 'active')
+        self.assertEqual(customer.preferred_language, 'fa')
+
+    def test_customer_account_rejects_invalid_phone(self):
+        customer = CustomerAccount()
+        with self.assertRaises(ValueError):
+            customer.set_primary_phone('not-a-mobile')
 
     def test_new_client_is_appended_as_latest_user_in_every_target_inbound(self):
         previous = GLOBAL_SERVER_DATA.get('inbounds')

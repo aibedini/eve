@@ -98,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.29"
+APP_VERSION = "2.4.30"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -7225,6 +7225,41 @@ def _normalize_ascii_digits(value: str | None) -> str:
     return val.translate(table)
 
 
+def normalize_iran_mobile(value: str | None) -> str:
+    """Return an Iranian mobile in canonical ``989xxxxxxxxx`` form.
+
+    Accepts Persian/Arabic digits, common 09/9/+98/0098 prefixes, separators,
+    and mobile numbers embedded in client labels. Returns an empty string when
+    no complete Iranian mobile number is present.
+    """
+    if not value:
+        return ''
+    text_value = _normalize_ascii_digits(value)
+    separator = r'[\s().\-]*'
+    boundary = r'(?<![0-9A-Za-z\u0600-\u06ff])'
+    patterns = (
+        boundary + r'\+98' + separator + r'(9(?:' + separator + r'\d){9})(?!\d)',
+        boundary + r'0098' + separator + r'(9(?:' + separator + r'\d){9})(?!\d)',
+        boundary + r'98' + separator + r'(9(?:' + separator + r'\d){9})(?!\d)',
+        boundary + r'0' + separator + r'(9(?:' + separator + r'\d){9})(?!\d)',
+        boundary + r'(9(?:' + separator + r'\d){9})(?!\d)',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text_value)
+        if match:
+            subscriber = re.sub(r'\D', '', match.group(1))
+            if len(subscriber) == 10 and subscriber.startswith('9'):
+                return f'98{subscriber}'
+
+    compact = re.sub(r'\D', '', text_value)
+    for pattern in (r'(?<!\d)0098(9\d{9})(?!\d)', r'(?<!\d)98(9\d{9})(?!\d)',
+                    r'(?<!\d)0(9\d{9})(?!\d)', r'(?<!\d)(9\d{9})(?!\d)'):
+        match = re.search(pattern, compact)
+        if match:
+            return f'98{match.group(1)}'
+    return ''
+
+
 def _extract_iran_mobile_from_text(value: str | None, *extra_sources: str | None) -> str:
     """Extract first valid Iranian mobile from value, then extra_sources in order.
 
@@ -7648,6 +7683,29 @@ class Transaction(db.Model):
             'date_jalali': format_jalali(self.created_at),
             'admin': admin_info
         }
+
+class CustomerAccount(db.Model):
+    """Channel-independent identity for an end customer."""
+    __tablename__ = 'customer_accounts'
+    id = db.Column(db.Integer, primary_key=True)
+    display_name = db.Column(db.String(120), nullable=True)
+    primary_phone = db.Column(db.String(12), nullable=True, unique=True, index=True)
+    phone_verified_at = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(24), nullable=False, default='active', index=True)
+    risk_level = db.Column(db.String(24), nullable=False, default='standard', index=True)
+    preferred_language = db.Column(db.String(12), nullable=False, default='fa')
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def set_primary_phone(self, raw_phone: str | None, *, verified=False):
+        canonical = normalize_iran_mobile(raw_phone)
+        if not canonical:
+            raise ValueError('A valid Iranian mobile number is required')
+        self.primary_phone = canonical
+        if verified:
+            self.phone_verified_at = datetime.utcnow()
+        return canonical
+
 
 class ClientPortalUser(db.Model):
     """End-user portal accounts — login with Iranian mobile + password."""
