@@ -191,7 +191,7 @@ configure_env() {
     set_env_kv "DOMAIN"                 "$DOMAIN"
     set_env_kv "SSL_MODE"               "$SSL_MODE"
     set_env_kv "LETSENCRYPT_EMAIL"      "$LETSENCRYPT_EMAIL"
-    set_env_kv "EVE_IMAGE"              "${EVE_IMAGE:-ghcr.io/yoyoraya/eve-xui-manager:latest}"
+    set_env_kv "EVE_IMAGE"              "${EVE_IMAGE:-ghcr.io/aibedini/eve:latest}"
     set_env_kv "POSTGRES_PASSWORD"      "$POSTGRES_PASSWORD"
     set_env_kv "INITIAL_ADMIN_USERNAME" "$INITIAL_ADMIN_USERNAME"
     set_env_kv "INITIAL_ADMIN_PASSWORD" "$INITIAL_ADMIN_PASSWORD"

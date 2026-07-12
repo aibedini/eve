@@ -21,7 +21,7 @@
 Run on your Ubuntu/Debian server:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/yoyoraya/eve-xui-manager/main/setup.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/aibedini/eve/main/setup.sh)
 ```
 
 The installer self-updates, verifies and installs requirements, and brings the service up behind nginx + gunicorn.
@@ -130,7 +130,7 @@ bash scripts/docker/build-offline-bundle.sh
 
 1. **Clone**
 ```bash
-git clone https://github.com/yoyoraya/eve-xui-manager.git
+git clone https://github.com/aibedini/eve.git
 cd eve-xui-manager
 ```
 

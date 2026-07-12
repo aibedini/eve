@@ -29,7 +29,7 @@ bash collect-offline-profile.sh
 ### ۲. ساخت bundle روی سیستم آنلاین
 
 ```bash
-git clone https://github.com/yoyoraya/eve-xui-manager.git
+git clone https://github.com/aibedini/eve.git
 cd eve-xui-manager
 chmod +x prepare-offline-bundle.sh
 bash prepare-offline-bundle.sh --profile /path/to/eve-offline-profile.txt .

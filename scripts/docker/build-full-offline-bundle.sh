@@ -17,7 +17,7 @@ set -euo pipefail
 #
 # The output file is: eve-full-offline-bundle.tar.gz
 
-APP_IMAGE="${APP_IMAGE:-ghcr.io/yoyoraya/eve-xui-manager:latest}"
+APP_IMAGE="${APP_IMAGE:-ghcr.io/aibedini/eve:latest}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"

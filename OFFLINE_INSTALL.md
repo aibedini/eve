@@ -60,7 +60,7 @@ bash /root/eve-offline-profile.sh
 Copy `/root/eve-offline-profile.txt` back to the online build machine, then run:
 
 ```bash
-git clone https://github.com/yoyoraya/eve-xui-manager.git
+git clone https://github.com/aibedini/eve.git
 cd eve-xui-manager
 chmod +x prepare-offline-bundle.sh
 bash prepare-offline-bundle.sh --profile /path/to/eve-offline-profile.txt .
@@ -81,7 +81,7 @@ only the package choices that Ubuntu would actually install.
 Generic all-target flow:
 
 ```bash
-git clone https://github.com/yoyoraya/eve-xui-manager.git
+git clone https://github.com/aibedini/eve.git
 cd eve-xui-manager
 chmod +x prepare-offline-bundle.sh
 bash prepare-offline-bundle.sh .
@@ -132,7 +132,7 @@ The installer uses only local files from `offline/`:
 
 ```bash
 # On a Linux/Mac/WSL machine with internet
-git clone https://github.com/yoyoraya/eve-xui-manager.git
+git clone https://github.com/aibedini/eve.git
 cd eve-xui-manager
 
 # Download all dependencies
@@ -341,7 +341,7 @@ bash setup.sh
 ```bash
 # On another computer WITH internet:
 # 1. Download project
-git clone https://github.com/yoyoraya/eve-xui-manager.git
+git clone https://github.com/aibedini/eve.git
 
 # 2. Download wheels
 bash eve-xui-manager/prepare-wheels.sh eve-xui-manager

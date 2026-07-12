@@ -16,7 +16,7 @@ Create `.env` next to `docker-compose.yml`:
 DOMAIN=panel.example.com
 SSL_MODE=http
 LETSENCRYPT_EMAIL=admin@example.com
-EVE_IMAGE=ghcr.io/yoyoraya/eve-xui-manager:latest
+EVE_IMAGE=ghcr.io/aibedini/eve:latest
 POSTGRES_PASSWORD=change-this-long-random-password
 INITIAL_ADMIN_USERNAME=admin
 INITIAL_ADMIN_PASSWORD=change-this-admin-password
@@ -54,7 +54,7 @@ Open `https://YOUR_DOMAIN`.
 To build locally instead of using GHCR:
 
 ```bash
-docker build -t ghcr.io/yoyoraya/eve-xui-manager:latest .
+docker build -t ghcr.io/aibedini/eve:latest .
 docker compose up -d
 ```
 
@@ -71,7 +71,7 @@ The bundle includes Docker Engine, Docker Compose plugin, all runtime images, an
 #### Build on any machine that has Docker + internet
 
 ```bash
-git clone https://github.com/yoyoraya/eve-xui-manager.git
+git clone https://github.com/aibedini/eve.git
 cd eve-xui-manager
 bash scripts/docker/build-full-offline-bundle.sh
 ```
@@ -117,7 +117,7 @@ Use this when Docker Engine is already on the target server (Ubuntu 20.04, 22.04
 #### Build on Hetzner or any online server
 
 ```bash
-git clone https://github.com/yoyoraya/eve-xui-manager.git
+git clone https://github.com/aibedini/eve.git
 cd eve-xui-manager
 bash scripts/docker/build-offline-bundle.sh
 ```
@@ -153,12 +153,12 @@ The target server only needs Docker Engine and the Docker Compose plugin. The ap
 On an online machine:
 
 ```bash
-docker pull ghcr.io/yoyoraya/eve-xui-manager:latest
+docker pull ghcr.io/aibedini/eve:latest
 docker pull postgres:16-alpine
 docker pull caddy:2-alpine
 docker pull redis:7-alpine
 docker save -o eve-docker-images.tar \
-  ghcr.io/yoyoraya/eve-xui-manager:latest \
+  ghcr.io/aibedini/eve:latest \
   postgres:16-alpine \
   caddy:2-alpine \
   redis:7-alpine
