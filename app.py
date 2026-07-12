@@ -98,7 +98,7 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.31"
+APP_VERSION = "2.4.32"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -7784,6 +7784,171 @@ class ServiceDelegation(db.Model):
     @property
     def is_active(self):
         return self.accepted_at is not None and self.revoked_at is None
+
+
+class TelegramIdentity(db.Model):
+    """A Telegram user identity, independent of any particular bot instance."""
+    __tablename__ = 'telegram_identities'
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer_accounts.id'), nullable=True, index=True)
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, unique=True, index=True)
+    telegram_chat_id = db.Column(db.BigInteger, nullable=True, index=True)
+    username = db.Column(db.String(64), nullable=True)
+    first_name = db.Column(db.String(128), nullable=True)
+    last_name = db.Column(db.String(128), nullable=True)
+    phone_normalized = db.Column(db.String(12), nullable=True, index=True)
+    phone_verified_at = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(24), nullable=False, default='active', index=True)
+    last_seen_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer = db.relationship('CustomerAccount', backref=db.backref('telegram_identities', lazy=True))
+
+    def set_verified_phone(self, raw_phone: str | None):
+        canonical = normalize_iran_mobile(raw_phone)
+        if not canonical:
+            raise ValueError('A valid Iranian mobile number is required')
+        self.phone_normalized = canonical
+        self.phone_verified_at = datetime.utcnow()
+        return canonical
+
+
+class OwnershipClaim(db.Model):
+    """A customer request to attach one or more existing panel clients."""
+    __tablename__ = 'ownership_claims'
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer_accounts.id'), nullable=False, index=True)
+    telegram_identity_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_identities.id'), nullable=False, index=True,
+    )
+    requested_reseller_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True, index=True)
+    status = db.Column(db.String(32), nullable=False, default='pending', index=True)
+    claim_method = db.Column(db.String(32), nullable=False, default='admin_review')
+    verified_phone = db.Column(db.String(12), nullable=False, index=True)
+    reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer = db.relationship('CustomerAccount')
+    telegram_identity = db.relationship('TelegramIdentity')
+
+
+class OwnershipClaimItem(db.Model):
+    """One candidate service within an ownership claim."""
+    __tablename__ = 'ownership_claim_items'
+    __table_args__ = (
+        db.UniqueConstraint('claim_id', 'server_id', 'client_uuid', name='uq_claim_service_item'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    claim_id = db.Column(
+        db.Integer, db.ForeignKey('ownership_claims.id', ondelete='CASCADE'), nullable=False, index=True,
+    )
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=False, index=True)
+    client_uuid = db.Column(db.String(100), nullable=False)
+    client_email_snapshot = db.Column(db.String(255), nullable=True, index=True)
+    match_reason = db.Column(db.String(64), nullable=False, default='phone_match')
+    match_score = db.Column(db.Integer, nullable=False, default=0)
+    subscription_verified = db.Column(db.Boolean, nullable=False, default=False)
+    status = db.Column(db.String(32), nullable=False, default='pending', index=True)
+    conflict_owner_id = db.Column(db.Integer, db.ForeignKey('customer_accounts.id'), nullable=True)
+    reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    claim = db.relationship('OwnershipClaim', backref=db.backref('items', lazy=True, cascade='all, delete-orphan'))
+    server = db.relationship('Server')
+
+
+def _can_review_ownership_claim(reviewer, claim: OwnershipClaim) -> bool:
+    if not reviewer:
+        return False
+    role = str(getattr(reviewer, 'role', '') or '').strip().lower()
+    if bool(getattr(reviewer, 'is_superadmin', False)) or role in ('admin', 'superadmin'):
+        return True
+    return role == 'reseller' and claim.requested_reseller_id == getattr(reviewer, 'id', None)
+
+
+def _refresh_ownership_claim_status(claim: OwnershipClaim):
+    statuses = [item.status for item in claim.items]
+    if not statuses or any(status == 'pending' for status in statuses):
+        claim.status = 'pending'
+    elif any(status == 'conflict' for status in statuses):
+        claim.status = 'needs_attention'
+    elif all(status == 'approved' for status in statuses):
+        claim.status = 'approved'
+    elif any(status == 'approved' for status in statuses):
+        claim.status = 'partially_approved'
+    else:
+        claim.status = 'rejected'
+    return claim.status
+
+
+def review_ownership_claim_item(item_id: int, reviewer, *, approve: bool,
+                                rejection_reason: str | None = None) -> dict:
+    """Atomically approve or reject one claim item with tenant authorization."""
+    item = OwnershipClaimItem.query.filter_by(id=int(item_id)).with_for_update().first()
+    if not item:
+        raise ValueError('Ownership claim item not found')
+    claim = OwnershipClaim.query.filter_by(id=item.claim_id).with_for_update().first()
+    if not claim or not _can_review_ownership_claim(reviewer, claim):
+        raise PermissionError('Not permitted to review this ownership claim')
+    if item.status not in ('pending', 'conflict'):
+        raise ValueError('Ownership claim item has already been reviewed')
+
+    now = datetime.utcnow()
+    item.reviewed_by_admin_id = reviewer.id
+    item.reviewed_at = now
+    claim.reviewed_by_admin_id = reviewer.id
+    claim.reviewed_at = now
+
+    if not approve:
+        item.status = 'rejected'
+        item.rejection_reason = (rejection_reason or '').strip()[:2000] or None
+        _refresh_ownership_claim_status(claim)
+        db.session.commit()
+        return {'success': True, 'status': item.status, 'claim_status': claim.status}
+
+    ownership = ServiceOwnership.query.filter_by(
+        server_id=item.server_id, client_uuid=item.client_uuid,
+    ).with_for_update().first()
+    if ownership and ownership.is_active and ownership.customer_id != claim.customer_id:
+        item.status = 'conflict'
+        item.conflict_owner_id = ownership.customer_id
+        _refresh_ownership_claim_status(claim)
+        db.session.commit()
+        return {'success': False, 'status': 'conflict', 'claim_status': claim.status}
+
+    if ownership is None:
+        ownership = ServiceOwnership(
+            customer_id=claim.customer_id,
+            server_id=item.server_id,
+            client_uuid=item.client_uuid,
+        )
+        db.session.add(ownership)
+    else:
+        ownership.customer_id = claim.customer_id
+        ownership.revoked_at = None
+    ownership.client_email_snapshot = item.client_email_snapshot
+    ownership.reseller_id = claim.requested_reseller_id
+    ownership.verification_method = claim.claim_method
+    ownership.verified_by_admin_id = reviewer.id
+    ownership.verified_at = now
+    item.status = 'approved'
+    item.conflict_owner_id = None
+    item.rejection_reason = None
+    _refresh_ownership_claim_status(claim)
+    db.session.commit()
+    return {
+        'success': True,
+        'status': item.status,
+        'claim_status': claim.status,
+        'service_ownership_id': ownership.id,
+    }
 
 
 class ClientPortalUser(db.Model):

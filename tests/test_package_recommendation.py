@@ -13,13 +13,17 @@ os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 from app import (  # noqa: E402
+    Admin,
     CustomerAccount,
     GLOBAL_SERVER_DATA,
     PendingSms,
     RenewalEvent,
+    OwnershipClaim,
+    OwnershipClaimItem,
     Server,
     ServiceDelegation,
     ServiceOwnership,
+    TelegramIdentity,
     SMS_GMWEB_API_KEY_KEY,
     SMS_GMWEB_BASE_URL_KEY,
     SMS_GMWEB_TIMEOUT_KEY,
@@ -39,6 +43,7 @@ from app import (  # noqa: E402
     _sms_reserve_daily_segments,
     _select_subscription_package,
     normalize_iran_mobile,
+    review_ownership_claim_item,
 )
 
 
@@ -68,6 +73,9 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             pass
 
     def tearDown(self):
+        OwnershipClaimItem.query.delete()
+        OwnershipClaim.query.delete()
+        TelegramIdentity.query.delete()
         ServiceDelegation.query.delete()
         ServiceOwnership.query.delete()
         CustomerAccount.query.delete()
@@ -78,7 +86,46 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             SMS_GMWEB_API_KEY_KEY,
             SMS_GMWEB_TIMEOUT_KEY,
         ])).delete(synchronize_session=False)
+        Admin.query.filter(Admin.username.like('claim-test-%')).delete(synchronize_session=False)
         db.session.commit()
+
+    def _make_claim(self, suffix, *, reviewer_role='admin', requested_reseller=False):
+        customer = CustomerAccount(primary_phone=f'98912000{int(suffix):04d}')
+        identity = TelegramIdentity(
+            customer=customer,
+            telegram_user_id=8_000_000 + int(suffix),
+            telegram_chat_id=8_000_000 + int(suffix),
+            phone_normalized=customer.primary_phone,
+            phone_verified_at=datetime.utcnow(),
+        )
+        server = Server(
+            name=f'Claim Test {suffix}', host=f'https://claim-{suffix}.test',
+            username='u', password='p',
+        )
+        reviewer = Admin(username=f'claim-test-{suffix}', role=reviewer_role)
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add_all([customer, identity, server, reviewer])
+        db.session.flush()
+        claim = OwnershipClaim(
+            customer_id=customer.id,
+            telegram_identity_id=identity.id,
+            requested_reseller_id=(reviewer.id if requested_reseller else None),
+            verified_phone=customer.primary_phone,
+            claim_method='admin_review',
+        )
+        db.session.add(claim)
+        db.session.flush()
+        item = OwnershipClaimItem(
+            claim_id=claim.id,
+            server_id=server.id,
+            client_uuid=f'claim-client-{suffix}',
+            client_email_snapshot=f'g{suffix}-{customer.primary_phone}',
+            match_reason='phone_match',
+            match_score=90,
+        )
+        db.session.add(item)
+        db.session.commit()
+        return customer, identity, server, reviewer, claim, item
 
     def test_forecast_above_catalog_uses_largest_available(self):
         selected, comfort, _ = _select_subscription_package(
@@ -173,6 +220,76 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
 
         delegation.revoked_at = datetime.utcnow()
         self.assertFalse(delegation.is_active)
+
+    def test_telegram_identity_verifies_and_canonicalizes_own_phone(self):
+        identity = TelegramIdentity(telegram_user_id=7000001)
+        canonical = identity.set_verified_phone('0919 529 2411')
+        self.assertEqual(canonical, '989195292411')
+        self.assertEqual(identity.phone_normalized, canonical)
+        self.assertIsNotNone(identity.phone_verified_at)
+
+    def test_admin_can_approve_claim_and_create_service_ownership(self):
+        customer, _identity, server, reviewer, claim, item = self._make_claim(1)
+        result = review_ownership_claim_item(item.id, reviewer, approve=True)
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['status'], 'approved')
+        self.assertEqual(result['claim_status'], 'approved')
+        ownership = ServiceOwnership.query.filter_by(
+            server_id=server.id, client_uuid='claim-client-1',
+        ).one()
+        self.assertEqual(ownership.customer_id, customer.id)
+        self.assertEqual(ownership.verified_by_admin_id, reviewer.id)
+        self.assertEqual(claim.status, 'approved')
+
+    def test_reseller_cannot_review_another_resellers_claim(self):
+        _customer, _identity, _server, owner_reseller, _claim, item = self._make_claim(
+            2, reviewer_role='reseller', requested_reseller=True,
+        )
+        other = Admin(username='claim-test-other', role='reseller')
+        other.set_password('StrongClaimPassword123!')
+        db.session.add(other)
+        db.session.commit()
+
+        with self.assertRaises(PermissionError):
+            review_ownership_claim_item(item.id, other, approve=True)
+        self.assertEqual(item.status, 'pending')
+        self.assertNotEqual(owner_reseller.id, other.id)
+
+    def test_claim_approval_detects_existing_active_owner_conflict(self):
+        customer, _identity, server, reviewer, claim, item = self._make_claim(3)
+        existing_customer = CustomerAccount(primary_phone='989121111111')
+        db.session.add(existing_customer)
+        db.session.flush()
+        existing = ServiceOwnership(
+            customer_id=existing_customer.id,
+            server_id=server.id,
+            client_uuid=item.client_uuid,
+            client_email_snapshot='existing-owner',
+        )
+        db.session.add(existing)
+        db.session.commit()
+
+        result = review_ownership_claim_item(item.id, reviewer, approve=True)
+        self.assertFalse(result['success'])
+        self.assertEqual(result['status'], 'conflict')
+        self.assertEqual(result['claim_status'], 'needs_attention')
+        self.assertEqual(item.conflict_owner_id, existing_customer.id)
+        self.assertEqual(existing.customer_id, existing_customer.id)
+        self.assertNotEqual(existing.customer_id, customer.id)
+        self.assertEqual(claim.status, 'needs_attention')
+
+    def test_claim_item_can_be_rejected_with_audited_reason(self):
+        _customer, _identity, _server, reviewer, claim, item = self._make_claim(4)
+        result = review_ownership_claim_item(
+            item.id, reviewer, approve=False, rejection_reason='Phone ownership not proven',
+        )
+        self.assertTrue(result['success'])
+        self.assertEqual(result['status'], 'rejected')
+        self.assertEqual(result['claim_status'], 'rejected')
+        self.assertEqual(item.rejection_reason, 'Phone ownership not proven')
+        self.assertEqual(item.reviewed_by_admin_id, reviewer.id)
+        self.assertEqual(claim.status, 'rejected')
 
     def test_new_client_is_appended_as_latest_user_in_every_target_inbound(self):
         previous = GLOBAL_SERVER_DATA.get('inbounds')
