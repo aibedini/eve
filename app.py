@@ -101,7 +101,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.34"
+APP_VERSION = "2.4.35"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -24656,7 +24656,8 @@ def test_telegram_egress_profile(profile_id):
         return jsonify({'success': False, 'error': 'Egress profile not found'}), 404
     result = _telegram_bot_diagnostic(bot, only_egress_id=profile.id)
     if not result.get('success') and profile.runtime_status == 'runtime_missing':
-        result['runtime_hint'] = 'Install Xray or set XRAY_BIN, then restart eve-telegram-egress.service'
+        result['runtime_hint'] = ('Use Eve menu option [x] to install Xray, then restart '
+                                  'eve-manager-telegram-egress.service')
     return jsonify(result)
 
 

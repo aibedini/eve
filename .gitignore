@@ -80,6 +80,7 @@ attached_assets/
 
 # Database and runtime data
 instance/
+runtime/
 *.db
 *.sqlite
 *.sqlite3

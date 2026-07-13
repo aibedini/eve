@@ -1286,7 +1286,11 @@ EOF
         systemctl restart ${SERVICE_NAME}
         print_success "Web, background, and Telegram egress services started"
     else
-        print_success "Web and background service definitions updated"
+        print_success "Web, background, and Telegram egress service definitions updated"
+    fi
+    if ! find_xray_binary >/dev/null 2>&1; then
+        print_warning "Xray runtime is not installed. Telegram managed routes will show runtime_missing."
+        print_warning "Run 'eve' and choose [x], or run: eve --install-xray"
     fi
     install_maintenance_service
 }
@@ -2377,6 +2381,166 @@ update_self() {
 # Status helpers for the menu banner
 # ──────────────────────────────────────────────────────────────
 
+find_xray_binary() {
+    local configured=""
+    if [ -r "$ENV_FILE" ]; then
+        configured=$(awk -F= '$1 == "XRAY_BIN" {sub(/^[^=]*=/, ""); print; exit}' "$ENV_FILE" 2>/dev/null || true)
+        configured="${configured%\"}"; configured="${configured#\"}"
+        [ -x "$configured" ] && { echo "$configured"; return 0; }
+    fi
+
+    local candidate
+    for candidate in \
+        "${APP_DIR}/runtime/xray/xray" \
+        "$(command -v xray 2>/dev/null || true)" \
+        /usr/local/bin/xray \
+        /usr/bin/xray \
+        /usr/local/x-ui/bin/xray-linux-amd64 \
+        /usr/local/x-ui/bin/xray-linux-arm64 \
+        /usr/local/x-ui/bin/xray; do
+        [ -n "$candidate" ] && [ -x "$candidate" ] && { echo "$candidate"; return 0; }
+    done
+    return 1
+}
+
+get_xray_status() {
+    local binary version
+    binary=$(find_xray_binary 2>/dev/null || true)
+    if [ -z "$binary" ]; then
+        echo -e "${YELLOW}○ Not installed${NC}"
+        return
+    fi
+    version=$("$binary" version 2>/dev/null | head -n 1 | sed -E 's/^[Xx]ray[[:space:]]+//' || true)
+    [ -z "$version" ] && version="installed"
+    echo -e "${GREEN}● ${version}${NC} ${DIM}(${binary})${NC}"
+}
+
+set_eve_xray_binary() {
+    local binary="$1"
+    [ -f "$ENV_FILE" ] || { print_error "Eve .env not found: $ENV_FILE"; return 1; }
+    if grep -q '^XRAY_BIN=' "$ENV_FILE" 2>/dev/null; then
+        sed -i "s|^XRAY_BIN=.*|XRAY_BIN=${binary}|" "$ENV_FILE"
+    else
+        printf '\nXRAY_BIN=%s\n' "$binary" >> "$ENV_FILE"
+    fi
+    chown "$APP_USER:$APP_USER" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+}
+
+install_or_update_eve_xray() {
+    print_header "Install / Update Eve Xray Runtime"
+    [ -f "$ENV_FILE" ] || {
+        print_error "Install Eve first; $ENV_FILE does not exist."
+        return 1
+    }
+    for command_name in curl python3 unzip sha256sum install; do
+        command -v "$command_name" >/dev/null 2>&1 || {
+            print_error "Required command is missing: $command_name"
+            return 1
+        }
+    done
+
+    local asset_arch machine
+    machine=$(uname -m)
+    case "$machine" in
+        x86_64|amd64) asset_arch="64" ;;
+        aarch64|arm64) asset_arch="arm64-v8a" ;;
+        armv7l|armv7) asset_arch="arm32-v7a" ;;
+        i386|i686) asset_arch="32" ;;
+        *) print_error "Unsupported CPU architecture: $machine"; return 1 ;;
+    esac
+
+    local tmp_dir release_json tag asset base_url expected actual target_dir target
+    tmp_dir=$(mktemp -d /tmp/eve-xray-install-XXXXXX) || return 1
+    local -a curl_args=(--fail --location --silent --show-error --retry 4 --retry-delay 3 --connect-timeout 15)
+    if [ -n "${XRAY_DOWNLOAD_PROXY:-}" ]; then
+        curl_args+=(--proxy "$XRAY_DOWNLOAD_PROXY")
+        print_warning "Using XRAY_DOWNLOAD_PROXY for the official release download."
+    fi
+
+    print_warning "Reading the latest stable version from the official XTLS/Xray-core repository..."
+    if ! release_json=$(curl "${curl_args[@]}" \
+            -H 'Accept: application/vnd.github+json' -H 'User-Agent: Eve-Xray-Installer' \
+            https://api.github.com/repos/XTLS/Xray-core/releases/latest); then
+        rm -rf "$tmp_dir"
+        print_error "Could not reach the official GitHub release API."
+        print_warning "On a restricted server, set XRAY_DOWNLOAD_PROXY and retry."
+        return 1
+    fi
+    tag=$(printf '%s' "$release_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name", ""))' 2>/dev/null || true)
+    if [[ ! "$tag" =~ ^v[0-9][0-9A-Za-z._-]*$ ]]; then
+        rm -rf "$tmp_dir"
+        print_error "The official release API returned an invalid version."
+        return 1
+    fi
+
+    asset="Xray-linux-${asset_arch}.zip"
+    base_url="https://github.com/XTLS/Xray-core/releases/download/${tag}"
+    print_warning "Downloading ${asset} (${tag})..."
+    if ! curl "${curl_args[@]}" -o "$tmp_dir/$asset" "$base_url/$asset" \
+            || ! curl "${curl_args[@]}" -o "$tmp_dir/$asset.dgst" "$base_url/$asset.dgst"; then
+        rm -rf "$tmp_dir"
+        print_error "Xray release download failed. No installed runtime was changed."
+        return 1
+    fi
+
+    expected=$(awk -F'= *' '/^SHA2-256=/{print tolower($2); exit}' "$tmp_dir/$asset.dgst")
+    actual=$(sha256sum "$tmp_dir/$asset" | awk '{print tolower($1)}')
+    if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]] || [ "$actual" != "$expected" ]; then
+        rm -rf "$tmp_dir"
+        print_error "Xray SHA-256 verification failed. No files were installed."
+        return 1
+    fi
+    print_success "Official SHA-256 verified"
+
+    mkdir -p "$tmp_dir/unpacked"
+    if ! unzip -q "$tmp_dir/$asset" xray -d "$tmp_dir/unpacked" \
+            || [ ! -f "$tmp_dir/unpacked/xray" ]; then
+        rm -rf "$tmp_dir"
+        print_error "The verified Xray archive could not be extracted."
+        return 1
+    fi
+    chmod 755 "$tmp_dir/unpacked/xray"
+    if ! "$tmp_dir/unpacked/xray" version >/dev/null 2>&1; then
+        rm -rf "$tmp_dir"
+        print_error "The downloaded Xray binary failed its version check."
+        return 1
+    fi
+
+    target_dir="${APP_DIR}/runtime/xray"
+    target="${target_dir}/xray"
+    install -d -o root -g root -m 755 "$target_dir"
+    install -o root -g root -m 755 "$tmp_dir/unpacked/xray" "$target.new"
+    mv -f "$target.new" "$target"
+    rm -rf "$tmp_dir"
+    set_eve_xray_binary "$target" || return 1
+
+    systemctl daemon-reload
+    if systemctl cat "${SERVICE_NAME}-telegram-egress.service" >/dev/null 2>&1; then
+        systemctl restart "${SERVICE_NAME}-telegram-egress.service"
+    else
+        print_warning "Telegram egress service is not installed yet; run an Eve update or full install."
+    fi
+    print_success "Eve Xray runtime installed: $("$target" version 2>/dev/null | head -n 1)"
+    print_success "Configured XRAY_BIN=${target}"
+}
+
+restart_telegram_egress_service() {
+    print_header "Restart Telegram Egress"
+    if ! systemctl cat "${SERVICE_NAME}-telegram-egress.service" >/dev/null 2>&1; then
+        print_error "${SERVICE_NAME}-telegram-egress.service is not installed. Run Eve Update first."
+        return 1
+    fi
+    systemctl restart "${SERVICE_NAME}-telegram-egress.service"
+    if systemctl is-active --quiet "${SERVICE_NAME}-telegram-egress.service"; then
+        print_success "Telegram egress worker is running"
+    else
+        print_error "Telegram egress worker failed to start"
+        systemctl status "${SERVICE_NAME}-telegram-egress.service" --no-pager -l || true
+        return 1
+    fi
+}
+
 get_app_version() {
     local ver=""
     if [ -f "$APP_DIR/app.py" ]; then
@@ -2426,6 +2590,7 @@ show_banner() {
     printf "  %-12s : " "Status";   echo -e "$(get_service_status)"
     printf "  %-12s : %s\n"  "Port"     "${APP_PORT}"
     printf "  %-12s : %s\n"  "Database" "$(get_db_type)"
+    printf "  %-12s : " "Xray";     echo -e "$(get_xray_status)"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo
 }
@@ -2726,6 +2891,10 @@ show_menu() {
         echo -e "   ${CYAN}[8]${NC}  Import Remote DB only (SSH)"
         echo -e "   ${CYAN}[9]${NC}  Import SSL from Remote Server (SSH)"
         echo
+        echo -e "  ${BOLD}Telegram Egress${NC}"
+        echo -e "   ${MAGENTA}[x]${NC}  Install / Update Eve Xray Runtime"
+        echo -e "   ${MAGENTA}[r]${NC}  Restart Telegram Egress Worker"
+        echo
         echo -e "  ${BOLD}System${NC}"
         echo -e "   ${DIM}[s]${NC}  Update this Script (Online — GitHub)"
         echo -e "   ${RED}[u]${NC}  Uninstall"
@@ -2812,6 +2981,16 @@ show_menu() {
                 import_ssl_from_remote
                 read -rp "  Press Enter to return to menu..." _dummy
                 ;;
+            x|X)
+                require_root
+                install_or_update_eve_xray || true
+                read -rp "  Press Enter to return to menu..." _dummy
+                ;;
+            r|R)
+                require_root
+                restart_telegram_egress_service || true
+                read -rp "  Press Enter to return to menu..." _dummy
+                ;;
             s|S)
                 update_self
                 ;;
@@ -2866,7 +3045,18 @@ uninstall_project() {
 # Entry point — non-interactive if args given, else show menu
 # ──────────────────────────────────────────────────────────────
 
-if [ "${1:-}" = "--online-update" ]; then
+if [ "${1:-}" = "--install-xray" ]; then
+    require_root
+    install_or_update_eve_xray
+    exit $?
+elif [ "${1:-}" = "--xray-status" ]; then
+    get_xray_status
+    exit 0
+elif [ "${1:-}" = "--restart-telegram-egress" ]; then
+    require_root
+    restart_telegram_egress_service
+    exit $?
+elif [ "${1:-}" = "--online-update" ]; then
     require_root
     detect_os
     do_online_update
