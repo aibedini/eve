@@ -1161,8 +1161,10 @@ def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Ad
     if not inbound_ids:
         return False, 'No enabled inbound is available on the selected server. Refresh the server and retry.'
     path = f"/api/client/{request_row.server_id}/{inbound_ids[0]}/add"
+    public_base_url = str(_public_base_url() or '').strip().rstrip('/') or 'http://localhost'
     with app.test_request_context(
         path,
+        base_url=public_base_url,
         method='POST',
         json={
             'mode': 'package',
