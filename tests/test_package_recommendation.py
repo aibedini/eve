@@ -1001,12 +1001,30 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                 message['text'] == COPY['fa']['support_pending']
                 for message in api.messages
             ))
-            process_update(api, bot, {'update_id': 16, 'callback_query': {
-                'id': 'admin-service-complete',
-                'data': f'admin-service:{renewal.id}:complete',
-                'from': {'id': 70010, 'first_name': 'Admin'},
-                'message': {'chat': {'id': 70010, 'type': 'private'}},
-            }})
+            with patch(
+                'telegram_bot_worker._execute_renewal_request',
+                return_value=(False, 'panel unavailable'),
+            ):
+                process_update(api, bot, {'update_id': 159, 'callback_query': {
+                    'id': 'admin-service-complete-failed',
+                    'data': f'admin-service:{renewal.id}:complete',
+                    'from': {'id': 70010, 'first_name': 'Admin'},
+                    'message': {'chat': {'id': 70010, 'type': 'private'}},
+                }})
+            self.assertEqual(renewal.status, 'pending')
+            self.assertIn('panel unavailable', api.messages[-1]['text'])
+
+            with patch(
+                'telegram_bot_worker._execute_renewal_request',
+                return_value=(True, {'success': True}),
+            ) as execute_renewal:
+                process_update(api, bot, {'update_id': 16, 'callback_query': {
+                    'id': 'admin-service-complete',
+                    'data': f'admin-service:{renewal.id}:complete',
+                    'from': {'id': 70010, 'first_name': 'Admin'},
+                    'message': {'chat': {'id': 70010, 'type': 'private'}},
+                }})
+            execute_renewal.assert_called_once_with(renewal, reviewer)
             self.assertEqual(renewal.status, 'completed')
             self.assertEqual(renewal.reviewed_by_admin_id, reviewer.id)
             self.assertEqual(api.messages[-1]['text'], COPY['fa']['request_completed'])

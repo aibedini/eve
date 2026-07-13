@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote, urlparse
 from zoneinfo import ZoneInfo
 
+from flask import session as flask_session
+
 os.environ.setdefault("DISABLE_BACKGROUND_THREADS", "true")
 os.environ.setdefault("EVE_PROCESS_ROLE", "telegram-bot")
 
@@ -50,6 +52,7 @@ from app import (  # noqa: E402
     load_snapshot_from_redis,
     normalize_iran_mobile,
     parse_allowed_servers,
+    renew_client,
     review_ownership_claim_item,
     verify_ownership_claim_subscription,
 )
@@ -205,7 +208,7 @@ def _owned_service(user_id: int, ownership_id: int):
     return identity, ownership
 
 
-def _cached_owned_service(ownership: ServiceOwnership):
+def _cached_owned_service_location(ownership: ServiceOwnership):
     email = str(ownership.client_email_snapshot or '').strip().lower()
     client_uuid = str(ownership.client_uuid or '').strip().lower()
     for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
@@ -219,8 +222,17 @@ def _cached_owned_service(ownership: ServiceOwnership):
             raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
             candidate_uuid = str(client.get('id') or client.get('uuid') or raw.get('id') or '').strip().lower()
             if (client_uuid and candidate_uuid == client_uuid) or (email and candidate_email == email):
-                return client
-    return None
+                try:
+                    inbound_id = int(inbound.get('id'))
+                except (TypeError, ValueError):
+                    inbound_id = None
+                return client, inbound_id
+    return None, None
+
+
+def _cached_owned_service(ownership: ServiceOwnership):
+    client, _inbound_id = _cached_owned_service_location(ownership)
+    return client
 
 
 def _format_traffic(value) -> str:
@@ -817,8 +829,9 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
         lines.append(f"Amount: {int(request_row.amount or 0):,} T")
     if request_row.note:
         lines.append(f"Message: {request_row.note[:1000]}")
+    complete_label = "✅ Approve & renew" if request_row.request_type == 'renewal' else "✅ Complete"
     keyboard = {"inline_keyboard": [[
-        {"text": "✅ Complete", "callback_data": f"admin-service:{request_row.id}:complete"},
+        {"text": complete_label, "callback_data": f"admin-service:{request_row.id}:complete"},
         {"text": "❌ Reject", "callback_data": f"admin-service:{request_row.id}:reject"},
     ]]}
     for admin in Admin.query.filter_by(enabled=True).all():
@@ -854,6 +867,42 @@ def _service_request_reviewer(user_id: int, request_row: TelegramServiceRequest)
     return None
 
 
+def _execute_renewal_request(request_row: TelegramServiceRequest, reviewer: Admin):
+    if not request_row.package_id or not request_row.package:
+        return False, 'The renewal request has no package.'
+    ownership = request_row.ownership
+    client, inbound_id = _cached_owned_service_location(ownership)
+    email = str(
+        (client or {}).get('email') or ownership.client_email_snapshot or ''
+    ).strip()
+    if not client or inbound_id is None or not email:
+        return False, 'The service is not present in the latest server snapshot. Refresh the server and retry.'
+    path = f"/api/client/{ownership.server_id}/{inbound_id}/{quote(email, safe='')}/renew"
+    with app.test_request_context(
+        path,
+        method='POST',
+        json={
+            'mode': 'package',
+            'package_id': request_row.package_id,
+            'reset_traffic': False,
+            'free': False,
+        },
+    ):
+        flask_session['admin_id'] = reviewer.id
+        flask_session['admin_username'] = reviewer.username
+        flask_session['role'] = reviewer.role
+        flask_session['is_superadmin'] = bool(reviewer.is_superadmin)
+        response = renew_client(ownership.server_id, inbound_id, email)
+    status_code = 200
+    if isinstance(response, tuple):
+        response, status_code = response[0], int(response[1])
+    payload = response.get_json(silent=True) if hasattr(response, 'get_json') else None
+    payload = payload if isinstance(payload, dict) else {}
+    if status_code < 400 and payload.get('success'):
+        return True, payload
+    return False, str(payload.get('error') or f'Renewal failed with HTTP {status_code}')
+
+
 def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
     parts = data.split(':')
     if len(parts) != 3 or parts[0] != 'admin-service' or parts[2] not in ('complete', 'reject'):
@@ -873,6 +922,16 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
     if request_row.status != 'pending':
         api.answer_callback(callback_id, 'Already reviewed')
         return True
+    if parts[2] == 'complete' and request_row.request_type == 'renewal':
+        renewed, result = _execute_renewal_request(request_row, reviewer)
+        if not renewed:
+            api.answer_callback(callback_id, 'Renewal failed')
+            if chat_id:
+                api.send_message(
+                    chat_id,
+                    f"Renewal request #{request_row.id} is still pending.\nError: {result}",
+                )
+            return True
     request_row.status = 'completed' if parts[2] == 'complete' else 'rejected'
     request_row.reviewed_by_admin_id = reviewer.id
     request_row.reviewed_at = datetime.utcnow()
