@@ -102,6 +102,18 @@ class TelegramBotApi:
             "message_id": int(message_id),
         })
 
+    def send_photo(self, chat_id: int, file_id: str):
+        return self.call("sendPhoto", {
+            "chat_id": int(chat_id),
+            "photo": str(file_id),
+        })
+
+    def send_document(self, chat_id: int, file_id: str):
+        return self.call("sendDocument", {
+            "chat_id": int(chat_id),
+            "document": str(file_id),
+        })
+
     def answer_callback(self, callback_query_id: str, text: str = ""):
         return self.call("answerCallbackQuery", {
             "callback_query_id": callback_query_id,
@@ -178,6 +190,9 @@ COPY = {
         "receipt_invalid": "رسید باید عکس یا فایل JPG/PNG/WebP/PDF و حداکثر ۱۰ مگابایت باشد.",
         "purchase_pending": "✅ رسید و سفارش شما ثبت شد. پس از بررسی دستی مدیر، نتیجه همین‌جا اعلام می‌شود.",
         "purchase_duplicate": "یک سفارش پرداخت‌شده‌ی در حال بررسی دارید؛ ابتدا نتیجه همان سفارش مشخص می‌شود.",
+        "purchase_account_name_prompt": "نام دلخواه اکانت را با ۳ تا ۳۲ کاراکتر انگلیسی، عدد، خط تیره یا زیرخط ارسال کنید. مثال: navid_01",
+        "purchase_account_name_invalid": "نام اکانت معتبر نیست. باید ۳ تا ۳۲ کاراکتر باشد، با حرف یا عدد شروع شود و فقط شامل حروف انگلیسی، عدد، - یا _ باشد.",
+        "purchase_account_name_taken": "این نام روی سرور انتخاب‌شده وجود دارد. نام دیگری ارسال کنید.",
         "purchase_approved": "✅ پرداخت سفارش شما تأیید شد. مدیر ساخت و تحویل سرویس را انجام می‌دهد.",
         "purchase_rejected": "❌ پرداخت سفارش شما تأیید نشد. برای بررسی بیشتر با پشتیبانی تماس بگیرید.",
         "start_first": "برای شروع /start را بزنید.",
@@ -251,6 +266,9 @@ COPY = {
         "receipt_invalid": "The receipt must be a JPG/PNG/WebP/PDF up to 10 MB.",
         "purchase_pending": "✅ Your receipt and order were recorded. An admin will review it manually and notify you here.",
         "purchase_duplicate": "You already have a paid order under review. Wait for its result first.",
+        "purchase_account_name_prompt": "Send the desired account name using 3-32 ASCII letters, numbers, dash, or underscore. Example: navid_01",
+        "purchase_account_name_invalid": "Invalid account name. Use 3-32 characters, start with a letter or number, and use only ASCII letters, numbers, - or _.",
+        "purchase_account_name_taken": "That name already exists on the selected server. Send another name.",
         "purchase_approved": "✅ Your payment was approved. An admin will create and deliver the service.",
         "purchase_rejected": "❌ Your payment was not approved. Contact support for more details.",
         "start_first": "Send /start to begin.",

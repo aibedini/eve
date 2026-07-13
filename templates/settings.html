@@ -546,6 +546,73 @@
                     </div>
                 </section>
 
+                <section class="panel-card tgb-section tgb-purchase-section" aria-labelledby="tgb-purchase-title">
+                    <div class="panel-card-header">
+                        <div class="header-content">
+                            <h2 id="tgb-purchase-title">Purchase Flow</h2>
+                            <p>Package-first automatic assignment is recommended for a faster, simpler checkout.</p>
+                        </div>
+                        <span class="tgb-purchase-recommended">Recommended default</span>
+                    </div>
+
+                    <div id="tgb-purchase-summary" class="tgb-purchase-summary" data-mode="automatic" aria-live="polite">
+                        <span class="tgb-purchase-summary-label">Customer sees</span>
+                        <strong id="tgb-purchase-summary-value">Packages only</strong>
+                        <span id="tgb-purchase-summary-detail">Eve selects an eligible server after payment approval.</span>
+                    </div>
+
+                    <div class="tgb-purchase-controls">
+                        <div class="tgb-purchase-choice">
+                            <div>
+                                <label for="tgb-purchase-customer-server-choice">Let customers choose a server</label>
+                                <small id="tgb-purchase-choice-hint">Off by default. Customers choose a package first and Eve assigns the server.</small>
+                            </div>
+                            <label class="toggle-switch" aria-label="Let customers choose a server"><input id="tgb-purchase-customer-server-choice" type="checkbox"><span class="slider"></span></label>
+                        </div>
+
+                        <div class="tgb-form-grid tgb-purchase-grid">
+                            <div class="form-group">
+                                <label for="tgb-purchase-assignment-strategy">Automatic assignment</label>
+                                <select id="tgb-purchase-assignment-strategy" class="form-select">
+                                    <option value="least_clients">Least active clients (recommended)</option>
+                                    <option value="priority">Admin priority</option>
+                                    <option value="weighted_random">Weighted random</option>
+                                    <option value="random">Random</option>
+                                </select>
+                                <small id="tgb-purchase-strategy-hint" class="text-secondary">Balances new accounts toward the eligible server with the fewest active clients.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="tgb-purchase-account-naming">New account name</label>
+                                <select id="tgb-purchase-account-naming" class="form-select">
+                                    <option value="generated">Generated from template (recommended)</option>
+                                    <option value="customer">Customer chooses a safe name</option>
+                                </select>
+                                <small id="tgb-purchase-naming-hint" class="text-secondary">Eve generates a consistent, unique account name.</small>
+                            </div>
+                            <div id="tgb-purchase-template-group" class="form-group tgb-form-span">
+                                <label for="tgb-purchase-account-template">Account name template</label>
+                                <div class="tgb-purchase-template-line">
+                                    <input id="tgb-purchase-account-template" class="form-control" value="tg{order_id}-{phone_last4}" autocomplete="off" spellcheck="false" aria-describedby="tgb-purchase-template-help tgb-purchase-template-error">
+                                    <output id="tgb-purchase-template-preview" for="tgb-purchase-account-template"><small>Preview</small><strong>tg1842-2411</strong></output>
+                                </div>
+                                <small id="tgb-purchase-template-help" class="text-secondary">Supported tokens: <code>{order_id}</code> <code>{phone_last4}</code> <code>{random4}</code></small>
+                                <small id="tgb-purchase-template-error" class="tgb-field-error" aria-live="polite"></small>
+                            </div>
+                            <div id="tgb-purchase-customer-name-note" class="tgb-purchase-safe-name" style="display:none;">
+                                <strong>Safe customer names only</strong>
+                                <span>Names must be 3–32 characters and use Latin letters, numbers, underscore, or hyphen. Eve still checks uniqueness before creation.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tgb-purchase-servers-head">
+                        <div><h3>Server policy</h3><p>Choose eligible capacity and the optional names customers may see. Host and IP are never exposed.</p></div>
+                        <span id="tgb-purchase-server-count">0 eligible</span>
+                    </div>
+                    <div id="tgb-purchase-servers-empty" class="tgb-empty" style="display:none;"><strong>No servers available</strong><span>Add an enabled server before configuring Telegram purchase assignment.</span></div>
+                    <div id="tgb-purchase-servers" class="tgb-purchase-servers" role="list"></div>
+                </section>
+
                 <section class="panel-card tgb-section">
                     <div class="panel-card-header"><div class="header-content"><h2>Connection Profile</h2><p>Choose how this server reaches Telegram. Iran servers usually need a proxy.</p></div><span class="tgb-transport"><span class="tgb-status-dot is-good"></span> Long polling <small>Webhook later</small></span></div>
                     <div class="tgb-presets" role="group" aria-label="Connection presets">
@@ -2785,6 +2852,46 @@
     .tgb-fieldset { border:0; padding:0; min-width:0; }
     .tgb-fieldset legend { font-size:.85rem; font-weight:500; margin-bottom:10px; }
     .tgb-fieldset label { display:inline-flex; align-items:center; gap:7px; margin-right:20px; color:var(--text-secondary); }
+    .tgb-purchase-section { overflow:hidden; }
+    .tgb-purchase-recommended { flex:none; padding:5px 8px; color:#f59e0b; background:rgba(245,158,11,.07); border:1px solid rgba(245,158,11,.28); border-radius:6px; font-size:.72rem; font-weight:600; white-space:nowrap; }
+    .tgb-purchase-summary { display:grid; grid-template-columns:auto minmax(0,auto) minmax(180px,1fr); align-items:center; gap:10px; margin:-2px 0 16px; padding:12px 14px; background:linear-gradient(100deg,rgba(34,197,94,.09),rgba(34,197,94,.025)); border:1px solid rgba(34,197,94,.26); border-left:3px solid var(--success); border-radius:8px; }
+    .tgb-purchase-summary[data-mode="customer"] { background:linear-gradient(100deg,rgba(245,158,11,.09),rgba(245,158,11,.025)); border-color:rgba(245,158,11,.3); border-left-color:#f59e0b; }
+    .tgb-purchase-summary-label { color:var(--text-secondary); font-size:.73rem; text-transform:uppercase; letter-spacing:.06em; }
+    .tgb-purchase-summary strong { font-size:.88rem; white-space:nowrap; }
+    .tgb-purchase-summary > span:last-child { justify-self:end; color:var(--text-secondary); font-size:.75rem; text-align:right; }
+    .tgb-purchase-controls { padding:15px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; }
+    .tgb-purchase-choice { display:flex; align-items:center; justify-content:space-between; gap:18px; padding-bottom:14px; margin-bottom:15px; border-bottom:1px solid var(--border-color); }
+    .tgb-purchase-choice > div { min-width:0; }
+    .tgb-purchase-choice label { display:block; margin-bottom:3px; color:var(--text-primary); font-size:.86rem; font-weight:600; }
+    .tgb-purchase-choice small { display:block; color:var(--text-secondary); font-size:.75rem; line-height:1.45; }
+    .tgb-purchase-grid .form-group { margin-bottom:13px; }
+    .tgb-purchase-template-line { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:9px; align-items:stretch; }
+    .tgb-purchase-template-line input { direction:ltr; font-family:monospace; }
+    .tgb-purchase-template-line output { display:flex; flex-direction:column; justify-content:center; min-width:150px; padding:6px 11px; background:rgba(99,102,241,.08); border:1px solid rgba(99,102,241,.26); border-radius:7px; }
+    .tgb-purchase-template-line output small { color:var(--text-secondary); font-size:.62rem; text-transform:uppercase; letter-spacing:.06em; }
+    .tgb-purchase-template-line output strong { margin-top:2px; font:600 .78rem/1.2 monospace; direction:ltr; text-align:left; }
+    #tgb-purchase-template-help code { color:#a5b4fc; padding:1px 3px; background:rgba(99,102,241,.09); border-radius:3px; }
+    .tgb-purchase-safe-name { grid-column:1 / -1; padding:10px 12px; color:var(--text-secondary); background:rgba(245,158,11,.06); border:1px solid rgba(245,158,11,.24); border-radius:7px; font-size:.75rem; line-height:1.45; }
+    .tgb-purchase-safe-name strong, .tgb-purchase-safe-name span { display:block; }
+    .tgb-purchase-safe-name strong { margin-bottom:2px; color:#f59e0b; }
+    .tgb-purchase-servers-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin:20px 0 10px; }
+    .tgb-purchase-servers-head h3 { margin:0 0 3px; font-size:.9rem; }
+    .tgb-purchase-servers-head p { margin:0; color:var(--text-secondary); font-size:.75rem; line-height:1.45; }
+    .tgb-purchase-servers-head > span { flex:none; color:var(--text-secondary); font-size:.72rem; }
+    .tgb-purchase-servers { display:flex; flex-direction:column; gap:7px; }
+    .tgb-purchase-server { display:grid; grid-template-columns:minmax(140px,1.25fr) auto auto minmax(140px,1fr) 86px 86px; align-items:end; gap:10px; padding:11px 12px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:8px; transition:border-color .15s,opacity .15s; }
+    .tgb-purchase-server:not(.is-eligible) { opacity:.62; }
+    .tgb-purchase-server.is-unhealthy { border-left:3px solid #f59e0b; }
+    .tgb-purchase-server-identity { align-self:center; min-width:0; }
+    .tgb-purchase-server-identity strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.82rem; }
+    .tgb-purchase-server-meta { display:flex; align-items:center; gap:6px; margin-top:4px; color:var(--text-secondary); font-size:.68rem; }
+    .tgb-purchase-server-meta .tgb-status-dot { width:6px; height:6px; box-shadow:none; }
+    .tgb-purchase-server .tgb-check { align-self:center; margin:0; font-size:.73rem; white-space:nowrap; }
+    .tgb-purchase-server .form-group { margin:0; min-width:0; }
+    .tgb-purchase-server .form-group label { font-size:.67rem; }
+    .tgb-purchase-server .form-control { min-height:38px; padding:7px 9px; font-size:.76rem; }
+    .tgb-purchase-server .tgb-customer-field.is-subordinate { opacity:.46; }
+    .tgb-purchase-server .tgb-customer-field input:disabled { cursor:not-allowed; }
     .tgb-presets { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-bottom:18px; }
     .tgb-preset { min-width:0; padding:14px; text-align:left; color:var(--text-primary); background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; cursor:pointer; transition:border-color .15s,background .15s; }
     .tgb-preset:hover, .tgb-preset:focus-visible { border-color:var(--primary); outline:none; }
@@ -2899,6 +3006,10 @@
     .tgb-stage-detail { display:block; margin-top:4px; color:var(--text-secondary); font-size:.68rem; line-height:1.35; overflow-wrap:anywhere; }
     .tgb-runtime-hint { margin-top:10px; padding:9px 11px; color:#f59e0b; background:rgba(245,158,11,.07); border-left:3px solid #f59e0b; font-size:.75rem; line-height:1.45; }
     button.is-loading { opacity:.68; cursor:wait; }
+    @media (max-width: 1024px) {
+        .tgb-purchase-server { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:end; }
+        .tgb-purchase-server-identity, .tgb-purchase-server div.tgb-customer-field { grid-column:1 / -1; }
+    }
     @media (max-width: 640px) {
         .tgb-readiness, .tgb-footer-actions { align-items:stretch; flex-direction:column; }
         .tgb-route-metrics { width:100%; }
@@ -2911,6 +3022,14 @@
         .tgb-tester-enabled { justify-content:space-between; }
         .tgb-tester-actions { width:100%; }
         .tgb-tester-actions .btn { flex:1; }
+        .tgb-purchase-summary { grid-template-columns:1fr; gap:4px; }
+        .tgb-purchase-summary > span:last-child { justify-self:start; text-align:left; }
+        .tgb-purchase-choice { align-items:flex-start; }
+        .tgb-purchase-template-line { grid-template-columns:1fr; }
+        .tgb-purchase-template-line output { min-width:0; }
+        .tgb-purchase-servers-head { align-items:flex-start; flex-direction:column; gap:5px; }
+        .tgb-purchase-server { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:end; }
+        .tgb-purchase-server-identity, .tgb-purchase-server .tgb-customer-field { grid-column:1 / -1; }
         .tgb-proxy-actions, .tgb-egress-actions, .tgb-footer-actions > div { width:100%; }
         .tgb-proxy-actions .btn, .tgb-egress-actions .btn, .tgb-footer-actions .btn, .tgb-footer-actions > div .btn { flex:1; }
         .tgb-egress-card-head { flex-direction:column; }
@@ -3026,6 +3145,7 @@
     let telegramBotEgressProfiles = [];
     let telegramBotEgressCandidates = [];
     let telegramBotTestUsers = [];
+    let telegramPurchaseServers = [];
     let telegramBotRuntime = {};
     let telegramBotFormReady = false;
     let telegramBotDirty = false;
@@ -3084,6 +3204,197 @@
         setTelegramBotReadiness('warning', 'Unsaved changes', 'Diagnostic results reflect the last saved settings. Save before testing the configured route.');
         document.getElementById('tgb-status-route').textContent = 'Unsaved';
         document.getElementById('tgb-status-latency').textContent = '—';
+    }
+
+    const telegramPurchaseStrategyHints = {
+        least_clients: 'Balances new accounts toward the eligible server with the fewest active clients.',
+        priority: 'Uses the lowest priority number first; the next eligible server is used when needed.',
+        weighted_random: 'Distributes orders randomly using each eligible server\'s relative weight.',
+        random: 'Chooses evenly at random from all eligible healthy servers.'
+    };
+
+    function validateTelegramPurchaseTemplate(showError = true) {
+        const input = document.getElementById('tgb-purchase-account-template');
+        const error = document.getElementById('tgb-purchase-template-error');
+        const mode = document.getElementById('tgb-purchase-account-naming').value;
+        let message = '';
+        if (mode === 'generated') {
+            const value = input.value.trim();
+            const withoutTokens = value.replace(/\{(?:order_id|phone_last4|random4)\}/g, '');
+            if (!value) message = 'Enter an account name template.';
+            else if (value.length < 3 || value.length > 120) message = 'The template must be between 3 and 120 characters.';
+            else if (/\{[^{}]*\}|[{}]/.test(withoutTokens)) message = 'Remove unsupported or incomplete template tokens.';
+            else if (!/^[A-Za-z0-9_-]*$/.test(withoutTokens)) message = 'Use only Latin letters, numbers, underscore, hyphen, and supported tokens.';
+            else {
+                const preview = value.replaceAll('{order_id}', '1842').replaceAll('{phone_last4}', '2411').replaceAll('{random4}', '7k2m');
+                if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/.test(preview)) message = 'The generated preview must start with a letter or number and be 3–64 safe characters.';
+            }
+        }
+        if (showError) error.textContent = message;
+        input.setAttribute('aria-invalid', message ? 'true' : 'false');
+        return !message;
+    }
+
+    function updateTelegramPurchaseTemplatePreview() {
+        const value = document.getElementById('tgb-purchase-account-template').value.trim();
+        const preview = value
+            .replaceAll('{order_id}', '1842')
+            .replaceAll('{phone_last4}', '2411')
+            .replaceAll('{random4}', '7k2m');
+        document.querySelector('#tgb-purchase-template-preview strong').textContent = preview || '—';
+        validateTelegramPurchaseTemplate(true);
+    }
+
+    function collectTelegramPurchaseServers() {
+        return Array.from(document.querySelectorAll('.tgb-purchase-server')).map(row => {
+            const index = Number(row.dataset.index);
+            const source = telegramPurchaseServers[index] || {};
+            return {
+                server_id: source.server_id,
+                server_name: source.server_name || '',
+                eligible: row.querySelector('[data-field="eligible"]').checked,
+                customer_visible: row.querySelector('[data-field="customer-visible"]').checked,
+                display_name: row.querySelector('[data-field="display-name"]').value.trim(),
+                priority: Math.max(0, Number(row.querySelector('[data-field="priority"]').value) || 0),
+                weight: Math.max(1, Number(row.querySelector('[data-field="weight"]').value) || 1),
+                active_clients: Number(source.active_clients) || 0,
+                healthy: source.healthy !== false
+            };
+        });
+    }
+
+    function syncTelegramPurchaseUI(markDirty = true) {
+        const customerSelects = document.getElementById('tgb-purchase-customer-server-choice').checked;
+        const strategy = document.getElementById('tgb-purchase-assignment-strategy').value;
+        const namingMode = document.getElementById('tgb-purchase-account-naming').value;
+        const rows = collectTelegramPurchaseServers();
+        const eligible = rows.filter(server => server.eligible);
+        const visible = eligible.filter(server => server.customer_visible);
+
+        const summary = document.getElementById('tgb-purchase-summary');
+        summary.dataset.mode = customerSelects ? 'customer' : 'automatic';
+        document.getElementById('tgb-purchase-summary-value').textContent = customerSelects ? 'Packages + selected server names' : 'Packages only';
+        document.getElementById('tgb-purchase-summary-detail').textContent = customerSelects
+            ? `${visible.length} customer-visible server${visible.length === 1 ? '' : 's'} configured.`
+            : 'Eve selects an eligible server after payment approval.';
+        document.getElementById('tgb-purchase-choice-hint').textContent = customerSelects
+            ? 'Only eligible servers marked customer-visible appear in Telegram. Internal server details stay hidden.'
+            : 'Off by default. Customers choose a package first and Eve assigns the server.';
+        document.getElementById('tgb-purchase-strategy-hint').textContent = telegramPurchaseStrategyHints[strategy] || telegramPurchaseStrategyHints.least_clients;
+        document.getElementById('tgb-purchase-naming-hint').textContent = namingMode === 'customer'
+            ? 'The customer enters a safe name; Eve validates and checks availability.'
+            : 'Eve generates a consistent, unique account name.';
+        document.getElementById('tgb-purchase-template-group').style.display = namingMode === 'generated' ? '' : 'none';
+        document.getElementById('tgb-purchase-customer-name-note').style.display = namingMode === 'customer' ? '' : 'none';
+        document.getElementById('tgb-purchase-server-count').textContent = `${eligible.length} eligible`;
+
+        document.querySelectorAll('.tgb-purchase-server').forEach(row => {
+            const isEligible = row.querySelector('[data-field="eligible"]').checked;
+            const visibleInput = row.querySelector('[data-field="customer-visible"]');
+            const displayName = row.querySelector('[data-field="display-name"]');
+            row.classList.toggle('is-eligible', isEligible);
+            row.querySelectorAll('.tgb-customer-field').forEach(field => field.classList.toggle('is-subordinate', !customerSelects || !isEligible));
+            visibleInput.disabled = !customerSelects || !isEligible;
+            displayName.disabled = !customerSelects || !isEligible || !visibleInput.checked;
+        });
+        if (namingMode === 'generated') updateTelegramPurchaseTemplatePreview();
+        else {
+            document.getElementById('tgb-purchase-template-error').textContent = '';
+            document.getElementById('tgb-purchase-account-template').setAttribute('aria-invalid', 'false');
+        }
+        if (markDirty) markTelegramBotDirty();
+    }
+
+    function renderTelegramPurchaseServers() {
+        const list = document.getElementById('tgb-purchase-servers');
+        const empty = document.getElementById('tgb-purchase-servers-empty');
+        list.replaceChildren();
+        empty.style.display = telegramPurchaseServers.length ? 'none' : '';
+
+        telegramPurchaseServers.forEach((server, index) => {
+            const row = document.createElement('div');
+            row.className = `tgb-purchase-server${server.eligible ? ' is-eligible' : ''}${server.healthy === false ? ' is-unhealthy' : ''}`;
+            row.dataset.index = String(index);
+            row.setAttribute('role', 'listitem');
+            const fieldPrefix = `tgb-purchase-server-${index}`;
+            row.innerHTML = `
+                <div class="tgb-purchase-server-identity"><strong></strong><span class="tgb-purchase-server-meta"><span class="tgb-status-dot"></span><span></span></span></div>
+                <label class="tgb-check"><input data-field="eligible" type="checkbox"> Eligible</label>
+                <label class="tgb-check tgb-customer-field"><input data-field="customer-visible" type="checkbox"> Customer-visible</label>
+                <div class="form-group tgb-customer-field"><label for="${fieldPrefix}-display-name">Display name</label><input id="${fieldPrefix}-display-name" data-field="display-name" class="form-control" maxlength="80" placeholder="e.g. Germany — Fast" autocomplete="off"></div>
+                <div class="form-group"><label for="${fieldPrefix}-priority">Priority</label><input id="${fieldPrefix}-priority" data-field="priority" class="form-control" type="number" min="0" max="100000" inputmode="numeric"></div>
+                <div class="form-group"><label for="${fieldPrefix}-weight">Weight</label><input id="${fieldPrefix}-weight" data-field="weight" class="form-control" type="number" min="1" max="10000" inputmode="numeric"></div>`;
+
+            row.querySelector('.tgb-purchase-server-identity strong').textContent = server.server_name || `Server ${server.server_id || index + 1}`;
+            const statusDot = row.querySelector('.tgb-purchase-server-meta .tgb-status-dot');
+            statusDot.classList.add(server.healthy === false ? 'is-warning' : 'is-good');
+            row.querySelector('.tgb-purchase-server-meta span:last-child').textContent = server.healthy === false
+                ? 'Health check unavailable'
+                : `${Number(server.active_clients) || 0} active clients`;
+            row.querySelector('[data-field="eligible"]').checked = server.eligible !== false;
+            row.querySelector('[data-field="customer-visible"]').checked = !!server.customer_visible;
+            row.querySelector('[data-field="display-name"]').value = server.display_name || '';
+            row.querySelector('[data-field="priority"]').value = Number.isFinite(Number(server.priority)) ? Number(server.priority) : 100;
+            row.querySelector('[data-field="weight"]').value = Math.max(1, Number(server.weight) || 1);
+            const serverLabel = server.server_name || `Server ${server.server_id || index + 1}`;
+            row.querySelector('[data-field="display-name"]').setAttribute('aria-label', `Customer display name for ${serverLabel}`);
+            row.querySelector('[data-field="priority"]').setAttribute('aria-label', `Assignment priority for ${serverLabel}`);
+            row.querySelector('[data-field="weight"]').setAttribute('aria-label', `Assignment weight for ${serverLabel}`);
+            row.querySelectorAll('input').forEach(input => {
+                input.addEventListener('input', () => {
+                    input.removeAttribute('aria-invalid');
+                    syncTelegramPurchaseUI(true);
+                });
+                input.addEventListener('change', () => syncTelegramPurchaseUI(true));
+            });
+            list.append(row);
+        });
+        syncTelegramPurchaseUI(false);
+    }
+
+    function validateTelegramPurchaseSettings() {
+        const customerSelects = document.getElementById('tgb-purchase-customer-server-choice').checked;
+        const namingMode = document.getElementById('tgb-purchase-account-naming').value;
+        if (!['generated', 'customer'].includes(namingMode)) {
+            showToast('Select a valid account naming mode.', 'error');
+            return false;
+        }
+        if (!validateTelegramPurchaseTemplate(true)) {
+            document.getElementById('tgb-purchase-account-template').focus();
+            showToast('Fix the account name template before saving.', 'error');
+            return false;
+        }
+        for (const row of document.querySelectorAll('.tgb-purchase-server')) {
+            const priorityInput = row.querySelector('[data-field="priority"]');
+            const weightInput = row.querySelector('[data-field="weight"]');
+            const serverName = row.querySelector('.tgb-purchase-server-identity strong').textContent || 'This server';
+            const priority = Number(priorityInput.value);
+            const weight = Number(weightInput.value);
+            priorityInput.removeAttribute('aria-invalid');
+            weightInput.removeAttribute('aria-invalid');
+            if (!Number.isInteger(priority) || priority < 0 || priority > 100000) {
+                priorityInput.setAttribute('aria-invalid', 'true');
+                priorityInput.focus();
+                showToast(`${serverName}: priority must be a whole number from 0 to 100000.`, 'error');
+                return false;
+            }
+            if (!Number.isInteger(weight) || weight < 1 || weight > 10000) {
+                weightInput.setAttribute('aria-invalid', 'true');
+                weightInput.focus();
+                showToast(`${serverName}: weight must be a whole number from 1 to 10000.`, 'error');
+                return false;
+            }
+        }
+        const servers = collectTelegramPurchaseServers();
+        if (servers.length && !servers.some(server => server.eligible)) {
+            showToast('Mark at least one server eligible for Telegram purchases.', 'error');
+            return false;
+        }
+        if (customerSelects && !servers.some(server => server.eligible && server.customer_visible && server.display_name)) {
+            showToast('Customer choice needs at least one eligible, visible server with a display name.', 'error');
+            return false;
+        }
+        return true;
     }
 
     function updateTelegramProxyWarning() {
@@ -3317,10 +3628,17 @@
             document.getElementById('tgb-default-language').value = bot.default_language || 'fa';
             document.getElementById('tgb-connection-mode').value = bot.connection_mode || 'proxy_first';
             document.getElementById('tgb-token-hint').textContent = bot.token_configured ? 'A token is saved. Leave blank to preserve it.' : 'No token saved yet. Paste the token from @BotFather.';
+            const purchasePolicy = data.purchase_policy || {};
+            document.getElementById('tgb-purchase-customer-server-choice').checked = !!purchasePolicy.customer_selects_server;
+            document.getElementById('tgb-purchase-assignment-strategy').value = ['least_clients', 'priority', 'weighted_random', 'random'].includes(purchasePolicy.assignment_strategy) ? purchasePolicy.assignment_strategy : 'least_clients';
+            document.getElementById('tgb-purchase-account-naming').value = ['generated', 'customer'].includes(purchasePolicy.account_name_mode) ? purchasePolicy.account_name_mode : 'generated';
+            document.getElementById('tgb-purchase-account-template').value = purchasePolicy.account_name_template || 'tg{order_id}-{phone_last4}';
+            telegramPurchaseServers = Array.isArray(data.purchase_servers) ? data.purchase_servers : [];
             telegramBotProxies = Array.isArray(data.proxies) ? data.proxies : [];
             telegramBotEgressProfiles = Array.isArray(data.egress_profiles) ? data.egress_profiles : [];
             telegramBotTestUsers = Array.isArray(data.test_users) ? data.test_users : [];
             telegramBotRuntime = data.runtime || {};
+            renderTelegramPurchaseServers();
             renderTelegramProxies();
             renderTelegramEgressProfiles();
             renderTelegramTestUsers();
@@ -3344,6 +3662,13 @@
                     const field = document.getElementById(id);
                     field.addEventListener('input', markTelegramBotDirty);
                     field.addEventListener('change', markTelegramBotDirty);
+                });
+                ['tgb-purchase-customer-server-choice','tgb-purchase-assignment-strategy','tgb-purchase-account-naming'].forEach(id => {
+                    document.getElementById(id).addEventListener('change', () => syncTelegramPurchaseUI(true));
+                });
+                document.getElementById('tgb-purchase-account-template').addEventListener('input', () => {
+                    updateTelegramPurchaseTemplatePreview();
+                    markTelegramBotDirty();
                 });
                 content.dataset.dirtyListener = 'true';
             }
@@ -3379,6 +3704,7 @@
         const languages = ['fa', 'en'].filter(code => document.getElementById(`tgb-lang-${code}`).checked);
         if (!languages.length) return showToast('Enable at least one language.', 'error');
         if (!languages.includes(document.getElementById('tgb-default-language').value)) return showToast('Default language must be enabled.', 'error');
+        if (!validateTelegramPurchaseSettings()) return;
         const payload = {
             display_name: document.getElementById('tgb-display-name').value.trim(),
             enabled: document.getElementById('tgb-enabled').checked,
@@ -3386,7 +3712,14 @@
             bot_token: document.getElementById('tgb-token').value.trim(),
             enabled_languages: languages,
             default_language: document.getElementById('tgb-default-language').value,
-            connection_mode: document.getElementById('tgb-connection-mode').value
+            connection_mode: document.getElementById('tgb-connection-mode').value,
+            purchase_policy: {
+                customer_selects_server: document.getElementById('tgb-purchase-customer-server-choice').checked,
+                assignment_strategy: document.getElementById('tgb-purchase-assignment-strategy').value,
+                account_name_mode: document.getElementById('tgb-purchase-account-naming').value,
+                account_name_template: document.getElementById('tgb-purchase-account-template').value.trim()
+            },
+            purchase_servers: collectTelegramPurchaseServers()
         };
         setTelegramButtonLoading(button, true, 'Saving…');
         try {

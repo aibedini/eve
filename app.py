@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.42"
+APP_VERSION = "2.4.43"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8378,6 +8378,87 @@ class TelegramPurchaseRequest(db.Model):
     server = db.relationship('Server')
     package = db.relationship('Package')
     bank_card = db.relationship('BankCard')
+
+
+class TelegramPurchasePolicy(db.Model):
+    """Per-bot purchase allocation and account naming policy."""
+    __tablename__ = 'telegram_purchase_policies'
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    customer_selects_server = db.Column(db.Boolean, nullable=False, default=False)
+    assignment_strategy = db.Column(db.String(32), nullable=False, default='least_clients')
+    account_name_mode = db.Column(db.String(24), nullable=False, default='generated')
+    account_name_template = db.Column(
+        db.String(120), nullable=False, default='tg{order_id}-{phone_last4}',
+    )
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_safe_dict(self):
+        return {
+            'customer_selects_server': bool(self.customer_selects_server),
+            'assignment_strategy': self.assignment_strategy or 'least_clients',
+            'account_name_mode': self.account_name_mode or 'generated',
+            'account_name_template': self.account_name_template or 'tg{order_id}-{phone_last4}',
+        }
+
+
+class TelegramPurchaseServerRule(db.Model):
+    """Eligibility, customer visibility, and allocation weight for one server."""
+    __tablename__ = 'telegram_purchase_server_rules'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'server_id', name='uq_telegram_purchase_server_rule'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    server_id = db.Column(
+        db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    eligible = db.Column(db.Boolean, nullable=False, default=True)
+    customer_visible = db.Column(db.Boolean, nullable=False, default=False)
+    display_name = db.Column(db.String(120), nullable=True)
+    priority = db.Column(db.Integer, nullable=False, default=100)
+    weight = db.Column(db.Integer, nullable=False, default=1)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    server = db.relationship('Server')
+
+
+class TelegramPurchaseNameDraft(db.Model):
+    """Sanitized customer account name kept while a receipt is pending."""
+    __tablename__ = 'telegram_purchase_name_drafts'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'telegram_user_id', name='uq_telegram_purchase_name_draft'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    requested_name = db.Column(db.String(64), nullable=False)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TelegramPurchaseRequestDetail(db.Model):
+    """Provisioning metadata frozen at purchase submission time."""
+    __tablename__ = 'telegram_purchase_request_details'
+    request_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_purchase_requests.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    account_name = db.Column(db.String(64), nullable=False)
+    allocation_strategy = db.Column(db.String(32), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    request = db.relationship('TelegramPurchaseRequest', backref=db.backref(
+        'detail', uselist=False, cascade='all, delete-orphan',
+    ))
 
 
 class TelegramProxyEndpoint(db.Model):
@@ -24560,6 +24641,132 @@ def _central_telegram_bot(create=False):
     return bot
 
 
+TELEGRAM_PURCHASE_STRATEGIES = {'least_clients', 'priority', 'weighted_random', 'random'}
+TELEGRAM_ACCOUNT_NAME_MODES = {'generated', 'customer'}
+TELEGRAM_ACCOUNT_NAME_TOKENS = {'order_id', 'phone_last4', 'random4'}
+
+
+def _telegram_purchase_policy(bot: TelegramBotInstance, create=False):
+    policy = db.session.get(TelegramPurchasePolicy, bot.id)
+    if policy is None and create:
+        policy = TelegramPurchasePolicy(bot_instance_id=bot.id)
+        db.session.add(policy)
+        db.session.flush()
+    return policy
+
+
+def _validate_telegram_account_name_template(value) -> str:
+    template = str(value or 'tg{order_id}-{phone_last4}').strip()
+    if not 3 <= len(template) <= 120:
+        raise ValueError('Account name template must be between 3 and 120 characters')
+    if not re.fullmatch(r'[A-Za-z0-9_{}-]+', template):
+        raise ValueError('Account name template may contain ASCII letters, numbers, underscore, dash, and tokens')
+    tokens = set(re.findall(r'\{([A-Za-z0-9_]+)\}', template))
+    if not tokens.issubset(TELEGRAM_ACCOUNT_NAME_TOKENS):
+        unknown = ', '.join(sorted(tokens - TELEGRAM_ACCOUNT_NAME_TOKENS))
+        raise ValueError(f'Unsupported account name template token: {unknown}')
+    rendered = template.format(order_id='1842', phone_last4='2411', random4='a7f2')
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{2,63}', rendered):
+        raise ValueError('Rendered account names must be 3-64 safe ASCII characters')
+    return template
+
+
+def _telegram_purchase_servers_payload(bot: TelegramBotInstance):
+    load_snapshot_from_redis()
+    statuses = {}
+    for status in GLOBAL_SERVER_DATA.get('servers_status') or []:
+        try:
+            statuses[int(status.get('server_id'))] = status
+        except (TypeError, ValueError, AttributeError):
+            continue
+    rules = {
+        row.server_id: row for row in TelegramPurchaseServerRule.query.filter_by(
+            bot_instance_id=bot.id,
+        ).all()
+    }
+    payload = []
+    for server in Server.query.filter_by(enabled=True, hidden=False).order_by(
+            Server.name.asc(), Server.id.asc()).all():
+        rule = rules.get(server.id)
+        status = statuses.get(server.id) or {}
+        stats = status.get('stats') if isinstance(status.get('stats'), dict) else {}
+        payload.append({
+            'server_id': server.id,
+            'server_name': server.name,
+            'eligible': bool(rule.eligible) if rule else True,
+            'customer_visible': bool(rule.customer_visible) if rule else False,
+            'display_name': (rule.display_name if rule else None) or server.name,
+            'priority': int(rule.priority if rule else 100),
+            'weight': int(rule.weight if rule else 1),
+            'active_clients': int(stats.get('active_clients', stats.get('total_clients', 0)) or 0),
+            'healthy': (bool(status.get('success')) if status else None),
+        })
+    return payload
+
+
+def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
+    policy_data = data.get('purchase_policy')
+    server_rows = data.get('purchase_servers')
+    if policy_data is None and server_rows is None:
+        return
+    if not isinstance(policy_data, dict):
+        raise ValueError('purchase_policy must be an object')
+    policy = _telegram_purchase_policy(bot, create=True)
+    strategy = str(policy_data.get('assignment_strategy') or 'least_clients').strip().lower()
+    if strategy not in TELEGRAM_PURCHASE_STRATEGIES:
+        raise ValueError('Invalid Telegram purchase assignment strategy')
+    name_mode = str(policy_data.get('account_name_mode') or 'generated').strip().lower()
+    if name_mode not in TELEGRAM_ACCOUNT_NAME_MODES:
+        raise ValueError('Invalid Telegram account naming mode')
+    template = _validate_telegram_account_name_template(policy_data.get('account_name_template'))
+    customer_selects = bool(policy_data.get('customer_selects_server', False))
+
+    if not isinstance(server_rows, list) or len(server_rows) > 200:
+        raise ValueError('purchase_servers must be a list of at most 200 rows')
+    valid_servers = {
+        server.id: server for server in Server.query.filter_by(enabled=True, hidden=False).all()
+    }
+    seen = set()
+    visible_count = 0
+    eligible_count = 0
+    for raw in server_rows:
+        if not isinstance(raw, dict):
+            raise ValueError('Invalid purchase server rule')
+        try:
+            server_id = int(raw.get('server_id'))
+        except (TypeError, ValueError):
+            raise ValueError('Invalid purchase server ID')
+        if server_id not in valid_servers or server_id in seen:
+            raise ValueError('Purchase server is unavailable or duplicated')
+        seen.add(server_id)
+        rule = TelegramPurchaseServerRule.query.filter_by(
+            bot_instance_id=bot.id, server_id=server_id,
+        ).first()
+        if rule is None:
+            rule = TelegramPurchaseServerRule(bot_instance_id=bot.id, server_id=server_id)
+            db.session.add(rule)
+        rule.eligible = bool(raw.get('eligible', True))
+        rule.customer_visible = bool(raw.get('customer_visible', False)) and rule.eligible
+        rule.display_name = str(raw.get('display_name') or valid_servers[server_id].name).strip()[:120]
+        rule.priority = max(0, min(100000, int(raw.get('priority') or 100)))
+        rule.weight = max(1, min(10000, int(raw.get('weight') or 1)))
+        eligible_count += int(rule.eligible)
+        visible_count += int(rule.customer_visible)
+    TelegramPurchaseServerRule.query.filter(
+        TelegramPurchaseServerRule.bot_instance_id == bot.id,
+        TelegramPurchaseServerRule.server_id.notin_(seen or {-1}),
+    ).delete(synchronize_session=False)
+    if not eligible_count:
+        raise ValueError('Enable at least one server for Telegram purchases')
+    if customer_selects and not visible_count:
+        raise ValueError('Customer server selection needs at least one visible eligible server')
+
+    policy.customer_selects_server = customer_selects
+    policy.assignment_strategy = strategy
+    policy.account_name_mode = name_mode
+    policy.account_name_template = template
+
+
 def _encrypt_telegram_secret(value: str) -> str:
     if not _get_server_password_fernet():
         raise RuntimeError('SERVER_PASSWORD_KEY is required before Telegram secrets can be saved')
@@ -24867,6 +25074,7 @@ def _telegram_egress_from_payload(profile, data):
 @superadmin_required
 def get_telegram_bot_settings():
     bot = _central_telegram_bot(create=True)
+    purchase_policy = _telegram_purchase_policy(bot, create=True)
     runtime = TelegramBotRuntime.query.filter_by(bot_instance_id=bot.id).first()
     if runtime is None:
         runtime = TelegramBotRuntime(bot_instance_id=bot.id)
@@ -24881,8 +25089,11 @@ def get_telegram_bot_settings():
     test_users = TelegramBotTestUser.query.filter_by(bot_instance_id=bot.id).order_by(
         TelegramBotTestUser.id.asc(),
     ).all()
+    db.session.commit()
     return jsonify({'success': True, 'bot': bot.to_safe_dict(),
                     'runtime': runtime.to_safe_dict(),
+                    'purchase_policy': purchase_policy.to_safe_dict(),
+                    'purchase_servers': _telegram_purchase_servers_payload(bot),
                     'test_users': [row.to_safe_dict() for row in test_users],
                     'proxies': [proxy.to_safe_dict() for proxy in proxies],
                     'egress_profiles': [profile.to_safe_dict() for profile in egresses]})
@@ -24915,6 +25126,11 @@ def save_telegram_bot_settings():
         if token:
             bot.token_encrypted = _encrypt_telegram_secret(token)
     except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    try:
+        _save_telegram_purchase_settings(bot, data)
+    except (TypeError, ValueError) as exc:
+        db.session.rollback()
         return jsonify({'success': False, 'error': str(exc)}), 400
     bot.display_name = display_name
     bot.enabled = bool(data.get('enabled', bot.enabled))
