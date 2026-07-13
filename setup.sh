@@ -1311,7 +1311,7 @@ EOF
     systemctl enable ${SERVICE_NAME}-telegram-egress
     systemctl enable ${SERVICE_NAME}-telegram-bot
     if [ "$restart_now" = "true" ]; then
-        systemctl restart ${SERVICE_NAME}
+        restart_eve_runtime_services
         print_success "Web, background, Telegram egress, and Telegram bot services started"
     else
         print_success "Web, background, Telegram egress, and Telegram bot service definitions updated"
@@ -1321,6 +1321,19 @@ EOF
         print_warning "Run 'eve' and choose [x], or run: eve --install-xray"
     fi
     install_maintenance_service
+}
+
+restart_eve_runtime_services() {
+    # Restart every runtime explicitly. `systemctl restart` on the web unit does
+    # not reliably start a newly-added Wants= dependency during an update.
+    systemctl restart "${SERVICE_NAME}"
+    local unit
+    for unit in background telegram-egress telegram-bot; do
+        if ! systemctl restart "${SERVICE_NAME}-${unit}.service"; then
+            print_warning "${SERVICE_NAME}-${unit}.service failed to restart"
+            systemctl status "${SERVICE_NAME}-${unit}.service" --no-pager -l || true
+        fi
+    done
 }
 
 install_maintenance_service() {
@@ -2339,7 +2352,7 @@ do_online_update() {
     setup_nginx
     patch_nginx_backup_location
     show_maintenance_preflight
-    systemctl restart "${SERVICE_NAME}"
+    restart_eve_runtime_services
     start_maintenance_service preflight-shown
     install_eve_cli
     print_success "Updated and service restarted"
@@ -2862,7 +2875,7 @@ offline_update() {
     fi
 
     print_warning "Starting service..."
-    systemctl start "${SERVICE_NAME}"
+    restart_eve_runtime_services
     sleep 2
     if systemctl is-active --quiet "${SERVICE_NAME}"; then
         print_success "Service is running"

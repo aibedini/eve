@@ -612,7 +612,8 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                 'connection_mode': 'proxy_first',
             })
             saved = response.get_json()
-            loaded = client.get('/api/settings/telegram-bots').get_json()
+            loaded_response = client.get('/api/settings/telegram-bots')
+            loaded = loaded_response.get_json()
             settings_page = client.get('/settings')
 
         self.assertTrue(saved['success'])
@@ -622,6 +623,9 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertNotIn('token_encrypted', loaded['bot'])
         self.assertEqual(settings_page.status_code, 200)
         self.assertIn(b'tab-telegram_bots', settings_page.data)
+        self.assertIn('no-store', loaded_response.headers.get('Cache-Control', ''))
+        self.assertEqual(loaded_response.headers.get('Surrogate-Control'), 'no-store')
+        self.assertIn('no-store', settings_page.headers.get('Cache-Control', ''))
 
     def test_telegram_test_user_api_requires_numeric_id_and_returns_runtime(self):
         reviewer = Admin(

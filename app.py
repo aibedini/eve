@@ -101,7 +101,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.36"
+APP_VERSION = "2.4.37"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2749,6 +2749,19 @@ def add_security_headers(response):
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
     response.headers.setdefault('Referrer-Policy', 'same-origin')
     response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+
+    # Settings contain live operational state and must never be replayed by a
+    # browser, reverse proxy, or CDN. In particular, Telegram tester/runtime
+    # rows change immediately after mutations and a stale GET is misleading.
+    try:
+        if request.path == '/settings' or request.path.startswith('/api/settings/'):
+            response.headers['Cache-Control'] = 'private, no-store, no-cache, must-revalidate, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            response.headers['Surrogate-Control'] = 'no-store'
+            response.headers.add('Vary', 'Cookie')
+    except Exception:
+        pass
 
     # The subscription route (/s/...) must be LIVE for everyone — both the HTML
     # manager page AND the VPN-app config. Force no-store on EVERY /s/ response

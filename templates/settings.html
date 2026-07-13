@@ -3031,8 +3031,16 @@
     let telegramBotDirty = false;
 
     async function telegramBotApi(url, options = {}) {
-        const response = await fetch(url, {
-            headers: {'Accept': 'application/json', ...(options.body ? {'Content-Type': 'application/json'} : {})},
+        const method = String(options.method || 'GET').toUpperCase();
+        const requestUrl = method === 'GET' ? `${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}` : url;
+        const response = await fetch(requestUrl, {
+            cache: 'no-store',
+            headers: {
+                'Accept': 'application/json',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                ...(options.body ? {'Content-Type': 'application/json'} : {})
+            },
             ...options
         });
         let data;
@@ -3243,7 +3251,12 @@
             labelInput.value = '';
             showToast('Telegram tester added.', 'success');
             await loadTelegramBotSettings();
-        } catch (requestError) { showToast(requestError.message, 'error'); }
+        } catch (requestError) {
+            showToast(requestError.message, 'error');
+            // A duplicate response means the row exists even if the previous
+            // GET was stale. Always reconcile the visible list from the DB.
+            await loadTelegramBotSettings();
+        }
         finally { setTelegramButtonLoading(button, false); }
     }
 
