@@ -5,6 +5,7 @@ load_dotenv()  # Load environment variables from .env file
 
 import io
 import re
+import hmac
 import json
 import math
 import sqlite3
@@ -101,11 +102,11 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.37"
+APP_VERSION = "2.4.38"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
-if PROCESS_ROLE not in ('combined', 'web', 'background'):
+if PROCESS_ROLE not in ('combined', 'web', 'background', 'telegram-egress', 'telegram-bot'):
     PROCESS_ROLE = 'combined'
 
 # Simple in-memory cache for update checks
@@ -7967,6 +7968,142 @@ def review_ownership_claim_item(item_id: int, reviewer, *, approve: bool,
     }
 
 
+def discover_phone_ownership_claim(identity: TelegramIdentity):
+    """Create or reuse a claim containing live clients matching a verified phone."""
+    if not identity or not identity.customer_id or not identity.phone_verified_at:
+        raise ValueError('A verified Telegram identity is required')
+    phone = normalize_iran_mobile(identity.phone_normalized)
+    if not phone:
+        raise ValueError('A verified phone is required')
+
+    existing = OwnershipClaim.query.filter(
+        OwnershipClaim.telegram_identity_id == identity.id,
+        OwnershipClaim.status.in_(('pending', 'needs_attention', 'partially_approved')),
+    ).order_by(OwnershipClaim.id.desc()).first()
+    if existing and existing.items:
+        return existing
+
+    # The Telegram worker is a separate process. Pull the shared snapshot
+    # before scanning; if Redis is unavailable, retain any local test snapshot.
+    load_snapshot_from_redis(force=True)
+    matches = []
+    seen = set()
+    with GLOBAL_REFRESH_LOCK:
+        for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+            try:
+                server_id = int(inbound.get('server_id') or 0)
+            except (TypeError, ValueError):
+                continue
+            if not server_id:
+                continue
+            for client in (inbound.get('clients') or []):
+                email = str(client.get('email') or '').strip()
+                client_uuid = str(client.get('id') or '').strip()
+                if not email or not client_uuid or normalize_iran_mobile(email) != phone:
+                    continue
+                key = (server_id, client_uuid)
+                if key in seen:
+                    continue
+                seen.add(key)
+                ownership = ServiceOwnership.query.filter_by(
+                    server_id=server_id, client_uuid=client_uuid,
+                ).first()
+                if ownership and ownership.is_active and ownership.customer_id == identity.customer_id:
+                    continue
+                matches.append((server_id, client_uuid, email, ownership))
+
+    if not matches:
+        return None
+    claim = existing or OwnershipClaim(
+        customer_id=identity.customer_id,
+        telegram_identity_id=identity.id,
+        verified_phone=phone,
+        status='pending',
+        claim_method='subscription_link',
+    )
+    if claim.id is None:
+        db.session.add(claim)
+        db.session.flush()
+    existing_keys = {(item.server_id, item.client_uuid) for item in claim.items}
+    for server_id, client_uuid, email, ownership in matches:
+        if (server_id, client_uuid) in existing_keys:
+            continue
+        db.session.add(OwnershipClaimItem(
+            claim_id=claim.id,
+            server_id=server_id,
+            client_uuid=client_uuid,
+            client_email_snapshot=email[:255],
+            match_reason='verified_phone_in_client_name',
+            match_score=100,
+            status='conflict' if ownership and ownership.is_active else 'pending',
+            conflict_owner_id=(ownership.customer_id if ownership and ownership.is_active else None),
+        ))
+    db.session.flush()
+    db.session.expire(claim, ['items'])
+    return claim
+
+
+def _live_client_for_claim_item(item: OwnershipClaimItem):
+    load_snapshot_from_redis(force=True)
+    with GLOBAL_REFRESH_LOCK:
+        for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+            try:
+                if int(inbound.get('server_id') or 0) != int(item.server_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            for client in (inbound.get('clients') or []):
+                if hmac.compare_digest(str(client.get('id') or ''), str(item.client_uuid or '')):
+                    return dict(client)
+    return None
+
+
+def verify_ownership_claim_subscription(item: OwnershipClaimItem, customer_id: int,
+                                        supplied_sub_id: str) -> dict:
+    """Verify a bearer subscription token and atomically attach its service."""
+    if not item or item.claim.customer_id != int(customer_id):
+        raise PermissionError('This service does not belong to the current claim')
+    if item.status == 'approved':
+        return {'success': True, 'status': 'approved', 'already_verified': True}
+    if item.status not in ('pending', 'conflict'):
+        raise ValueError('This service cannot be verified')
+    live_client = _live_client_for_claim_item(item)
+    if not live_client:
+        raise ValueError('The service is not available in the current server snapshot')
+    expected = str(live_client.get('subId') or live_client.get('id') or '').strip()
+    supplied = str(supplied_sub_id or '').strip()
+    if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+        return {'success': False, 'status': 'invalid_subscription'}
+
+    ownership = ServiceOwnership.query.filter_by(
+        server_id=item.server_id, client_uuid=item.client_uuid,
+    ).with_for_update().first()
+    if ownership and ownership.is_active and ownership.customer_id != int(customer_id):
+        item.status = 'conflict'
+        item.conflict_owner_id = ownership.customer_id
+        _refresh_ownership_claim_status(item.claim)
+        db.session.flush()
+        return {'success': False, 'status': 'conflict'}
+    if ownership is None:
+        ownership = ServiceOwnership(
+            customer_id=int(customer_id), server_id=item.server_id,
+            client_uuid=item.client_uuid,
+        )
+        db.session.add(ownership)
+    ownership.customer_id = int(customer_id)
+    ownership.client_email_snapshot = item.client_email_snapshot
+    ownership.verification_method = 'subscription_link'
+    ownership.verified_at = datetime.utcnow()
+    ownership.revoked_at = None
+    item.subscription_verified = True
+    item.status = 'approved'
+    item.conflict_owner_id = None
+    item.reviewed_at = datetime.utcnow()
+    _refresh_ownership_claim_status(item.claim)
+    db.session.flush()
+    return {'success': True, 'status': 'approved', 'service_ownership_id': ownership.id}
+
+
 class TelegramBotInstance(db.Model):
     """Tenant-scoped interactive Telegram bot configuration."""
     __tablename__ = 'telegram_bot_instances'
@@ -8114,6 +8251,28 @@ class TelegramBotUserState(db.Model):
     bot = db.relationship('TelegramBotInstance', backref=db.backref(
         'user_states', lazy=True, cascade='all, delete-orphan',
     ))
+
+
+class TelegramOwnershipSession(db.Model):
+    """Ephemeral selection state while a Telegram user proves one service."""
+    __tablename__ = 'telegram_ownership_sessions'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'telegram_user_id', name='uq_telegram_ownership_session'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    claim_id = db.Column(db.Integer, db.ForeignKey('ownership_claims.id', ondelete='CASCADE'), nullable=False)
+    selected_item_id = db.Column(
+        db.Integer, db.ForeignKey('ownership_claim_items.id', ondelete='CASCADE'), nullable=True,
+    )
+    failed_attempts = db.Column(db.Integer, nullable=False, default=0)
+    locked_until = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class TelegramProxyEndpoint(db.Model):

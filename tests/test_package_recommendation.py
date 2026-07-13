@@ -25,6 +25,7 @@ from app import (  # noqa: E402
     ServiceDelegation,
     ServiceOwnership,
     TelegramIdentity,
+    TelegramOwnershipSession,
     TelegramBotInstance,
     TelegramBotRuntime,
     TelegramBotTestUser,
@@ -50,13 +51,15 @@ from app import (  # noqa: E402
     _sms_reserve_daily_segments,
     _select_subscription_package,
     normalize_iran_mobile,
+    discover_phone_ownership_claim,
     review_ownership_claim_item,
     _telegram_bot_diagnostic,
     _telegram_proxy_from_payload,
+    verify_ownership_claim_subscription,
 )
 from telegram_diagnostics import probe_telegram_transport, redact_connection_error  # noqa: E402
 from telegram_xray import XraySupervisor, build_xray_config_from_uri, write_xray_config  # noqa: E402
-from telegram_bot_worker import process_update  # noqa: E402
+from telegram_bot_worker import _extract_subscription_token, process_update  # noqa: E402
 
 
 PACKAGES = [
@@ -102,6 +105,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         TelegramEgressProfile.query.delete()
         TelegramProxyEndpoint.query.delete()
         TelegramBotUserState.query.delete()
+        TelegramOwnershipSession.query.delete()
         TelegramBotTestUser.query.delete()
         TelegramBotRuntime.query.delete()
         TelegramBotInstance.query.delete()
@@ -760,6 +764,131 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertIsNone(claimant.customer_id)
         self.assertEqual(original.customer_id, customer.id)
         self.assertEqual(state.step, 'needs_review')
+
+    def test_telegram_discovers_phone_clients_and_deduplicates_inbounds(self):
+        customer = CustomerAccount(primary_phone='989125551234', phone_verified_at=datetime.utcnow())
+        identity = TelegramIdentity(
+            customer=customer, telegram_user_id=70006, telegram_chat_id=70006,
+            phone_normalized=customer.primary_phone, phone_verified_at=datetime.utcnow(),
+        )
+        server = Server(
+            name='Discovery Test', host='https://discovery.test', username='u', password='p',
+        )
+        db.session.add_all([customer, identity, server])
+        db.session.commit()
+        previous = GLOBAL_SERVER_DATA.get('inbounds')
+        client = {
+            'id': 'discovery-client-uuid', 'subId': 'discovery-sub-token',
+            'email': 'g276-09125551234',
+        }
+        GLOBAL_SERVER_DATA['inbounds'] = [
+            {'server_id': server.id, 'id': 1, 'clients': [dict(client)]},
+            {'server_id': server.id, 'id': 2, 'clients': [dict(client)]},
+            {'server_id': server.id, 'id': 3, 'clients': [
+                {'id': 'other-client', 'subId': 'other', 'email': 'g277-09120000000'},
+            ]},
+        ]
+        try:
+            with patch('app.load_snapshot_from_redis', return_value=False):
+                claim = discover_phone_ownership_claim(identity)
+                db.session.commit()
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous
+
+        self.assertIsNotNone(claim)
+        self.assertEqual(len(claim.items), 1)
+        self.assertEqual(claim.items[0].client_uuid, 'discovery-client-uuid')
+        self.assertEqual(claim.items[0].match_score, 100)
+
+    def test_subscription_link_proves_claim_without_storing_secret(self):
+        customer = CustomerAccount(primary_phone='989125551235', phone_verified_at=datetime.utcnow())
+        identity = TelegramIdentity(
+            customer=customer, telegram_user_id=70007, telegram_chat_id=70007,
+            phone_normalized=customer.primary_phone, phone_verified_at=datetime.utcnow(),
+        )
+        server = Server(
+            name='Proof Test', host='https://proof.test', username='u', password='p',
+        )
+        db.session.add_all([customer, identity, server])
+        db.session.commit()
+        secret_sub_id = 'proof-secret-sub-token'
+        previous = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': server.id, 'id': 1, 'clients': [{
+                'id': 'proof-client-uuid', 'subId': secret_sub_id,
+                'email': 'g278-9125551235',
+            }],
+        }]
+        try:
+            with patch('app.load_snapshot_from_redis', return_value=False):
+                claim = discover_phone_ownership_claim(identity)
+                item = claim.items[0]
+                rejected = verify_ownership_claim_subscription(item, customer.id, 'wrong-token')
+                accepted = verify_ownership_claim_subscription(item, customer.id, secret_sub_id)
+                db.session.commit()
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous
+
+        ownership = ServiceOwnership.query.filter_by(
+            server_id=server.id, client_uuid='proof-client-uuid',
+        ).one()
+        self.assertFalse(rejected['success'])
+        self.assertTrue(accepted['success'])
+        self.assertEqual(ownership.customer_id, customer.id)
+        self.assertEqual(ownership.verification_method, 'subscription_link')
+        self.assertTrue(item.subscription_verified)
+        self.assertNotIn(secret_sub_id, str(item.__dict__))
+        self.assertEqual(
+            _extract_subscription_token(f'https://eve.example/s/{server.id}/{secret_sub_id}'),
+            secret_sub_id,
+        )
+        self.assertEqual(_extract_subscription_token('not-a-link'), '')
+        self.assertEqual(_extract_subscription_token('https://user:pass@eve.example/s/secret'), '')
+
+    def test_admin_can_review_claim_from_telegram_without_tester_allowlist(self):
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=True,
+            enabled_languages_json='["fa"]', default_language='fa',
+        )
+        customer = CustomerAccount(primary_phone='989125551236', phone_verified_at=datetime.utcnow())
+        identity = TelegramIdentity(
+            customer=customer, telegram_user_id=70008, telegram_chat_id=70008,
+            phone_normalized=customer.primary_phone, phone_verified_at=datetime.utcnow(),
+        )
+        server = Server(name='Admin Review Test', host='https://review.test', username='u', password='p')
+        reviewer = Admin(
+            username='claim-test-telegram-reviewer', role='superadmin', is_superadmin=True,
+            enabled=True, telegram_id='80008',
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add_all([bot, customer, identity, server, reviewer])
+        db.session.flush()
+        claim = OwnershipClaim(
+            customer_id=customer.id, telegram_identity_id=identity.id,
+            verified_phone=customer.primary_phone, status='pending', claim_method='admin_review',
+        )
+        db.session.add(claim)
+        db.session.flush()
+        item = OwnershipClaimItem(
+            claim_id=claim.id, server_id=server.id, client_uuid='admin-review-client',
+            client_email_snapshot='g279-09125551236', status='pending',
+        )
+        db.session.add(item)
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 7, 'callback_query': {
+            'id': 'admin-callback', 'data': f'admin-claim:{item.id}:approve',
+            'from': {'id': 80008, 'first_name': 'Admin'},
+            'message': {'chat': {'id': 80008, 'type': 'private'}},
+        }})
+
+        ownership = ServiceOwnership.query.filter_by(
+            server_id=server.id, client_uuid='admin-review-client',
+        ).one()
+        self.assertEqual(ownership.customer_id, customer.id)
+        self.assertEqual(item.status, 'approved')
+        self.assertEqual(api.callbacks, [('admin-callback', 'Saved')])
 
     def test_new_client_is_appended_as_latest_user_in_every_target_inbound(self):
         previous = GLOBAL_SERVER_DATA.get('inbounds')

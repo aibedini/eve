@@ -7,22 +7,30 @@ import signal
 import time
 import uuid
 from datetime import datetime, timedelta
+from urllib.parse import unquote, urlparse
 
 os.environ.setdefault("DISABLE_BACKGROUND_THREADS", "true")
 os.environ.setdefault("EVE_PROCESS_ROLE", "telegram-bot")
 
 from app import (  # noqa: E402
+    Admin,
     CustomerAccount,
+    OwnershipClaim,
+    OwnershipClaimItem,
     TelegramBotInstance,
     TelegramBotRuntime,
     TelegramBotTestUser,
     TelegramBotUserState,
     TelegramIdentity,
+    TelegramOwnershipSession,
     _telegram_bot_api_client,
     _decrypt_telegram_secret,
     app,
     db,
+    discover_phone_ownership_claim,
     normalize_iran_mobile,
+    review_ownership_claim_item,
+    verify_ownership_claim_subscription,
 )
 from telegram_bot_runtime import (  # noqa: E402
     COPY,
@@ -123,9 +131,148 @@ def _send_contact_prompt(api: TelegramBotApi, chat_id: int, language: str):
     )
 
 
+def _send_claim_candidates(api: TelegramBotApi, chat_id: int, language: str,
+                           claim: OwnershipClaim | None):
+    if claim is None:
+        api.send_message(chat_id, COPY[language]["no_candidates"])
+        return
+    items = [item for item in claim.items if item.status in ("pending", "conflict")][:20]
+    if not items:
+        return
+    keyboard = []
+    for index, item in enumerate(items, 1):
+        label = str(item.client_email_snapshot or f'{COPY[language]["service_button"]} {index}')
+        keyboard.append([{
+            "text": label[:48],
+            "callback_data": f"claim:{item.id}",
+        }])
+    keyboard.append([{
+        "text": COPY[language]["no_link_button"],
+        "callback_data": f"claim-none:{claim.id}",
+    }])
+    api.send_message(
+        chat_id, COPY[language]["choose_service"],
+        reply_markup={"inline_keyboard": keyboard},
+    )
+
+
+def _ownership_session(bot_id: int, user_id: int, claim_id: int) -> TelegramOwnershipSession:
+    row = TelegramOwnershipSession.query.filter_by(
+        bot_instance_id=bot_id, telegram_user_id=user_id,
+    ).first()
+    if row is None:
+        row = TelegramOwnershipSession(
+            bot_instance_id=bot_id, telegram_user_id=user_id, claim_id=claim_id,
+        )
+        db.session.add(row)
+    row.claim_id = claim_id
+    return row
+
+
+def _extract_subscription_token(value: str) -> str:
+    raw = str(value or '').strip()
+    if len(raw) > 2048:
+        return ''
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return ''
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.username or parsed.password:
+        return ''
+    parts = [unquote(part) for part in parsed.path.split('/') if part]
+    token = parts[-1].strip() if parts else ''
+    if not token or len(token) > 256 or any(char in token for char in '/\\?#@:'):
+        return ''
+    return token
+
+
+def _notify_claim_admins(api: TelegramBotApi, claim: OwnershipClaim, user_id: int):
+    text = (
+        f"Telegram ownership review requested\n"
+        f"Claim: #{claim.id}\nTelegram user: {user_id}\n"
+        f"Phone: {claim.verified_phone}\nCandidates: {len(claim.items)}"
+    )
+    pending_items = [item for item in claim.items if item.status in ('pending', 'conflict')][:20]
+    keyboard = []
+    for item in pending_items:
+        label = str(item.client_email_snapshot or f'Service #{item.id}')[:32]
+        keyboard.append([
+            {"text": f"✅ {label}", "callback_data": f"admin-claim:{item.id}:approve"},
+            {"text": "❌ Reject", "callback_data": f"admin-claim:{item.id}:reject"},
+        ])
+    for admin in Admin.query.filter_by(enabled=True).all():
+        if not (admin.is_superadmin or admin.role in ('admin', 'superadmin')):
+            continue
+        try:
+            admin_chat_id = int(str(admin.telegram_id or '').strip())
+            if admin_chat_id > 0 and admin_chat_id != user_id:
+                extra = {"reply_markup": {"inline_keyboard": keyboard}} if keyboard else {}
+                api.send_message(admin_chat_id, text, **extra)
+        except (TypeError, ValueError, TelegramApiError):
+            continue
+
+
+def _telegram_admin(user_id: int):
+    for admin in Admin.query.filter_by(enabled=True).all():
+        try:
+            if int(str(admin.telegram_id or '').strip()) != int(user_id):
+                continue
+        except (TypeError, ValueError):
+            continue
+        if admin.is_superadmin or admin.role in ('admin', 'superadmin'):
+            return admin
+    return None
+
+
+def _handle_admin_claim_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if len(parts) != 3 or parts[0] != 'admin-claim' or parts[2] not in ('approve', 'reject'):
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    message = callback.get('message') or {}
+    chat_id = int(((message.get('chat') or {}).get('id')) or 0)
+    reviewer = _telegram_admin(int(sender.get('id') or 0))
+    if not reviewer:
+        if callback_id:
+            api.answer_callback(callback_id, 'Access denied')
+        return True
+    try:
+        result = review_ownership_claim_item(
+            int(parts[1]), reviewer, approve=(parts[2] == 'approve'),
+            rejection_reason=('Rejected from Telegram review' if parts[2] == 'reject' else None),
+        )
+        if callback_id:
+            api.answer_callback(callback_id, 'Saved')
+        if chat_id:
+            api.send_message(chat_id, f"Claim item #{parts[1]}: {result.get('status')}")
+        item = db.session.get(OwnershipClaimItem, int(parts[1]))
+        if item and item.claim.telegram_identity.telegram_chat_id:
+            language = item.claim.customer.preferred_language or 'fa'
+            key = ('service_attached' if result.get('status') == 'approved'
+                   else 'claim_rejected' if result.get('status') == 'rejected'
+                   else 'claim_conflict')
+            api.send_message(item.claim.telegram_identity.telegram_chat_id, COPY.get(language, COPY['fa'])[key])
+    except (ValueError, PermissionError) as exc:
+        if callback_id:
+            api.answer_callback(callback_id, str(exc)[:120])
+    return True
+
+
 def _handle_start(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
                   user_id: int, state: TelegramBotUserState):
     languages = bot.enabled_languages()
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if identity and identity.customer_id and identity.phone_verified_at:
+        customer = db.session.get(CustomerAccount, identity.customer_id)
+        preferred = str(getattr(customer, 'preferred_language', '') or '')
+        if preferred in languages:
+            state.language = preferred
+        state.step = "verified"
+        db.session.flush()
+        claim = discover_phone_ownership_claim(identity)
+        _send_claim_candidates(api, chat_id, state.language, claim)
+        return
     if len(languages) > 1:
         state.step = "choose_language"
         db.session.flush()
@@ -150,6 +297,9 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     data = str(callback.get("data") or "")
     if not user_id or not chat_id or not callback_id:
         return
+    if data.startswith('admin-claim:'):
+        _handle_admin_claim_callback(api, callback, data)
+        return
     if not _is_allowed(bot, user_id):
         api.answer_callback(callback_id)
         return
@@ -164,6 +314,45 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             api.answer_callback(callback_id, "✓")
             _send_contact_prompt(api, chat_id, language)
             return
+    if data.startswith("claim:"):
+        try:
+            item_id = int(data.partition(":")[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        item = OwnershipClaimItem.query.filter_by(id=item_id).first()
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+        if not item or not identity or item.claim.telegram_identity_id != identity.id:
+            api.answer_callback(callback_id)
+            return
+        session_row = _ownership_session(bot.id, user_id, item.claim_id)
+        session_row.selected_item_id = item.id
+        state.step = "awaiting_subscription"
+        db.session.flush()
+        api.answer_callback(callback_id, "✓")
+        api.send_message(chat_id, COPY[state.language]["send_subscription"])
+        return
+    if data.startswith("claim-none:"):
+        try:
+            claim_id = int(data.partition(":")[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+        claim = OwnershipClaim.query.filter_by(id=claim_id).first()
+        if not claim or not identity or claim.telegram_identity_id != identity.id:
+            api.answer_callback(callback_id)
+            return
+        claim.claim_method = "admin_review"
+        claim.status = "pending"
+        state.step = "needs_review"
+        session_row = _ownership_session(bot.id, user_id, claim.id)
+        session_row.selected_item_id = None
+        db.session.flush()
+        api.answer_callback(callback_id, "✓")
+        api.send_message(chat_id, COPY[state.language]["admin_review"])
+        _notify_claim_admins(api, claim, user_id)
+        return
     api.answer_callback(callback_id)
 
 
@@ -223,6 +412,54 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         chat_id, COPY[language]["verified"],
         reply_markup={"remove_keyboard": True},
     )
+    claim = discover_phone_ownership_claim(identity)
+    _send_claim_candidates(api, chat_id, language, claim)
+
+
+def _handle_subscription(api: TelegramBotApi, bot: TelegramBotInstance, message: dict,
+                         sender: dict, state: TelegramBotUserState, text: str):
+    chat_id = int((message.get("chat") or {}).get("id"))
+    user_id = int(sender["id"])
+    language = state.language if state.language in COPY else bot.default_language
+    session_row = TelegramOwnershipSession.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id,
+    ).first()
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    item = db.session.get(OwnershipClaimItem, session_row.selected_item_id) if session_row else None
+    if not identity or not identity.customer_id or not item:
+        state.step = "verified"
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]["start_first"])
+        return
+    if session_row.locked_until and session_row.locked_until > datetime.utcnow():
+        api.send_message(chat_id, COPY[language]["proof_limited"])
+        return
+    token = _extract_subscription_token(text)
+    if not token:
+        api.send_message(chat_id, COPY[language]["invalid_subscription"])
+        return
+    result = verify_ownership_claim_subscription(item, identity.customer_id, token)
+    if result.get("status") == "invalid_subscription":
+        session_row.failed_attempts = int(session_row.failed_attempts or 0) + 1
+        if session_row.failed_attempts >= 5:
+            session_row.locked_until = datetime.utcnow() + timedelta(minutes=15)
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]["invalid_subscription"])
+        return
+    if result.get("status") == "conflict":
+        state.step = "needs_review"
+        session_row.selected_item_id = None
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]["claim_conflict"])
+        _notify_claim_admins(api, item.claim, user_id)
+        return
+    state.step = "verified"
+    session_row.selected_item_id = None
+    session_row.failed_attempts = 0
+    session_row.locked_until = None
+    db.session.flush()
+    api.send_message(chat_id, COPY[language]["service_attached"])
+    _send_claim_candidates(api, chat_id, language, item.claim)
 
 
 def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict):
@@ -242,6 +479,8 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         _handle_start(api, bot, chat_id, user_id, state)
     elif message.get("contact"):
         _handle_contact(api, bot, message, sender, state)
+    elif state.step == "awaiting_subscription":
+        _handle_subscription(api, bot, message, sender, state, text)
     elif state.step == "share_contact":
         _send_contact_prompt(api, chat_id, state.language)
     else:
