@@ -66,12 +66,14 @@ from app import (  # noqa: E402
     _telegram_bot_diagnostic,
     _telegram_proxy_from_payload,
     verify_ownership_claim_subscription,
+    v3_add_client,
 )
 from telegram_diagnostics import probe_telegram_transport, redact_connection_error  # noqa: E402
 from telegram_xray import XraySupervisor, build_xray_config_from_uri, write_xray_config  # noqa: E402
 from telegram_bot_worker import (  # noqa: E402
     _ensure_purchase_detail,
     _extract_subscription_token,
+    _purchase_provisioning_inbound_ids,
     process_update,
 )
 from telegram_bot_runtime import COPY  # noqa: E402
@@ -1182,6 +1184,73 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(request_row.status, 'completed')
         self.assertIn(request_row.detail.account_name, api.messages[-1]['text'])
         self.assertIn('https://eve.example/s/1/new-subscription', api.messages[-1]['text'])
+
+    def test_v3_add_client_verifies_ambiguous_empty_200_response(self):
+        server = MagicMock(id=1, host='https://panel.example/base')
+        session_obj = MagicMock()
+        empty = MagicMock(status_code=200, content=b'', headers={}, text='')
+        verified_payload = {
+            'success': True,
+            'obj': {'client': {'email': 'tg2-2411', 'id': 'client-uuid'}},
+        }
+        verified = MagicMock(
+            status_code=200,
+            content=b'{"success":true}',
+            headers={'Content-Type': 'application/json'},
+            text='{"success":true}',
+        )
+        verified.json.return_value = verified_payload
+        session_obj.post.return_value = empty
+        session_obj.get.return_value = verified
+
+        ok, result, error = v3_add_client(
+            server, session_obj,
+            {'email': 'tg2-2411', 'id': 'client-uuid'}, [31, 32],
+        )
+
+        self.assertTrue(ok)
+        self.assertIsNone(error)
+        self.assertTrue(result['verified_after_empty_response'])
+        self.assertEqual(session_obj.post.call_count, 1)
+        self.assertEqual(session_obj.get.call_count, 1)
+
+    def test_v3_add_client_empty_200_stays_failed_when_client_missing(self):
+        server = MagicMock(id=1, host='https://panel.example/base')
+        session_obj = MagicMock()
+        session_obj.post.return_value = MagicMock(
+            status_code=200, content=b'', headers={}, text='',
+        )
+        missing = MagicMock(
+            status_code=200,
+            content=b'{"success":false}',
+            headers={'Content-Type': 'application/json'},
+            text='{"success":false}',
+        )
+        missing.json.return_value = {'success': False, 'msg': 'not found'}
+        session_obj.get.return_value = missing
+
+        ok, _result, error = v3_add_client(
+            server, session_obj,
+            {'email': 'tg2-2411', 'id': 'client-uuid'}, [31],
+        )
+
+        self.assertFalse(ok)
+        self.assertIn('client was not found after verification', error)
+
+    def test_telegram_purchase_excludes_listener_only_inbounds(self):
+        previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [
+            {'server_id': 1, 'id': 27, 'protocol': 'socks', 'enable': True},
+            {'server_id': 1, 'id': 31, 'protocol': 'shadowsocks', 'enable': True},
+            {'server_id': 1, 'id': 32, 'protocol': 'shadowsocks', 'enable': True},
+            {'server_id': 1, 'id': 39, 'protocol': 'mixed', 'enable': True},
+            {'server_id': 1, 'id': 40, 'protocol': 'vless', 'enable': False},
+            {'server_id': 2, 'id': 99, 'protocol': 'vless', 'enable': True},
+        ]
+        try:
+            self.assertEqual(_purchase_provisioning_inbound_ids(1), [31, 32])
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
 
     def test_telegram_customer_server_and_account_name_policy_flow(self):
         bot = TelegramBotInstance(

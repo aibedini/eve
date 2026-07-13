@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.47"
+APP_VERSION = "2.4.48"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -11002,8 +11002,28 @@ def v3_reset_client(server, session_obj, email):
 
 
 def v3_add_client(server, session_obj, client: dict, inbound_ids: list):
-    return _v3_post(server, session_obj, "/panel/api/clients/add",
-                    {"client": _v3_client_payload(client), "inboundIds": list(inbound_ids or [])})
+    payload = _v3_client_payload(client)
+    ok, result, error = _v3_post(
+        server, session_obj, "/panel/api/clients/add",
+        {"client": payload, "inboundIds": list(inbound_ids or [])},
+    )
+    if ok:
+        return ok, result, error
+    # Some 3x-ui v3 builds return HTTP 200 with no body after Add. That response
+    # is ambiguous: older builds sometimes created the client and sometimes
+    # aborted inside protocol attachment. Never retry blindly (which can create
+    # duplicates); verify the durable client record by email first.
+    if error and error.startswith("Empty response (status 200)"):
+        email = str(payload.get('email') or '').strip()
+        created = _v3_get_client(server, session_obj, email) if email else None
+        if created:
+            return True, {
+                'success': True,
+                'obj': {'client': created},
+                'verified_after_empty_response': True,
+            }, None
+        error = f"{error}; client was not found after verification"
+    return False, result, error
 
 
 def v3_attach_client(server, session_obj, email, inbound_ids: list):

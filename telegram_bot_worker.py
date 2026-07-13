@@ -1124,6 +1124,25 @@ def _ensure_purchase_ownership(request_row: TelegramPurchaseRequest, reviewer: A
     return ownership
 
 
+def _purchase_provisioning_inbound_ids(server_id: int):
+    supported_protocols = {
+        'vmess', 'vless', 'trojan', 'shadowsocks', 'wireguard', 'hysteria',
+    }
+    inbound_ids = []
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id') or 0) != int(server_id):
+                continue
+            if not bool(inbound.get('enable', True)):
+                continue
+            if str(inbound.get('protocol') or '').strip().lower() not in supported_protocols:
+                continue
+            inbound_ids.append(int(inbound.get('id')))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(inbound_ids))
+
+
 def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Admin):
     detail = _ensure_purchase_detail(request_row)
     if not request_row.package_id or not request_row.package or not detail:
@@ -1135,17 +1154,10 @@ def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Ad
             return True, {'client': existing, 'already_created': True}
         except ValueError as exc:
             return False, str(exc)
-    inbound_ids = []
-    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
-        try:
-            if int(inbound.get('server_id') or 0) != int(request_row.server_id):
-                continue
-            if not bool(inbound.get('enable', True)):
-                continue
-            inbound_ids.append(int(inbound.get('id')))
-        except (TypeError, ValueError):
-            continue
-    inbound_ids = sorted(set(inbound_ids))
+    # Only protocols backed by 3x-ui's durable client model are valid purchase
+    # targets. Listener-only inbounds such as socks/http/tunnel and mixed admin
+    # relays must never receive customer accounts automatically.
+    inbound_ids = _purchase_provisioning_inbound_ids(request_row.server_id)
     if not inbound_ids:
         return False, 'No enabled inbound is available on the selected server. Refresh the server and retry.'
     path = f"/api/client/{request_row.server_id}/{inbound_ids[0]}/add"
