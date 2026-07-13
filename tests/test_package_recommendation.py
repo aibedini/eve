@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from sqlalchemy.exc import IntegrityError
 from cryptography.fernet import Fernet
 
@@ -26,6 +26,7 @@ from app import (  # noqa: E402
     ServiceOwnership,
     TelegramIdentity,
     TelegramBotInstance,
+    TelegramEgressProfile,
     TelegramProxyEndpoint,
     SMS_GMWEB_API_KEY_KEY,
     SMS_GMWEB_BASE_URL_KEY,
@@ -50,6 +51,8 @@ from app import (  # noqa: E402
     _telegram_bot_diagnostic,
     _telegram_proxy_from_payload,
 )
+from telegram_diagnostics import probe_telegram_transport, redact_connection_error  # noqa: E402
+from telegram_xray import XraySupervisor, build_xray_config_from_uri, write_xray_config  # noqa: E402
 
 
 PACKAGES = [
@@ -78,6 +81,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             pass
 
     def tearDown(self):
+        TelegramEgressProfile.query.delete()
         TelegramProxyEndpoint.query.delete()
         TelegramBotInstance.query.delete()
         OwnershipClaimItem.query.delete()
@@ -360,7 +364,11 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                     raise ConnectionError('proxy unavailable')
                 return GoodResponse()
 
-            with patch('app._telegram_get_me', side_effect=fake_get_me):
+            transport_ok = {'success': True, 'stages': [
+                {'name': 'transport', 'status': 'passed', 'latency_ms': 1},
+            ]}
+            with patch('app.probe_telegram_transport', return_value=transport_ok), \
+                    patch('app._telegram_get_me', side_effect=fake_get_me):
                 result = _telegram_bot_diagnostic(bot, route='configured')
 
         self.assertTrue(result['success'])
@@ -368,6 +376,197 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(len(result['attempts']), 2)
         self.assertEqual(proxy.health_status, 'failed')
         self.assertEqual(bot.bot_username, 'eve_test_bot')
+
+    def test_staged_proxy_diagnostic_stops_before_get_me_and_persists_safe_error(self):
+        fernet = Fernet(Fernet.generate_key())
+        password = 'do-not-leak-proxy-password'
+        with patch('app._get_server_password_fernet', return_value=fernet):
+            bot = TelegramBotInstance(
+                scope_key='system', connection_mode='proxy_only',
+                token_encrypted='enc:' + fernet.encrypt(b'123456:abcdefghijklmnopqrstuvwxyz').decode(),
+            )
+            db.session.add(bot)
+            db.session.flush()
+            proxy = TelegramProxyEndpoint(
+                bot_instance_id=bot.id, proxy_type='socks5', host='proxy.test', port=1080,
+                password_encrypted='enc:' + fernet.encrypt(password.encode()).decode(),
+            )
+            db.session.add(proxy)
+            db.session.commit()
+            failed = {
+                'success': False,
+                'error': 'SOCKS authentication failed for ***',
+                'error_code': 'proxy_tunnel_auth_failed',
+                'stages': [
+                    {'name': 'proxy_tcp', 'status': 'passed', 'latency_ms': 2},
+                    {'name': 'proxy_tunnel', 'status': 'failed', 'latency_ms': 3,
+                     'error_code': 'proxy_tunnel_auth_failed'},
+                ],
+            }
+            with patch('app.probe_telegram_transport', return_value=failed), \
+                    patch('app._telegram_get_me') as get_me:
+                result = _telegram_bot_diagnostic(bot, only_proxy_id=proxy.id)
+
+        self.assertFalse(result['success'])
+        self.assertEqual(result['attempts'][0]['error_code'], 'proxy_tunnel_auth_failed')
+        self.assertEqual(len(result['attempts'][0]['stages']), 2)
+        self.assertNotIn(password, proxy.last_error)
+        get_me.assert_not_called()
+
+    def test_transport_probe_classifies_proxy_tcp_timeout(self):
+        def timeout_socket(*_args, **_kwargs):
+            raise TimeoutError('connection timed out')
+
+        result = probe_telegram_transport(
+            proxy_type='socks5', host='proxy.test', port=1080,
+            username='alice', password='secret-value', socket_factory=timeout_socket,
+        )
+
+        self.assertFalse(result['success'])
+        self.assertEqual(result['error_code'], 'proxy_tcp_timeout')
+        self.assertEqual(result['stages'][0]['name'], 'proxy_tcp')
+        self.assertNotIn('secret-value', str(result))
+
+    def test_connection_error_redaction_removes_proxy_and_bot_secrets(self):
+        raw = ('HTTPSConnectionPool at socks5h://user:password@proxy.test:1080 '
+               'for /bot123456:abcdefghijklmnopqrstuvwxyz/getMe')
+        safe = redact_connection_error(raw, ('user', 'password'))
+        self.assertNotIn('password', safe)
+        self.assertNotIn('123456:abcdefghijklmnopqrstuvwxyz', safe)
+        self.assertIn('/bot***', safe)
+
+    def test_vless_ws_tls_is_rendered_as_loopback_only_xray_config(self):
+        uri = ('vless://11111111-1111-1111-1111-111111111111@example.com:443'
+               '?type=ws&security=tls&sni=edge.example.com&host=cdn.example.com&path=%2Feve#route')
+        config = build_xray_config_from_uri(uri, 12080)
+        inbound = config['inbounds'][0]
+        outbound = config['outbounds'][0]
+        self.assertEqual(inbound['listen'], '127.0.0.1')
+        self.assertEqual(inbound['port'], 12080)
+        self.assertEqual(outbound['protocol'], 'vless')
+        self.assertEqual(outbound['streamSettings']['network'], 'ws')
+        self.assertEqual(outbound['streamSettings']['wsSettings']['path'], '/eve')
+        self.assertEqual(outbound['streamSettings']['tlsSettings']['serverName'], 'edge.example.com')
+
+    def test_vless_reality_requires_public_key(self):
+        uri = ('vless://11111111-1111-1111-1111-111111111111@example.com:443'
+               '?type=tcp&security=reality&sni=example.org')
+        with self.assertRaisesRegex(ValueError, 'public key'):
+            build_xray_config_from_uri(uri, 12080)
+
+    def test_xray_config_file_is_atomic_and_contains_no_public_listener(self):
+        uri = ('vless://11111111-1111-1111-1111-111111111111@example.com:443'
+               '?type=grpc&security=tls&serviceName=eve')
+        with tempfile.TemporaryDirectory() as directory:
+            path, digest = write_xray_config(uri, 12081, directory, 7)
+            with open(path, encoding='utf-8') as handle:
+                payload = handle.read()
+        self.assertTrue(digest)
+        self.assertIn('127.0.0.1', payload)
+        self.assertNotIn('0.0.0.0', payload)
+
+    def test_xray_supervisor_uses_fixed_argv_without_a_shell(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = os.path.join(directory, 'xray.exe')
+            with open(binary, 'wb') as handle:
+                handle.write(b'placeholder')
+            config_path = os.path.join(directory, 'profile-1.json')
+            process = MagicMock()
+            process.poll.return_value = None
+            process.pid = 4321
+            validation = MagicMock(returncode=0, stderr='')
+            supervisor = XraySupervisor(directory, binary)
+            with patch('telegram_xray.write_xray_config', return_value=(config_path, 'digest')), \
+                    patch('telegram_xray.subprocess.run', return_value=validation) as run, \
+                    patch('telegram_xray.subprocess.Popen', return_value=process) as popen, \
+                    patch('telegram_xray._port_ready', return_value=True):
+                result = supervisor.sync(1, 'vless://secret', 12080)
+
+        self.assertTrue(result['success'])
+        self.assertIsInstance(run.call_args.args[0], list)
+        self.assertFalse(run.call_args.kwargs['shell'])
+        self.assertIsInstance(popen.call_args.args[0], list)
+        self.assertFalse(popen.call_args.kwargs['shell'])
+        self.assertNotIn('vless://secret', str(run.call_args))
+        self.assertNotIn('vless://secret', str(popen.call_args))
+
+    def test_telegram_egress_safe_dict_never_exposes_connection_uri(self):
+        profile = TelegramEgressProfile(
+            bot_instance_id=1, name='Foreign route', config_encrypted='enc:top-secret',
+            local_port=12080,
+        )
+        safe = profile.to_safe_dict()
+        self.assertTrue(safe['config_configured'])
+        self.assertNotIn('config_encrypted', safe)
+        self.assertNotIn('config_uri', safe)
+        self.assertNotIn('top-secret', str(safe))
+
+    def test_telegram_egress_api_encrypts_uri_and_blank_edit_preserves_it(self):
+        reviewer = Admin(
+            username='claim-test-egress-admin', role='superadmin',
+            is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add(reviewer)
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+        uri = ('vless://11111111-1111-1111-1111-111111111111@example.com:443'
+               '?type=ws&security=tls&sni=example.com&path=%2Feve')
+        fernet = Fernet(Fernet.generate_key())
+        with patch('app._get_server_password_fernet', return_value=fernet):
+            created = client.post('/api/settings/telegram-bots/egress', json={
+                'name': 'Foreign route', 'config_uri': uri,
+                'local_port': 12080, 'priority': 10, 'enabled': True,
+            }).get_json()
+            profile = db.session.get(TelegramEgressProfile, created['profile']['id'])
+            encrypted = profile.config_encrypted
+            updated = client.put(
+                f"/api/settings/telegram-bots/egress/{profile.id}",
+                json={'name': 'Foreign route edited', 'config_uri': '',
+                      'local_port': 12080, 'priority': 10, 'enabled': True},
+            ).get_json()
+            loaded = client.get('/api/settings/telegram-bots').get_json()
+
+        self.assertTrue(created['success'])
+        self.assertTrue(encrypted.startswith('enc:'))
+        self.assertNotIn(uri, str(created))
+        self.assertTrue(updated['success'])
+        self.assertEqual(profile.config_encrypted, encrypted)
+        self.assertNotIn(uri, str(loaded))
+        self.assertNotIn('config_encrypted', str(loaded))
+
+    def test_telegram_egress_candidates_never_return_client_uuid(self):
+        reviewer = Admin(
+            username='claim-test-egress-candidates', role='superadmin',
+            is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        server = Server(
+            name='Candidate Foreign', host='https://foreign.example.com',
+            username='u', password='p', enabled=True,
+        )
+        db.session.add_all([reviewer, server])
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+        secret_uuid = '11111111-2222-3333-4444-555555555555'
+        previous = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': server.id, 'id': 91, 'remark': 'Telegram route',
+            'protocol': 'vless', 'streamSettings': {'network': 'ws', 'security': 'tls'},
+            'clients': [{'id': secret_uuid, 'email': 'eve-system-route'}],
+        }]
+        try:
+            payload = client.get('/api/settings/telegram-bots/egress/candidates').get_json()
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous
+
+        self.assertTrue(payload['success'])
+        self.assertEqual(payload['candidates'][0]['client_id'], 'eve-system-route')
+        self.assertNotIn(secret_uuid, str(payload))
 
     def test_telegram_bot_settings_api_masks_saved_token(self):
         reviewer = Admin(

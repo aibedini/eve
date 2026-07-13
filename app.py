@@ -12,6 +12,8 @@ import base64
 import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from telegram_diagnostics import probe_telegram_transport, redact_connection_error
+from telegram_xray import build_xray_config_from_uri
 import logging
 import qrcode
 import uuid
@@ -99,7 +101,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.33"
+APP_VERSION = "2.4.34"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8057,6 +8059,61 @@ class TelegramProxyEndpoint(db.Model):
             'last_success_at': self.last_success_at.isoformat() if self.last_success_at else None,
             'last_failure_at': self.last_failure_at.isoformat() if self.last_failure_at else None,
             'cooldown_until': self.cooldown_until.isoformat() if self.cooldown_until else None,
+        }
+
+
+class TelegramEgressProfile(db.Model):
+    """A managed Xray client exposed only as a loopback SOCKS route."""
+    __tablename__ = 'telegram_egress_profiles'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'local_port', name='uq_telegram_egress_port'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    name = db.Column(db.String(120), nullable=False)
+    source_type = db.Column(db.String(24), nullable=False, default='manual_uri')
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='SET NULL'), nullable=True)
+    inbound_id = db.Column(db.Integer, nullable=True)
+    client_email_snapshot = db.Column(db.String(255), nullable=True)
+    protocol = db.Column(db.String(24), nullable=False, default='vless')
+    config_encrypted = db.Column(db.Text, nullable=False)
+    local_port = db.Column(db.Integer, nullable=False, default=12080)
+    priority = db.Column(db.Integer, nullable=False, default=50, index=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    runtime_status = db.Column(db.String(32), nullable=False, default='pending')
+    runtime_pid = db.Column(db.Integer, nullable=True)
+    health_status = db.Column(db.String(24), nullable=False, default='unknown')
+    last_latency_ms = db.Column(db.Integer, nullable=True)
+    failure_count = db.Column(db.Integer, nullable=False, default=0)
+    last_error = db.Column(db.Text, nullable=True)
+    last_success_at = db.Column(db.DateTime, nullable=True)
+    last_failure_at = db.Column(db.DateTime, nullable=True)
+    last_heartbeat_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    bot = db.relationship('TelegramBotInstance', backref=db.backref(
+        'egress_profiles', lazy=True, cascade='all, delete-orphan',
+    ))
+    server = db.relationship('Server')
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id, 'name': self.name, 'source_type': self.source_type,
+            'server_id': self.server_id, 'server_name': self.server.name if self.server else None,
+            'inbound_id': self.inbound_id, 'client_email': self.client_email_snapshot,
+            'protocol': self.protocol, 'config_configured': bool(self.config_encrypted),
+            'local_host': '127.0.0.1', 'local_port': self.local_port,
+            'priority': self.priority, 'enabled': bool(self.enabled),
+            'runtime_status': self.runtime_status, 'health_status': self.health_status,
+            'last_latency_ms': self.last_latency_ms,
+            'failure_count': int(self.failure_count or 0), 'last_error': self.last_error,
+            'last_success_at': self.last_success_at.isoformat() if self.last_success_at else None,
+            'last_failure_at': self.last_failure_at.isoformat() if self.last_failure_at else None,
+            'last_heartbeat_at': self.last_heartbeat_at.isoformat() if self.last_heartbeat_at else None,
         }
 
 
@@ -24158,36 +24215,66 @@ def _telegram_proxy_mapping(endpoint: TelegramProxyEndpoint) -> dict:
     return {'http': url, 'https': url}
 
 
-def _telegram_bot_attempt(token: str, route_name: str, proxies=None) -> dict:
+def _telegram_bot_attempt(token: str, route_name: str, proxies=None, proxy=None) -> dict:
     started = time.perf_counter()
+    username = _decrypt_telegram_secret(proxy.username_encrypted) if proxy else None
+    password = _decrypt_telegram_secret(proxy.password_encrypted) if proxy else None
+    transport = probe_telegram_transport(
+        proxy_type=proxy.proxy_type if proxy else None,
+        host=proxy.host if proxy else None,
+        port=proxy.port if proxy else None,
+        username=username,
+        password=password,
+    )
+    stages = list(transport.get('stages') or [])
+    if not transport.get('success'):
+        return {
+            'success': False, 'route': route_name,
+            'latency_ms': max(0, int((time.perf_counter() - started) * 1000)),
+            'error': transport.get('error') or 'Transport diagnostic failed',
+            'error_code': transport.get('error_code'), 'stages': stages,
+        }
+    api_started = time.perf_counter()
     try:
         response = _telegram_get_me(token, proxies=proxies, timeout_sec=10)
         latency = max(0, int((time.perf_counter() - started) * 1000))
+        api_latency = max(0, int((time.perf_counter() - api_started) * 1000))
         try:
             body = response.json() if response.content else {}
         except Exception:
             body = {}
         result = body.get('result') if isinstance(body, dict) else None
         if response.status_code == 200 and isinstance(body, dict) and body.get('ok') and isinstance(result, dict):
+            stages.append({'name': 'telegram_api', 'status': 'passed', 'latency_ms': api_latency})
             return {
                 'success': True, 'route': route_name, 'latency_ms': latency,
                 'bot_user_id': result.get('id'), 'bot_username': result.get('username'),
-                'bot_name': result.get('first_name'),
+                'bot_name': result.get('first_name'), 'stages': stages,
             }
         description = body.get('description') if isinstance(body, dict) else None
+        safe_error = redact_connection_error(description or f'Telegram returned HTTP {response.status_code}', (token, username, password))
+        stages.append({'name': 'telegram_api', 'status': 'failed', 'latency_ms': api_latency,
+                       'error_code': 'telegram_api_rejected', 'message': safe_error})
         return {
             'success': False, 'route': route_name, 'latency_ms': latency,
-            'error': description or f'Telegram returned HTTP {response.status_code}',
+            'error': safe_error, 'error_code': 'telegram_api_rejected', 'stages': stages,
         }
     except Exception as exc:
+        safe_error = redact_connection_error(exc, (token, username, password))
+        error_code = 'telegram_api_timeout' if 'timed out' in safe_error.lower() else 'telegram_api_failed'
+        latency = max(0, int((time.perf_counter() - started) * 1000))
+        api_latency = max(0, int((time.perf_counter() - api_started) * 1000))
+        stages.append({'name': 'telegram_api', 'status': 'failed', 'latency_ms': api_latency,
+                       'error_code': error_code, 'message': safe_error})
         return {
             'success': False, 'route': route_name,
-            'latency_ms': max(0, int((time.perf_counter() - started) * 1000)),
-            'error': str(exc)[:500],
+            'latency_ms': latency, 'error': safe_error,
+            'error_code': error_code, 'stages': stages,
         }
 
 
-def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_proxy_id=None) -> dict:
+def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_proxy_id=None,
+                             only_egress_id=None) -> dict:
     token = _decrypt_telegram_secret(bot.token_encrypted)
     if not token or token.startswith(SERVER_PASSWORD_PREFIX):
         return {'success': False, 'error': 'Bot token is not configured or cannot be decrypted', 'attempts': []}
@@ -24196,39 +24283,63 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
     if only_proxy_id is not None:
         proxies = proxies.filter_by(id=int(only_proxy_id))
     proxy_rows = proxies.order_by(TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc()).all()
+    egresses = TelegramEgressProfile.query.filter_by(bot_instance_id=bot.id, enabled=True)
+    if only_egress_id is not None:
+        egresses = egresses.filter_by(id=int(only_egress_id))
+    egress_rows = egresses.order_by(
+        TelegramEgressProfile.priority.asc(), TelegramEgressProfile.id.asc(),
+    ).all()
+    managed_rows = sorted(
+        [('egress', row) for row in egress_rows] + [('proxy', row) for row in proxy_rows],
+        key=lambda item: (int(item[1].priority or 0), item[1].id),
+    )
     attempts = []
     if only_proxy_id is not None:
         order = [('proxy', row) for row in proxy_rows]
+    elif only_egress_id is not None:
+        order = [('egress', row) for row in egress_rows]
     elif route == 'direct':
         order = [('direct', None)]
     elif bot.connection_mode == 'direct_only':
         order = [('direct', None)]
     elif bot.connection_mode == 'proxy_only':
-        order = [('proxy', row) for row in proxy_rows]
+        order = managed_rows
     elif bot.connection_mode == 'proxy_first':
-        order = [('proxy', row) for row in proxy_rows] + [('direct', None)]
+        order = managed_rows + [('direct', None)]
     else:
-        order = [('direct', None)] + [('proxy', row) for row in proxy_rows]
+        order = [('direct', None)] + managed_rows
 
-    for kind, proxy in order:
-        route_name = 'direct' if proxy is None else f'{proxy.proxy_type}://{proxy.host}:{proxy.port}'
+    for kind, endpoint in order:
+        if kind == 'direct':
+            proxy = None
+            route_name = 'direct'
+        elif kind == 'egress':
+            proxy = SimpleNamespace(
+                proxy_type='socks5', host='127.0.0.1', port=endpoint.local_port,
+                username_encrypted=None, password_encrypted=None,
+            )
+            route_name = f'xray://{endpoint.name}'
+        else:
+            proxy = endpoint
+            route_name = f'{proxy.proxy_type}://{proxy.host}:{proxy.port}'
         result = _telegram_bot_attempt(
             token, route_name, proxies=(_telegram_proxy_mapping(proxy) if proxy else None),
+            proxy=proxy,
         )
         attempts.append(result)
         now = datetime.utcnow()
-        if proxy:
-            proxy.last_latency_ms = result.get('latency_ms')
+        if endpoint:
+            endpoint.last_latency_ms = result.get('latency_ms')
             if result['success']:
-                proxy.health_status = 'healthy'
-                proxy.failure_count = 0
-                proxy.last_error = None
-                proxy.last_success_at = now
+                endpoint.health_status = 'healthy'
+                endpoint.failure_count = 0
+                endpoint.last_error = None
+                endpoint.last_success_at = now
             else:
-                proxy.health_status = 'failed'
-                proxy.failure_count = int(proxy.failure_count or 0) + 1
-                proxy.last_error = result.get('error')
-                proxy.last_failure_at = now
+                endpoint.health_status = 'failed'
+                endpoint.failure_count = int(endpoint.failure_count or 0) + 1
+                endpoint.last_error = result.get('error')
+                endpoint.last_failure_at = now
         if result['success']:
             bot.bot_user_id = result.get('bot_user_id')
             bot.bot_username = result.get('bot_username')
@@ -24276,6 +24387,72 @@ def _telegram_proxy_from_payload(proxy, data):
     return proxy
 
 
+def _find_telegram_egress_candidate(server_id, inbound_id, client_id):
+    server = db.session.get(Server, int(server_id))
+    if not server:
+        raise ValueError('Server not found')
+    inbound = next((row for row in (GLOBAL_SERVER_DATA.get('inbounds') or [])
+                    if int(row.get('server_id') or 0) == server.id
+                    and int(row.get('id') or 0) == int(inbound_id)), None)
+    if not inbound:
+        raise ValueError('Inbound is not available in the current server snapshot')
+    if str(inbound.get('protocol') or '').lower() != 'vless':
+        raise ValueError('Managed Xray currently supports VLESS inbounds')
+    wanted = str(client_id or '')
+    client = next((row for row in (inbound.get('clients') or [])
+                   if wanted in {str(row.get('id') or ''), str(row.get('uuid') or ''),
+                                 str(row.get('email') or '')}), None)
+    if not client:
+        raise ValueError('Client was not found in the selected inbound')
+    uri = generate_client_link(client, inbound, server.host)
+    if not uri:
+        raise ValueError('Eve could not generate a connection configuration for this client')
+    return server, inbound, client, uri
+
+
+def _telegram_egress_from_payload(profile, data):
+    profile.name = str(data.get('name') or profile.name or '').strip()[:120]
+    if not profile.name:
+        raise ValueError('Egress profile name is required')
+    try:
+        profile.local_port = int(data.get('local_port') if data.get('local_port') is not None
+                                 else (profile.local_port or 12080))
+        profile.priority = int(data.get('priority') if data.get('priority') is not None
+                               else (profile.priority or 50))
+    except (TypeError, ValueError):
+        raise ValueError('Local port and priority must be whole numbers')
+    if profile.local_port < 1024 or profile.local_port > 65535:
+        raise ValueError('Local SOCKS port must be between 1024 and 65535')
+    profile.priority = max(0, min(profile.priority, 10000))
+    if 'enabled' in data:
+        profile.enabled = bool(data.get('enabled'))
+
+    uri = str(data.get('config_uri') or '').strip()
+    if data.get('server_id') and data.get('inbound_id') and data.get('client_id'):
+        server, inbound, client, uri = _find_telegram_egress_candidate(
+            data.get('server_id'), data.get('inbound_id'), data.get('client_id'),
+        )
+        profile.source_type = 'managed_server_client'
+        profile.server_id = server.id
+        profile.inbound_id = int(inbound.get('id'))
+        profile.client_email_snapshot = str(client.get('email') or '')[:255]
+    elif uri:
+        profile.source_type = 'manual_uri'
+        profile.server_id = None
+        profile.inbound_id = None
+        profile.client_email_snapshot = None
+    if uri:
+        build_xray_config_from_uri(uri, profile.local_port)
+        profile.protocol = 'vless'
+        profile.config_encrypted = _encrypt_telegram_secret(uri)
+        profile.runtime_status = 'pending'
+    elif not profile.config_encrypted:
+        raise ValueError('Choose a 3x-ui client or provide a VLESS configuration')
+    else:
+        build_xray_config_from_uri(_decrypt_telegram_secret(profile.config_encrypted), profile.local_port)
+    return profile
+
+
 @app.route('/api/settings/telegram-bots', methods=['GET'])
 @superadmin_required
 def get_telegram_bot_settings():
@@ -24283,8 +24460,12 @@ def get_telegram_bot_settings():
     proxies = TelegramProxyEndpoint.query.filter_by(bot_instance_id=bot.id).order_by(
         TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc(),
     ).all()
+    egresses = TelegramEgressProfile.query.filter_by(bot_instance_id=bot.id).order_by(
+        TelegramEgressProfile.priority.asc(), TelegramEgressProfile.id.asc(),
+    ).all()
     return jsonify({'success': True, 'bot': bot.to_safe_dict(),
-                    'proxies': [proxy.to_safe_dict() for proxy in proxies]})
+                    'proxies': [proxy.to_safe_dict() for proxy in proxies],
+                    'egress_profiles': [profile.to_safe_dict() for profile in egresses]})
 
 
 @app.route('/api/settings/telegram-bots', methods=['POST'])
@@ -24387,6 +24568,96 @@ def test_telegram_bot_proxy(proxy_id):
     if not proxy:
         return jsonify({'success': False, 'error': 'Proxy not found'}), 404
     return jsonify(_telegram_bot_diagnostic(bot, only_proxy_id=proxy.id))
+
+
+@app.route('/api/settings/telegram-bots/egress/candidates', methods=['GET'])
+@superadmin_required
+def get_telegram_egress_candidates():
+    servers = {row.id: row for row in Server.query.filter_by(enabled=True).all()}
+    candidates = []
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        server_id = int(inbound.get('server_id') or 0)
+        server = servers.get(server_id)
+        if not server or str(inbound.get('protocol') or '').lower() != 'vless':
+            continue
+        stream = inbound.get('streamSettings') or {}
+        if isinstance(stream, str):
+            try:
+                stream = json.loads(stream)
+            except (TypeError, ValueError):
+                stream = {}
+        for client in (inbound.get('clients') or []):
+            # The UUID/password is connection material. The browser receives only
+            # the human-facing email and sends it back as the lookup reference.
+            client_email = str(client.get('email') or '').strip()
+            if not client_email:
+                continue
+            candidates.append({
+                'server_id': server.id, 'server_name': server.name,
+                'inbound_id': int(inbound.get('id')), 'inbound_remark': inbound.get('remark'),
+                'protocol': 'vless', 'network': stream.get('network') or 'tcp',
+                'security': stream.get('security') or 'none',
+                'client_id': client_email, 'client_email': client_email,
+            })
+            if len(candidates) >= 500:
+                break
+        if len(candidates) >= 500:
+            break
+    return jsonify({'success': True, 'candidates': candidates})
+
+
+@app.route('/api/settings/telegram-bots/egress', methods=['POST'])
+@superadmin_required
+def create_telegram_egress_profile():
+    bot = _central_telegram_bot(create=True)
+    profile = TelegramEgressProfile(bot_instance_id=bot.id, name='Managed Xray')
+    try:
+        _telegram_egress_from_payload(profile, request.get_json(silent=True) or {})
+        db.session.add(profile)
+        db.session.commit()
+    except (ValueError, RuntimeError) as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': redact_connection_error(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'This local SOCKS port is already assigned'}), 409
+    return jsonify({'success': True, 'profile': profile.to_safe_dict()})
+
+
+@app.route('/api/settings/telegram-bots/egress/<int:profile_id>', methods=['PUT', 'DELETE'])
+@superadmin_required
+def update_telegram_egress_profile(profile_id):
+    bot = _central_telegram_bot(create=True)
+    profile = TelegramEgressProfile.query.filter_by(id=profile_id, bot_instance_id=bot.id).first()
+    if not profile:
+        return jsonify({'success': False, 'error': 'Egress profile not found'}), 404
+    if request.method == 'DELETE':
+        db.session.delete(profile)
+        db.session.commit()
+        return jsonify({'success': True})
+    try:
+        _telegram_egress_from_payload(profile, request.get_json(silent=True) or {})
+        db.session.commit()
+    except (ValueError, RuntimeError) as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': redact_connection_error(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'This local SOCKS port is already assigned'}), 409
+    return jsonify({'success': True, 'profile': profile.to_safe_dict()})
+
+
+@app.route('/api/settings/telegram-bots/egress/<int:profile_id>/test', methods=['POST'])
+@superadmin_required
+def test_telegram_egress_profile(profile_id):
+    bot = _central_telegram_bot(create=True)
+    profile = TelegramEgressProfile.query.filter_by(id=profile_id, bot_instance_id=bot.id).first()
+    if not profile:
+        return jsonify({'success': False, 'error': 'Egress profile not found'}), 404
+    result = _telegram_bot_diagnostic(bot, only_egress_id=profile.id)
+    if not result.get('success') and profile.runtime_status == 'runtime_missing':
+        result['runtime_hint'] = 'Install Xray or set XRAY_BIN, then restart eve-telegram-egress.service'
+    return jsonify(result)
 
 
 @app.route('/api/settings/telegram-backup', methods=['GET'])

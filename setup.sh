@@ -1215,7 +1215,7 @@ setup_systemd() {
 [Unit]
 Description=Eve X-UI Manager
 After=network.target
-Wants=${SERVICE_NAME}-background.service
+Wants=${SERVICE_NAME}-background.service ${SERVICE_NAME}-telegram-egress.service
 
 [Service]
 User=${APP_USER}
@@ -1251,12 +1251,40 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+    cat > /etc/systemd/system/${SERVICE_NAME}-telegram-egress.service <<EOF
+[Unit]
+Description=Eve Telegram managed Xray egress
+After=network-online.target ${SERVICE_NAME}.service
+Wants=network-online.target
+PartOf=${SERVICE_NAME}.service
+ConditionPathExists=${APP_DIR}/telegram_egress_worker.py
+
+[Service]
+User=${APP_USER}
+Group=${APP_USER}
+WorkingDirectory=${APP_DIR}
+Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=${ENV_FILE}
+Environment="EVE_PROCESS_ROLE=telegram-egress"
+ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/telegram_egress_worker.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=${APP_DIR}/instance
+
+[Install]
+WantedBy=multi-user.target
+EOF
     systemctl daemon-reload
     systemctl enable ${SERVICE_NAME}
     systemctl enable ${SERVICE_NAME}-background
+    systemctl enable ${SERVICE_NAME}-telegram-egress
     if [ "$restart_now" = "true" ]; then
         systemctl restart ${SERVICE_NAME}
-        print_success "Web and background services started"
+        print_success "Web, background, and Telegram egress services started"
     else
         print_success "Web and background service definitions updated"
     fi
@@ -2816,9 +2844,11 @@ uninstall_project() {
     systemctl stop ${SERVICE_NAME} || true
     systemctl disable ${SERVICE_NAME} || true
     systemctl disable --now ${SERVICE_NAME}-background 2>/dev/null || true
+    systemctl disable --now ${SERVICE_NAME}-telegram-egress 2>/dev/null || true
     systemctl disable --now eve-maintenance.service 2>/dev/null || true
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
     rm -f /etc/systemd/system/${SERVICE_NAME}-background.service
+    rm -f /etc/systemd/system/${SERVICE_NAME}-telegram-egress.service
     rm -f /etc/systemd/system/eve-maintenance.service
     rm -f /usr/local/sbin/eve-maintenance-root
     systemctl daemon-reload

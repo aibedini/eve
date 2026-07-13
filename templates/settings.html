@@ -557,6 +557,26 @@
                 </section>
 
                 <section class="panel-card tgb-section">
+                    <div class="panel-card-header"><div class="header-content"><h2>Managed Xray Routes</h2><p>Turn an existing 3x-ui VLESS client into a loopback-only Telegram route.</p></div><button id="tgb-add-egress" class="btn btn-secondary" type="button" onclick="openTelegramEgressForm()">Add route</button></div>
+                    <div class="tgb-egress-note"><span class="tgb-status-dot is-warning"></span><div><strong>Private local relay</strong><span>Xray listens only on <code>127.0.0.1</code> and requires an installed runtime configured by <code>XRAY_BIN</code>. Use customer accounts only temporarily; a dedicated system route is safer.</span></div></div>
+                    <div id="tgb-egress-empty" class="tgb-empty" style="display:none;"><strong>No managed routes configured</strong><span>Select an existing VLESS client or paste a VLESS URI to create a local Telegram route.</span></div>
+                    <div id="tgb-egress-list" class="tgb-egress-list"></div>
+                    <form id="tgb-egress-form" class="tgb-proxy-form tgb-egress-form" style="display:none;" onsubmit="saveTelegramEgress(event)">
+                        <input id="tgb-egress-id" type="hidden">
+                        <div class="tgb-form-grid">
+                            <div class="form-group"><label for="tgb-egress-name">Route name</label><input id="tgb-egress-name" class="form-control" required placeholder="Telegram via Germany" autocomplete="off"></div>
+                            <div class="form-group"><label for="tgb-egress-source">Configuration source</label><select id="tgb-egress-source" class="form-select" onchange="updateTelegramEgressSourceUI()"><option value="candidate">Existing 3x-ui VLESS client</option><option value="manual">Manual VLESS URI</option></select></div>
+                            <div id="tgb-egress-candidate-group" class="form-group tgb-form-span"><label for="tgb-egress-candidate">VLESS client</label><select id="tgb-egress-candidate" class="form-select"></select><small id="tgb-egress-candidate-hint" class="text-secondary">Loading available clients…</small></div>
+                            <div id="tgb-egress-uri-group" class="form-group tgb-form-span" style="display:none;"><label for="tgb-egress-uri">VLESS URI</label><textarea id="tgb-egress-uri" class="form-control tgb-secret-textarea" rows="3" placeholder="vless://…" autocomplete="new-password" spellcheck="false"></textarea><small id="tgb-egress-uri-hint" class="text-secondary">The URI is encrypted and never returned. Leave blank while editing to preserve the saved value.</small></div>
+                            <div class="form-group"><label for="tgb-egress-port">Local port</label><input id="tgb-egress-port" class="form-control" type="number" min="1024" max="65535" required value="10808"><small class="text-secondary">Bound to 127.0.0.1 only.</small></div>
+                            <div class="form-group"><label for="tgb-egress-priority">Priority</label><input id="tgb-egress-priority" class="form-control" type="number" min="0" value="100"></div>
+                        </div>
+                        <label class="tgb-check"><input id="tgb-egress-enabled" type="checkbox" checked> Enabled</label>
+                        <div class="tgb-form-actions"><button type="button" class="btn btn-secondary" onclick="closeTelegramEgressForm()">Cancel</button><button id="tgb-egress-save" type="submit" class="btn btn-primary">Save route</button></div>
+                    </form>
+                </section>
+
+                <section class="panel-card tgb-section">
                     <div class="panel-card-header"><div class="header-content"><h2>Proxy Pool</h2><p>Healthy routes are preferred; failed routes can cool down without stopping the bot.</p></div><button id="tgb-add-proxy" class="btn btn-secondary" type="button" onclick="openTelegramProxyForm()">Add proxy</button></div>
                     <div id="tgb-proxy-empty" class="tgb-empty" style="display:none;"><strong>No proxies configured</strong><span>Add SOCKS5 or HTTP routing for restricted networks.</span></div>
                     <div id="tgb-proxy-list" class="tgb-proxy-list"></div>
@@ -573,6 +593,12 @@
                         <label class="tgb-check"><input id="tgb-proxy-enabled" type="checkbox" checked> Enabled</label>
                         <div class="tgb-form-actions"><button type="button" class="btn btn-secondary" onclick="closeTelegramProxyForm()">Cancel</button><button id="tgb-proxy-save" type="submit" class="btn btn-primary">Save proxy</button></div>
                     </form>
+                </section>
+
+                <section id="tgb-diagnostic" class="panel-card tgb-section tgb-diagnostic" aria-live="polite">
+                    <div class="panel-card-header"><div class="header-content"><h2>Route Diagnostic</h2><p>Each test shows the exact network layer reached before a failure.</p></div><span id="tgb-diagnostic-summary" class="tgb-diagnostic-summary">No test run</span></div>
+                    <div id="tgb-diagnostic-empty" class="tgb-empty"><strong>Run a connection test</strong><span>The staged result will separate TCP, tunnel, TLS, and Telegram API failures.</span></div>
+                    <div id="tgb-diagnostic-attempts" class="tgb-diagnostic-attempts"></div>
                 </section>
 
                 <div class="tgb-footer-actions">
@@ -2736,6 +2762,32 @@
     .tgb-transport { display:flex; align-items:center; gap:8px; color:var(--text-primary); font-size:.84rem; white-space:nowrap; }
     .tgb-transport small { color:var(--text-secondary); padding-left:6px; }
     .tgb-proxy-list { display:flex; flex-direction:column; gap:10px; }
+    .tgb-egress-note { display:flex; align-items:flex-start; gap:11px; margin-bottom:14px; padding:11px 13px; color:var(--text-secondary); background:rgba(245,158,11,.07); border:1px solid rgba(245,158,11,.24); border-radius:8px; font-size:.78rem; line-height:1.5; }
+    .tgb-egress-note .tgb-status-dot { margin-top:5px; }
+    .tgb-egress-note strong, .tgb-egress-note span { display:block; }
+    .tgb-egress-note strong { color:#f59e0b; margin-bottom:2px; }
+    .tgb-egress-note code { color:var(--text-primary); }
+    .tgb-egress-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .tgb-egress-card { position:relative; min-width:0; padding:15px; background:var(--bg-dark); border:1px solid var(--border-color); border-top:3px solid var(--text-secondary); border-radius:9px; }
+    .tgb-egress-card.is-healthy { border-top-color:var(--success); }
+    .tgb-egress-card.is-failed { border-top-color:#ef4444; }
+    .tgb-egress-card.is-warning { border-top-color:#f59e0b; }
+    .tgb-egress-card.is-disabled { opacity:.65; }
+    .tgb-egress-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .tgb-egress-card-head > div { min-width:0; }
+    .tgb-egress-card-head h3 { margin:0; font-size:.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tgb-egress-address { flex:none; padding:4px 7px; color:#a5b4fc; background:rgba(99,102,241,.12); border:1px solid rgba(99,102,241,.28); border-radius:5px; font:500 .72rem/1.2 monospace; }
+    .tgb-egress-source { margin-top:5px; color:var(--text-secondary); font-size:.75rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tgb-egress-state-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:13px 0; }
+    .tgb-egress-state { padding:8px 9px; background:rgba(148,163,184,.06); border:1px solid var(--border-color); border-radius:7px; }
+    .tgb-egress-state small, .tgb-egress-state strong { display:block; }
+    .tgb-egress-state small { color:var(--text-secondary); font-size:.66rem; text-transform:uppercase; letter-spacing:.06em; }
+    .tgb-egress-state strong { margin-top:3px; font-size:.78rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tgb-egress-heartbeat { min-height:17px; color:var(--text-secondary); font-size:.72rem; }
+    .tgb-egress-card .tgb-last-error { white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+    .tgb-egress-actions { display:flex; justify-content:flex-end; gap:7px; margin-top:12px; }
+    .tgb-form-span { grid-column:1 / -1; }
+    .tgb-secret-textarea { resize:vertical; min-height:76px; font-family:monospace; direction:ltr; }
     .tgb-proxy-card { display:grid; grid-template-columns:minmax(180px,1fr) minmax(160px,.8fr) auto; align-items:center; gap:14px; padding:14px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; min-width:0; }
     .tgb-proxy-card.is-disabled { opacity:.62; }
     .tgb-proxy-title, .tgb-proxy-health { min-width:0; }
@@ -2752,6 +2804,26 @@
     .tgb-form-actions { justify-content:flex-end; }
     .tgb-footer-actions { justify-content:space-between; padding:4px 0 8px; }
     .tgb-empty { display:flex; flex-direction:column; gap:5px; border:1px dashed var(--border-color); border-radius:9px; }
+    .tgb-diagnostic-summary { padding:5px 8px; color:var(--text-secondary); background:var(--bg-dark); border:1px solid var(--border-color); border-radius:6px; font-size:.75rem; }
+    .tgb-diagnostic-summary.is-good { color:var(--success); border-color:rgba(34,197,94,.35); background:rgba(34,197,94,.07); }
+    .tgb-diagnostic-summary.is-error { color:#ef4444; border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.07); }
+    .tgb-diagnostic-summary.is-warning { color:#f59e0b; border-color:rgba(245,158,11,.35); background:rgba(245,158,11,.07); }
+    .tgb-diagnostic-attempts { display:flex; flex-direction:column; gap:12px; }
+    .tgb-attempt { padding:13px 14px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; }
+    .tgb-attempt-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:13px; }
+    .tgb-attempt-head strong { font-size:.84rem; }
+    .tgb-attempt-head span { color:var(--text-secondary); font-size:.73rem; }
+    .tgb-stage-track { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); }
+    .tgb-stage { position:relative; min-width:0; padding:26px 8px 5px 0; color:var(--text-secondary); border-top:2px solid var(--border-color); }
+    .tgb-stage::before { content:''; position:absolute; top:-6px; left:0; width:10px; height:10px; border-radius:50%; background:var(--text-secondary); box-shadow:0 0 0 4px var(--bg-dark); }
+    .tgb-stage.is-passed { color:var(--success); border-color:var(--success); }
+    .tgb-stage.is-passed::before { background:var(--success); }
+    .tgb-stage.is-failed { color:#ef4444; border-color:#ef4444; }
+    .tgb-stage.is-failed::before { background:#ef4444; }
+    .tgb-stage.is-skipped { opacity:.48; border-top-style:dashed; }
+    .tgb-stage-name { display:block; color:currentColor; font:600 .69rem/1.3 monospace; overflow-wrap:anywhere; }
+    .tgb-stage-detail { display:block; margin-top:4px; color:var(--text-secondary); font-size:.68rem; line-height:1.35; overflow-wrap:anywhere; }
+    .tgb-runtime-hint { margin-top:10px; padding:9px 11px; color:#f59e0b; background:rgba(245,158,11,.07); border-left:3px solid #f59e0b; font-size:.75rem; line-height:1.45; }
     button.is-loading { opacity:.68; cursor:wait; }
     @media (max-width: 640px) {
         .tgb-readiness, .tgb-footer-actions { align-items:stretch; flex-direction:column; }
@@ -2759,9 +2831,16 @@
         .tgb-route-metrics > span { min-width:0; flex:1; padding:0 10px; }
         .tgb-route-metrics > span:first-child { border-left:0; padding-left:0; }
         .tgb-form-grid, .tgb-presets { grid-template-columns:1fr; }
-        .tgb-proxy-card { grid-template-columns:1fr; }
-        .tgb-proxy-actions, .tgb-footer-actions > div { width:100%; }
-        .tgb-proxy-actions .btn, .tgb-footer-actions .btn, .tgb-footer-actions > div .btn { flex:1; }
+        .tgb-proxy-card, .tgb-egress-list, .tgb-egress-state-grid { grid-template-columns:1fr; }
+        .tgb-proxy-actions, .tgb-egress-actions, .tgb-footer-actions > div { width:100%; }
+        .tgb-proxy-actions .btn, .tgb-egress-actions .btn, .tgb-footer-actions .btn, .tgb-footer-actions > div .btn { flex:1; }
+        .tgb-egress-card-head { flex-direction:column; }
+        .tgb-stage-track { grid-template-columns:1fr; padding-left:9px; }
+        .tgb-stage { padding:4px 0 14px 22px; border-top:0; border-left:2px solid var(--border-color); }
+        .tgb-stage::before { top:2px; left:-6px; }
+        .tgb-stage.is-passed { border-left-color:var(--success); }
+        .tgb-stage.is-failed { border-left-color:#ef4444; }
+        .tgb-stage.is-skipped { border-left-style:dashed; }
         .tgb-section .panel-card-header { flex-direction:column; align-items:stretch; gap:12px; }
     }
 </style>
@@ -2861,6 +2940,8 @@
     }
 
     let telegramBotProxies = [];
+    let telegramBotEgressProfiles = [];
+    let telegramBotEgressCandidates = [];
     let telegramBotFormReady = false;
     let telegramBotDirty = false;
 
@@ -2871,7 +2952,11 @@
         });
         let data;
         try { data = await response.json(); } catch (_) { throw new Error('The server returned an invalid response.'); }
-        if (!data || data.success !== true) throw new Error((data && (data.error || data.message)) || 'Request failed.');
+        if (!data || data.success !== true) {
+            const error = new Error((data && (data.error || data.message)) || 'Request failed.');
+            error.payload = data || {};
+            throw error;
+        }
         return data;
     }
 
@@ -2935,7 +3020,10 @@
             document.getElementById('tgb-connection-mode').value = bot.connection_mode || 'proxy_first';
             document.getElementById('tgb-token-hint').textContent = bot.token_configured ? 'A token is saved. Leave blank to preserve it.' : 'No token saved yet. Paste the token from @BotFather.';
             telegramBotProxies = Array.isArray(data.proxies) ? data.proxies : [];
+            telegramBotEgressProfiles = Array.isArray(data.egress_profiles) ? data.egress_profiles : [];
             renderTelegramProxies();
+            renderTelegramEgressProfiles();
+            loadTelegramEgressCandidates();
             syncTelegramBotPreset();
             updateTelegramProxyWarning();
             const configured = !!bot.token_configured;
@@ -3014,12 +3102,200 @@
         try {
             const data = await telegramBotApi('/api/settings/telegram-bots/test', {method:'POST', body:JSON.stringify({route})});
             const d = data.diagnostic || data.result || data;
+            renderTelegramDiagnostic(data);
             setTelegramBotReadiness('good', 'Telegram reachable', `Connected successfully via ${d.route_used || d.route || route}.`, d);
             showToast('Telegram connection test passed.', 'success');
         } catch (error) {
+            renderTelegramDiagnostic(error.payload || {success:false, error:error.message, attempts:[]});
             setTelegramBotReadiness('error', 'Telegram unreachable', error.message, {route});
             showToast(error.message, 'error');
-        } finally { setTelegramButtonLoading(button, false); }
+        } finally { setTelegramButtonLoading(button, false); await loadTelegramBotSettings(); }
+    }
+
+    function telegramStatusClass(value) {
+        const key = String(value || '').toLowerCase().replaceAll('_', ' ');
+        if (['healthy', 'ok', 'success', 'passed', 'running'].includes(key)) return 'is-healthy';
+        if (['failed', 'error', 'unreachable', 'stopped'].includes(key)) return 'is-failed';
+        if (['starting', 'degraded', 'cooldown', 'runtime missing', 'missing'].includes(key)) return 'is-warning';
+        return '';
+    }
+
+    function formatTelegramTimestamp(value) {
+        if (!value) return 'No heartbeat yet';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+    }
+
+    async function loadTelegramEgressCandidates() {
+        const select = document.getElementById('tgb-egress-candidate');
+        const hint = document.getElementById('tgb-egress-candidate-hint');
+        if (!select || !hint) return;
+        try {
+            const data = await telegramBotApi('/api/settings/telegram-bots/egress/candidates');
+            telegramBotEgressCandidates = Array.isArray(data.candidates) ? data.candidates : [];
+            renderTelegramEgressCandidates();
+        } catch (error) {
+            telegramBotEgressCandidates = [];
+            select.innerHTML = '<option value="">Candidates unavailable</option>';
+            select.disabled = true;
+            hint.textContent = `Could not load clients: ${error.message}`;
+        }
+    }
+
+    function telegramEgressCandidateKey(candidate) {
+        return [candidate.server_id, candidate.inbound_id, candidate.client_id].map(value => String(value ?? '')).join(':');
+    }
+
+    function renderTelegramEgressCandidates(selectedKey = '') {
+        const select = document.getElementById('tgb-egress-candidate');
+        const hint = document.getElementById('tgb-egress-candidate-hint');
+        if (!select || !hint) return;
+        select.disabled = !telegramBotEgressCandidates.length;
+        if (!telegramBotEgressCandidates.length) {
+            select.innerHTML = '<option value="">No VLESS clients available</option>';
+            hint.textContent = 'Create a VLESS client on a managed 3x-ui server, or choose Manual VLESS URI.';
+            return;
+        }
+        select.innerHTML = telegramBotEgressCandidates.map(candidate => {
+            const key = telegramEgressCandidateKey(candidate);
+            const location = `${candidate.server_name || `Server ${candidate.server_id}`} / ${candidate.inbound_remark || `Inbound ${candidate.inbound_id}`}`;
+            const transport = `${candidate.network || 'tcp'} / ${candidate.security || 'none'}`;
+            return `<option value="${escapeHtml(key)}">${escapeHtml(location)} / ${escapeHtml(candidate.client_email || 'Unnamed client')} / ${escapeHtml(transport)}</option>`;
+        }).join('');
+        if (selectedKey && telegramBotEgressCandidates.some(candidate => telegramEgressCandidateKey(candidate) === selectedKey)) select.value = selectedKey;
+        hint.textContent = `${telegramBotEgressCandidates.length} eligible VLESS client${telegramBotEgressCandidates.length === 1 ? '' : 's'} found. A dedicated system client is recommended.`;
+    }
+
+    function renderTelegramEgressProfiles() {
+        const list = document.getElementById('tgb-egress-list');
+        const empty = document.getElementById('tgb-egress-empty');
+        if (!list || !empty) return;
+        empty.style.display = telegramBotEgressProfiles.length ? 'none' : 'flex';
+        list.innerHTML = telegramBotEgressProfiles.map(profile => {
+            const health = profile.health_status || 'not tested';
+            const runtime = profile.runtime_status || 'unknown';
+            const stateClass = telegramStatusClass(health) || telegramStatusClass(runtime);
+            const source = profile.source_type === 'manual_uri'
+                ? `Manual ${String(profile.protocol || 'VLESS').toUpperCase()} configuration${profile.config_configured ? ' / encrypted' : ''}`
+                : `${profile.server_name || `Server ${profile.server_id || '—'}`} / inbound ${profile.inbound_id || '—'} / ${profile.client_email || 'Unnamed client'} / ${String(profile.protocol || 'VLESS').toUpperCase()}`;
+            const heartbeat = profile.last_heartbeat_at ? `Heartbeat ${formatTelegramTimestamp(profile.last_heartbeat_at)}` : 'No runtime heartbeat yet';
+            const error = profile.last_error ? `<div class="tgb-last-error" title="${escapeHtml(String(profile.last_error))}">${escapeHtml(String(profile.last_error))}</div>` : '';
+            return `<article class="tgb-egress-card ${stateClass} ${profile.enabled === false ? 'is-disabled' : ''}">
+                <div class="tgb-egress-card-head"><div><h3>${escapeHtml(String(profile.name || 'Managed route'))}</h3><div class="tgb-egress-source" title="${escapeHtml(source)}">${escapeHtml(source)}</div></div><code class="tgb-egress-address">${escapeHtml(String(profile.local_host || '127.0.0.1'))}:${Number(profile.local_port || 0)}</code></div>
+                <div class="tgb-egress-state-grid"><div class="tgb-egress-state"><small>Runtime</small><strong>${escapeHtml(String(runtime))}</strong></div><div class="tgb-egress-state"><small>Health</small><strong>${escapeHtml(String(health))}${profile.last_latency_ms != null ? ` · ${Number(profile.last_latency_ms)} ms` : ''}</strong></div></div>
+                <div class="tgb-egress-heartbeat">${escapeHtml(heartbeat)} · Priority ${Number(profile.priority || 0)} · ${Number(profile.failure_count || 0)} failure${Number(profile.failure_count || 0) === 1 ? '' : 's'} · ${profile.enabled === false ? 'Disabled' : 'Enabled'}</div>${error}
+                <div class="tgb-egress-actions"><button class="btn btn-secondary" type="button" onclick="testTelegramEgress(${Number(profile.id)}, this)">Test</button><button class="btn btn-secondary" type="button" onclick="openTelegramEgressForm(${Number(profile.id)})">Edit</button><button class="btn btn-danger" type="button" onclick="deleteTelegramEgress(${Number(profile.id)}, this)">Delete</button></div>
+            </article>`;
+        }).join('');
+    }
+
+    async function openTelegramEgressForm(id = null) {
+        if (!telegramBotEgressCandidates.length) await loadTelegramEgressCandidates();
+        const profile = telegramBotEgressProfiles.find(item => Number(item.id) === Number(id)) || {};
+        document.getElementById('tgb-egress-id').value = profile.id || '';
+        document.getElementById('tgb-egress-name').value = profile.name || '';
+        document.getElementById('tgb-egress-source').value = profile.source_type === 'manual_uri' ? 'manual' : 'candidate';
+        document.getElementById('tgb-egress-uri').value = '';
+        document.getElementById('tgb-egress-port').value = profile.local_port || 10808;
+        document.getElementById('tgb-egress-priority').value = profile.priority ?? 100;
+        document.getElementById('tgb-egress-enabled').checked = profile.enabled !== false;
+        const match = telegramBotEgressCandidates.find(candidate => String(candidate.server_id) === String(profile.server_id) && String(candidate.inbound_id) === String(profile.inbound_id) && (!profile.client_email || candidate.client_email === profile.client_email));
+        renderTelegramEgressCandidates(match ? telegramEgressCandidateKey(match) : '');
+        updateTelegramEgressSourceUI();
+        document.getElementById('tgb-egress-form').style.display = '';
+        document.getElementById('tgb-egress-name').focus();
+    }
+
+    function closeTelegramEgressForm() { document.getElementById('tgb-egress-form').style.display = 'none'; }
+
+    function updateTelegramEgressSourceUI() {
+        const manual = document.getElementById('tgb-egress-source').value === 'manual';
+        document.getElementById('tgb-egress-candidate-group').style.display = manual ? 'none' : '';
+        document.getElementById('tgb-egress-uri-group').style.display = manual ? '' : 'none';
+        document.getElementById('tgb-egress-uri').required = manual && !document.getElementById('tgb-egress-id').value;
+        document.getElementById('tgb-egress-candidate').required = !manual;
+    }
+
+    async function saveTelegramEgress(event) {
+        event.preventDefault();
+        const id = document.getElementById('tgb-egress-id').value;
+        const source = document.getElementById('tgb-egress-source').value;
+        const button = document.getElementById('tgb-egress-save');
+        const payload = {name:document.getElementById('tgb-egress-name').value.trim(), local_port:Number(document.getElementById('tgb-egress-port').value), priority:Number(document.getElementById('tgb-egress-priority').value), enabled:document.getElementById('tgb-egress-enabled').checked};
+        if (source === 'manual') {
+            payload.source_type = 'manual_uri';
+            payload.config_uri = document.getElementById('tgb-egress-uri').value.trim();
+        } else {
+            const candidate = telegramBotEgressCandidates.find(item => telegramEgressCandidateKey(item) === document.getElementById('tgb-egress-candidate').value);
+            if (!candidate) return showToast('Select an available VLESS client.', 'error');
+            payload.source_type = 'managed_server_client';
+            payload.server_id = candidate.server_id;
+            payload.inbound_id = candidate.inbound_id;
+            payload.client_id = candidate.client_id;
+        }
+        setTelegramButtonLoading(button, true, 'Saving…');
+        try {
+            await telegramBotApi(id ? `/api/settings/telegram-bots/egress/${id}` : '/api/settings/telegram-bots/egress', {method:id ? 'PUT' : 'POST', body:JSON.stringify(payload)});
+            closeTelegramEgressForm(); showToast('Managed Xray route saved.', 'success'); await loadTelegramBotSettings();
+        } catch (error) { showToast(error.message, 'error'); }
+        finally { setTelegramButtonLoading(button, false); }
+    }
+
+    async function testTelegramEgress(id, button) {
+        setTelegramButtonLoading(button, true, 'Testing…');
+        setTelegramBotReadiness('warning', 'Testing managed Xray route…', 'Starting the loopback relay and checking every Telegram network layer.');
+        try {
+            const data = await telegramBotApi(`/api/settings/telegram-bots/egress/${id}/test`, {method:'POST'});
+            renderTelegramDiagnostic(data);
+            const d = data.diagnostic || data.result || data;
+            setTelegramBotReadiness('good', 'Managed route is healthy', 'Xray reached the Telegram API through the selected VLESS route.', d);
+            showToast('Managed Xray route test passed.', 'success');
+        } catch (error) {
+            renderTelegramDiagnostic(error.payload || {success:false, error:error.message, attempts:[]});
+            setTelegramBotReadiness('error', 'Managed route failed', error.message);
+            showToast(error.message, 'error');
+        } finally { setTelegramButtonLoading(button, false); await loadTelegramBotSettings(); }
+    }
+
+    async function deleteTelegramEgress(id, button) {
+        if (!confirm('Delete this managed Xray route? Its local relay will be stopped.')) return;
+        setTelegramButtonLoading(button, true, 'Deleting…');
+        try { await telegramBotApi(`/api/settings/telegram-bots/egress/${id}`, {method:'DELETE'}); showToast('Managed Xray route deleted.', 'success'); }
+        catch (error) { showToast(error.message, 'error'); }
+        finally { setTelegramButtonLoading(button, false); await loadTelegramBotSettings(); }
+    }
+
+    function renderTelegramDiagnostic(payload) {
+        const data = payload && (payload.diagnostic || payload.result) ? (payload.diagnostic || payload.result) : (payload || {});
+        const attempts = Array.isArray(data.attempts) ? data.attempts : Array.isArray(payload && payload.attempts) ? payload.attempts : [];
+        const success = data.success === true || (payload && payload.success === true);
+        const empty = document.getElementById('tgb-diagnostic-empty');
+        const container = document.getElementById('tgb-diagnostic-attempts');
+        const summary = document.getElementById('tgb-diagnostic-summary');
+        if (!empty || !container || !summary) return;
+        empty.style.display = attempts.length ? 'none' : 'flex';
+        summary.className = `tgb-diagnostic-summary ${success ? 'is-good' : 'is-error'}`;
+        summary.textContent = success ? 'All required stages passed' : (data.error_code || (payload && payload.error_code) || 'Connection failed');
+        container.innerHTML = attempts.map((attempt, index) => {
+            const provided = Array.isArray(attempt.stages) ? attempt.stages : [];
+            const route = String(attempt.route || `Attempt ${index + 1}`);
+            const firstStage = provided.some(stage => stage.name === 'proxy_tcp' || stage.name === 'proxy_tunnel') || /proxy|xray|socks|http/i.test(route) ? 'proxy_tcp' : 'telegram_tcp';
+            const names = [firstStage, 'proxy_tunnel', 'telegram_tls', 'telegram_api'];
+            const stages = names.filter((name, idx) => !(name === 'proxy_tunnel' && firstStage === 'telegram_tcp')).map(name => provided.find(stage => stage.name === name) || {name, status:'skipped', message:'Not reached'});
+            const stageHtml = stages.map(stage => {
+                const status = String(stage.status || 'skipped').toLowerCase();
+                const statusClass = ['passed', 'success', 'ok'].includes(status) ? 'is-passed' : ['failed', 'error'].includes(status) ? 'is-failed' : 'is-skipped';
+                const detailParts = [];
+                if (stage.latency_ms != null) detailParts.push(`${Number(stage.latency_ms)} ms`);
+                if (stage.error_code) detailParts.push(String(stage.error_code));
+                if (stage.message) detailParts.push(String(stage.message));
+                return `<div class="tgb-stage ${statusClass}"><span class="tgb-stage-name">${escapeHtml(String(stage.name))}</span><span class="tgb-stage-detail">${escapeHtml(detailParts.join(' · ') || status)}</span></div>`;
+            }).join('');
+            const attemptDetail = attempt.success === true ? 'Passed' : escapeHtml(String(attempt.error_code || attempt.error || 'Failed'));
+            return `<article class="tgb-attempt"><div class="tgb-attempt-head"><strong>${escapeHtml(route)}</strong><span>${attempt.latency_ms != null ? `${Number(attempt.latency_ms)} ms · ` : ''}${attemptDetail}</span></div><div class="tgb-stage-track">${stageHtml}</div></article>`;
+        }).join('');
+        const hint = data.runtime_hint || (payload && payload.runtime_hint);
+        if (hint) container.insertAdjacentHTML('beforeend', `<div class="tgb-runtime-hint"><strong>Runtime action:</strong> ${escapeHtml(String(hint))}</div>`);
     }
 
     function renderTelegramProxies() {
@@ -3072,17 +3348,17 @@
 
     async function testTelegramProxy(id, button) {
         setTelegramButtonLoading(button, true, 'Testing…');
-        try { await telegramBotApi(`/api/settings/telegram-bots/proxies/${id}/test`, {method:'POST'}); showToast('Proxy test passed.', 'success'); }
-        catch (error) { showToast(error.message, 'error'); }
+        try { const data = await telegramBotApi(`/api/settings/telegram-bots/proxies/${id}/test`, {method:'POST'}); renderTelegramDiagnostic(data); showToast('Proxy test passed.', 'success'); }
+        catch (error) { renderTelegramDiagnostic(error.payload || {success:false, error:error.message, attempts:[]}); showToast(error.message, 'error'); }
         finally { setTelegramButtonLoading(button, false); await loadTelegramBotSettings(); }
     }
 
     async function deleteTelegramProxy(id, button) {
         if (!confirm('Delete this proxy? This action cannot be undone.')) return;
         setTelegramButtonLoading(button, true, 'Deleting…');
-        try { await telegramBotApi(`/api/settings/telegram-bots/proxies/${id}`, {method:'DELETE'}); telegramBotProxies = telegramBotProxies.filter(item => Number(item.id) !== Number(id)); renderTelegramProxies(); showToast('Proxy deleted.', 'success'); }
+        try { await telegramBotApi(`/api/settings/telegram-bots/proxies/${id}`, {method:'DELETE'}); showToast('Proxy deleted.', 'success'); }
         catch (error) { showToast(error.message, 'error'); }
-        finally { setTelegramButtonLoading(button, false); }
+        finally { setTelegramButtonLoading(button, false); await loadTelegramBotSettings(); }
     }
 
     function loadWhatsAppSettings() {
