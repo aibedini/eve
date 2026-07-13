@@ -443,7 +443,7 @@ def _notify_claim_admins(api: TelegramBotApi, claim: OwnershipClaim, user_id: in
             continue
         try:
             admin_chat_id = int(str(admin.telegram_id or '').strip())
-            if admin_chat_id > 0 and admin_chat_id != user_id:
+            if admin_chat_id > 0:
                 extra = {"reply_markup": {"inline_keyboard": keyboard}} if keyboard else {}
                 api.send_message(admin_chat_id, text, **extra)
         except (TypeError, ValueError, TelegramApiError):
@@ -515,7 +515,7 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
             continue
         try:
             admin_chat_id = int(str(admin.telegram_id or '').strip())
-            if admin_chat_id > 0 and admin_chat_id != request_row.telegram_user_id:
+            if admin_chat_id > 0:
                 api.send_message(admin_chat_id, "\n".join(lines), reply_markup=keyboard)
         except (TypeError, ValueError, TelegramApiError):
             continue

@@ -792,7 +792,12 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             name='30GB / 30 Days', days=30, volume=30, price=320000,
             enabled=True, scope='global', display_order=1,
         )
-        db.session.add_all([bot, customer, identity, server, package])
+        reviewer = Admin(
+            username='claim-test-service-reviewer', role='superadmin',
+            is_superadmin=True, enabled=True, telegram_id='70010',
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add_all([bot, customer, identity, server, package, reviewer])
         db.session.flush()
         ownership = ServiceOwnership(
             customer_id=customer.id, server_id=server.id,
@@ -864,6 +869,10 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             renewal = TelegramServiceRequest.query.filter_by(request_type='renewal').one()
             self.assertEqual(renewal.package_id, package.id)
             self.assertEqual(renewal.amount, 320000)
+            self.assertTrue(any(
+                message['text'].startswith('Telegram Renewal request')
+                for message in api.messages
+            ))
 
             process_update(api, bot, {'update_id': 14, 'callback_query': {
                 'id': 'service-support', 'data': f'service-support:{ownership.id}',
@@ -877,20 +886,15 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             }})
             support = TelegramServiceRequest.query.filter_by(request_type='support').one()
             self.assertEqual(support.note, 'Please check this service.')
-            self.assertEqual(api.messages[-1]['text'], COPY['fa']['support_pending'])
-
-            reviewer = Admin(
-                username='claim-test-service-reviewer', role='superadmin',
-                is_superadmin=True, enabled=True, telegram_id='80010',
-            )
-            reviewer.set_password('StrongClaimPassword123!')
-            db.session.add(reviewer)
-            db.session.commit()
+            self.assertTrue(any(
+                message['text'] == COPY['fa']['support_pending']
+                for message in api.messages
+            ))
             process_update(api, bot, {'update_id': 16, 'callback_query': {
                 'id': 'admin-service-complete',
                 'data': f'admin-service:{renewal.id}:complete',
-                'from': {'id': 80010, 'first_name': 'Admin'},
-                'message': {'chat': {'id': 80010, 'type': 'private'}},
+                'from': {'id': 70010, 'first_name': 'Admin'},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
             }})
             self.assertEqual(renewal.status, 'completed')
             self.assertEqual(renewal.reviewed_by_admin_id, reviewer.id)
