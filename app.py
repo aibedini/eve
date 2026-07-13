@@ -101,7 +101,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.35"
+APP_VERSION = "2.4.36"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8008,6 +8008,99 @@ class TelegramBotInstance(db.Model):
             'last_test_error': self.last_test_error,
             'last_test_at': self.last_test_at.isoformat() if self.last_test_at else None,
         }
+
+
+class TelegramBotRuntime(db.Model):
+    """Durable polling cursor and health state for one Telegram bot."""
+    __tablename__ = 'telegram_bot_runtimes'
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, unique=True, index=True,
+    )
+    next_update_id = db.Column(db.BigInteger, nullable=False, default=0)
+    status = db.Column(db.String(24), nullable=False, default='stopped', index=True)
+    worker_id = db.Column(db.String(64), nullable=True)
+    lease_expires_at = db.Column(db.DateTime, nullable=True)
+    last_heartbeat_at = db.Column(db.DateTime, nullable=True)
+    last_update_at = db.Column(db.DateTime, nullable=True)
+    last_route = db.Column(db.String(120), nullable=True)
+    last_error = db.Column(db.Text, nullable=True)
+    failed_update_id = db.Column(db.BigInteger, nullable=True)
+    failed_update_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    bot = db.relationship('TelegramBotInstance', backref=db.backref(
+        'runtime', uselist=False, cascade='all, delete-orphan',
+    ))
+
+    def to_safe_dict(self):
+        heartbeat = self.last_heartbeat_at
+        status = self.status
+        if status == 'running' and (not heartbeat or heartbeat < datetime.utcnow() - timedelta(seconds=90)):
+            status = 'stale'
+        return {
+            'status': status,
+            'next_update_id': int(self.next_update_id or 0),
+            'last_heartbeat_at': heartbeat.isoformat() if heartbeat else None,
+            'last_update_at': self.last_update_at.isoformat() if self.last_update_at else None,
+            'last_route': self.last_route,
+            'last_error': self.last_error,
+        }
+
+
+class TelegramBotTestUser(db.Model):
+    """A Telegram user explicitly allowed while a bot is in test mode."""
+    __tablename__ = 'telegram_bot_test_users'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'telegram_user_id', name='uq_telegram_bot_test_user'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    label = db.Column(db.String(120), nullable=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    bot = db.relationship('TelegramBotInstance', backref=db.backref(
+        'test_users', lazy=True, cascade='all, delete-orphan',
+    ))
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'telegram_user_id': int(self.telegram_user_id),
+            'label': self.label,
+            'enabled': bool(self.enabled),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TelegramBotUserState(db.Model):
+    """Per-bot onboarding state without changing the global Telegram identity."""
+    __tablename__ = 'telegram_bot_user_states'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'telegram_user_id', name='uq_telegram_bot_user_state'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    language = db.Column(db.String(12), nullable=False, default='fa')
+    step = db.Column(db.String(32), nullable=False, default='new', index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    bot = db.relationship('TelegramBotInstance', backref=db.backref(
+        'user_states', lazy=True, cascade='all, delete-orphan',
+    ))
 
 
 class TelegramProxyEndpoint(db.Model):
@@ -24215,6 +24308,46 @@ def _telegram_proxy_mapping(endpoint: TelegramProxyEndpoint) -> dict:
     return {'http': url, 'https': url}
 
 
+def _telegram_bot_api_client(bot: TelegramBotInstance):
+    """Build the interactive bot client with the same ordered routes as diagnostics."""
+    from telegram_bot_runtime import TelegramBotApi, TelegramRoute
+
+    token = _decrypt_telegram_secret(bot.token_encrypted)
+    if not token or token.startswith(SERVER_PASSWORD_PREFIX):
+        raise ValueError('Bot token is not configured or cannot be decrypted')
+    proxy_rows = TelegramProxyEndpoint.query.filter_by(
+        bot_instance_id=bot.id, enabled=True,
+    ).order_by(TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc()).all()
+    egress_rows = TelegramEgressProfile.query.filter_by(
+        bot_instance_id=bot.id, enabled=True,
+    ).order_by(TelegramEgressProfile.priority.asc(), TelegramEgressProfile.id.asc()).all()
+    managed = sorted(
+        [('egress', row) for row in egress_rows] + [('proxy', row) for row in proxy_rows],
+        key=lambda item: (int(item[1].priority or 0), item[1].id),
+    )
+    routes = []
+    for kind, row in managed:
+        if kind == 'egress':
+            proxy_url = f'socks5h://127.0.0.1:{int(row.local_port)}'
+            routes.append(TelegramRoute(
+                f'xray://{row.name}', {'http': proxy_url, 'https': proxy_url},
+            ))
+        else:
+            routes.append(TelegramRoute(
+                f'{row.proxy_type}://{row.host}:{row.port}', _telegram_proxy_mapping(row),
+            ))
+    direct = TelegramRoute('direct')
+    if bot.connection_mode == 'direct_only':
+        routes = [direct]
+    elif bot.connection_mode == 'proxy_first':
+        routes.append(direct)
+    elif bot.connection_mode == 'auto':
+        routes.insert(0, direct)
+    if not routes:
+        raise ValueError('No usable Telegram route is configured')
+    return TelegramBotApi(token, routes)
+
+
 def _telegram_bot_attempt(token: str, route_name: str, proxies=None, proxy=None) -> dict:
     started = time.perf_counter()
     username = _decrypt_telegram_secret(proxy.username_encrypted) if proxy else None
@@ -24457,13 +24590,23 @@ def _telegram_egress_from_payload(profile, data):
 @superadmin_required
 def get_telegram_bot_settings():
     bot = _central_telegram_bot(create=True)
+    runtime = TelegramBotRuntime.query.filter_by(bot_instance_id=bot.id).first()
+    if runtime is None:
+        runtime = TelegramBotRuntime(bot_instance_id=bot.id)
+        db.session.add(runtime)
+        db.session.commit()
     proxies = TelegramProxyEndpoint.query.filter_by(bot_instance_id=bot.id).order_by(
         TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc(),
     ).all()
     egresses = TelegramEgressProfile.query.filter_by(bot_instance_id=bot.id).order_by(
         TelegramEgressProfile.priority.asc(), TelegramEgressProfile.id.asc(),
     ).all()
+    test_users = TelegramBotTestUser.query.filter_by(bot_instance_id=bot.id).order_by(
+        TelegramBotTestUser.id.asc(),
+    ).all()
     return jsonify({'success': True, 'bot': bot.to_safe_dict(),
+                    'runtime': runtime.to_safe_dict(),
+                    'test_users': [row.to_safe_dict() for row in test_users],
                     'proxies': [proxy.to_safe_dict() for proxy in proxies],
                     'egress_profiles': [profile.to_safe_dict() for profile in egresses]})
 
@@ -24517,6 +24660,90 @@ def test_telegram_bot_settings():
     if route not in ('direct', 'configured'):
         return jsonify({'success': False, 'error': 'Invalid diagnostic route'}), 400
     return jsonify(_telegram_bot_diagnostic(bot, route=route))
+
+
+def _telegram_test_user_id(value):
+    try:
+        user_id = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ValueError('Telegram user ID must be a number')
+    if user_id <= 0 or user_id > 9223372036854775807:
+        raise ValueError('Telegram user ID is out of range')
+    return user_id
+
+
+@app.route('/api/settings/telegram-bots/test-users', methods=['POST'])
+@superadmin_required
+def create_telegram_bot_test_user():
+    bot = _central_telegram_bot(create=True)
+    data = request.get_json(silent=True) or {}
+    try:
+        row = TelegramBotTestUser(
+            bot_instance_id=bot.id,
+            telegram_user_id=_telegram_test_user_id(data.get('telegram_user_id')),
+            label=str(data.get('label') or '').strip()[:120] or None,
+            enabled=bool(data.get('enabled', True)),
+        )
+        db.session.add(row)
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'This Telegram user is already in the test list'}), 409
+    return jsonify({'success': True, 'test_user': row.to_safe_dict()})
+
+
+@app.route('/api/settings/telegram-bots/test-users/<int:test_user_id>', methods=['PUT', 'DELETE'])
+@superadmin_required
+def update_telegram_bot_test_user(test_user_id):
+    bot = _central_telegram_bot(create=True)
+    row = TelegramBotTestUser.query.filter_by(
+        id=test_user_id, bot_instance_id=bot.id,
+    ).first()
+    if not row:
+        return jsonify({'success': False, 'error': 'Test user not found'}), 404
+    if request.method == 'DELETE':
+        db.session.delete(row)
+        db.session.commit()
+        return jsonify({'success': True})
+    data = request.get_json(silent=True) or {}
+    try:
+        if 'telegram_user_id' in data:
+            row.telegram_user_id = _telegram_test_user_id(data.get('telegram_user_id'))
+        if 'label' in data:
+            row.label = str(data.get('label') or '').strip()[:120] or None
+        if 'enabled' in data:
+            row.enabled = bool(data.get('enabled'))
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'This Telegram user is already in the test list'}), 409
+    return jsonify({'success': True, 'test_user': row.to_safe_dict()})
+
+
+@app.route('/api/settings/telegram-bots/send-test', methods=['POST'])
+@superadmin_required
+def send_telegram_bot_test_message():
+    bot = _central_telegram_bot(create=True)
+    data = request.get_json(silent=True) or {}
+    try:
+        user_id = _telegram_test_user_id(data.get('telegram_user_id'))
+        if bot.test_mode and not TelegramBotTestUser.query.filter_by(
+                bot_instance_id=bot.id, telegram_user_id=user_id, enabled=True).first():
+            return jsonify({'success': False, 'error': 'Add and enable this user in the test list first'}), 400
+        api = _telegram_bot_api_client(bot)
+        _result, route = api.send_message(
+            user_id,
+            '✅ Eve Telegram bot test succeeded.\n\nتست ربات تلگرام Eve با موفقیت انجام شد.',
+        )
+        return jsonify({'success': True, 'route': route})
+    except (ValueError, RuntimeError) as exc:
+        return jsonify({'success': False, 'error': redact_connection_error(exc)}), 400
 
 
 @app.route('/api/settings/telegram-bots/proxies', methods=['POST'])

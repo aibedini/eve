@@ -1,0 +1,142 @@
+"""Small, token-safe Telegram Bot API client and localized onboarding UI."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import requests
+
+from telegram_diagnostics import redact_connection_error
+
+
+API_ROOT = "https://api.telegram.org"
+
+
+@dataclass(frozen=True)
+class TelegramRoute:
+    name: str
+    proxies: dict[str, str] | None = None
+
+
+class TelegramApiError(RuntimeError):
+    def __init__(self, message: str, *, retryable: bool = True, retry_after: int = 0):
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = max(0, int(retry_after or 0))
+
+
+class TelegramBotApi:
+    """Bot API client with ordered route failover and no token logging."""
+
+    def __init__(self, token: str, routes: list[TelegramRoute]):
+        self._token = token
+        self._routes = routes or [TelegramRoute("direct")]
+
+    def call(self, method: str, payload: dict[str, Any] | None = None,
+             *, long_poll_timeout: int = 0) -> tuple[Any, str]:
+        errors: list[str] = []
+        connect_timeout = 10
+        read_timeout = max(15, int(long_poll_timeout) + 10)
+        url = f"{API_ROOT}/bot{self._token}/{method}"
+        for route in self._routes:
+            started = time.perf_counter()
+            try:
+                response = requests.post(
+                    url, json=payload or {}, proxies=route.proxies,
+                    timeout=(connect_timeout, read_timeout),
+                )
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    raise TelegramApiError(
+                        f"Telegram returned invalid JSON (HTTP {response.status_code})",
+                    ) from exc
+                if response.status_code == 200 and isinstance(body, dict) and body.get("ok"):
+                    return body.get("result"), route.name
+                description = body.get("description") if isinstance(body, dict) else None
+                safe = redact_connection_error(
+                    description or f"Telegram returned HTTP {response.status_code}",
+                    (self._token,),
+                )
+                # Auth, validation and webhook conflicts are route-independent.
+                if response.status_code in (400, 401, 403, 404, 409, 429):
+                    parameters = body.get("parameters") if isinstance(body, dict) else {}
+                    raise TelegramApiError(
+                        safe,
+                        retryable=False,
+                        retry_after=(parameters or {}).get("retry_after", 0),
+                    )
+                errors.append(f"{route.name}: {safe}")
+            except TelegramApiError as exc:
+                if not exc.retryable:
+                    raise
+                errors.append(f"{route.name}: {exc}")
+            except requests.RequestException as exc:
+                elapsed = max(1, int((time.perf_counter() - started) * 1000))
+                safe = redact_connection_error(exc, (self._token,))
+                errors.append(f"{route.name} ({elapsed} ms): {safe}")
+        raise TelegramApiError("; ".join(errors) or "No Telegram route is available")
+
+    def get_updates(self, offset: int, *, timeout: int = 25):
+        return self.call("getUpdates", {
+            "offset": int(offset or 0),
+            "timeout": int(timeout),
+            "allowed_updates": ["message", "callback_query"],
+        }, long_poll_timeout=timeout)
+
+    def send_message(self, chat_id: int, text: str, **extra):
+        return self.call("sendMessage", {"chat_id": int(chat_id), "text": text, **extra})
+
+    def answer_callback(self, callback_query_id: str, text: str = ""):
+        return self.call("answerCallbackQuery", {
+            "callback_query_id": callback_query_id,
+            "text": text,
+        })
+
+
+COPY = {
+    "fa": {
+        "choose_language": "زبان ربات را انتخاب کنید:",
+        "share_phone": "برای شناسایی حساب‌ها، شماره موبایل خودتان را با دکمه زیر ارسال کنید.",
+        "share_button": "📱 ارسال شماره من",
+        "phone_invalid": "این شماره معتبر نیست. لطفاً شماره ایران خودتان را با دکمه ارسال کنید.",
+        "phone_mismatch": "برای امنیت، فقط شماره‌ای پذیرفته می‌شود که Telegram آن را متعلق به خود شما اعلام کند.",
+        "phone_conflict": "این حساب قبلاً به مشتری دیگری متصل شده است. برای ادامه، مدیر باید آن را بررسی کند.",
+        "verified": "✅ شماره شما تأیید شد. در مرحله بعد سرویس‌هایتان را با هم پیدا و متصل می‌کنیم.",
+        "start_first": "برای شروع /start را بزنید.",
+        "test_restricted": "این ربات فعلاً در حالت تست خصوصی است.",
+    },
+    "en": {
+        "choose_language": "Choose your bot language:",
+        "share_phone": "To identify your accounts, share your own phone number using the button below.",
+        "share_button": "📱 Share my number",
+        "phone_invalid": "That number is not valid. Please share your Iranian mobile number using the button.",
+        "phone_mismatch": "For security, only a phone number Telegram confirms belongs to you is accepted.",
+        "phone_conflict": "This Telegram account is already linked to another customer. An admin must review it.",
+        "verified": "✅ Your phone is verified. Next, we will find and link your services together.",
+        "start_first": "Send /start to begin.",
+        "test_restricted": "This bot is currently in private test mode.",
+    },
+}
+
+
+def language_keyboard(enabled_languages: list[str]):
+    labels = {"fa": "فارسی 🇮🇷", "en": "English 🇬🇧"}
+    return {
+        "inline_keyboard": [[
+            {"text": labels[lang], "callback_data": f"lang:{lang}"}
+            for lang in enabled_languages if lang in labels
+        ]]
+    }
+
+
+def contact_keyboard(language: str):
+    lang = language if language in COPY else "fa"
+    return {
+        "keyboard": [[{"text": COPY[lang]["share_button"], "request_contact": True}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+        "input_field_placeholder": COPY[lang]["share_button"],
+    }

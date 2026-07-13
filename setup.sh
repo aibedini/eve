@@ -1215,7 +1215,7 @@ setup_systemd() {
 [Unit]
 Description=Eve X-UI Manager
 After=network.target
-Wants=${SERVICE_NAME}-background.service ${SERVICE_NAME}-telegram-egress.service
+Wants=${SERVICE_NAME}-background.service ${SERVICE_NAME}-telegram-egress.service ${SERVICE_NAME}-telegram-bot.service
 
 [Service]
 User=${APP_USER}
@@ -1278,15 +1278,43 @@ ReadWritePaths=${APP_DIR}/instance
 [Install]
 WantedBy=multi-user.target
 EOF
+    cat > /etc/systemd/system/${SERVICE_NAME}-telegram-bot.service <<EOF
+[Unit]
+Description=Eve Telegram Bot Polling Worker
+After=network-online.target ${SERVICE_NAME}-telegram-egress.service
+Wants=network-online.target
+PartOf=${SERVICE_NAME}.service
+ConditionPathExists=${APP_DIR}/telegram_bot_worker.py
+
+[Service]
+User=${APP_USER}
+Group=${APP_USER}
+WorkingDirectory=${APP_DIR}
+Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=${ENV_FILE}
+Environment="EVE_PROCESS_ROLE=telegram-bot"
+ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/telegram_bot_worker.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=${APP_DIR}/instance
+
+[Install]
+WantedBy=multi-user.target
+EOF
     systemctl daemon-reload
     systemctl enable ${SERVICE_NAME}
     systemctl enable ${SERVICE_NAME}-background
     systemctl enable ${SERVICE_NAME}-telegram-egress
+    systemctl enable ${SERVICE_NAME}-telegram-bot
     if [ "$restart_now" = "true" ]; then
         systemctl restart ${SERVICE_NAME}
-        print_success "Web, background, and Telegram egress services started"
+        print_success "Web, background, Telegram egress, and Telegram bot services started"
     else
-        print_success "Web, background, and Telegram egress service definitions updated"
+        print_success "Web, background, Telegram egress, and Telegram bot service definitions updated"
     fi
     if ! find_xray_binary >/dev/null 2>&1; then
         print_warning "Xray runtime is not installed. Telegram managed routes will show runtime_missing."
@@ -2541,6 +2569,22 @@ restart_telegram_egress_service() {
     fi
 }
 
+restart_telegram_bot_service() {
+    print_header "Restart Telegram Bot"
+    if ! systemctl cat "${SERVICE_NAME}-telegram-bot.service" >/dev/null 2>&1; then
+        print_error "${SERVICE_NAME}-telegram-bot.service is not installed. Run Eve Update first."
+        return 1
+    fi
+    systemctl restart "${SERVICE_NAME}-telegram-bot.service"
+    if systemctl is-active --quiet "${SERVICE_NAME}-telegram-bot.service"; then
+        print_success "Telegram bot polling worker is running"
+    else
+        print_error "Telegram bot polling worker failed to start"
+        systemctl status "${SERVICE_NAME}-telegram-bot.service" --no-pager -l || true
+        return 1
+    fi
+}
+
 get_app_version() {
     local ver=""
     if [ -f "$APP_DIR/app.py" ]; then
@@ -2894,6 +2938,7 @@ show_menu() {
         echo -e "  ${BOLD}Telegram Egress${NC}"
         echo -e "   ${MAGENTA}[x]${NC}  Install / Update Eve Xray Runtime"
         echo -e "   ${MAGENTA}[r]${NC}  Restart Telegram Egress Worker"
+        echo -e "   ${MAGENTA}[b]${NC}  Restart Telegram Bot Worker"
         echo
         echo -e "  ${BOLD}System${NC}"
         echo -e "   ${DIM}[s]${NC}  Update this Script (Online — GitHub)"
@@ -2991,6 +3036,11 @@ show_menu() {
                 restart_telegram_egress_service || true
                 read -rp "  Press Enter to return to menu..." _dummy
                 ;;
+            b|B)
+                require_root
+                restart_telegram_bot_service || true
+                read -rp "  Press Enter to return to menu..." _dummy
+                ;;
             s|S)
                 update_self
                 ;;
@@ -3024,10 +3074,12 @@ uninstall_project() {
     systemctl disable ${SERVICE_NAME} || true
     systemctl disable --now ${SERVICE_NAME}-background 2>/dev/null || true
     systemctl disable --now ${SERVICE_NAME}-telegram-egress 2>/dev/null || true
+    systemctl disable --now ${SERVICE_NAME}-telegram-bot 2>/dev/null || true
     systemctl disable --now eve-maintenance.service 2>/dev/null || true
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
     rm -f /etc/systemd/system/${SERVICE_NAME}-background.service
     rm -f /etc/systemd/system/${SERVICE_NAME}-telegram-egress.service
+    rm -f /etc/systemd/system/${SERVICE_NAME}-telegram-bot.service
     rm -f /etc/systemd/system/eve-maintenance.service
     rm -f /usr/local/sbin/eve-maintenance-root
     systemctl daemon-reload
@@ -3055,6 +3107,10 @@ elif [ "${1:-}" = "--xray-status" ]; then
 elif [ "${1:-}" = "--restart-telegram-egress" ]; then
     require_root
     restart_telegram_egress_service
+    exit $?
+elif [ "${1:-}" = "--restart-telegram-bot" ]; then
+    require_root
+    restart_telegram_bot_service
     exit $?
 elif [ "${1:-}" = "--online-update" ]; then
     require_root

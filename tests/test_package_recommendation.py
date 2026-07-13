@@ -26,6 +26,9 @@ from app import (  # noqa: E402
     ServiceOwnership,
     TelegramIdentity,
     TelegramBotInstance,
+    TelegramBotRuntime,
+    TelegramBotTestUser,
+    TelegramBotUserState,
     TelegramEgressProfile,
     TelegramProxyEndpoint,
     SMS_GMWEB_API_KEY_KEY,
@@ -53,6 +56,7 @@ from app import (  # noqa: E402
 )
 from telegram_diagnostics import probe_telegram_transport, redact_connection_error  # noqa: E402
 from telegram_xray import XraySupervisor, build_xray_config_from_uri, write_xray_config  # noqa: E402
+from telegram_bot_worker import process_update  # noqa: E402
 
 
 PACKAGES = [
@@ -61,6 +65,20 @@ PACKAGES = [
     {'id': 3, 'name': '30 GB', 'days': 31, 'volume': 30, 'price': 390_000},
     {'id': 4, 'name': '50 GB', 'days': 31, 'volume': 50, 'price': 600_000},
 ]
+
+
+class FakeTelegramApi:
+    def __init__(self):
+        self.messages = []
+        self.callbacks = []
+
+    def send_message(self, chat_id, text, **extra):
+        self.messages.append({'chat_id': chat_id, 'text': text, **extra})
+        return {'message_id': len(self.messages)}, 'test'
+
+    def answer_callback(self, callback_query_id, text=''):
+        self.callbacks.append((callback_query_id, text))
+        return True, 'test'
 
 
 class PackageRecommendationRegressionTests(unittest.TestCase):
@@ -83,6 +101,9 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
     def tearDown(self):
         TelegramEgressProfile.query.delete()
         TelegramProxyEndpoint.query.delete()
+        TelegramBotUserState.query.delete()
+        TelegramBotTestUser.query.delete()
+        TelegramBotRuntime.query.delete()
         TelegramBotInstance.query.delete()
         OwnershipClaimItem.query.delete()
         OwnershipClaim.query.delete()
@@ -601,6 +622,140 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertNotIn('token_encrypted', loaded['bot'])
         self.assertEqual(settings_page.status_code, 200)
         self.assertIn(b'tab-telegram_bots', settings_page.data)
+
+    def test_telegram_test_user_api_requires_numeric_id_and_returns_runtime(self):
+        reviewer = Admin(
+            username='claim-test-bot-testers', role='superadmin', is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add(reviewer)
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+
+        invalid = client.post('/api/settings/telegram-bots/test-users', json={
+            'telegram_user_id': '@username', 'label': 'unsafe',
+        })
+        created = client.post('/api/settings/telegram-bots/test-users', json={
+            'telegram_user_id': '123456789', 'label': 'Owner phone',
+        })
+        loaded = client.get('/api/settings/telegram-bots').get_json()
+
+        self.assertFalse(invalid.get_json()['success'])
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(loaded['test_users'][0]['telegram_user_id'], 123456789)
+        self.assertEqual(loaded['runtime']['status'], 'stopped')
+
+    def test_telegram_test_mode_ignores_unauthorized_user_without_identity(self):
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=True,
+            enabled_languages_json='["fa","en"]', default_language='fa',
+        )
+        db.session.add(bot)
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 1, 'message': {
+            'message_id': 1, 'text': '/start',
+            'from': {'id': 70001, 'first_name': 'Unknown'},
+            'chat': {'id': 70001, 'type': 'private'},
+        }})
+        db.session.commit()
+
+        self.assertIsNone(TelegramIdentity.query.filter_by(telegram_user_id=70001).first())
+        self.assertEqual(CustomerAccount.query.count(), 0)
+        self.assertEqual(api.messages, [])
+
+    def test_telegram_start_language_and_verified_contact_flow(self):
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=True,
+            enabled_languages_json='["fa","en"]', default_language='fa',
+        )
+        db.session.add(bot)
+        db.session.flush()
+        db.session.add(TelegramBotTestUser(
+            bot_instance_id=bot.id, telegram_user_id=70002, label='Owner', enabled=True,
+        ))
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 2, 'message': {
+            'message_id': 1, 'text': '/start',
+            'from': {'id': 70002, 'first_name': 'Ali'},
+            'chat': {'id': 70002, 'type': 'private'},
+        }})
+        process_update(api, bot, {'update_id': 3, 'callback_query': {
+            'id': 'callback-1', 'data': 'lang:en',
+            'from': {'id': 70002, 'first_name': 'Ali'},
+            'message': {'chat': {'id': 70002, 'type': 'private'}},
+        }})
+        process_update(api, bot, {'update_id': 4, 'message': {
+            'message_id': 2,
+            'from': {'id': 70002, 'first_name': 'Ali'},
+            'chat': {'id': 70002, 'type': 'private'},
+            'contact': {'user_id': 70002, 'phone_number': '09195292411'},
+        }})
+        db.session.commit()
+
+        state = TelegramBotUserState.query.filter_by(telegram_user_id=70002).one()
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=70002).one()
+        customer = db.session.get(CustomerAccount, identity.customer_id)
+        self.assertEqual(state.language, 'en')
+        self.assertEqual(state.step, 'verified')
+        self.assertEqual(customer.primary_phone, '989195292411')
+        self.assertEqual(customer.preferred_language, 'en')
+        self.assertEqual(api.callbacks, [('callback-1', '✓')])
+
+    def test_telegram_rejects_contact_belonging_to_another_user(self):
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=False,
+            enabled_languages_json='["fa"]', default_language='fa',
+        )
+        db.session.add(bot)
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 5, 'message': {
+            'message_id': 2,
+            'from': {'id': 70003, 'first_name': 'Ali'},
+            'chat': {'id': 70003, 'type': 'private'},
+            'contact': {'user_id': 99999, 'phone_number': '09195292411'},
+        }})
+        db.session.commit()
+
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=70003).one()
+        self.assertIsNone(identity.customer_id)
+        self.assertEqual(CustomerAccount.query.count(), 0)
+        self.assertIn('امنیت', api.messages[-1]['text'])
+
+    def test_telegram_does_not_reassign_phone_owned_by_another_identity(self):
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=False,
+            enabled_languages_json='["fa"]', default_language='fa',
+        )
+        customer = CustomerAccount(primary_phone='989195292411', phone_verified_at=datetime.utcnow())
+        original = TelegramIdentity(
+            customer=customer, telegram_user_id=70004, telegram_chat_id=70004,
+            phone_normalized=customer.primary_phone, phone_verified_at=datetime.utcnow(),
+        )
+        db.session.add_all([bot, customer, original])
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 6, 'message': {
+            'message_id': 2,
+            'from': {'id': 70005, 'first_name': 'Other'},
+            'chat': {'id': 70005, 'type': 'private'},
+            'contact': {'user_id': 70005, 'phone_number': '09195292411'},
+        }})
+        db.session.commit()
+
+        claimant = TelegramIdentity.query.filter_by(telegram_user_id=70005).one()
+        state = TelegramBotUserState.query.filter_by(telegram_user_id=70005).one()
+        self.assertIsNone(claimant.customer_id)
+        self.assertEqual(original.customer_id, customer.id)
+        self.assertEqual(state.step, 'needs_review')
 
     def test_new_client_is_appended_as_latest_user_in_every_target_inbound(self):
         previous = GLOBAL_SERVER_DATA.get('inbounds')
