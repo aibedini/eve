@@ -964,6 +964,27 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                 for message in api.messages
             ))
 
+            process_update(api, bot, {'update_id': 131, 'callback_query': {
+                'id': 'renew-package-duplicate',
+                'data': f'renew-package:{ownership.id}:{package.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            self.assertEqual(
+                TelegramServiceRequest.query.filter_by(request_type='renewal').count(), 1,
+            )
+            self.assertTrue(any(
+                f'#{renewal.id}' in message['text']
+                and message.get('reply_markup', {}).get('inline_keyboard', [[{}]])[0][0].get(
+                    'callback_data'
+                ) == f'renew-request:{renewal.id}:cancel'
+                for message in api.messages
+            ))
+            self.assertGreaterEqual(sum(
+                message['text'].startswith(f'Telegram Renewal request #{renewal.id}')
+                for message in api.messages
+            ), 2)
+
             process_update(api, bot, {'update_id': 14, 'callback_query': {
                 'id': 'service-support', 'data': f'service-support:{ownership.id}',
                 'from': {'id': 70010},
@@ -989,6 +1010,24 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             self.assertEqual(renewal.status, 'completed')
             self.assertEqual(renewal.reviewed_by_admin_id, reviewer.id)
             self.assertEqual(api.messages[-1]['text'], COPY['fa']['request_completed'])
+
+            process_update(api, bot, {'update_id': 17, 'callback_query': {
+                'id': 'renew-package-after-complete',
+                'data': f'renew-package:{ownership.id}:{package.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            pending_again = TelegramServiceRequest.query.filter_by(
+                request_type='renewal', status='pending',
+            ).one()
+            process_update(api, bot, {'update_id': 18, 'callback_query': {
+                'id': 'renew-request-cancel',
+                'data': f'renew-request:{pending_again.id}:cancel',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            self.assertEqual(pending_again.status, 'cancelled')
+            self.assertIn(f'#{pending_again.id}', api.messages[-1]['text'])
         finally:
             GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
 

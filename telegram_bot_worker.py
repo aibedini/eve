@@ -354,7 +354,7 @@ def _send_renew_packages(api: TelegramBotApi, bot: TelegramBotInstance,
         request_row, duplicate = _create_service_request(
             bot.id, user_id, ownership, 'renewal', package=None, note=None,
         )
-        api.send_message(chat_id, COPY[language]['renew_duplicate' if duplicate else 'renew_pending'])
+        _send_renewal_request_state(api, chat_id, language, request_row, duplicate=duplicate)
         if not duplicate:
             _notify_service_request_admins(api, request_row)
         return
@@ -782,6 +782,25 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
     return row, False
 
 
+def _send_renewal_request_state(api: TelegramBotApi, chat_id: int, language: str,
+                                request_row: TelegramServiceRequest, *, duplicate: bool):
+    if not duplicate:
+        api.send_message(chat_id, COPY[language]['renew_pending'])
+        return
+    api.send_message(
+        chat_id,
+        COPY[language]['renew_duplicate'].format(request_id=request_row.id),
+        reply_markup={"inline_keyboard": [[{
+            "text": COPY[language]['renew_cancel_button'],
+            "callback_data": f"renew-request:{request_row.id}:cancel",
+        }]]},
+    )
+    # A duplicate means the customer has returned to an unresolved request. Send
+    # the existing review card again so an admin can actually finish it instead
+    # of leaving the customer trapped behind a generic warning.
+    _notify_service_request_admins(api, request_row)
+
+
 def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramServiceRequest):
     ownership = request_row.ownership
     server_name = getattr(ownership.server, 'name', '') or f'#{ownership.server_id}'
@@ -872,6 +891,45 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
             language = 'fa'
         key = 'request_completed' if request_row.status == 'completed' else 'request_rejected'
         api.send_message(identity.telegram_chat_id, COPY[language][key])
+    return True
+
+
+def _handle_renewal_request_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if len(parts) != 3 or parts[0] != 'renew-request' or parts[2] != 'cancel':
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    user_id = int(sender.get('id') or 0)
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    try:
+        request_row = db.session.get(TelegramServiceRequest, int(parts[1]))
+    except (TypeError, ValueError):
+        request_row = None
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    allowed = bool(
+        request_row and identity and identity.customer_id == request_row.customer_id
+        and request_row.telegram_user_id == user_id
+    )
+    if not allowed:
+        if callback_id:
+            api.answer_callback(callback_id, 'Access denied')
+        return True
+    customer = db.session.get(CustomerAccount, request_row.customer_id)
+    language = str(getattr(customer, 'preferred_language', '') or 'fa')
+    if language not in COPY:
+        language = 'fa'
+    if request_row.status != 'pending':
+        api.answer_callback(callback_id, 'Already reviewed')
+        return True
+    request_row.status = 'cancelled'
+    request_row.reviewed_at = datetime.utcnow()
+    db.session.flush()
+    api.answer_callback(callback_id, 'Cancelled')
+    api.send_message(
+        chat_id,
+        COPY[language]['renew_cancelled'].format(request_id=request_row.id),
+    )
     return True
 
 
@@ -1055,6 +1113,9 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     if data.startswith('admin-service:'):
         _handle_admin_service_callback(api, callback, data)
         return
+    if data.startswith('renew-request:'):
+        _handle_renewal_request_callback(api, callback, data)
+        return
     if data.startswith('admin-purchase:'):
         _handle_admin_purchase_callback(api, callback, data)
         return
@@ -1190,7 +1251,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             bot.id, user_id, ownership, 'renewal', package=package, note=None,
         )
         api.answer_callback(callback_id)
-        api.send_message(chat_id, COPY[language]['renew_duplicate' if duplicate else 'renew_pending'])
+        _send_renewal_request_state(api, chat_id, language, request_row, duplicate=duplicate)
         if not duplicate:
             _notify_service_request_admins(api, request_row)
         return
