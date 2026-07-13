@@ -1030,8 +1030,11 @@ def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRe
     ]
     if request_row.detail:
         lines.append(f"Account name: {request_row.detail.account_name}")
+    approve_label = (
+        '🔄 Retry provisioning' if request_row.status == 'approved' else '✅ Approve payment & create service'
+    )
     keyboard = {'inline_keyboard': [[
-        {'text': '✅ Approve payment', 'callback_data': f'admin-purchase:{request_row.id}:approve'},
+        {'text': approve_label, 'callback_data': f'admin-purchase:{request_row.id}:approve'},
         {'text': '❌ Reject', 'callback_data': f'admin-purchase:{request_row.id}:reject'},
     ]]}
     for admin in _purchase_admins(request_row):
