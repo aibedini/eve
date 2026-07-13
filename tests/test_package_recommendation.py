@@ -69,7 +69,11 @@ from app import (  # noqa: E402
 )
 from telegram_diagnostics import probe_telegram_transport, redact_connection_error  # noqa: E402
 from telegram_xray import XraySupervisor, build_xray_config_from_uri, write_xray_config  # noqa: E402
-from telegram_bot_worker import _extract_subscription_token, process_update  # noqa: E402
+from telegram_bot_worker import (  # noqa: E402
+    _ensure_purchase_detail,
+    _extract_subscription_token,
+    process_update,
+)
 from telegram_bot_runtime import COPY  # noqa: E402
 
 
@@ -1133,15 +1137,51 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             for message in api.messages
         ))
 
-        process_update(api, bot, {'update_id': 24, 'callback_query': {
-            'id': 'admin-purchase-approve',
-            'data': f'admin-purchase:{request_row.id}:approve',
-            'from': {'id': 70011, 'first_name': 'Admin'},
-            'message': {'chat': {'id': 70011, 'type': 'private'}},
-        }})
+        # Approved orders created by an older worker may not have their frozen
+        # provisioning detail. The retry path must repair that metadata safely.
+        db.session.delete(request_row.detail)
+        db.session.flush()
+        db.session.expire(request_row, ['detail'])
+        self.assertIsNone(request_row.detail)
+        repaired_detail = _ensure_purchase_detail(request_row)
+        self.assertTrue(repaired_detail.account_name.startswith(f'tg{request_row.id}-'))
+
+        with patch(
+            'telegram_bot_worker._execute_purchase_request',
+            return_value=(False, 'panel temporarily unavailable'),
+        ):
+            process_update(api, bot, {'update_id': 24, 'callback_query': {
+                'id': 'admin-purchase-approve-failed',
+                'data': f'admin-purchase:{request_row.id}:approve',
+                'from': {'id': 70011, 'first_name': 'Admin'},
+                'message': {'chat': {'id': 70011, 'type': 'private'}},
+            }})
         self.assertEqual(request_row.status, 'approved')
+        self.assertTrue(any(
+            message.get('reply_markup', {}).get('inline_keyboard', [[{}]])[0][0].get(
+                'callback_data'
+            ) == f'admin-purchase:{request_row.id}:approve'
+            for message in api.messages
+        ))
         self.assertEqual(request_row.reviewed_by_admin_id, reviewer.id)
         self.assertEqual(api.messages[-1]['text'], COPY['fa']['purchase_approved'])
+
+        with patch(
+            'telegram_bot_worker._execute_purchase_request',
+            return_value=(True, {'client': {
+                'dashboard_link': 'https://eve.example/s/1/new-subscription',
+            }}),
+        ) as execute_purchase:
+            process_update(api, bot, {'update_id': 25, 'callback_query': {
+                'id': 'admin-purchase-approve-retry',
+                'data': f'admin-purchase:{request_row.id}:approve',
+                'from': {'id': 70011, 'first_name': 'Admin'},
+                'message': {'chat': {'id': 70011, 'type': 'private'}},
+            }})
+        execute_purchase.assert_called_once_with(request_row, reviewer)
+        self.assertEqual(request_row.status, 'completed')
+        self.assertIn(request_row.detail.account_name, api.messages[-1]['text'])
+        self.assertIn('https://eve.example/s/1/new-subscription', api.messages[-1]['text'])
 
     def test_telegram_customer_server_and_account_name_policy_flow(self):
         bot = TelegramBotInstance(

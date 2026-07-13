@@ -46,6 +46,7 @@ from app import (  # noqa: E402
     _telegram_bot_api_client,
     _decrypt_telegram_secret,
     _public_base_url,
+    add_client,
     app,
     db,
     discover_phone_ownership_claim,
@@ -1054,6 +1055,132 @@ def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRe
             continue
 
 
+def _cached_purchase_client(request_row: TelegramPurchaseRequest):
+    email = str(getattr(request_row.detail, 'account_name', '') or '').strip().lower()
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id') or 0) != int(request_row.server_id):
+                continue
+        except (TypeError, ValueError):
+            continue
+        for client in (inbound.get('clients') or []):
+            if str(client.get('email') or '').strip().lower() == email:
+                return client
+    return None
+
+
+def _ensure_purchase_detail(request_row: TelegramPurchaseRequest):
+    if request_row.detail:
+        return request_row.detail
+    bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
+    customer = db.session.get(CustomerAccount, request_row.customer_id)
+    if not bot or not customer:
+        return None
+    detail = TelegramPurchaseRequestDetail(
+        request_id=request_row.id,
+        account_name=_render_purchase_account_name(bot, request_row, customer, None),
+        allocation_strategy=_purchase_policy_values(bot)['assignment_strategy'],
+    )
+    request_row.detail = detail
+    db.session.add(detail)
+    db.session.flush()
+    return detail
+
+
+def _ensure_purchase_ownership(request_row: TelegramPurchaseRequest, reviewer: Admin, client: dict,
+                               *, allow_create: bool):
+    raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
+    client_uuid = str(client.get('id') or client.get('uuid') or raw.get('id') or '').strip()
+    if not client_uuid:
+        raise ValueError('Created client UUID is missing from the server snapshot.')
+    ownership = ServiceOwnership.query.filter_by(
+        server_id=request_row.server_id, client_uuid=client_uuid,
+    ).first()
+    if ownership is None:
+        if not allow_create:
+            raise ValueError(
+                'An account with this name already exists but is not linked to this order. '
+                'Resolve ownership manually; Eve will not claim it automatically.'
+            )
+        bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
+        owner = db.session.get(Admin, bot.owner_admin_id) if bot and bot.owner_admin_id else None
+        reseller_id = owner.id if owner and str(owner.role or '').lower() == 'reseller' else None
+        ownership = ServiceOwnership(
+            customer_id=request_row.customer_id,
+            server_id=request_row.server_id,
+            client_uuid=client_uuid,
+            client_email_snapshot=request_row.detail.account_name,
+            reseller_id=reseller_id,
+            verification_method='telegram_purchase',
+            verified_by_admin_id=reviewer.id,
+            verified_at=datetime.utcnow(),
+        )
+        db.session.add(ownership)
+    elif ownership.customer_id != request_row.customer_id:
+        raise ValueError('The generated account name already belongs to another customer.')
+    return ownership
+
+
+def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Admin):
+    detail = _ensure_purchase_detail(request_row)
+    if not request_row.package_id or not request_row.package or not detail:
+        return False, 'Purchase package or provisioning details are missing.'
+    existing = _cached_purchase_client(request_row)
+    if existing:
+        try:
+            _ensure_purchase_ownership(request_row, reviewer, existing, allow_create=False)
+            return True, {'client': existing, 'already_created': True}
+        except ValueError as exc:
+            return False, str(exc)
+    inbound_ids = []
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id') or 0) != int(request_row.server_id):
+                continue
+            if not bool(inbound.get('enable', True)):
+                continue
+            inbound_ids.append(int(inbound.get('id')))
+        except (TypeError, ValueError):
+            continue
+    inbound_ids = sorted(set(inbound_ids))
+    if not inbound_ids:
+        return False, 'No enabled inbound is available on the selected server. Refresh the server and retry.'
+    path = f"/api/client/{request_row.server_id}/{inbound_ids[0]}/add"
+    with app.test_request_context(
+        path,
+        method='POST',
+        json={
+            'mode': 'package',
+            'package_id': request_row.package_id,
+            'email': request_row.detail.account_name,
+            'comment': f'Telegram purchase #{request_row.id}',
+            'inbound_ids': inbound_ids,
+            'free': False,
+        },
+    ):
+        flask_session['admin_id'] = reviewer.id
+        flask_session['admin_username'] = reviewer.username
+        flask_session['role'] = reviewer.role
+        flask_session['is_superadmin'] = bool(reviewer.is_superadmin)
+        response = add_client(request_row.server_id, inbound_ids[0])
+    status_code = 200
+    if isinstance(response, tuple):
+        response, status_code = response[0], int(response[1])
+    payload = response.get_json(silent=True) if hasattr(response, 'get_json') else None
+    payload = payload if isinstance(payload, dict) else {}
+    if status_code >= 400 or not payload.get('success'):
+        return False, str(payload.get('error') or f'Provisioning failed with HTTP {status_code}')
+    client = _cached_purchase_client(request_row)
+    if not client:
+        return False, 'The panel created the client but the local snapshot was not updated. Refresh and retry.'
+    try:
+        ownership = _ensure_purchase_ownership(request_row, reviewer, client, allow_create=True)
+    except ValueError as exc:
+        return False, str(exc)
+    payload['ownership_id'] = ownership.id
+    return True, payload
+
+
 def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
     parts = data.split(':')
     if len(parts) != 3 or parts[0] != 'admin-purchase' or parts[2] not in ('approve', 'reject'):
@@ -1070,15 +1197,42 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
         if callback_id:
             api.answer_callback(callback_id, 'Access denied')
         return True
-    if request_row.status != 'pending':
-        api.answer_callback(callback_id, 'Already reviewed')
-        return True
-    request_row.status = 'approved' if parts[2] == 'approve' else 'rejected'
-    request_row.reviewed_by_admin_id = reviewer.id
-    request_row.reviewed_at = datetime.utcnow()
-    db.session.flush()
-    api.answer_callback(callback_id, 'Saved')
-    if chat_id:
+    if parts[2] == 'reject':
+        if request_row.status != 'pending':
+            api.answer_callback(callback_id, 'Already reviewed')
+            return True
+        request_row.status = 'rejected'
+        request_row.reviewed_by_admin_id = reviewer.id
+        request_row.reviewed_at = datetime.utcnow()
+        db.session.flush()
+        api.answer_callback(callback_id, 'Rejected')
+    else:
+        if request_row.status not in ('pending', 'approved'):
+            api.answer_callback(callback_id, 'Already completed')
+            return True
+        if request_row.status == 'pending':
+            request_row.status = 'approved'
+            request_row.reviewed_by_admin_id = reviewer.id
+            request_row.reviewed_at = datetime.utcnow()
+            db.session.flush()
+        provisioned, provision_result = _execute_purchase_request(request_row, reviewer)
+        if provisioned:
+            request_row.status = 'completed'
+            db.session.flush()
+            api.answer_callback(callback_id, 'Service created')
+        else:
+            api.answer_callback(callback_id, 'Provisioning failed')
+            if chat_id:
+                api.send_message(
+                    chat_id,
+                    f"Purchase #{request_row.id} payment is approved, but provisioning failed.\n"
+                    f"Error: {provision_result}",
+                    reply_markup={'inline_keyboard': [[{
+                        'text': '🔄 Retry provisioning',
+                        'callback_data': f'admin-purchase:{request_row.id}:approve',
+                    }]]},
+                )
+    if chat_id and request_row.status in ('completed', 'rejected'):
         api.send_message(chat_id, f"Purchase #{request_row.id}: {request_row.status}")
     identity = TelegramIdentity.query.filter_by(
         telegram_user_id=request_row.telegram_user_id,
@@ -1089,8 +1243,23 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
         language = str(getattr(customer, 'preferred_language', '') or 'fa')
         if language not in COPY:
             language = 'fa'
-        key = 'purchase_approved' if request_row.status == 'approved' else 'purchase_rejected'
-        api.send_message(identity.telegram_chat_id, COPY[language][key])
+        if request_row.status == 'completed':
+            result = provision_result if isinstance(provision_result, dict) else {}
+            client = result.get('client') if isinstance(result.get('client'), dict) else {}
+            delivery_link = str(
+                client.get('dashboard_link') or client.get('dash_sub_url')
+                or client.get('sub_link') or ''
+            ).strip()
+            api.send_message(
+                identity.telegram_chat_id,
+                COPY[language]['purchase_completed'].format(
+                    account_name=request_row.detail.account_name,
+                    delivery_link=delivery_link,
+                ).rstrip(),
+            )
+        else:
+            key = 'purchase_approved' if request_row.status == 'approved' else 'purchase_rejected'
+            api.send_message(identity.telegram_chat_id, COPY[language][key])
     return True
 
 
