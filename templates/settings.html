@@ -2798,8 +2798,8 @@
     .tgb-worker-badge { display:inline-flex; align-items:center; gap:8px; flex:none; padding:6px 9px; color:var(--text-secondary); background:var(--bg-dark); border:1px solid var(--border-color); border-radius:999px; font-size:.76rem; font-weight:600; }
     .tgb-worker-badge[data-state="running"] { color:var(--success); border-color:rgba(34,197,94,.35); background:rgba(34,197,94,.07); }
     .tgb-worker-badge[data-state="running"] .tgb-status-dot { background:var(--success); box-shadow:0 0 0 4px rgba(34,197,94,.12); }
-    .tgb-worker-badge[data-state="warning"], .tgb-worker-badge[data-state="blocked"], .tgb-worker-badge[data-state="stale"] { color:#f59e0b; border-color:rgba(245,158,11,.35); background:rgba(245,158,11,.07); }
-    .tgb-worker-badge[data-state="warning"] .tgb-status-dot, .tgb-worker-badge[data-state="blocked"] .tgb-status-dot, .tgb-worker-badge[data-state="stale"] .tgb-status-dot { background:#f59e0b; box-shadow:0 0 0 4px rgba(245,158,11,.12); }
+    .tgb-worker-badge[data-state="warning"], .tgb-worker-badge[data-state="blocked"], .tgb-worker-badge[data-state="stale"], .tgb-worker-badge[data-state="disabled"] { color:#f59e0b; border-color:rgba(245,158,11,.35); background:rgba(245,158,11,.07); }
+    .tgb-worker-badge[data-state="warning"] .tgb-status-dot, .tgb-worker-badge[data-state="blocked"] .tgb-status-dot, .tgb-worker-badge[data-state="stale"] .tgb-status-dot, .tgb-worker-badge[data-state="disabled"] .tgb-status-dot { background:#f59e0b; box-shadow:0 0 0 4px rgba(245,158,11,.12); }
     .tgb-worker-badge[data-state="error"], .tgb-worker-badge[data-state="stopped"] { color:#ef4444; border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.07); }
     .tgb-worker-badge[data-state="error"] .tgb-status-dot, .tgb-worker-badge[data-state="stopped"] .tgb-status-dot { background:#ef4444; box-shadow:0 0 0 4px rgba(239,68,68,.12); }
     .tgb-test-blocked { display:flex; align-items:flex-start; gap:11px; margin:-2px 0 14px; padding:11px 13px; color:var(--text-secondary); background:rgba(245,158,11,.07); border:1px solid rgba(245,158,11,.28); border-radius:8px; font-size:.78rem; line-height:1.5; }
@@ -3102,12 +3102,14 @@
     }
 
     function telegramRuntimeState(runtime, bot) {
+        if (!bot.enabled) return 'disabled';
         const raw = String(runtime.status || (bot.enabled ? 'starting' : 'idle')).toLowerCase();
         if (raw === 'running' && runtime.last_heartbeat_at) {
             const heartbeat = new Date(runtime.last_heartbeat_at).getTime();
             if (Number.isFinite(heartbeat) && Date.now() - heartbeat > 120000) return 'stale';
         }
         if (['running'].includes(raw)) return 'running';
+        if (['disabled'].includes(raw)) return 'disabled';
         if (['blocked'].includes(raw)) return 'blocked';
         if (['stale', 'starting', 'degraded'].includes(raw)) return raw === 'stale' ? 'stale' : 'warning';
         if (['error', 'failed'].includes(raw)) return 'error';
@@ -3117,6 +3119,7 @@
 
     function telegramRuntimeLabel(state, rawStatus) {
         if (state === 'running') return 'Running';
+        if (state === 'disabled') return 'Bot disabled';
         if (state === 'stale') return 'Heartbeat stale';
         if (state === 'blocked') return 'Blocked';
         if (state === 'warning') return String(rawStatus || 'Starting').replaceAll('_', ' ');
@@ -3156,10 +3159,11 @@
         const testBlocked = !!bot.test_mode && !hasEnabledTester;
         document.getElementById('tgb-test-blocked').style.display = testBlocked ? '' : 'none';
 
-        if (!bot.enabled) return;
         const diagnostic = {bot_username:bot.bot_username, route:runtime.last_route || 'Waiting', latency_ms:null};
         document.getElementById('tgb-status-latency').textContent = 'Live';
-        if (testBlocked) {
+        if (!bot.enabled) {
+            setTelegramBotReadiness('warning', 'Telegram bot disabled', 'Enable the bot and save settings before sending /start.', diagnostic);
+        } else if (testBlocked) {
             setTelegramBotReadiness('warning', 'Test Mode blocked', 'Add and enable a numeric Telegram user ID before testing incoming messages.', diagnostic);
         } else if (state === 'running') {
             setTelegramBotReadiness('good', 'Telegram worker running', `Polling through ${runtime.last_route || 'the configured route'}.`, diagnostic);

@@ -60,6 +60,7 @@ from app import (  # noqa: E402
 from telegram_diagnostics import probe_telegram_transport, redact_connection_error  # noqa: E402
 from telegram_xray import XraySupervisor, build_xray_config_from_uri, write_xray_config  # noqa: E402
 from telegram_bot_worker import _extract_subscription_token, process_update  # noqa: E402
+from telegram_bot_runtime import COPY  # noqa: E402
 
 
 PACKAGES = [
@@ -655,6 +656,29 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(loaded['test_users'][0]['telegram_user_id'], 123456789)
         self.assertEqual(loaded['runtime']['status'], 'stopped')
 
+    def test_telegram_send_test_rejects_disabled_bot(self):
+        reviewer = Admin(
+            username='claim-test-disabled-send', role='superadmin', is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=False, test_mode=False,
+            enabled_languages_json='["fa","en"]', default_language='fa',
+        )
+        db.session.add_all([reviewer, bot])
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+
+        response = client.post('/api/settings/telegram-bots/send-test', json={
+            'telegram_user_id': '123456789',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get('X-Eve-Status'), '400')
+        self.assertIn('Enable the Telegram bot', response.get_json()['error'])
+
     def test_telegram_test_mode_ignores_unauthorized_user_without_identity(self):
         bot = TelegramBotInstance(
             scope_key='system', display_name='Test', enabled=True, test_mode=True,
@@ -714,6 +738,34 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(customer.primary_phone, '989195292411')
         self.assertEqual(customer.preferred_language, 'en')
         self.assertEqual(api.callbacks, [('callback-1', '✓')])
+
+    def test_telegram_verified_start_shows_persistent_main_menu(self):
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=False,
+            enabled_languages_json='["fa","en"]', default_language='fa',
+        )
+        customer = CustomerAccount(
+            primary_phone='989125551230', phone_verified_at=datetime.utcnow(),
+            preferred_language='en',
+        )
+        identity = TelegramIdentity(
+            customer=customer, telegram_user_id=70009, telegram_chat_id=70009,
+            phone_normalized=customer.primary_phone, phone_verified_at=datetime.utcnow(),
+        )
+        db.session.add_all([bot, customer, identity])
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 8, 'message': {
+            'message_id': 1, 'text': '/start',
+            'from': {'id': 70009, 'first_name': 'Verified'},
+            'chat': {'id': 70009, 'type': 'private'},
+        }})
+
+        self.assertEqual(api.messages[-1]['text'], COPY['en']['welcome_menu'])
+        keyboard = api.messages[-1]['reply_markup']
+        self.assertTrue(keyboard['is_persistent'])
+        self.assertEqual(keyboard['keyboard'][0][0]['text'], COPY['en']['menu_services'])
 
     def test_telegram_rejects_contact_belonging_to_another_user(self):
         bot = TelegramBotInstance(

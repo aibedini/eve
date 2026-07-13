@@ -17,6 +17,7 @@ from app import (  # noqa: E402
     CustomerAccount,
     OwnershipClaim,
     OwnershipClaimItem,
+    ServiceOwnership,
     TelegramBotInstance,
     TelegramBotRuntime,
     TelegramBotTestUser,
@@ -38,6 +39,7 @@ from telegram_bot_runtime import (  # noqa: E402
     TelegramBotApi,
     contact_keyboard,
     language_keyboard,
+    main_menu_keyboard,
 )
 from telegram_diagnostics import redact_connection_error  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
@@ -45,6 +47,7 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 running = True
 worker_id = f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
+webhook_prepared_bot_ids: set[int] = set()
 
 
 def _stop(_signum, _frame):
@@ -129,6 +132,34 @@ def _send_contact_prompt(api: TelegramBotApi, chat_id: int, language: str):
         chat_id, COPY[language]["share_phone"],
         reply_markup=contact_keyboard(language),
     )
+
+
+def _send_main_menu(api: TelegramBotApi, chat_id: int, language: str):
+    lang = language if language in COPY else "fa"
+    api.send_message(
+        chat_id, COPY[lang]["welcome_menu"],
+        reply_markup=main_menu_keyboard(lang),
+    )
+
+
+def _send_owned_services(api: TelegramBotApi, chat_id: int, language: str,
+                         identity: TelegramIdentity | None):
+    lang = language if language in COPY else "fa"
+    if identity is None or not identity.customer_id:
+        api.send_message(chat_id, COPY[lang]["no_owned_services"])
+        return
+    ownerships = ServiceOwnership.query.filter_by(
+        customer_id=identity.customer_id, revoked_at=None,
+    ).order_by(ServiceOwnership.id.asc()).all()
+    if not ownerships:
+        api.send_message(chat_id, COPY[lang]["no_owned_services"])
+        return
+    lines = [COPY[lang]["owned_services"]]
+    for index, ownership in enumerate(ownerships, 1):
+        label = ownership.client_email_snapshot or f'{COPY[lang]["service_button"]} {index}'
+        server_name = getattr(ownership.server, 'name', '') or ''
+        lines.append(f"{index}. {label}" + (f" — {server_name}" if server_name else ""))
+    api.send_message(chat_id, "\n".join(lines))
 
 
 def _send_claim_candidates(api: TelegramBotApi, chat_id: int, language: str,
@@ -270,8 +301,7 @@ def _handle_start(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
             state.language = preferred
         state.step = "verified"
         db.session.flush()
-        claim = discover_phone_ownership_claim(identity)
-        _send_claim_candidates(api, chat_id, state.language, claim)
+        _send_main_menu(api, chat_id, state.language)
         return
     if len(languages) > 1:
         state.step = "choose_language"
@@ -308,11 +338,20 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         language = data.partition(":")[2]
         if language in bot.enabled_languages():
             state.language = language
-            state.step = "share_contact"
-            _identity(sender, chat_id)
+            identity = _identity(sender, chat_id)
+            if identity.customer_id and identity.phone_verified_at:
+                customer = db.session.get(CustomerAccount, identity.customer_id)
+                if customer is not None:
+                    customer.preferred_language = language
+                state.step = "verified"
+            else:
+                state.step = "share_contact"
             db.session.flush()
             api.answer_callback(callback_id, "✓")
-            _send_contact_prompt(api, chat_id, language)
+            if state.step == "verified":
+                _send_main_menu(api, chat_id, language)
+            else:
+                _send_contact_prompt(api, chat_id, language)
             return
     if data.startswith("claim:"):
         try:
@@ -412,6 +451,7 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         chat_id, COPY[language]["verified"],
         reply_markup={"remove_keyboard": True},
     )
+    _send_main_menu(api, chat_id, language)
     claim = discover_phone_ownership_claim(identity)
     _send_claim_candidates(api, chat_id, language, claim)
 
@@ -459,6 +499,7 @@ def _handle_subscription(api: TelegramBotApi, bot: TelegramBotInstance, message:
     session_row.locked_until = None
     db.session.flush()
     api.send_message(chat_id, COPY[language]["service_attached"])
+    _send_main_menu(api, chat_id, language)
     _send_claim_candidates(api, chat_id, language, item.claim)
 
 
@@ -477,6 +518,23 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     text = str(message.get("text") or "").strip()
     if text == "/start" or text.startswith("/start "):
         _handle_start(api, bot, chat_id, user_id, state)
+    elif text in {COPY["fa"]["menu_services"], COPY["en"]["menu_services"]}:
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+        _send_owned_services(api, chat_id, state.language, identity)
+    elif text in {COPY["fa"]["menu_add_service"], COPY["en"]["menu_add_service"]}:
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+        if identity and identity.customer_id and identity.phone_verified_at:
+            claim = discover_phone_ownership_claim(identity)
+            _send_claim_candidates(api, chat_id, state.language, claim)
+        else:
+            _send_contact_prompt(api, chat_id, state.language)
+    elif text in {COPY["fa"]["menu_language"], COPY["en"]["menu_language"]}:
+        state.step = "choose_language"
+        db.session.flush()
+        api.send_message(
+            chat_id, COPY[state.language]["choose_language"],
+            reply_markup=language_keyboard(bot.enabled_languages()),
+        )
     elif message.get("contact"):
         _handle_contact(api, bot, message, sender, state)
     elif state.step == "awaiting_subscription":
@@ -504,7 +562,7 @@ def _poll_bot(bot: TelegramBotInstance):
         runtime.last_error = "Bot token or Telegram route is not configured"
         runtime.last_heartbeat_at = datetime.utcnow()
         db.session.commit()
-        time.sleep(max(5, min(int(getattr(exc, 'retry_after', 0) or 0), 60)))
+        time.sleep(5)
         return
     try:
         api = _telegram_bot_api_client(bot)
@@ -516,6 +574,12 @@ def _poll_bot(bot: TelegramBotInstance):
         time.sleep(5)
         return
     try:
+        if bot.id not in webhook_prepared_bot_ids:
+            _result, route_name = api.delete_webhook()
+            webhook_prepared_bot_ids.add(bot.id)
+            runtime.last_route = route_name
+            runtime.last_heartbeat_at = datetime.utcnow()
+            db.session.commit()
         updates, route_name = api.get_updates(int(runtime.next_update_id or 0), timeout=25)
         runtime = _runtime(bot.id)
         runtime.status = "running"
@@ -569,7 +633,7 @@ def main():
     signal.signal(signal.SIGINT, _stop)
     while running:
         with app.app_context():
-            bots = TelegramBotInstance.query.filter_by(enabled=True, transport_mode="polling").all()
+            bots = TelegramBotInstance.query.filter_by(transport_mode="polling").all()
             if not bots:
                 time.sleep(3)
                 continue
@@ -578,7 +642,17 @@ def main():
             for bot in bots:
                 if not running:
                     break
-                _poll_bot(bot)
+                if bot.enabled:
+                    _poll_bot(bot)
+                    continue
+                runtime = _runtime(bot.id)
+                runtime.worker_id = worker_id
+                runtime.status = "disabled"
+                runtime.last_error = "Bot is disabled in settings"
+                runtime.last_heartbeat_at = datetime.utcnow()
+                runtime.lease_expires_at = datetime.utcnow() + timedelta(seconds=60)
+                db.session.commit()
+                time.sleep(1)
 
 
 if __name__ == "__main__":

@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.38"
+APP_VERSION = "2.4.39"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -24904,6 +24904,11 @@ def send_telegram_bot_test_message():
     bot = _central_telegram_bot(create=True)
     data = request.get_json(silent=True) or {}
     try:
+        if not bot.enabled:
+            return jsonify({
+                'success': False,
+                'error': 'Enable the Telegram bot and save settings before testing',
+            }), 400
         user_id = _telegram_test_user_id(data.get('telegram_user_id'))
         if bot.test_mode and not TelegramBotTestUser.query.filter_by(
                 bot_instance_id=bot.id, telegram_user_id=user_id, enabled=True).first():

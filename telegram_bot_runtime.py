@@ -86,6 +86,12 @@ class TelegramBotApi:
             "allowed_updates": ["message", "callback_query"],
         }, long_poll_timeout=timeout)
 
+    def delete_webhook(self):
+        return self.call("deleteWebhook", {"drop_pending_updates": False})
+
+    def get_webhook_info(self):
+        return self.call("getWebhookInfo", {})
+
     def send_message(self, chat_id: int, text: str, **extra):
         return self.call("sendMessage", {"chat_id": int(chat_id), "text": text, **extra})
 
@@ -116,6 +122,12 @@ COPY = {
         "claim_rejected": "درخواست مالکیت این سرویس توسط مدیر تأیید نشد.",
         "no_link_button": "لینک‌ها را ندارم",
         "service_button": "سرویس",
+        "welcome_menu": "به ربات Eve خوش آمدید. یکی از گزینه‌های زیر را انتخاب کنید:",
+        "menu_services": "📦 سرویس‌های من",
+        "menu_add_service": "➕ افزودن سرویس",
+        "menu_language": "🌐 تغییر زبان",
+        "no_owned_services": "هنوز سرویسی به حساب شما متصل نشده است.",
+        "owned_services": "سرویس‌های متصل به حساب شما:",
         "start_first": "برای شروع /start را بزنید.",
         "test_restricted": "این ربات فعلاً در حالت تست خصوصی است.",
     },
@@ -138,6 +150,12 @@ COPY = {
         "claim_rejected": "An admin did not approve this service ownership request.",
         "no_link_button": "I do not have the links",
         "service_button": "Service",
+        "welcome_menu": "Welcome to Eve. Choose an option below:",
+        "menu_services": "📦 My services",
+        "menu_add_service": "➕ Add service",
+        "menu_language": "🌐 Change language",
+        "no_owned_services": "No service is linked to your account yet.",
+        "owned_services": "Services linked to your account:",
         "start_first": "Send /start to begin.",
         "test_restricted": "This bot is currently in private test mode.",
     },
@@ -161,4 +179,16 @@ def contact_keyboard(language: str):
         "resize_keyboard": True,
         "one_time_keyboard": True,
         "input_field_placeholder": COPY[lang]["share_button"],
+    }
+
+
+def main_menu_keyboard(language: str):
+    lang = language if language in COPY else "fa"
+    return {
+        "keyboard": [
+            [{"text": COPY[lang]["menu_services"]}, {"text": COPY[lang]["menu_add_service"]}],
+            [{"text": COPY[lang]["menu_language"]}],
+        ],
+        "resize_keyboard": True,
+        "is_persistent": True,
     }
