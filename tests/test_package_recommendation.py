@@ -15,6 +15,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 from app import (  # noqa: E402
     Admin,
+    BankCard,
     CustomerAccount,
     GLOBAL_SERVER_DATA,
     PendingSms,
@@ -27,6 +28,8 @@ from app import (  # noqa: E402
     ServiceOwnership,
     TelegramIdentity,
     TelegramOwnershipSession,
+    TelegramPurchaseRequest,
+    TelegramPurchaseSession,
     TelegramServiceRequest,
     TelegramServiceSession,
     TelegramBotInstance,
@@ -78,6 +81,7 @@ class FakeTelegramApi:
     def __init__(self):
         self.messages = []
         self.callbacks = []
+        self.copies = []
 
     def send_message(self, chat_id, text, **extra):
         self.messages.append({'chat_id': chat_id, 'text': text, **extra})
@@ -86,6 +90,12 @@ class FakeTelegramApi:
     def answer_callback(self, callback_query_id, text=''):
         self.callbacks.append((callback_query_id, text))
         return True, 'test'
+
+    def copy_message(self, chat_id, from_chat_id, message_id):
+        self.copies.append({
+            'chat_id': chat_id, 'from_chat_id': from_chat_id, 'message_id': message_id,
+        })
+        return {'message_id': message_id}, 'test'
 
 
 class PackageRecommendationRegressionTests(unittest.TestCase):
@@ -106,8 +116,11 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             pass
 
     def tearDown(self):
+        db.session.rollback()
         TelegramEgressProfile.query.delete()
         TelegramProxyEndpoint.query.delete()
+        TelegramPurchaseRequest.query.delete()
+        TelegramPurchaseSession.query.delete()
         TelegramServiceRequest.query.delete()
         TelegramServiceSession.query.delete()
         TelegramBotUserState.query.delete()
@@ -122,6 +135,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         ServiceOwnership.query.delete()
         CustomerAccount.query.delete()
         Package.query.delete()
+        BankCard.query.delete()
         SmsSendLog.query.delete()
         PendingSms.query.delete()
         SystemConfig.query.filter(SystemConfig.key.in_([
@@ -901,6 +915,99 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             self.assertEqual(api.messages[-1]['text'], COPY['fa']['request_completed'])
         finally:
             GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
+
+    def test_telegram_purchase_receipt_manual_approval_flow(self):
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=False,
+            enabled_languages_json='["fa","en"]', default_language='fa',
+        )
+        customer = CustomerAccount(
+            primary_phone='989125551232', phone_verified_at=datetime.utcnow(),
+            preferred_language='fa',
+        )
+        identity = TelegramIdentity(
+            customer=customer, telegram_user_id=70011, telegram_chat_id=70011,
+            phone_normalized=customer.primary_phone, phone_verified_at=datetime.utcnow(),
+        )
+        server = Server(name='BUY', host='https://buy.test', username='u', password='p')
+        package = Package(
+            name='20GB / 30 Days', days=30, volume=20, price=230000,
+            enabled=True, scope='global', display_order=1,
+        )
+        card = BankCard(
+            label='Main card', bank_name='Test Bank', owner_name='Eve Owner',
+            card_number='6037997512345678', is_active=True,
+        )
+        reviewer = Admin(
+            username='claim-test-purchase-reviewer', role='superadmin',
+            is_superadmin=True, enabled=True, telegram_id='70012',
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add_all([bot, customer, identity, server, package, card, reviewer])
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 20, 'message': {
+            'message_id': 1, 'text': COPY['fa']['menu_buy_service'],
+            'from': {'id': 70011, 'first_name': 'Buyer'},
+            'chat': {'id': 70011, 'type': 'private'},
+        }})
+        server_callbacks = [
+            button['callback_data']
+            for row in api.messages[-1]['reply_markup']['inline_keyboard'] for button in row
+        ]
+        self.assertIn(f'buy-server:{server.id}', server_callbacks)
+        process_update(api, bot, {'update_id': 21, 'callback_query': {
+            'id': 'buy-server', 'data': f'buy-server:{server.id}',
+            'from': {'id': 70011},
+            'message': {'chat': {'id': 70011, 'type': 'private'}},
+        }})
+        package_callbacks = [
+            button['callback_data']
+            for row in api.messages[-1]['reply_markup']['inline_keyboard'] for button in row
+        ]
+        self.assertIn(f'buy-package:{server.id}:{package.id}', package_callbacks)
+        process_update(api, bot, {'update_id': 22, 'callback_query': {
+            'id': 'buy-package', 'data': f'buy-package:{server.id}:{package.id}',
+            'from': {'id': 70011},
+            'message': {'chat': {'id': 70011, 'type': 'private'}},
+        }})
+        self.assertIn('6037 9975 1234 5678', api.messages[-1]['text'])
+        state = TelegramBotUserState.query.filter_by(
+            bot_instance_id=bot.id, telegram_user_id=70011,
+        ).one()
+        self.assertEqual(state.step, 'awaiting_purchase_receipt')
+
+        process_update(api, bot, {'update_id': 23, 'message': {
+            'message_id': 44,
+            'photo': [{
+                'file_id': 'receipt-file-id', 'file_unique_id': 'receipt-unique-id',
+                'file_size': 120000,
+            }],
+            'from': {'id': 70011, 'first_name': 'Buyer'},
+            'chat': {'id': 70011, 'type': 'private'},
+        }})
+        request_row = TelegramPurchaseRequest.query.one()
+        self.assertEqual(request_row.status, 'pending')
+        self.assertEqual(request_row.amount, 230000)
+        self.assertEqual(request_row.source_message_id, 44)
+        self.assertEqual(api.copies[-1], {
+            'chat_id': 70012, 'from_chat_id': 70011, 'message_id': 44,
+        })
+        self.assertTrue(any(
+            message['text'].startswith('Telegram purchase request')
+            for message in api.messages
+        ))
+
+        process_update(api, bot, {'update_id': 24, 'callback_query': {
+            'id': 'admin-purchase-approve',
+            'data': f'admin-purchase:{request_row.id}:approve',
+            'from': {'id': 70012, 'first_name': 'Admin'},
+            'message': {'chat': {'id': 70012, 'type': 'private'}},
+        }})
+        self.assertEqual(request_row.status, 'approved')
+        self.assertEqual(request_row.reviewed_by_admin_id, reviewer.id)
+        self.assertEqual(api.messages[-1]['text'], COPY['fa']['purchase_approved'])
 
     def test_telegram_rejects_contact_belonging_to_another_user(self):
         bot = TelegramBotInstance(

@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.41"
+APP_VERSION = "2.4.42"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8325,6 +8325,59 @@ class TelegramServiceRequest(db.Model):
 
     ownership = db.relationship('ServiceOwnership')
     package = db.relationship('Package')
+
+
+class TelegramPurchaseSession(db.Model):
+    """Durable in-progress server/package selection for a Telegram purchase."""
+    __tablename__ = 'telegram_purchase_sessions'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'telegram_user_id', name='uq_telegram_purchase_session'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=True)
+    package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='SET NULL'), nullable=True)
+    bank_card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id', ondelete='SET NULL'), nullable=True)
+    action = db.Column(db.String(32), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TelegramPurchaseRequest(db.Model):
+    """Customer purchase awaiting manual receipt review in Telegram."""
+    __tablename__ = 'telegram_purchase_requests'
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    customer_id = db.Column(
+        db.Integer, db.ForeignKey('customer_accounts.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='SET NULL'), nullable=True)
+    bank_card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id', ondelete='SET NULL'), nullable=True)
+    amount = db.Column(db.BigInteger, nullable=False)
+    receipt_file_id = db.Column(db.Text, nullable=False)
+    receipt_file_unique_id = db.Column(db.String(160), nullable=True, index=True)
+    receipt_kind = db.Column(db.String(16), nullable=False, default='photo')
+    source_chat_id = db.Column(db.BigInteger, nullable=False)
+    source_message_id = db.Column(db.BigInteger, nullable=False)
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    server = db.relationship('Server')
+    package = db.relationship('Package')
+    bank_card = db.relationship('BankCard')
 
 
 class TelegramProxyEndpoint(db.Model):

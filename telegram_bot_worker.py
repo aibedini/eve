@@ -17,11 +17,13 @@ os.environ.setdefault("EVE_PROCESS_ROLE", "telegram-bot")
 
 from app import (  # noqa: E402
     Admin,
+    BankCard,
     CustomerAccount,
     GLOBAL_SERVER_DATA,
     OwnershipClaim,
     OwnershipClaimItem,
     Package,
+    Server,
     ServiceOwnership,
     TelegramBotInstance,
     TelegramBotRuntime,
@@ -29,6 +31,8 @@ from app import (  # noqa: E402
     TelegramBotUserState,
     TelegramIdentity,
     TelegramOwnershipSession,
+    TelegramPurchaseRequest,
+    TelegramPurchaseSession,
     TelegramServiceRequest,
     TelegramServiceSession,
     _telegram_bot_api_client,
@@ -37,7 +41,9 @@ from app import (  # noqa: E402
     app,
     db,
     discover_phone_ownership_claim,
+    load_snapshot_from_redis,
     normalize_iran_mobile,
+    parse_allowed_servers,
     review_ownership_claim_item,
     verify_ownership_claim_subscription,
 )
@@ -286,7 +292,7 @@ def _send_service_details(api: TelegramBotApi, chat_id: int, language: str,
         remaining_text = COPY[lang]['unlimited'] if remaining in (None, -1) else _format_traffic(remaining)
         freshness = COPY[lang]['service_live']
     else:
-        used = 0
+        used = None
         remaining_text = COPY[lang]['service_unavailable']
         freshness = COPY[lang]['service_unavailable']
     text = "\n".join([
@@ -295,7 +301,7 @@ def _send_service_details(api: TelegramBotApi, chat_id: int, language: str,
         f"{COPY[lang]['service_account']}: <code>{html.escape(str(account))}</code>",
         f"{COPY[lang]['service_status']}: {_service_status(client, lang)}",
         f"{COPY[lang]['service_expiry']}: {_service_expiry(client, lang)}",
-        f"{COPY[lang]['service_usage']}: {_format_traffic(used)}",
+        f"{COPY[lang]['service_usage']}: {_format_traffic(used) if used is not None else COPY[lang]['service_unavailable']}",
         f"{COPY[lang]['service_remaining']}: {remaining_text}",
         f"{COPY[lang]['service_updated']}: {freshness}",
     ])
@@ -359,6 +365,154 @@ def _send_renew_packages(api: TelegramBotApi, bot: TelegramBotInstance,
         chat_id, COPY[language]['choose_package'],
         reply_markup={"inline_keyboard": keyboard},
     )
+
+
+def _purchase_servers(bot: TelegramBotInstance):
+    query = Server.query.filter_by(enabled=True, hidden=False)
+    servers = query.order_by(Server.name.asc(), Server.id.asc()).all()
+    if not bot.owner_admin_id:
+        return servers[:30]
+    owner = db.session.get(Admin, bot.owner_admin_id)
+    raw_allowed = parse_allowed_servers(getattr(owner, 'allowed_servers', None)) if owner else []
+    if raw_allowed == '*':
+        return servers[:30]
+    allowed = set()
+    for value in raw_allowed if isinstance(raw_allowed, list) else []:
+        try:
+            allowed.add(int(value.get('server_id') if isinstance(value, dict) else value))
+        except (TypeError, ValueError):
+            continue
+    return [server for server in servers if server.id in allowed][:30]
+
+
+def _purchase_packages(bot: TelegramBotInstance):
+    packages = Package.query.filter_by(enabled=True).order_by(
+        Package.display_order.asc(), Package.id.asc(),
+    ).all()
+    visible = []
+    for package in packages:
+        scope = str(package.scope or 'global').lower()
+        if scope == 'global':
+            visible.append(package)
+            continue
+        try:
+            assigned = {int(value) for value in json.loads(package.assigned_reseller_ids or '[]')}
+        except (TypeError, ValueError):
+            assigned = set()
+        if bot.owner_admin_id and (
+            int(bot.owner_admin_id) in assigned or
+            (scope == 'personal' and int(package.created_by or 0) == int(bot.owner_admin_id))
+        ):
+            visible.append(package)
+    return visible[:30]
+
+
+def _purchase_session(bot_id: int, user_id: int) -> TelegramPurchaseSession:
+    row = TelegramPurchaseSession.query.filter_by(
+        bot_instance_id=bot_id, telegram_user_id=user_id,
+    ).first()
+    if row is None:
+        row = TelegramPurchaseSession(bot_instance_id=bot_id, telegram_user_id=user_id)
+        db.session.add(row)
+    return row
+
+
+def _send_purchase_servers(api: TelegramBotApi, bot: TelegramBotInstance,
+                           chat_id: int, language: str):
+    servers = _purchase_servers(bot)
+    if not servers:
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    keyboard = [[{
+        'text': f"{COPY[language]['server_button']}: {server.name}"[:60],
+        'callback_data': f'buy-server:{server.id}',
+    }] for server in servers]
+    api.send_message(
+        chat_id, COPY[language]['choose_purchase_server'],
+        reply_markup={'inline_keyboard': keyboard},
+    )
+
+
+def _send_purchase_packages(api: TelegramBotApi, bot: TelegramBotInstance,
+                            chat_id: int, language: str, server: Server):
+    packages = _purchase_packages(bot)
+    if not packages:
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    keyboard = [[{
+        'text': f"{package.name} • {int(package.price or 0):,} T"[:60],
+        'callback_data': f'buy-package:{server.id}:{package.id}',
+    }] for package in packages]
+    api.send_message(
+        chat_id, COPY[language]['choose_purchase_package'],
+        reply_markup={'inline_keyboard': keyboard},
+    )
+
+
+def _format_bank_card(card: BankCard) -> str:
+    lines = []
+    if card.label:
+        lines.append(f"<b>{html.escape(card.label)}</b>")
+    if card.bank_name:
+        lines.append(html.escape(card.bank_name))
+    if card.card_number:
+        number = ''.join(filter(str.isdigit, card.card_number)) or card.card_number
+        grouped = ' '.join(number[index:index + 4] for index in range(0, len(number), 4))
+        lines.append(f"<code>{html.escape(grouped)}</code>")
+    if card.owner_name:
+        lines.append(html.escape(card.owner_name))
+    if card.iban:
+        lines.append(f"IBAN: <code>{html.escape(card.iban)}</code>")
+    return '\n'.join(lines)
+
+
+def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
+                            chat_id: int, user_id: int, language: str,
+                            server: Server, package: Package,
+                            state: TelegramBotUserState):
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not identity or not identity.customer_id or not identity.phone_verified_at:
+        _send_contact_prompt(api, chat_id, language)
+        return
+    duplicate = TelegramPurchaseRequest.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id, status='pending',
+    ).first()
+    if duplicate:
+        api.send_message(chat_id, COPY[language]['purchase_duplicate'])
+        return
+    card = BankCard.query.filter_by(is_active=True).order_by(BankCard.id.asc()).first()
+    if card is None:
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    session_row = _purchase_session(bot.id, user_id)
+    session_row.server_id = server.id
+    session_row.package_id = package.id
+    session_row.bank_card_id = card.id
+    session_row.action = 'awaiting_receipt'
+    state.step = 'awaiting_purchase_receipt'
+    db.session.flush()
+    api.send_message(
+        chat_id,
+        COPY[language]['purchase_payment'].format(
+            amount=f"{int(package.price or 0):,}", card=_format_bank_card(card),
+        ),
+        parse_mode='HTML',
+    )
+
+
+def _receipt_from_message(message: dict):
+    photos = message.get('photo')
+    if isinstance(photos, list) and photos:
+        photo = photos[-1] if isinstance(photos[-1], dict) else {}
+        if int(photo.get('file_size') or 0) <= 10 * 1024 * 1024 and photo.get('file_id'):
+            return 'photo', str(photo['file_id']), str(photo.get('file_unique_id') or '')
+    document = message.get('document') if isinstance(message.get('document'), dict) else {}
+    mime = str(document.get('mime_type') or '').lower()
+    allowed = {'image/jpeg', 'image/png', 'image/webp', 'application/pdf'}
+    if (document.get('file_id') and mime in allowed and
+            int(document.get('file_size') or 0) <= 10 * 1024 * 1024):
+        return 'document', str(document['file_id']), str(document.get('file_unique_id') or '')
+    return None
 
 
 def _send_claim_candidates(api: TelegramBotApi, chat_id: int, language: str,
@@ -580,6 +734,99 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
     return True
 
 
+def _purchase_reviewer(user_id: int, request_row: TelegramPurchaseRequest):
+    admin = _telegram_admin(user_id)
+    if admin:
+        return admin
+    bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
+    owner = db.session.get(Admin, bot.owner_admin_id) if bot and bot.owner_admin_id else None
+    try:
+        owner_telegram_id = int(str(getattr(owner, 'telegram_id', '') or '').strip())
+    except (TypeError, ValueError):
+        owner_telegram_id = 0
+    if owner and owner.enabled and owner_telegram_id == int(user_id):
+        return owner
+    return None
+
+
+def _purchase_admins(request_row: TelegramPurchaseRequest):
+    bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
+    admins = []
+    for admin in Admin.query.filter_by(enabled=True).all():
+        role = str(admin.role or '').lower()
+        is_global = bool(admin.is_superadmin or role in ('admin', 'superadmin'))
+        is_owner = bool(bot and bot.owner_admin_id and admin.id == bot.owner_admin_id)
+        if is_global or is_owner:
+            admins.append(admin)
+    return admins
+
+
+def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRequest):
+    lines = [
+        f"Telegram purchase request #{request_row.id}",
+        f"Server: {request_row.server.name}",
+        f"Package: {request_row.package.name}",
+        f"Amount: {int(request_row.amount or 0):,} T",
+        f"Telegram user: {request_row.telegram_user_id}",
+    ]
+    keyboard = {'inline_keyboard': [[
+        {'text': '✅ Approve payment', 'callback_data': f'admin-purchase:{request_row.id}:approve'},
+        {'text': '❌ Reject', 'callback_data': f'admin-purchase:{request_row.id}:reject'},
+    ]]}
+    for admin in _purchase_admins(request_row):
+        try:
+            admin_chat_id = int(str(admin.telegram_id or '').strip())
+            if admin_chat_id <= 0:
+                continue
+            if admin_chat_id != int(request_row.source_chat_id):
+                api.copy_message(
+                    admin_chat_id, request_row.source_chat_id, request_row.source_message_id,
+                )
+            api.send_message(admin_chat_id, '\n'.join(lines), reply_markup=keyboard)
+        except (TypeError, ValueError, TelegramApiError):
+            continue
+
+
+def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if len(parts) != 3 or parts[0] != 'admin-purchase' or parts[2] not in ('approve', 'reject'):
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    try:
+        request_row = db.session.get(TelegramPurchaseRequest, int(parts[1]))
+    except (TypeError, ValueError):
+        request_row = None
+    reviewer = _purchase_reviewer(int(sender.get('id') or 0), request_row) if request_row else None
+    if not request_row or not reviewer:
+        if callback_id:
+            api.answer_callback(callback_id, 'Access denied')
+        return True
+    if request_row.status != 'pending':
+        api.answer_callback(callback_id, 'Already reviewed')
+        return True
+    request_row.status = 'approved' if parts[2] == 'approve' else 'rejected'
+    request_row.reviewed_by_admin_id = reviewer.id
+    request_row.reviewed_at = datetime.utcnow()
+    db.session.flush()
+    api.answer_callback(callback_id, 'Saved')
+    if chat_id:
+        api.send_message(chat_id, f"Purchase #{request_row.id}: {request_row.status}")
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=request_row.telegram_user_id,
+        customer_id=request_row.customer_id,
+    ).first()
+    if identity and identity.telegram_chat_id:
+        customer = db.session.get(CustomerAccount, request_row.customer_id)
+        language = str(getattr(customer, 'preferred_language', '') or 'fa')
+        if language not in COPY:
+            language = 'fa'
+        key = 'purchase_approved' if request_row.status == 'approved' else 'purchase_rejected'
+        api.send_message(identity.telegram_chat_id, COPY[language][key])
+    return True
+
+
 def _handle_admin_claim_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
     parts = data.split(':')
     if len(parts) != 3 or parts[0] != 'admin-claim' or parts[2] not in ('approve', 'reject'):
@@ -658,6 +905,9 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     if data.startswith('admin-service:'):
         _handle_admin_service_callback(api, callback, data)
         return
+    if data.startswith('admin-purchase:'):
+        _handle_admin_purchase_callback(api, callback, data)
+        return
     if not _is_allowed(bot, user_id):
         api.answer_callback(callback_id)
         return
@@ -670,6 +920,37 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         api.answer_callback(callback_id)
         _send_owned_services(api, chat_id, language, identity)
+        return
+    if data.startswith('buy-server:'):
+        try:
+            server_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        server = next((row for row in _purchase_servers(bot) if row.id == server_id), None)
+        api.answer_callback(callback_id)
+        if server is None:
+            api.send_message(chat_id, COPY[language]['payment_unavailable'])
+            return
+        _send_purchase_packages(api, bot, chat_id, language, server)
+        return
+    if data.startswith('buy-package:'):
+        parts = data.split(':')
+        try:
+            server_id = int(parts[1])
+            package_id = int(parts[2])
+        except (IndexError, TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        server = next((row for row in _purchase_servers(bot) if row.id == server_id), None)
+        package = next((row for row in _purchase_packages(bot) if row.id == package_id), None)
+        api.answer_callback(callback_id)
+        if server is None or package is None:
+            api.send_message(chat_id, COPY[language]['payment_unavailable'])
+            return
+        _begin_purchase_payment(
+            api, bot, chat_id, user_id, language, server, package, state,
+        )
         return
     if data.startswith('service:'):
         try:
@@ -967,6 +1248,71 @@ def _handle_support_message(api: TelegramBotApi, bot: TelegramBotInstance, messa
     _notify_service_request_admins(api, request_row)
 
 
+def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
+                             message: dict, sender: dict,
+                             state: TelegramBotUserState):
+    chat_id = int((message.get('chat') or {}).get('id'))
+    user_id = int(sender['id'])
+    language = state.language if state.language in COPY else bot.default_language
+    receipt = _receipt_from_message(message)
+    if receipt is None:
+        api.send_message(chat_id, COPY[language]['receipt_invalid'])
+        return
+    session_row = TelegramPurchaseSession.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id, action='awaiting_receipt',
+    ).first()
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not session_row or not identity or not identity.customer_id:
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['start_first'])
+        return
+    server = db.session.get(Server, session_row.server_id)
+    package = db.session.get(Package, session_row.package_id)
+    card = db.session.get(BankCard, session_row.bank_card_id)
+    if not server or not package or not card or not card.is_active:
+        session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    duplicate = TelegramPurchaseRequest.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id, status='pending',
+    ).first()
+    if duplicate:
+        session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['purchase_duplicate'])
+        return
+    kind, file_id, unique_id = receipt
+    request_row = TelegramPurchaseRequest(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        customer_id=identity.customer_id,
+        server_id=server.id,
+        package_id=package.id,
+        bank_card_id=card.id,
+        amount=int(package.price or 0),
+        receipt_file_id=file_id,
+        receipt_file_unique_id=unique_id or None,
+        receipt_kind=kind,
+        source_chat_id=chat_id,
+        source_message_id=int(message.get('message_id') or 0),
+        status='pending',
+    )
+    db.session.add(request_row)
+    db.session.flush()
+    session_row.action = None
+    session_row.server_id = None
+    session_row.package_id = None
+    session_row.bank_card_id = None
+    state.step = 'verified'
+    db.session.flush()
+    api.send_message(chat_id, COPY[language]['purchase_pending'])
+    _notify_purchase_admins(api, request_row)
+
+
 def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict):
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
@@ -986,6 +1332,13 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         _send_owned_services(api, chat_id, state.language, identity)
+    elif text in {COPY["fa"]["menu_buy_service"], COPY["en"]["menu_buy_service"]}:
+        state.step = 'verified'
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+        if identity and identity.customer_id and identity.phone_verified_at:
+            _send_purchase_servers(api, bot, chat_id, state.language)
+        else:
+            _send_contact_prompt(api, chat_id, state.language)
     elif text in {COPY["fa"]["menu_add_service"], COPY["en"]["menu_add_service"]}:
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
@@ -1007,6 +1360,8 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         _handle_subscription(api, bot, message, sender, state, text)
     elif state.step == "awaiting_support_message":
         _handle_support_message(api, bot, message, sender, state, text)
+    elif state.step == "awaiting_purchase_receipt":
+        _handle_purchase_receipt(api, bot, message, sender, state)
     elif state.step == "share_contact":
         _send_contact_prompt(api, chat_id, state.language)
     else:
@@ -1014,6 +1369,10 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
 
 
 def process_update(api: TelegramBotApi, bot: TelegramBotInstance, update: dict):
+    # The Telegram worker is a separate process and background snapshot readers
+    # are intentionally disabled here. Pull only when Redis' snapshot version
+    # changed so service details never depend on stale process-local memory.
+    load_snapshot_from_redis()
     if isinstance(update.get("callback_query"), dict):
         _handle_callback(api, bot, update["callback_query"])
     elif isinstance(update.get("message"), dict):

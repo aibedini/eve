@@ -95,6 +95,13 @@ class TelegramBotApi:
     def send_message(self, chat_id: int, text: str, **extra):
         return self.call("sendMessage", {"chat_id": int(chat_id), "text": text, **extra})
 
+    def copy_message(self, chat_id: int, from_chat_id: int, message_id: int):
+        return self.call("copyMessage", {
+            "chat_id": int(chat_id),
+            "from_chat_id": int(from_chat_id),
+            "message_id": int(message_id),
+        })
+
     def answer_callback(self, callback_query_id: str, text: str = ""):
         return self.call("answerCallbackQuery", {
             "callback_query_id": callback_query_id,
@@ -124,7 +131,8 @@ COPY = {
         "service_button": "سرویس",
         "welcome_menu": "به ربات Eve خوش آمدید. یکی از گزینه‌های زیر را انتخاب کنید:",
         "menu_services": "📦 سرویس‌های من",
-        "menu_add_service": "➕ افزودن سرویس",
+        "menu_buy_service": "🛒 خرید سرویس جدید",
+        "menu_add_service": "➕ افزودن سرویس موجود",
         "menu_language": "🌐 تغییر زبان",
         "no_owned_services": "هنوز سرویسی به حساب شما متصل نشده است.",
         "owned_services": "سرویس‌های متصل به حساب شما:",
@@ -162,6 +170,16 @@ COPY = {
         "request_rejected": "❌ درخواست شما توسط مدیر رد شد.",
         "link_unavailable": "لینک اتصال این سرویس فعلاً در دسترس نیست؛ درخواست شما به مدیر اطلاع داده شد.",
         "invalid_service": "این سرویس در حساب شما وجود ندارد یا دسترسی آن لغو شده است.",
+        "choose_purchase_server": "سرور سرویس جدید را انتخاب کنید:",
+        "choose_purchase_package": "پکیج خرید را انتخاب کنید:",
+        "purchase_payment": "برای ثبت سفارش، مبلغ <b>{amount}</b> تومان را به کارت زیر واریز کنید:\n\n{card}\n\nسپس تصویر رسید را همین‌جا ارسال کنید.",
+        "payment_unavailable": "فعلاً خرید برای این انتخاب فعال نیست یا کارت پرداختی تعریف نشده است. کمی بعد دوباره تلاش کنید.",
+        "receipt_prompt": "لطفاً تصویر رسید کارت‌به‌کارت را ارسال کنید.",
+        "receipt_invalid": "رسید باید عکس یا فایل JPG/PNG/WebP/PDF و حداکثر ۱۰ مگابایت باشد.",
+        "purchase_pending": "✅ رسید و سفارش شما ثبت شد. پس از بررسی دستی مدیر، نتیجه همین‌جا اعلام می‌شود.",
+        "purchase_duplicate": "یک سفارش پرداخت‌شده‌ی در حال بررسی دارید؛ ابتدا نتیجه همان سفارش مشخص می‌شود.",
+        "purchase_approved": "✅ پرداخت سفارش شما تأیید شد. مدیر ساخت و تحویل سرویس را انجام می‌دهد.",
+        "purchase_rejected": "❌ پرداخت سفارش شما تأیید نشد. برای بررسی بیشتر با پشتیبانی تماس بگیرید.",
         "start_first": "برای شروع /start را بزنید.",
         "test_restricted": "این ربات فعلاً در حالت تست خصوصی است.",
     },
@@ -186,7 +204,8 @@ COPY = {
         "service_button": "Service",
         "welcome_menu": "Welcome to Eve. Choose an option below:",
         "menu_services": "📦 My services",
-        "menu_add_service": "➕ Add service",
+        "menu_buy_service": "🛒 Buy new service",
+        "menu_add_service": "➕ Add existing service",
         "menu_language": "🌐 Change language",
         "no_owned_services": "No service is linked to your account yet.",
         "owned_services": "Services linked to your account:",
@@ -224,6 +243,16 @@ COPY = {
         "request_rejected": "❌ Your request was rejected by an admin.",
         "link_unavailable": "The connection link is not available right now; an admin was notified.",
         "invalid_service": "This service is not in your account or access was revoked.",
+        "choose_purchase_server": "Choose a server for the new service:",
+        "choose_purchase_package": "Choose a purchase package:",
+        "purchase_payment": "Transfer <b>{amount}</b> Toman to the card below:\n\n{card}\n\nThen send the receipt image here.",
+        "payment_unavailable": "Purchasing is not available for this selection or no active payment card is configured. Try again later.",
+        "receipt_prompt": "Please send the card-transfer receipt image.",
+        "receipt_invalid": "The receipt must be a JPG/PNG/WebP/PDF up to 10 MB.",
+        "purchase_pending": "✅ Your receipt and order were recorded. An admin will review it manually and notify you here.",
+        "purchase_duplicate": "You already have a paid order under review. Wait for its result first.",
+        "purchase_approved": "✅ Your payment was approved. An admin will create and deliver the service.",
+        "purchase_rejected": "❌ Your payment was not approved. Contact support for more details.",
         "start_first": "Send /start to begin.",
         "test_restricted": "This bot is currently in private test mode.",
     },
@@ -254,8 +283,8 @@ def main_menu_keyboard(language: str):
     lang = language if language in COPY else "fa"
     return {
         "keyboard": [
-            [{"text": COPY[lang]["menu_services"]}, {"text": COPY[lang]["menu_add_service"]}],
-            [{"text": COPY[lang]["menu_language"]}],
+            [{"text": COPY[lang]["menu_services"]}, {"text": COPY[lang]["menu_buy_service"]}],
+            [{"text": COPY[lang]["menu_add_service"]}, {"text": COPY[lang]["menu_language"]}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,
