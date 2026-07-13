@@ -21,11 +21,14 @@ from app import (  # noqa: E402
     RenewalEvent,
     OwnershipClaim,
     OwnershipClaimItem,
+    Package,
     Server,
     ServiceDelegation,
     ServiceOwnership,
     TelegramIdentity,
     TelegramOwnershipSession,
+    TelegramServiceRequest,
+    TelegramServiceSession,
     TelegramBotInstance,
     TelegramBotRuntime,
     TelegramBotTestUser,
@@ -105,6 +108,8 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
     def tearDown(self):
         TelegramEgressProfile.query.delete()
         TelegramProxyEndpoint.query.delete()
+        TelegramServiceRequest.query.delete()
+        TelegramServiceSession.query.delete()
         TelegramBotUserState.query.delete()
         TelegramOwnershipSession.query.delete()
         TelegramBotTestUser.query.delete()
@@ -116,6 +121,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         ServiceDelegation.query.delete()
         ServiceOwnership.query.delete()
         CustomerAccount.query.delete()
+        Package.query.delete()
         SmsSendLog.query.delete()
         PendingSms.query.delete()
         SystemConfig.query.filter(SystemConfig.key.in_([
@@ -766,6 +772,131 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         keyboard = api.messages[-1]['reply_markup']
         self.assertTrue(keyboard['is_persistent'])
         self.assertEqual(keyboard['keyboard'][0][0]['text'], COPY['en']['menu_services'])
+
+    def test_telegram_owned_service_drilldown_link_renewal_and_support(self):
+        previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=False,
+            enabled_languages_json='["fa","en"]', default_language='fa',
+        )
+        customer = CustomerAccount(
+            primary_phone='989125551231', phone_verified_at=datetime.utcnow(),
+            preferred_language='fa',
+        )
+        identity = TelegramIdentity(
+            customer=customer, telegram_user_id=70010, telegram_chat_id=70010,
+            phone_normalized=customer.primary_phone, phone_verified_at=datetime.utcnow(),
+        )
+        server = Server(name='PLUS', host='https://plus.test', username='u', password='p')
+        package = Package(
+            name='30GB / 30 Days', days=30, volume=30, price=320000,
+            enabled=True, scope='global', display_order=1,
+        )
+        db.session.add_all([bot, customer, identity, server, package])
+        db.session.flush()
+        ownership = ServiceOwnership(
+            customer_id=customer.id, server_id=server.id,
+            client_uuid='service-client-1', client_email_snapshot='g276-09125551231',
+            verification_method='subscription', verified_at=datetime.utcnow(),
+        )
+        db.session.add(ownership)
+        db.session.commit()
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': server.id, 'id': 11, 'clients': [{
+                'id': 'service-client-1', 'email': 'g276-09125551231',
+                'up': 1024 ** 3, 'down': 2 * (1024 ** 3),
+                'remaining_bytes': 7 * (1024 ** 3),
+                'expiryTimestamp': 0, 'service_state': 'active', 'enable': True,
+                'raw_client': {
+                    'id': 'service-client-1', 'email': 'g276-09125551231',
+                    'subId': 'private-sub-token', 'expiryTime': 0,
+                },
+            }],
+        }]
+        api = FakeTelegramApi()
+        try:
+            process_update(api, bot, {'update_id': 9, 'message': {
+                'message_id': 1, 'text': COPY['fa']['menu_services'],
+                'from': {'id': 70010, 'first_name': 'Owner'},
+                'chat': {'id': 70010, 'type': 'private'},
+            }})
+            list_keyboard = api.messages[-1]['reply_markup']['inline_keyboard']
+            self.assertIn('PLUS', list_keyboard[0][0]['text'])
+            self.assertEqual(list_keyboard[1][0]['callback_data'], f'service:{ownership.id}')
+
+            process_update(api, bot, {'update_id': 10, 'callback_query': {
+                'id': 'service-detail', 'data': f'service:{ownership.id}',
+                'from': {'id': 70010, 'first_name': 'Owner'},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            self.assertIn('g276-09125551231', api.messages[-1]['text'])
+            self.assertIn(COPY['fa']['status_active'], api.messages[-1]['text'])
+            detail_callbacks = [
+                button['callback_data']
+                for row in api.messages[-1]['reply_markup']['inline_keyboard'] for button in row
+            ]
+            self.assertIn(f'service-renew:{ownership.id}', detail_callbacks)
+            self.assertIn(f'service-support:{ownership.id}', detail_callbacks)
+
+            with patch('telegram_bot_worker._public_base_url', return_value='https://eve.example'):
+                process_update(api, bot, {'update_id': 11, 'callback_query': {
+                    'id': 'service-link', 'data': f'service-link:{ownership.id}',
+                    'from': {'id': 70010},
+                    'message': {'chat': {'id': 70010, 'type': 'private'}},
+                }})
+            self.assertIn('/s/', api.messages[-1]['text'])
+            self.assertIn('private-sub-token', api.messages[-1]['text'])
+
+            process_update(api, bot, {'update_id': 12, 'callback_query': {
+                'id': 'service-renew', 'data': f'service-renew:{ownership.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            self.assertEqual(
+                api.messages[-1]['reply_markup']['inline_keyboard'][0][0]['callback_data'],
+                f'renew-package:{ownership.id}:{package.id}',
+            )
+            process_update(api, bot, {'update_id': 13, 'callback_query': {
+                'id': 'renew-package', 'data': f'renew-package:{ownership.id}:{package.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            renewal = TelegramServiceRequest.query.filter_by(request_type='renewal').one()
+            self.assertEqual(renewal.package_id, package.id)
+            self.assertEqual(renewal.amount, 320000)
+
+            process_update(api, bot, {'update_id': 14, 'callback_query': {
+                'id': 'service-support', 'data': f'service-support:{ownership.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            process_update(api, bot, {'update_id': 15, 'message': {
+                'message_id': 2, 'text': 'Please check this service.',
+                'from': {'id': 70010, 'first_name': 'Owner'},
+                'chat': {'id': 70010, 'type': 'private'},
+            }})
+            support = TelegramServiceRequest.query.filter_by(request_type='support').one()
+            self.assertEqual(support.note, 'Please check this service.')
+            self.assertEqual(api.messages[-1]['text'], COPY['fa']['support_pending'])
+
+            reviewer = Admin(
+                username='claim-test-service-reviewer', role='superadmin',
+                is_superadmin=True, enabled=True, telegram_id='80010',
+            )
+            reviewer.set_password('StrongClaimPassword123!')
+            db.session.add(reviewer)
+            db.session.commit()
+            process_update(api, bot, {'update_id': 16, 'callback_query': {
+                'id': 'admin-service-complete',
+                'data': f'admin-service:{renewal.id}:complete',
+                'from': {'id': 80010, 'first_name': 'Admin'},
+                'message': {'chat': {'id': 80010, 'type': 'private'}},
+            }})
+            self.assertEqual(renewal.status, 'completed')
+            self.assertEqual(renewal.reviewed_by_admin_id, reviewer.id)
+            self.assertEqual(api.messages[-1]['text'], COPY['fa']['request_completed'])
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
 
     def test_telegram_rejects_contact_belonging_to_another_user(self):
         bot = TelegramBotInstance(

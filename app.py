@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.39"
+APP_VERSION = "2.4.40"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8273,6 +8273,58 @@ class TelegramOwnershipSession(db.Model):
     locked_until = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TelegramServiceSession(db.Model):
+    """Current service/action selected by a Telegram user."""
+    __tablename__ = 'telegram_service_sessions'
+    __table_args__ = (
+        db.UniqueConstraint('bot_instance_id', 'telegram_user_id', name='uq_telegram_service_session'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    service_ownership_id = db.Column(
+        db.Integer, db.ForeignKey('service_ownerships.id', ondelete='CASCADE'),
+        nullable=True, index=True,
+    )
+    action = db.Column(db.String(32), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TelegramServiceRequest(db.Model):
+    """Durable manual renewal/support request created from Telegram."""
+    __tablename__ = 'telegram_service_requests'
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    customer_id = db.Column(
+        db.Integer, db.ForeignKey('customer_accounts.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    service_ownership_id = db.Column(
+        db.Integer, db.ForeignKey('service_ownerships.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    request_type = db.Column(db.String(24), nullable=False, index=True)
+    package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='SET NULL'), nullable=True)
+    amount = db.Column(db.BigInteger, nullable=True)
+    note = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    ownership = db.relationship('ServiceOwnership')
+    package = db.relationship('Package')
 
 
 class TelegramProxyEndpoint(db.Model):

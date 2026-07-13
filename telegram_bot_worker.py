@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import html
+import json
 import os
 import signal
 import time
 import uuid
-from datetime import datetime, timedelta
-from urllib.parse import unquote, urlparse
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote, unquote, urlparse
+from zoneinfo import ZoneInfo
 
 os.environ.setdefault("DISABLE_BACKGROUND_THREADS", "true")
 os.environ.setdefault("EVE_PROCESS_ROLE", "telegram-bot")
@@ -15,8 +18,10 @@ os.environ.setdefault("EVE_PROCESS_ROLE", "telegram-bot")
 from app import (  # noqa: E402
     Admin,
     CustomerAccount,
+    GLOBAL_SERVER_DATA,
     OwnershipClaim,
     OwnershipClaimItem,
+    Package,
     ServiceOwnership,
     TelegramBotInstance,
     TelegramBotRuntime,
@@ -24,8 +29,11 @@ from app import (  # noqa: E402
     TelegramBotUserState,
     TelegramIdentity,
     TelegramOwnershipSession,
+    TelegramServiceRequest,
+    TelegramServiceSession,
     _telegram_bot_api_client,
     _decrypt_telegram_secret,
+    _public_base_url,
     app,
     db,
     discover_phone_ownership_claim,
@@ -154,12 +162,203 @@ def _send_owned_services(api: TelegramBotApi, chat_id: int, language: str,
     if not ownerships:
         api.send_message(chat_id, COPY[lang]["no_owned_services"])
         return
-    lines = [COPY[lang]["owned_services"]]
-    for index, ownership in enumerate(ownerships, 1):
+    keyboard = []
+    current_server_id = None
+    for index, ownership in enumerate(ownerships[:50], 1):
+        if ownership.server_id != current_server_id:
+            current_server_id = ownership.server_id
+            server_name = getattr(ownership.server, 'name', '') or f'#{ownership.server_id}'
+            keyboard.append([{
+                "text": f'{COPY[lang]["server_button"]}: {server_name}'[:60],
+                "callback_data": "noop",
+            }])
         label = ownership.client_email_snapshot or f'{COPY[lang]["service_button"]} {index}'
-        server_name = getattr(ownership.server, 'name', '') or ''
-        lines.append(f"{index}. {label}" + (f" — {server_name}" if server_name else ""))
-    api.send_message(chat_id, "\n".join(lines))
+        keyboard.append([{
+            "text": f'{COPY[lang]["account_button"]}: {label}'[:60],
+            "callback_data": f"service:{ownership.id}",
+        }])
+    api.send_message(
+        chat_id, COPY[lang]["owned_services"],
+        reply_markup={"inline_keyboard": keyboard},
+    )
+
+
+def _owned_service(user_id: int, ownership_id: int):
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not identity or not identity.customer_id:
+        return identity, None
+    ownership = ServiceOwnership.query.filter_by(
+        id=int(ownership_id), customer_id=identity.customer_id, revoked_at=None,
+    ).first()
+    return identity, ownership
+
+
+def _cached_owned_service(ownership: ServiceOwnership):
+    email = str(ownership.client_email_snapshot or '').strip().lower()
+    client_uuid = str(ownership.client_uuid or '').strip().lower()
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id') or 0) != int(ownership.server_id):
+                continue
+        except (TypeError, ValueError):
+            continue
+        for client in (inbound.get('clients') or []):
+            candidate_email = str(client.get('email') or '').strip().lower()
+            raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
+            candidate_uuid = str(client.get('id') or client.get('uuid') or raw.get('id') or '').strip().lower()
+            if (client_uuid and candidate_uuid == client_uuid) or (email and candidate_email == email):
+                return client
+    return None
+
+
+def _format_traffic(value) -> str:
+    try:
+        size = max(0, int(value or 0))
+    except (TypeError, ValueError):
+        size = 0
+    if size >= 1024 ** 3:
+        return f"{size / (1024 ** 3):.2f} GB"
+    if size >= 1024 ** 2:
+        return f"{size / (1024 ** 2):.1f} MB"
+    return f"{size / 1024:.1f} KB"
+
+
+def _service_expiry(client: dict | None, language: str) -> str:
+    if not client:
+        return COPY[language]["service_unavailable"]
+    raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
+    try:
+        expiry_ts = int(client.get('expiryTimestamp') or raw.get('expiryTime') or 0)
+    except (TypeError, ValueError):
+        expiry_ts = 0
+    if expiry_ts == 0:
+        return COPY[language]["unlimited"]
+    if expiry_ts < 0:
+        days = max(1, int(round(abs(expiry_ts) / 86400000)))
+        return f"{days} " + ("روز پس از اولین اتصال" if language == 'fa' else "days after first connection")
+    expiry = datetime.fromtimestamp(expiry_ts / 1000, tz=timezone.utc)
+    remaining_days = int((expiry - datetime.now(timezone.utc)).total_seconds() // 86400)
+    date_text = expiry.astimezone(ZoneInfo('Asia/Tehran')).strftime('%Y-%m-%d')
+    if remaining_days < 0:
+        return f"{date_text} ({COPY[language]['status_expired']})"
+    suffix = f"{remaining_days} روز" if language == 'fa' else f"{remaining_days} days"
+    return f"{date_text} ({suffix})"
+
+
+def _service_status(client: dict | None, language: str) -> str:
+    if not client:
+        return f"⚪ {COPY[language]['status_unknown']}"
+    key = str(client.get('service_state') or '').strip().lower()
+    if not key:
+        key = 'active' if client.get('enable', True) else 'inactive'
+    labels = {
+        'active': ('🟢', 'status_active'),
+        'inactive': ('⚪', 'status_inactive'),
+        'expired': ('🔴', 'status_expired'),
+        'volume_ended': ('🔴', 'status_volume_ended'),
+        'volume_low': ('🟠', 'status_volume_low'),
+        'expiring_soon': ('🟠', 'status_expiring_soon'),
+    }
+    emoji, copy_key = labels.get(key, ('⚪', 'status_unknown'))
+    return f"{emoji} {COPY[language][copy_key]}"
+
+
+def _service_keyboard(ownership: ServiceOwnership, language: str):
+    return {"inline_keyboard": [
+        [{"text": COPY[language]["get_link_button"], "callback_data": f"service-link:{ownership.id}"}],
+        [
+            {"text": COPY[language]["renew_button"], "callback_data": f"service-renew:{ownership.id}"},
+            {"text": COPY[language]["support_button"], "callback_data": f"service-support:{ownership.id}"},
+        ],
+        [{"text": COPY[language]["back_services_button"], "callback_data": "service-list"}],
+    ]}
+
+
+def _send_service_details(api: TelegramBotApi, chat_id: int, language: str,
+                          ownership: ServiceOwnership):
+    lang = language if language in COPY else 'fa'
+    client = _cached_owned_service(ownership)
+    server_name = getattr(ownership.server, 'name', '') or f'#{ownership.server_id}'
+    account = ownership.client_email_snapshot or f'#{ownership.id}'
+    if client:
+        used = max(0, int(client.get('up') or 0)) + max(0, int(client.get('down') or 0))
+        remaining = client.get('remaining_bytes')
+        remaining_text = COPY[lang]['unlimited'] if remaining in (None, -1) else _format_traffic(remaining)
+        freshness = COPY[lang]['service_live']
+    else:
+        used = 0
+        remaining_text = COPY[lang]['service_unavailable']
+        freshness = COPY[lang]['service_unavailable']
+    text = "\n".join([
+        f"<b>{COPY[lang]['service_details']}</b>",
+        f"{COPY[lang]['service_server']}: <b>{html.escape(str(server_name))}</b>",
+        f"{COPY[lang]['service_account']}: <code>{html.escape(str(account))}</code>",
+        f"{COPY[lang]['service_status']}: {_service_status(client, lang)}",
+        f"{COPY[lang]['service_expiry']}: {_service_expiry(client, lang)}",
+        f"{COPY[lang]['service_usage']}: {_format_traffic(used)}",
+        f"{COPY[lang]['service_remaining']}: {remaining_text}",
+        f"{COPY[lang]['service_updated']}: {freshness}",
+    ])
+    api.send_message(
+        chat_id, text, parse_mode='HTML',
+        reply_markup=_service_keyboard(ownership, lang),
+    )
+
+
+def _service_session(bot_id: int, user_id: int) -> TelegramServiceSession:
+    row = TelegramServiceSession.query.filter_by(
+        bot_instance_id=bot_id, telegram_user_id=user_id,
+    ).first()
+    if row is None:
+        row = TelegramServiceSession(bot_instance_id=bot_id, telegram_user_id=user_id)
+        db.session.add(row)
+    return row
+
+
+def _available_packages(ownership: ServiceOwnership):
+    packages = Package.query.filter_by(enabled=True).order_by(
+        Package.display_order.asc(), Package.id.asc(),
+    ).all()
+    visible = []
+    for package in packages:
+        scope = str(package.scope or 'global').lower()
+        if scope == 'global':
+            visible.append(package)
+            continue
+        try:
+            assigned = {int(value) for value in json.loads(package.assigned_reseller_ids or '[]')}
+        except (TypeError, ValueError):
+            assigned = set()
+        if ownership.reseller_id and int(ownership.reseller_id) in assigned:
+            visible.append(package)
+    return visible[:20]
+
+
+def _send_renew_packages(api: TelegramBotApi, bot: TelegramBotInstance,
+                         chat_id: int, user_id: int, language: str,
+                         ownership: ServiceOwnership):
+    packages = _available_packages(ownership)
+    if not packages:
+        request_row, duplicate = _create_service_request(
+            bot.id, user_id, ownership, 'renewal', package=None, note=None,
+        )
+        api.send_message(chat_id, COPY[language]['renew_duplicate' if duplicate else 'renew_pending'])
+        if not duplicate:
+            _notify_service_request_admins(api, request_row)
+        return
+    keyboard = []
+    for package in packages:
+        price = f"{int(package.price or 0):,} T"
+        keyboard.append([{
+            "text": f"{package.name} • {price}"[:60],
+            "callback_data": f"renew-package:{ownership.id}:{package.id}",
+        }])
+    keyboard.append([{"text": COPY[language]['back_services_button'],
+                      "callback_data": f"service:{ownership.id}"}])
+    api.send_message(
+        chat_id, COPY[language]['choose_package'],
+        reply_markup={"inline_keyboard": keyboard},
+    )
 
 
 def _send_claim_candidates(api: TelegramBotApi, chat_id: int, language: str,
@@ -171,10 +370,18 @@ def _send_claim_candidates(api: TelegramBotApi, chat_id: int, language: str,
     if not items:
         return
     keyboard = []
+    current_server_id = None
     for index, item in enumerate(items, 1):
+        if item.server_id != current_server_id:
+            current_server_id = item.server_id
+            server_name = getattr(item.server, 'name', '') or f'#{item.server_id}'
+            keyboard.append([{
+                "text": f'{COPY[language]["server_button"]}: {server_name}'[:60],
+                "callback_data": "noop",
+            }])
         label = str(item.client_email_snapshot or f'{COPY[language]["service_button"]} {index}')
         keyboard.append([{
-            "text": label[:48],
+            "text": f'{COPY[language]["account_button"]}: {label}'[:60],
             "callback_data": f"claim:{item.id}",
         }])
     keyboard.append([{
@@ -255,6 +462,124 @@ def _telegram_admin(user_id: int):
     return None
 
 
+def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnership,
+                            request_type: str, *, package: Package | None, note: str | None):
+    if request_type == 'renewal':
+        existing = TelegramServiceRequest.query.filter_by(
+            service_ownership_id=ownership.id,
+            request_type='renewal', status='pending',
+        ).first()
+        if existing is not None:
+            return existing, True
+    row = TelegramServiceRequest(
+        bot_instance_id=bot_id,
+        telegram_user_id=user_id,
+        customer_id=ownership.customer_id,
+        service_ownership_id=ownership.id,
+        request_type=request_type,
+        package_id=(package.id if package else None),
+        amount=(int(package.price or 0) if package else None),
+        note=(str(note or '').strip()[:4000] or None),
+        status='pending',
+    )
+    db.session.add(row)
+    db.session.flush()
+    return row, False
+
+
+def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramServiceRequest):
+    ownership = request_row.ownership
+    server_name = getattr(ownership.server, 'name', '') or f'#{ownership.server_id}'
+    account = ownership.client_email_snapshot or f'#{ownership.id}'
+    request_label = 'Renewal' if request_row.request_type == 'renewal' else 'Support'
+    lines = [
+        f"Telegram {request_label} request #{request_row.id}",
+        f"Server: {server_name}",
+        f"Account: {account}",
+        f"Telegram user: {request_row.telegram_user_id}",
+    ]
+    if request_row.package:
+        lines.append(f"Package: {request_row.package.name}")
+        lines.append(f"Amount: {int(request_row.amount or 0):,} T")
+    if request_row.note:
+        lines.append(f"Message: {request_row.note[:1000]}")
+    keyboard = {"inline_keyboard": [[
+        {"text": "✅ Complete", "callback_data": f"admin-service:{request_row.id}:complete"},
+        {"text": "❌ Reject", "callback_data": f"admin-service:{request_row.id}:reject"},
+    ]]}
+    for admin in Admin.query.filter_by(enabled=True).all():
+        role = str(admin.role or '').lower()
+        is_global_admin = bool(admin.is_superadmin or role in ('admin', 'superadmin'))
+        is_owner_reseller = bool(role == 'reseller' and ownership.reseller_id == admin.id)
+        if not (is_global_admin or is_owner_reseller):
+            continue
+        try:
+            admin_chat_id = int(str(admin.telegram_id or '').strip())
+            if admin_chat_id > 0 and admin_chat_id != request_row.telegram_user_id:
+                api.send_message(admin_chat_id, "\n".join(lines), reply_markup=keyboard)
+        except (TypeError, ValueError, TelegramApiError):
+            continue
+
+
+def _service_request_reviewer(user_id: int, request_row: TelegramServiceRequest):
+    try:
+        wanted = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    for admin in Admin.query.filter_by(enabled=True).all():
+        try:
+            if int(str(admin.telegram_id or '').strip()) != wanted:
+                continue
+        except (TypeError, ValueError):
+            continue
+        role = str(admin.role or '').lower()
+        if admin.is_superadmin or role in ('admin', 'superadmin'):
+            return admin
+        if role == 'reseller' and request_row.ownership.reseller_id == admin.id:
+            return admin
+    return None
+
+
+def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if len(parts) != 3 or parts[0] != 'admin-service' or parts[2] not in ('complete', 'reject'):
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    try:
+        request_row = db.session.get(TelegramServiceRequest, int(parts[1]))
+    except (TypeError, ValueError):
+        request_row = None
+    reviewer = _service_request_reviewer(int(sender.get('id') or 0), request_row) if request_row else None
+    if not request_row or not reviewer:
+        if callback_id:
+            api.answer_callback(callback_id, 'Access denied')
+        return True
+    if request_row.status != 'pending':
+        api.answer_callback(callback_id, 'Already reviewed')
+        return True
+    request_row.status = 'completed' if parts[2] == 'complete' else 'rejected'
+    request_row.reviewed_by_admin_id = reviewer.id
+    request_row.reviewed_at = datetime.utcnow()
+    db.session.flush()
+    api.answer_callback(callback_id, 'Saved')
+    if chat_id:
+        api.send_message(chat_id, f"Request #{request_row.id}: {request_row.status}")
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=request_row.telegram_user_id,
+        customer_id=request_row.customer_id,
+    ).first()
+    if identity and identity.telegram_chat_id:
+        customer = db.session.get(CustomerAccount, request_row.customer_id)
+        language = str(getattr(customer, 'preferred_language', '') or 'fa')
+        if language not in COPY:
+            language = 'fa'
+        key = 'request_completed' if request_row.status == 'completed' else 'request_rejected'
+        api.send_message(identity.telegram_chat_id, COPY[language][key])
+    return True
+
+
 def _handle_admin_claim_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
     parts = data.split(':')
     if len(parts) != 3 or parts[0] != 'admin-claim' or parts[2] not in ('approve', 'reject'):
@@ -330,10 +655,119 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     if data.startswith('admin-claim:'):
         _handle_admin_claim_callback(api, callback, data)
         return
+    if data.startswith('admin-service:'):
+        _handle_admin_service_callback(api, callback, data)
+        return
     if not _is_allowed(bot, user_id):
         api.answer_callback(callback_id)
         return
     state = _state(bot, user_id)
+    language = state.language if state.language in COPY else bot.default_language
+    if data == 'noop':
+        api.answer_callback(callback_id)
+        return
+    if data == 'service-list':
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+        api.answer_callback(callback_id)
+        _send_owned_services(api, chat_id, language, identity)
+        return
+    if data.startswith('service:'):
+        try:
+            ownership_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        _identity_row, ownership = _owned_service(user_id, ownership_id)
+        if not ownership:
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['invalid_service'])
+            return
+        api.answer_callback(callback_id)
+        _send_service_details(api, chat_id, language, ownership)
+        return
+    if data.startswith('service-link:'):
+        try:
+            ownership_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        _identity_row, ownership = _owned_service(user_id, ownership_id)
+        if not ownership:
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['invalid_service'])
+            return
+        client = _cached_owned_service(ownership)
+        raw = client.get('raw_client') if client and isinstance(client.get('raw_client'), dict) else {}
+        sub_id = str((raw.get('subId') or client.get('subId')) if client else '').strip()
+        base_url = _public_base_url().rstrip('/')
+        api.answer_callback(callback_id)
+        if sub_id and base_url:
+            safe_sub_id = quote(sub_id, safe='')
+            api.send_message(chat_id, f"{COPY[language]['get_link_button']}:\n{base_url}/s/{ownership.server_id}/{safe_sub_id}")
+        else:
+            request_row, _duplicate = _create_service_request(
+                bot.id, user_id, ownership, 'support', package=None,
+                note='Connection link unavailable in Telegram worker snapshot',
+            )
+            api.send_message(chat_id, COPY[language]['link_unavailable'])
+            _notify_service_request_admins(api, request_row)
+        return
+    if data.startswith('service-renew:'):
+        try:
+            ownership_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        _identity_row, ownership = _owned_service(user_id, ownership_id)
+        if not ownership:
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['invalid_service'])
+            return
+        api.answer_callback(callback_id)
+        _send_renew_packages(api, bot, chat_id, user_id, language, ownership)
+        return
+    if data.startswith('renew-package:'):
+        parts = data.split(':')
+        try:
+            ownership_id = int(parts[1])
+            package_id = int(parts[2])
+        except (IndexError, TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        _identity_row, ownership = _owned_service(user_id, ownership_id)
+        package = db.session.get(Package, package_id)
+        allowed_package_ids = {row.id for row in _available_packages(ownership)} if ownership else set()
+        if not ownership or not package or package.id not in allowed_package_ids:
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['invalid_service'])
+            return
+        request_row, duplicate = _create_service_request(
+            bot.id, user_id, ownership, 'renewal', package=package, note=None,
+        )
+        api.answer_callback(callback_id)
+        api.send_message(chat_id, COPY[language]['renew_duplicate' if duplicate else 'renew_pending'])
+        if not duplicate:
+            _notify_service_request_admins(api, request_row)
+        return
+    if data.startswith('service-support:'):
+        try:
+            ownership_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        _identity_row, ownership = _owned_service(user_id, ownership_id)
+        if not ownership:
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['invalid_service'])
+            return
+        session_row = _service_session(bot.id, user_id)
+        session_row.service_ownership_id = ownership.id
+        session_row.action = 'support'
+        state.step = 'awaiting_support_message'
+        db.session.flush()
+        api.answer_callback(callback_id)
+        api.send_message(chat_id, COPY[language]['support_prompt'])
+        return
     if data.startswith("lang:"):
         language = data.partition(":")[2]
         if language in bot.enabled_languages():
@@ -503,6 +937,36 @@ def _handle_subscription(api: TelegramBotApi, bot: TelegramBotInstance, message:
     _send_claim_candidates(api, chat_id, language, item.claim)
 
 
+def _handle_support_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict,
+                            sender: dict, state: TelegramBotUserState, text: str):
+    chat_id = int((message.get('chat') or {}).get('id'))
+    user_id = int(sender['id'])
+    language = state.language if state.language in COPY else bot.default_language
+    session_row = TelegramServiceSession.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id, action='support',
+    ).first()
+    if not session_row or not session_row.service_ownership_id or not text or text.startswith('/'):
+        api.send_message(chat_id, COPY[language]['support_prompt'])
+        return
+    _identity_row, ownership = _owned_service(user_id, session_row.service_ownership_id)
+    if not ownership:
+        state.step = 'verified'
+        session_row.action = None
+        session_row.service_ownership_id = None
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['invalid_service'])
+        return
+    request_row, _duplicate = _create_service_request(
+        bot.id, user_id, ownership, 'support', package=None, note=text,
+    )
+    state.step = 'verified'
+    session_row.action = None
+    session_row.service_ownership_id = None
+    db.session.flush()
+    api.send_message(chat_id, COPY[language]['support_pending'])
+    _notify_service_request_admins(api, request_row)
+
+
 def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict):
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
@@ -519,9 +983,11 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     if text == "/start" or text.startswith("/start "):
         _handle_start(api, bot, chat_id, user_id, state)
     elif text in {COPY["fa"]["menu_services"], COPY["en"]["menu_services"]}:
+        state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         _send_owned_services(api, chat_id, state.language, identity)
     elif text in {COPY["fa"]["menu_add_service"], COPY["en"]["menu_add_service"]}:
+        state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         if identity and identity.customer_id and identity.phone_verified_at:
             claim = discover_phone_ownership_claim(identity)
@@ -539,6 +1005,8 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         _handle_contact(api, bot, message, sender, state)
     elif state.step == "awaiting_subscription":
         _handle_subscription(api, bot, message, sender, state, text)
+    elif state.step == "awaiting_support_message":
+        _handle_support_message(api, bot, message, sender, state, text)
     elif state.step == "share_contact":
         _send_contact_prompt(api, chat_id, state.language)
     else:
