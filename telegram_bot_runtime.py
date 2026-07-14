@@ -102,17 +102,64 @@ class TelegramBotApi:
             "message_id": int(message_id),
         })
 
-    def send_photo(self, chat_id: int, file_id: str):
+    def send_photo(self, chat_id: int, file_id: str, **extra):
         return self.call("sendPhoto", {
             "chat_id": int(chat_id),
             "photo": str(file_id),
+            **extra,
         })
 
-    def send_document(self, chat_id: int, file_id: str):
+    def send_document(self, chat_id: int, file_id: str, **extra):
         return self.call("sendDocument", {
             "chat_id": int(chat_id),
             "document": str(file_id),
+            **extra,
         })
+
+    def send_upload(self, chat_id: int, content: bytes, filename: str,
+                    content_type: str, *, as_photo: bool = False, caption: str = ''):
+        """Upload a trusted in-memory operator attachment through route failover."""
+        if not content:
+            raise TelegramApiError("Attachment is empty", retryable=False)
+        method = "sendPhoto" if as_photo else "sendDocument"
+        field = "photo" if as_photo else "document"
+        url = f"{API_ROOT}/bot{self._token}/{method}"
+        errors: list[str] = []
+        for route in self._routes:
+            try:
+                data = {"chat_id": int(chat_id)}
+                if caption:
+                    data["caption"] = str(caption)[:1024]
+                response = requests.post(
+                    url,
+                    data=data,
+                    files={field: (str(filename), content, str(content_type or 'application/octet-stream'))},
+                    proxies=route.proxies,
+                    timeout=(15, 120),
+                )
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    raise TelegramApiError(
+                        f"Telegram returned invalid JSON (HTTP {response.status_code})",
+                    ) from exc
+                if response.status_code == 200 and isinstance(body, dict) and body.get("ok"):
+                    return body.get("result"), route.name
+                description = body.get("description") if isinstance(body, dict) else None
+                safe = redact_connection_error(
+                    description or f"Telegram returned HTTP {response.status_code}",
+                    (self._token,),
+                )
+                if response.status_code in (400, 401, 403, 404, 409, 413, 429):
+                    raise TelegramApiError(safe, retryable=False)
+                errors.append(f"{route.name}: {safe}")
+            except TelegramApiError as exc:
+                if not exc.retryable:
+                    raise
+                errors.append(f"{route.name}: {exc}")
+            except requests.RequestException as exc:
+                errors.append(f"{route.name}: {redact_connection_error(exc, (self._token,))}")
+        raise TelegramApiError("; ".join(errors) or "No Telegram route is available")
 
     def download_file(self, file_id: str, *, max_bytes: int = 20 * 1024 * 1024):
         """Resolve and download a Telegram file through the bot's configured routes."""
@@ -183,6 +230,7 @@ COPY = {
         "menu_services": "📦 سرویس‌های من",
         "menu_buy_service": "🛒 خرید سرویس جدید",
         "menu_add_service": "➕ افزودن سرویس موجود",
+        "menu_support_requests": "🎫 درخواست‌های پشتیبانی من",
         "menu_language": "🌐 تغییر زبان",
         "no_owned_services": "هنوز سرویسی به حساب شما متصل نشده است.",
         "owned_services": "سرویس‌های متصل به حساب شما:",
@@ -216,8 +264,21 @@ COPY = {
         "renew_duplicate": "درخواست تمدید #{request_id} هنوز در حال بررسی است. برای جلوگیری از ثبت و پرداخت تکراری، درخواست تازه‌ای ساخته نشد. می‌توانید درخواست قبلی را لغو کنید یا منتظر تصمیم مدیر بمانید.",
         "renew_cancel_button": "لغو درخواست تمدید",
         "renew_cancelled": "درخواست تمدید #{request_id} لغو شد. اکنون می‌توانید درخواست تازه‌ای ثبت کنید.",
-        "support_prompt": "پیام پشتیبانی خود را در یک پیام ارسال کنید.",
-        "support_pending": "✅ پیام شما برای پشتیبانی ثبت شد.",
+        "support_prompt": "پیام، تصویر یا فایل پشتیبانی خود را ارسال کنید.",
+        "support_pending": "✅ پیام شما در درخواست پشتیبانی #{request_id} ثبت شد.",
+        "support_no_tickets": "هنوز درخواست پشتیبانی ندارید.",
+        "support_ticket_list": "درخواست‌های پشتیبانی شما:",
+        "support_ticket_title": "درخواست پشتیبانی #{request_id}",
+        "support_status_waiting_admin": "منتظر پاسخ پشتیبانی",
+        "support_status_waiting_customer": "منتظر پاسخ شما",
+        "support_status_closed": "بسته‌شده",
+        "support_sender_admin": "پشتیبانی",
+        "support_sender_customer": "شما",
+        "support_continue_button": "💬 ادامه گفتگو",
+        "support_new_button": "➕ درخواست جدید برای این سرویس",
+        "support_back_button": "⬅️ درخواست‌های من",
+        "support_view_button": "🎫 مشاهده درخواست",
+        "support_ticket_missing": "این درخواست پیدا نشد یا دیگر در دسترس نیست.",
         "request_completed": "✅ درخواست شما توسط مدیر تکمیل شد.",
         "request_rejected": "❌ درخواست شما توسط مدیر رد شد.",
         "link_unavailable": "لینک اتصال این سرویس فعلاً در دسترس نیست؛ درخواست شما به مدیر اطلاع داده شد.",
@@ -262,6 +323,7 @@ COPY = {
         "menu_services": "📦 My services",
         "menu_buy_service": "🛒 Buy new service",
         "menu_add_service": "➕ Add existing service",
+        "menu_support_requests": "🎫 My support requests",
         "menu_language": "🌐 Change language",
         "no_owned_services": "No service is linked to your account yet.",
         "owned_services": "Services linked to your account:",
@@ -295,8 +357,21 @@ COPY = {
         "renew_duplicate": "Renewal request #{request_id} is still under review. No duplicate request was created. You can cancel the earlier request or wait for an admin decision.",
         "renew_cancel_button": "Cancel renewal request",
         "renew_cancelled": "Renewal request #{request_id} was cancelled. You can now submit a new request.",
-        "support_prompt": "Send your support message in one message.",
-        "support_pending": "✅ Your support message was recorded.",
+        "support_prompt": "Send your support message, image, or file.",
+        "support_pending": "✅ Your message was added to support request #{request_id}.",
+        "support_no_tickets": "You do not have any support requests yet.",
+        "support_ticket_list": "Your support requests:",
+        "support_ticket_title": "Support request #{request_id}",
+        "support_status_waiting_admin": "Waiting for support",
+        "support_status_waiting_customer": "Waiting for you",
+        "support_status_closed": "Closed",
+        "support_sender_admin": "Support",
+        "support_sender_customer": "You",
+        "support_continue_button": "💬 Continue conversation",
+        "support_new_button": "➕ New request for this service",
+        "support_back_button": "⬅️ My requests",
+        "support_view_button": "🎫 View request",
+        "support_ticket_missing": "This request was not found or is no longer available.",
         "request_completed": "✅ Your request was completed by an admin.",
         "request_rejected": "❌ Your request was rejected by an admin.",
         "link_unavailable": "The connection link is not available right now; an admin was notified.",
@@ -346,7 +421,8 @@ def main_menu_keyboard(language: str):
     return {
         "keyboard": [
             [{"text": COPY[lang]["menu_services"]}, {"text": COPY[lang]["menu_buy_service"]}],
-            [{"text": COPY[lang]["menu_add_service"]}, {"text": COPY[lang]["menu_language"]}],
+            [{"text": COPY[lang]["menu_add_service"]}, {"text": COPY[lang]["menu_support_requests"]}],
+            [{"text": COPY[lang]["menu_language"]}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,

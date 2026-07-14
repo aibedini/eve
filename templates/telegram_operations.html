@@ -16,7 +16,7 @@
     .tg-refresh-button { min-height: 40px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(129,140,248,.42); border-radius: 9px; background: rgba(99,102,241,.12); color: var(--text-primary); font: inherit; font-size: .84rem; font-weight: 700; cursor: pointer; transition: background .18s ease, border-color .18s ease, transform .18s ease; }
     .tg-refresh-button:hover { background: rgba(99,102,241,.22); border-color: var(--tg-indigo); }
     .tg-refresh-button:active { transform: translateY(1px); }
-    .tg-refresh-button:focus-visible, .tg-filter-button:focus-visible, .tg-item:focus-visible, .tg-action:focus-visible, .tg-back:focus-visible { outline: 2px solid var(--tg-cyan); outline-offset: 2px; }
+    .tg-refresh-button:focus-visible, .tg-filter-button:focus-visible, .tg-item:focus-visible, .tg-action:focus-visible, .tg-back:focus-visible, .tg-private-link:focus-visible, .tg-file-remove:focus-visible { outline: 2px solid var(--tg-cyan); outline-offset: 2px; }
     .tg-refresh-button[disabled] svg { animation: tg-spin .8s linear infinite; }
     @keyframes tg-spin { to { transform: rotate(360deg); } }
 
@@ -78,6 +78,9 @@
     .tg-status.approved { color: var(--tg-cyan); background: rgba(34,211,238,.08); }
     .tg-status.completed { color: var(--tg-green); background: rgba(52,211,153,.08); }
     .tg-status.rejected { color: var(--tg-red); background: rgba(251,113,133,.08); }
+    .tg-status.waiting_admin { color: var(--tg-amber); background: rgba(251,191,36,.08); }
+    .tg-status.waiting_customer { color: var(--tg-cyan); background: rgba(34,211,238,.08); }
+    .tg-status.closed { color: var(--tg-green); background: rgba(52,211,153,.08); }
 
     .tg-detail { min-width: 0; min-height: 0; height: 100%; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--text-secondary) transparent; scrollbar-width: thin; background: var(--bg-card); }
     .tg-detail-shell { min-height: 100%; }
@@ -88,6 +91,9 @@
     .tg-detail-eyebrow { margin-bottom: 5px; color: var(--detail-color); font-size: .68rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
     .tg-detail-title { margin: 0; font-size: 1.08rem; line-height: 1.35; }
     .tg-detail-subtitle { margin: 5px 0 0; color: var(--text-secondary); font-size: .74rem; }
+    .tg-detail-tools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+    .tg-private-link { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 11px; border: 1px solid rgba(34,211,238,.38); border-radius: 8px; color: var(--tg-cyan); background: rgba(34,211,238,.07); font-size: .74rem; font-weight: 750; text-decoration: none; }
+    .tg-private-link:hover { background: rgba(34,211,238,.14); }
     .tg-back { display: none; min-height: 40px; padding: 0 10px; border: 1px solid var(--border-color); border-radius: 8px; background: transparent; color: var(--text-primary); font: inherit; font-size: .76rem; font-weight: 700; cursor: pointer; }
     .tg-detail-body { padding: 18px 20px 26px; }
     .tg-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .82fr); gap: 16px; align-items: start; }
@@ -116,6 +122,42 @@
     .tg-action.danger { border-color: rgba(251,113,133,.4); background: rgba(190,24,93,.15); color: var(--tg-red); }
     .tg-reply { box-sizing: border-box; width: 100%; min-height: 112px; resize: vertical; padding: 11px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-dark); color: var(--text-primary); font: inherit; font-size: .82rem; line-height: 1.6; }
     .tg-reply-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 7px; color: var(--text-secondary); font-size: .66rem; }
+    .tg-composer-label { display: block; margin-bottom: 7px; color: var(--text-secondary); font-size: .7rem; font-weight: 700; }
+    .tg-attach-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+    .tg-file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .tg-attach-button { display: inline-flex; align-items: center; min-height: 40px; padding: 0 12px; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); background: var(--bg-card-hover); font-size: .74rem; font-weight: 750; cursor: pointer; }
+    .tg-attach-button:hover { border-color: var(--tg-indigo); }
+    .tg-file-input:focus-visible + .tg-attach-button { outline: 2px solid var(--tg-cyan); outline-offset: 2px; }
+    .tg-file-chip { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: 7px; min-height: 36px; padding: 0 7px 0 10px; border: 1px solid rgba(129,140,248,.3); border-radius: 7px; color: var(--text-primary); background: rgba(99,102,241,.09); font-size: .7rem; }
+    .tg-file-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tg-file-remove { display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 5px; color: var(--text-secondary); background: transparent; cursor: pointer; }
+    .tg-file-remove:hover { color: var(--tg-red); background: rgba(251,113,133,.1); }
+
+    .tg-waiting-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid currentColor; border-radius: 8px; font-size: .75rem; }
+    .tg-waiting-banner strong { font-size: .76rem; }
+    .tg-waiting-banner.waiting_admin { color: var(--tg-amber); background: rgba(251,191,36,.06); }
+    .tg-waiting-banner.waiting_customer { color: var(--tg-cyan); background: rgba(34,211,238,.06); }
+    .tg-waiting-banner.closed { color: var(--tg-green); background: rgba(52,211,153,.06); }
+    .tg-thread { display: grid; gap: 11px; }
+    .tg-message { width: min(88%, 620px); padding: 11px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-dark); }
+    .tg-message.customer { justify-self: start; border-left: 3px solid var(--tg-indigo); }
+    .tg-message.operator { justify-self: end; border-right: 3px solid var(--tg-cyan); background: rgba(34,211,238,.045); }
+    .rtl .tg-message.customer { border-left: 1px solid var(--border-color); border-right: 3px solid var(--tg-indigo); }
+    .rtl .tg-message.operator { border-right: 1px solid var(--border-color); border-left: 3px solid var(--tg-cyan); }
+    .tg-message-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+    .tg-message-sender { color: var(--text-primary); font-size: .7rem; font-weight: 800; }
+    .tg-message-time { flex: none; color: var(--text-secondary); font-size: .62rem; font-variant-numeric: tabular-nums; }
+    .tg-message-text { margin: 0; color: var(--text-primary); font-size: .79rem; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .tg-message-attachment { margin-top: 9px; }
+    .tg-attachment-image { display: block; width: auto; max-width: 100%; max-height: 260px; border: 1px solid var(--border-color); border-radius: 7px; object-fit: contain; background: var(--bg-card); }
+    .tg-attachment-link { color: var(--tg-cyan); font-size: .7rem; font-weight: 700; text-decoration: none; }
+    .tg-attachment-link:hover { text-decoration: underline; }
+    .tg-file-card { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 10px; border: 1px solid var(--border-color); border-radius: 7px; color: var(--text-primary); background: var(--bg-card); text-decoration: none; }
+    .tg-file-card-mark { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 6px; color: var(--tg-cyan); background: rgba(34,211,238,.08); font-weight: 800; }
+    .tg-file-card-copy { min-width: 0; }
+    .tg-file-card-name { display: block; overflow: hidden; font-size: .72rem; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+    .tg-file-card-meta { display: block; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; }
+    .tg-thread-empty { padding: 24px 14px; color: var(--text-secondary); font-size: .75rem; text-align: center; }
 
     .tg-timeline { position: relative; margin: 0; padding: 0; list-style: none; }
     .tg-event { position: relative; padding: 0 0 17px 22px; }
@@ -170,6 +212,9 @@
         .tg-facts { grid-template-columns: 1fr 1fr; }
         .tg-receipt { max-height: none; }
         .tg-receipt img { max-height: none; }
+        .tg-message { width: 94%; }
+        .tg-detail-tools { align-items: stretch; }
+        .tg-private-link { min-height: 44px; }
     }
     @media (max-width: 390px) {
         .tg-metrics { grid-template-columns: 1fr 1fr; gap: 7px; }
@@ -178,6 +223,7 @@
         .tg-facts { grid-template-columns: 1fr; }
         .tg-actions { display: grid; grid-template-columns: 1fr; }
         .tg-action { width: 100%; }
+        .tg-message { width: 100%; }
         .tg-detail-head { gap: 10px; }
     }
     @media (prefers-reduced-motion: reduce) { .tg-refresh-button[disabled] svg, .tg-skeleton, .tg-toast { animation: none; } }
@@ -239,7 +285,10 @@
 <script nonce="{{ csp_nonce }}">
 (() => {
     'use strict';
-    const state = { kind: 'all', status: 'all', search: '', items: [], selectedKey: null, loading: false, action: false, controller: null };
+    const initialQuery = new URLSearchParams(window.location.search);
+    const initialKind = ['all', 'purchase', 'renewal', 'support'].includes(initialQuery.get('kind')) ? initialQuery.get('kind') : 'all';
+    const initialRequest = /^\d+$/.test(initialQuery.get('request') || '') ? initialQuery.get('request') : null;
+    const state = { kind: initialKind, status: 'all', search: '', items: [], selectedKey: initialRequest ? `${initialKind === 'all' ? 'support' : initialKind}:${initialRequest}` : null, loading: false, action: false, controller: null };
     const operationKey = item => `${value(item.kind)}:${value(item.id)}`;
     const listEl = document.getElementById('tg-list');
     const detailEl = document.getElementById('tg-detail');
@@ -248,6 +297,7 @@
     const statusSelect = document.getElementById('tg-status');
     const searchInput = document.getElementById('tg-search');
     const resultCount = document.getElementById('tg-result-count');
+    document.querySelectorAll('[data-kind]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.kind === state.kind)));
 
     const el = (tag, className, text) => {
         const node = document.createElement(tag);
@@ -259,6 +309,10 @@
     const value = (input, fallback = '—') => input === undefined || input === null || input === '' ? fallback : String(input);
     const kindLabel = kind => ({ purchase: 'Purchase', renewal: 'Renewal', support: 'Support' }[kind] || value(kind, 'Request'));
     const statusLabel = status => ({ pending: 'Pending review', approved: 'Approved', completed: 'Completed', rejected: 'Rejected' }[status] || value(status));
+    const supportState = item => item.support_state || (item.status === 'completed' ? 'closed' : 'waiting_admin');
+    const supportStateLabel = status => ({ waiting_admin: 'Waiting for operator', waiting_customer: 'Waiting for customer', closed: 'Closed' }[status] || value(status));
+    const displayStatus = item => item.kind === 'support' ? supportStateLabel(supportState(item)) : statusLabel(item.status);
+    const displayStatusClass = item => item.kind === 'support' ? supportState(item) : value(item.status, 'pending');
     const kindColor = kind => ({ purchase: 'var(--tg-indigo)', renewal: 'var(--tg-green)', support: 'var(--tg-cyan)' }[kind] || 'var(--tg-indigo)');
     const fmtAmount = amount => {
         const number = Number(amount);
@@ -313,11 +367,11 @@
             const button = el('button', `tg-item${operationKey(item) === state.selectedKey ? ' selected' : ''}`);
             button.type = 'button';
             button.style.setProperty('--item-color', kindColor(item.kind));
-            button.setAttribute('aria-label', `${kindLabel(item.kind)} ${value(item.id)}, ${identity(item)}, ${statusLabel(item.status)}`);
+            button.setAttribute('aria-label', `${kindLabel(item.kind)} ${value(item.id)}, ${identity(item)}, ${displayStatus(item)}`);
             const top = el('span', 'tg-item-top');
             append(top, el('span', 'tg-kind', kindLabel(item.kind)), el('span', 'tg-id', `#${value(item.id)}`));
             const bottom = el('span', 'tg-item-bottom');
-            append(bottom, el('span', `tg-status ${value(item.status, 'pending')}`, statusLabel(item.status)), el('span', 'tg-age', age(item.created_at)), el('span', 'tg-amount', fmtAmount(item.amount)));
+            append(bottom, el('span', `tg-status ${displayStatusClass(item)}`, displayStatus(item)), el('span', 'tg-age', age(item.updated_at || item.created_at)), el('span', 'tg-amount', fmtAmount(item.amount)));
             append(button, top, el('span', 'tg-customer', identity(item)), el('span', 'tg-context', context(item)), bottom);
             button.addEventListener('click', () => selectItem(item));
             listEl.appendChild(button);
@@ -342,12 +396,20 @@
         button.addEventListener('click', handler);
         return button;
     }
-    function safeReceiptUrl(raw) {
+    function safeSameOriginUrl(raw) {
         if (!raw) return null;
         try {
             const parsed = new URL(raw, window.location.origin);
             return parsed.origin === window.location.origin && ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null;
         } catch (_) { return null; }
+    }
+    const safeReceiptUrl = safeSameOriginUrl;
+    function formatFileSize(bytes) {
+        const number = Number(bytes);
+        if (!Number.isFinite(number) || number < 0) return '';
+        if (number < 1024) return `${number} B`;
+        if (number < 1048576) return `${(number / 1024).toFixed(number < 10240 ? 1 : 0)} KB`;
+        return `${(number / 1048576).toFixed(number < 10485760 ? 1 : 0)} MB`;
     }
     function receiptSection(item) {
         const sec = section('Payment receipt');
@@ -376,11 +438,58 @@
         }
         return sec;
     }
+    function messageAttachment(message) {
+        const rawUrl = message.attachment_url || message.file_url;
+        const safeUrl = safeSameOriginUrl(rawUrl);
+        if (!rawUrl && !message.attachment_name) return null;
+        const wrap = el('div', 'tg-message-attachment');
+        const mime = value(message.attachment_mime, '').toLowerCase();
+        const kind = value(message.attachment_kind, '').toLowerCase();
+        const name = value(message.attachment_name, 'Attachment');
+        const isImage = kind === 'image' || mime.startsWith('image/');
+        if (isImage && safeUrl) {
+            const link = el('a', 'tg-attachment-link'); link.href = safeUrl; link.target = '_blank'; link.rel = 'noopener';
+            const image = document.createElement('img'); image.className = 'tg-attachment-image'; image.src = safeUrl; image.loading = 'lazy'; image.alt = name;
+            link.appendChild(image); wrap.appendChild(link);
+            const open = el('a', 'tg-attachment-link', `Open ${name} full size ↗`); open.href = safeUrl; open.target = '_blank'; open.rel = 'noopener'; wrap.appendChild(open);
+            return wrap;
+        }
+        if (safeUrl) {
+            const card = el('a', 'tg-file-card'); card.href = safeUrl; card.target = '_blank'; card.rel = 'noopener';
+            const copy = el('span', 'tg-file-card-copy');
+            append(copy, el('span', 'tg-file-card-name', name), el('span', 'tg-file-card-meta', [mime || kind || 'File', formatFileSize(message.attachment_size)].filter(Boolean).join(' · ')));
+            append(card, el('span', 'tg-file-card-mark', '↓'), copy); wrap.appendChild(card);
+            return wrap;
+        }
+        wrap.appendChild(el('span', 'tg-result-count', `${name} · Attachment unavailable`));
+        return wrap;
+    }
+    function conversationSection(item) {
+        const sec = section('Conversation');
+        const thread = el('div', 'tg-thread');
+        const messages = Array.isArray(item.messages) ? [...item.messages] : [];
+        if (!messages.length && item.note) messages.push({ sender_type: 'customer', message: item.note, created_at: item.created_at });
+        if (!messages.length) {
+            thread.appendChild(el('div', 'tg-thread-empty', 'No conversation messages yet.'));
+        } else {
+            messages.forEach(message => {
+                const outbound = ['admin', 'operator', 'reseller'].includes(value(message.sender_type, '').toLowerCase()) || value(message.direction, '').toLowerCase() === 'outbound';
+                const card = el('article', `tg-message ${outbound ? 'operator' : 'customer'}`);
+                const head = el('header', 'tg-message-head');
+                const fallbackSender = outbound ? 'Operator' : 'Customer';
+                append(head, el('span', 'tg-message-sender', value(message.sender_name || message.author || message.sender, fallbackSender)), el('time', 'tg-message-time', fmtDate(message.created_at || message.timestamp)));
+                const body = message.message || message.text || message.body;
+                append(card, head, body ? el('p', 'tg-message-text', body) : null, messageAttachment(message));
+                thread.appendChild(card);
+            });
+        }
+        sec.appendChild(thread); return sec;
+    }
     function timelineSection(item) {
         const sec = section('Activity');
         const timeline = el('ol', 'tg-timeline');
-        const events = [{ title: `${kindLabel(item.kind)} request created`, time: item.created_at, message: item.note, color: kindColor(item.kind) }];
-        (Array.isArray(item.messages) ? item.messages : []).forEach(message => events.push({
+        const events = [{ title: `${kindLabel(item.kind)} request created`, time: item.created_at, message: item.kind === 'support' ? '' : item.note, color: kindColor(item.kind) }];
+        if (item.kind !== 'support') (Array.isArray(item.messages) ? item.messages : []).forEach(message => events.push({
             title: value(message.sender_name || message.author || message.sender || message.sender_type || message.direction, 'Message'),
             time: message.created_at || message.timestamp,
             message: message.message || message.text || message.body,
@@ -412,19 +521,62 @@
     }
     function supportReply(item) {
         const sec = section('Reply to customer');
-        const label = el('label');
+        const label = el('label', 'tg-composer-label', 'Message');
         const textarea = el('textarea', 'tg-reply'); textarea.placeholder = 'Write a clear reply…'; textarea.maxLength = 4000;
+        textarea.id = `tg-support-reply-${item.id}`; label.htmlFor = textarea.id;
         const meta = el('div', 'tg-reply-meta'); const count = el('span', '', '0 / 4000'); append(meta, el('span', '', 'Sent directly through Telegram'), count);
         textarea.addEventListener('input', () => { count.textContent = `${textarea.value.length} / 4000`; });
-        label.appendChild(textarea); append(sec, label, meta);
+        append(sec, label, textarea, meta);
+
+        const attachRow = el('div', 'tg-attach-row');
+        const fileInput = el('input', 'tg-file-input'); fileInput.type = 'file'; fileInput.id = `tg-support-file-${item.id}`;
+        const attachLabel = el('label', 'tg-attach-button', 'Attach image or file'); attachLabel.htmlFor = fileInput.id;
+        const chipSlot = el('span');
+        const renderChip = () => {
+            clear(chipSlot);
+            const file = fileInput.files && fileInput.files[0];
+            if (!file) return;
+            const chip = el('span', 'tg-file-chip');
+            const remove = el('button', 'tg-file-remove', '×'); remove.type = 'button'; remove.setAttribute('aria-label', `Remove ${file.name}`);
+            remove.addEventListener('click', () => { fileInput.value = ''; renderChip(); });
+            append(chip, el('span', 'tg-file-chip-name', `${file.name} · ${formatFileSize(file.size)}`), remove); chipSlot.appendChild(chip);
+        };
+        fileInput.addEventListener('change', renderChip); append(attachRow, fileInput, attachLabel, chipSlot); sec.appendChild(attachRow);
         const actions = el('div', 'tg-actions'); actions.style.marginTop = '12px';
         const send = complete => {
             const message = textarea.value.trim();
-            if (!message) { toast('Write a reply before sending.', true); textarea.focus(); return; }
-            mutate(`/api/telegram-operations/services/${encodeURIComponent(item.id)}/reply`, { message, complete }, complete ? 'Reply sent and support request completed.' : 'Reply sent.');
+            const attachment = fileInput.files && fileInput.files[0];
+            if (!message && !attachment) { toast('Write a reply or attach a file before sending.', true); textarea.focus(); return; }
+            const form = new FormData();
+            if (message) form.append('message', message);
+            if (attachment) form.append('attachment', attachment, attachment.name);
+            form.append('complete', String(complete));
+            mutateFormData(`/api/telegram-operations/services/${encodeURIComponent(item.id)}/reply`, form, complete ? 'Reply sent and support ticket closed.' : 'Reply sent.');
         };
-        append(actions, actionButton('Send reply', 'primary', () => send(false)), actionButton('Send & complete', 'success', () => send(true)));
+        textarea.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); send(false); } });
+        append(actions, actionButton('Send reply', 'primary', () => send(false)), actionButton('Send & close', 'success', () => send(true)));
         sec.appendChild(actions); return sec;
+    }
+
+    function supportBanner(item) {
+        const status = supportState(item);
+        const copy = {
+            waiting_admin: ['Waiting for operator', 'The customer is waiting for your reply.'],
+            waiting_customer: ['Waiting for customer', 'Your reply was delivered; the customer can continue this conversation.'],
+            closed: ['Closed', 'This support conversation is closed and remains available in history.']
+        }[status] || [supportStateLabel(status), ''];
+        const banner = el('div', `tg-waiting-banner ${status}`);
+        append(banner, el('strong', '', copy[0]), el('span', '', copy[1])); return banner;
+    }
+
+    function safeTelegramUrl(raw) {
+        if (!raw) return null;
+        try {
+            const parsed = new URL(raw);
+            if (parsed.protocol === 'tg:') return parsed.href;
+            if (parsed.protocol === 'https:' && ['t.me', 'telegram.me', 'www.telegram.me'].includes(parsed.hostname.toLowerCase())) return parsed.href;
+        } catch (_) { return null; }
+        return null;
     }
 
     function renderDetail() {
@@ -434,18 +586,27 @@
         detailEl.style.setProperty('--detail-color', kindColor(item.kind));
         const shell = el('div', 'tg-detail-shell');
         const head = el('header', 'tg-detail-head');
-        const heading = el('div'); append(heading, el('div', 'tg-detail-eyebrow', `${kindLabel(item.kind)} · #${value(item.id)}`), el('h2', 'tg-detail-title', identity(item)), el('p', 'tg-detail-subtitle', `${statusLabel(item.status)} · ${fmtDate(item.created_at)}`));
+        const heading = el('div'); append(heading, el('div', 'tg-detail-eyebrow', `${kindLabel(item.kind)} · #${value(item.id)}`), el('h2', 'tg-detail-title', identity(item)), el('p', 'tg-detail-subtitle', `${displayStatus(item)} · ${fmtDate(item.created_at)}`));
         const back = el('button', 'tg-back', '← Inbox'); back.type = 'button'; back.addEventListener('click', closeDetail);
-        append(head, heading, back); shell.appendChild(head);
+        const tools = el('div', 'tg-detail-tools');
+        if (item.kind === 'support') {
+            const privateUrl = safeTelegramUrl(item.telegram_private_url);
+            if (privateUrl) {
+                const privateLink = el('a', 'tg-private-link', 'Open Telegram PV ↗'); privateLink.href = privateUrl; privateLink.target = '_blank'; privateLink.rel = 'noopener'; tools.appendChild(privateLink);
+            }
+        }
+        tools.appendChild(back); append(head, heading, tools); shell.appendChild(head);
         const body = el('div', 'tg-detail-body');
         if (item.provisioning_error) body.appendChild(el('div', 'tg-error-box', `Provisioning error: ${item.provisioning_error}`));
         const grid = el('div', 'tg-detail-grid'); const main = el('div'); const side = el('div');
         const summary = section('Request details'); const facts = el('dl', 'tg-facts');
-        append(facts, fact('Status', statusLabel(item.status)), fact('Amount', fmtAmount(item.amount) || '—'), fact('Server', item.server_name), fact('Account', item.account_name, true), fact('Package', item.package_name), fact('Phone', item.customer_phone || item.phone, true), fact('Telegram username', item.telegram_username ? `@${item.telegram_username}` : '—'), fact('Telegram user ID', item.telegram_user_id, true), fact('Created', fmtDate(item.created_at)), fact('Last updated', fmtDate(item.updated_at)));
+        append(facts, fact('Status', displayStatus(item)), fact('Amount', fmtAmount(item.amount) || '—'), fact('Server', item.server_name), fact('Account', item.account_name, true), fact('Package', item.package_name), fact('Phone', item.customer_phone || item.phone, true), fact('Telegram username', item.telegram_username ? `@${item.telegram_username}` : '—'), fact('Telegram user ID', item.telegram_user_id, true), fact('Created', fmtDate(item.created_at)), fact('Last updated', fmtDate(item.updated_at)));
         summary.appendChild(facts); main.appendChild(summary);
-        if (item.note) { const note = section(item.kind === 'support' ? 'Original message' : 'Operator note'); note.appendChild(el('p', 'tg-note', item.note)); main.appendChild(note); }
+        if (item.kind === 'support') { main.appendChild(supportBanner(item)); main.appendChild(conversationSection(item)); }
+        else if (item.note) { const note = section('Operator note'); note.appendChild(el('p', 'tg-note', item.note)); main.appendChild(note); }
         if (item.kind === 'purchase') main.appendChild(receiptSection(item));
-        if (item.kind === 'support' && !['completed', 'rejected'].includes(item.status)) main.appendChild(supportReply(item));
+        if (item.kind === 'support' && supportState(item) !== 'closed') main.appendChild(supportReply(item));
+        else if (item.kind === 'support') { /* Closed conversations retain history without review actions. */ }
         else main.appendChild(detailActions(item));
         side.appendChild(timelineSection(item)); append(grid, main, side); body.appendChild(grid); shell.appendChild(body); detailEl.appendChild(shell);
     }
@@ -464,6 +625,7 @@
             state.items = Array.isArray(data.items) ? data.items : [];
             if (state.selectedKey && !state.items.some(item => operationKey(item) === state.selectedKey)) state.selectedKey = null;
             renderMetrics(data.counters || {}); renderList(); renderDetail();
+            if (state.selectedKey) workspaceEl.classList.add('detail-open');
             document.getElementById('tg-last-updated').textContent = `Synced ${EveDate.formatTime(new Date())}`;
         } catch (error) {
             if (error.name === 'AbortError') return;
@@ -477,6 +639,20 @@
         state.action = true; renderDetail();
         try {
             const response = await fetch(url, { method: 'POST', cache: 'no-store', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                if (data.item) await loadOperations({ quiet: true });
+                throw new Error(data.error || `Action failed (${response.status})`);
+            }
+            toast(successMessage); await loadOperations({ quiet: true });
+        } catch (error) { toast(error.message, true); }
+        finally { state.action = false; renderDetail(); }
+    }
+    async function mutateFormData(url, formData, successMessage) {
+        if (state.action) return;
+        state.action = true; renderDetail();
+        try {
+            const response = await fetch(url, { method: 'POST', cache: 'no-store', headers: { Accept: 'application/json' }, body: formData });
             const data = await response.json().catch(() => ({}));
             if (!response.ok || !data.success) {
                 if (data.item) await loadOperations({ quiet: true });

@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.53"
+APP_VERSION = "2.4.54"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8353,7 +8353,15 @@ class TelegramServiceRequestMessage(db.Model):
     )
     sender_type = db.Column(db.String(16), nullable=False)
     admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='SET NULL'), nullable=True)
-    message = db.Column(db.Text, nullable=False)
+    message = db.Column(db.Text, nullable=False, default='')
+    attachment_kind = db.Column(db.String(24), nullable=True)
+    attachment_file_id = db.Column(db.Text, nullable=True)
+    attachment_file_unique_id = db.Column(db.String(255), nullable=True)
+    attachment_name = db.Column(db.String(255), nullable=True)
+    attachment_mime = db.Column(db.String(127), nullable=True)
+    attachment_size = db.Column(db.BigInteger, nullable=True)
+    source_chat_id = db.Column(db.BigInteger, nullable=True)
+    source_message_id = db.Column(db.BigInteger, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
 
     admin = db.relationship('Admin')
@@ -9266,6 +9274,34 @@ with app.app_context():
                 conn.commit()
     except Exception as _sms_migration_error:
         print(f'Migration error (sms_send_log delivery tracking): {_sms_migration_error}')
+
+    # Durable Telegram support attachments for existing installations.
+    try:
+        inspector = inspect(db.engine)
+        if 'telegram_service_request_messages' in set(inspector.get_table_names()):
+            _support_message_cols = {
+                c['name'] for c in inspector.get_columns('telegram_service_request_messages')
+            }
+            _support_message_new_cols = (
+                ('attachment_kind', 'VARCHAR(24)'),
+                ('attachment_file_id', 'TEXT'),
+                ('attachment_file_unique_id', 'VARCHAR(255)'),
+                ('attachment_name', 'VARCHAR(255)'),
+                ('attachment_mime', 'VARCHAR(127)'),
+                ('attachment_size', 'BIGINT'),
+                ('source_chat_id', 'BIGINT'),
+                ('source_message_id', 'BIGINT'),
+            )
+            for _cn, _ct in _support_message_new_cols:
+                if _cn not in _support_message_cols:
+                    with db.engine.connect() as conn:
+                        conn.execute(text(
+                            f'ALTER TABLE telegram_service_request_messages ADD COLUMN {_cn} {_ct}'
+                        ))
+                        conn.commit()
+                    print(f'Migration: added telegram_service_request_messages.{_cn}')
+    except Exception as _support_message_migration_error:
+        print(f'Migration error (Telegram support attachments): {_support_message_migration_error}')
 
     # Ensure announcements columns exist — each in its own try so one failure
     # doesn't prevent the others from running.
@@ -25445,9 +25481,13 @@ def _telegram_operation_customer_payload(row, identity_map=None, customer_map=No
                 if customer_map is not None else db.session.get(CustomerAccount, row.customer_id))
     phone = ((customer.primary_phone if customer else None)
              or (identity.phone_normalized if identity else None))
+    telegram_username = str(identity.username or '').lstrip('@') if identity else ''
+    private_url = (f'https://t.me/{telegram_username}' if telegram_username
+                   else f'tg://user?id={int(row.telegram_user_id)}')
     return {
         'telegram_user_id': int(row.telegram_user_id),
-        'telegram_username': identity.username if identity else None,
+        'telegram_username': telegram_username or None,
+        'telegram_private_url': private_url,
         'telegram_name': (' '.join(filter(None, [identity.first_name, identity.last_name])).strip()
                           if identity else None),
         'phone': phone,
@@ -25483,19 +25523,34 @@ def _serialize_telegram_purchase(row, identity_map=None, customer_map=None):
 
 def _serialize_telegram_service(row, identity_map=None, customer_map=None):
     ownership = row.ownership
-    messages = [{
-        'id': message.id,
-        'sender_type': message.sender_type,
-        'sender_name': message.admin.username if message.admin else None,
-        'message': message.message,
-        'created_at': message.created_at.isoformat() if message.created_at else None,
-    } for message in row.messages]
+    messages = []
+    for message in row.messages:
+        messages.append({
+            'id': message.id,
+            'sender_type': message.sender_type,
+            'sender_name': message.admin.username if message.admin else None,
+            'message': message.message,
+            'created_at': message.created_at.isoformat() if message.created_at else None,
+            'attachment_kind': message.attachment_kind,
+            'attachment_name': message.attachment_name,
+            'attachment_mime': message.attachment_mime,
+            'attachment_size': int(message.attachment_size or 0),
+            'attachment_url': (
+                url_for('telegram_support_message_attachment', request_id=row.id,
+                        message_id=message.id)
+                if message.attachment_file_id else None
+            ),
+        })
     if row.request_type == 'support' and row.note and not messages:
         messages.append({
             'id': None, 'sender_type': 'customer', 'sender_name': None,
             'message': row.note,
             'created_at': row.created_at.isoformat() if row.created_at else None,
         })
+    last_sender = messages[-1].get('sender_type') if messages else 'customer'
+    support_state = ('closed' if row.status != 'pending'
+                     else 'waiting_customer' if last_sender == 'admin'
+                     else 'waiting_admin')
     payload = {
         'id': row.id,
         'kind': row.request_type,
@@ -25510,6 +25565,7 @@ def _serialize_telegram_service(row, identity_map=None, customer_map=None):
         'note': row.note,
         'receipt_url': None,
         'messages': messages,
+        'support_state': support_state if row.request_type == 'support' else None,
     }
     payload.update(_telegram_operation_customer_payload(row, identity_map, customer_map))
     return payload
@@ -25613,6 +25669,10 @@ def get_telegram_operations():
                                   for item in all_items),
         'open_support': sum(item['status'] == 'pending' and item['kind'] == 'support'
                             for item in all_items),
+        'support_waiting_admin': sum(item.get('support_state') == 'waiting_admin'
+                                     for item in all_items),
+        'support_waiting_customer': sum(item.get('support_state') == 'waiting_customer'
+                                        for item in all_items),
         'completed_today': sum(
             item['status'] == 'completed' and item.get('updated_at')
             and datetime.fromisoformat(item['updated_at']).date() == today
@@ -25726,6 +25786,81 @@ def telegram_purchase_receipt(request_id):
         return jsonify({'success': False, 'error': safe_error}), 502
 
 
+TELEGRAM_SUPPORT_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
+TELEGRAM_SUPPORT_INLINE_TYPES = {
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf',
+}
+TELEGRAM_SUPPORT_ALLOWED_TYPES = TELEGRAM_SUPPORT_INLINE_TYPES | {
+    'text/plain', 'application/zip', 'application/x-zip-compressed',
+}
+
+
+def _telegram_support_attachment_from_result(result, *, fallback_kind, fallback_name,
+                                             fallback_mime, fallback_size):
+    result = result if isinstance(result, dict) else {}
+    if fallback_kind == 'photo':
+        photos = result.get('photo') if isinstance(result.get('photo'), list) else []
+        payload = photos[-1] if photos and isinstance(photos[-1], dict) else {}
+        kind = 'photo'
+        name = fallback_name or 'support-image.jpg'
+        mime = fallback_mime or 'image/jpeg'
+    else:
+        payload = result.get('document') if isinstance(result.get('document'), dict) else {}
+        kind = 'document'
+        name = str(payload.get('file_name') or fallback_name or 'support-file')[:255]
+        mime = str(payload.get('mime_type') or fallback_mime or 'application/octet-stream')[:127]
+    return {
+        'attachment_kind': kind,
+        'attachment_file_id': str(payload.get('file_id') or '') or None,
+        'attachment_file_unique_id': str(payload.get('file_unique_id') or '')[:255] or None,
+        'attachment_name': name[:255],
+        'attachment_mime': mime,
+        'attachment_size': int(payload.get('file_size') or fallback_size or 0),
+        'source_message_id': int(result.get('message_id') or 0) or None,
+    }
+
+
+@app.route('/api/telegram-operations/services/<int:request_id>/messages/<int:message_id>/attachment')
+@login_required
+def telegram_support_message_attachment(request_id, message_id):
+    row, error = _telegram_service_for_admin(request_id)
+    if error:
+        return error
+    message = TelegramServiceRequestMessage.query.filter_by(
+        id=message_id, request_id=row.id,
+    ).first()
+    if not message or not message.attachment_file_id:
+        return jsonify({'success': False, 'error': 'Attachment not found'}), 404
+    bot = db.session.get(TelegramBotInstance, row.bot_instance_id)
+    if not bot:
+        return jsonify({'success': False, 'error': 'Telegram bot is unavailable'}), 404
+    try:
+        content, detected_type, detected_name, route_name = _telegram_bot_api_client(bot).download_file(
+            message.attachment_file_id, max_bytes=TELEGRAM_SUPPORT_ATTACHMENT_MAX_BYTES,
+        )
+        content_type = str(message.attachment_mime or detected_type or 'application/octet-stream')
+        content_type = content_type.split(';', 1)[0].strip().lower()
+        inline = content_type in TELEGRAM_SUPPORT_INLINE_TYPES
+        filename = secure_filename(message.attachment_name or detected_name) or 'support-attachment'
+        response = send_file(
+            io.BytesIO(content),
+            mimetype=(content_type if inline else 'application/octet-stream'),
+            download_name=filename,
+            as_attachment=not inline,
+            max_age=0,
+        )
+        response.headers['Cache-Control'] = 'no-store, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Telegram-Route'] = route_name
+        return response
+    except Exception as exc:
+        safe_error = redact_connection_error(exc)
+        logging.warning('Telegram support attachment failed for message #%s: %s',
+                        message.id, safe_error)
+        return jsonify({'success': False, 'error': safe_error}), 502
+
+
 @app.route('/api/telegram-operations/services/<int:request_id>/<action>', methods=['POST'])
 @login_required
 def review_telegram_service_operation(request_id, action):
@@ -25761,22 +25896,52 @@ def reply_telegram_support_operation(request_id):
         return jsonify({'success': False, 'error': 'Replies are only available for support requests'}), 409
     if row.status != 'pending':
         return jsonify({'success': False, 'error': 'This support request is closed'}), 409
-    data = request.get_json(silent=True) or {}
+    is_multipart = bool(request.content_type and request.content_type.startswith('multipart/form-data'))
+    data = request.form if is_multipart else (request.get_json(silent=True) or {})
     message = str(data.get('message') or '').strip()
-    if not message or len(message) > 4000:
-        return jsonify({'success': False, 'error': 'Reply must be between 1 and 4000 characters'}), 400
+    attachment = request.files.get('attachment') if is_multipart else None
+    if (not message and not attachment) or len(message) > 4000:
+        return jsonify({'success': False, 'error': 'Add a reply or attachment (maximum 4000 characters)'}), 400
     admin = _telegram_operations_admin()
     identity = _telegram_operation_identity(row.telegram_user_id, row.customer_id)
     bot = db.session.get(TelegramBotInstance, row.bot_instance_id)
     if not identity or not identity.telegram_chat_id or not bot:
         return jsonify({'success': False, 'error': 'Customer Telegram chat is unavailable'}), 409
+    complete = False
     try:
-        if not _telegram_operation_notify(row, reply=message):
+        attachment_values = {}
+        if attachment:
+            filename = secure_filename(attachment.filename or '') or 'support-attachment'
+            content_type = str(attachment.mimetype or 'application/octet-stream').lower()
+            if content_type not in TELEGRAM_SUPPORT_ALLOWED_TYPES:
+                return jsonify({'success': False, 'error': 'Unsupported attachment type'}), 400
+            content = attachment.stream.read(TELEGRAM_SUPPORT_ATTACHMENT_MAX_BYTES + 1)
+            if not content or len(content) > TELEGRAM_SUPPORT_ATTACHMENT_MAX_BYTES:
+                return jsonify({'success': False, 'error': 'Attachment must be between 1 byte and 20 MB'}), 400
+            as_photo = content_type.startswith('image/') and content_type != 'image/gif' and len(content) <= 10 * 1024 * 1024
+            result, _route_name = _telegram_bot_api_client(bot).send_upload(
+                identity.telegram_chat_id, content, filename, content_type,
+                as_photo=as_photo, caption=message,
+            )
+            attachment_values = _telegram_support_attachment_from_result(
+                result,
+                fallback_kind=('photo' if as_photo else 'document'),
+                fallback_name=filename,
+                fallback_mime=content_type,
+                fallback_size=len(content),
+            )
+            if not attachment_values.get('attachment_file_id'):
+                raise ValueError('Telegram did not return an attachment file ID')
+            attachment_values['source_chat_id'] = int(identity.telegram_chat_id)
+        elif not _telegram_operation_notify(row, reply=message):
             return jsonify({'success': False, 'error': 'Telegram delivery failed; reply was not saved'}), 502
         db.session.add(TelegramServiceRequestMessage(
-            request_id=row.id, sender_type='admin', admin_id=admin.id, message=message,
+            request_id=row.id, sender_type='admin', admin_id=admin.id,
+            message=message, **attachment_values,
         ))
-        if bool(data.get('complete')):
+        row.updated_at = datetime.utcnow()
+        complete = str(data.get('complete') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+        if complete:
             row.status = 'completed'
             row.reviewed_by_admin_id = admin.id
             row.reviewed_at = datetime.utcnow()
@@ -25784,6 +25949,8 @@ def reply_telegram_support_operation(request_id):
     except Exception as exc:
         db.session.rollback()
         return jsonify({'success': False, 'error': redact_connection_error(exc)}), 502
+    if complete:
+        _telegram_operation_notify(row)
     return jsonify({'success': True, 'item': _serialize_telegram_service(row)})
 
 

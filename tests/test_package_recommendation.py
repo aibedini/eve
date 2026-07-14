@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 import unittest
@@ -104,6 +105,7 @@ class FakeTelegramApi:
         self.callbacks = []
         self.copies = []
         self.media = []
+        self.uploads = []
 
     def send_message(self, chat_id, text, **extra):
         self.messages.append({'chat_id': chat_id, 'text': text, **extra})
@@ -119,13 +121,31 @@ class FakeTelegramApi:
         })
         return {'message_id': message_id}, 'test'
 
-    def send_photo(self, chat_id, file_id):
-        self.media.append({'kind': 'photo', 'chat_id': chat_id, 'file_id': file_id})
+    def send_photo(self, chat_id, file_id, **extra):
+        self.media.append({'kind': 'photo', 'chat_id': chat_id, 'file_id': file_id, **extra})
         return {'message_id': len(self.media)}, 'test'
 
-    def send_document(self, chat_id, file_id):
-        self.media.append({'kind': 'document', 'chat_id': chat_id, 'file_id': file_id})
+    def send_document(self, chat_id, file_id, **extra):
+        self.media.append({'kind': 'document', 'chat_id': chat_id, 'file_id': file_id, **extra})
         return {'message_id': len(self.media)}, 'test'
+
+    def send_upload(self, chat_id, content, filename, content_type, *, as_photo=False,
+                    caption=''):
+        self.uploads.append({
+            'chat_id': chat_id, 'content': content, 'filename': filename,
+            'content_type': content_type, 'as_photo': as_photo, 'caption': caption,
+        })
+        if as_photo:
+            result = {'message_id': 800, 'photo': [{
+                'file_id': 'uploaded-photo', 'file_unique_id': 'uploaded-photo-unique',
+                'file_size': len(content),
+            }]}
+        else:
+            result = {'message_id': 800, 'document': {
+                'file_id': 'uploaded-document', 'file_unique_id': 'uploaded-document-unique',
+                'file_name': filename, 'mime_type': content_type, 'file_size': len(content),
+            }}
+        return result, 'test'
 
 
 class PackageRecommendationRegressionTests(unittest.TestCase):
@@ -1074,7 +1094,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             support = TelegramServiceRequest.query.filter_by(request_type='support').one()
             self.assertEqual(support.note, 'Please check this service.')
             self.assertTrue(any(
-                message['text'] == COPY['fa']['support_pending']
+                message['text'] == COPY['fa']['support_pending'].format(request_id=support.id)
                 for message in api.messages
             ))
 
@@ -2235,6 +2255,111 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         ).one()
         self.assertEqual(saved.message, 'Your service was checked.')
         self.assertIn('Your service was checked.', api.messages[0]['text'])
+
+    def test_telegram_support_reply_accepts_attachment_and_exposes_conversation_state(self):
+        client, reviewer, _, support, _ = self._make_telegram_operation_records('reply-file')
+        api = FakeTelegramApi()
+
+        with patch('app._telegram_bot_api_client', return_value=api):
+            response = client.post(
+                f'/api/telegram-operations/services/{support.id}/reply',
+                data={
+                    'message': 'Please use this screenshot.',
+                    'complete': 'false',
+                    'attachment': (io.BytesIO(b'png-bytes'), 'answer.png'),
+                },
+                content_type='multipart/form-data',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()['item']
+        self.assertEqual(payload['support_state'], 'waiting_customer')
+        self.assertEqual(payload['telegram_private_url'], 'https://t.me/mahna_test')
+        saved = TelegramServiceRequestMessage.query.filter_by(
+            request_id=support.id, sender_type='admin', admin_id=reviewer.id,
+        ).one()
+        self.assertEqual(saved.attachment_file_id, 'uploaded-photo')
+        self.assertEqual(saved.attachment_name, 'answer.png')
+        self.assertEqual(api.uploads[0]['chat_id'], 215614184)
+        self.assertEqual(api.uploads[0]['caption'], 'Please use this screenshot.')
+
+        api.download_file = MagicMock(return_value=(
+            b'png-bytes', 'image/png', 'answer.png', 'test-route',
+        ))
+        with patch('app._telegram_bot_api_client', return_value=api):
+            attachment = client.get(
+                f'/api/telegram-operations/services/{support.id}/messages/{saved.id}/attachment',
+            )
+        self.assertEqual(attachment.status_code, 200)
+        self.assertEqual(attachment.data, b'png-bytes')
+        self.assertIn('inline', attachment.headers.get('Content-Disposition', ''))
+        self.assertIn('no-store', attachment.headers.get('Cache-Control', ''))
+        api.download_file.assert_called_once_with('uploaded-photo', max_bytes=20 * 1024 * 1024)
+
+    def test_telegram_admin_can_reply_to_support_with_media_and_customer_can_view_history(self):
+        _, reviewer, bot, support, _ = self._make_telegram_operation_records('bot-support')
+        reviewer.telegram_id = '9001'
+        bot.test_mode = True
+        db.session.add(TelegramBotTestUser(
+            bot_instance_id=bot.id, telegram_user_id=215614184,
+            label='support customer', enabled=True,
+        ))
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 301, 'callback_query': {
+            'id': 'admin-reply', 'data': f'admin-support:{support.id}:reply',
+            'from': {'id': 9001},
+            'message': {'chat': {'id': 9001, 'type': 'private'}},
+        }})
+        process_update(api, bot, {'update_id': 302, 'message': {
+            'message_id': 77, 'caption': 'Annotated answer',
+            'photo': [{'file_id': 'small'}, {
+                'file_id': 'admin-photo', 'file_unique_id': 'admin-photo-u',
+                'file_size': 1200, 'width': 600, 'height': 400,
+            }],
+            'from': {'id': 9001, 'first_name': 'Admin'},
+            'chat': {'id': 9001, 'type': 'private'},
+        }})
+
+        self.assertTrue(any(copy['chat_id'] == 215614184 and copy['message_id'] == 77
+                            for copy in api.copies))
+        saved = TelegramServiceRequestMessage.query.filter_by(
+            request_id=support.id, sender_type='admin', admin_id=reviewer.id,
+        ).one()
+        self.assertEqual(saved.message, 'Annotated answer')
+        self.assertEqual(saved.attachment_file_id, 'admin-photo')
+
+        process_update(api, bot, {'update_id': 303, 'message': {
+            'message_id': 78, 'text': COPY['fa']['menu_support_requests'],
+            'from': {'id': 215614184, 'first_name': 'Customer'},
+            'chat': {'id': 215614184, 'type': 'private'},
+        }})
+        self.assertTrue(any(
+            message.get('reply_markup', {}).get('inline_keyboard', [[{}]])[0][0].get(
+                'callback_data'
+            ) == f'support-ticket:{support.id}'
+            for message in api.messages
+        ))
+        process_update(api, bot, {'update_id': 304, 'callback_query': {
+            'id': 'customer-ticket', 'data': f'support-ticket:{support.id}',
+            'from': {'id': 215614184},
+            'message': {'chat': {'id': 215614184, 'type': 'private'}},
+        }})
+        self.assertTrue(any('Annotated answer' in message['text'] for message in api.messages))
+        self.assertTrue(any(media['chat_id'] == 215614184 and media['file_id'] == 'admin-photo'
+                            for media in api.media))
+
+    def test_telegram_operations_page_supports_deep_link_and_thread_composer(self):
+        client, _, _, support, _ = self._make_telegram_operation_records('support-ui')
+        page = client.get(f'/telegram-operations?kind=support&request={support.id}')
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(b'initialRequest', page.data)
+        self.assertIn(b'Open Telegram PV', page.data)
+        self.assertIn(b'Attach image or file', page.data)
+        self.assertIn(b'Send & close', page.data)
+        self.assertNotIn(b'Send & complete', page.data)
+        self.assertIn(b"part.type !== 'era'", page.data)
 
     def test_telegram_purchase_approve_provisions_and_notifies_customer(self):
         client, reviewer, _, _, purchase = self._make_telegram_operation_records('approve')

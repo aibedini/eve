@@ -135,7 +135,18 @@
                 const date = parse(value);
                 if (!date) return fallback !== undefined ? fallback : (value == null || value === '' ? '—' : String(value));
                 try {
-                    return new Intl.DateTimeFormat(locale, Object.assign({ timeZone: timezone }, options)).format(date);
+                    const formatter = new Intl.DateTimeFormat(locale, Object.assign({ timeZone: timezone }, options));
+                    if (calendar === 'jalali') {
+                        return formatter.formatToParts(date)
+                            .filter(part => part.type !== 'era')
+                            .map(part => part.value)
+                            .join('')
+                            .replace(/\s+,/g, ',')
+                            .replace(/,\s*,/g, ',')
+                            .replace(/\s{2,}/g, ' ')
+                            .trim();
+                    }
+                    return formatter.format(date);
                 } catch (_) {
                     try { return new Intl.DateTimeFormat(locale, options).format(date); } catch (_) { return date.toISOString(); }
                 }
@@ -186,8 +197,18 @@
 
             window.EveDate = Object.freeze({
                 calendar, timezone, locale, parse, parseInput, formatInput,
-                format: (value, options) => formatted(value, mergeFormatOptions({ dateStyle: 'medium', timeStyle: 'short' }, options)),
-                formatDate: (value, options) => formatted(value, mergeFormatOptions({ dateStyle: 'medium' }, options)),
+                format: (value, options) => formatted(value, mergeFormatOptions(
+                    calendar === 'jalali'
+                        ? { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+                        : { dateStyle: 'medium', timeStyle: 'short' },
+                    options
+                )),
+                formatDate: (value, options) => formatted(value, mergeFormatOptions(
+                    calendar === 'jalali'
+                        ? { year: 'numeric', month: 'short', day: 'numeric' }
+                        : { dateStyle: 'medium' },
+                    options
+                )),
                 formatTime: (value, options) => formatted(value, mergeFormatOptions({ timeStyle: 'short' }, options)),
                 relative
             });

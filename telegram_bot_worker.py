@@ -714,6 +714,40 @@ def _receipt_from_message(message: dict):
     return None
 
 
+def _support_attachment_from_message(message: dict):
+    """Return durable Telegram metadata for a safe support attachment."""
+    photos = message.get('photo')
+    if isinstance(photos, list) and photos:
+        photo = photos[-1] if isinstance(photos[-1], dict) else {}
+        size = int(photo.get('file_size') or 0)
+        if photo.get('file_id') and size <= 20 * 1024 * 1024:
+            return {
+                'attachment_kind': 'photo',
+                'attachment_file_id': str(photo['file_id']),
+                'attachment_file_unique_id': str(photo.get('file_unique_id') or '')[:255] or None,
+                'attachment_name': 'support-image.jpg',
+                'attachment_mime': 'image/jpeg',
+                'attachment_size': size,
+            }
+    document = message.get('document') if isinstance(message.get('document'), dict) else {}
+    mime = str(document.get('mime_type') or 'application/octet-stream').lower()
+    allowed = {
+        'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf',
+        'text/plain', 'application/zip', 'application/x-zip-compressed',
+    }
+    size = int(document.get('file_size') or 0)
+    if document.get('file_id') and mime in allowed and size <= 20 * 1024 * 1024:
+        return {
+            'attachment_kind': 'document',
+            'attachment_file_id': str(document['file_id']),
+            'attachment_file_unique_id': str(document.get('file_unique_id') or '')[:255] or None,
+            'attachment_name': str(document.get('file_name') or 'support-file')[:255],
+            'attachment_mime': mime[:127],
+            'attachment_size': size,
+        }
+    return None
+
+
 def _send_claim_candidates(api: TelegramBotApi, chat_id: int, language: str,
                            claim: OwnershipClaim | None):
     if claim is None:
@@ -816,7 +850,9 @@ def _telegram_admin(user_id: int):
 
 
 def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnership,
-                            request_type: str, *, package: Package | None, note: str | None):
+                            request_type: str, *, package: Package | None, note: str | None,
+                            attachment: dict | None = None, source_chat_id: int | None = None,
+                            source_message_id: int | None = None):
     if request_type == 'renewal':
         existing = TelegramServiceRequest.query.filter_by(
             service_ownership_id=ownership.id,
@@ -834,12 +870,17 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
         ).order_by(TelegramServiceRequest.id.desc()).first()
         clean_note = str(note or '').strip()[:4000]
         if existing is not None:
-            if clean_note:
-                existing.note = clean_note
+            if clean_note or attachment:
+                if clean_note:
+                    existing.note = clean_note
+                existing.updated_at = datetime.utcnow()
                 db.session.add(TelegramServiceRequestMessage(
                     request_id=existing.id,
                     sender_type='customer',
                     message=clean_note,
+                    source_chat_id=source_chat_id,
+                    source_message_id=source_message_id,
+                    **(attachment or {}),
                 ))
             return existing, True
     row = TelegramServiceRequest(
@@ -855,11 +896,14 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
     )
     db.session.add(row)
     db.session.flush()
-    if request_type == 'support' and row.note:
+    if request_type == 'support' and (row.note or attachment):
         db.session.add(TelegramServiceRequestMessage(
             request_id=row.id,
             sender_type='customer',
-            message=row.note,
+            message=row.note or '',
+            source_chat_id=source_chat_id,
+            source_message_id=source_message_id,
+            **(attachment or {}),
         ))
     return row, False
 
@@ -883,7 +927,8 @@ def _send_renewal_request_state(api: TelegramBotApi, chat_id: int, language: str
     _notify_service_request_admins(api, request_row)
 
 
-def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramServiceRequest):
+def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramServiceRequest,
+                                   incoming_message: dict | None = None):
     ownership = request_row.ownership
     server_name = getattr(ownership.server, 'name', '') or f'#{ownership.server_id}'
     account = ownership.client_email_snapshot or f'#{ownership.id}'
@@ -899,11 +944,33 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
         lines.append(f"Amount: {int(request_row.amount or 0):,} T")
     if request_row.note:
         lines.append(f"Message: {request_row.note[:1000]}")
-    complete_label = "✅ Approve & renew" if request_row.request_type == 'renewal' else "✅ Complete"
-    keyboard = {"inline_keyboard": [[
-        {"text": complete_label, "callback_data": f"admin-service:{request_row.id}:complete"},
-        {"text": "❌ Reject", "callback_data": f"admin-service:{request_row.id}:reject"},
-    ]]}
+    if request_row.request_type == 'support':
+        identity = TelegramIdentity.query.filter_by(
+            telegram_user_id=request_row.telegram_user_id,
+        ).first()
+        username = str(getattr(identity, 'username', '') or '').lstrip('@')
+        private_url = (f'https://t.me/{username}' if username
+                       else f'tg://user?id={request_row.telegram_user_id}')
+        rows = [[
+            {"text": "💬 Reply", "callback_data": f"admin-support:{request_row.id}:reply"},
+            {"text": "👤 Open PV", "url": private_url},
+        ]]
+        panel_url = _public_base_url().rstrip('/')
+        if panel_url:
+            rows.append([{
+                "text": "🖥 Open Eve inbox",
+                "url": f'{panel_url}/telegram-operations?kind=support&request={request_row.id}',
+            }])
+        rows.append([{
+            "text": "✅ Close ticket",
+            "callback_data": f"admin-support:{request_row.id}:close",
+        }])
+        keyboard = {"inline_keyboard": rows}
+    else:
+        keyboard = {"inline_keyboard": [[
+            {"text": "✅ Approve & renew", "callback_data": f"admin-service:{request_row.id}:complete"},
+            {"text": "❌ Reject", "callback_data": f"admin-service:{request_row.id}:reject"},
+        ]]}
     for admin in Admin.query.filter_by(enabled=True).all():
         role = str(admin.role or '').lower()
         is_global_admin = bool(admin.is_superadmin or role in ('admin', 'superadmin'))
@@ -914,6 +981,10 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
             admin_chat_id = int(str(admin.telegram_id or '').strip())
             if admin_chat_id > 0:
                 api.send_message(admin_chat_id, "\n".join(lines), reply_markup=keyboard)
+                source_chat = int(((incoming_message or {}).get('chat') or {}).get('id') or 0)
+                source_message = int((incoming_message or {}).get('message_id') or 0)
+                if source_chat and source_message and _support_attachment_from_message(incoming_message or {}):
+                    api.copy_message(admin_chat_id, source_chat, source_message)
         except (TypeError, ValueError, TelegramApiError):
             continue
 
@@ -935,6 +1006,103 @@ def _service_request_reviewer(user_id: int, request_row: TelegramServiceRequest)
         if role == 'reseller' and request_row.ownership.reseller_id == admin.id:
             return admin
     return None
+
+
+def _customer_support_request(user_id: int, request_id: int):
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not identity or not identity.customer_id:
+        return None
+    return TelegramServiceRequest.query.filter_by(
+        id=request_id,
+        telegram_user_id=user_id,
+        customer_id=identity.customer_id,
+        request_type='support',
+    ).first()
+
+
+def _support_waiting_state(request_row: TelegramServiceRequest) -> str:
+    if request_row.status != 'pending':
+        return 'closed'
+    messages = list(request_row.messages or [])
+    return 'waiting_customer' if messages and messages[-1].sender_type == 'admin' else 'waiting_admin'
+
+
+def _support_status_label(request_row: TelegramServiceRequest, language: str) -> str:
+    return COPY[language][f"support_status_{_support_waiting_state(request_row)}"]
+
+
+def _send_support_requests(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
+                           user_id: int, language: str):
+    rows = TelegramServiceRequest.query.filter_by(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        request_type='support',
+    ).order_by(TelegramServiceRequest.updated_at.desc(), TelegramServiceRequest.id.desc()).limit(20).all()
+    if not rows:
+        api.send_message(chat_id, COPY[language]['support_no_tickets'])
+        return
+    keyboard = []
+    for row in rows:
+        account = row.ownership.client_email_snapshot if row.ownership else f'#{row.id}'
+        label = f"#{row.id} • {_support_status_label(row, language)} • {account}"
+        keyboard.append([{"text": label[:60], "callback_data": f"support-ticket:{row.id}"}])
+    api.send_message(
+        chat_id, COPY[language]['support_ticket_list'],
+        reply_markup={"inline_keyboard": keyboard},
+    )
+
+
+def _send_support_ticket(api: TelegramBotApi, chat_id: int, user_id: int,
+                         language: str, request_row: TelegramServiceRequest):
+    ownership = request_row.ownership
+    account = ownership.client_email_snapshot if ownership else f'#{request_row.id}'
+    server_name = getattr(getattr(ownership, 'server', None), 'name', '') or '-'
+    lines = [
+        f"<b>{html.escape(COPY[language]['support_ticket_title'].format(request_id=request_row.id))}</b>",
+        f"{COPY[language]['service_server']}: <b>{html.escape(str(server_name))}</b>",
+        f"{COPY[language]['service_account']}: <code>{html.escape(str(account))}</code>",
+        f"{COPY[language]['service_status']}: <b>{html.escape(_support_status_label(request_row, language))}</b>",
+        '',
+    ]
+    recent = list(request_row.messages or [])[-10:]
+    for message in recent:
+        sender_label = (COPY[language]['support_sender_admin']
+                        if message.sender_type == 'admin'
+                        else COPY[language]['support_sender_customer'])
+        body = str(message.message or '').strip()
+        attachment = str(message.attachment_name or '').strip()
+        rendered = body[:700] if body else ''
+        if attachment:
+            rendered = f"{rendered}\n📎 {attachment}".strip()
+        lines.append(f"<b>{html.escape(sender_label)}:</b> {html.escape(rendered or '—')}")
+    keyboard = []
+    if request_row.status == 'pending':
+        keyboard.append([{
+            "text": COPY[language]['support_continue_button'],
+            "callback_data": f"support-reply:{request_row.id}",
+        }])
+    elif ownership:
+        keyboard.append([{
+            "text": COPY[language]['support_new_button'],
+            "callback_data": f"service-support:{ownership.id}",
+        }])
+    keyboard.append([{
+        "text": COPY[language]['support_back_button'],
+        "callback_data": "support-list",
+    }])
+    api.send_message(
+        chat_id, '\n'.join(lines), parse_mode='HTML',
+        reply_markup={"inline_keyboard": keyboard},
+    )
+    # Re-send the latest attachments so the customer can open them from history.
+    for message in [row for row in recent if row.attachment_file_id][-3:]:
+        try:
+            if message.attachment_kind == 'photo':
+                api.send_photo(chat_id, message.attachment_file_id)
+            else:
+                api.send_document(chat_id, message.attachment_file_id)
+        except TelegramApiError:
+            continue
 
 
 def _execute_renewal_request(request_row: TelegramServiceRequest, reviewer: Admin):
@@ -1020,6 +1188,66 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
             language = 'fa'
         key = 'request_completed' if request_row.status == 'completed' else 'request_rejected'
         api.send_message(identity.telegram_chat_id, COPY[language][key])
+    return True
+
+
+def _handle_admin_support_callback(api: TelegramBotApi, bot: TelegramBotInstance,
+                                   callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if len(parts) != 3 or parts[0] != 'admin-support' or parts[2] not in ('reply', 'close'):
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    user_id = int(sender.get('id') or 0)
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    try:
+        request_row = db.session.get(TelegramServiceRequest, int(parts[1]))
+    except (TypeError, ValueError):
+        request_row = None
+    reviewer = _service_request_reviewer(user_id, request_row) if request_row else None
+    if not request_row or request_row.request_type != 'support' or not reviewer:
+        if callback_id:
+            api.answer_callback(callback_id, 'Access denied')
+        return True
+    if request_row.status != 'pending':
+        api.answer_callback(callback_id, 'Ticket is already closed')
+        return True
+    if parts[2] == 'close':
+        request_row.status = 'completed'
+        request_row.reviewed_by_admin_id = reviewer.id
+        request_row.reviewed_at = datetime.utcnow()
+        db.session.flush()
+        api.answer_callback(callback_id, 'Ticket closed')
+        customer = db.session.get(CustomerAccount, request_row.customer_id)
+        language = str(getattr(customer, 'preferred_language', '') or 'fa')
+        language = language if language in COPY else 'fa'
+        identity = TelegramIdentity.query.filter_by(
+            telegram_user_id=request_row.telegram_user_id,
+            customer_id=request_row.customer_id,
+        ).first()
+        if identity and identity.telegram_chat_id:
+            api.send_message(
+                identity.telegram_chat_id,
+                COPY[language]['request_completed'],
+                reply_markup={"inline_keyboard": [[{
+                    "text": COPY[language]['support_view_button'],
+                    "callback_data": f"support-ticket:{request_row.id}",
+                }]]},
+            )
+        if chat_id:
+            api.send_message(chat_id, f'Support ticket #{request_row.id} closed.')
+        return True
+    state = _state(bot, user_id)
+    session_row = _service_session(bot.id, user_id)
+    session_row.action = f'admin_support:{request_row.id}'
+    session_row.service_ownership_id = request_row.service_ownership_id
+    state.step = 'awaiting_admin_support_reply'
+    db.session.flush()
+    api.answer_callback(callback_id, 'Send your reply')
+    api.send_message(
+        chat_id,
+        f'Reply to support ticket #{request_row.id}. Send text, an image, or a file.',
+    )
     return True
 
 
@@ -1467,6 +1695,9 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     if data.startswith('admin-claim:'):
         _handle_admin_claim_callback(api, callback, data)
         return
+    if data.startswith('admin-support:'):
+        _handle_admin_support_callback(api, bot, callback, data)
+        return
     if data.startswith('admin-service:'):
         _handle_admin_service_callback(api, callback, data)
         return
@@ -1488,6 +1719,42 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         api.answer_callback(callback_id)
         _send_owned_services(api, chat_id, language, identity)
+        return
+    if data == 'support-list':
+        api.answer_callback(callback_id)
+        _send_support_requests(api, bot, chat_id, user_id, language)
+        return
+    if data.startswith('support-ticket:'):
+        try:
+            request_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        request_row = _customer_support_request(user_id, request_id)
+        api.answer_callback(callback_id)
+        if request_row:
+            _send_support_ticket(api, chat_id, user_id, language, request_row)
+        else:
+            api.send_message(chat_id, COPY[language]['support_ticket_missing'])
+        return
+    if data.startswith('support-reply:'):
+        try:
+            request_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        request_row = _customer_support_request(user_id, request_id)
+        if not request_row or request_row.status != 'pending':
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['support_ticket_missing'])
+            return
+        session_row = _service_session(bot.id, user_id)
+        session_row.service_ownership_id = request_row.service_ownership_id
+        session_row.action = f'support_request:{request_row.id}'
+        state.step = 'awaiting_support_message'
+        db.session.flush()
+        api.answer_callback(callback_id)
+        api.send_message(chat_id, COPY[language]['support_prompt'])
         return
     if data.startswith('buy-server:'):
         try:
@@ -1806,9 +2073,12 @@ def _handle_support_message(api: TelegramBotApi, bot: TelegramBotInstance, messa
     user_id = int(sender['id'])
     language = state.language if state.language in COPY else bot.default_language
     session_row = TelegramServiceSession.query.filter_by(
-        bot_instance_id=bot.id, telegram_user_id=user_id, action='support',
+        bot_instance_id=bot.id, telegram_user_id=user_id,
     ).first()
-    if not session_row or not session_row.service_ownership_id or not text or text.startswith('/'):
+    attachment = _support_attachment_from_message(message)
+    note = str(text or message.get('caption') or '').strip()[:4000]
+    if (not session_row or not session_row.service_ownership_id
+            or (not note and not attachment) or note.startswith('/')):
         api.send_message(chat_id, COPY[language]['support_prompt'])
         return
     _identity_row, ownership = _owned_service(user_id, session_row.service_ownership_id)
@@ -1819,15 +2089,104 @@ def _handle_support_message(api: TelegramBotApi, bot: TelegramBotInstance, messa
         db.session.flush()
         api.send_message(chat_id, COPY[language]['invalid_service'])
         return
+    requested_id = None
+    if str(session_row.action or '').startswith('support_request:'):
+        try:
+            requested_id = int(str(session_row.action).partition(':')[2])
+        except (TypeError, ValueError):
+            requested_id = None
+    existing_request = _customer_support_request(user_id, requested_id) if requested_id else None
+    if existing_request and existing_request.status != 'pending':
+        existing_request = None
     request_row, _duplicate = _create_service_request(
-        bot.id, user_id, ownership, 'support', package=None, note=text,
+        bot.id, user_id, ownership, 'support', package=None, note=note,
+        attachment=attachment,
+        source_chat_id=chat_id,
+        source_message_id=int(message.get('message_id') or 0) or None,
     )
     state.step = 'verified'
     session_row.action = None
     session_row.service_ownership_id = None
     db.session.flush()
-    api.send_message(chat_id, COPY[language]['support_pending'])
-    _notify_service_request_admins(api, request_row)
+    api.send_message(
+        chat_id,
+        COPY[language]['support_pending'].format(request_id=request_row.id),
+        reply_markup={"inline_keyboard": [[{
+            "text": COPY[language]['support_view_button'],
+            "callback_data": f"support-ticket:{request_row.id}",
+        }]]},
+    )
+    _notify_service_request_admins(api, request_row, incoming_message=message)
+
+
+def _handle_admin_support_message(api: TelegramBotApi, bot: TelegramBotInstance,
+                                  message: dict, sender: dict,
+                                  state: TelegramBotUserState, text: str):
+    admin_chat_id = int((message.get('chat') or {}).get('id'))
+    user_id = int(sender['id'])
+    session_row = TelegramServiceSession.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id,
+    ).first()
+    try:
+        request_id = int(str(getattr(session_row, 'action', '') or '').partition(':')[2])
+    except (TypeError, ValueError):
+        request_id = 0
+    request_row = db.session.get(TelegramServiceRequest, request_id) if request_id else None
+    reviewer = _service_request_reviewer(user_id, request_row) if request_row else None
+    attachment = _support_attachment_from_message(message)
+    note = str(text or message.get('caption') or '').strip()[:4000]
+    if (not request_row or request_row.request_type != 'support' or request_row.status != 'pending'
+            or not reviewer or (not note and not attachment) or note.startswith('/')):
+        api.send_message(admin_chat_id, 'Send text, an image, or a supported file for the open ticket.')
+        return
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=request_row.telegram_user_id,
+        customer_id=request_row.customer_id,
+    ).first()
+    if not identity or not identity.telegram_chat_id:
+        api.send_message(admin_chat_id, 'Customer Telegram chat is unavailable.')
+        return
+    delivered_message_id = None
+    try:
+        if attachment:
+            result, _route_name = api.copy_message(
+                identity.telegram_chat_id,
+                admin_chat_id,
+                int(message.get('message_id') or 0),
+            )
+            delivered_message_id = int((result or {}).get('message_id') or 0) or None
+        else:
+            heading = 'پاسخ پشتیبانی:' if state.language == 'fa' else 'Support reply:'
+            result, _route_name = api.send_message(
+                identity.telegram_chat_id,
+                f'{heading}\n{note}',
+            )
+            delivered_message_id = int((result or {}).get('message_id') or 0) or None
+    except TelegramApiError as exc:
+        api.send_message(admin_chat_id, f'Delivery failed: {redact_connection_error(exc)}')
+        return
+    db.session.add(TelegramServiceRequestMessage(
+        request_id=request_row.id,
+        sender_type='admin',
+        admin_id=reviewer.id,
+        message=note,
+        source_chat_id=admin_chat_id,
+        source_message_id=int(message.get('message_id') or delivered_message_id or 0) or None,
+        **(attachment or {}),
+    ))
+    request_row.updated_at = datetime.utcnow()
+    session_row.action = None
+    session_row.service_ownership_id = None
+    state.step = 'verified'
+    db.session.flush()
+    api.send_message(
+        admin_chat_id,
+        f'✅ Reply sent to support ticket #{request_row.id}.',
+        reply_markup={"inline_keyboard": [[
+            {"text": "💬 Reply again", "callback_data": f"admin-support:{request_row.id}:reply"},
+            {"text": "✅ Close ticket", "callback_data": f"admin-support:{request_row.id}:close"},
+        ]]},
+    )
 
 
 def _handle_purchase_account_name(api: TelegramBotApi, bot: TelegramBotInstance,
@@ -1949,7 +2308,14 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         return
     user_id = int(sender["id"])
     chat_id = int(chat["id"])
-    if not _is_allowed(bot, user_id):
+    pending_admin_reply = TelegramServiceSession.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id,
+    ).first()
+    is_authorized_admin_reply = bool(
+        pending_admin_reply
+        and str(pending_admin_reply.action or '').startswith('admin_support:')
+    )
+    if not _is_allowed(bot, user_id) and not is_authorized_admin_reply:
         return
     state = _state(bot, user_id)
     _identity(sender, chat_id)
@@ -1957,6 +2323,8 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     text = str(message.get("text") or "").strip()
     if text == "/start" or text.startswith("/start "):
         _handle_start(api, bot, chat_id, user_id, state)
+    elif state.step == "awaiting_admin_support_reply":
+        _handle_admin_support_message(api, bot, message, sender, state, text)
     elif text in {COPY["fa"]["menu_services"], COPY["en"]["menu_services"]}:
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
@@ -1979,6 +2347,9 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
             _send_claim_candidates(api, chat_id, state.language, claim)
         else:
             _send_contact_prompt(api, chat_id, state.language)
+    elif text in {COPY["fa"]["menu_support_requests"], COPY["en"]["menu_support_requests"]}:
+        state.step = 'verified'
+        _send_support_requests(api, bot, chat_id, user_id, state.language)
     elif text in {COPY["fa"]["menu_language"], COPY["en"]["menu_language"]}:
         state.step = "choose_language"
         db.session.flush()
