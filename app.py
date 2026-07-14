@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.55"
+APP_VERSION = "2.4.56"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8140,6 +8140,7 @@ class TelegramBotInstance(db.Model):
     support_group_enabled = db.Column(db.Boolean, nullable=False, default=False)
     support_group_chat_id = db.Column(db.BigInteger, nullable=True)
     support_group_topics = db.Column(db.Boolean, nullable=False, default=True)
+    support_sla_minutes = db.Column(db.Integer, nullable=False, default=60)
     last_test_status = db.Column(db.String(24), nullable=True)
     last_test_route = db.Column(db.String(120), nullable=True)
     last_test_latency_ms = db.Column(db.Integer, nullable=True)
@@ -8174,6 +8175,7 @@ class TelegramBotInstance(db.Model):
             'support_group_enabled': bool(self.support_group_enabled),
             'support_group_chat_id': self.support_group_chat_id,
             'support_group_topics': bool(self.support_group_topics),
+            'support_sla_minutes': max(0, int(self.support_sla_minutes or 0)),
             'last_test_status': self.last_test_status,
             'last_test_route': self.last_test_route,
             'last_test_latency_ms': self.last_test_latency_ms,
@@ -8342,6 +8344,9 @@ class TelegramServiceRequest(db.Model):
     status = db.Column(db.String(24), nullable=False, default='pending', index=True)
     reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
     reviewed_at = db.Column(db.DateTime, nullable=True)
+    assigned_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='SET NULL'), nullable=True, index=True)
+    support_priority = db.Column(db.String(16), nullable=False, default='normal', index=True)
+    first_response_at = db.Column(db.DateTime, nullable=True)
     support_group_chat_id = db.Column(db.BigInteger, nullable=True)
     support_message_thread_id = db.Column(db.BigInteger, nullable=True)
     support_group_message_id = db.Column(db.BigInteger, nullable=True)
@@ -8350,6 +8355,8 @@ class TelegramServiceRequest(db.Model):
 
     ownership = db.relationship('ServiceOwnership')
     package = db.relationship('Package')
+    bot = db.relationship('TelegramBotInstance')
+    assigned_admin = db.relationship('Admin', foreign_keys=[assigned_admin_id])
 
 
 class TelegramServiceRequestMessage(db.Model):
@@ -9321,11 +9328,15 @@ with app.app_context():
                 ('support_group_enabled', 'BOOLEAN DEFAULT FALSE'),
                 ('support_group_chat_id', 'BIGINT'),
                 ('support_group_topics', 'BOOLEAN DEFAULT TRUE'),
+                ('support_sla_minutes', 'INTEGER DEFAULT 60'),
             ),
             'telegram_service_requests': (
                 ('support_group_chat_id', 'BIGINT'),
                 ('support_message_thread_id', 'BIGINT'),
                 ('support_group_message_id', 'BIGINT'),
+                ('assigned_admin_id', 'INTEGER'),
+                ('support_priority', "VARCHAR(16) DEFAULT 'normal'"),
+                ('first_response_at', 'TIMESTAMP'),
             ),
         }
         for _table, _columns in _support_routing_tables.items():
@@ -9339,6 +9350,16 @@ with app.app_context():
                     conn.execute(text(f'ALTER TABLE {_table} ADD COLUMN {_column} {_column_type}'))
                     conn.commit()
                 print(f'Migration: added {_table}.{_column}')
+        with db.engine.connect() as conn:
+            conn.execute(text(
+                'CREATE INDEX IF NOT EXISTS ix_telegram_service_requests_assigned_admin_id '
+                'ON telegram_service_requests (assigned_admin_id)'
+            ))
+            conn.execute(text(
+                'CREATE INDEX IF NOT EXISTS ix_telegram_service_requests_support_priority '
+                'ON telegram_service_requests (support_priority)'
+            ))
+            conn.commit()
     except Exception as _support_routing_migration_error:
         print(f'Migration error (Telegram support group routing): {_support_routing_migration_error}')
 
@@ -25560,7 +25581,24 @@ def _serialize_telegram_purchase(row, identity_map=None, customer_map=None):
     return payload
 
 
-def _serialize_telegram_service(row, identity_map=None, customer_map=None):
+def _support_assignable_operators(row, admins=None):
+    admins = admins if admins is not None else Admin.query.filter_by(enabled=True).all()
+    reseller_id = getattr(row.ownership, 'reseller_id', None) if row.ownership else None
+    result = []
+    for admin in admins:
+        role = str(admin.role or '').lower()
+        if not (admin.is_superadmin or role in ('admin', 'superadmin')
+                or (role == 'reseller' and admin.id == reseller_id)):
+            continue
+        result.append({
+            'id': admin.id,
+            'username': admin.username,
+            'role': role or 'admin',
+        })
+    return result
+
+
+def _serialize_telegram_service(row, identity_map=None, customer_map=None, admins=None):
     ownership = row.ownership
     messages = []
     for message in row.messages:
@@ -25589,7 +25627,18 @@ def _serialize_telegram_service(row, identity_map=None, customer_map=None):
     last_sender = messages[-1].get('sender_type') if messages else 'customer'
     support_state = ('closed' if row.status != 'pending'
                      else 'waiting_customer' if last_sender == 'admin'
+                     else 'in_progress' if row.assigned_admin_id
                      else 'waiting_admin')
+    priority = str(row.support_priority or 'normal').lower()
+    if priority not in ('low', 'normal', 'high', 'urgent'):
+        priority = 'normal'
+    sla_minutes = max(0, int(getattr(row.bot, 'support_sla_minutes', 0) or 0))
+    last_customer_at = next((message.created_at for message in reversed(row.messages)
+                             if message.sender_type == 'customer'), row.created_at)
+    response_due_at = (last_customer_at + timedelta(minutes=sla_minutes)
+                       if row.status == 'pending' and last_sender != 'admin'
+                       and sla_minutes and last_customer_at else None)
+    sla_overdue = bool(response_due_at and response_due_at < datetime.utcnow())
     payload = {
         'id': row.id,
         'kind': row.request_type,
@@ -25607,6 +25656,14 @@ def _serialize_telegram_service(row, identity_map=None, customer_map=None):
         'support_state': support_state if row.request_type == 'support' else None,
         'support_group_routed': bool(row.support_group_chat_id),
         'support_message_thread_id': row.support_message_thread_id,
+        'support_priority': priority,
+        'assigned_admin_id': row.assigned_admin_id,
+        'assigned_admin_username': row.assigned_admin.username if row.assigned_admin else None,
+        'assignable_operators': _support_assignable_operators(row, admins),
+        'first_response_at': row.first_response_at.isoformat() if row.first_response_at else None,
+        'support_sla_minutes': sla_minutes,
+        'support_response_due_at': response_due_at.isoformat() if response_due_at else None,
+        'support_sla_overdue': sla_overdue,
     }
     payload.update(_telegram_operation_customer_payload(row, identity_map, customer_map))
     return payload
@@ -25683,6 +25740,8 @@ def get_telegram_operations():
         joinedload(TelegramServiceRequest.ownership).joinedload(ServiceOwnership.server),
         joinedload(TelegramServiceRequest.package),
         joinedload(TelegramServiceRequest.messages).joinedload(TelegramServiceRequestMessage.admin),
+        joinedload(TelegramServiceRequest.bot),
+        joinedload(TelegramServiceRequest.assigned_admin),
     ).order_by(
         TelegramServiceRequest.created_at.desc(), TelegramServiceRequest.id.desc(),
     ).limit(250).all()
@@ -25697,9 +25756,10 @@ def get_telegram_operations():
     customer_map = {int(row.id): row for row in CustomerAccount.query.filter(
         CustomerAccount.id.in_(customer_ids or {-1}),
     ).all()}
+    enabled_admins = Admin.query.filter_by(enabled=True).order_by(Admin.username.asc()).all()
     all_items = ([_serialize_telegram_purchase(row, identity_map, customer_map)
                   for row in visible_purchases]
-                 + [_serialize_telegram_service(row, identity_map, customer_map)
+                 + [_serialize_telegram_service(row, identity_map, customer_map, enabled_admins)
                     for row in visible_services])
     all_items.sort(key=lambda item: (item.get('created_at') or '', item['id']), reverse=True)
     today = datetime.utcnow().date()
@@ -25714,6 +25774,10 @@ def get_telegram_operations():
                                      for item in all_items),
         'support_waiting_customer': sum(item.get('support_state') == 'waiting_customer'
                                         for item in all_items),
+        'support_in_progress': sum(item.get('support_state') == 'in_progress'
+                                   for item in all_items),
+        'support_sla_overdue': sum(bool(item.get('support_sla_overdue'))
+                                   for item in all_items),
         'completed_today': sum(
             item['status'] == 'completed' and item.get('updated_at')
             and datetime.fromisoformat(item['updated_at']).date() == today
@@ -25724,8 +25788,17 @@ def get_telegram_operations():
     for item in all_items:
         if kind != 'all' and item['kind'] != kind:
             continue
-        if status != 'all' and item['status'] != status:
-            continue
+        if status != 'all':
+            support_filter_match = bool(
+                item['kind'] == 'support' and (
+                    item.get('support_state') == status
+                    or (status == 'sla_overdue' and item.get('support_sla_overdue'))
+                    or (status in ('low', 'normal', 'high', 'urgent')
+                        and item.get('support_priority') == status)
+                )
+            )
+            if item['status'] != status and not support_filter_match:
+                continue
         if search:
             haystack = ' '.join(str(item.get(key) or '') for key in (
                 'id', 'telegram_user_id', 'telegram_username', 'phone', 'customer_name',
@@ -25927,6 +26000,38 @@ def review_telegram_service_operation(request_id, action):
     return jsonify({'success': True, 'item': _serialize_telegram_service(row)})
 
 
+@app.route('/api/telegram-operations/services/<int:request_id>/triage', methods=['POST'])
+@login_required
+def triage_telegram_support_operation(request_id):
+    row, error = _telegram_service_for_admin(request_id)
+    if error:
+        return error
+    if row.request_type != 'support' or row.status != 'pending':
+        return jsonify({'success': False, 'error': 'Only open support tickets can be triaged'}), 409
+    data = request.get_json(silent=True) or {}
+    if 'support_priority' in data:
+        priority = str(data.get('support_priority') or '').strip().lower()
+        if priority not in ('low', 'normal', 'high', 'urgent'):
+            return jsonify({'success': False, 'error': 'Invalid support priority'}), 400
+        row.support_priority = priority
+    if 'assigned_admin_id' in data:
+        raw_assignee = data.get('assigned_admin_id')
+        if raw_assignee in (None, ''):
+            row.assigned_admin_id = None
+        else:
+            try:
+                assignee_id = int(raw_assignee)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'error': 'Invalid support assignee'}), 400
+            allowed_ids = {item['id'] for item in _support_assignable_operators(row)}
+            if assignee_id not in allowed_ids:
+                return jsonify({'success': False, 'error': 'This operator cannot be assigned to the ticket'}), 403
+            row.assigned_admin_id = assignee_id
+    row.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'success': True, 'item': _serialize_telegram_service(row)})
+
+
 @app.route('/api/telegram-operations/services/<int:request_id>/reply', methods=['POST'])
 @login_required
 def reply_telegram_support_operation(request_id):
@@ -25980,6 +26085,10 @@ def reply_telegram_support_operation(request_id):
             request_id=row.id, sender_type='admin', admin_id=admin.id,
             message=message, **attachment_values,
         ))
+        if not row.assigned_admin_id:
+            row.assigned_admin_id = admin.id
+        if not row.first_response_at:
+            row.first_response_at = datetime.utcnow()
         row.updated_at = datetime.utcnow()
         complete = str(data.get('complete') or '').strip().lower() in ('1', 'true', 'yes', 'on')
         if complete:
@@ -26067,6 +26176,12 @@ def save_telegram_bot_settings():
     if support_group_enabled and support_group_chat_id is None:
         return jsonify({'success': False, 'error': 'Support group chat ID is required when group routing is enabled'}), 400
     try:
+        support_sla_minutes = int(data.get('support_sla_minutes', bot.support_sla_minutes or 60))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Support SLA must be a whole number of minutes'}), 400
+    if support_sla_minutes < 0 or support_sla_minutes > 10080:
+        return jsonify({'success': False, 'error': 'Support SLA must be between 0 and 10080 minutes'}), 400
+    try:
         if token:
             bot.token_encrypted = _encrypt_telegram_secret(token)
     except RuntimeError as exc:
@@ -26086,6 +26201,7 @@ def save_telegram_bot_settings():
     bot.support_group_enabled = support_group_enabled
     bot.support_group_chat_id = support_group_chat_id
     bot.support_group_topics = bool(data.get('support_group_topics', True))
+    bot.support_sla_minutes = support_sla_minutes
     if bot.enabled and not bot.token_encrypted:
         return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
     db.session.commit()

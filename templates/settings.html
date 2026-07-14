@@ -579,6 +579,11 @@
                             </div>
                             <label class="toggle-switch" aria-label="Create one Telegram topic per support ticket"><input id="tgb-support-group-topics" type="checkbox" checked><span class="slider"></span></label>
                         </div>
+                        <div class="form-group">
+                            <label for="tgb-support-sla-minutes">First-response SLA (minutes)</label>
+                            <input id="tgb-support-sla-minutes" class="form-control" type="number" min="0" max="10080" step="1" value="60">
+                            <small class="text-secondary">Use 0 to disable SLA warnings. The timer restarts when the customer sends a follow-up.</small>
+                        </div>
                         <div class="tgb-route-help tgb-form-span">
                             <strong>Operator access</strong>
                             <span>Only enabled Eve admins or the service reseller whose Telegram ID matches the sender can relay messages to customers. In a regular non-forum group, reply directly to the ticket card.</span>
@@ -3816,6 +3821,7 @@
             document.getElementById('tgb-support-group-enabled').checked = !!bot.support_group_enabled;
             document.getElementById('tgb-support-group-chat-id').value = bot.support_group_chat_id || '';
             document.getElementById('tgb-support-group-topics').checked = bot.support_group_topics !== false;
+            document.getElementById('tgb-support-sla-minutes').value = Number.isFinite(Number(bot.support_sla_minutes)) ? Number(bot.support_sla_minutes) : 60;
             updateTelegramSupportGroupUI();
             document.getElementById('tgb-token-hint').textContent = bot.token_configured ? 'A token is saved. Leave blank to preserve it.' : 'No token saved yet. Paste the token from @BotFather.';
             const purchasePolicy = data.purchase_policy || {};
@@ -3852,7 +3858,7 @@
             renderTelegramBotRuntime(bot, telegramBotRuntime);
             telegramBotDirty = false;
             if (!content.dataset.dirtyListener) {
-                ['tgb-display-name','tgb-token','tgb-enabled','tgb-test-mode','tgb-lang-fa','tgb-lang-en','tgb-default-language','tgb-connection-mode','tgb-support-group-enabled','tgb-support-group-chat-id','tgb-support-group-topics'].forEach(id => {
+                ['tgb-display-name','tgb-token','tgb-enabled','tgb-test-mode','tgb-lang-fa','tgb-lang-en','tgb-default-language','tgb-connection-mode','tgb-support-group-enabled','tgb-support-group-chat-id','tgb-support-group-topics','tgb-support-sla-minutes'].forEach(id => {
                     const field = document.getElementById(id);
                     field.addEventListener('input', markTelegramBotDirty);
                     field.addEventListener('change', markTelegramBotDirty);
@@ -3896,8 +3902,6 @@
 
     function updateTelegramSupportGroupUI() {
         const enabled = document.getElementById('tgb-support-group-enabled').checked;
-        const fields = document.getElementById('tgb-support-group-fields');
-        fields.style.opacity = enabled ? '1' : '.58';
         document.getElementById('tgb-support-group-chat-id').disabled = !enabled;
         document.getElementById('tgb-support-group-topics').disabled = !enabled;
         if (telegramBotFormReady) markTelegramBotDirty();
@@ -3910,6 +3914,8 @@
         const supportGroupEnabled = document.getElementById('tgb-support-group-enabled').checked;
         const supportGroupChatId = document.getElementById('tgb-support-group-chat-id').value.trim();
         if (supportGroupEnabled && !/^-\d+$/.test(supportGroupChatId)) return showToast('Enter a valid negative Telegram support group ID.', 'error');
+        const supportSlaMinutes = Number(document.getElementById('tgb-support-sla-minutes').value);
+        if (!Number.isInteger(supportSlaMinutes) || supportSlaMinutes < 0 || supportSlaMinutes > 10080) return showToast('Support SLA must be between 0 and 10080 minutes.', 'error');
         if (!validateTelegramPurchaseSettings()) return;
         const payload = {
             display_name: document.getElementById('tgb-display-name').value.trim(),
@@ -3922,6 +3928,7 @@
             support_group_enabled: supportGroupEnabled,
             support_group_chat_id: supportGroupChatId || null,
             support_group_topics: document.getElementById('tgb-support-group-topics').checked,
+            support_sla_minutes: supportSlaMinutes,
             purchase_policy: {
                 customer_selects_server: document.getElementById('tgb-purchase-customer-server-choice').checked,
                 assignment_strategy: document.getElementById('tgb-purchase-assignment-strategy').value,

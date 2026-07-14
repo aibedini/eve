@@ -939,6 +939,11 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
         f"Account: {account}",
         f"Telegram user: {request_row.telegram_user_id}",
     ]
+    if request_row.request_type == 'support':
+        lines.append(f"Priority: {str(request_row.support_priority or 'normal').upper()}")
+        lines.append(
+            f"Assigned: {request_row.assigned_admin.username if request_row.assigned_admin else 'Unassigned'}"
+        )
     if request_row.package:
         lines.append(f"Package: {request_row.package.name}")
         lines.append(f"Amount: {int(request_row.amount or 0):,} T")
@@ -955,6 +960,10 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
             {"text": "💬 Reply", "callback_data": f"admin-support:{request_row.id}:reply"},
             {"text": "👤 Open PV", "url": private_url},
         ]]
+        rows.append([{
+            "text": "🙋 Claim ticket",
+            "callback_data": f"admin-support:{request_row.id}:claim",
+        }])
         panel_url = _public_base_url().rstrip('/')
         if panel_url:
             rows.append([{
@@ -1034,13 +1043,20 @@ def _notify_support_group(api: TelegramBotApi, request_row: TelegramServiceReque
                    else f'tg://user?id={request_row.telegram_user_id}')
     lines = [
         f'🎫 Support ticket #{request_row.id}',
+        f'Priority: {str(request_row.support_priority or "normal").upper()}',
+        f'Assigned: {request_row.assigned_admin.username if request_row.assigned_admin else "Unassigned"}',
         f'Server: {server_name}',
         f'Account: {account}',
         f'Telegram user: {request_row.telegram_user_id}',
     ]
     if request_row.note:
         lines.extend(['', f'Customer: {request_row.note[:2500]}'])
+    bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
+    sla_minutes = max(0, int(getattr(bot, 'support_sla_minutes', 0) or 0))
+    if sla_minutes:
+        lines.append(f'SLA: reply within {sla_minutes} minutes')
     keyboard = [[
+        {'text': '🙋 Claim', 'callback_data': f'admin-support:{request_row.id}:claim'},
         {'text': '👤 Open PV', 'url': private_url},
         {'text': '✅ Close ticket', 'callback_data': f'admin-support:{request_row.id}:close'},
     ]]
@@ -1092,6 +1108,12 @@ def _service_request_reviewer(user_id: int, request_row: TelegramServiceRequest)
     return None
 
 
+def _support_reviewer_can_handle(reviewer: Admin, request_row: TelegramServiceRequest) -> bool:
+    if not request_row.assigned_admin_id or request_row.assigned_admin_id == reviewer.id:
+        return True
+    return bool(reviewer.is_superadmin or str(reviewer.role or '').lower() == 'superadmin')
+
+
 def _customer_support_request(user_id: int, request_id: int):
     identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
     if not identity or not identity.customer_id:
@@ -1108,7 +1130,9 @@ def _support_waiting_state(request_row: TelegramServiceRequest) -> str:
     if request_row.status != 'pending':
         return 'closed'
     messages = list(request_row.messages or [])
-    return 'waiting_customer' if messages and messages[-1].sender_type == 'admin' else 'waiting_admin'
+    if messages and messages[-1].sender_type == 'admin':
+        return 'waiting_customer'
+    return 'in_progress' if request_row.assigned_admin_id else 'waiting_admin'
 
 
 def _support_status_label(request_row: TelegramServiceRequest, language: str) -> str:
@@ -1278,7 +1302,7 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
 def _handle_admin_support_callback(api: TelegramBotApi, bot: TelegramBotInstance,
                                    callback: dict, data: str) -> bool:
     parts = data.split(':')
-    if len(parts) != 3 or parts[0] != 'admin-support' or parts[2] not in ('reply', 'close'):
+    if len(parts) != 3 or parts[0] != 'admin-support' or parts[2] not in ('reply', 'close', 'claim'):
         return False
     callback_id = str(callback.get('id') or '')
     sender = callback.get('from') or {}
@@ -1296,7 +1320,27 @@ def _handle_admin_support_callback(api: TelegramBotApi, bot: TelegramBotInstance
     if request_row.status != 'pending':
         api.answer_callback(callback_id, 'Ticket is already closed')
         return True
+    if parts[2] == 'claim':
+        if request_row.assigned_admin_id and request_row.assigned_admin_id != reviewer.id:
+            api.answer_callback(callback_id, 'Already assigned to another operator')
+            return True
+        request_row.assigned_admin_id = reviewer.id
+        request_row.updated_at = datetime.utcnow()
+        db.session.flush()
+        api.answer_callback(callback_id, 'Ticket assigned to you')
+        thread_id = int(((callback.get('message') or {}).get('message_thread_id') or 0))
+        if chat_id:
+            api.send_message(
+                chat_id, f'🙋 Ticket #{request_row.id} assigned to {reviewer.username}.',
+                **({'message_thread_id': thread_id} if thread_id else {}),
+            )
+        return True
+    if not _support_reviewer_can_handle(reviewer, request_row):
+        api.answer_callback(callback_id, 'Assigned to another operator')
+        return True
     if parts[2] == 'close':
+        if not request_row.assigned_admin_id:
+            request_row.assigned_admin_id = reviewer.id
         request_row.status = 'completed'
         request_row.reviewed_by_admin_id = reviewer.id
         request_row.reviewed_at = datetime.utcnow()
@@ -2232,7 +2276,8 @@ def _handle_admin_support_message(api: TelegramBotApi, bot: TelegramBotInstance,
     attachment = _support_attachment_from_message(message)
     note = str(text or message.get('caption') or '').strip()[:4000]
     if (not request_row or request_row.request_type != 'support' or request_row.status != 'pending'
-            or not reviewer or (not note and not attachment) or note.startswith('/')):
+            or not reviewer or not _support_reviewer_can_handle(reviewer, request_row)
+            or (not note and not attachment) or note.startswith('/')):
         api.send_message(admin_chat_id, 'Send text, an image, or a supported file for the open ticket.')
         return
     identity = TelegramIdentity.query.filter_by(
@@ -2270,6 +2315,10 @@ def _handle_admin_support_message(api: TelegramBotApi, bot: TelegramBotInstance,
         source_message_id=int(message.get('message_id') or delivered_message_id or 0) or None,
         **(attachment or {}),
     ))
+    if not request_row.assigned_admin_id:
+        request_row.assigned_admin_id = reviewer.id
+    if not request_row.first_response_at:
+        request_row.first_response_at = datetime.utcnow()
     request_row.updated_at = datetime.utcnow()
     session_row.action = None
     session_row.service_ownership_id = None
@@ -2428,11 +2477,13 @@ def _handle_support_group_message(api: TelegramBotApi, bot: TelegramBotInstance,
     if sender.get('is_bot') or not sender.get('id'):
         return True
     reviewer = _service_request_reviewer(int(sender['id']), request_row)
-    if not reviewer:
+    if not reviewer or not _support_reviewer_can_handle(reviewer, request_row):
         return True
     text = str(message.get('text') or message.get('caption') or '').strip()[:4000]
     attachment = _support_attachment_from_message(message)
     if text.lower() in ('/close', '/close@' + str(bot.bot_username or '').lower()):
+        if not request_row.assigned_admin_id:
+            request_row.assigned_admin_id = reviewer.id
         request_row.status = 'completed'
         request_row.reviewed_by_admin_id = reviewer.id
         request_row.reviewed_at = datetime.utcnow()
@@ -2498,6 +2549,10 @@ def _handle_support_group_message(api: TelegramBotApi, bot: TelegramBotInstance,
         source_message_id=int(message.get('message_id') or 0),
         **(attachment or {}),
     ))
+    if not request_row.assigned_admin_id:
+        request_row.assigned_admin_id = reviewer.id
+    if not request_row.first_response_at:
+        request_row.first_response_at = datetime.utcnow()
     request_row.updated_at = datetime.utcnow()
     thread_id = int(message.get('message_thread_id') or 0)
     try:

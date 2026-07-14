@@ -81,6 +81,13 @@
     .tg-status.waiting_admin { color: var(--tg-amber); background: rgba(251,191,36,.08); }
     .tg-status.waiting_customer { color: var(--tg-cyan); background: rgba(34,211,238,.08); }
     .tg-status.closed { color: var(--tg-green); background: rgba(52,211,153,.08); }
+    .tg-status.in_progress { color: var(--tg-indigo); background: rgba(129,140,248,.1); }
+    .tg-priority { padding: 3px 6px; border-radius: 5px; font-size: .58rem; font-weight: 850; letter-spacing: .04em; text-transform: uppercase; }
+    .tg-priority.low { color: var(--text-secondary); background: rgba(148,163,184,.09); }
+    .tg-priority.normal { color: var(--tg-indigo); background: rgba(129,140,248,.1); }
+    .tg-priority.high { color: var(--tg-amber); background: rgba(251,191,36,.1); }
+    .tg-priority.urgent { color: var(--tg-red); background: rgba(251,113,133,.12); }
+    .tg-item.sla-overdue { box-shadow: inset 3px 0 0 var(--tg-red); }
 
     .tg-detail { min-width: 0; min-height: 0; height: 100%; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--text-secondary) transparent; scrollbar-width: thin; background: var(--bg-card); }
     .tg-detail-shell { min-height: 100%; }
@@ -158,6 +165,10 @@
     .tg-file-card-name { display: block; overflow: hidden; font-size: .72rem; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
     .tg-file-card-meta { display: block; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; }
     .tg-thread-empty { padding: 24px 14px; color: var(--text-secondary); font-size: .75rem; text-align: center; }
+    .tg-triage-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+    .tg-triage-grid label { display: grid; gap: 6px; color: var(--text-secondary); font-size: .68rem; font-weight: 700; }
+    .tg-triage-grid select { min-height: 40px; padding: 0 9px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-dark); color: var(--text-primary); font: inherit; font-size: .75rem; }
+    .tg-sla-overdue { margin-top: 10px; color: var(--tg-red); font-size: .7rem; font-weight: 750; }
 
     .tg-timeline { position: relative; margin: 0; padding: 0; list-style: none; }
     .tg-event { position: relative; padding: 0 0 17px 22px; }
@@ -213,6 +224,7 @@
         .tg-receipt { max-height: none; }
         .tg-receipt img { max-height: none; }
         .tg-message { width: 94%; }
+        .tg-triage-grid { grid-template-columns: 1fr; }
         .tg-detail-tools { align-items: stretch; }
         .tg-private-link { min-height: 44px; }
     }
@@ -258,7 +270,7 @@
         <label>
             <span class="tg-field-label">Status</span>
             <select class="tg-select" id="tg-status">
-                <option value="all">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="completed">Completed</option><option value="rejected">Rejected</option>
+                <option value="all">All statuses</option><option value="pending">Pending</option><option value="waiting_admin">Support · unassigned</option><option value="in_progress">Support · in progress</option><option value="waiting_customer">Support · waiting for customer</option><option value="sla_overdue">Support · SLA overdue</option><option value="urgent">Support · urgent</option><option value="approved">Approved</option><option value="completed">Completed</option><option value="rejected">Rejected</option>
             </select>
         </label>
         <label class="tg-search-field">
@@ -310,7 +322,7 @@
     const kindLabel = kind => ({ purchase: 'Purchase', renewal: 'Renewal', support: 'Support' }[kind] || value(kind, 'Request'));
     const statusLabel = status => ({ pending: 'Pending review', approved: 'Approved', completed: 'Completed', rejected: 'Rejected' }[status] || value(status));
     const supportState = item => item.support_state || (item.status === 'completed' ? 'closed' : 'waiting_admin');
-    const supportStateLabel = status => ({ waiting_admin: 'Waiting for operator', waiting_customer: 'Waiting for customer', closed: 'Closed' }[status] || value(status));
+    const supportStateLabel = status => ({ waiting_admin: 'Unassigned', in_progress: 'In progress', waiting_customer: 'Waiting for customer', closed: 'Closed' }[status] || value(status));
     const displayStatus = item => item.kind === 'support' ? supportStateLabel(supportState(item)) : statusLabel(item.status);
     const displayStatusClass = item => item.kind === 'support' ? supportState(item) : value(item.status, 'pending');
     const kindColor = kind => ({ purchase: 'var(--tg-indigo)', renewal: 'var(--tg-green)', support: 'var(--tg-cyan)' }[kind] || 'var(--tg-indigo)');
@@ -364,12 +376,12 @@
             return;
         }
         state.items.forEach(item => {
-            const button = el('button', `tg-item${operationKey(item) === state.selectedKey ? ' selected' : ''}`);
+            const button = el('button', `tg-item${operationKey(item) === state.selectedKey ? ' selected' : ''}${item.support_sla_overdue ? ' sla-overdue' : ''}`);
             button.type = 'button';
             button.style.setProperty('--item-color', kindColor(item.kind));
             button.setAttribute('aria-label', `${kindLabel(item.kind)} ${value(item.id)}, ${identity(item)}, ${displayStatus(item)}`);
             const top = el('span', 'tg-item-top');
-            append(top, el('span', 'tg-kind', kindLabel(item.kind)), el('span', 'tg-id', `#${value(item.id)}`));
+            append(top, el('span', 'tg-kind', kindLabel(item.kind)), item.kind === 'support' ? el('span', `tg-priority ${value(item.support_priority, 'normal')}`, value(item.support_priority, 'normal')) : null, el('span', 'tg-id', `#${value(item.id)}`));
             const bottom = el('span', 'tg-item-bottom');
             append(bottom, el('span', `tg-status ${displayStatusClass(item)}`, displayStatus(item)), el('span', 'tg-age', age(item.updated_at || item.created_at)), el('span', 'tg-amount', fmtAmount(item.amount)));
             append(button, top, el('span', 'tg-customer', identity(item)), el('span', 'tg-context', context(item)), bottom);
@@ -558,10 +570,41 @@
         sec.appendChild(actions); return sec;
     }
 
+    function supportTriage(item) {
+        const sec = section('Ownership & priority');
+        const grid = el('div', 'tg-triage-grid');
+        const assigneeLabel = el('label', '', 'Assigned operator');
+        const assignee = el('select');
+        const unassigned = document.createElement('option'); unassigned.value = ''; unassigned.textContent = 'Unassigned'; assignee.appendChild(unassigned);
+        (Array.isArray(item.assignable_operators) ? item.assignable_operators : []).forEach(operator => {
+            const option = document.createElement('option'); option.value = String(operator.id); option.textContent = `${operator.username} · ${operator.role}`; assignee.appendChild(option);
+        });
+        assignee.value = item.assigned_admin_id ? String(item.assigned_admin_id) : '';
+        assigneeLabel.appendChild(assignee);
+        const priorityLabel = el('label', '', 'Priority');
+        const priority = el('select');
+        [['low','Low'],['normal','Normal'],['high','High'],['urgent','Urgent']].forEach(([key, label]) => {
+            const option = document.createElement('option'); option.value = key; option.textContent = label; priority.appendChild(option);
+        });
+        priority.value = value(item.support_priority, 'normal'); priorityLabel.appendChild(priority);
+        append(grid, assigneeLabel, priorityLabel); sec.appendChild(grid);
+        const actions = el('div', 'tg-actions'); actions.style.marginTop = '10px';
+        actions.appendChild(actionButton('Save triage', 'primary', () => mutate(
+            `/api/telegram-operations/services/${encodeURIComponent(item.id)}/triage`,
+            { assigned_admin_id: assignee.value || null, support_priority: priority.value },
+            'Ticket assignment updated.'
+        )));
+        sec.appendChild(actions);
+        if (item.support_sla_overdue) sec.appendChild(el('div', 'tg-sla-overdue', `SLA overdue · response was due ${fmtDate(item.support_response_due_at)}`));
+        else if (item.support_response_due_at) sec.appendChild(el('div', 'tg-reply-meta', `Response due ${fmtDate(item.support_response_due_at)}`));
+        return sec;
+    }
+
     function supportBanner(item) {
         const status = supportState(item);
         const copy = {
             waiting_admin: ['Waiting for operator', 'The customer is waiting for your reply.'],
+            in_progress: ['In progress', `${item.assigned_admin_username || 'An operator'} owns this ticket and the customer is waiting.`],
             waiting_customer: ['Waiting for customer', 'Your reply was delivered; the customer can continue this conversation.'],
             closed: ['Closed', 'This support conversation is closed and remains available in history.']
         }[status] || [supportStateLabel(status), ''];
@@ -602,7 +645,11 @@
         const summary = section('Request details'); const facts = el('dl', 'tg-facts');
         append(facts, fact('Status', displayStatus(item)), fact('Amount', fmtAmount(item.amount) || '—'), fact('Server', item.server_name), fact('Account', item.account_name, true), fact('Package', item.package_name), fact('Phone', item.customer_phone || item.phone, true), fact('Telegram username', item.telegram_username ? `@${item.telegram_username}` : '—'), fact('Telegram user ID', item.telegram_user_id, true), fact('Created', fmtDate(item.created_at)), fact('Last updated', fmtDate(item.updated_at)));
         summary.appendChild(facts); main.appendChild(summary);
-        if (item.kind === 'support') { main.appendChild(supportBanner(item)); main.appendChild(conversationSection(item)); }
+        if (item.kind === 'support') {
+            if (supportState(item) !== 'closed') main.appendChild(supportTriage(item));
+            main.appendChild(supportBanner(item));
+            main.appendChild(conversationSection(item));
+        }
         else if (item.note) { const note = section('Operator note'); note.appendChild(el('p', 'tg-note', item.note)); main.appendChild(note); }
         if (item.kind === 'purchase') main.appendChild(receiptSection(item));
         if (item.kind === 'support' && supportState(item) !== 'closed') main.appendChild(supportReply(item));
