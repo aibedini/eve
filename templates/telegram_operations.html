@@ -270,7 +270,7 @@
         <label>
             <span class="tg-field-label">Status</span>
             <select class="tg-select" id="tg-status">
-                <option value="all">All statuses</option><option value="pending">Pending</option><option value="waiting_admin">Support · unassigned</option><option value="in_progress">Support · in progress</option><option value="waiting_customer">Support · waiting for customer</option><option value="sla_overdue">Support · SLA overdue</option><option value="urgent">Support · urgent</option><option value="approved">Approved</option><option value="completed">Completed</option><option value="rejected">Rejected</option>
+                <option value="all">All statuses</option><option value="pending">Pending</option><option value="waiting_admin">Support · unassigned</option><option value="in_progress">Support · in progress</option><option value="waiting_customer">Support · waiting for customer</option><option value="sla_overdue">Support · SLA overdue</option><option value="sla_escalated">Support · escalated</option><option value="urgent">Support · urgent</option><option value="approved">Approved</option><option value="completed">Completed</option><option value="rejected">Rejected</option>
             </select>
         </label>
         <label class="tg-search-field">
@@ -595,7 +595,9 @@
             'Ticket assignment updated.'
         )));
         sec.appendChild(actions);
-        if (item.support_sla_overdue) sec.appendChild(el('div', 'tg-sla-overdue', `SLA overdue · response was due ${fmtDate(item.support_response_due_at)}`));
+        if (item.support_sla_escalated) sec.appendChild(el('div', 'tg-sla-overdue', `Escalated automatically · ${fmtDate(item.support_sla_escalated_at)}`));
+        else if (item.support_sla_overdue) sec.appendChild(el('div', 'tg-sla-overdue', `SLA overdue · response was due ${fmtDate(item.support_response_due_at)}`));
+        else if (item.support_sla_warned) sec.appendChild(el('div', 'tg-reply-meta', `SLA warning sent · ${fmtDate(item.support_sla_warning_at)}`));
         else if (item.support_response_due_at) sec.appendChild(el('div', 'tg-reply-meta', `Response due ${fmtDate(item.support_response_due_at)}`));
         return sec;
     }

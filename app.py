@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.56"
+APP_VERSION = "2.4.57"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8141,6 +8141,8 @@ class TelegramBotInstance(db.Model):
     support_group_chat_id = db.Column(db.BigInteger, nullable=True)
     support_group_topics = db.Column(db.Boolean, nullable=False, default=True)
     support_sla_minutes = db.Column(db.Integer, nullable=False, default=60)
+    support_sla_warning_percent = db.Column(db.Integer, nullable=False, default=80)
+    support_escalation_minutes = db.Column(db.Integer, nullable=False, default=30)
     last_test_status = db.Column(db.String(24), nullable=True)
     last_test_route = db.Column(db.String(120), nullable=True)
     last_test_latency_ms = db.Column(db.Integer, nullable=True)
@@ -8176,6 +8178,8 @@ class TelegramBotInstance(db.Model):
             'support_group_chat_id': self.support_group_chat_id,
             'support_group_topics': bool(self.support_group_topics),
             'support_sla_minutes': max(0, int(self.support_sla_minutes or 0)),
+            'support_sla_warning_percent': max(1, min(99, int(self.support_sla_warning_percent or 80))),
+            'support_escalation_minutes': max(0, int(self.support_escalation_minutes or 0)),
             'last_test_status': self.last_test_status,
             'last_test_route': self.last_test_route,
             'last_test_latency_ms': self.last_test_latency_ms,
@@ -8347,6 +8351,10 @@ class TelegramServiceRequest(db.Model):
     assigned_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='SET NULL'), nullable=True, index=True)
     support_priority = db.Column(db.String(16), nullable=False, default='normal', index=True)
     first_response_at = db.Column(db.DateTime, nullable=True)
+    sla_warning_message_id = db.Column(db.Integer, nullable=True)
+    sla_escalated_message_id = db.Column(db.Integer, nullable=True)
+    sla_warning_at = db.Column(db.DateTime, nullable=True)
+    sla_escalated_at = db.Column(db.DateTime, nullable=True)
     support_group_chat_id = db.Column(db.BigInteger, nullable=True)
     support_message_thread_id = db.Column(db.BigInteger, nullable=True)
     support_group_message_id = db.Column(db.BigInteger, nullable=True)
@@ -9329,6 +9337,8 @@ with app.app_context():
                 ('support_group_chat_id', 'BIGINT'),
                 ('support_group_topics', 'BOOLEAN DEFAULT TRUE'),
                 ('support_sla_minutes', 'INTEGER DEFAULT 60'),
+                ('support_sla_warning_percent', 'INTEGER DEFAULT 80'),
+                ('support_escalation_minutes', 'INTEGER DEFAULT 30'),
             ),
             'telegram_service_requests': (
                 ('support_group_chat_id', 'BIGINT'),
@@ -9337,6 +9347,10 @@ with app.app_context():
                 ('assigned_admin_id', 'INTEGER'),
                 ('support_priority', "VARCHAR(16) DEFAULT 'normal'"),
                 ('first_response_at', 'TIMESTAMP'),
+                ('sla_warning_message_id', 'INTEGER'),
+                ('sla_escalated_message_id', 'INTEGER'),
+                ('sla_warning_at', 'TIMESTAMP'),
+                ('sla_escalated_at', 'TIMESTAMP'),
             ),
         }
         for _table, _columns in _support_routing_tables.items():
@@ -25635,6 +25649,8 @@ def _serialize_telegram_service(row, identity_map=None, customer_map=None, admin
     sla_minutes = max(0, int(getattr(row.bot, 'support_sla_minutes', 0) or 0))
     last_customer_at = next((message.created_at for message in reversed(row.messages)
                              if message.sender_type == 'customer'), row.created_at)
+    last_customer_message_id = next((message.id for message in reversed(row.messages)
+                                     if message.sender_type == 'customer'), None)
     response_due_at = (last_customer_at + timedelta(minutes=sla_minutes)
                        if row.status == 'pending' and last_sender != 'admin'
                        and sla_minutes and last_customer_at else None)
@@ -25664,6 +25680,16 @@ def _serialize_telegram_service(row, identity_map=None, customer_map=None, admin
         'support_sla_minutes': sla_minutes,
         'support_response_due_at': response_due_at.isoformat() if response_due_at else None,
         'support_sla_overdue': sla_overdue,
+        'support_sla_warned': bool(
+            last_customer_message_id
+            and row.sla_warning_message_id == last_customer_message_id
+        ),
+        'support_sla_escalated': bool(
+            last_customer_message_id
+            and row.sla_escalated_message_id == last_customer_message_id
+        ),
+        'support_sla_warning_at': row.sla_warning_at.isoformat() if row.sla_warning_at else None,
+        'support_sla_escalated_at': row.sla_escalated_at.isoformat() if row.sla_escalated_at else None,
     }
     payload.update(_telegram_operation_customer_payload(row, identity_map, customer_map))
     return payload
@@ -25778,6 +25804,8 @@ def get_telegram_operations():
                                    for item in all_items),
         'support_sla_overdue': sum(bool(item.get('support_sla_overdue'))
                                    for item in all_items),
+        'support_sla_escalated': sum(bool(item.get('support_sla_escalated'))
+                                     for item in all_items),
         'completed_today': sum(
             item['status'] == 'completed' and item.get('updated_at')
             and datetime.fromisoformat(item['updated_at']).date() == today
@@ -25793,6 +25821,7 @@ def get_telegram_operations():
                 item['kind'] == 'support' and (
                     item.get('support_state') == status
                     or (status == 'sla_overdue' and item.get('support_sla_overdue'))
+                    or (status == 'sla_escalated' and item.get('support_sla_escalated'))
                     or (status in ('low', 'normal', 'high', 'urgent')
                         and item.get('support_priority') == status)
                 )
@@ -26182,6 +26211,19 @@ def save_telegram_bot_settings():
     if support_sla_minutes < 0 or support_sla_minutes > 10080:
         return jsonify({'success': False, 'error': 'Support SLA must be between 0 and 10080 minutes'}), 400
     try:
+        support_sla_warning_percent = int(data.get(
+            'support_sla_warning_percent', bot.support_sla_warning_percent or 80,
+        ))
+        support_escalation_minutes = int(data.get(
+            'support_escalation_minutes', bot.support_escalation_minutes or 30,
+        ))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Support warning and escalation values must be whole numbers'}), 400
+    if support_sla_warning_percent < 1 or support_sla_warning_percent > 99:
+        return jsonify({'success': False, 'error': 'SLA warning must be between 1 and 99 percent'}), 400
+    if support_escalation_minutes < 0 or support_escalation_minutes > 10080:
+        return jsonify({'success': False, 'error': 'Support escalation must be between 0 and 10080 minutes'}), 400
+    try:
         if token:
             bot.token_encrypted = _encrypt_telegram_secret(token)
     except RuntimeError as exc:
@@ -26202,6 +26244,8 @@ def save_telegram_bot_settings():
     bot.support_group_chat_id = support_group_chat_id
     bot.support_group_topics = bool(data.get('support_group_topics', True))
     bot.support_sla_minutes = support_sla_minutes
+    bot.support_sla_warning_percent = support_sla_warning_percent
+    bot.support_escalation_minutes = support_escalation_minutes
     if bot.enabled and not bot.token_encrypted:
         return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
     db.session.commit()

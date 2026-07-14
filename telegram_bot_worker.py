@@ -79,6 +79,7 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 running = True
 worker_id = f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
 webhook_prepared_bot_ids: set[int] = set()
+sla_scan_at_by_bot: dict[int, float] = {}
 
 
 def _stop(_signum, _frame):
@@ -1087,6 +1088,120 @@ def _notify_support_group(api: TelegramBotApi, request_row: TelegramServiceReque
             api.copy_message(chat_id, source_chat, source_message, **send_extra)
     except TelegramApiError:
         return
+
+
+def _support_sla_alert(api: TelegramBotApi, request_row: TelegramServiceRequest,
+                       *, escalated: bool):
+    """Notify the right operators once for the current customer message."""
+    ownership = request_row.ownership
+    server_name = getattr(getattr(ownership, 'server', None), 'name', '') or '-'
+    account = getattr(ownership, 'client_email_snapshot', '') or f'#{request_row.id}'
+    assigned = request_row.assigned_admin.username if request_row.assigned_admin else 'Unassigned'
+    title = '🚨 SLA ESCALATION' if escalated else '⏳ SLA warning'
+    lines = [
+        f'{title} · support ticket #{request_row.id}',
+        f'Priority: {str(request_row.support_priority or "normal").upper()}',
+        f'Assigned: {assigned}',
+        f'Server: {server_name}',
+        f'Account: {account}',
+        f'Telegram user: {request_row.telegram_user_id}',
+    ]
+    panel_url = _public_base_url().rstrip('/')
+    keyboard = [[
+        {'text': '🙋 Claim', 'callback_data': f'admin-support:{request_row.id}:claim'},
+        {'text': '💬 Reply', 'callback_data': f'admin-support:{request_row.id}:reply'},
+    ]]
+    if panel_url:
+        keyboard.append([{
+            'text': '🖥 Open Eve inbox',
+            'url': f'{panel_url}/telegram-operations?kind=support&request={request_row.id}',
+        }])
+
+    eligible_admins = []
+    for admin in Admin.query.filter_by(enabled=True).all():
+        role = str(admin.role or '').lower()
+        is_global_admin = bool(admin.is_superadmin or role in ('admin', 'superadmin'))
+        is_owner_reseller = bool(role == 'reseller' and ownership.reseller_id == admin.id)
+        if is_global_admin or is_owner_reseller:
+            eligible_admins.append(admin)
+    targets = eligible_admins
+    if not escalated and request_row.assigned_admin_id:
+        assigned_targets = [admin for admin in eligible_admins
+                            if admin.id == request_row.assigned_admin_id]
+        has_assigned_chat = any(
+            str(admin.telegram_id or '').strip().isdigit()
+            and int(str(admin.telegram_id).strip()) > 0
+            for admin in assigned_targets
+        )
+        if has_assigned_chat:
+            targets = assigned_targets
+    for admin in targets:
+        try:
+            admin_chat_id = int(str(admin.telegram_id or '').strip())
+            if admin_chat_id > 0:
+                api.send_message(
+                    admin_chat_id, '\n'.join(lines),
+                    reply_markup={'inline_keyboard': keyboard},
+                )
+        except (TypeError, ValueError, TelegramApiError):
+            continue
+
+    if request_row.support_group_chat_id:
+        extra = {}
+        if request_row.support_message_thread_id:
+            extra['message_thread_id'] = int(request_row.support_message_thread_id)
+        elif request_row.support_group_message_id:
+            extra['reply_parameters'] = {'message_id': int(request_row.support_group_message_id)}
+        try:
+            api.send_message(
+                int(request_row.support_group_chat_id), '\n'.join(lines),
+                reply_markup={'inline_keyboard': keyboard}, **extra,
+            )
+        except TelegramApiError:
+            pass
+
+
+def _scan_support_sla(api: TelegramBotApi, bot: TelegramBotInstance):
+    """Send durable, de-duplicated warning/escalation alerts for open tickets."""
+    sla_minutes = max(0, int(bot.support_sla_minutes or 0))
+    if not sla_minutes:
+        return
+    warning_percent = max(1, min(99, int(bot.support_sla_warning_percent or 80)))
+    escalation_minutes = max(0, int(bot.support_escalation_minutes or 0))
+    now = datetime.utcnow()
+    rows = TelegramServiceRequest.query.filter_by(
+        bot_instance_id=bot.id, request_type='support', status='pending',
+    ).all()
+    changed = False
+    for request_row in rows:
+        messages = list(request_row.messages or [])
+        latest = messages[-1] if messages else None
+        if not latest or latest.sender_type != 'customer' or not latest.created_at:
+            continue
+        warning_due = latest.created_at + timedelta(
+            seconds=(sla_minutes * 60 * warning_percent / 100),
+        )
+        escalation_due = latest.created_at + timedelta(
+            minutes=sla_minutes + escalation_minutes,
+        )
+        if now >= escalation_due and request_row.sla_escalated_message_id != latest.id:
+            if str(request_row.support_priority or 'normal').lower() != 'urgent':
+                request_row.support_priority = 'urgent'
+            _support_sla_alert(api, request_row, escalated=True)
+            request_row.sla_warning_message_id = latest.id
+            request_row.sla_escalated_message_id = latest.id
+            request_row.sla_warning_at = now
+            request_row.sla_escalated_at = now
+            request_row.updated_at = now
+            changed = True
+        elif now >= warning_due and request_row.sla_warning_message_id != latest.id:
+            _support_sla_alert(api, request_row, escalated=False)
+            request_row.sla_warning_message_id = latest.id
+            request_row.sla_warning_at = now
+            request_row.updated_at = now
+            changed = True
+    if changed:
+        db.session.commit()
 
 
 def _service_request_reviewer(user_id: int, request_row: TelegramServiceRequest):
@@ -2682,6 +2797,15 @@ def _poll_bot(bot: TelegramBotInstance):
             runtime.last_route = route_name
             runtime.last_heartbeat_at = datetime.utcnow()
             db.session.commit()
+        now_monotonic = time.monotonic()
+        if now_monotonic - sla_scan_at_by_bot.get(bot.id, 0) >= 30:
+            try:
+                _scan_support_sla(api, bot)
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('[telegram-support] SLA scan failed for bot %s', bot.id)
+            finally:
+                sla_scan_at_by_bot[bot.id] = now_monotonic
         updates, route_name = api.get_updates(int(runtime.next_update_id or 0), timeout=25)
         runtime = _runtime(bot.id)
         runtime.status = "running"
