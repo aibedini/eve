@@ -78,6 +78,7 @@ from telegram_bot_worker import (  # noqa: E402
     _ensure_purchase_inbound_allocation,
     _extract_subscription_token,
     _purchase_provisioning_inbound_ids,
+    _render_purchase_account_name,
     process_update,
 )
 from telegram_bot_runtime import COPY  # noqa: E402
@@ -757,7 +758,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                 'customer_selects_server': True,
                 'assignment_strategy': 'priority',
                 'account_name_mode': 'customer',
-                'account_name_template': 'tg{order_id}-{phone_last4}',
+                'account_name_template': 'tg-{telegram_username}-{phone}',
             },
             'purchase_servers': [target],
         })
@@ -769,6 +770,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         ).one()
         self.assertTrue(policy.customer_selects_server)
         self.assertEqual(policy.account_name_mode, 'customer')
+        self.assertEqual(policy.account_name_template, 'tg-{telegram_username}-{phone}')
         self.assertEqual(rule.display_name, 'Germany Premium')
         self.assertEqual(rule.priority, 5)
 
@@ -1360,6 +1362,44 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             inbound_ids, error = _ensure_purchase_inbound_allocation(request_row)
         self.assertEqual(inbound_ids, [34, 35])
         self.assertIsNone(error)
+
+    def test_telegram_generated_account_name_supports_username_and_full_phone(self):
+        bot = TelegramBotInstance(scope_key='name-token-test', display_name='Name token')
+        server = Server(name='Name token server', host='https://name-token.test', username='u', password='p')
+        customer = CustomerAccount(primary_phone='989195292411', phone_verified_at=datetime.utcnow())
+        db.session.add_all([bot, server, customer])
+        db.session.flush()
+        identity = TelegramIdentity(
+            customer_id=customer.id,
+            telegram_user_id=215614184,
+            username='navid_test',
+            phone_normalized='989195292411',
+            phone_verified_at=datetime.utcnow(),
+        )
+        policy = TelegramPurchasePolicy(
+            bot_instance_id=bot.id,
+            account_name_mode='generated',
+            account_name_template='tg-{telegram_username}-{phone}',
+        )
+        request_row = TelegramPurchaseRequest(
+            bot_instance_id=bot.id, telegram_user_id=identity.telegram_user_id,
+            customer_id=customer.id, server_id=server.id, amount=1000,
+            receipt_file_id='receipt', source_chat_id=identity.telegram_user_id,
+            source_message_id=3,
+        )
+        db.session.add_all([identity, policy, request_row])
+        db.session.flush()
+        self.assertEqual(
+            _render_purchase_account_name(bot, request_row, customer, None),
+            'tg-navid_test-09195292411',
+        )
+        identity.username = None
+        policy.account_name_template = 'tg-{telegram_username}-{phone_last4}'
+        db.session.flush()
+        self.assertEqual(
+            _render_purchase_account_name(bot, request_row, customer, None),
+            'tg-user215614184-2411',
+        )
 
     def test_telegram_customer_server_and_account_name_policy_flow(self):
         bot = TelegramBotInstance(

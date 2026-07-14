@@ -633,11 +633,25 @@ def _render_purchase_account_name(bot: TelegramBotInstance,
     if requested_name:
         return requested_name
     template = _purchase_policy_values(bot)['account_name_template']
-    phone = ''.join(filter(str.isdigit, str(customer.primary_phone or '')))
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=request_row.telegram_user_id,
+    ).first()
+    canonical_phone = normalize_iran_mobile(
+        (identity.phone_normalized if identity else None) or customer.primary_phone,
+    )
+    if canonical_phone and canonical_phone.startswith('98') and len(canonical_phone) == 12:
+        phone = f'0{canonical_phone[2:]}'
+    else:
+        phone = ''.join(filter(str.isdigit, str(customer.primary_phone or '')))
+    telegram_username = re.sub(
+        r'[^A-Za-z0-9_]+', '', str((identity.username if identity else '') or '').lstrip('@'),
+    ) or f'user{request_row.telegram_user_id}'
     try:
         rendered = template.format(
             order_id=request_row.id,
+            phone=(phone or f'user{request_row.telegram_user_id}'),
             phone_last4=(phone[-4:] if phone else '0000'),
+            telegram_username=telegram_username,
             random4=uuid.uuid4().hex[:4],
         )
     except (KeyError, ValueError):

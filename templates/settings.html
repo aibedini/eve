@@ -595,7 +595,7 @@
                                     <input id="tgb-purchase-account-template" class="form-control" value="tg{order_id}-{phone_last4}" autocomplete="off" spellcheck="false" aria-describedby="tgb-purchase-template-help tgb-purchase-template-error">
                                     <output id="tgb-purchase-template-preview" for="tgb-purchase-account-template"><small>Preview</small><strong>tg1842-2411</strong></output>
                                 </div>
-                                <small id="tgb-purchase-template-help" class="text-secondary">Supported tokens: <code>{order_id}</code> <code>{phone_last4}</code> <code>{random4}</code></small>
+                                <small id="tgb-purchase-template-help" class="text-secondary">Supported tokens: <code>{order_id}</code> <code>{telegram_username}</code> <code>{phone}</code> <code>{phone_last4}</code> <code>{random4}</code></small>
                                 <small id="tgb-purchase-template-error" class="tgb-field-error" aria-live="polite"></small>
                             </div>
                             <div id="tgb-purchase-customer-name-note" class="tgb-purchase-safe-name" style="display:none;">
@@ -3247,13 +3247,18 @@
         let message = '';
         if (mode === 'generated') {
             const value = input.value.trim();
-            const withoutTokens = value.replace(/\{(?:order_id|phone_last4|random4)\}/g, '');
+            const withoutTokens = value.replace(/\{(?:order_id|telegram_username|phone|phone_last4|random4)\}/g, '');
             if (!value) message = 'Enter an account name template.';
             else if (value.length < 3 || value.length > 120) message = 'The template must be between 3 and 120 characters.';
             else if (/\{[^{}]*\}|[{}]/.test(withoutTokens)) message = 'Remove unsupported or incomplete template tokens.';
             else if (!/^[A-Za-z0-9_-]*$/.test(withoutTokens)) message = 'Use only Latin letters, numbers, underscore, hyphen, and supported tokens.';
             else {
-                const preview = value.replaceAll('{order_id}', '1842').replaceAll('{phone_last4}', '2411').replaceAll('{random4}', '7k2m');
+                const preview = value
+                    .replaceAll('{order_id}', '1842')
+                    .replaceAll('{telegram_username}', 'mahna')
+                    .replaceAll('{phone}', '09195292411')
+                    .replaceAll('{phone_last4}', '2411')
+                    .replaceAll('{random4}', '7k2m');
                 if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/.test(preview)) message = 'The generated preview must start with a letter or number and be 3–64 safe characters.';
             }
         }
@@ -3266,6 +3271,8 @@
         const value = document.getElementById('tgb-purchase-account-template').value.trim();
         const preview = value
             .replaceAll('{order_id}', '1842')
+            .replaceAll('{telegram_username}', 'mahna')
+            .replaceAll('{phone}', '09195292411')
             .replaceAll('{phone_last4}', '2411')
             .replaceAll('{random4}', '7k2m');
         document.querySelector('#tgb-purchase-template-preview strong').textContent = preview || '—';

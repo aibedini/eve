@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.50"
+APP_VERSION = "2.4.51"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -24756,7 +24756,9 @@ def _central_telegram_bot(create=False):
 
 TELEGRAM_PURCHASE_STRATEGIES = {'least_clients', 'priority', 'weighted_random', 'random'}
 TELEGRAM_ACCOUNT_NAME_MODES = {'generated', 'customer'}
-TELEGRAM_ACCOUNT_NAME_TOKENS = {'order_id', 'phone_last4', 'random4'}
+TELEGRAM_ACCOUNT_NAME_TOKENS = {
+    'order_id', 'phone', 'phone_last4', 'telegram_username', 'random4',
+}
 TELEGRAM_INBOUND_ROUTE_MODES = {'manual', 'auto_detect'}
 TELEGRAM_CUSTOMER_INBOUND_PROTOCOLS = {
     'vmess', 'vless', 'trojan', 'shadowsocks', 'wireguard', 'hysteria',
@@ -24782,7 +24784,13 @@ def _validate_telegram_account_name_template(value) -> str:
     if not tokens.issubset(TELEGRAM_ACCOUNT_NAME_TOKENS):
         unknown = ', '.join(sorted(tokens - TELEGRAM_ACCOUNT_NAME_TOKENS))
         raise ValueError(f'Unsupported account name template token: {unknown}')
-    rendered = template.format(order_id='1842', phone_last4='2411', random4='a7f2')
+    rendered = template.format(
+        order_id='1842',
+        phone='09195292411',
+        phone_last4='2411',
+        telegram_username='mahna',
+        random4='a7f2',
+    )
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{2,63}', rendered):
         raise ValueError('Rendered account names must be 3-64 safe ASCII characters')
     return template
