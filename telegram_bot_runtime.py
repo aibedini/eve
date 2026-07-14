@@ -114,6 +114,44 @@ class TelegramBotApi:
             "document": str(file_id),
         })
 
+    def download_file(self, file_id: str, *, max_bytes: int = 20 * 1024 * 1024):
+        """Resolve and download a Telegram file through the bot's configured routes."""
+        metadata, route_name = self.call("getFile", {"file_id": str(file_id)})
+        file_path = str((metadata or {}).get("file_path") or "").strip()
+        if not file_path or file_path.startswith('/') or '..' in file_path.split('/'):
+            raise TelegramApiError("Telegram returned an invalid file path", retryable=False)
+        routes = sorted(self._routes, key=lambda route: route.name != route_name)
+        url = f"{API_ROOT}/file/bot{self._token}/{file_path}"
+        errors: list[str] = []
+        for route in routes:
+            try:
+                response = requests.get(
+                    url, proxies=route.proxies, timeout=(10, 30), stream=True,
+                )
+                if response.status_code != 200:
+                    errors.append(f"{route.name}: HTTP {response.status_code}")
+                    continue
+                declared = int(response.headers.get('Content-Length') or 0)
+                if declared > max_bytes:
+                    raise TelegramApiError("Telegram file is too large", retryable=False)
+                chunks = []
+                size = 0
+                for chunk in response.iter_content(64 * 1024):
+                    if not chunk:
+                        continue
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise TelegramApiError("Telegram file is too large", retryable=False)
+                    chunks.append(chunk)
+                content_type = str(response.headers.get('Content-Type') or 'application/octet-stream')
+                filename = file_path.rsplit('/', 1)[-1] or 'telegram-receipt'
+                return b''.join(chunks), content_type, filename, route.name
+            except TelegramApiError:
+                raise
+            except requests.RequestException as exc:
+                errors.append(f"{route.name}: {redact_connection_error(exc, (self._token,))}")
+        raise TelegramApiError('; '.join(errors) or 'Could not download Telegram file')
+
     def answer_callback(self, callback_query_id: str, text: str = ""):
         return self.call("answerCallbackQuery", {
             "callback_query_id": callback_query_id,

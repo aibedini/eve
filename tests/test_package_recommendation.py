@@ -37,6 +37,7 @@ from app import (  # noqa: E402
     TelegramPurchaseServerRule,
     TelegramPurchaseSession,
     TelegramServiceRequest,
+    TelegramServiceRequestMessage,
     TelegramServiceSession,
     TelegramBotInstance,
     TelegramBotRuntime,
@@ -151,6 +152,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         TelegramPurchaseSession.query.delete()
         TelegramPurchaseServerRule.query.delete()
         TelegramPurchasePolicy.query.delete()
+        TelegramServiceRequestMessage.query.delete()
         TelegramServiceRequest.query.delete()
         TelegramServiceSession.query.delete()
         TelegramBotUserState.query.delete()
@@ -2048,6 +2050,162 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(_sms_db_segments_used_today(), 2)
         self.assertTrue(_sms_reserve_daily_segments(1, 3))
         self.assertFalse(_sms_reserve_daily_segments(2, 3))
+
+
+    def _make_telegram_operation_records(self, suffix='ops'):
+        reviewer = Admin(
+            username=f'claim-test-{suffix}-admin', role='superadmin',
+            is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        server = Server(
+            name=f'Operation Server {suffix}', host=f'https://{suffix}.example.test',
+            username='u', password='p', enabled=True,
+        )
+        package = Package(name=f'Operation Package {suffix}', days=30, volume=20, price=230000)
+        customer = CustomerAccount(
+            display_name='Telegram Customer', primary_phone='989195292411', preferred_language='fa',
+        )
+        bot = TelegramBotInstance(
+            scope_key=f'operation-{suffix}', display_name='Operation Bot', enabled=True,
+            test_mode=True, token_encrypted='encrypted-token',
+        )
+        db.session.add_all([reviewer, server, package, customer, bot])
+        db.session.flush()
+        identity = TelegramIdentity(
+            customer_id=customer.id, telegram_user_id=215614184,
+            telegram_chat_id=215614184, username='mahna_test', phone_normalized='989195292411',
+        )
+        ownership = ServiceOwnership(
+            customer_id=customer.id, server_id=server.id,
+            client_uuid=f'client-{suffix}', client_email_snapshot=f'g-{suffix}-09195292411',
+            verification_method='admin', verified_at=datetime.utcnow(),
+        )
+        db.session.add_all([identity, ownership])
+        db.session.flush()
+        support = TelegramServiceRequest(
+            bot_instance_id=bot.id, telegram_user_id=identity.telegram_user_id,
+            customer_id=customer.id, service_ownership_id=ownership.id,
+            request_type='support', note='I need help', status='pending',
+        )
+        purchase = TelegramPurchaseRequest(
+            bot_instance_id=bot.id, telegram_user_id=identity.telegram_user_id,
+            customer_id=customer.id, server_id=server.id, package_id=package.id,
+            amount=230000, receipt_file_id='receipt-file', receipt_kind='photo',
+            source_chat_id=identity.telegram_chat_id, source_message_id=99, status='pending',
+        )
+        db.session.add_all([support, purchase])
+        db.session.flush()
+        db.session.add_all([
+            TelegramServiceRequestMessage(
+                request_id=support.id, sender_type='customer', message='I need help',
+            ),
+            TelegramPurchaseRequestDetail(
+                request_id=purchase.id, account_name=f'tg-{suffix}-2411',
+                allocation_strategy='least_clients',
+            ),
+        ])
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+        return client, reviewer, bot, support, purchase
+
+    def test_telegram_operations_inbox_lists_purchase_and_support(self):
+        client, _, _, support, purchase = self._make_telegram_operation_records('inbox')
+
+        response = client.get('/api/telegram-operations')
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload['success'])
+        page = client.get('/telegram-operations')
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(b'Telegram Operations', page.data)
+        self.assertEqual({item['kind'] for item in payload['items']}, {'purchase', 'support'})
+        self.assertEqual(payload['counters']['waiting_review'], 1)
+        self.assertEqual(payload['counters']['open_support'], 1)
+        support_item = next(item for item in payload['items'] if item['id'] == support.id
+                            and item['kind'] == 'support')
+        purchase_item = next(item for item in payload['items'] if item['id'] == purchase.id
+                             and item['kind'] == 'purchase')
+        self.assertEqual(support_item['messages'][0]['message'], 'I need help')
+        self.assertEqual(purchase_item['telegram_username'], 'mahna_test')
+        self.assertIn(f'/purchases/{purchase.id}/receipt', purchase_item['receipt_url'])
+
+    def test_telegram_support_reply_is_delivered_and_persisted(self):
+        client, reviewer, _, support, _ = self._make_telegram_operation_records('reply')
+        api = FakeTelegramApi()
+
+        with patch('app._telegram_bot_api_client', return_value=api):
+            response = client.post(
+                f'/api/telegram-operations/services/{support.id}/reply',
+                json={'message': 'Your service was checked.', 'complete': True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['success'])
+        db.session.refresh(support)
+        self.assertEqual(support.status, 'completed')
+        saved = TelegramServiceRequestMessage.query.filter_by(
+            request_id=support.id, sender_type='admin', admin_id=reviewer.id,
+        ).one()
+        self.assertEqual(saved.message, 'Your service was checked.')
+        self.assertIn('Your service was checked.', api.messages[0]['text'])
+
+    def test_telegram_purchase_approve_provisions_and_notifies_customer(self):
+        client, reviewer, _, _, purchase = self._make_telegram_operation_records('approve')
+        api = FakeTelegramApi()
+        provision_result = {'client': {'sub_link': 'https://example.test/sub/created'}}
+
+        with patch('telegram_bot_worker._execute_purchase_request',
+                   return_value=(True, provision_result)) as execute, \
+                patch('app._telegram_bot_api_client', return_value=api):
+            response = client.post(
+                f'/api/telegram-operations/purchases/{purchase.id}/approve', json={},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['success'])
+        db.session.refresh(purchase)
+        self.assertEqual(purchase.status, 'completed')
+        execute.assert_called_once_with(purchase, reviewer)
+        self.assertIn('https://example.test/sub/created', api.messages[0]['text'])
+
+    def test_telegram_purchase_receipt_streams_without_cache(self):
+        client, _, _, _, purchase = self._make_telegram_operation_records('receipt')
+        api = MagicMock()
+        api.download_file.return_value = (b'receipt-bytes', 'image/jpeg', 'receipt.jpg', 'proxy')
+
+        with patch('app._telegram_bot_api_client', return_value=api):
+            response = client.get(
+                f'/api/telegram-operations/purchases/{purchase.id}/receipt',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b'receipt-bytes')
+        self.assertIn('no-store', response.headers.get('Cache-Control', ''))
+        self.assertEqual(response.headers.get('X-Content-Type-Options'), 'nosniff')
+        api.download_file.assert_called_once_with('receipt-file')
+
+    def test_telegram_operations_reseller_scope_blocks_unowned_requests(self):
+        client, reviewer, bot, support, purchase = self._make_telegram_operation_records('scope')
+        reviewer.role = 'reseller'
+        reviewer.is_superadmin = False
+        db.session.commit()
+
+        blocked = client.get('/api/telegram-operations').get_json()
+        blocked_receipt = client.get(
+            f'/api/telegram-operations/purchases/{purchase.id}/receipt',
+        )
+        self.assertEqual(blocked['items'], [])
+        self.assertEqual(blocked_receipt.status_code, 403)
+
+        bot.owner_admin_id = reviewer.id
+        support.ownership.reseller_id = reviewer.id
+        db.session.commit()
+        allowed = client.get('/api/telegram-operations').get_json()
+        self.assertEqual(len(allowed['items']), 2)
 
 
 if __name__ == '__main__':

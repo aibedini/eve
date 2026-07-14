@@ -100,6 +100,14 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V3a1 1 0 0 1 1-1h10l5 5v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="12" y2="17"></line></svg>
                     <span>Receipts</span>
                 </a>
+
+                <a href="{{ url_for('telegram_operations_page') }}" class="nav-item {% if request.endpoint == 'telegram_operations_page' %}active{% endif %}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
+                        <path d="M8 9h8"></path><path d="M8 13h5"></path>
+                    </svg>
+                    <span>Telegram Inbox</span>
+                </a>
                 
                 <a href="{{ url_for('finance_page') }}" class="nav-item {% if request.endpoint == 'finance_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>

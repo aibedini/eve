@@ -44,6 +44,7 @@ from app import (  # noqa: E402
     TelegramPurchaseServerRule,
     TelegramPurchaseSession,
     TelegramServiceRequest,
+    TelegramServiceRequestMessage,
     TelegramServiceSession,
     _telegram_bot_api_client,
     _decrypt_telegram_secret,
@@ -836,6 +837,12 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
     )
     db.session.add(row)
     db.session.flush()
+    if request_type == 'support' and row.note:
+        db.session.add(TelegramServiceRequestMessage(
+            request_id=row.id,
+            sender_type='customer',
+            message=row.note,
+        ))
     return row, False
 
 

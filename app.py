@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.51"
+APP_VERSION = "2.4.52"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8325,6 +8325,25 @@ class TelegramServiceRequest(db.Model):
 
     ownership = db.relationship('ServiceOwnership')
     package = db.relationship('Package')
+
+
+class TelegramServiceRequestMessage(db.Model):
+    """Durable operator/customer conversation attached to a Telegram support request."""
+    __tablename__ = 'telegram_service_request_messages'
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_service_requests.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    sender_type = db.Column(db.String(16), nullable=False)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='SET NULL'), nullable=True)
+    message = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    admin = db.relationship('Admin')
+    request = db.relationship('TelegramServiceRequest', backref=db.backref(
+        'messages', lazy=True, cascade='all, delete-orphan', order_by='TelegramServiceRequestMessage.created_at',
+    ))
 
 
 class TelegramPurchaseSession(db.Model):
@@ -25343,6 +25362,387 @@ def _telegram_egress_from_payload(profile, data):
     else:
         build_xray_config_from_uri(_decrypt_telegram_secret(profile.config_encrypted), profile.local_port)
     return profile
+
+
+def _telegram_operations_admin():
+    return db.session.get(Admin, session.get('admin_id'))
+
+
+def _telegram_operation_identity(telegram_user_id, customer_id=None):
+    query = TelegramIdentity.query.filter_by(telegram_user_id=telegram_user_id)
+    if customer_id is not None:
+        identity = query.filter_by(customer_id=customer_id).first()
+        if identity:
+            return identity
+    return query.first()
+
+
+def _telegram_purchase_visible_to(admin, row):
+    if not admin:
+        return False
+    if admin.is_superadmin or str(admin.role or '').lower() in ('admin', 'superadmin'):
+        return True
+    bot = db.session.get(TelegramBotInstance, row.bot_instance_id)
+    return str(admin.role or '').lower() == 'reseller' and bot and bot.owner_admin_id == admin.id
+
+
+def _telegram_service_visible_to(admin, row):
+    if not admin:
+        return False
+    if admin.is_superadmin or str(admin.role or '').lower() in ('admin', 'superadmin'):
+        return True
+    return (str(admin.role or '').lower() == 'reseller' and row.ownership
+            and row.ownership.reseller_id == admin.id)
+
+
+def _telegram_operation_customer_payload(row, identity_map=None, customer_map=None):
+    identity = ((identity_map or {}).get(int(row.telegram_user_id))
+                if identity_map is not None else
+                _telegram_operation_identity(row.telegram_user_id, row.customer_id))
+    customer = ((customer_map or {}).get(int(row.customer_id))
+                if customer_map is not None else db.session.get(CustomerAccount, row.customer_id))
+    phone = ((customer.primary_phone if customer else None)
+             or (identity.phone_normalized if identity else None))
+    return {
+        'telegram_user_id': int(row.telegram_user_id),
+        'telegram_username': identity.username if identity else None,
+        'telegram_name': (' '.join(filter(None, [identity.first_name, identity.last_name])).strip()
+                          if identity else None),
+        'phone': phone,
+        'customer_phone': phone,
+        'customer_name': customer.display_name if customer else None,
+    }
+
+
+def _serialize_telegram_purchase(row, identity_map=None, customer_map=None):
+    detail = row.detail
+    allocation = row.inbound_allocation
+    payload = {
+        'id': row.id,
+        'kind': 'purchase',
+        'status': row.status,
+        'created_at': row.created_at.isoformat() if row.created_at else None,
+        'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+        'reviewed_at': row.reviewed_at.isoformat() if row.reviewed_at else None,
+        'server_name': row.server.name if row.server else None,
+        'account_name': detail.account_name if detail else None,
+        'package_name': row.package.name if row.package else None,
+        'amount': int(row.amount or 0),
+        'note': None,
+        'receipt_kind': row.receipt_kind,
+        'receipt_url': url_for('telegram_purchase_receipt', request_id=row.id),
+        'allocation_mode': allocation.mode if allocation else None,
+        'inbound_ids': allocation.inbound_ids() if allocation else [],
+        'messages': [],
+    }
+    payload.update(_telegram_operation_customer_payload(row, identity_map, customer_map))
+    return payload
+
+
+def _serialize_telegram_service(row, identity_map=None, customer_map=None):
+    ownership = row.ownership
+    messages = [{
+        'id': message.id,
+        'sender_type': message.sender_type,
+        'sender_name': message.admin.username if message.admin else None,
+        'message': message.message,
+        'created_at': message.created_at.isoformat() if message.created_at else None,
+    } for message in row.messages]
+    if row.request_type == 'support' and row.note and not messages:
+        messages.append({
+            'id': None, 'sender_type': 'customer', 'sender_name': None,
+            'message': row.note,
+            'created_at': row.created_at.isoformat() if row.created_at else None,
+        })
+    payload = {
+        'id': row.id,
+        'kind': row.request_type,
+        'status': row.status,
+        'created_at': row.created_at.isoformat() if row.created_at else None,
+        'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+        'reviewed_at': row.reviewed_at.isoformat() if row.reviewed_at else None,
+        'server_name': ownership.server.name if ownership and ownership.server else None,
+        'account_name': ownership.client_email_snapshot if ownership else None,
+        'package_name': row.package.name if row.package else None,
+        'amount': int(row.amount or 0),
+        'note': row.note,
+        'receipt_url': None,
+        'messages': messages,
+    }
+    payload.update(_telegram_operation_customer_payload(row, identity_map, customer_map))
+    return payload
+
+
+def _telegram_operation_notify(row, *, result=None, reply=None):
+    """Best-effort customer notification; an API outage must not undo an operator action."""
+    identity = _telegram_operation_identity(row.telegram_user_id, row.customer_id)
+    if not identity or not identity.telegram_chat_id:
+        return False
+    bot = db.session.get(TelegramBotInstance, row.bot_instance_id)
+    if not bot:
+        return False
+    customer = db.session.get(CustomerAccount, row.customer_id)
+    language = str(getattr(customer, 'preferred_language', '') or 'fa')
+    try:
+        from telegram_bot_worker import COPY
+        language_copy = COPY.get(language, COPY['fa'])
+        if reply is not None:
+            heading = 'پاسخ پشتیبانی:' if language == 'fa' else 'Support reply:'
+            text_value = f'{heading}\n{reply}'
+        elif isinstance(row, TelegramPurchaseRequest):
+            if row.status == 'completed':
+                result = result if isinstance(result, dict) else {}
+                client = result.get('client') if isinstance(result.get('client'), dict) else {}
+                delivery_link = str(client.get('dashboard_link') or client.get('dash_sub_url')
+                                    or client.get('sub_link') or '').strip()
+                text_value = language_copy['purchase_completed'].format(
+                    account_name=(row.detail.account_name if row.detail else ''),
+                    delivery_link=delivery_link,
+                ).rstrip()
+            else:
+                key = 'purchase_approved' if row.status == 'approved' else 'purchase_rejected'
+                text_value = language_copy[key]
+        else:
+            key = 'request_completed' if row.status == 'completed' else 'request_rejected'
+            text_value = language_copy[key]
+        _telegram_bot_api_client(bot).send_message(identity.telegram_chat_id, text_value)
+        return True
+    except Exception as exc:
+        logging.warning('Telegram operation notification failed for %s #%s: %s',
+                        type(row).__name__, row.id, redact_connection_error(exc))
+        return False
+
+
+@app.route('/telegram-operations')
+@login_required
+def telegram_operations_page():
+    user = _telegram_operations_admin()
+    return render_template(
+        'telegram_operations.html', current_user=user,
+        is_superadmin=bool(user and user.is_superadmin),
+        app_version=APP_VERSION, admin_username=user.username if user else '',
+        role=user.role if user else '',
+    )
+
+
+@app.route('/api/telegram-operations', methods=['GET'])
+@login_required
+def get_telegram_operations():
+    admin = _telegram_operations_admin()
+    kind = str(request.args.get('kind') or 'all').strip().lower()
+    status = str(request.args.get('status') or 'all').strip().lower()
+    search = str(request.args.get('search') or '').strip().lower()[:120]
+    purchases = TelegramPurchaseRequest.query.options(
+        joinedload(TelegramPurchaseRequest.server),
+        joinedload(TelegramPurchaseRequest.package),
+        joinedload(TelegramPurchaseRequest.detail),
+        joinedload(TelegramPurchaseRequest.inbound_allocation),
+    ).order_by(
+        TelegramPurchaseRequest.created_at.desc(), TelegramPurchaseRequest.id.desc(),
+    ).limit(250).all()
+    services = TelegramServiceRequest.query.options(
+        joinedload(TelegramServiceRequest.ownership).joinedload(ServiceOwnership.server),
+        joinedload(TelegramServiceRequest.package),
+        joinedload(TelegramServiceRequest.messages).joinedload(TelegramServiceRequestMessage.admin),
+    ).order_by(
+        TelegramServiceRequest.created_at.desc(), TelegramServiceRequest.id.desc(),
+    ).limit(250).all()
+    visible_purchases = [row for row in purchases if _telegram_purchase_visible_to(admin, row)]
+    visible_services = [row for row in services if _telegram_service_visible_to(admin, row)]
+    visible_rows = visible_purchases + visible_services
+    telegram_ids = {int(row.telegram_user_id) for row in visible_rows}
+    customer_ids = {int(row.customer_id) for row in visible_rows}
+    identity_map = {int(row.telegram_user_id): row for row in TelegramIdentity.query.filter(
+        TelegramIdentity.telegram_user_id.in_(telegram_ids or {-1}),
+    ).all()}
+    customer_map = {int(row.id): row for row in CustomerAccount.query.filter(
+        CustomerAccount.id.in_(customer_ids or {-1}),
+    ).all()}
+    all_items = ([_serialize_telegram_purchase(row, identity_map, customer_map)
+                  for row in visible_purchases]
+                 + [_serialize_telegram_service(row, identity_map, customer_map)
+                    for row in visible_services])
+    all_items.sort(key=lambda item: (item.get('created_at') or '', item['id']), reverse=True)
+    today = datetime.utcnow().date()
+    counters = {
+        'waiting_review': sum(item['status'] == 'pending' and item['kind'] in ('purchase', 'renewal')
+                              for item in all_items),
+        'provisioning_retry': sum(item['status'] == 'approved' and item['kind'] == 'purchase'
+                                  for item in all_items),
+        'open_support': sum(item['status'] == 'pending' and item['kind'] == 'support'
+                            for item in all_items),
+        'completed_today': sum(
+            item['status'] == 'completed' and item.get('updated_at')
+            and datetime.fromisoformat(item['updated_at']).date() == today
+            for item in all_items
+        ),
+    }
+    filtered = []
+    for item in all_items:
+        if kind != 'all' and item['kind'] != kind:
+            continue
+        if status != 'all' and item['status'] != status:
+            continue
+        if search:
+            haystack = ' '.join(str(item.get(key) or '') for key in (
+                'id', 'telegram_user_id', 'telegram_username', 'phone', 'customer_name',
+                'server_name', 'account_name', 'package_name', 'note',
+            )).lower()
+            if search not in haystack:
+                continue
+        filtered.append(item)
+    return jsonify({'success': True, 'items': filtered, 'counters': counters})
+
+
+def _telegram_purchase_for_admin(request_id):
+    row = db.session.get(TelegramPurchaseRequest, request_id)
+    if not row:
+        return None, (jsonify({'success': False, 'error': 'Purchase request not found'}), 404)
+    if not _telegram_purchase_visible_to(_telegram_operations_admin(), row):
+        return None, (jsonify({'success': False, 'error': 'Access denied'}), 403)
+    return row, None
+
+
+def _telegram_service_for_admin(request_id):
+    row = db.session.get(TelegramServiceRequest, request_id)
+    if not row:
+        return None, (jsonify({'success': False, 'error': 'Service request not found'}), 404)
+    if not _telegram_service_visible_to(_telegram_operations_admin(), row):
+        return None, (jsonify({'success': False, 'error': 'Access denied'}), 403)
+    return row, None
+
+
+@app.route('/api/telegram-operations/purchases/<int:request_id>/<action>', methods=['POST'])
+@login_required
+def review_telegram_purchase_operation(request_id, action):
+    if action not in ('approve', 'retry', 'reject'):
+        return jsonify({'success': False, 'error': 'Invalid action'}), 404
+    row, error = _telegram_purchase_for_admin(request_id)
+    if error:
+        return error
+    admin = _telegram_operations_admin()
+    if action == 'reject':
+        if row.status != 'pending':
+            return jsonify({'success': False, 'error': 'Only pending purchases can be rejected'}), 409
+        row.status = 'rejected'
+        row.reviewed_by_admin_id = admin.id
+        row.reviewed_at = datetime.utcnow()
+        db.session.commit()
+        _telegram_operation_notify(row)
+        return jsonify({'success': True, 'item': _serialize_telegram_purchase(row)})
+    if row.status not in ('pending', 'approved'):
+        return jsonify({'success': False, 'error': 'This purchase is already completed or rejected'}), 409
+    if action == 'retry' and row.status != 'approved':
+        return jsonify({'success': False, 'error': 'Retry is only available after payment approval'}), 409
+    if row.status == 'pending':
+        row.status = 'approved'
+        row.reviewed_by_admin_id = admin.id
+        row.reviewed_at = datetime.utcnow()
+        db.session.flush()
+    from telegram_bot_worker import _execute_purchase_request
+    provisioned, result = _execute_purchase_request(row, admin)
+    if not provisioned:
+        db.session.commit()
+        _telegram_operation_notify(row)
+        return jsonify({'success': False, 'error': str(result),
+                        'item': _serialize_telegram_purchase(row)}), 409
+    row.status = 'completed'
+    db.session.commit()
+    _telegram_operation_notify(row, result=result)
+    return jsonify({'success': True, 'item': _serialize_telegram_purchase(row)})
+
+
+@app.route('/api/telegram-operations/purchases/<int:request_id>/receipt', methods=['GET'])
+@login_required
+def telegram_purchase_receipt(request_id):
+    row, error = _telegram_purchase_for_admin(request_id)
+    if error:
+        return error
+    bot = db.session.get(TelegramBotInstance, row.bot_instance_id)
+    if not bot:
+        return jsonify({'success': False, 'error': 'Telegram bot is unavailable'}), 404
+    try:
+        content, content_type, filename, route_name = _telegram_bot_api_client(bot).download_file(
+            row.receipt_file_id,
+        )
+        safe_inline_types = {'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'}
+        content_type = str(content_type or '').split(';', 1)[0].strip().lower()
+        inline = content_type in safe_inline_types
+        response = send_file(
+            io.BytesIO(content), mimetype=(content_type if inline else 'application/octet-stream'),
+            download_name=(secure_filename(filename) or 'telegram-receipt'),
+            as_attachment=not inline, max_age=0,
+        )
+        response.headers['Cache-Control'] = 'no-store, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Telegram-Route'] = route_name
+        return response
+    except Exception as exc:
+        safe_error = redact_connection_error(exc)
+        logging.warning('Telegram receipt download failed for purchase #%s: %s', row.id, safe_error)
+        return jsonify({'success': False, 'error': safe_error}), 502
+
+
+@app.route('/api/telegram-operations/services/<int:request_id>/<action>', methods=['POST'])
+@login_required
+def review_telegram_service_operation(request_id, action):
+    if action not in ('complete', 'reject'):
+        return jsonify({'success': False, 'error': 'Invalid action'}), 404
+    row, error = _telegram_service_for_admin(request_id)
+    if error:
+        return error
+    if row.status != 'pending':
+        return jsonify({'success': False, 'error': 'This request has already been reviewed'}), 409
+    admin = _telegram_operations_admin()
+    if action == 'complete' and row.request_type == 'renewal':
+        from telegram_bot_worker import _execute_renewal_request
+        renewed, result = _execute_renewal_request(row, admin)
+        if not renewed:
+            return jsonify({'success': False, 'error': str(result),
+                            'item': _serialize_telegram_service(row)}), 409
+    row.status = 'completed' if action == 'complete' else 'rejected'
+    row.reviewed_by_admin_id = admin.id
+    row.reviewed_at = datetime.utcnow()
+    db.session.commit()
+    _telegram_operation_notify(row)
+    return jsonify({'success': True, 'item': _serialize_telegram_service(row)})
+
+
+@app.route('/api/telegram-operations/services/<int:request_id>/reply', methods=['POST'])
+@login_required
+def reply_telegram_support_operation(request_id):
+    row, error = _telegram_service_for_admin(request_id)
+    if error:
+        return error
+    if row.request_type != 'support':
+        return jsonify({'success': False, 'error': 'Replies are only available for support requests'}), 409
+    if row.status != 'pending':
+        return jsonify({'success': False, 'error': 'This support request is closed'}), 409
+    data = request.get_json(silent=True) or {}
+    message = str(data.get('message') or '').strip()
+    if not message or len(message) > 4000:
+        return jsonify({'success': False, 'error': 'Reply must be between 1 and 4000 characters'}), 400
+    admin = _telegram_operations_admin()
+    identity = _telegram_operation_identity(row.telegram_user_id, row.customer_id)
+    bot = db.session.get(TelegramBotInstance, row.bot_instance_id)
+    if not identity or not identity.telegram_chat_id or not bot:
+        return jsonify({'success': False, 'error': 'Customer Telegram chat is unavailable'}), 409
+    try:
+        if not _telegram_operation_notify(row, reply=message):
+            return jsonify({'success': False, 'error': 'Telegram delivery failed; reply was not saved'}), 502
+        db.session.add(TelegramServiceRequestMessage(
+            request_id=row.id, sender_type='admin', admin_id=admin.id, message=message,
+        ))
+        if bool(data.get('complete')):
+            row.status = 'completed'
+            row.reviewed_by_admin_id = admin.id
+            row.reviewed_at = datetime.utcnow()
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': redact_connection_error(exc)}), 502
+    return jsonify({'success': True, 'item': _serialize_telegram_service(row)})
 
 
 @app.route('/api/settings/telegram-bots', methods=['GET'])
