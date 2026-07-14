@@ -1254,6 +1254,95 @@ def _support_status_label(request_row: TelegramServiceRequest, language: str) ->
     return COPY[language][f"support_status_{_support_waiting_state(request_row)}"]
 
 
+def _purchase_status_label(request_row: TelegramPurchaseRequest, language: str) -> str:
+    status = str(request_row.status or 'pending').lower()
+    return COPY[language].get(f'purchase_status_{status}', status.replace('_', ' ').title())
+
+
+def _customer_purchase_order(bot_id: int, user_id: int, request_id: int):
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not identity or not identity.customer_id:
+        return None
+    return TelegramPurchaseRequest.query.filter_by(
+        id=request_id,
+        bot_instance_id=bot_id,
+        telegram_user_id=user_id,
+        customer_id=identity.customer_id,
+    ).first()
+
+
+def _send_purchase_orders(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
+                          user_id: int, language: str):
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not identity or not identity.customer_id:
+        api.send_message(chat_id, COPY[language]['purchase_orders_empty'])
+        return
+    rows = TelegramPurchaseRequest.query.filter_by(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        customer_id=identity.customer_id,
+    ).order_by(
+        TelegramPurchaseRequest.updated_at.desc(), TelegramPurchaseRequest.id.desc(),
+    ).limit(20).all()
+    if not rows:
+        api.send_message(chat_id, COPY[language]['purchase_orders_empty'])
+        return
+    keyboard = []
+    for row in rows:
+        package_name = getattr(row.package, 'name', '') or f'#{row.package_id}'
+        label = f"#{row.id} · {_purchase_status_label(row, language)} · {package_name}"
+        keyboard.append([{
+            'text': label[:64],
+            'callback_data': f'purchase-order:{row.id}',
+        }])
+    api.send_message(
+        chat_id, COPY[language]['purchase_orders_list'],
+        reply_markup={'inline_keyboard': keyboard},
+    )
+
+
+def _send_purchase_order(api: TelegramBotApi, chat_id: int, language: str,
+                         request_row: TelegramPurchaseRequest):
+    server_name = getattr(request_row.server, 'name', '') or f'#{request_row.server_id}'
+    package_name = getattr(request_row.package, 'name', '') or f'#{request_row.package_id}'
+    account_name = str(getattr(request_row.detail, 'account_name', '') or '').strip()
+    lines = [
+        f"<b>{html.escape(COPY[language]['purchase_order_title'].format(order_id=request_row.id))}</b>",
+        f"{COPY[language]['service_status']}: <b>{html.escape(_purchase_status_label(request_row, language))}</b>",
+        f"{COPY[language]['service_server']}: <b>{html.escape(str(server_name))}</b>",
+        f"{COPY[language]['purchase_order_package']}: <b>{html.escape(str(package_name))}</b>",
+        f"{COPY[language]['purchase_order_amount']}: <b>{int(request_row.amount or 0):,} T</b>",
+    ]
+    if account_name:
+        lines.append(
+            f"{COPY[language]['service_account']}: <code>{html.escape(account_name)}</code>"
+        )
+    keyboard = [[{
+        'text': COPY[language]['purchase_order_refresh'],
+        'callback_data': f'purchase-order:{request_row.id}',
+    }]]
+    if request_row.status == 'completed' and account_name:
+        ownership = next((row for row in ServiceOwnership.query.filter_by(
+            customer_id=request_row.customer_id,
+            server_id=request_row.server_id,
+            revoked_at=None,
+        ).all() if str(row.client_email_snapshot or '').strip().lower() == account_name.lower()), None)
+        if ownership:
+            keyboard.append([{
+                'text': COPY[language]['menu_services'],
+                'callback_data': f'service:{ownership.id}',
+            }])
+    if request_row.status in ('completed', 'rejected', 'cancelled'):
+        keyboard.append([{
+            'text': COPY[language]['purchase_order_buy_again'],
+            'callback_data': 'purchase-start',
+        }])
+    api.send_message(
+        chat_id, '\n'.join(lines), parse_mode='HTML',
+        reply_markup={'inline_keyboard': keyboard},
+    )
+
+
 def _send_support_requests(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
                            user_id: int, language: str):
     rows = TelegramServiceRequest.query.filter_by(
@@ -1868,10 +1957,20 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
                     account_name=request_row.detail.account_name,
                     delivery_link=delivery_link,
                 ).rstrip(),
+                reply_markup={'inline_keyboard': [[{
+                    'text': COPY[language]['menu_orders'],
+                    'callback_data': f'purchase-order:{request_row.id}',
+                }]]},
             )
         else:
             key = 'purchase_approved' if request_row.status == 'approved' else 'purchase_rejected'
-            api.send_message(identity.telegram_chat_id, COPY[language][key])
+            api.send_message(
+                identity.telegram_chat_id, COPY[language][key],
+                reply_markup={'inline_keyboard': [[{
+                    'text': COPY[language]['menu_orders'],
+                    'callback_data': f'purchase-order:{request_row.id}',
+                }]]},
+            )
     return True
 
 
@@ -1974,6 +2073,31 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         api.answer_callback(callback_id)
         _send_owned_services(api, chat_id, language, identity)
+        return
+    if data == 'purchase-list':
+        api.answer_callback(callback_id)
+        _send_purchase_orders(api, bot, chat_id, user_id, language)
+        return
+    if data == 'purchase-start':
+        state.step = 'verified'
+        api.answer_callback(callback_id)
+        if _purchase_policy_values(bot)['customer_selects_server']:
+            _send_purchase_servers(api, bot, chat_id, language)
+        else:
+            _send_purchase_packages(api, bot, chat_id, language, None)
+        return
+    if data.startswith('purchase-order:'):
+        try:
+            request_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        request_row = _customer_purchase_order(bot.id, user_id, request_id)
+        api.answer_callback(callback_id)
+        if request_row:
+            _send_purchase_order(api, chat_id, language, request_row)
+        else:
+            api.send_message(chat_id, COPY[language]['purchase_order_missing'])
         return
     if data == 'support-list':
         api.answer_callback(callback_id)
@@ -2557,7 +2681,13 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     session_row.bank_card_id = None
     state.step = 'verified'
     db.session.flush()
-    api.send_message(chat_id, COPY[language]['purchase_pending'])
+    api.send_message(
+        chat_id, COPY[language]['purchase_pending'],
+        reply_markup={'inline_keyboard': [[{
+            'text': COPY[language]['menu_orders'],
+            'callback_data': f'purchase-order:{request_row.id}',
+        }]]},
+    )
     _notify_purchase_admins(api, request_row)
 
 
@@ -2719,6 +2849,9 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
                 _send_purchase_packages(api, bot, chat_id, state.language, None)
         else:
             _send_contact_prompt(api, chat_id, state.language)
+    elif text in {COPY["fa"]["menu_orders"], COPY["en"]["menu_orders"]}:
+        state.step = 'verified'
+        _send_purchase_orders(api, bot, chat_id, user_id, state.language)
     elif text in {COPY["fa"]["menu_add_service"], COPY["en"]["menu_add_service"]}:
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
