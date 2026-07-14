@@ -95,11 +95,24 @@ class TelegramBotApi:
     def send_message(self, chat_id: int, text: str, **extra):
         return self.call("sendMessage", {"chat_id": int(chat_id), "text": text, **extra})
 
-    def copy_message(self, chat_id: int, from_chat_id: int, message_id: int):
+    def copy_message(self, chat_id: int, from_chat_id: int, message_id: int, **extra):
         return self.call("copyMessage", {
             "chat_id": int(chat_id),
             "from_chat_id": int(from_chat_id),
             "message_id": int(message_id),
+            **extra,
+        })
+
+    def create_forum_topic(self, chat_id: int, name: str):
+        return self.call("createForumTopic", {
+            "chat_id": int(chat_id),
+            "name": str(name)[:128],
+        })
+
+    def close_forum_topic(self, chat_id: int, message_thread_id: int):
+        return self.call("closeForumTopic", {
+            "chat_id": int(chat_id),
+            "message_thread_id": int(message_thread_id),
         })
 
     def send_photo(self, chat_id: int, file_id: str, **extra):

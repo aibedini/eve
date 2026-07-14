@@ -987,6 +987,90 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
                     api.copy_message(admin_chat_id, source_chat, source_message)
         except (TypeError, ValueError, TelegramApiError):
             continue
+    if request_row.request_type == 'support':
+        _notify_support_group(api, request_row, incoming_message=incoming_message)
+
+
+def _support_group_route(api: TelegramBotApi, request_row: TelegramServiceRequest):
+    """Return the configured group and create one forum topic per ticket when enabled."""
+    bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
+    if not bot or not bot.support_group_enabled or not bot.support_group_chat_id:
+        return None, {}
+    chat_id = int(bot.support_group_chat_id)
+    request_row.support_group_chat_id = chat_id
+    if bot.support_group_topics and not request_row.support_message_thread_id:
+        ownership = request_row.ownership
+        server_name = getattr(getattr(ownership, 'server', None), 'name', '') or 'Server'
+        account = getattr(ownership, 'client_email_snapshot', '') or f'account-{request_row.id}'
+        topic_name = f'#{request_row.id} {server_name} · {account}'[:128]
+        try:
+            result, _route_name = api.create_forum_topic(chat_id, topic_name)
+            request_row.support_message_thread_id = int(
+                (result or {}).get('message_thread_id') or 0
+            ) or None
+        except TelegramApiError:
+            # A regular group (or a forum where the bot lacks topic permission)
+            # still receives the ticket card; operators reply directly to it.
+            request_row.support_message_thread_id = None
+    extra = ({'message_thread_id': int(request_row.support_message_thread_id)}
+             if request_row.support_message_thread_id else {})
+    return chat_id, extra
+
+
+def _notify_support_group(api: TelegramBotApi, request_row: TelegramServiceRequest,
+                          *, incoming_message: dict | None = None):
+    chat_id, thread_extra = _support_group_route(api, request_row)
+    if not chat_id:
+        return
+    ownership = request_row.ownership
+    server_name = getattr(getattr(ownership, 'server', None), 'name', '') or '-'
+    account = getattr(ownership, 'client_email_snapshot', '') or f'#{request_row.id}'
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=request_row.telegram_user_id,
+        customer_id=request_row.customer_id,
+    ).first()
+    username = str(getattr(identity, 'username', '') or '').lstrip('@')
+    private_url = (f'https://t.me/{username}' if username
+                   else f'tg://user?id={request_row.telegram_user_id}')
+    lines = [
+        f'🎫 Support ticket #{request_row.id}',
+        f'Server: {server_name}',
+        f'Account: {account}',
+        f'Telegram user: {request_row.telegram_user_id}',
+    ]
+    if request_row.note:
+        lines.extend(['', f'Customer: {request_row.note[:2500]}'])
+    keyboard = [[
+        {'text': '👤 Open PV', 'url': private_url},
+        {'text': '✅ Close ticket', 'callback_data': f'admin-support:{request_row.id}:close'},
+    ]]
+    panel_url = _public_base_url().rstrip('/')
+    if panel_url:
+        keyboard.append([{
+            'text': '🖥 Open Eve inbox',
+            'url': f'{panel_url}/telegram-operations?kind=support&request={request_row.id}',
+        }])
+    try:
+        send_extra = dict(thread_extra)
+        if not thread_extra and request_row.support_group_message_id:
+            send_extra['reply_parameters'] = {
+                'message_id': int(request_row.support_group_message_id),
+            }
+        result, _route_name = api.send_message(
+            chat_id, '\n'.join(lines),
+            reply_markup={'inline_keyboard': keyboard},
+            **send_extra,
+        )
+        if thread_extra or not request_row.support_group_message_id:
+            request_row.support_group_message_id = int(
+                (result or {}).get('message_id') or 0
+            ) or request_row.support_group_message_id
+        source_chat = int(((incoming_message or {}).get('chat') or {}).get('id') or 0)
+        source_message = int((incoming_message or {}).get('message_id') or 0)
+        if source_chat and source_message and _support_attachment_from_message(incoming_message or {}):
+            api.copy_message(chat_id, source_chat, source_message, **send_extra)
+    except TelegramApiError:
+        return
 
 
 def _service_request_reviewer(user_id: int, request_row: TelegramServiceRequest):
@@ -1235,7 +1319,19 @@ def _handle_admin_support_callback(api: TelegramBotApi, bot: TelegramBotInstance
                 }]]},
             )
         if chat_id:
-            api.send_message(chat_id, f'Support ticket #{request_row.id} closed.')
+            callback_thread = int(
+                ((callback.get('message') or {}).get('message_thread_id') or 0)
+            ) or None
+            extra = {'message_thread_id': callback_thread} if callback_thread else {}
+            api.send_message(chat_id, f'Support ticket #{request_row.id} closed.', **extra)
+        if request_row.support_group_chat_id and request_row.support_message_thread_id:
+            try:
+                api.close_forum_topic(
+                    request_row.support_group_chat_id,
+                    request_row.support_message_thread_id,
+                )
+            except TelegramApiError:
+                pass
         return True
     state = _state(bot, user_id)
     session_row = _service_session(bot.id, user_id)
@@ -2301,6 +2397,120 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     _notify_purchase_admins(api, request_row)
 
 
+def _support_request_for_group_message(bot: TelegramBotInstance, message: dict):
+    chat_id = int((message.get('chat') or {}).get('id') or 0)
+    if (not bot.support_group_enabled or not bot.support_group_chat_id
+            or chat_id != int(bot.support_group_chat_id)):
+        return None
+    thread_id = int(message.get('message_thread_id') or 0)
+    query = TelegramServiceRequest.query.filter_by(
+        bot_instance_id=bot.id,
+        request_type='support',
+        status='pending',
+        support_group_chat_id=chat_id,
+    )
+    if thread_id:
+        return query.filter_by(support_message_thread_id=thread_id).first()
+    reply_to = message.get('reply_to_message') if isinstance(message.get('reply_to_message'), dict) else {}
+    reply_message_id = int(reply_to.get('message_id') or 0)
+    if reply_message_id:
+        return query.filter_by(support_group_message_id=reply_message_id).first()
+    return None
+
+
+def _handle_support_group_message(api: TelegramBotApi, bot: TelegramBotInstance,
+                                  message: dict) -> bool:
+    """Relay authorized operator messages from a configured group/topic to the customer."""
+    request_row = _support_request_for_group_message(bot, message)
+    if not request_row:
+        return False
+    sender = message.get('from') or {}
+    if sender.get('is_bot') or not sender.get('id'):
+        return True
+    reviewer = _service_request_reviewer(int(sender['id']), request_row)
+    if not reviewer:
+        return True
+    text = str(message.get('text') or message.get('caption') or '').strip()[:4000]
+    attachment = _support_attachment_from_message(message)
+    if text.lower() in ('/close', '/close@' + str(bot.bot_username or '').lower()):
+        request_row.status = 'completed'
+        request_row.reviewed_by_admin_id = reviewer.id
+        request_row.reviewed_at = datetime.utcnow()
+        request_row.updated_at = datetime.utcnow()
+        customer = db.session.get(CustomerAccount, request_row.customer_id)
+        language = str(getattr(customer, 'preferred_language', '') or 'fa')
+        language = language if language in COPY else 'fa'
+        identity = TelegramIdentity.query.filter_by(
+            telegram_user_id=request_row.telegram_user_id,
+            customer_id=request_row.customer_id,
+        ).first()
+        if identity and identity.telegram_chat_id:
+            try:
+                api.send_message(identity.telegram_chat_id, COPY[language]['request_completed'])
+            except TelegramApiError:
+                pass
+        thread_id = int(message.get('message_thread_id') or 0)
+        try:
+            api.send_message(
+                int((message.get('chat') or {}).get('id')),
+                f'✅ Support ticket #{request_row.id} closed.',
+                **({'message_thread_id': thread_id} if thread_id else {}),
+            )
+        except TelegramApiError:
+            pass
+        if request_row.support_message_thread_id:
+            try:
+                api.close_forum_topic(
+                    request_row.support_group_chat_id,
+                    request_row.support_message_thread_id,
+                )
+            except TelegramApiError:
+                pass
+        return True
+    if (not text and not attachment) or text.startswith('/'):
+        return True
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=request_row.telegram_user_id,
+        customer_id=request_row.customer_id,
+    ).first()
+    if not identity or not identity.telegram_chat_id:
+        return True
+    try:
+        if attachment:
+            api.copy_message(
+                identity.telegram_chat_id,
+                int((message.get('chat') or {}).get('id')),
+                int(message.get('message_id') or 0),
+            )
+        else:
+            customer = db.session.get(CustomerAccount, request_row.customer_id)
+            language = str(getattr(customer, 'preferred_language', '') or 'fa')
+            heading = 'پاسخ پشتیبانی:' if language == 'fa' else 'Support reply:'
+            api.send_message(identity.telegram_chat_id, f'{heading}\n{text}')
+    except TelegramApiError:
+        return True
+    db.session.add(TelegramServiceRequestMessage(
+        request_id=request_row.id,
+        sender_type='admin',
+        admin_id=reviewer.id,
+        message=text,
+        source_chat_id=int((message.get('chat') or {}).get('id')),
+        source_message_id=int(message.get('message_id') or 0),
+        **(attachment or {}),
+    ))
+    request_row.updated_at = datetime.utcnow()
+    thread_id = int(message.get('message_thread_id') or 0)
+    try:
+        api.send_message(
+            int((message.get('chat') or {}).get('id')),
+            f'✅ Reply delivered for ticket #{request_row.id}.',
+            **({'message_thread_id': thread_id} if thread_id else {}),
+        )
+    except TelegramApiError:
+        pass
+    return True
+
+
 def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict):
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
@@ -2381,7 +2591,12 @@ def process_update(api: TelegramBotApi, bot: TelegramBotInstance, update: dict):
     if isinstance(update.get("callback_query"), dict):
         _handle_callback(api, bot, update["callback_query"])
     elif isinstance(update.get("message"), dict):
-        _handle_message(api, bot, update["message"])
+        message = update["message"]
+        chat_type = str((message.get('chat') or {}).get('type') or '')
+        if chat_type in ('group', 'supergroup'):
+            _handle_support_group_message(api, bot, message)
+        else:
+            _handle_message(api, bot, message)
 
 
 def _poll_bot(bot: TelegramBotInstance):

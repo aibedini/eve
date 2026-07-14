@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.54"
+APP_VERSION = "2.4.55"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8137,6 +8137,9 @@ class TelegramBotInstance(db.Model):
     default_language = db.Column(db.String(12), nullable=False, default='fa')
     connection_mode = db.Column(db.String(24), nullable=False, default='proxy_first')
     transport_mode = db.Column(db.String(24), nullable=False, default='polling')
+    support_group_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    support_group_chat_id = db.Column(db.BigInteger, nullable=True)
+    support_group_topics = db.Column(db.Boolean, nullable=False, default=True)
     last_test_status = db.Column(db.String(24), nullable=True)
     last_test_route = db.Column(db.String(120), nullable=True)
     last_test_latency_ms = db.Column(db.Integer, nullable=True)
@@ -8168,6 +8171,9 @@ class TelegramBotInstance(db.Model):
             'default_language': self.default_language,
             'connection_mode': self.connection_mode,
             'transport_mode': self.transport_mode,
+            'support_group_enabled': bool(self.support_group_enabled),
+            'support_group_chat_id': self.support_group_chat_id,
+            'support_group_topics': bool(self.support_group_topics),
             'last_test_status': self.last_test_status,
             'last_test_route': self.last_test_route,
             'last_test_latency_ms': self.last_test_latency_ms,
@@ -8336,6 +8342,9 @@ class TelegramServiceRequest(db.Model):
     status = db.Column(db.String(24), nullable=False, default='pending', index=True)
     reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
     reviewed_at = db.Column(db.DateTime, nullable=True)
+    support_group_chat_id = db.Column(db.BigInteger, nullable=True)
+    support_message_thread_id = db.Column(db.BigInteger, nullable=True)
+    support_group_message_id = db.Column(db.BigInteger, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -9302,6 +9311,36 @@ with app.app_context():
                     print(f'Migration: added telegram_service_request_messages.{_cn}')
     except Exception as _support_message_migration_error:
         print(f'Migration error (Telegram support attachments): {_support_message_migration_error}')
+
+    # Optional Telegram support group and per-ticket forum topic routing.
+    try:
+        inspector = inspect(db.engine)
+        _telegram_tables = set(inspector.get_table_names())
+        _support_routing_tables = {
+            'telegram_bot_instances': (
+                ('support_group_enabled', 'BOOLEAN DEFAULT FALSE'),
+                ('support_group_chat_id', 'BIGINT'),
+                ('support_group_topics', 'BOOLEAN DEFAULT TRUE'),
+            ),
+            'telegram_service_requests': (
+                ('support_group_chat_id', 'BIGINT'),
+                ('support_message_thread_id', 'BIGINT'),
+                ('support_group_message_id', 'BIGINT'),
+            ),
+        }
+        for _table, _columns in _support_routing_tables.items():
+            if _table not in _telegram_tables:
+                continue
+            _existing = {c['name'] for c in inspector.get_columns(_table)}
+            for _column, _column_type in _columns:
+                if _column in _existing:
+                    continue
+                with db.engine.connect() as conn:
+                    conn.execute(text(f'ALTER TABLE {_table} ADD COLUMN {_column} {_column_type}'))
+                    conn.commit()
+                print(f'Migration: added {_table}.{_column}')
+    except Exception as _support_routing_migration_error:
+        print(f'Migration error (Telegram support group routing): {_support_routing_migration_error}')
 
     # Ensure announcements columns exist — each in its own try so one failure
     # doesn't prevent the others from running.
@@ -25566,6 +25605,8 @@ def _serialize_telegram_service(row, identity_map=None, customer_map=None):
         'receipt_url': None,
         'messages': messages,
         'support_state': support_state if row.request_type == 'support' else None,
+        'support_group_routed': bool(row.support_group_chat_id),
+        'support_message_thread_id': row.support_message_thread_id,
     }
     payload.update(_telegram_operation_customer_payload(row, identity_map, customer_map))
     return payload
@@ -26012,6 +26053,19 @@ def save_telegram_bot_settings():
     connection_mode = str(data.get('connection_mode') or bot.connection_mode or 'proxy_first').strip().lower()
     if connection_mode not in ('auto', 'direct_only', 'proxy_first', 'proxy_only'):
         return jsonify({'success': False, 'error': 'Invalid connection mode'}), 400
+    support_group_enabled = bool(data.get('support_group_enabled', bot.support_group_enabled))
+    support_group_chat_id = data.get('support_group_chat_id')
+    if support_group_chat_id in (None, ''):
+        support_group_chat_id = None
+    else:
+        try:
+            support_group_chat_id = int(str(support_group_chat_id).strip())
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Support group chat ID must be numeric'}), 400
+        if support_group_chat_id >= 0:
+            return jsonify({'success': False, 'error': 'Support group chat ID must be a negative Telegram group ID'}), 400
+    if support_group_enabled and support_group_chat_id is None:
+        return jsonify({'success': False, 'error': 'Support group chat ID is required when group routing is enabled'}), 400
     try:
         if token:
             bot.token_encrypted = _encrypt_telegram_secret(token)
@@ -26029,6 +26083,9 @@ def save_telegram_bot_settings():
     bot.default_language = default_language
     bot.connection_mode = connection_mode
     bot.transport_mode = 'polling'
+    bot.support_group_enabled = support_group_enabled
+    bot.support_group_chat_id = support_group_chat_id
+    bot.support_group_topics = bool(data.get('support_group_topics', True))
     if bot.enabled and not bot.token_encrypted:
         return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
     db.session.commit()
