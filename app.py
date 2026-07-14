@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.59"
+APP_VERSION = "2.4.60"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -25482,12 +25482,32 @@ def _find_telegram_egress_candidate(server_id, inbound_id, client_id):
         raise ValueError('Inbound is not available in the current server snapshot')
     if str(inbound.get('protocol') or '').lower() != 'vless':
         raise ValueError('Managed Xray currently supports VLESS inbounds')
+    inbound_enabled = inbound.get('enable', inbound.get('enabled', True))
+    if str(inbound_enabled).strip().lower() in {'false', '0', 'no', 'off'}:
+        raise ValueError('The selected inbound is disabled')
     wanted = str(client_id or '')
     client = next((row for row in (inbound.get('clients') or [])
                    if wanted in {str(row.get('id') or ''), str(row.get('uuid') or ''),
                                  str(row.get('email') or '')}), None)
     if not client:
         raise ValueError('Client was not found in the selected inbound')
+    raw_client = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
+    client_enabled = raw_client.get('enable', client.get('enable', True))
+    if str(client_enabled).strip().lower() in {'false', '0', 'no', 'off'}:
+        raise ValueError('The selected client is disabled')
+    try:
+        expiry_ms = int(raw_client.get('expiryTime') or 0)
+    except (TypeError, ValueError):
+        expiry_ms = 0
+    if expiry_ms > 0 and expiry_ms <= int(time.time() * 1000):
+        raise ValueError('The selected client has expired')
+    try:
+        total_bytes = int(raw_client.get('totalGB') or client.get('totalGB') or 0)
+        used_bytes = int(client.get('up') or 0) + int(client.get('down') or 0)
+    except (TypeError, ValueError):
+        total_bytes = used_bytes = 0
+    if total_bytes > 0 and used_bytes >= total_bytes:
+        raise ValueError('The selected client has no remaining traffic')
     uri = generate_client_link(client, inbound, server.host)
     if not uri:
         raise ValueError('Eve could not generate a connection configuration for this client')
