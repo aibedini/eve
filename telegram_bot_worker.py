@@ -36,7 +36,9 @@ from app import (  # noqa: E402
     TelegramIdentity,
     TelegramOwnershipSession,
     TelegramPurchaseRequest,
+    TelegramPurchaseRequestAllocation,
     TelegramPurchaseRequestDetail,
+    TelegramPurchaseInboundRoute,
     TelegramPurchaseNameDraft,
     TelegramPurchasePolicy,
     TelegramPurchaseServerRule,
@@ -46,15 +48,19 @@ from app import (  # noqa: E402
     _telegram_bot_api_client,
     _decrypt_telegram_secret,
     _public_base_url,
+    _detect_telegram_inbound_profiles,
+    _telegram_customer_inbounds,
     add_client,
     app,
     db,
     discover_phone_ownership_claim,
+    get_xui_session,
     load_snapshot_from_redis,
     normalize_iran_mobile,
     parse_allowed_servers,
     renew_client,
     review_ownership_claim_item,
+    server_is_v3,
     verify_ownership_claim_subscription,
 )
 from telegram_bot_runtime import (  # noqa: E402
@@ -424,12 +430,25 @@ def _purchase_server_rules(bot: TelegramBotInstance):
     }
 
 
-def _eligible_purchase_servers(bot: TelegramBotInstance):
+def _purchase_inbound_routes(bot: TelegramBotInstance, package_id: int | None = None):
+    query = TelegramPurchaseInboundRoute.query.filter_by(
+        bot_instance_id=bot.id, enabled=True,
+    )
+    if package_id is not None:
+        query = query.filter_by(package_id=int(package_id))
+    return query.all()
+
+
+def _eligible_purchase_servers(bot: TelegramBotInstance, package_id: int | None = None):
     servers = _purchase_servers(bot)
     rules = _purchase_server_rules(bot)
-    if not rules:
+    if rules:
+        servers = [server for server in servers if rules.get(server.id) and rules[server.id].eligible]
+    routes = _purchase_inbound_routes(bot, package_id)
+    if not routes:
         return servers
-    return [server for server in servers if rules.get(server.id) and rules[server.id].eligible]
+    route_server_ids = {row.server_id for row in routes}
+    return [server for server in servers if server.id in route_server_ids]
 
 
 def _server_active_client_counts():
@@ -447,8 +466,8 @@ def _server_active_client_counts():
     return counts, healthy
 
 
-def _assign_purchase_server(bot: TelegramBotInstance):
-    servers = _eligible_purchase_servers(bot)
+def _assign_purchase_server(bot: TelegramBotInstance, package_id: int | None = None):
+    servers = _eligible_purchase_servers(bot, package_id)
     if not servers:
         return None
     counts, healthy_ids = _server_active_client_counts()
@@ -523,6 +542,17 @@ def _send_purchase_servers(api: TelegramBotApi, bot: TelegramBotInstance,
 def _send_purchase_packages(api: TelegramBotApi, bot: TelegramBotInstance,
                             chat_id: int, language: str, server: Server | None):
     packages = _purchase_packages(bot)
+    configured_routes = _purchase_inbound_routes(bot)
+    if configured_routes:
+        configured_pairs = {(row.package_id, row.server_id) for row in configured_routes}
+        if server:
+            packages = [row for row in packages if (row.id, server.id) in configured_pairs]
+        else:
+            eligible_ids = {row.id for row in _eligible_purchase_servers(bot)}
+            packages = [row for row in packages if any(
+                package_id == row.id and server_id in eligible_ids
+                for package_id, server_id in configured_pairs
+            )]
     if not packages:
         api.send_message(chat_id, COPY[language]['payment_unavailable'])
         return
@@ -1124,23 +1154,69 @@ def _ensure_purchase_ownership(request_row: TelegramPurchaseRequest, reviewer: A
     return ownership
 
 
-def _purchase_provisioning_inbound_ids(server_id: int):
-    supported_protocols = {
-        'vmess', 'vless', 'trojan', 'shadowsocks', 'wireguard', 'hysteria',
-    }
-    inbound_ids = []
-    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+def _ensure_purchase_inbound_allocation(request_row: TelegramPurchaseRequest):
+    """Resolve once and persist so retries can never drift to another inbound pack."""
+    if request_row.inbound_allocation:
+        inbound_ids = request_row.inbound_allocation.inbound_ids()
+        if inbound_ids:
+            return inbound_ids, None
+        return None, 'The saved inbound allocation for this order is invalid.'
+    route = TelegramPurchaseInboundRoute.query.filter_by(
+        bot_instance_id=request_row.bot_instance_id,
+        package_id=request_row.package_id,
+        server_id=request_row.server_id,
+        enabled=True,
+    ).first()
+    if route is None:
+        return None, (
+            'No inbound route is configured for this package and server. '
+            'Configure Telegram Purchase Flow > Inbound routing, then retry.'
+        )
+    server = db.session.get(Server, request_row.server_id)
+    if not server:
+        return None, 'The selected server no longer exists.'
+    valid_ids = {row['id'] for row in _telegram_customer_inbounds(server.id)}
+    panel_session, panel_error = get_xui_session(server)
+    if not panel_session or panel_error:
+        return None, panel_error or 'Could not connect to the selected server.'
+    is_v3 = bool(server_is_v3(server, panel_session))
+    signature = None
+    if route.mode == 'auto_detect':
+        if not is_v3:
+            return None, 'Auto Detect requires 3x-ui v3 or newer; select one manual inbound for this legacy server.'
         try:
-            if int(inbound.get('server_id') or 0) != int(server_id):
-                continue
-            if not bool(inbound.get('enable', True)):
-                continue
-            if str(inbound.get('protocol') or '').strip().lower() not in supported_protocols:
-                continue
-            inbound_ids.append(int(inbound.get('id')))
-        except (TypeError, ValueError):
-            continue
-    return sorted(set(inbound_ids))
+            profiles = _detect_telegram_inbound_profiles(server)
+        except ValueError as exc:
+            return None, str(exc)
+        selected = random.choices(
+            profiles,
+            weights=[max(1, int(profile['client_count'])) for profile in profiles],
+            k=1,
+        )[0]
+        inbound_ids = [value for value in selected['inbound_ids'] if value in valid_ids]
+        signature = selected.get('signature')
+    else:
+        inbound_ids = [value for value in route.inbound_ids() if value in valid_ids]
+        if not is_v3 and len(inbound_ids) != 1:
+            return None, 'Legacy 3x-ui servers require exactly one manual inbound per package.'
+    if not inbound_ids:
+        return None, 'The configured inbound route has no active client-capable inbound. Refresh and update the route.'
+    allocation = TelegramPurchaseRequestAllocation(
+        request_id=request_row.id,
+        route_id=route.id,
+        mode=route.mode,
+        inbound_ids_json=json.dumps(sorted(set(inbound_ids)), separators=(',', ':')),
+        detected_signature=signature,
+    )
+    request_row.inbound_allocation = allocation
+    db.session.add(allocation)
+    db.session.flush()
+    return allocation.inbound_ids(), None
+
+
+def _purchase_provisioning_inbound_ids(server_id: int):
+    """Compatibility helper: list valid customer inbounds, not an allocation policy."""
+    return [row['id'] for row in _telegram_customer_inbounds(server_id)]
 
 
 def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Admin):
@@ -1154,12 +1230,9 @@ def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Ad
             return True, {'client': existing, 'already_created': True}
         except ValueError as exc:
             return False, str(exc)
-    # Only protocols backed by 3x-ui's durable client model are valid purchase
-    # targets. Listener-only inbounds such as socks/http/tunnel and mixed admin
-    # relays must never receive customer accounts automatically.
-    inbound_ids = _purchase_provisioning_inbound_ids(request_row.server_id)
+    inbound_ids, allocation_error = _ensure_purchase_inbound_allocation(request_row)
     if not inbound_ids:
-        return False, 'No enabled inbound is available on the selected server. Refresh the server and retry.'
+        return False, allocation_error or 'No inbound allocation is available.'
     path = f"/api/client/{request_row.server_id}/{inbound_ids[0]}/add"
     public_base_url = str(_public_base_url() or '').strip().rstrip('/') or 'http://localhost'
     with app.test_request_context(
@@ -1403,17 +1476,17 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             api.answer_callback(callback_id)
             return
         policy_values = _purchase_policy_values(bot)
+        package = next((row for row in _purchase_packages(bot) if row.id == package_id), None)
         if server_id == 0 and not policy_values['customer_selects_server']:
-            server = _assign_purchase_server(bot)
+            server = _assign_purchase_server(bot, package_id) if package else None
         elif server_id > 0 and policy_values['customer_selects_server']:
             rules = _purchase_server_rules(bot)
             server = next((
-                row for row in _eligible_purchase_servers(bot)
+                row for row in _eligible_purchase_servers(bot, package_id)
                 if row.id == server_id and rules.get(row.id) and rules[row.id].customer_visible
             ), None)
         else:
             server = None
-        package = next((row for row in _purchase_packages(bot) if row.id == package_id), None)
         api.answer_callback(callback_id)
         if server is None or package is None:
             api.send_message(chat_id, COPY[language]['payment_unavailable'])

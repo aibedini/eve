@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.49"
+APP_VERSION = "2.4.50"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8429,6 +8429,62 @@ class TelegramPurchaseServerRule(db.Model):
     server = db.relationship('Server')
 
 
+class TelegramPurchaseInboundRoute(db.Model):
+    """Inbound allocation policy for one bot/package/server combination."""
+    __tablename__ = 'telegram_purchase_inbound_routes'
+    __table_args__ = (
+        db.UniqueConstraint(
+            'bot_instance_id', 'package_id', 'server_id',
+            name='uq_telegram_purchase_inbound_route',
+        ),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    package_id = db.Column(
+        db.Integer, db.ForeignKey('packages.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    server_id = db.Column(
+        db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    mode = db.Column(db.String(24), nullable=False, default='manual')
+    inbound_ids_json = db.Column(db.Text, nullable=False, default='[]')
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    package = db.relationship('Package')
+    server = db.relationship('Server')
+
+    def inbound_ids(self):
+        try:
+            values = json.loads(self.inbound_ids_json or '[]')
+        except (TypeError, ValueError):
+            values = []
+        result = []
+        for value in values if isinstance(values, list) else []:
+            try:
+                inbound_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if inbound_id > 0 and inbound_id not in result:
+                result.append(inbound_id)
+        return sorted(result)
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'package_id': self.package_id,
+            'server_id': self.server_id,
+            'mode': self.mode or 'manual',
+            'inbound_ids': self.inbound_ids(),
+            'enabled': bool(self.enabled),
+        }
+
+
 class TelegramPurchaseNameDraft(db.Model):
     """Sanitized customer account name kept while a receipt is pending."""
     __tablename__ = 'telegram_purchase_name_drafts'
@@ -8459,6 +8515,43 @@ class TelegramPurchaseRequestDetail(db.Model):
     request = db.relationship('TelegramPurchaseRequest', backref=db.backref(
         'detail', uselist=False, cascade='all, delete-orphan',
     ))
+
+
+class TelegramPurchaseRequestAllocation(db.Model):
+    """Immutable inbound choice used by provisioning retries for one purchase."""
+    __tablename__ = 'telegram_purchase_request_allocations'
+    request_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_purchase_requests.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    route_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_purchase_inbound_routes.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    mode = db.Column(db.String(24), nullable=False)
+    inbound_ids_json = db.Column(db.Text, nullable=False)
+    detected_signature = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    route = db.relationship('TelegramPurchaseInboundRoute')
+    request = db.relationship('TelegramPurchaseRequest', backref=db.backref(
+        'inbound_allocation', uselist=False, cascade='all, delete-orphan',
+    ))
+
+    def inbound_ids(self):
+        try:
+            values = json.loads(self.inbound_ids_json or '[]')
+        except (TypeError, ValueError):
+            values = []
+        result = []
+        for value in values if isinstance(values, list) else []:
+            try:
+                inbound_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if inbound_id > 0 and inbound_id not in result:
+                result.append(inbound_id)
+        return sorted(result)
 
 
 class TelegramProxyEndpoint(db.Model):
@@ -24664,6 +24757,10 @@ def _central_telegram_bot(create=False):
 TELEGRAM_PURCHASE_STRATEGIES = {'least_clients', 'priority', 'weighted_random', 'random'}
 TELEGRAM_ACCOUNT_NAME_MODES = {'generated', 'customer'}
 TELEGRAM_ACCOUNT_NAME_TOKENS = {'order_id', 'phone_last4', 'random4'}
+TELEGRAM_INBOUND_ROUTE_MODES = {'manual', 'auto_detect'}
+TELEGRAM_CUSTOMER_INBOUND_PROTOCOLS = {
+    'vmess', 'vless', 'trojan', 'shadowsocks', 'wireguard', 'hysteria',
+}
 
 
 def _telegram_purchase_policy(bot: TelegramBotInstance, create=False):
@@ -24720,14 +24817,162 @@ def _telegram_purchase_servers_payload(bot: TelegramBotInstance):
             'weight': int(rule.weight if rule else 1),
             'active_clients': int(stats.get('active_clients', stats.get('total_clients', 0)) or 0),
             'healthy': (bool(status.get('success')) if status else None),
+            'supports_v3_clients': bool(server_is_v3(server)),
         })
     return payload
+
+
+def _telegram_customer_inbounds(server_id: int):
+    """Return active client-capable inbounds from the freshest shared snapshot."""
+    load_snapshot_from_redis()
+    rows = []
+    for inbound in GLOBAL_SERVER_DATA.get('inbounds') or []:
+        try:
+            if int(inbound.get('server_id') or 0) != int(server_id):
+                continue
+            if not bool(inbound.get('enable', True)):
+                continue
+            protocol = str(inbound.get('protocol') or '').strip().lower()
+            if protocol not in TELEGRAM_CUSTOMER_INBOUND_PROTOCOLS:
+                continue
+            rows.append({
+                'id': int(inbound.get('id')),
+                'remark': str(inbound.get('remark') or inbound.get('tag') or '').strip(),
+                'protocol': protocol,
+                'client_count': len(inbound.get('clients') or []),
+            })
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return sorted(rows, key=lambda row: row['id'])
+
+
+def _telegram_purchase_routes_payload(bot: TelegramBotInstance):
+    routes = TelegramPurchaseInboundRoute.query.filter_by(bot_instance_id=bot.id).all()
+    return [row.to_safe_dict() for row in sorted(
+        routes, key=lambda row: (row.server_id, row.package_id, row.id),
+    )]
+
+
+def _telegram_purchase_packages_payload():
+    return [{
+        'id': row.id,
+        'name': row.name,
+        'days': int(row.days or 0),
+        'volume': int(row.volume or 0),
+        'price': int(row.price or 0),
+    } for row in Package.query.filter_by(enabled=True).order_by(
+        Package.display_order.asc(), Package.id.asc(),
+    ).all()]
+
+
+def _v3_client_rows(payload):
+    """Normalize the response shapes used by 3x-ui's v3 clients/list endpoint."""
+    value = payload.get('obj') if isinstance(payload, dict) else payload
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    if isinstance(value, dict):
+        for key in ('clients', 'items', 'records', 'list', 'data'):
+            rows = value.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _detect_telegram_inbound_profiles(server: Server):
+    """Inspect existing v3 clients and count their exact valid inbound sets."""
+    panel_session, error = get_xui_session(server)
+    if not panel_session or error:
+        raise ValueError(error or 'Could not connect to the selected server')
+    if not server_is_v3(server, panel_session):
+        raise ValueError('Auto Detect requires 3x-ui v3 or newer; legacy panels need one manual inbound')
+    ok, payload, api_error = _v3_get(server, panel_session, '/panel/api/clients/list')
+    if not ok:
+        raise ValueError(api_error or 'Could not read v3 client assignments')
+    valid_ids = {row['id'] for row in _telegram_customer_inbounds(server.id)}
+    counts = {}
+    for client in _v3_client_rows(payload):
+        raw_ids = client.get('inboundIds')
+        if raw_ids is None:
+            raw_ids = client.get('inbound_ids')
+        combination = []
+        for value in raw_ids if isinstance(raw_ids, list) else []:
+            try:
+                inbound_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if inbound_id in valid_ids and inbound_id not in combination:
+                combination.append(inbound_id)
+        signature = tuple(sorted(combination))
+        if signature:
+            counts[signature] = counts.get(signature, 0) + 1
+    profiles = [{
+        'inbound_ids': list(signature),
+        'client_count': count,
+        'signature': ','.join(str(value) for value in signature),
+    } for signature, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+    if not profiles:
+        raise ValueError('No existing v3 client has a valid inbound assignment combination on this server')
+    recurring = [profile for profile in profiles if profile['client_count'] >= 2]
+    return recurring or profiles
+
+
+def _save_telegram_purchase_routes(bot: TelegramBotInstance, raw_routes):
+    if not isinstance(raw_routes, list) or len(raw_routes) > 2000:
+        raise ValueError('purchase_inbound_routes must be a list of at most 2000 rows')
+    valid_packages = {row.id for row in Package.query.filter_by(enabled=True).all()}
+    valid_servers = {row.id for row in Server.query.filter_by(enabled=True, hidden=False).all()}
+    valid_inbounds = {
+        server_id: {row['id'] for row in _telegram_customer_inbounds(server_id)}
+        for server_id in valid_servers
+    }
+    seen = set()
+    for raw in raw_routes:
+        if not isinstance(raw, dict):
+            raise ValueError('Invalid purchase inbound route')
+        try:
+            package_id = int(raw.get('package_id'))
+            server_id = int(raw.get('server_id'))
+        except (TypeError, ValueError):
+            raise ValueError('Invalid package or server in purchase inbound route')
+        key = (package_id, server_id)
+        if key in seen or package_id not in valid_packages or server_id not in valid_servers:
+            raise ValueError('Purchase inbound route is unavailable or duplicated')
+        seen.add(key)
+        mode = str(raw.get('mode') or 'manual').strip().lower()
+        if mode not in TELEGRAM_INBOUND_ROUTE_MODES:
+            raise ValueError('Invalid purchase inbound route mode')
+        inbound_ids = []
+        for value in raw.get('inbound_ids') if isinstance(raw.get('inbound_ids'), list) else []:
+            try:
+                inbound_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if inbound_id in valid_inbounds.get(server_id, set()) and inbound_id not in inbound_ids:
+                inbound_ids.append(inbound_id)
+        enabled = bool(raw.get('enabled', True))
+        if enabled and mode == 'manual' and not inbound_ids:
+            raise ValueError('Each enabled manual route needs at least one active client inbound')
+        row = TelegramPurchaseInboundRoute.query.filter_by(
+            bot_instance_id=bot.id, package_id=package_id, server_id=server_id,
+        ).first()
+        if row is None:
+            row = TelegramPurchaseInboundRoute(
+                bot_instance_id=bot.id, package_id=package_id, server_id=server_id,
+            )
+            db.session.add(row)
+        row.mode = mode
+        row.inbound_ids_json = json.dumps(sorted(inbound_ids), separators=(',', ':'))
+        row.enabled = enabled
+    for existing in TelegramPurchaseInboundRoute.query.filter_by(bot_instance_id=bot.id).all():
+        if (existing.package_id, existing.server_id) not in seen:
+            db.session.delete(existing)
 
 
 def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
     policy_data = data.get('purchase_policy')
     server_rows = data.get('purchase_servers')
-    if policy_data is None and server_rows is None:
+    inbound_routes = data.get('purchase_inbound_routes')
+    if policy_data is None and server_rows is None and inbound_routes is None:
         return
     if not isinstance(policy_data, dict):
         raise ValueError('purchase_policy must be an object')
@@ -24785,6 +25030,8 @@ def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
     policy.assignment_strategy = strategy
     policy.account_name_mode = name_mode
     policy.account_name_template = template
+    if inbound_routes is not None:
+        _save_telegram_purchase_routes(bot, inbound_routes)
 
 
 def _encrypt_telegram_secret(value: str) -> str:
@@ -25114,6 +25361,12 @@ def get_telegram_bot_settings():
                     'runtime': runtime.to_safe_dict(),
                     'purchase_policy': purchase_policy.to_safe_dict(),
                     'purchase_servers': _telegram_purchase_servers_payload(bot),
+                    'purchase_packages': _telegram_purchase_packages_payload(),
+                    'purchase_inbound_routes': _telegram_purchase_routes_payload(bot),
+                    'purchase_inbounds': {
+                        str(server.id): _telegram_customer_inbounds(server.id)
+                        for server in Server.query.filter_by(enabled=True, hidden=False).all()
+                    },
                     'test_users': [row.to_safe_dict() for row in test_users],
                     'proxies': [proxy.to_safe_dict() for proxy in proxies],
                     'egress_profiles': [profile.to_safe_dict() for profile in egresses]})
@@ -25163,6 +25416,30 @@ def save_telegram_bot_settings():
         return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
     db.session.commit()
     return jsonify({'success': True, 'bot': bot.to_safe_dict()})
+
+
+@app.route('/api/settings/telegram-bots/purchase-routes/detect', methods=['POST'])
+@superadmin_required
+def detect_telegram_purchase_routes():
+    data = request.get_json(silent=True) or {}
+    try:
+        server_id = int(data.get('server_id'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Invalid server ID'}), 400
+    server = Server.query.filter_by(id=server_id, enabled=True, hidden=False).first()
+    if not server:
+        return jsonify({'success': False, 'error': 'Server is unavailable'}), 404
+    try:
+        profiles = _detect_telegram_inbound_profiles(server)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    return jsonify({
+        'success': True,
+        'server_id': server.id,
+        'panel_generation': 'v3+',
+        'profiles': profiles,
+        'sampled_clients': sum(profile['client_count'] for profile in profiles),
+    })
 
 
 @app.route('/api/settings/telegram-bots/test', methods=['POST'])

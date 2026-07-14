@@ -29,7 +29,9 @@ from app import (  # noqa: E402
     TelegramIdentity,
     TelegramOwnershipSession,
     TelegramPurchaseRequest,
+    TelegramPurchaseRequestAllocation,
     TelegramPurchaseRequestDetail,
+    TelegramPurchaseInboundRoute,
     TelegramPurchaseNameDraft,
     TelegramPurchasePolicy,
     TelegramPurchaseServerRule,
@@ -64,6 +66,7 @@ from app import (  # noqa: E402
     discover_phone_ownership_claim,
     review_ownership_claim_item,
     _telegram_bot_diagnostic,
+    _detect_telegram_inbound_profiles,
     _telegram_proxy_from_payload,
     verify_ownership_claim_subscription,
     v3_add_client,
@@ -72,6 +75,7 @@ from telegram_diagnostics import probe_telegram_transport, redact_connection_err
 from telegram_xray import XraySupervisor, build_xray_config_from_uri, write_xray_config  # noqa: E402
 from telegram_bot_worker import (  # noqa: E402
     _ensure_purchase_detail,
+    _ensure_purchase_inbound_allocation,
     _extract_subscription_token,
     _purchase_provisioning_inbound_ids,
     process_update,
@@ -138,8 +142,10 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         db.session.rollback()
         TelegramEgressProfile.query.delete()
         TelegramProxyEndpoint.query.delete()
+        TelegramPurchaseRequestAllocation.query.delete()
         TelegramPurchaseRequestDetail.query.delete()
         TelegramPurchaseRequest.query.delete()
+        TelegramPurchaseInboundRoute.query.delete()
         TelegramPurchaseNameDraft.query.delete()
         TelegramPurchaseSession.query.delete()
         TelegramPurchaseServerRule.query.delete()
@@ -1251,6 +1257,109 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             self.assertEqual(_purchase_provisioning_inbound_ids(1), [31, 32])
         finally:
             GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
+
+    def test_telegram_v3_auto_detect_keeps_recurring_valid_assignment_packs(self):
+        server = Server(name='Detect v3', host='https://detect-v3.test', username='u', password='p')
+        db.session.add(server)
+        db.session.commit()
+        previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [
+            {'server_id': server.id, 'id': 31, 'protocol': 'shadowsocks', 'enable': True},
+            {'server_id': server.id, 'id': 32, 'protocol': 'vless', 'enable': True},
+            {'server_id': server.id, 'id': 39, 'protocol': 'mixed', 'enable': True},
+            {'server_id': server.id, 'id': 40, 'protocol': 'vless', 'enable': False},
+        ]
+        payload = {'success': True, 'obj': [
+            {'email': 'a', 'inboundIds': [31, 32, 39]},
+            {'email': 'b', 'inboundIds': [32, 31]},
+            {'email': 'c', 'inboundIds': [31, 40]},
+            {'email': 'd', 'inboundIds': []},
+        ]}
+        try:
+            with patch('app.load_snapshot_from_redis'), \
+                    patch('app.get_xui_session', return_value=(MagicMock(), None)), \
+                    patch('app.server_is_v3', return_value=True), \
+                    patch('app._v3_get', return_value=(True, payload, None)):
+                profiles = _detect_telegram_inbound_profiles(server)
+            self.assertEqual(profiles, [{
+                'inbound_ids': [31, 32], 'client_count': 2, 'signature': '31,32',
+            }])
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
+
+    def test_telegram_purchase_route_enforces_legacy_single_inbound_and_freezes_retry(self):
+        bot = TelegramBotInstance(scope_key='route-test', display_name='Route test')
+        package = Package(name='Route package', days=30, volume=10, price=1000, enabled=True)
+        server = Server(name='Legacy route', host='https://legacy-route.test', username='u', password='p')
+        customer = CustomerAccount(primary_phone='989121112233', phone_verified_at=datetime.utcnow())
+        db.session.add_all([bot, package, server, customer])
+        db.session.flush()
+        route = TelegramPurchaseInboundRoute(
+            bot_instance_id=bot.id, package_id=package.id, server_id=server.id,
+            mode='manual', inbound_ids_json='[31,32]', enabled=True,
+        )
+        request_row = TelegramPurchaseRequest(
+            bot_instance_id=bot.id, telegram_user_id=90123, customer_id=customer.id,
+            server_id=server.id, package_id=package.id, amount=1000,
+            receipt_file_id='receipt', source_chat_id=90123, source_message_id=1,
+        )
+        db.session.add_all([route, request_row])
+        db.session.commit()
+        valid = [{'id': 31}, {'id': 32}]
+        with patch('telegram_bot_worker._telegram_customer_inbounds', return_value=valid), \
+                patch('telegram_bot_worker.get_xui_session', return_value=(MagicMock(), None)), \
+                patch('telegram_bot_worker.server_is_v3', return_value=False):
+            inbound_ids, error = _ensure_purchase_inbound_allocation(request_row)
+            self.assertIsNone(inbound_ids)
+            self.assertIn('exactly one', error)
+            route.inbound_ids_json = '[31]'
+            db.session.flush()
+            inbound_ids, error = _ensure_purchase_inbound_allocation(request_row)
+            self.assertEqual(inbound_ids, [31])
+            self.assertIsNone(error)
+        route.inbound_ids_json = '[32]'
+        db.session.flush()
+        inbound_ids, error = _ensure_purchase_inbound_allocation(request_row)
+        self.assertEqual(inbound_ids, [31])
+        self.assertIsNone(error)
+
+    def test_telegram_v3_auto_route_uses_weighted_pack_and_freezes_it(self):
+        bot = TelegramBotInstance(scope_key='auto-route-test', display_name='Auto route')
+        package = Package(name='Auto package', days=30, volume=20, price=2000, enabled=True)
+        server = Server(name='Auto v3', host='https://auto-v3.test', username='u', password='p')
+        customer = CustomerAccount(primary_phone='989121112244', phone_verified_at=datetime.utcnow())
+        db.session.add_all([bot, package, server, customer])
+        db.session.flush()
+        route = TelegramPurchaseInboundRoute(
+            bot_instance_id=bot.id, package_id=package.id, server_id=server.id,
+            mode='auto_detect', inbound_ids_json='[]', enabled=True,
+        )
+        request_row = TelegramPurchaseRequest(
+            bot_instance_id=bot.id, telegram_user_id=90124, customer_id=customer.id,
+            server_id=server.id, package_id=package.id, amount=2000,
+            receipt_file_id='receipt', source_chat_id=90124, source_message_id=2,
+        )
+        db.session.add_all([route, request_row])
+        db.session.commit()
+        profiles = [
+            {'inbound_ids': [31, 32], 'client_count': 8, 'signature': '31,32'},
+            {'inbound_ids': [34, 35], 'client_count': 3, 'signature': '34,35'},
+        ]
+        with patch('telegram_bot_worker._telegram_customer_inbounds', return_value=[
+                    {'id': 31}, {'id': 32}, {'id': 34}, {'id': 35},
+                ]), \
+                patch('telegram_bot_worker.get_xui_session', return_value=(MagicMock(), None)), \
+                patch('telegram_bot_worker.server_is_v3', return_value=True), \
+                patch('telegram_bot_worker._detect_telegram_inbound_profiles', return_value=profiles), \
+                patch('telegram_bot_worker.random.choices', return_value=[profiles[1]]) as chooser:
+            inbound_ids, error = _ensure_purchase_inbound_allocation(request_row)
+        self.assertEqual(inbound_ids, [34, 35])
+        self.assertIsNone(error)
+        self.assertEqual(chooser.call_args.kwargs['weights'], [8, 3])
+        with patch('telegram_bot_worker._detect_telegram_inbound_profiles', side_effect=AssertionError('must not redetect')):
+            inbound_ids, error = _ensure_purchase_inbound_allocation(request_row)
+        self.assertEqual(inbound_ids, [34, 35])
+        self.assertIsNone(error)
 
     def test_telegram_customer_server_and_account_name_policy_flow(self):
         bot = TelegramBotInstance(

@@ -611,6 +611,14 @@
                     </div>
                     <div id="tgb-purchase-servers-empty" class="tgb-empty" style="display:none;"><strong>No servers available</strong><span>Add an enabled server before configuring Telegram purchase assignment.</span></div>
                     <div id="tgb-purchase-servers" class="tgb-purchase-servers" role="list"></div>
+
+                    <div class="tgb-purchase-servers-head">
+                        <div><h3>Package inbound routing</h3><p>Required for correct provisioning. Legacy panels use one inbound; v3+ may use a fixed set or recurring sets detected from existing clients.</p></div>
+                        <span id="tgb-purchase-route-count">0 configured</span>
+                    </div>
+                    <div class="tgb-route-help"><strong>Auto Detect</strong><span>Reads existing v3 client assignments, groups identical inbound combinations, ignores disabled/listener-only inbounds, and selects a recurring group using its real client frequency.</span></div>
+                    <div id="tgb-purchase-routes-empty" class="tgb-empty" style="display:none;"><strong>No package routes available</strong><span>Add a package and server, then refresh this page.</span></div>
+                    <div id="tgb-purchase-routes" class="tgb-purchase-routes"></div>
                 </section>
 
                 <section class="panel-card tgb-section">
@@ -2892,6 +2900,20 @@
     .tgb-purchase-server .form-control { min-height:38px; padding:7px 9px; font-size:.76rem; }
     .tgb-purchase-server .tgb-customer-field.is-subordinate { opacity:.46; }
     .tgb-purchase-server .tgb-customer-field input:disabled { cursor:not-allowed; }
+    .tgb-route-help { display:flex; gap:10px; margin-bottom:10px; padding:10px 12px; color:var(--text-secondary); background:rgba(99,102,241,.06); border:1px solid rgba(99,102,241,.22); border-radius:8px; font-size:.74rem; line-height:1.45; }
+    .tgb-route-help strong { flex:none; color:#a5b4fc; }
+    .tgb-purchase-routes { display:flex; flex-direction:column; gap:12px; }
+    .tgb-purchase-route-server { padding:12px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; }
+    .tgb-purchase-route-server > h4 { margin:0 0 9px; font-size:.84rem; }
+    .tgb-purchase-route { display:grid; grid-template-columns:minmax(140px,1fr) 150px minmax(220px,2fr) auto; gap:10px; align-items:end; padding:9px 0; border-top:1px solid var(--border-color); }
+    .tgb-purchase-route:first-of-type { border-top:0; }
+    .tgb-purchase-route-name { align-self:center; min-width:0; }
+    .tgb-purchase-route-name strong,.tgb-purchase-route-name small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tgb-purchase-route-name strong { font-size:.78rem; }
+    .tgb-purchase-route-name small { margin-top:3px; color:var(--text-secondary); font-size:.66rem; }
+    .tgb-purchase-route .form-group { margin:0; }
+    .tgb-purchase-route select[multiple] { min-height:76px; }
+    .tgb-route-detect-result { grid-column:2 / -1; min-height:1em; color:var(--text-secondary); font-size:.69rem; }
     .tgb-presets { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-bottom:18px; }
     .tgb-preset { min-width:0; padding:14px; text-align:left; color:var(--text-primary); background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; cursor:pointer; transition:border-color .15s,background .15s; }
     .tgb-preset:hover, .tgb-preset:focus-visible { border-color:var(--primary); outline:none; }
@@ -3030,6 +3052,8 @@
         .tgb-purchase-servers-head { align-items:flex-start; flex-direction:column; gap:5px; }
         .tgb-purchase-server { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:end; }
         .tgb-purchase-server-identity, .tgb-purchase-server .tgb-customer-field { grid-column:1 / -1; }
+        .tgb-purchase-route { grid-template-columns:1fr; }
+        .tgb-route-detect-result { grid-column:auto; }
         .tgb-proxy-actions, .tgb-egress-actions, .tgb-footer-actions > div { width:100%; }
         .tgb-proxy-actions .btn, .tgb-egress-actions .btn, .tgb-footer-actions .btn, .tgb-footer-actions > div .btn { flex:1; }
         .tgb-egress-card-head { flex-direction:column; }
@@ -3146,6 +3170,9 @@
     let telegramBotEgressCandidates = [];
     let telegramBotTestUsers = [];
     let telegramPurchaseServers = [];
+    let telegramPurchasePackages = [];
+    let telegramPurchaseInboundRoutes = [];
+    let telegramPurchaseInbounds = {};
     let telegramBotRuntime = {};
     let telegramBotFormReady = false;
     let telegramBotDirty = false;
@@ -3261,6 +3288,102 @@
                 healthy: source.healthy !== false
             };
         });
+    }
+
+    function collectTelegramPurchaseInboundRoutes() {
+        return Array.from(document.querySelectorAll('.tgb-purchase-route')).map(row => {
+            const modeValue = row.querySelector('[data-field="route-mode"]').value;
+            return {
+                package_id: Number(row.dataset.packageId),
+                server_id: Number(row.dataset.serverId),
+                enabled: modeValue !== 'disabled',
+                mode: modeValue === 'auto_detect' ? 'auto_detect' : 'manual',
+                inbound_ids: Array.from(row.querySelector('[data-field="route-inbounds"]').selectedOptions)
+                    .map(option => Number(option.value)).filter(Number.isInteger)
+            };
+        });
+    }
+
+    function syncTelegramPurchaseRouteRow(row, markDirty = true) {
+        const mode = row.querySelector('[data-field="route-mode"]').value;
+        const inboundField = row.querySelector('[data-field="route-inbounds"]').closest('.form-group');
+        const detectButton = row.querySelector('[data-action="detect-route"]');
+        inboundField.style.display = mode === 'manual' ? '' : 'none';
+        detectButton.style.display = mode === 'auto_detect' ? '' : 'none';
+        row.classList.toggle('is-disabled', mode === 'disabled');
+        if (markDirty) markTelegramBotDirty();
+        const configured = collectTelegramPurchaseInboundRoutes().filter(route => route.enabled).length;
+        document.getElementById('tgb-purchase-route-count').textContent = `${configured} configured`;
+    }
+
+    async function detectTelegramPurchaseRoute(row, button) {
+        const result = row.querySelector('.tgb-route-detect-result');
+        setTelegramButtonLoading(button, true, 'Detecting…');
+        result.textContent = 'Reading existing v3 client assignments…';
+        try {
+            const data = await telegramBotApi('/api/settings/telegram-bots/purchase-routes/detect', {
+                method:'POST', body:JSON.stringify({server_id:Number(row.dataset.serverId)})
+            });
+            result.textContent = data.profiles.map(profile =>
+                `[${profile.inbound_ids.join(', ')}] — ${profile.client_count} client${profile.client_count === 1 ? '' : 's'}`
+            ).join('  •  ');
+            showToast(`${data.profiles.length} inbound combination(s) detected.`, 'success');
+        } catch (error) {
+            result.textContent = error.message;
+            showToast(error.message, 'error');
+        } finally { setTelegramButtonLoading(button, false); }
+    }
+
+    function renderTelegramPurchaseInboundRoutes() {
+        const container = document.getElementById('tgb-purchase-routes');
+        const empty = document.getElementById('tgb-purchase-routes-empty');
+        container.replaceChildren();
+        const routesByKey = new Map(telegramPurchaseInboundRoutes.map(route => [
+            `${route.server_id}:${route.package_id}`, route
+        ]));
+        const enabledServers = telegramPurchaseServers.filter(server => server.eligible !== false);
+        empty.style.display = enabledServers.length && telegramPurchasePackages.length ? 'none' : '';
+        enabledServers.forEach(server => {
+            const group = document.createElement('section');
+            group.className = 'tgb-purchase-route-server';
+            const heading = document.createElement('h4');
+            heading.textContent = `${server.server_name || `Server ${server.server_id}`} — ${server.supports_v3_clients ? 'v3+ multi-inbound' : 'generation checked on save/provision'}`;
+            group.append(heading);
+            telegramPurchasePackages.forEach(packageRow => {
+                const route = routesByKey.get(`${server.server_id}:${packageRow.id}`) || {};
+                const row = document.createElement('div');
+                row.className = 'tgb-purchase-route';
+                row.dataset.serverId = String(server.server_id);
+                row.dataset.packageId = String(packageRow.id);
+                row.innerHTML = `
+                    <div class="tgb-purchase-route-name"><strong></strong><small></small></div>
+                    <div class="form-group"><label>Routing mode</label><select data-field="route-mode" class="form-select"><option value="disabled">Not offered</option><option value="manual">Manual inbound set</option><option value="auto_detect">Auto Detect (v3+)</option></select></div>
+                    <div class="form-group"><label>Inbound assignment</label><select data-field="route-inbounds" class="form-select" multiple></select><small class="text-secondary">Legacy: select exactly one. v3+: select the full set.</small></div>
+                    <button type="button" data-action="detect-route" class="btn btn-secondary">Preview packs</button>
+                    <div class="tgb-route-detect-result" aria-live="polite"></div>`;
+                row.querySelector('.tgb-purchase-route-name strong').textContent = packageRow.name || `Package ${packageRow.id}`;
+                row.querySelector('.tgb-purchase-route-name small').textContent = `${Number(packageRow.volume) || 0} GB • ${Number(packageRow.days) || 0} days`;
+                const mode = route.enabled === false || !route.mode ? 'disabled' : route.mode;
+                row.querySelector('[data-field="route-mode"]').value = ['manual','auto_detect'].includes(mode) ? mode : 'disabled';
+                const selected = new Set((route.inbound_ids || []).map(Number));
+                const inboundSelect = row.querySelector('[data-field="route-inbounds"]');
+                (telegramPurchaseInbounds[String(server.server_id)] || []).forEach(inbound => {
+                    const option = document.createElement('option');
+                    option.value = String(inbound.id);
+                    option.textContent = `#${inbound.id} ${inbound.remark || inbound.protocol} (${inbound.protocol})`;
+                    option.selected = selected.has(Number(inbound.id));
+                    inboundSelect.append(option);
+                });
+                row.querySelector('[data-field="route-mode"]').addEventListener('change', () => syncTelegramPurchaseRouteRow(row, true));
+                inboundSelect.addEventListener('change', markTelegramBotDirty);
+                row.querySelector('[data-action="detect-route"]').addEventListener('click', event => detectTelegramPurchaseRoute(row, event.currentTarget));
+                group.append(row);
+                syncTelegramPurchaseRouteRow(row, false);
+            });
+            container.append(group);
+        });
+        const configured = collectTelegramPurchaseInboundRoutes().filter(route => route.enabled).length;
+        document.getElementById('tgb-purchase-route-count').textContent = `${configured} configured`;
     }
 
     function syncTelegramPurchaseUI(markDirty = true) {
@@ -3392,6 +3515,22 @@
         }
         if (customerSelects && !servers.some(server => server.eligible && server.customer_visible && server.display_name)) {
             showToast('Customer choice needs at least one eligible, visible server with a display name.', 'error');
+            return false;
+        }
+        const inboundRoutes = collectTelegramPurchaseInboundRoutes();
+        for (const row of document.querySelectorAll('.tgb-purchase-route')) {
+            const mode = row.querySelector('[data-field="route-mode"]').value;
+            const inboundSelect = row.querySelector('[data-field="route-inbounds"]');
+            inboundSelect.removeAttribute('aria-invalid');
+            if (mode === 'manual' && inboundSelect.selectedOptions.length === 0) {
+                inboundSelect.setAttribute('aria-invalid', 'true');
+                inboundSelect.focus();
+                showToast('Every manual package route needs at least one inbound.', 'error');
+                return false;
+            }
+        }
+        if (telegramPurchasePackages.length && !inboundRoutes.some(route => route.enabled)) {
+            showToast('Configure at least one package inbound route before enabling purchases.', 'error');
             return false;
         }
         return true;
@@ -3634,11 +3773,15 @@
             document.getElementById('tgb-purchase-account-naming').value = ['generated', 'customer'].includes(purchasePolicy.account_name_mode) ? purchasePolicy.account_name_mode : 'generated';
             document.getElementById('tgb-purchase-account-template').value = purchasePolicy.account_name_template || 'tg{order_id}-{phone_last4}';
             telegramPurchaseServers = Array.isArray(data.purchase_servers) ? data.purchase_servers : [];
+            telegramPurchasePackages = Array.isArray(data.purchase_packages) ? data.purchase_packages : [];
+            telegramPurchaseInboundRoutes = Array.isArray(data.purchase_inbound_routes) ? data.purchase_inbound_routes : [];
+            telegramPurchaseInbounds = data.purchase_inbounds && typeof data.purchase_inbounds === 'object' ? data.purchase_inbounds : {};
             telegramBotProxies = Array.isArray(data.proxies) ? data.proxies : [];
             telegramBotEgressProfiles = Array.isArray(data.egress_profiles) ? data.egress_profiles : [];
             telegramBotTestUsers = Array.isArray(data.test_users) ? data.test_users : [];
             telegramBotRuntime = data.runtime || {};
             renderTelegramPurchaseServers();
+            renderTelegramPurchaseInboundRoutes();
             renderTelegramProxies();
             renderTelegramEgressProfiles();
             renderTelegramTestUsers();
@@ -3719,7 +3862,8 @@
                 account_name_mode: document.getElementById('tgb-purchase-account-naming').value,
                 account_name_template: document.getElementById('tgb-purchase-account-template').value.trim()
             },
-            purchase_servers: collectTelegramPurchaseServers()
+            purchase_servers: collectTelegramPurchaseServers(),
+            purchase_inbound_routes: collectTelegramPurchaseInboundRoutes()
         };
         setTelegramButtonLoading(button, true, 'Saving…');
         try {
