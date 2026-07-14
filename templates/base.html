@@ -34,6 +34,165 @@
             return parseInt(value.toString().replace(/,/g, '').replace(/\D/g, '')) || 0;
         }
     </script>
+    <script nonce="{{ csp_nonce }}">
+        (function () {
+            const calendar = {{ (app_calendar or 'jalali')|tojson }} === 'gregorian' ? 'gregorian' : 'jalali';
+            const timezone = {{ (app_timezone or 'Asia/Tehran')|tojson }} || 'Asia/Tehran';
+            const panelLanguage = {{ (panel_lang or 'en')|tojson }} === 'fa' ? 'fa' : 'en';
+            const locale = calendar === 'jalali'
+                ? `${panelLanguage === 'fa' ? 'fa-IR' : 'en-US'}-u-ca-persian-nu-latn`
+                : `${panelLanguage === 'fa' ? 'fa-IR' : 'en-US'}-u-ca-gregory-nu-latn`;
+
+            function parse(value) {
+                if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : new Date(value.getTime());
+                if (typeof value === 'number') {
+                    const numericDate = new Date(value);
+                    return Number.isNaN(numericDate.getTime()) ? null : numericDate;
+                }
+                if (typeof value !== 'string' || !value.trim()) return null;
+                const raw = value.trim();
+                const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw);
+                const normalized = hasZone ? raw : `${raw.replace(' ', 'T')}Z`;
+                const date = new Date(normalized);
+                return Number.isNaN(date.getTime()) ? null : date;
+            }
+
+            function jalaliToGregorian(jy, jm, jd) {
+                const monthDays = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29];
+                jy -= 979; jm -= 1; jd -= 1;
+                let days = 365 * jy + 8 * Math.floor(jy / 33) + Math.floor(((jy % 33) + 3) / 4);
+                for (let index = 0; index < jm; index += 1) days += monthDays[index];
+                days += jd + 79;
+                let gy = 1600 + 400 * Math.floor(days / 146097);
+                days %= 146097;
+                let leap = true;
+                if (days >= 36525) {
+                    days -= 1;
+                    gy += 100 * Math.floor(days / 36524);
+                    days %= 36524;
+                    if (days >= 365) days += 1; else leap = false;
+                }
+                gy += 4 * Math.floor(days / 1461);
+                days %= 1461;
+                if (days >= 366) {
+                    leap = false;
+                    days -= 1;
+                    gy += Math.floor(days / 365);
+                    days %= 365;
+                }
+                const gregorianMonthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+                let gm = 0;
+                while (gm < 12 && days >= gregorianMonthDays[gm]) days -= gregorianMonthDays[gm++];
+                return [gy, gm + 1, days + 1];
+            }
+
+            function zonedWallTimeToDate(parts) {
+                const target = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second || 0);
+                let guess = target;
+                const formatter = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
+                    timeZone: timezone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+                for (let attempt = 0; attempt < 3; attempt += 1) {
+                    const current = {};
+                    formatter.formatToParts(new Date(guess)).forEach(part => {
+                        if (part.type !== 'literal') current[part.type] = Number(part.value);
+                    });
+                    const rendered = Date.UTC(current.year, current.month - 1, current.day,
+                        current.hour === 24 ? 0 : current.hour, current.minute, current.second);
+                    const correction = rendered - target;
+                    guess -= correction;
+                    if (!correction) break;
+                }
+                const date = new Date(guess);
+                return Number.isNaN(date.getTime()) ? null : date;
+            }
+
+            function parseInput(value) {
+                const normalized = String(value || '').trim()
+                    .replace(/[\u06f0-\u06f9]/g, digit => String(digit.charCodeAt(0) - 0x06f0))
+                    .replace(/[\u0660-\u0669]/g, digit => String(digit.charCodeAt(0) - 0x0660));
+                const match = normalized.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+                if (!match) return null;
+                let year = Number(match[1]);
+                let month = Number(match[2]);
+                let day = Number(match[3]);
+                const hour = Number(match[4] || 0);
+                const minute = Number(match[5] || 0);
+                const second = Number(match[6] || 0);
+                const maxDay = calendar === 'jalali'
+                    ? (month <= 6 ? 31 : (month <= 11 ? 30 : 30))
+                    : new Date(Date.UTC(year, month, 0)).getUTCDate();
+                if (month < 1 || month > 12 || day < 1 || day > maxDay
+                    || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return null;
+                if (calendar === 'jalali') [year, month, day] = jalaliToGregorian(year, month, day);
+                return zonedWallTimeToDate({
+                    year, month, day, hour, minute, second
+                });
+            }
+
+            function formatted(value, options, fallback) {
+                const date = parse(value);
+                if (!date) return fallback !== undefined ? fallback : (value == null || value === '' ? '—' : String(value));
+                try {
+                    return new Intl.DateTimeFormat(locale, Object.assign({ timeZone: timezone }, options)).format(date);
+                } catch (_) {
+                    try { return new Intl.DateTimeFormat(locale, options).format(date); } catch (_) { return date.toISOString(); }
+                }
+            }
+
+            function relative(value) {
+                const date = parse(value);
+                if (!date) return value == null || value === '' ? '—' : String(value);
+                const deltaSeconds = Math.round((date.getTime() - Date.now()) / 1000);
+                const absolute = Math.abs(deltaSeconds);
+                let divisor = 1;
+                let unit = 'second';
+                if (absolute >= 86400) { divisor = 86400; unit = 'day'; }
+                else if (absolute >= 3600) { divisor = 3600; unit = 'hour'; }
+                else if (absolute >= 60) { divisor = 60; unit = 'minute'; }
+                try {
+                    return new Intl.RelativeTimeFormat(`${panelLanguage === 'fa' ? 'fa-IR' : 'en-US'}-u-nu-latn`, { numeric: 'auto' })
+                        .format(Math.round(deltaSeconds / divisor), unit);
+                } catch (_) {
+                    const amount = Math.abs(Math.round(deltaSeconds / divisor));
+                    return deltaSeconds < 0 ? `${amount} ${unit}${amount === 1 ? '' : 's'} ago` : `in ${amount} ${unit}${amount === 1 ? '' : 's'}`;
+                }
+            }
+
+            function mergeFormatOptions(defaults, options) {
+                const custom = Object.assign({}, options || {});
+                const componentKeys = ['weekday', 'era', 'year', 'month', 'day', 'dayPeriod',
+                    'hour', 'minute', 'second', 'fractionalSecondDigits', 'timeZoneName'];
+                const base = componentKeys.some(key => custom[key] !== undefined) ? {} : Object.assign({}, defaults);
+                return Object.assign(base, custom);
+            }
+
+            function formatInput(value) {
+                const date = parse(value);
+                if (!date) return '';
+                const parts = {};
+                new Intl.DateTimeFormat(locale, {
+                    timeZone: timezone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit'
+                }).formatToParts(date).forEach(part => {
+                    if (part.type !== 'literal') parts[part.type] = part.value;
+                });
+                const datePart = calendar === 'gregorian'
+                    ? `${parts.year}-${parts.month}-${parts.day}`
+                    : `${parts.year}/${parts.month}/${parts.day}`;
+                return `${datePart}${calendar === 'gregorian' ? 'T' : ' '}${parts.hour}:${parts.minute}`;
+            }
+
+            window.EveDate = Object.freeze({
+                calendar, timezone, locale, parse, parseInput, formatInput,
+                format: (value, options) => formatted(value, mergeFormatOptions({ dateStyle: 'medium', timeStyle: 'short' }, options)),
+                formatDate: (value, options) => formatted(value, mergeFormatOptions({ dateStyle: 'medium' }, options)),
+                formatTime: (value, options) => formatted(value, mergeFormatOptions({ timeStyle: 'short' }, options)),
+                relative
+            });
+        })();
+    </script>
 </head>
 <body class="{{ panel_dir or 'ltr' }}">
     <div class="app-layout">

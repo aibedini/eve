@@ -1179,14 +1179,9 @@
 
         function fmtJalali(isoStr, period) {
             if (!isoStr) return '—';
-            const d = new Date(isoStr);
-            if (isNaN(d)) return isoStr;
-            // Convert to Tehran time (UTC+3:30)
-            const tehran = new Date(d.getTime() + (3*60+30)*60000);
-            const [jy, jm, jd] = _g2j(tehran.getUTCFullYear(), tehran.getUTCMonth()+1, tehran.getUTCDate());
-            const months = IS_FA ? _JALALI_MONTHS_FA : _JALALI_MONTHS_EN;
-            if (period === 'month') return `${months[jm-1]} ${jy}`;
-            return `${jd} ${months[jm-1]} ${jy}`;
+            return EveDate.formatDate(isoStr, period === 'month'
+                ? { year: 'numeric', month: 'long' }
+                : { year: 'numeric', month: 'long', day: 'numeric' });
         }
 
         function fmtBytes(b) {

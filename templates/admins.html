@@ -1133,8 +1133,7 @@
     
     function formatJalaliDate(isoString) {
         if (!isoString) return 'Never';
-        const date = new Date(isoString);
-        return date.toLocaleDateString('fa-IR');
+        return window.EveDate ? EveDate.formatDate(isoString) : new Date(isoString).toLocaleDateString();
     }
     
     function renderAdmins() {

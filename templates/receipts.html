@@ -48,7 +48,7 @@
         <form id="auto-window-form" onsubmit="createAutoWindow(event)">
             <div class="form-group">
                 <label>End Date *</label>
-                <input type="text" id="auto-end-shamsi" data-jdp class="form-input" placeholder="1403/09/15 14:30" required>
+                <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="auto-end-shamsi" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="form-input" placeholder="{{ '1405/04/23 14:30' if app_calendar == 'jalali' else '2026-07-14 14:30' }}" required>
             </div>
             <div class="form-group">
                 <label>Max Amount (0 = unlimited)</label>
@@ -587,7 +587,7 @@
     });
 
     function initShamsiPicker() {
-        if (typeof jalaliDatepicker !== 'undefined') {
+        if (EveDate.calendar === 'jalali' && typeof jalaliDatepicker !== 'undefined') {
             jalaliDatepicker.startWatch({
                 time: true,
                 hasSecond: false
@@ -716,17 +716,7 @@
                 userCell = `<td data-label="User">${r.admin ? r.admin.username : 'Unknown'}</td>`;
             }
 
-            // Shamsi Date Conversion
-            let dateStr = r.created_at;
-            try {
-                if (typeof persianDate !== 'undefined') {
-                    dateStr = new persianDate(new Date(r.created_at)).format('YYYY/MM/DD HH:mm');
-                } else {
-                    dateStr = new Date(r.created_at).toLocaleString();
-                }
-            } catch(e) {
-                console.error(e);
-            }
+            const dateStr = EveDate.format(r.created_at);
 
             const statusBadge = renderStatusBadge(r.status, r.auto_deadline);
             
@@ -896,7 +886,7 @@
 
     async function loadAutoWindows() {
         try {
-            const resp = await fetch('/api/auto-approval-windows');
+            const resp = await fetch('/api/receipts/auto-windows');
             const data = await resp.json();
             if (data.success) {
                 autoWindows = data.windows || [];
@@ -913,7 +903,7 @@
             const chip = document.createElement('div');
             chip.className = 'chip';
             chip.innerHTML = `
-                <span>Until ${new Date(w.ends_at).toLocaleString()}</span>
+                <span>Until ${EveDate.format(w.ends_at)}</span>
                 <button onclick="deleteAutoWindow(${w.id})" style="border:none;background:none;cursor:pointer;margin-left:8px;">&times;</button>
             `;
             container.appendChild(chip);
@@ -945,10 +935,11 @@
     async function createAutoWindow(event) {
         event.preventDefault();
         const shamsiEnd = document.getElementById('auto-end-shamsi').value;
-        const gregorianEnd = shamsiToGregorian(shamsiEnd);
+        const parsedEnd = EveDate.parseInput(shamsiEnd);
+        const gregorianEnd = parsedEnd ? parsedEnd.toISOString() : null;
         
         if (!gregorianEnd) {
-            showToast('Invalid date format. Use: 1403/09/15 14:30', 'error');
+            showToast(EveDate.calendar === 'jalali' ? 'Invalid date format. Use: 1405/04/23 14:30' : 'Invalid Gregorian date and time', 'error');
             return;
         }
 
@@ -959,7 +950,7 @@
         };
         
         try {
-            const resp = await fetch('/api/auto-approval-windows', {
+            const resp = await fetch('/api/receipts/auto-windows', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload)
@@ -980,7 +971,7 @@
     async function deleteAutoWindow(id) {
         if(!confirm('Remove this window?')) return;
         try {
-            await fetch(`/api/auto-approval-windows/${id}`, { method: 'DELETE' });
+            await fetch(`/api/receipts/auto-windows/${id}`, { method: 'DELETE' });
             loadAutoWindows();
         } catch(e) {}
     }

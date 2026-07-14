@@ -50,6 +50,9 @@ from app import (  # noqa: E402
     SMS_GMWEB_TIMEOUT_KEY,
     SmsSendLog,
     SystemConfig,
+    SystemSetting,
+    GENERAL_CALENDAR_SETTING_KEY,
+    GENERAL_TIMEZONE_SETTING_KEY,
     app,
     db,
     add_cached_client,
@@ -65,6 +68,8 @@ from app import (  # noqa: E402
     _select_subscription_package,
     normalize_iran_mobile,
     discover_phone_ownership_claim,
+    format_app_datetime,
+    parse_jalali_date,
     review_ownership_claim_item,
     _telegram_bot_diagnostic,
     _detect_telegram_inbound_profiles,
@@ -174,6 +179,10 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             SMS_GMWEB_BASE_URL_KEY,
             SMS_GMWEB_API_KEY_KEY,
             SMS_GMWEB_TIMEOUT_KEY,
+        ])).delete(synchronize_session=False)
+        SystemSetting.query.filter(SystemSetting.key.in_([
+            GENERAL_CALENDAR_SETTING_KEY,
+            GENERAL_TIMEZONE_SETTING_KEY,
         ])).delete(synchronize_session=False)
         Admin.query.filter(Admin.username.like('claim-test-%')).delete(synchronize_session=False)
         db.session.commit()
@@ -684,6 +693,57 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(loaded_response.headers.get('Surrogate-Control'), 'no-store')
         self.assertIn('no-store', settings_page.headers.get('Cache-Control', ''))
 
+    def test_general_settings_persist_calendar_and_render_global_date_runtime(self):
+        reviewer = Admin(
+            username='claim-test-calendar-admin', role='superadmin', is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add(reviewer)
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+
+        response = client.post('/api/settings/general', json={
+            'timezone': 'Asia/Tehran',
+            'calendar': 'gregorian',
+            'panel_lang': 'en',
+            'near_expiry_days': 3,
+            'near_expiry_hours': 0,
+            'low_volume_gb': 1,
+            'panel_domain': '',
+        })
+        loaded = client.get('/api/settings/general').get_json()
+        settings_page = client.get('/settings')
+        operations_page = client.get('/telegram-operations')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(loaded['calendar'], 'gregorian')
+        self.assertEqual(loaded['timezone'], 'Asia/Tehran')
+        self.assertIn(b'id="general-calendar"', settings_page.data)
+        self.assertIn(b'window.EveDate', settings_page.data)
+        self.assertIn(b'parseInput', settings_page.data)
+        self.assertEqual(operations_page.status_code, 200)
+        self.assertIn(b'overflow-y: auto', operations_page.data)
+        self.assertIn(b'grid-template-rows: minmax(0, 1fr)', operations_page.data)
+        self.assertIn(b'max-height: 100%', operations_page.data)
+        self.assertIn(b'Intl.NumberFormat(EveDate.locale)', operations_page.data)
+
+    def test_configured_calendar_and_timezone_drive_formatting_and_input_parsing(self):
+        db.session.add_all([
+            SystemSetting(key=GENERAL_CALENDAR_SETTING_KEY, value='gregorian'),
+            SystemSetting(key=GENERAL_TIMEZONE_SETTING_KEY, value='Asia/Tehran'),
+        ])
+        db.session.commit()
+
+        parsed = parse_jalali_date('2026/07/14 12:00')
+        self.assertEqual(parsed, datetime(2026, 7, 14, 8, 30))
+        self.assertEqual(format_app_datetime(parsed), '2026/07/14 12:00')
+
+        db.session.get(SystemSetting, GENERAL_CALENDAR_SETTING_KEY).value = 'jalali'
+        db.session.commit()
+        self.assertTrue(format_app_datetime(parsed).startswith('1405/04/'))
+
     def test_telegram_test_user_api_requires_numeric_id_and_returns_runtime(self):
         reviewer = Admin(
             username='claim-test-bot-testers', role='superadmin', is_superadmin=True, enabled=True,
@@ -1017,6 +1077,29 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                 message['text'] == COPY['fa']['support_pending']
                 for message in api.messages
             ))
+
+            process_update(api, bot, {'update_id': 151, 'callback_query': {
+                'id': 'service-support-follow-up', 'data': f'service-support:{ownership.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            process_update(api, bot, {'update_id': 152, 'message': {
+                'message_id': 3, 'text': 'This is a follow-up message.',
+                'from': {'id': 70010, 'first_name': 'Owner'},
+                'chat': {'id': 70010, 'type': 'private'},
+            }})
+            self.assertEqual(
+                TelegramServiceRequest.query.filter_by(request_type='support').count(), 1,
+            )
+            self.assertEqual(
+                TelegramServiceRequestMessage.query.filter_by(
+                    request_id=support.id, sender_type='customer',
+                ).order_by(TelegramServiceRequestMessage.id.asc()).with_entities(
+                    TelegramServiceRequestMessage.message,
+                ).all(),
+                [('Please check this service.',), ('This is a follow-up message.',)],
+            )
+            self.assertEqual(support.note, 'This is a follow-up message.')
             with patch(
                 'telegram_bot_worker._execute_renewal_request',
                 return_value=(False, 'panel unavailable'),

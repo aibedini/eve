@@ -215,7 +215,7 @@
             {% if user.last_login %}
             <div class="info-row">
                 <span class="label">{{ 'آخرین ورود' if panel_lang == 'fa' else 'Last Login' }}</span>
-                <span class="val">{{ user.last_login.strftime('%Y-%m-%d %H:%M') }}</span>
+                <span class="val">{{ last_login_display }}</span>
             </div>
             {% endif %}
         </div>

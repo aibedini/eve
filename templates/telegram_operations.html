@@ -47,18 +47,18 @@
     .tg-select { padding: 0 11px; }
     .tg-search-wrap { position: relative; }
     .tg-search { padding: 0 40px 0 12px; }
-    .tg-search-wrap svg { position: absolute; right: 13px; top: 13px; color: var(--text-secondary); pointer-events: none; }
+    .tg-search-wrap svg { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); pointer-events: none; }
     .rtl .tg-search { padding: 0 12px 0 40px; }
     .rtl .tg-search-wrap svg { right: auto; left: 13px; }
     .tg-select:focus, .tg-search:focus, .tg-reply:focus { outline: 0; border-color: var(--tg-indigo); box-shadow: 0 0 0 3px rgba(129,140,248,.12); }
 
-    .tg-workspace { display: grid; grid-template-columns: minmax(310px, 38fr) minmax(0, 62fr); min-height: 580px; max-height: calc(100vh - 355px); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: var(--bg-card); }
-    .tg-inbox { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border-color); background: color-mix(in srgb, var(--bg-card) 72%, var(--bg-dark)); }
+    .tg-workspace { display: grid; grid-template-columns: minmax(310px, 38fr) minmax(0, 62fr); grid-template-rows: minmax(0, 1fr); height: clamp(560px, calc(100dvh - 410px), 780px); min-height: 0; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: var(--bg-card); }
+    .tg-inbox { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; max-height: 100%; overflow: hidden; border-right: 1px solid var(--border-color); background: color-mix(in srgb, var(--bg-card) 72%, var(--bg-dark)); }
     .rtl .tg-inbox { border-right: 0; border-left: 1px solid var(--border-color); }
     .tg-inbox-head { display: flex; align-items: center; justify-content: space-between; min-height: 52px; padding: 0 14px; border-bottom: 1px solid var(--border-color); }
     .tg-inbox-head strong { font-size: .86rem; }
     .tg-result-count { color: var(--text-secondary); font-size: .72rem; }
-    .tg-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+    .tg-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--text-secondary) transparent; scrollbar-width: thin; }
     .tg-item { position: relative; display: block; width: 100%; min-height: 112px; padding: 13px 14px 12px 17px; border: 0; border-bottom: 1px solid var(--border-color); background: transparent; color: var(--text-primary); text-align: left; font: inherit; cursor: pointer; transition: background .15s ease; }
     .rtl .tg-item { padding: 13px 17px 12px 14px; text-align: right; }
     .tg-item:hover { background: var(--bg-card-hover); }
@@ -79,7 +79,7 @@
     .tg-status.completed { color: var(--tg-green); background: rgba(52,211,153,.08); }
     .tg-status.rejected { color: var(--tg-red); background: rgba(251,113,133,.08); }
 
-    .tg-detail { min-width: 0; overflow-y: auto; background: var(--bg-card); }
+    .tg-detail { min-width: 0; min-height: 0; height: 100%; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--text-secondary) transparent; scrollbar-width: thin; background: var(--bg-card); }
     .tg-detail-shell { min-height: 100%; }
     .tg-detail-head { position: sticky; z-index: 3; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px 20px 16px 23px; border-bottom: 1px solid var(--border-color); background: color-mix(in srgb, var(--bg-card) 94%, transparent); backdrop-filter: blur(10px); }
     .rtl .tg-detail-head { padding: 18px 23px 16px 20px; }
@@ -99,8 +99,8 @@
     .tg-fact dd { margin: 0; overflow-wrap: anywhere; color: var(--text-primary); font-size: .8rem; font-weight: 650; }
     .tg-fact dd.mono { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
     .tg-note { margin: 0; color: var(--text-primary); font-size: .8rem; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .tg-receipt { position: relative; display: grid; place-items: center; min-height: 220px; overflow: hidden; border: 1px dashed var(--border-color); border-radius: 8px; background: var(--bg-dark); }
-    .tg-receipt img { display: block; width: 100%; max-height: 390px; object-fit: contain; }
+    .tg-receipt { position: relative; display: grid; place-items: center; min-height: 220px; max-height: min(52vh, 520px); overflow: hidden; border: 1px dashed var(--border-color); border-radius: 8px; background: var(--bg-dark); }
+    .tg-receipt img { display: block; width: auto; max-width: 100%; height: auto; max-height: min(50vh, 500px); object-fit: contain; }
     .tg-receipt-empty { max-width: 240px; padding: 28px; color: var(--text-secondary); font-size: .76rem; line-height: 1.55; text-align: center; }
     .tg-receipt-link { display: inline-flex; margin-top: 10px; color: var(--tg-cyan); font-size: .75rem; font-weight: 700; }
     .tg-error-box { margin-bottom: 16px; padding: 11px 12px; border: 1px solid rgba(251,113,133,.4); border-radius: 8px; background: rgba(251,113,133,.08); color: #fecdd3; font-size: .76rem; line-height: 1.55; overflow-wrap: anywhere; }
@@ -147,7 +147,7 @@
     @media (max-width: 1100px) {
         .tg-toolbar { grid-template-columns: 1fr 170px; }
         .tg-search-field { grid-column: 1 / -1; }
-        .tg-workspace { grid-template-columns: minmax(280px, 42fr) minmax(0, 58fr); max-height: none; min-height: 650px; }
+        .tg-workspace { grid-template-columns: minmax(280px, 42fr) minmax(0, 58fr); height: clamp(560px, calc(100dvh - 455px), 720px); }
         .tg-detail-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 760px) {
@@ -158,9 +158,9 @@
         .tg-search-field { grid-column: auto; }
         .tg-segments { grid-template-columns: repeat(2, 1fr); }
         .tg-filter-button { min-height: 42px; }
-        .tg-workspace { display: block; min-height: 520px; max-height: none; }
-        .tg-inbox { min-height: 520px; border: 0 !important; }
-        .tg-detail { display: none; min-height: 520px; overflow: visible; }
+        .tg-workspace { display: block; height: auto; min-height: 520px; overflow: visible; }
+        .tg-inbox { min-height: 520px; height: auto; max-height: 70dvh; border: 0 !important; }
+        .tg-detail { display: none; min-height: 520px; height: auto; max-height: none; overflow: visible; }
         .tg-workspace.detail-open .tg-inbox { display: none; }
         .tg-workspace.detail-open .tg-detail { display: block; }
         .tg-back { display: inline-flex; align-items: center; }
@@ -168,6 +168,8 @@
         .rtl .tg-detail-head { padding: 14px 18px 14px 15px; }
         .tg-detail-body { padding: 14px; }
         .tg-facts { grid-template-columns: 1fr 1fr; }
+        .tg-receipt { max-height: none; }
+        .tg-receipt img { max-height: none; }
     }
     @media (max-width: 390px) {
         .tg-metrics { grid-template-columns: 1fr 1fr; gap: 7px; }
@@ -246,7 +248,6 @@
     const statusSelect = document.getElementById('tg-status');
     const searchInput = document.getElementById('tg-search');
     const resultCount = document.getElementById('tg-result-count');
-    const locale = document.documentElement.lang === 'fa' ? 'fa-IR' : 'en-US';
 
     const el = (tag, className, text) => {
         const node = document.createElement(tag);
@@ -261,22 +262,10 @@
     const kindColor = kind => ({ purchase: 'var(--tg-indigo)', renewal: 'var(--tg-green)', support: 'var(--tg-cyan)' }[kind] || 'var(--tg-indigo)');
     const fmtAmount = amount => {
         const number = Number(amount);
-        return Number.isFinite(number) && number > 0 ? `${new Intl.NumberFormat(locale).format(number)} T` : '';
+        return Number.isFinite(number) && number > 0 ? `${new Intl.NumberFormat(EveDate.locale).format(number)} T` : '';
     };
-    const fmtDate = input => {
-        if (!input) return '—';
-        const date = new Date(input);
-        return Number.isNaN(date.getTime()) ? value(input) : new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
-    };
-    const age = input => {
-        const date = new Date(input);
-        if (Number.isNaN(date.getTime())) return '—';
-        const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-        if (seconds < 60) return 'just now';
-        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-        if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-        return `${Math.floor(seconds / 86400)}d ago`;
-    };
+    const fmtDate = input => window.EveDate ? window.EveDate.format(input) : value(input);
+    const age = input => window.EveDate ? window.EveDate.relative(input) : value(input);
     const identity = item => item.telegram_username ? `@${item.telegram_username}` : (item.customer_phone || item.phone || `Telegram ${value(item.telegram_user_id)}`);
     const context = item => [item.server_name, item.account_name].filter(Boolean).join(' · ') || item.package_name || 'No service context';
 
@@ -475,7 +464,7 @@
             state.items = Array.isArray(data.items) ? data.items : [];
             if (state.selectedKey && !state.items.some(item => operationKey(item) === state.selectedKey)) state.selectedKey = null;
             renderMetrics(data.counters || {}); renderList(); renderDetail();
-            document.getElementById('tg-last-updated').textContent = `Synced ${new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(new Date())}`;
+            document.getElementById('tg-last-updated').textContent = `Synced ${EveDate.formatTime(new Date())}`;
         } catch (error) {
             if (error.name === 'AbortError') return;
             clear(listEl); listEl.appendChild(stateView('Could not load inbox', error.message, '!'));

@@ -1264,9 +1264,11 @@
 
     let formatter;
     try {
-        formatter = new Intl.DateTimeFormat('en-u-ca-persian', { year: 'numeric', month: '2-digit', day: '2-digit' });
+        formatter = new Intl.DateTimeFormat(EveDate.locale, {
+            timeZone: EveDate.timezone, year: 'numeric', month: '2-digit', day: '2-digit'
+        });
     } catch (err) {
-        console.warn('Persian calendar is not supported in this browser', err);
+        console.warn('Configured calendar is not supported in this browser', err);
     }
 
     const filters = {

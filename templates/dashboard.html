@@ -1069,7 +1069,7 @@
                 </div>
                 <div class="form-group" style="margin-bottom: 0;">
                     <label>Expiry Time</label>
-                    <input type="text" id="edit-client-expiry" data-jdp class="form-input" placeholder="1403/09/15 14:30">
+                    <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="edit-client-expiry" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="form-input" placeholder="{{ '1405/04/23 14:30' if app_calendar == 'jalali' else '2026-07-14 14:30' }}">
                 </div>
             </div>
 
@@ -2203,7 +2203,7 @@
     }
 
     function initShamsiPicker() {
-        if (typeof jalaliDatepicker !== 'undefined') {
+        if (EveDate.calendar === 'jalali' && typeof jalaliDatepicker !== 'undefined') {
             jalaliDatepicker.startWatch({
                 time: true,
                 hasSecond: false,
@@ -2217,11 +2217,11 @@
         const expiryInput = document.getElementById('edit-client-expiry');
         if (!expiryInput) return;
 
-        expiryInput.setAttribute('data-jdp', '');
+        if (EveDate.calendar === 'jalali') expiryInput.setAttribute('data-jdp', '');
         expiryInput.readOnly = false;
         expiryInput.removeAttribute('readonly');
 
-        if (typeof jalaliDatepicker !== 'undefined') {
+        if (EveDate.calendar === 'jalali' && typeof jalaliDatepicker !== 'undefined') {
             try {
                 jalaliDatepicker.updateOptions({
                     time: true,
@@ -4451,9 +4451,7 @@
             }
 
             const amountStr = Number(last.amount || 0).toLocaleString();
-            const renewalDate = isFa
-                ? (last.date_jalali || '')
-                : (last.date_iso ? new Date(last.date_iso).toLocaleString('en-US') : '');
+            const renewalDate = last.date_iso ? EveDate.format(last.date_iso) : (last.date_jalali || '');
             const cardLine = (last.sender_card || last.dest_card)
                 ? `<div>💳 ${isFa ? 'کارت' : 'Card'}: <span dir="ltr">${escapeHtml(last.sender_card || '—')}</span>${last.dest_card ? ` → ${escapeHtml(last.dest_card)}` : ''}</div>`
                 : '';
@@ -4498,9 +4496,7 @@
                 ? (isFa ? ` (${g.days_ago} روز پیش)` : ` (${g.days_ago}d ago)`)
                 : '';
             const by = g.admin_username ? ` • 👤 ${escapeHtml(g.admin_username)}` : '';
-            const giftDate = isFa
-                ? (g.date_jalali || '')
-                : (g.date_iso ? new Date(g.date_iso).toLocaleString('en-US') : '');
+            const giftDate = g.date_iso ? EveDate.format(g.date_iso) : (g.date_jalali || '');
             hist.innerHTML = isFa
                 ? `🎁 توجه: این یوزر قبلاً ${gb}هدیه گرفته — 📅 ${escapeHtml(giftDate)}${days}${by}.<br>گیفت معمولاً یک‌بار داده می‌شود؛ در صورت تمایل خاموش کنید.`
                 : `🎁 Heads up: this user already received ${gb}a gift — 📅 ${escapeHtml(giftDate)}${days}${by}.<br>Gifts are usually given once; turn off if not intended.`;
@@ -4576,7 +4572,7 @@
             ? (isFa ? 'خیر' : 'No')
             : (detail.reachable === true ? (isFa ? 'بله' : 'Yes') : '—');
         let checked = '—';
-        try { if (detail.checked_at) checked = new Date(detail.checked_at + (detail.checked_at.endsWith('Z') ? '' : 'Z')).toLocaleString(); } catch (e) {}
+        try { if (detail.checked_at) checked = EveDate.format(detail.checked_at); } catch (e) {}
 
         const row = (label, val) => `<div style="display:flex;gap:8px;margin:4px 0;"><span style="min-width:120px;opacity:0.7;">${label}</span><span style="word-break:break-word;">${val}</span></div>`;
 
@@ -8556,19 +8552,7 @@ Connection links
 
     function formatEditClientExpiryTs(ts) {
         if (!ts || ts <= 0) return '';
-
-        if (typeof persianDate !== 'undefined') {
-            const pDate = new persianDate(ts);
-            return toEnglishDigits(pDate.format('YYYY/MM/DD HH:mm'));
-        }
-
-        const date = new Date(ts);
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        const hours = String(date.getHours()).padStart(2, '0');
-        const minutes = String(date.getMinutes()).padStart(2, '0');
-        return `${year}/${month}/${day} ${hours}:${minutes}`;
+        return EveDate.formatInput(ts);
     }
 
     function parseEditClientExpiryTextToMs(text) {
@@ -8576,8 +8560,8 @@ Connection links
         if (!trimmed) return 0;
 
         try {
-            const gregorian = shamsiToGregorian(trimmed);
-            if (gregorian) return new Date(gregorian).getTime();
+            const parsed = EveDate.parseInput(trimmed);
+            if (parsed) return parsed.getTime();
         } catch (e) {
             // ignore and fall back
         }
@@ -8752,12 +8736,12 @@ Connection links
                 // X-UI convention: negative expiryTime means "not started yet" with remaining duration.
                 payload.expiryTime = -remainingDays * msPerDay;
             } else if (expiryInput.value) {
-                const gregorian = shamsiToGregorian(expiryInput.value);
-                if (gregorian) {
-                    payload.expiryTime = new Date(gregorian).getTime();
-                } else {
-                    payload.expiryTime = new Date(expiryInput.value).getTime();
+                const parsedExpiry = EveDate.parseInput(expiryInput.value);
+                if (!parsedExpiry) {
+                    showToast('Invalid expiry date and time', 'error');
+                    return;
                 }
+                payload.expiryTime = parsedExpiry.getTime();
             } else {
                 payload.expiryTime = 0;
             }
@@ -8836,7 +8820,7 @@ Connection links
         if (!ts || ts <= 0) return '';
         const d = new Date(Number(ts));
         if (Number.isNaN(d.getTime())) return '';
-        return d.toLocaleTimeString('en-GB', { timeZone: APP_TIMEZONE || 'Asia/Tehran', hour12: false });
+        return EveDate.formatTime(d, { hour12: false });
     }
 
     function openDeleteClientModal(serverId, inboundId, email, uuid, enable, expiry, expiryTs, up, down, total, remaining) {

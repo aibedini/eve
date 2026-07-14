@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.52"
+APP_VERSION = "2.4.53"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -4472,12 +4472,14 @@ DEFAULT_RENEW_TEMPLATE = """🔰{email}\n⌛{days_label} 📊{volume_label}{if_g
 
 MONITOR_SETTINGS_KEY = 'monitor_settings'
 GENERAL_TIMEZONE_SETTING_KEY = 'general_timezone'
+GENERAL_CALENDAR_SETTING_KEY = 'general_calendar'
 PANEL_UI_LANG_SETTING_KEY = 'panel_ui_lang'
 PANEL_DOMAIN_SETTING_KEY = 'panel_domain'
 GENERAL_EXPIRY_WARNING_DAYS_KEY = 'general_expiry_warning_days'
 GENERAL_EXPIRY_WARNING_HOURS_KEY = 'general_expiry_warning_hours'
 GENERAL_LOW_VOLUME_WARNING_GB_KEY = 'general_low_volume_warning_gb'
 DEFAULT_APP_TIMEZONE = 'Asia/Tehran'
+DEFAULT_APP_CALENDAR = 'jalali'
 WHATSAPP_DEPLOYMENT_REGION_KEY = 'whatsapp_deployment_region'
 WHATSAPP_ENABLED_KEY = 'whatsapp_enabled'
 WHATSAPP_PROVIDER_KEY = 'whatsapp_provider'
@@ -4850,6 +4852,20 @@ def _get_app_timezone_name() -> str:
     if _is_valid_timezone_name(normalized):
         return str(normalized).strip()
     return DEFAULT_APP_TIMEZONE
+
+
+def _normalize_calendar_name(value: str | None) -> str | None:
+    normalized = str(value or '').strip().lower()
+    aliases = {
+        'jalali': 'jalali', 'persian': 'jalali', 'solar_hijri': 'jalali',
+        'gregorian': 'gregorian', 'gregory': 'gregorian', 'miladi': 'gregorian',
+    }
+    return aliases.get(normalized)
+
+
+def _get_app_calendar_name() -> str:
+    stored = _get_or_create_system_setting(GENERAL_CALENDAR_SETTING_KEY, DEFAULT_APP_CALENDAR)
+    return _normalize_calendar_name(stored) or DEFAULT_APP_CALENDAR
 
 
 def _normalize_ui_lang(value: str | None, default: str = 'en') -> str:
@@ -10206,6 +10222,7 @@ def log_transaction(user_id, amount, type, desc, server_id=None, card_id=None, s
 def inject_wallet_credit():
     wallet_credit = 0
     app_timezone = DEFAULT_APP_TIMEZONE
+    app_calendar = DEFAULT_APP_CALENDAR
     panel_lang = 'en'
     admin_id = session.get('admin_id')
     if admin_id:
@@ -10218,6 +10235,11 @@ def inject_wallet_credit():
         app_timezone = DEFAULT_APP_TIMEZONE
 
     try:
+        app_calendar = _get_app_calendar_name()
+    except Exception:
+        app_calendar = DEFAULT_APP_CALENDAR
+
+    try:
         panel_lang = _get_panel_ui_lang()
     except Exception:
         panel_lang = 'en'
@@ -10225,21 +10247,29 @@ def inject_wallet_credit():
     return {
         "wallet_credit": wallet_credit,
         "app_timezone": app_timezone,
+        "app_calendar": app_calendar,
         "panel_lang": panel_lang,
         "panel_dir": ('rtl' if panel_lang == 'fa' else 'ltr'),
     }
 
-def format_jalali(dt):
+def format_app_datetime(dt):
     if not dt:
         return None
     try:
         dt_local = _to_app_timezone(dt)
         if not dt_local:
             return None
-        jalali_date = jdatetime_class.fromgregorian(datetime=dt_local.replace(tzinfo=None))
-        return jalali_date.strftime('%Y/%m/%d %H:%M')
+        if _get_app_calendar_name() == 'gregorian':
+            return dt_local.strftime('%Y/%m/%d %H:%M')
+        calendar_date = jdatetime_class.fromgregorian(datetime=dt_local.replace(tzinfo=None))
+        return calendar_date.strftime('%Y/%m/%d %H:%M')
     except Exception:
         return dt.isoformat() if dt else None
+
+
+def format_jalali(dt):
+    """Backward-compatible display formatter honoring the global calendar setting."""
+    return format_app_datetime(dt)
 
 EMAIL_IN_DESCRIPTION = re.compile(r'([A-Za-z0-9_.+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9-.]+)$')
 
@@ -10282,16 +10312,19 @@ def extract_email_from_description(description):
     return email.rstrip('.,;') or None
 
 def parse_jalali_date(date_str, end_of_day=False):
+    """Parse a panel date using the configured calendar and timezone into naive UTC."""
     if not date_str:
         return None
-    normalized = date_str.strip()
+    normalized = str(date_str).strip().translate(_DIGIT_TRANSLATION).replace('T', ' ')
     if not normalized:
         return None
     patterns = ['%Y/%m/%d %H:%M', '%Y-%m-%d %H:%M', '%Y/%m/%d', '%Y-%m-%d']
     for pattern in patterns:
         try:
-            j_date = jdatetime_class.strptime(normalized, pattern)
-            gregorian = j_date.togregorian()
+            if _get_app_calendar_name() == 'gregorian':
+                gregorian = datetime.strptime(normalized, pattern)
+            else:
+                gregorian = jdatetime_class.strptime(normalized, pattern).togregorian()
             dt = None
             if 'H' not in pattern:
                 day = gregorian.date()
@@ -10299,9 +10332,9 @@ def parse_jalali_date(date_str, end_of_day=False):
                 dt = datetime.combine(day, time_part)
             else:
                 dt = gregorian
-            
-            # Convert Tehran to UTC (-3:30)
-            return dt - timedelta(hours=3, minutes=30)
+
+            app_tz = _get_app_tzinfo()
+            return dt.replace(tzinfo=app_tz).astimezone(timezone.utc).replace(tzinfo=None)
         except ValueError:
             continue
     return None
@@ -12814,7 +12847,10 @@ def client_portal():
     if not user or not user.enabled:
         session.pop('client_id', None)
         return redirect(url_for('login'))
-    return render_template('client_portal.html', user=user)
+    return render_template(
+        'client_portal.html', user=user,
+        last_login_display=format_app_datetime(user.last_login) if user.last_login else None,
+    )
 
 
 @app.route('/')
@@ -15130,6 +15166,7 @@ def get_general_settings():
         'success': True,
         'timezone': _get_app_timezone_name(),
         'timezone_options': _get_standard_timezone_options(),
+        'calendar': _get_app_calendar_name(),
         'panel_lang': _get_panel_ui_lang(),
         'near_expiry_days': thresholds.get('near_expiry_days', 3),
         'near_expiry_hours': thresholds.get('near_expiry_hours', 0),
@@ -15164,6 +15201,9 @@ def save_general_settings():
         }), 400
 
     panel_lang = _normalize_ui_lang(data.get('panel_lang'), default='en')
+    calendar_name = _normalize_calendar_name(data.get('calendar') or DEFAULT_APP_CALENDAR)
+    if not calendar_name:
+        return jsonify({'success': False, 'error': 'Invalid calendar. Allowed: jalali, gregorian'}), 400
 
     near_expiry_days = _parse_int(data.get('near_expiry_days'), 3, min_value=0, max_value=365)
     near_expiry_hours = _parse_int(data.get('near_expiry_hours'), 0, min_value=0, max_value=23)
@@ -15196,6 +15236,7 @@ def save_general_settings():
             app.logger.warning(f"nginx update failed when changing domain to {new_domain}: {nginx_error}")
 
     _set_system_setting_value(GENERAL_TIMEZONE_SETTING_KEY, tz_name)
+    _set_system_setting_value(GENERAL_CALENDAR_SETTING_KEY, calendar_name)
     _set_system_setting_value(PANEL_UI_LANG_SETTING_KEY, panel_lang)
     _set_system_setting_value(GENERAL_EXPIRY_WARNING_DAYS_KEY, str(near_expiry_days))
     _set_system_setting_value(GENERAL_EXPIRY_WARNING_HOURS_KEY, str(near_expiry_hours))
@@ -15213,6 +15254,7 @@ def save_general_settings():
         'message': 'General settings saved',
         'timezone': tz_name,
         'timezone_options': _get_standard_timezone_options(),
+        'calendar': calendar_name,
         'panel_lang': panel_lang,
         'near_expiry_days': near_expiry_days,
         'near_expiry_hours': near_expiry_hours,

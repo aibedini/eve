@@ -824,6 +824,24 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
         ).first()
         if existing is not None:
             return existing, True
+    if request_type == 'support':
+        existing = TelegramServiceRequest.query.filter_by(
+            bot_instance_id=bot_id,
+            telegram_user_id=user_id,
+            service_ownership_id=ownership.id,
+            request_type='support',
+            status='pending',
+        ).order_by(TelegramServiceRequest.id.desc()).first()
+        clean_note = str(note or '').strip()[:4000]
+        if existing is not None:
+            if clean_note:
+                existing.note = clean_note
+                db.session.add(TelegramServiceRequestMessage(
+                    request_id=existing.id,
+                    sender_type='customer',
+                    message=clean_note,
+                ))
+            return existing, True
     row = TelegramServiceRequest(
         bot_instance_id=bot_id,
         telegram_user_id=user_id,

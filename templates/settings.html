@@ -154,6 +154,15 @@
                 </div>
 
                 <div class="form-group" style="margin-top: 18px; margin-bottom: 0;">
+                    <label>Calendar</label>
+                    <select id="general-calendar" class="form-select">
+                        <option value="jalali">Persian / Jalali (Solar Hijri)</option>
+                        <option value="gregorian">Gregorian</option>
+                    </select>
+                    <small class="text-secondary">Calendar controls how dates are displayed across Eve; TimeZone controls the clock zone.</small>
+                </div>
+
+                <div class="form-group" style="margin-top: 18px; margin-bottom: 0;">
                     <label>Near Expiry Threshold</label>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
                         <div>
@@ -3908,8 +3917,7 @@
 
     function formatTelegramTimestamp(value) {
         if (!value) return 'No heartbeat yet';
-        const date = new Date(value);
-        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+        return EveDate.format(value);
     }
 
     async function loadTelegramEgressCandidates() {
@@ -4351,24 +4359,11 @@
         return isNaN(d.getTime()) ? null : d;
     }
 
-    // Format a log timestamp as a Jalali (Persian) date + Tehran-time clock,
-    // e.g. "1405/04/03 18:59:13". Latin digits keep it aligned with the rest of
-    // the table; falls back to the locale default if Intl/persian isn't available.
-    const _jalaliFmt = (() => {
-        try {
-            return new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', {
-                timeZone: 'Asia/Tehran',
-                year: 'numeric', month: '2-digit', day: '2-digit',
-                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-            });
-        } catch (_) { return null; }
-    })();
     function formatJalaliTehran(iso) {
-        const d = _parseUtcDate(iso);
-        if (!d) return iso || '';
-        try {
-            return _jalaliFmt ? _jalaliFmt.format(d) : d.toLocaleString();
-        } catch (_) { return d.toLocaleString(); }
+        return iso ? EveDate.format(iso, {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+        }) : '';
     }
 
     function _setSmsRunBtn(running) {
@@ -4612,7 +4607,7 @@
             const logs = (data && data.logs) || [];
             smsLogTotal = Number((data && data.total) || logs.length);
             const stampEl = document.getElementById('sms-logs-updated');
-            if (stampEl) stampEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+            if (stampEl) stampEl.textContent = 'Updated ' + EveDate.formatTime(new Date());
             if (!logs.length) {
                 body.innerHTML = '<tr><td colspan="7" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>';
                 _renderSmsLogPager();
@@ -4891,6 +4886,8 @@
                 applyTimezoneOptions('general-timezone', Array.isArray(data.timezone_options) ? data.timezone_options : []);
                 const input = document.getElementById('general-timezone');
                 if (input) input.value = data.timezone || 'Asia/Tehran';
+                const calendarInput = document.getElementById('general-calendar');
+                if (calendarInput) calendarInput.value = data.calendar === 'gregorian' ? 'gregorian' : 'jalali';
 
                 const panelLangSel = document.getElementById('general-panel-lang');
                 if (panelLangSel) panelLangSel.value = (data.panel_lang === 'fa') ? 'fa' : 'en';
@@ -4912,7 +4909,7 @@
                     const d = new Date(data.last_snapshot_at);
                     const ago = Math.round((Date.now() - d.getTime()) / 60000);
                     const agoStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago/60)}h ago`;
-                    lastTimeEl.textContent = `${d.toLocaleTimeString()} (${agoStr})`;
+                    lastTimeEl.textContent = `${EveDate.formatTime(d)} (${agoStr})`;
                     totalEl.textContent = (data.total_snapshots || 0).toLocaleString() + ' rows';
                     lastInfo.style.display = 'block';
                 } else if (lastInfo) {
@@ -5021,6 +5018,8 @@
     async function saveGeneralSettings() {
         const input = document.getElementById('general-timezone');
         const timezone = ((input ? input.value : '') || 'Asia/Tehran').trim().replace(/\\/g, '/').replace(/\s+/g, '');
+        const calendarInput = document.getElementById('general-calendar');
+        const calendar = calendarInput && calendarInput.value === 'gregorian' ? 'gregorian' : 'jalali';
         const panelLang = (document.getElementById('general-panel-lang') || {}).value || 'en';
         const nearDays = parseInt((document.getElementById('general-near-expiry-days') || {}).value || '3', 10);
         const nearHours = parseInt((document.getElementById('general-near-expiry-hours') || {}).value || '0', 10);
@@ -5033,6 +5032,7 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     timezone,
+                    calendar,
                     panel_lang: (panelLang === 'fa') ? 'fa' : 'en',
                     near_expiry_days: Number.isFinite(nearDays) ? nearDays : 3,
                     near_expiry_hours: Number.isFinite(nearHours) ? nearHours : 0,
@@ -5042,8 +5042,11 @@
             });
             const data = await res.json();
             if (data && data.success) {
+                const calendarChanged = data.calendar && data.calendar !== EveDate.calendar;
+                const timezoneChanged = data.timezone && data.timezone !== EveDate.timezone;
                 applyTimezoneOptions('general-timezone', Array.isArray(data.timezone_options) ? data.timezone_options : []);
                 if (input) input.value = data.timezone || timezone;
+                if (calendarInput) calendarInput.value = data.calendar === 'gregorian' ? 'gregorian' : calendar;
                 const panelLangSel = document.getElementById('general-panel-lang');
                 if (panelLangSel) panelLangSel.value = (data.panel_lang === 'fa') ? 'fa' : 'en';
                 const nearDaysInput = document.getElementById('general-near-expiry-days');
@@ -5061,8 +5064,9 @@
                 } else if (data.nginx_error) {
                     showToast(`Settings saved, but nginx update failed: ${data.nginx_error}`, 'warning', 8000);
                 } else {
-                    showToast('Settings saved');
+                    showToast((calendarChanged || timezoneChanged) ? 'Settings saved. Reloading dates and timesâ€¦' : 'Settings saved');
                 }
+                if (calendarChanged || timezoneChanged) setTimeout(() => window.location.reload(), 650);
             } else {
                 showToast((data && data.error) ? data.error : 'Error saving settings', 'error');
             }
@@ -5132,8 +5136,7 @@
     function fmtDate(iso) {
         if (!iso) return '—';
         try {
-            const d = new Date(iso);
-            return d.toLocaleString(undefined, { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+            return EveDate.format(iso, { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
         } catch { return iso; }
     }
 
@@ -5262,7 +5265,7 @@
                         const sd = new Date(d.last_snapshot_at);
                         const ago = Math.round((Date.now() - sd.getTime()) / 60000);
                         const agoStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago/60)}h ago`;
-                        return `<div class="overview-card-value" style="font-size:0.95rem">${sd.toLocaleTimeString()}</div>
+                        return `<div class="overview-card-value" style="font-size:0.95rem">${EveDate.formatTime(sd)}</div>
                     <div class="overview-card-sub">${agoStr} &nbsp;·&nbsp; ${(d.total_snapshots||0).toLocaleString()} rows</div>`;
                     })() : `<div class="overview-card-value" style="font-size:0.95rem;color:#94a3b8">—</div>
                     <div class="overview-card-sub">No usage rollups yet</div>`}
@@ -5291,7 +5294,7 @@
             if (data.cert_expiry) {
                 const exp = new Date(data.cert_expiry);
                 const daysLeft = Math.ceil((exp - Date.now()) / 86400000);
-                parts.push(`Expires: ${exp.toLocaleDateString()} (${daysLeft > 0 ? daysLeft + ' days' : 'EXPIRED'})`);
+                parts.push(`Expires: ${EveDate.formatDate(exp)} (${daysLeft > 0 ? daysLeft + ' days' : 'EXPIRED'})`);
             }
             if (parts.length) activeText += ' · ' + parts.join(' · ');
         } else if (data.ssl_type === 'letsencrypt') {
@@ -7261,8 +7264,7 @@
     function _hlFormatTime(iso) {
         if (!iso) return '-';
         try {
-            const d = new Date(iso);
-            return d.toLocaleString();
+            return EveDate.format(iso);
         } catch { return iso; }
     }
 

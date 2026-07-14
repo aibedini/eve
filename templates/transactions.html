@@ -251,9 +251,11 @@
 
     let formatter;
     try {
-        formatter = new Intl.DateTimeFormat('en-u-ca-persian', { year: 'numeric', month: '2-digit', day: '2-digit' });
+        formatter = new Intl.DateTimeFormat(EveDate.locale, {
+            timeZone: EveDate.timezone, year: 'numeric', month: '2-digit', day: '2-digit'
+        });
     } catch (err) {
-        console.warn('Persian calendar is not supported in this browser', err);
+        console.warn('Configured calendar is not supported in this browser', err);
     }
 
     const filters = {
@@ -402,7 +404,7 @@
             const isPositive = Number(t.amount || 0) > 0;
             const color = isPositive ? '#4ade80' : '#ef4444';
             const sign = isPositive ? '+' : '';
-            const date = t.date_jalali || (t.date ? new Date(t.date).toLocaleString() : '-');
+            const date = t.date ? EveDate.format(t.date) : (t.date_jalali || '-');
             const userCell = isSuperadmin ? `
                 <td style="padding: 15px; color: var(--text-secondary);">
                     ${t.admin ? `<div style=\"font-weight:600; color:var(--text-primary);\">${t.admin.username}</div><div style=\"font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-secondary);\">${t.admin.role}</div>` : '-'}

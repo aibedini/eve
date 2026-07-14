@@ -1308,11 +1308,11 @@
             <div style="display:flex; gap: 12px;">
                 <div class="form-group" style="flex:1;">
                     <label>Start</label>
-                    <input type="text" id="announcement-start" data-jdp class="form-input" placeholder="1404/10/10 14:30">
+                    <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="announcement-start" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="form-input" placeholder="{{ '1405/04/23 14:30' if app_calendar == 'jalali' else '2026-07-14 14:30' }}">
                 </div>
                 <div class="form-group" style="flex:1;">
                     <label>End</label>
-                    <input type="text" id="announcement-end" data-jdp class="form-input" placeholder="1404/10/10 18:30">
+                    <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="announcement-end" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="form-input" placeholder="{{ '1405/04/23 18:30' if app_calendar == 'jalali' else '2026-07-14 18:30' }}">
                 </div>
             </div>
 
@@ -1722,10 +1722,10 @@
             const isActive = isAnnouncementActive(a);
             const serversLabel = a.all_servers ? 'All servers' : ((a.server_names && a.server_names.length) ? a.server_names.join(', ') : 'No servers selected');
             const createdBy = a.created_by || 'unknown';
-            const createdAt = a.created_at_jalali || (a.created_at ? new Date(a.created_at).toLocaleString('fa-IR') : '');
-            const windowLabel = (a.start_at_jalali && a.end_at_jalali)
-                ? `${a.start_at_jalali} → ${a.end_at_jalali}`
-                : ((a.start_at && a.end_at) ? `${new Date(a.start_at).toLocaleString('fa-IR')} → ${new Date(a.end_at).toLocaleString('fa-IR')}` : '');
+            const createdAt = a.created_at ? EveDate.format(a.created_at) : (a.created_at_jalali || '');
+            const windowLabel = (a.start_at && a.end_at)
+                ? `${EveDate.format(a.start_at)} → ${EveDate.format(a.end_at)}`
+                : ((a.start_at_jalali && a.end_at_jalali) ? `${a.start_at_jalali} → ${a.end_at_jalali}` : '');
 
             return `
                 <div class="server-card">
@@ -1764,7 +1764,7 @@
     }
 
     function initAnnouncementShamsiPicker() {
-        if (typeof jalaliDatepicker !== 'undefined') {
+        if (EveDate.calendar === 'jalali' && typeof jalaliDatepicker !== 'undefined') {
             jalaliDatepicker.startWatch({
                 time: true,
                 hasSecond: false
@@ -2166,8 +2166,8 @@
         document.getElementById('announcement-modal-title').textContent = 'Edit Announcement';
         annSetContent(a.message || '');
 
-        document.getElementById('announcement-start').value = a.start_at_jalali || '';
-        document.getElementById('announcement-end').value = a.end_at_jalali || '';
+        document.getElementById('announcement-start').value = EveDate.formatInput(a.start_at);
+        document.getElementById('announcement-end').value = EveDate.formatInput(a.end_at);
         const hrEl = document.getElementById('announcement-hide-resellers');
         if (hrEl) hrEl.checked = !!a.hide_from_resellers;
         const popEl = document.getElementById('announcement-is-popup');
@@ -2456,7 +2456,7 @@
                 </div>
 
                 <div style="margin-top: 10px; color: var(--text-secondary); font-size: 0.8rem;">
-                    <div>Created: ${escapeHtml(item.created_at ? new Date(item.created_at).toLocaleString('fa-IR') : '')} • By: ${escapeHtml(item.created_by || 'unknown')}</div>
+                    <div>Created: ${escapeHtml(item.created_at ? EveDate.format(item.created_at) : '')} • By: ${escapeHtml(item.created_by || 'unknown')}</div>
                 </div>
 
                 <div class="server-actions" style="gap: 8px; flex-wrap: wrap;">
@@ -3059,8 +3059,7 @@
         function fmFmtDate(iso) {
             if (!iso) return '';
             try {
-                const d = new Date(iso);
-                return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+                return EveDate.formatDate(iso, { month: 'short', day: 'numeric', year: 'numeric' });
             } catch (_) { return iso; }
         }
 
