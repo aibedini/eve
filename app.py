@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.58"
+APP_VERSION = "2.4.59"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -25253,7 +25253,11 @@ def _telegram_bot_api_client(bot: TelegramBotInstance):
     ).order_by(TelegramEgressProfile.priority.asc(), TelegramEgressProfile.id.asc()).all()
     managed = sorted(
         [('egress', row) for row in egress_rows] + [('proxy', row) for row in proxy_rows],
-        key=lambda item: (int(item[1].priority or 0), item[1].id),
+        key=lambda item: (
+            int(item[1].priority or 0),
+            0 if item[0] == 'egress' else 1,
+            int(item[1].id or 0),
+        ),
     )
     routes = []
     for kind, row in managed:
@@ -25324,7 +25328,13 @@ def _telegram_bot_attempt(token: str, route_name: str, proxies=None, proxy=None)
         }
     except Exception as exc:
         safe_error = redact_connection_error(exc, (token, username, password))
-        error_code = 'telegram_api_timeout' if 'timed out' in safe_error.lower() else 'telegram_api_failed'
+        lowered_error = safe_error.lower()
+        if 'unexpected_eof_while_reading' in lowered_error or 'unexpected eof' in lowered_error:
+            error_code = 'route_outbound_closed'
+        elif 'timed out' in lowered_error:
+            error_code = 'telegram_api_timeout'
+        else:
+            error_code = 'telegram_api_failed'
         latency = max(0, int((time.perf_counter() - started) * 1000))
         api_latency = max(0, int((time.perf_counter() - api_started) * 1000))
         stages.append({'name': 'telegram_api', 'status': 'failed', 'latency_ms': api_latency,
@@ -25354,7 +25364,11 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
     ).all()
     managed_rows = sorted(
         [('egress', row) for row in egress_rows] + [('proxy', row) for row in proxy_rows],
-        key=lambda item: (int(item[1].priority or 0), item[1].id),
+        key=lambda item: (
+            int(item[1].priority or 0),
+            0 if item[0] == 'egress' else 1,
+            int(item[1].id or 0),
+        ),
     )
     attempts = []
     if only_proxy_id is not None:
@@ -25420,7 +25434,14 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
     bot.last_test_error = attempts[-1].get('error') if attempts else 'No usable route configured'
     bot.last_test_at = datetime.utcnow()
     db.session.commit()
-    return {'success': False, 'error': bot.last_test_error, 'attempts': attempts}
+    result = {'success': False, 'error': bot.last_test_error, 'attempts': attempts}
+    if only_egress_id is not None and any(
+            attempt.get('error_code') == 'route_outbound_closed' for attempt in attempts):
+        result['runtime_hint'] = (
+            'The local Xray SOCKS listener is running, but the selected VLESS route closed '
+            'outbound traffic. Choose an enabled inbound and active client, or paste a known-working URI.'
+        )
+    return result
 
 
 def _telegram_proxy_from_payload(proxy, data):
@@ -26436,6 +26457,9 @@ def get_telegram_egress_candidates():
         server = servers.get(server_id)
         if not server or str(inbound.get('protocol') or '').lower() != 'vless':
             continue
+        inbound_enabled = inbound.get('enable', inbound.get('enabled', True))
+        if inbound_enabled in (False, 0, '0', 'false', 'False'):
+            continue
         stream = inbound.get('streamSettings') or {}
         if isinstance(stream, str):
             try:
@@ -26447,6 +26471,23 @@ def get_telegram_egress_candidates():
             # the human-facing email and sends it back as the lookup reference.
             client_email = str(client.get('email') or '').strip()
             if not client_email:
+                continue
+            raw_client = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
+            client_enabled = raw_client.get('enable', client.get('enable', True))
+            if client_enabled in (False, 0, '0', 'false', 'False'):
+                continue
+            try:
+                expiry_ms = int(raw_client.get('expiryTime') or 0)
+            except (TypeError, ValueError):
+                expiry_ms = 0
+            if expiry_ms > 0 and expiry_ms <= int(time.time() * 1000):
+                continue
+            try:
+                total_bytes = int(raw_client.get('totalGB') or client.get('totalGB') or 0)
+                used_bytes = int(client.get('up') or 0) + int(client.get('down') or 0)
+            except (TypeError, ValueError):
+                total_bytes = used_bytes = 0
+            if total_bytes > 0 and used_bytes >= total_bytes:
                 continue
             candidates.append({
                 'server_id': server.id, 'server_name': server.name,

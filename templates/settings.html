@@ -683,7 +683,8 @@
                         <button type="button" class="tgb-preset" data-preset="foreign" onclick="applyTelegramBotPreset('foreign')"><strong>Foreign server</strong><span>Direct connection only</span></button>
                         <button type="button" class="tgb-preset" data-preset="custom" onclick="applyTelegramBotPreset('custom')"><strong>Custom</strong><span>Set routing manually</span></button>
                     </div>
-                    <div class="form-group tgb-mode-select"><label for="tgb-connection-mode">Connection mode</label><select id="tgb-connection-mode" class="form-select" onchange="markTelegramBotPresetCustom()"><option value="auto">Auto (direct, then proxy)</option><option value="direct_only">Direct only</option><option value="proxy_first">Proxy first, then direct</option><option value="proxy_only">Proxy only</option></select><div id="tgb-proxy-warning" class="tgb-inline-warning" style="display:none;">This mode needs an enabled proxy. Add or enable one before testing the configured route.</div></div>
+                    <div class="form-group tgb-mode-select"><label for="tgb-connection-mode">Connection mode</label><select id="tgb-connection-mode" class="form-select" onchange="markTelegramBotPresetCustom()"><option value="auto">Auto (direct, then managed routes)</option><option value="direct_only">Direct only</option><option value="proxy_first">Managed routes first, then direct</option><option value="proxy_only">Managed routes only</option></select><div id="tgb-proxy-warning" class="tgb-inline-warning" style="display:none;">This mode needs an enabled Xray route or proxy. Add or enable one before testing.</div></div>
+                    <div id="tgb-route-order" class="tgb-route-order" aria-live="polite"><strong>Effective failover order</strong><span>Loading routes…</span></div>
                 </section>
 
                 <section class="panel-card tgb-section tgb-live-test" aria-labelledby="tgb-live-test-title">
@@ -729,10 +730,16 @@
                         <div class="tgb-form-grid">
                             <div class="form-group"><label for="tgb-egress-name">Route name</label><input id="tgb-egress-name" class="form-control" required placeholder="Telegram via Germany" autocomplete="off"></div>
                             <div class="form-group"><label for="tgb-egress-source">Configuration source</label><select id="tgb-egress-source" class="form-select" onchange="updateTelegramEgressSourceUI()"><option value="candidate">Existing 3x-ui VLESS client</option><option value="manual">Manual VLESS URI</option></select></div>
-                            <div id="tgb-egress-candidate-group" class="form-group tgb-form-span"><label for="tgb-egress-candidate">VLESS client</label><select id="tgb-egress-candidate" class="form-select"></select><small id="tgb-egress-candidate-hint" class="text-secondary">Loading available clients…</small></div>
+                            <div id="tgb-egress-candidate-group" class="form-group tgb-form-span">
+                                <label for="tgb-egress-candidate-search">Find VLESS client</label>
+                                <input id="tgb-egress-candidate-search" class="form-control" type="search" placeholder="Search account, phone, server, inbound, transport…" autocomplete="off" spellcheck="false" aria-controls="tgb-egress-candidate" oninput="filterTelegramEgressCandidates()" onkeydown="handleTelegramEgressSearchKey(event)">
+                                <label class="sr-only" for="tgb-egress-candidate">Matching VLESS clients</label>
+                                <select id="tgb-egress-candidate" class="form-select" size="7" aria-describedby="tgb-egress-candidate-hint"></select>
+                                <small id="tgb-egress-candidate-hint" class="text-secondary" aria-live="polite">Loading active clients…</small>
+                            </div>
                             <div id="tgb-egress-uri-group" class="form-group tgb-form-span" style="display:none;"><label for="tgb-egress-uri">VLESS URI</label><textarea id="tgb-egress-uri" class="form-control tgb-secret-textarea" rows="3" placeholder="vless://…" autocomplete="new-password" spellcheck="false"></textarea><small id="tgb-egress-uri-hint" class="text-secondary">The URI is encrypted and never returned. Leave blank while editing to preserve the saved value.</small></div>
                             <div class="form-group"><label for="tgb-egress-port">Local port</label><input id="tgb-egress-port" class="form-control" type="number" min="1024" max="65535" required value="10808"><small class="text-secondary">Bound to 127.0.0.1 only.</small></div>
-                            <div class="form-group"><label for="tgb-egress-priority">Priority</label><input id="tgb-egress-priority" class="form-control" type="number" min="0" value="100"></div>
+                            <div class="form-group"><label for="tgb-egress-priority">Priority</label><input id="tgb-egress-priority" class="form-control" type="number" min="0" value="100"><small class="text-secondary">Lower number is tried earlier across both Xray routes and proxies.</small></div>
                         </div>
                         <label class="tgb-check"><input id="tgb-egress-enabled" type="checkbox" checked> Enabled</label>
                         <div class="tgb-form-actions"><button type="button" class="btn btn-secondary" onclick="closeTelegramEgressForm()">Cancel</button><button id="tgb-egress-save" type="submit" class="btn btn-primary">Save route</button></div>
@@ -740,7 +747,7 @@
                 </section>
 
                 <section class="panel-card tgb-section">
-                    <div class="panel-card-header"><div class="header-content"><h2>Proxy Pool</h2><p>Healthy routes are preferred; failed routes can cool down without stopping the bot.</p></div><button id="tgb-add-proxy" class="btn btn-secondary" type="button" onclick="openTelegramProxyForm()">Add proxy</button></div>
+                    <div class="panel-card-header"><div class="header-content"><h2>Proxy Pool</h2><p>Xray routes and proxies share one priority queue. Lower numbers are tried first; failures continue to the next route.</p></div><button id="tgb-add-proxy" class="btn btn-secondary" type="button" onclick="openTelegramProxyForm()">Add proxy</button></div>
                     <div id="tgb-proxy-empty" class="tgb-empty" style="display:none;"><strong>No proxies configured</strong><span>Add SOCKS5 or HTTP routing for restricted networks.</span></div>
                     <div id="tgb-proxy-list" class="tgb-proxy-list"></div>
                     <form id="tgb-proxy-form" class="tgb-proxy-form" style="display:none;" onsubmit="saveTelegramProxy(event)">
@@ -749,7 +756,7 @@
                             <div class="form-group"><label for="tgb-proxy-type">Type</label><select id="tgb-proxy-type" class="form-select"><option value="socks5">SOCKS5</option><option value="http">HTTP</option></select></div>
                             <div class="form-group"><label for="tgb-proxy-host">Host</label><input id="tgb-proxy-host" class="form-control" required placeholder="127.0.0.1" autocomplete="off"></div>
                             <div class="form-group"><label for="tgb-proxy-port">Port</label><input id="tgb-proxy-port" class="form-control" type="number" min="1" max="65535" required placeholder="1080"></div>
-                            <div class="form-group"><label for="tgb-proxy-priority">Priority</label><input id="tgb-proxy-priority" class="form-control" type="number" min="0" value="100"></div>
+                            <div class="form-group"><label for="tgb-proxy-priority">Priority</label><input id="tgb-proxy-priority" class="form-control" type="number" min="0" value="100"><small class="text-secondary">Lower number is tried earlier across both proxies and Xray routes.</small></div>
                             <div class="form-group"><label for="tgb-proxy-username">Username</label><input id="tgb-proxy-username" class="form-control" autocomplete="off" placeholder="Optional"></div>
                             <div class="form-group"><label for="tgb-proxy-password">Password</label><input id="tgb-proxy-password" type="password" class="form-control" autocomplete="new-password" placeholder="Optional; blank preserves saved"></div>
                         </div>
@@ -2957,6 +2964,14 @@
     .tgb-purchase-server .tgb-customer-field input:disabled { cursor:not-allowed; }
     .tgb-route-help { display:flex; gap:10px; margin-bottom:10px; padding:10px 12px; color:var(--text-secondary); background:rgba(99,102,241,.06); border:1px solid rgba(99,102,241,.22); border-radius:8px; font-size:.74rem; line-height:1.45; }
     .tgb-route-help strong { flex:none; color:#a5b4fc; }
+    .sr-only { position:absolute!important; width:1px!important; height:1px!important; padding:0!important; margin:-1px!important; overflow:hidden!important; clip:rect(0,0,0,0)!important; white-space:nowrap!important; border:0!important; }
+    .tgb-route-order { display:flex; flex-direction:column; gap:7px; margin-top:12px; padding:11px 13px; color:var(--text-secondary); background:rgba(99,102,241,.06); border:1px solid rgba(99,102,241,.22); border-radius:8px; font-size:.75rem; }
+    .tgb-route-order strong { color:#a5b4fc; }
+    .tgb-route-order ol { display:flex; flex-wrap:wrap; gap:7px; margin:0; padding:0; list-style:none; counter-reset:route; }
+    .tgb-route-order li { counter-increment:route; padding:5px 8px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:6px; }
+    .tgb-route-order li::before { content:counter(route) '. '; color:#a5b4fc; font-weight:700; }
+    #tgb-egress-candidate-search { margin-bottom:8px; }
+    #tgb-egress-candidate { min-height:180px; }
     .tgb-purchase-routes { display:flex; flex-direction:column; gap:12px; }
     .tgb-purchase-route-server { padding:12px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; }
     .tgb-purchase-route-server > h4 { margin:0 0 9px; font-size:.84rem; }
@@ -3600,9 +3615,57 @@
 
     function updateTelegramProxyWarning() {
         const mode = document.getElementById('tgb-connection-mode').value;
-        const needsProxy = mode === 'proxy_first' || mode === 'proxy_only';
-        const hasEnabledProxy = telegramBotProxies.some(proxy => proxy.enabled !== false);
-        document.getElementById('tgb-proxy-warning').style.display = needsProxy && !hasEnabledProxy ? '' : 'none';
+        const needsManagedRoute = mode === 'proxy_first' || mode === 'proxy_only';
+        const hasEnabledManagedRoute = telegramBotProxies.some(proxy => proxy.enabled !== false)
+            || telegramBotEgressProfiles.some(profile => profile.enabled !== false);
+        document.getElementById('tgb-proxy-warning').style.display = needsManagedRoute && !hasEnabledManagedRoute ? '' : 'none';
+        renderTelegramRouteOrder();
+    }
+
+    function renderTelegramRouteOrder() {
+        const box = document.getElementById('tgb-route-order');
+        const modeSelect = document.getElementById('tgb-connection-mode');
+        if (!box || !modeSelect) return;
+        const managed = [
+            ...telegramBotEgressProfiles.filter(item => item.enabled !== false).map(item => ({
+                kind: 'Xray', name: item.name || `Route ${item.id}`, priority: Number(item.priority || 0),
+                rank: 0, id: Number(item.id || 0), health: item.health_status || 'not tested',
+            })),
+            ...telegramBotProxies.filter(item => item.enabled !== false).map(item => ({
+                kind: 'Proxy', name: `${String(item.proxy_type || item.type || 'socks5').toUpperCase()} ${item.host}:${item.port}`,
+                priority: Number(item.priority || 0), rank: 1, id: Number(item.id || 0),
+                health: item.health_status || 'not tested',
+            })),
+        ].sort((a, b) => a.priority - b.priority || a.rank - b.rank || a.id - b.id);
+        const direct = {kind: 'Direct', name: 'Telegram API'};
+        const mode = modeSelect.value;
+        let routes = managed;
+        if (mode === 'direct_only') routes = [direct];
+        else if (mode === 'auto') routes = [direct, ...managed];
+        else if (mode === 'proxy_first') routes = [...managed, direct];
+
+        box.replaceChildren();
+        const title = document.createElement('strong');
+        title.textContent = 'Effective failover order';
+        box.appendChild(title);
+        const help = document.createElement('span');
+        help.textContent = 'Xray and proxy entries share one queue; lower priority numbers run first. Equal numbers put Xray before proxy.';
+        box.appendChild(help);
+        if (!routes.length) {
+            const empty = document.createElement('span');
+            empty.textContent = 'No enabled managed route is available.';
+            box.appendChild(empty);
+            return;
+        }
+        const list = document.createElement('ol');
+        routes.forEach(route => {
+            const item = document.createElement('li');
+            item.textContent = route.kind === 'Direct'
+                ? `Direct: ${route.name}`
+                : `${route.kind}: ${route.name} (priority ${route.priority}, ${route.health})`;
+            list.appendChild(item);
+        });
+        box.appendChild(list);
     }
 
     function redactTelegramRuntimeError(value) {
@@ -4015,24 +4078,82 @@
         return [candidate.server_id, candidate.inbound_id, candidate.client_id].map(value => String(value ?? '')).join(':');
     }
 
+    function telegramEgressSearchValue(value) {
+        const digitMap = {'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'};
+        return String(value || '').normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[۰-۹٠-٩]/g, digit => digitMap[digit])
+            .replace(/[يى]/g, 'ی').replace(/ك/g, 'ک')
+            .toLocaleLowerCase().trim();
+    }
+
+    function telegramEgressSearchAliases(value) {
+        const normalized = telegramEgressSearchValue(value);
+        const aliases = new Set([normalized]);
+        (normalized.match(/\d+/g) || []).filter(digits => digits.length >= 10).forEach(digits => {
+            aliases.add(digits);
+            if (digits.startsWith('09')) aliases.add(`98${digits.slice(1)}`);
+            else if (digits.startsWith('989')) aliases.add(`0${digits.slice(2)}`);
+            else if (digits.length === 10 && digits.startsWith('9')) {
+                aliases.add(`0${digits}`); aliases.add(`98${digits}`);
+            }
+        });
+        return [...aliases].filter(Boolean);
+    }
+
+    function filterTelegramEgressCandidates() { renderTelegramEgressCandidates(); }
+
+    function handleTelegramEgressSearchKey(event) {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            document.getElementById('tgb-egress-candidate').focus();
+        } else if (event.key === 'Escape' && event.currentTarget.value) {
+            event.currentTarget.value = '';
+            renderTelegramEgressCandidates();
+        }
+    }
+
     function renderTelegramEgressCandidates(selectedKey = '') {
         const select = document.getElementById('tgb-egress-candidate');
         const hint = document.getElementById('tgb-egress-candidate-hint');
         if (!select || !hint) return;
-        select.disabled = !telegramBotEgressCandidates.length;
+        const search = document.getElementById('tgb-egress-candidate-search');
+        const wantedKey = selectedKey || select.value;
+        const tokenGroups = telegramEgressSearchValue(search ? search.value : '').split(/\s+/).filter(Boolean).map(telegramEgressSearchAliases);
+        const matches = telegramBotEgressCandidates.filter(candidate => {
+            const source = [
+                candidate.client_email, candidate.client_id, candidate.server_name, candidate.server_id,
+                candidate.inbound_remark, candidate.inbound_id,
+                candidate.network, candidate.security, candidate.protocol,
+            ].join(' ');
+            const haystack = telegramEgressSearchAliases(source).join(' ');
+            return tokenGroups.every(aliases => aliases.some(token => haystack.includes(token)));
+        });
+        select.replaceChildren();
+        select.disabled = !matches.length;
         if (!telegramBotEgressCandidates.length) {
-            select.innerHTML = '<option value="">No VLESS clients available</option>';
-            hint.textContent = 'Create a VLESS client on a managed 3x-ui server, or choose Manual VLESS URI.';
+            const option = document.createElement('option'); option.value = ''; option.textContent = 'No active VLESS clients available'; select.appendChild(option);
+            hint.textContent = 'Disabled/expired clients and disabled inbounds are hidden. Create an active VLESS client or choose Manual VLESS URI.';
             return;
         }
-        select.innerHTML = telegramBotEgressCandidates.map(candidate => {
-            const key = telegramEgressCandidateKey(candidate);
-            const location = `${candidate.server_name || `Server ${candidate.server_id}`} / ${candidate.inbound_remark || `Inbound ${candidate.inbound_id}`}`;
-            const transport = `${candidate.network || 'tcp'} / ${candidate.security || 'none'}`;
-            return `<option value="${escapeHtml(key)}">${escapeHtml(location)} / ${escapeHtml(candidate.client_email || 'Unnamed client')} / ${escapeHtml(transport)}</option>`;
-        }).join('');
-        if (selectedKey && telegramBotEgressCandidates.some(candidate => telegramEgressCandidateKey(candidate) === selectedKey)) select.value = selectedKey;
-        hint.textContent = `${telegramBotEgressCandidates.length} eligible VLESS client${telegramBotEgressCandidates.length === 1 ? '' : 's'} found. A dedicated system client is recommended.`;
+        if (!matches.length) {
+            const option = document.createElement('option'); option.value = ''; option.textContent = 'No matching active clients'; select.appendChild(option);
+            hint.textContent = `No match for “${search ? search.value.trim() : ''}”. Search account, phone, server, inbound, or transport.`;
+            return;
+        }
+        const groups = new Map();
+        matches.forEach(candidate => {
+            const location = `${candidate.server_name || `Server ${candidate.server_id}`} · ${candidate.inbound_remark || `Inbound ${candidate.inbound_id}`}`;
+            if (!groups.has(location)) {
+                const group = document.createElement('optgroup'); group.label = location; groups.set(location, group); select.appendChild(group);
+            }
+            const option = document.createElement('option');
+            option.value = telegramEgressCandidateKey(candidate);
+            option.textContent = `${candidate.client_email || 'Unnamed client'} · ${candidate.network || 'tcp'} / ${candidate.security || 'none'}`;
+            groups.get(location).appendChild(option);
+        });
+        if (wantedKey && matches.some(candidate => telegramEgressCandidateKey(candidate) === wantedKey)) select.value = wantedKey;
+        hint.textContent = `${matches.length} of ${telegramBotEgressCandidates.length} active VLESS clients shown. Use multiple words to narrow results; Arrow Down moves to the list.`;
     }
 
     function renderTelegramEgressProfiles() {
@@ -4056,6 +4177,7 @@
                 <div class="tgb-egress-actions"><button class="btn btn-secondary" type="button" onclick="testTelegramEgress(${Number(profile.id)}, this)">Test</button><button class="btn btn-secondary" type="button" onclick="openTelegramEgressForm(${Number(profile.id)})">Edit</button><button class="btn btn-danger" type="button" onclick="deleteTelegramEgress(${Number(profile.id)}, this)">Delete</button></div>
             </article>`;
         }).join('');
+        renderTelegramRouteOrder();
     }
 
     async function openTelegramEgressForm(id = null) {
@@ -4068,6 +4190,7 @@
         document.getElementById('tgb-egress-port').value = profile.local_port || 10808;
         document.getElementById('tgb-egress-priority').value = profile.priority ?? 100;
         document.getElementById('tgb-egress-enabled').checked = profile.enabled !== false;
+        document.getElementById('tgb-egress-candidate-search').value = '';
         const match = telegramBotEgressCandidates.find(candidate => String(candidate.server_id) === String(profile.server_id) && String(candidate.inbound_id) === String(profile.inbound_id) && (!profile.client_email || candidate.client_email === profile.client_email));
         renderTelegramEgressCandidates(match ? telegramEgressCandidateKey(match) : '');
         updateTelegramEgressSourceUI();
