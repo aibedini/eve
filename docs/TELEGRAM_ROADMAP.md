@@ -31,6 +31,15 @@ path without losing their design decisions.
 - [ ] Customer notifications for expiry, low volume, renewal, and order events
 - [ ] Audit, rate-limit, fraud controls, and operational reporting
 
+## Active phase — reseller bot foundation
+
+- [x] Independent long-poll worker per bot so one reseller cannot delay another
+- [x] Pooled HTTP/SOCKS connections and short route circuit breaker
+- [x] Customer updates take priority over periodic SLA scans
+- [ ] Reseller bot create/edit UI, token verification, branding, and central-bot fallback
+- [ ] Reseller-scoped packages, bank cards, server access, and operator permissions
+- [ ] Per-bot runtime controls, health reporting, and safe disable/delete lifecycle
+
 ## Support phases — paused after 2.4.57
 
 Completed:

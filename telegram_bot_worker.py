@@ -8,6 +8,7 @@ import os
 import random
 import re
 import signal
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -80,6 +81,7 @@ running = True
 worker_id = f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
 webhook_prepared_bot_ids: set[int] = set()
 sla_scan_at_by_bot: dict[int, float] = {}
+bot_threads: dict[int, tuple[threading.Thread, threading.Event]] = {}
 
 
 def _stop(_signum, _frame):
@@ -2930,15 +2932,6 @@ def _poll_bot(bot: TelegramBotInstance):
             runtime.last_route = route_name
             runtime.last_heartbeat_at = datetime.utcnow()
             db.session.commit()
-        now_monotonic = time.monotonic()
-        if now_monotonic - sla_scan_at_by_bot.get(bot.id, 0) >= 30:
-            try:
-                _scan_support_sla(api, bot)
-            except Exception:
-                db.session.rollback()
-                app.logger.exception('[telegram-support] SLA scan failed for bot %s', bot.id)
-            finally:
-                sla_scan_at_by_bot[bot.id] = now_monotonic
         updates, route_name = api.get_updates(int(runtime.next_update_id or 0), timeout=25)
         runtime = _runtime(bot.id)
         runtime.status = "running"
@@ -2976,6 +2969,18 @@ def _poll_bot(bot: TelegramBotInstance):
                     runtime.failed_update_count = 0
                 db.session.commit()
                 break
+        # Customer updates always run before periodic operational scans, so an
+        # SLA sweep can never delay a button response that is already waiting.
+        now_monotonic = time.monotonic()
+        if now_monotonic - sla_scan_at_by_bot.get(bot.id, 0) >= 30:
+            try:
+                _scan_support_sla(api, bot)
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('[telegram-support] SLA scan failed for bot %s', bot.id)
+            finally:
+                sla_scan_at_by_bot[bot.id] = now_monotonic
     except TelegramApiError as exc:
         db.session.rollback()
         runtime = _runtime(bot.id)
@@ -2987,20 +2992,14 @@ def _poll_bot(bot: TelegramBotInstance):
         time.sleep(5)
 
 
-def main():
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    while running:
+def _run_bot(bot_id: int, stop_event: threading.Event):
+    """Long-poll one bot independently so another bot can never block it."""
+    while running and not stop_event.is_set():
         with app.app_context():
-            bots = TelegramBotInstance.query.filter_by(transport_mode="polling").all()
-            if not bots:
-                time.sleep(3)
-                continue
-            # The first release has one central bot. Keeping this loop explicit
-            # makes adding one worker thread per reseller bot a contained next step.
-            for bot in bots:
-                if not running:
-                    break
+            try:
+                bot = db.session.get(TelegramBotInstance, int(bot_id))
+                if bot is None or bot.transport_mode != "polling":
+                    return
                 if bot.enabled:
                     _poll_bot(bot)
                     continue
@@ -3011,7 +3010,47 @@ def main():
                 runtime.last_heartbeat_at = datetime.utcnow()
                 runtime.lease_expires_at = datetime.utcnow() + timedelta(seconds=60)
                 db.session.commit()
-                time.sleep(1)
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('[telegram-worker] bot loop failed for bot %s', bot_id)
+                stop_event.wait(2)
+                continue
+        stop_event.wait(1)
+
+
+def main():
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    try:
+        while running:
+            with app.app_context():
+                desired_ids = {
+                    int(row.id) for row in
+                    TelegramBotInstance.query.filter_by(transport_mode="polling").all()
+                }
+            for bot_id in desired_ids:
+                current = bot_threads.get(bot_id)
+                if current and current[0].is_alive():
+                    continue
+                stop_event = threading.Event()
+                thread = threading.Thread(
+                    target=_run_bot, args=(bot_id, stop_event),
+                    name=f'telegram-bot-{bot_id}', daemon=True,
+                )
+                bot_threads[bot_id] = (thread, stop_event)
+                thread.start()
+            for bot_id in list(bot_threads):
+                thread, stop_event = bot_threads[bot_id]
+                if bot_id not in desired_ids or not thread.is_alive():
+                    stop_event.set()
+                    bot_threads.pop(bot_id, None)
+            time.sleep(2 if desired_ids else 3)
+    finally:
+        for _thread, stop_event in bot_threads.values():
+            stop_event.set()
+        deadline = time.monotonic() + 5
+        for thread, _stop_event in bot_threads.values():
+            thread.join(timeout=max(0, deadline - time.monotonic()))
 
 
 if __name__ == "__main__":

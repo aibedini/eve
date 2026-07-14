@@ -2,16 +2,41 @@
 
 from __future__ import annotations
 
+import hashlib
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from telegram_diagnostics import redact_connection_error
 
 
 API_ROOT = "https://api.telegram.org"
+_TRANSPORT_LOCAL = threading.local()
+
+
+def _pooled_session() -> requests.Session:
+    """One connection pool per worker thread; no settings or customer data is cached."""
+    session = getattr(_TRANSPORT_LOCAL, "session", None)
+    if session is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=0, pool_block=False)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        session.headers.update({"User-Agent": "Eve-Telegram/1"})
+        _TRANSPORT_LOCAL.session = session
+    return session
+
+
+def _route_state(client_key: str) -> dict[str, Any]:
+    states = getattr(_TRANSPORT_LOCAL, "route_states", None)
+    if states is None:
+        states = {}
+        _TRANSPORT_LOCAL.route_states = states
+    return states.setdefault(client_key, {"preferred": None, "cooldowns": {}})
 
 
 @dataclass(frozen=True)
@@ -33,17 +58,38 @@ class TelegramBotApi:
     def __init__(self, token: str, routes: list[TelegramRoute]):
         self._token = token
         self._routes = routes or [TelegramRoute("direct")]
+        self._session = _pooled_session()
+        self._route_state = _route_state(hashlib.sha256(token.encode()).hexdigest()[:20])
+
+    def _ordered_routes(self) -> list[TelegramRoute]:
+        now = time.monotonic()
+        cooldowns = self._route_state["cooldowns"]
+        active = [route for route in self._routes if float(cooldowns.get(route.name, 0)) <= now]
+        routes = active or list(self._routes)
+        preferred = self._route_state.get("preferred")
+        return sorted(routes, key=lambda route: route.name != preferred)
+
+    def _route_succeeded(self, route: TelegramRoute):
+        self._route_state["preferred"] = route.name
+        self._route_state["cooldowns"].pop(route.name, None)
+
+    def _route_failed(self, route: TelegramRoute):
+        # A short circuit breaker avoids paying the same connect/TLS timeout for
+        # every reply while still probing the route again automatically.
+        if self._route_state.get("preferred") == route.name:
+            self._route_state["preferred"] = None
+        self._route_state["cooldowns"][route.name] = time.monotonic() + 20
 
     def call(self, method: str, payload: dict[str, Any] | None = None,
              *, long_poll_timeout: int = 0) -> tuple[Any, str]:
         errors: list[str] = []
-        connect_timeout = 10
+        connect_timeout = 4
         read_timeout = max(15, int(long_poll_timeout) + 10)
         url = f"{API_ROOT}/bot{self._token}/{method}"
-        for route in self._routes:
+        for route in self._ordered_routes():
             started = time.perf_counter()
             try:
-                response = requests.post(
+                response = self._session.post(
                     url, json=payload or {}, proxies=route.proxies,
                     timeout=(connect_timeout, read_timeout),
                 )
@@ -54,6 +100,7 @@ class TelegramBotApi:
                         f"Telegram returned invalid JSON (HTTP {response.status_code})",
                     ) from exc
                 if response.status_code == 200 and isinstance(body, dict) and body.get("ok"):
+                    self._route_succeeded(route)
                     return body.get("result"), route.name
                 description = body.get("description") if isinstance(body, dict) else None
                 safe = redact_connection_error(
@@ -68,12 +115,15 @@ class TelegramBotApi:
                         retryable=False,
                         retry_after=(parameters or {}).get("retry_after", 0),
                     )
+                self._route_failed(route)
                 errors.append(f"{route.name}: {safe}")
             except TelegramApiError as exc:
                 if not exc.retryable:
                     raise
+                self._route_failed(route)
                 errors.append(f"{route.name}: {exc}")
             except requests.RequestException as exc:
+                self._route_failed(route)
                 elapsed = max(1, int((time.perf_counter() - started) * 1000))
                 safe = redact_connection_error(exc, (self._token,))
                 errors.append(f"{route.name} ({elapsed} ms): {safe}")
@@ -138,12 +188,12 @@ class TelegramBotApi:
         field = "photo" if as_photo else "document"
         url = f"{API_ROOT}/bot{self._token}/{method}"
         errors: list[str] = []
-        for route in self._routes:
+        for route in self._ordered_routes():
             try:
                 data = {"chat_id": int(chat_id)}
                 if caption:
                     data["caption"] = str(caption)[:1024]
-                response = requests.post(
+                response = self._session.post(
                     url,
                     data=data,
                     files={field: (str(filename), content, str(content_type or 'application/octet-stream'))},
@@ -157,6 +207,7 @@ class TelegramBotApi:
                         f"Telegram returned invalid JSON (HTTP {response.status_code})",
                     ) from exc
                 if response.status_code == 200 and isinstance(body, dict) and body.get("ok"):
+                    self._route_succeeded(route)
                     return body.get("result"), route.name
                 description = body.get("description") if isinstance(body, dict) else None
                 safe = redact_connection_error(
@@ -165,12 +216,15 @@ class TelegramBotApi:
                 )
                 if response.status_code in (400, 401, 403, 404, 409, 413, 429):
                     raise TelegramApiError(safe, retryable=False)
+                self._route_failed(route)
                 errors.append(f"{route.name}: {safe}")
             except TelegramApiError as exc:
                 if not exc.retryable:
                     raise
+                self._route_failed(route)
                 errors.append(f"{route.name}: {exc}")
             except requests.RequestException as exc:
+                self._route_failed(route)
                 errors.append(f"{route.name}: {redact_connection_error(exc, (self._token,))}")
         raise TelegramApiError("; ".join(errors) or "No Telegram route is available")
 
@@ -180,15 +234,16 @@ class TelegramBotApi:
         file_path = str((metadata or {}).get("file_path") or "").strip()
         if not file_path or file_path.startswith('/') or '..' in file_path.split('/'):
             raise TelegramApiError("Telegram returned an invalid file path", retryable=False)
-        routes = sorted(self._routes, key=lambda route: route.name != route_name)
+        routes = sorted(self._ordered_routes(), key=lambda route: route.name != route_name)
         url = f"{API_ROOT}/file/bot{self._token}/{file_path}"
         errors: list[str] = []
         for route in routes:
             try:
-                response = requests.get(
+                response = self._session.get(
                     url, proxies=route.proxies, timeout=(10, 30), stream=True,
                 )
                 if response.status_code != 200:
+                    self._route_failed(route)
                     errors.append(f"{route.name}: HTTP {response.status_code}")
                     continue
                 declared = int(response.headers.get('Content-Length') or 0)
@@ -205,10 +260,12 @@ class TelegramBotApi:
                     chunks.append(chunk)
                 content_type = str(response.headers.get('Content-Type') or 'application/octet-stream')
                 filename = file_path.rsplit('/', 1)[-1] or 'telegram-receipt'
+                self._route_succeeded(route)
                 return b''.join(chunks), content_type, filename, route.name
             except TelegramApiError:
                 raise
             except requests.RequestException as exc:
+                self._route_failed(route)
                 errors.append(f"{route.name}: {redact_connection_error(exc, (self._token,))}")
         raise TelegramApiError('; '.join(errors) or 'Could not download Telegram file')
 
