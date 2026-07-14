@@ -721,23 +721,26 @@
                 </section>
 
                 <section class="panel-card tgb-section">
-                    <div class="panel-card-header"><div class="header-content"><h2>Managed Xray Routes</h2><p>Turn an existing 3x-ui VLESS client into a loopback-only Telegram route.</p></div><button id="tgb-add-egress" class="btn btn-secondary" type="button" onclick="openTelegramEgressForm()">Add route</button></div>
+                    <div class="panel-card-header"><div class="header-content"><h2>Managed Xray Routes</h2><p>Select an account, then choose one of its compatible 3x-ui inbounds for Telegram traffic.</p></div><button id="tgb-add-egress" class="btn btn-secondary" type="button" onclick="openTelegramEgressForm()">Add route</button></div>
                     <div class="tgb-egress-note"><span class="tgb-status-dot is-warning"></span><div><strong>Private local relay</strong><span>Xray listens only on <code>127.0.0.1</code> and requires an installed runtime configured by <code>XRAY_BIN</code>. Use customer accounts only temporarily; a dedicated system route is safer.</span></div></div>
-                    <div id="tgb-egress-empty" class="tgb-empty" style="display:none;"><strong>No managed routes configured</strong><span>Select an existing VLESS client or paste a VLESS URI to create a local Telegram route.</span></div>
+                    <div id="tgb-egress-empty" class="tgb-empty" style="display:none;"><strong>No managed routes configured</strong><span>Select an existing account and inbound, or paste a supported URI to create a local Telegram route.</span></div>
                     <div id="tgb-egress-list" class="tgb-egress-list"></div>
                     <form id="tgb-egress-form" class="tgb-proxy-form tgb-egress-form" style="display:none;" onsubmit="saveTelegramEgress(event)">
                         <input id="tgb-egress-id" type="hidden">
                         <div class="tgb-form-grid">
                             <div class="form-group"><label for="tgb-egress-name">Route name</label><input id="tgb-egress-name" class="form-control" required placeholder="Telegram via Germany" autocomplete="off"></div>
-                            <div class="form-group"><label for="tgb-egress-source">Configuration source</label><select id="tgb-egress-source" class="form-select" onchange="updateTelegramEgressSourceUI()"><option value="candidate">Existing 3x-ui VLESS client</option><option value="manual">Manual VLESS URI</option></select></div>
+                            <div class="form-group"><label for="tgb-egress-source">Configuration source</label><select id="tgb-egress-source" class="form-select" onchange="updateTelegramEgressSourceUI()"><option value="candidate">Existing 3x-ui account</option><option value="manual">Manual configuration URI</option></select></div>
                             <div id="tgb-egress-candidate-group" class="form-group tgb-form-span">
-                                <label for="tgb-egress-candidate-search">Find VLESS client</label>
-                                <input id="tgb-egress-candidate-search" class="form-control" type="search" placeholder="Search account, phone, server, inbound, transport…" autocomplete="off" spellcheck="false" aria-controls="tgb-egress-candidate" oninput="filterTelegramEgressCandidates()" onkeydown="handleTelegramEgressSearchKey(event)">
-                                <label class="sr-only" for="tgb-egress-candidate">Matching VLESS clients</label>
-                                <select id="tgb-egress-candidate" class="form-select" size="7" aria-describedby="tgb-egress-candidate-hint"></select>
+                                <label for="tgb-egress-candidate-search">Find account</label>
+                                <input id="tgb-egress-candidate-search" class="form-control" type="search" placeholder="Search account, phone, or server…" autocomplete="off" spellcheck="false" aria-controls="tgb-egress-account" oninput="filterTelegramEgressCandidates()" onkeydown="handleTelegramEgressSearchKey(event)">
+                                <label class="sr-only" for="tgb-egress-account">Matching accounts</label>
+                                <select id="tgb-egress-account" class="form-select" size="6" aria-describedby="tgb-egress-candidate-hint" onchange="renderTelegramEgressInbounds()"></select>
                                 <small id="tgb-egress-candidate-hint" class="text-secondary" aria-live="polite">Loading active clients…</small>
+                                <label for="tgb-egress-candidate" style="margin-top:10px;">Use inbound</label>
+                                <select id="tgb-egress-candidate" class="form-select" size="5" aria-describedby="tgb-egress-inbound-hint"></select>
+                                <small id="tgb-egress-inbound-hint" class="text-secondary" aria-live="polite">Select an account to see its compatible inbounds.</small>
                             </div>
-                            <div id="tgb-egress-uri-group" class="form-group tgb-form-span" style="display:none;"><label for="tgb-egress-uri">VLESS URI</label><textarea id="tgb-egress-uri" class="form-control tgb-secret-textarea" rows="3" placeholder="vless://…" autocomplete="new-password" spellcheck="false"></textarea><small id="tgb-egress-uri-hint" class="text-secondary">The URI is encrypted and never returned. Leave blank while editing to preserve the saved value.</small></div>
+                            <div id="tgb-egress-uri-group" class="form-group tgb-form-span" style="display:none;"><label for="tgb-egress-uri">Configuration URI</label><textarea id="tgb-egress-uri" class="form-control tgb-secret-textarea" rows="3" placeholder="vless://, vmess://, trojan://, ss://, or wireguard://" autocomplete="new-password" spellcheck="false"></textarea><small id="tgb-egress-uri-hint" class="text-secondary">The URI is encrypted and never returned. Leave blank while editing to preserve the saved value.</small></div>
                             <div class="form-group"><label for="tgb-egress-port">Local port</label><input id="tgb-egress-port" class="form-control" type="number" min="1024" max="65535" required value="10808"><small class="text-secondary">Bound to 127.0.0.1 only.</small></div>
                             <div class="form-group"><label for="tgb-egress-priority">Priority</label><input id="tgb-egress-priority" class="form-control" type="number" min="0" value="100"><small class="text-secondary">Lower number is tried earlier across both Xray routes and proxies.</small></div>
                         </div>
@@ -2971,7 +2974,8 @@
     .tgb-route-order li { counter-increment:route; padding:5px 8px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:6px; }
     .tgb-route-order li::before { content:counter(route) '. '; color:#a5b4fc; font-weight:700; }
     #tgb-egress-candidate-search { margin-bottom:8px; }
-    #tgb-egress-candidate { min-height:180px; }
+    #tgb-egress-account { min-height:150px; }
+    #tgb-egress-candidate { min-height:125px; }
     .tgb-purchase-routes { display:flex; flex-direction:column; gap:12px; }
     .tgb-purchase-route-server { padding:12px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; }
     .tgb-purchase-route-server > h4 { margin:0 0 9px; font-size:.84rem; }
@@ -4059,23 +4063,29 @@
     }
 
     async function loadTelegramEgressCandidates() {
-        const select = document.getElementById('tgb-egress-candidate');
+        const accountSelect = document.getElementById('tgb-egress-account');
+        const inboundSelect = document.getElementById('tgb-egress-candidate');
         const hint = document.getElementById('tgb-egress-candidate-hint');
-        if (!select || !hint) return;
+        if (!accountSelect || !inboundSelect || !hint) return;
         try {
             const data = await telegramBotApi('/api/settings/telegram-bots/egress/candidates');
             telegramBotEgressCandidates = Array.isArray(data.candidates) ? data.candidates : [];
             renderTelegramEgressCandidates();
         } catch (error) {
             telegramBotEgressCandidates = [];
-            select.innerHTML = '<option value="">Candidates unavailable</option>';
-            select.disabled = true;
+            accountSelect.innerHTML = '<option value="">Accounts unavailable</option>';
+            inboundSelect.innerHTML = '<option value="">Inbounds unavailable</option>';
+            accountSelect.disabled = inboundSelect.disabled = true;
             hint.textContent = `Could not load clients: ${error.message}`;
         }
     }
 
     function telegramEgressCandidateKey(candidate) {
         return [candidate.server_id, candidate.inbound_id, candidate.client_id].map(value => String(value ?? '')).join(':');
+    }
+
+    function telegramEgressAccountKey(candidate) {
+        return String(candidate.account_key || `${candidate.server_id}:${String(candidate.client_email || candidate.client_id || '').toLocaleLowerCase()}`);
     }
 
     function telegramEgressSearchValue(value) {
@@ -4106,7 +4116,7 @@
     function handleTelegramEgressSearchKey(event) {
         if (event.key === 'ArrowDown') {
             event.preventDefault();
-            document.getElementById('tgb-egress-candidate').focus();
+            document.getElementById('tgb-egress-account').focus();
         } else if (event.key === 'Escape' && event.currentTarget.value) {
             event.currentTarget.value = '';
             renderTelegramEgressCandidates();
@@ -4114,46 +4124,77 @@
     }
 
     function renderTelegramEgressCandidates(selectedKey = '') {
-        const select = document.getElementById('tgb-egress-candidate');
+        const accountSelect = document.getElementById('tgb-egress-account');
         const hint = document.getElementById('tgb-egress-candidate-hint');
-        if (!select || !hint) return;
+        if (!accountSelect || !hint) return;
         const search = document.getElementById('tgb-egress-candidate-search');
-        const wantedKey = selectedKey || select.value;
+        const selectedCandidate = telegramBotEgressCandidates.find(candidate => telegramEgressCandidateKey(candidate) === selectedKey);
+        const wantedAccount = selectedCandidate ? telegramEgressAccountKey(selectedCandidate) : accountSelect.value;
         const tokenGroups = telegramEgressSearchValue(search ? search.value : '').split(/\s+/).filter(Boolean).map(telegramEgressSearchAliases);
-        const matches = telegramBotEgressCandidates.filter(candidate => {
+        const accounts = new Map();
+        telegramBotEgressCandidates.forEach(candidate => {
+            const key = telegramEgressAccountKey(candidate);
+            if (!accounts.has(key)) accounts.set(key, []);
+            accounts.get(key).push(candidate);
+        });
+        const matches = [...accounts.entries()].filter(([, candidates]) => {
+            const candidate = candidates[0];
             const source = [
                 candidate.client_email, candidate.client_id, candidate.server_name, candidate.server_id,
-                candidate.inbound_remark, candidate.inbound_id,
-                candidate.network, candidate.security, candidate.protocol,
+                ...candidates.flatMap(item => [item.inbound_remark, item.inbound_id, item.protocol, item.network]),
             ].join(' ');
             const haystack = telegramEgressSearchAliases(source).join(' ');
             return tokenGroups.every(aliases => aliases.some(token => haystack.includes(token)));
         });
-        select.replaceChildren();
-        select.disabled = !matches.length;
+        accountSelect.replaceChildren();
+        accountSelect.disabled = !matches.length;
         if (!telegramBotEgressCandidates.length) {
-            const option = document.createElement('option'); option.value = ''; option.textContent = 'No active VLESS clients available'; select.appendChild(option);
-            hint.textContent = 'Disabled/expired clients and disabled inbounds are hidden. Create an active VLESS client or choose Manual VLESS URI.';
+            const option = document.createElement('option'); option.value = ''; option.textContent = 'No compatible active accounts'; accountSelect.appendChild(option);
+            hint.textContent = 'Disabled, expired, depleted, and Xray-incompatible inbounds are hidden.';
+            renderTelegramEgressInbounds(selectedKey);
             return;
         }
         if (!matches.length) {
-            const option = document.createElement('option'); option.value = ''; option.textContent = 'No matching active clients'; select.appendChild(option);
-            hint.textContent = `No match for “${search ? search.value.trim() : ''}”. Search account, phone, server, inbound, or transport.`;
+            const option = document.createElement('option'); option.value = ''; option.textContent = 'No matching accounts'; accountSelect.appendChild(option);
+            hint.textContent = `No match for “${search ? search.value.trim() : ''}”. Search account, phone, or server.`;
+            renderTelegramEgressInbounds(selectedKey);
             return;
         }
-        const groups = new Map();
-        matches.forEach(candidate => {
-            const location = `${candidate.server_name || `Server ${candidate.server_id}`} · ${candidate.inbound_remark || `Inbound ${candidate.inbound_id}`}`;
-            if (!groups.has(location)) {
-                const group = document.createElement('optgroup'); group.label = location; groups.set(location, group); select.appendChild(group);
-            }
+        matches.sort((a, b) => String(a[1][0].client_email || '').localeCompare(String(b[1][0].client_email || ''))).forEach(([key, candidates]) => {
+            const candidate = candidates[0];
+            const option = document.createElement('option');
+            option.value = key;
+            option.textContent = `${candidate.client_email || 'Unnamed account'} · ${candidate.server_name || `Server ${candidate.server_id}`} · ${candidates.length} inbound${candidates.length === 1 ? '' : 's'}`;
+            accountSelect.appendChild(option);
+        });
+        if (wantedAccount && matches.some(([key]) => key === wantedAccount)) accountSelect.value = wantedAccount;
+        hint.textContent = `${matches.length} of ${accounts.size} active accounts shown. Multiple words and Persian/English phone formats are supported.`;
+        renderTelegramEgressInbounds(selectedKey);
+    }
+
+    function renderTelegramEgressInbounds(selectedKey = '') {
+        const accountSelect = document.getElementById('tgb-egress-account');
+        const inboundSelect = document.getElementById('tgb-egress-candidate');
+        const hint = document.getElementById('tgb-egress-inbound-hint');
+        if (!accountSelect || !inboundSelect || !hint) return;
+        const currentKey = selectedKey || inboundSelect.value;
+        const candidates = telegramBotEgressCandidates.filter(candidate => telegramEgressAccountKey(candidate) === accountSelect.value);
+        inboundSelect.replaceChildren();
+        inboundSelect.disabled = !candidates.length;
+        if (!candidates.length) {
+            const option = document.createElement('option'); option.value = ''; option.textContent = 'Select an account first'; inboundSelect.appendChild(option);
+            hint.textContent = 'Only enabled inbounds that Xray can render are shown.';
+            return;
+        }
+        candidates.sort((a, b) => Number(a.inbound_id || 0) - Number(b.inbound_id || 0)).forEach(candidate => {
             const option = document.createElement('option');
             option.value = telegramEgressCandidateKey(candidate);
-            option.textContent = `${candidate.client_email || 'Unnamed client'} · ${candidate.network || 'tcp'} / ${candidate.security || 'none'}`;
-            groups.get(location).appendChild(option);
+            option.textContent = `${candidate.inbound_remark || `Inbound ${candidate.inbound_id}`} · ${String(candidate.protocol || '').toUpperCase()} · ${candidate.network || 'tcp'} / ${candidate.security || 'none'}`;
+            inboundSelect.appendChild(option);
         });
-        if (wantedKey && matches.some(candidate => telegramEgressCandidateKey(candidate) === wantedKey)) select.value = wantedKey;
-        hint.textContent = `${matches.length} of ${telegramBotEgressCandidates.length} active VLESS clients shown. Use multiple words to narrow results; Arrow Down moves to the list.`;
+        if (currentKey && candidates.some(candidate => telegramEgressCandidateKey(candidate) === currentKey)) inboundSelect.value = currentKey;
+        const protocols = [...new Set(candidates.map(candidate => String(candidate.protocol || '').toUpperCase()))].join(', ');
+        hint.textContent = `${candidates.length} compatible inbound${candidates.length === 1 ? '' : 's'} available${protocols ? `: ${protocols}` : ''}.`;
     }
 
     function renderTelegramEgressProfiles() {
@@ -4205,6 +4246,7 @@
         document.getElementById('tgb-egress-candidate-group').style.display = manual ? 'none' : '';
         document.getElementById('tgb-egress-uri-group').style.display = manual ? '' : 'none';
         document.getElementById('tgb-egress-uri').required = manual && !document.getElementById('tgb-egress-id').value;
+        document.getElementById('tgb-egress-account').required = !manual;
         document.getElementById('tgb-egress-candidate').required = !manual;
     }
 

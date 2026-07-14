@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.60"
+APP_VERSION = "2.4.61"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -12360,12 +12360,28 @@ def generate_client_link(client, inbound, server_host):
         protocol = (inbound.get('protocol') or '').lower()
         settings = _as_json(inbound.get('settings'))
         stream_settings = _as_json(inbound.get('streamSettings'))
+        if not stream_settings:
+            stream_settings = {
+                'network': inbound.get('network') or 'tcp',
+                'security': inbound.get('security') or 'none',
+            }
         stream = _extract_stream_parts(stream_settings)
+        raw_client = _as_json(client.get('raw_client'))
+
+        def _client_value(*keys):
+            for key in keys:
+                value = client.get(key)
+                if value not in (None, ''):
+                    return value
+                value = raw_client.get(key)
+                if value not in (None, ''):
+                    return value
+            return ''
 
         host, port = _parse_host(server_host, inbound.get('port'))
-        remark = quote(client.get('email') or inbound.get('remark') or 'client')
-        uuid = client.get('id') or client.get('uuid') or client.get('password') or ''
-        flow = client.get('flow') or settings.get('flow') or ''
+        remark = quote(_client_value('email') or inbound.get('remark') or 'client')
+        uuid = _client_value('id', 'uuid', 'password')
+        flow = _client_value('flow') or settings.get('flow') or ''
 
         if protocol == 'vless':
             query = {
@@ -12390,10 +12406,10 @@ def generate_client_link(client, inbound, server_host):
             return f"vless://{uuid}@{host}:{port}?{urlencode(q)}#{remark}"
 
         if protocol == 'vmess':
-            aid = client.get('alterId', client.get('aid', 0)) or 0
+            aid = _client_value('alterId', 'aid') or 0
             vmess_obj = {
                 "v": "2",
-                "ps": client.get('email') or inbound.get('remark') or host,
+                "ps": _client_value('email') or inbound.get('remark') or host,
                 "add": host,
                 "port": str(port),
                 "id": uuid,
@@ -12415,7 +12431,7 @@ def generate_client_link(client, inbound, server_host):
             return f"vmess://{payload}"
 
         if protocol == 'trojan':
-            password = client.get('password') or uuid
+            password = _client_value('password') or uuid
             query = {
                 "type": stream["network"],
                 "security": None if stream["security"] == 'none' else stream["security"],
@@ -12432,8 +12448,8 @@ def generate_client_link(client, inbound, server_host):
             return f"trojan://{password}@{host}:{port}{q_str}#{remark}"
 
         if protocol == 'shadowsocks':
-            method = settings.get('method') or client.get('method')
-            password = client.get('password') or uuid
+            method = settings.get('method') or _client_value('method')
+            password = _client_value('password') or uuid
             if method and password:
                 userinfo = base64.b64encode(f"{method}:{password}".encode()).decode()
                 query = {}
@@ -12450,7 +12466,7 @@ def generate_client_link(client, inbound, server_host):
             return None
 
         if protocol == 'wireguard':
-            private_key = client.get('privateKey') or client.get('password') or ''
+            private_key = _client_value('privateKey', 'password')
             if not private_key:
                 return None
             server_public_key = settings.get('publicKey') or settings.get('pubKey') or ''
@@ -12475,8 +12491,8 @@ def generate_client_link(client, inbound, server_host):
                 'address': allowed_ips[0] if allowed_ips else '',
                 'mtu': settings.get('mtu') or '',
                 'dns': settings.get('dns') or '',
-                'presharedkey': client.get('preSharedKey') or '',
-                'keepalive': client.get('keepAlive') or '',
+                'presharedkey': _client_value('preSharedKey') or '',
+                'keepalive': _client_value('keepAlive') or '',
             }
             query = urlencode({k: str(v) for k, v in params.items() if v not in ('', None, 0)})
             suffix = f"?{query}" if query else ''
@@ -25438,7 +25454,7 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
     if only_egress_id is not None and any(
             attempt.get('error_code') == 'route_outbound_closed' for attempt in attempts):
         result['runtime_hint'] = (
-            'The local Xray SOCKS listener is running, but the selected VLESS route closed '
+            'The local Xray SOCKS listener is running, but the selected outbound route closed '
             'outbound traffic. Choose an enabled inbound and active client, or paste a known-working URI.'
         )
     return result
@@ -25471,7 +25487,11 @@ def _telegram_proxy_from_payload(proxy, data):
     return proxy
 
 
+TELEGRAM_EGRESS_PROTOCOLS = {'vless', 'vmess', 'trojan', 'shadowsocks', 'wireguard'}
+
+
 def _find_telegram_egress_candidate(server_id, inbound_id, client_id):
+    load_snapshot_from_redis()
     server = db.session.get(Server, int(server_id))
     if not server:
         raise ValueError('Server not found')
@@ -25480,8 +25500,9 @@ def _find_telegram_egress_candidate(server_id, inbound_id, client_id):
                     and int(row.get('id') or 0) == int(inbound_id)), None)
     if not inbound:
         raise ValueError('Inbound is not available in the current server snapshot')
-    if str(inbound.get('protocol') or '').lower() != 'vless':
-        raise ValueError('Managed Xray currently supports VLESS inbounds')
+    protocol = str(inbound.get('protocol') or '').lower()
+    if protocol not in TELEGRAM_EGRESS_PROTOCOLS:
+        raise ValueError(f'The selected {protocol or "unknown"} inbound cannot be used as an Xray outbound')
     inbound_enabled = inbound.get('enable', inbound.get('enabled', True))
     if str(inbound_enabled).strip().lower() in {'false', '0', 'no', 'off'}:
         raise ValueError('The selected inbound is disabled')
@@ -25511,6 +25532,7 @@ def _find_telegram_egress_candidate(server_id, inbound_id, client_id):
     uri = generate_client_link(client, inbound, server.host)
     if not uri:
         raise ValueError('Eve could not generate a connection configuration for this client')
+    build_xray_config_from_uri(uri, 12080)
     return server, inbound, client, uri
 
 
@@ -25547,11 +25569,12 @@ def _telegram_egress_from_payload(profile, data):
         profile.client_email_snapshot = None
     if uri:
         build_xray_config_from_uri(uri, profile.local_port)
-        profile.protocol = 'vless'
+        scheme = urlparse(uri).scheme.lower()
+        profile.protocol = 'shadowsocks' if scheme == 'ss' else scheme
         profile.config_encrypted = _encrypt_telegram_secret(uri)
         profile.runtime_status = 'pending'
     elif not profile.config_encrypted:
-        raise ValueError('Choose a 3x-ui client or provide a VLESS configuration')
+        raise ValueError('Choose a 3x-ui account and inbound, or provide a supported configuration URI')
     else:
         build_xray_config_from_uri(_decrypt_telegram_secret(profile.config_encrypted), profile.local_port)
     return profile
@@ -26470,12 +26493,14 @@ def test_telegram_bot_proxy(proxy_id):
 @app.route('/api/settings/telegram-bots/egress/candidates', methods=['GET'])
 @superadmin_required
 def get_telegram_egress_candidates():
+    load_snapshot_from_redis()
     servers = {row.id: row for row in Server.query.filter_by(enabled=True).all()}
     candidates = []
     for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
         server_id = int(inbound.get('server_id') or 0)
         server = servers.get(server_id)
-        if not server or str(inbound.get('protocol') or '').lower() != 'vless':
+        protocol = str(inbound.get('protocol') or '').lower()
+        if not server or protocol not in TELEGRAM_EGRESS_PROTOCOLS:
             continue
         inbound_enabled = inbound.get('enable', inbound.get('enabled', True))
         if inbound_enabled in (False, 0, '0', 'false', 'False'):
@@ -26486,6 +26511,11 @@ def get_telegram_egress_candidates():
                 stream = json.loads(stream)
             except (TypeError, ValueError):
                 stream = {}
+        if not stream:
+            stream = {
+                'network': inbound.get('network') or 'tcp',
+                'security': inbound.get('security') or 'none',
+            }
         for client in (inbound.get('clients') or []):
             # The UUID/password is connection material. The browser receives only
             # the human-facing email and sends it back as the lookup reference.
@@ -26509,16 +26539,24 @@ def get_telegram_egress_candidates():
                 total_bytes = used_bytes = 0
             if total_bytes > 0 and used_bytes >= total_bytes:
                 continue
+            uri = generate_client_link(client, inbound, server.host)
+            if not uri:
+                continue
+            try:
+                build_xray_config_from_uri(uri, 12080)
+            except (TypeError, ValueError):
+                continue
             candidates.append({
                 'server_id': server.id, 'server_name': server.name,
                 'inbound_id': int(inbound.get('id')), 'inbound_remark': inbound.get('remark'),
-                'protocol': 'vless', 'network': stream.get('network') or 'tcp',
+                'protocol': protocol, 'network': stream.get('network') or 'tcp',
                 'security': stream.get('security') or 'none',
+                'account_key': f'{server.id}:{client_email.lower()}',
                 'client_id': client_email, 'client_email': client_email,
             })
-            if len(candidates) >= 500:
+            if len(candidates) >= 5000:
                 break
-        if len(candidates) >= 500:
+        if len(candidates) >= 5000:
             break
     return jsonify({'success': True, 'candidates': candidates})
 

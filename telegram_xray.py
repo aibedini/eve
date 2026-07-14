@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -36,65 +37,64 @@ def _one(query, key, default=""):
     return values[0] if values else default
 
 
-def build_xray_config_from_uri(uri: str, local_port: int) -> dict:
-    """Build an Xray client config from a common VLESS share URI."""
-    parsed = urlparse((uri or "").strip())
-    if parsed.scheme.lower() != "vless":
-        raise ValueError("Managed Xray currently supports VLESS configurations")
-    if not parsed.username or not parsed.hostname or not parsed.port:
-        raise ValueError("VLESS configuration is missing UUID, host, or port")
-    if not 1024 <= int(local_port) <= 65535:
-        raise ValueError("Local SOCKS port must be between 1024 and 65535")
+def _decode_base64(value: str) -> str:
+    raw = unquote(value or "").strip()
+    raw += "=" * (-len(raw) % 4)
+    try:
+        return base64.urlsafe_b64decode(raw.encode()).decode()
+    except Exception as exc:
+        raise ValueError("Configuration contains invalid base64 data") from exc
 
-    query = parse_qs(parsed.query, keep_blank_values=True)
-    network = _one(query, "type", "tcp").lower()
-    if network == "http":
-        network = "tcp"
+
+def _stream_settings(network: str, security: str, values: dict) -> dict:
+    aliases = {"raw": "tcp", "websocket": "ws", "http": "tcp"}
+    network = aliases.get((network or "tcp").lower(), (network or "tcp").lower())
     if network not in ("tcp", "ws", "grpc"):
-        raise ValueError(f"Unsupported VLESS transport: {network}")
-    security = _one(query, "security", "none").lower()
+        raise ValueError(f"Unsupported Xray transport: {network}")
+    security = (security or "none").lower()
     if security not in ("none", "tls", "reality"):
-        raise ValueError(f"Unsupported VLESS security: {security}")
+        raise ValueError(f"Unsupported Xray transport security: {security}")
 
-    user = {
-        "id": unquote(parsed.username),
-        "encryption": _one(query, "encryption", "none") or "none",
-    }
-    flow = _one(query, "flow")
-    if flow:
-        user["flow"] = flow
     stream = {"network": network, "security": security}
     if network == "ws":
         stream["wsSettings"] = {
-            "path": _one(query, "path", "/") or "/",
-            "headers": {"Host": _one(query, "host", parsed.hostname)},
+            "path": values.get("path") or "/",
+            "headers": {"Host": values.get("host") or values.get("address") or ""},
         }
     elif network == "grpc":
         stream["grpcSettings"] = {
-            "serviceName": _one(query, "serviceName"),
-            "multiMode": _one(query, "mode").lower() == "multi",
+            "serviceName": values.get("serviceName") or values.get("service_name") or "",
+            "multiMode": str(values.get("mode") or "").lower() == "multi",
         }
     if security == "tls":
         tls = {
-            "serverName": _one(query, "sni", parsed.hostname),
-            "fingerprint": _one(query, "fp", "chrome") or "chrome",
+            "serverName": values.get("sni") or values.get("address") or "",
+            "fingerprint": values.get("fp") or "chrome",
         }
-        alpn = [item for item in _one(query, "alpn").split(",") if item]
+        alpn = values.get("alpn") or ""
+        if isinstance(alpn, str):
+            alpn = [item for item in alpn.split(",") if item]
         if alpn:
             tls["alpn"] = alpn
         stream["tlsSettings"] = tls
     elif security == "reality":
-        public_key = _one(query, "pbk")
+        public_key = values.get("pbk") or values.get("publicKey")
         if not public_key:
             raise ValueError("REALITY configuration is missing its public key")
         stream["realitySettings"] = {
-            "serverName": _one(query, "sni", parsed.hostname),
-            "fingerprint": _one(query, "fp", "chrome") or "chrome",
+            "serverName": values.get("sni") or values.get("address") or "",
+            "fingerprint": values.get("fp") or "chrome",
             "publicKey": public_key,
-            "shortId": _one(query, "sid"),
-            "spiderX": _one(query, "spx", "/") or "/",
+            "shortId": values.get("sid") or "",
+            "spiderX": values.get("spx") or "/",
         }
+    return stream
 
+
+def _base_config(local_port: int, outbound: dict) -> dict:
+    if not 1024 <= int(local_port) <= 65535:
+        raise ValueError("Local SOCKS port must be between 1024 and 65535")
+    outbound["tag"] = "eve-telegram-egress"
     return {
         "log": {"loglevel": "warning"},
         "inbounds": [{
@@ -104,17 +104,116 @@ def build_xray_config_from_uri(uri: str, local_port: int) -> dict:
             "protocol": "socks",
             "settings": {"auth": "noauth", "udp": False},
         }],
-        "outbounds": [{
-            "tag": "eve-telegram-egress",
-            "protocol": "vless",
-            "settings": {"vnext": [{
-                "address": parsed.hostname,
-                "port": int(parsed.port),
-                "users": [user],
-            }]},
-            "streamSettings": stream,
-        }],
+        "outbounds": [outbound],
     }
+
+
+def build_xray_config_from_uri(uri: str, local_port: int) -> dict:
+    """Build a loopback Xray client from VLESS, VMess, Trojan, SS, or WireGuard."""
+    parsed = urlparse((uri or "").strip())
+    scheme = parsed.scheme.lower()
+
+    if scheme == "vmess":
+        payload = json.loads(_decode_base64((uri or "").strip()[8:].split("#", 1)[0]))
+        address, port, user_id = payload.get("add"), payload.get("port"), payload.get("id")
+        if not address or not port or not user_id:
+            raise ValueError("VMess configuration is missing UUID, host, or port")
+        values = {
+            "address": address, "host": payload.get("host"), "path": payload.get("path"),
+            "serviceName": payload.get("serviceName") or payload.get("path"),
+            "sni": payload.get("sni"), "alpn": payload.get("alpn"), "fp": payload.get("fp"),
+            "pbk": payload.get("pbk"), "sid": payload.get("sid"),
+        }
+        security = str(payload.get("tls") or "none").lower()
+        user = {"id": str(user_id), "alterId": int(payload.get("aid") or 0),
+                "security": payload.get("scy") or "auto"}
+        outbound = {
+            "protocol": "vmess",
+            "settings": {"vnext": [{"address": address, "port": int(port), "users": [user]}]},
+            "streamSettings": _stream_settings(payload.get("net") or "tcp", security, values),
+        }
+        return _base_config(local_port, outbound)
+
+    if scheme not in ("vless", "trojan", "ss", "wireguard"):
+        raise ValueError("Supported managed protocols are VLESS, VMess, Trojan, Shadowsocks, and WireGuard")
+
+    if scheme == "ss":
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        username, address, port = parsed.username, parsed.hostname, parsed.port
+        if username and address and port:
+            credentials = _decode_base64(username)
+        else:
+            legacy = _decode_base64((uri or "").strip()[5:].split("#", 1)[0].split("?", 1)[0])
+            credentials, endpoint = legacy.rsplit("@", 1)
+            address, port_text = endpoint.rsplit(":", 1)
+            port = int(port_text)
+        if ":" not in credentials or not address or not port:
+            raise ValueError("Shadowsocks configuration is missing method, password, host, or port")
+        method, password = credentials.split(":", 1)
+        plugin = unquote(_one(query, "plugin"))
+        values = {"address": address}
+        network, security = "tcp", "none"
+        if plugin:
+            parts = [part for part in plugin.split(";") if part]
+            plugin_name = parts[0].lower()
+            options = dict(part.split("=", 1) for part in parts[1:] if "=" in part)
+            if plugin_name == "v2ray-plugin":
+                network = "ws"
+                security = "tls" if "tls" in parts[1:] else "none"
+                values.update({"path": options.get("path"), "host": options.get("host"),
+                               "sni": options.get("host")})
+            elif plugin_name == "grpc":
+                network = "grpc"
+                values["serviceName"] = options.get("serviceName")
+            else:
+                raise ValueError(f"Unsupported Shadowsocks plugin: {plugin_name}")
+        outbound = {
+            "protocol": "shadowsocks",
+            "settings": {"servers": [{"address": address, "port": int(port),
+                                        "method": method, "password": password}]},
+            "streamSettings": _stream_settings(network, security, values),
+        }
+        return _base_config(local_port, outbound)
+
+    if not parsed.username or not parsed.hostname or not parsed.port:
+        raise ValueError(f"{scheme.upper()} configuration is missing credentials, host, or port")
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    values = {key: _one(query, key) for key in (
+        "path", "host", "serviceName", "mode", "sni", "alpn", "fp", "pbk", "sid", "spx",
+    )}
+    values["address"] = parsed.hostname
+
+    if scheme == "wireguard":
+        public_key = _one(query, "publickey")
+        if not public_key:
+            raise ValueError("WireGuard configuration is missing the server public key")
+        peer = {"endpoint": f"{parsed.hostname}:{parsed.port}", "publicKey": public_key}
+        if _one(query, "presharedkey"):
+            peer["preSharedKey"] = _one(query, "presharedkey")
+        if _one(query, "keepalive"):
+            peer["keepAlive"] = int(_one(query, "keepalive"))
+        settings = {"secretKey": unquote(parsed.username), "peers": [peer], "noKernelTun": True}
+        addresses = [item for item in _one(query, "address").split(",") if item]
+        if addresses:
+            settings["address"] = addresses
+        if _one(query, "mtu"):
+            settings["mtu"] = int(_one(query, "mtu"))
+        return _base_config(local_port, {"protocol": "wireguard", "settings": settings})
+
+    network = _one(query, "type", "tcp")
+    security = _one(query, "security", "none")
+    if scheme == "vless":
+        user = {"id": unquote(parsed.username), "encryption": _one(query, "encryption", "none") or "none"}
+        if _one(query, "flow"):
+            user["flow"] = _one(query, "flow")
+        settings = {"vnext": [{"address": parsed.hostname, "port": int(parsed.port), "users": [user]}]}
+    else:
+        settings = {"servers": [{"address": parsed.hostname, "port": int(parsed.port),
+                                  "password": unquote(parsed.username)}]}
+    return _base_config(local_port, {
+        "protocol": scheme, "settings": settings,
+        "streamSettings": _stream_settings(network, security, values),
+    })
 
 
 def write_xray_config(uri: str, local_port: int, directory: str, profile_id: int):
