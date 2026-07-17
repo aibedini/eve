@@ -1179,9 +1179,20 @@
 
         function fmtJalali(isoStr, period) {
             if (!isoStr) return '—';
-            return EveDate.formatDate(isoStr, period === 'month'
+            const opts = period === 'month'
                 ? { year: 'numeric', month: 'long' }
-                : { year: 'numeric', month: 'long', day: 'numeric' });
+                : { year: 'numeric', month: 'long', day: 'numeric' };
+            // This page does not extend base.html, so window.EveDate is not
+            // guaranteed to exist — fall back to a plain Intl formatter.
+            if (window.EveDate) return EveDate.formatDate(isoStr, opts);
+            const date = new Date(isoStr);
+            if (Number.isNaN(date.getTime())) return '—';
+            try {
+                const locale = `${IS_FA ? 'fa-IR' : 'en-US'}-u-ca-persian-nu-latn`;
+                return new Intl.DateTimeFormat(locale, Object.assign({ timeZone: 'Asia/Tehran' }, opts)).format(date);
+            } catch (_) {
+                return date.toLocaleDateString();
+            }
         }
 
         function fmtBytes(b) {
