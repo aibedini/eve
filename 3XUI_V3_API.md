@@ -1,6 +1,6 @@
 # 3x-ui v3 API Reference
 
-> Compatibility audit refreshed against the upstream OpenAPI and source tags through **v3.4.2**. Older v3 and legacy encoded inbound JSON remain supported.
+> Compatibility audit refreshed against the upstream OpenAPI and source tags through **v3.5.0**. Older v3 and legacy encoded inbound JSON remain supported.
 
 > منبع: OpenAPI 3.0.3 زندهٔ پنل (`/{webBasePath}/panel/api/openapi.json`) — تست‌شده روی 3x-ui **v3.3.1**.
 > `info.title = "3X-UI Panel API"`, `version = "3.x"`.
@@ -74,7 +74,7 @@
 | POST | `/onlinesByGuid` | آنلاین‌ها گروه‌بندی‌شده بر اساس `panelGuid` نودِ میزبان (برای attribution درست در توپولوژی chain). |
 | POST | `/activeInbounds` | inbound tag‌هایی که در پنجرهٔ heartbeat ترافیک داشتند، per node-guid. |
 | POST | `/lastOnline` | map: `email → last-seen unix timestamp`. |
-| GET | `/subLinks/{subId}` | **همهٔ URL‌های پروتکلی همهٔ کلاینت‌های یک subId** (vless/vmess/trojan/ss/hysteria/hy2) به‌صورت آرایهٔ JSON (بدون base64). نتیجه دقیقاً مثل `/sub/<subId>`. آرایهٔ خالی وقتی subId کلاینت enable ندارد. ← **EVE برای ساب چند-اینباندی از این استفاده می‌کند.** |
+| GET | `/subLinks/{subId}` | **همهٔ URL‌های پروتکلی همهٔ کلاینت‌های یک subId** (vless/vmess/trojan/ss/hysteria/hy2/mtproto) به‌صورت آرایهٔ JSON (بدون base64). نتیجه دقیقاً مثل `/sub/<subId>`. آرایهٔ خالی وقتی subId کلاینت enable ندارد. ← **EVE برای ساب چند-اینباندی از این استفاده می‌کند.** |
 | GET | `/links/{email}` | همهٔ URL‌های یک client روی همهٔ inbound‌های attached (مثل دکمهٔ Copy URL پنل). با `externalProxy`، یک URL به‌ازای هر external proxy. |
 
 ### Groups `/panel/api/clients/groups`

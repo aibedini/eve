@@ -142,6 +142,31 @@ class XuiCompatibilityTests(unittest.TestCase):
         self.assertEqual(query['keepalive'], ['25'])
         self.assertTrue(query['publickey'][0])
 
+    def test_mtproto_fallback_link_uses_per_client_secret_and_adtag(self):
+        inbound = {
+            'protocol': 'mtproto',
+            'port': 443,
+            'remark': 'MTProto',
+            'settings': {'clients': []},
+            'streamSettings': {},
+        }
+        client = {
+            'email': 'alice',
+            'Secret': 'dd00000000000000000000000000000000',
+            'AdTag': 'sponsor-channel',
+        }
+
+        link = generate_client_link(client, inbound, 'https://vpn.example:2053')
+
+        parsed = urlparse(link)
+        query = parse_qs(parsed.query)
+        self.assertEqual(parsed.scheme, 'tg')
+        self.assertEqual(parsed.netloc, 'proxy')
+        self.assertEqual(query['server'], ['vpn.example'])
+        self.assertEqual(query['port'], ['443'])
+        self.assertEqual(query['secret'], ['dd00000000000000000000000000000000'])
+        self.assertEqual(query['adtag'], ['sponsor-channel'])
+
 
 if __name__ == '__main__':
     unittest.main()
