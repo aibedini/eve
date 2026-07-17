@@ -4650,7 +4650,7 @@
         if (Array.isArray(job.states_enabled) && job.states_enabled.length) {
             parts.unshift(`States <strong>${job.states_enabled.map(s => SMS_STATE_LABELS[s] || s).join(' → ')}</strong>`);
         }
-        if (job.stopped) parts.push(`<span style="color:#f59e0b;">Stopped: ${job.stopped}</span>`);
+        if (job.stopped) parts.push(`<span style="color:#f59e0b;">Stopped: ${escapeHtml(job.stopped)}</span>`);
         document.getElementById('sms-scan-counts').innerHTML = parts.join('');
         _setSmsRunBtn(running);
     }

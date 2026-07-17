@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.62"
+APP_VERSION = "2.4.65"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -5962,6 +5962,47 @@ def _sms_take_send_slot(recipient: str, cfg: dict, segments: int = 1) -> tuple[b
     return True, None
 
 
+def _sms_gmweb_error_reason(resp) -> str:
+    """Build a useful operator-facing reason from a non-2xx GMweb response."""
+    status_code = getattr(resp, 'status_code', None)
+    fallback = f"http_{status_code}" if status_code else "gateway_http_error"
+    body = {}
+    try:
+        body = resp.json() if getattr(resp, 'content', None) else {}
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        return fallback
+
+    parts = []
+    error = body.get('error') or body.get('message')
+    reason = body.get('reason')
+    if error:
+        parts.append(str(error))
+    if reason and reason != error:
+        parts.append(str(reason))
+
+    limits = body.get('limits') if isinstance(body.get('limits'), dict) else {}
+    used = body.get('used') if isinstance(body.get('used'), dict) else {}
+    rate_bits = []
+    if 'minute' in limits or 'minute' in used:
+        rate_bits.append(f"minute {used.get('minute', '?')}/{limits.get('minute', '?')}")
+    if 'hour' in limits or 'hour' in used:
+        rate_bits.append(f"hour {used.get('hour', '?')}/{limits.get('hour', '?')}")
+    if rate_bits:
+        parts.append(", ".join(rate_bits))
+
+    retry_after = None
+    try:
+        retry_after = resp.headers.get('retry-after') or resp.headers.get('Retry-After')
+    except Exception:
+        retry_after = None
+    if retry_after:
+        parts.append(f"retry_after={retry_after}s")
+
+    return f"{fallback}: {'; '.join(parts)}" if parts else fallback
+
+
 def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: str | None = None,
                         idempotency_key: str | None = None) -> dict:
     """POST a single SMS to the GMweb-API gateway. The gateway queues it and
@@ -6017,7 +6058,7 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
             if out['request_id'] and not out['status_url']:
                 out['status_url'] = f"/send/status/{out['request_id']}"
         else:
-            out['reason'] = f'http_{resp.status_code}'
+            out['reason'] = _sms_gmweb_error_reason(resp)
     except Exception as e:
         out['reason'] = str(e)
     return out
@@ -6826,8 +6867,9 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 _sms_refund_daily_segments(segments)
                 SMS_LAST_SEND_TS[0] = time.time()
                 _sms_scan_inc('failed')
-                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', 'http_429', res)
-                _sms_scan_set(stopped='gateway_rate_limited', state='done',
+                rate_reason = res.get('reason') or 'http_429'
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', rate_reason, res)
+                _sms_scan_set(stopped=f'gateway_rate_limited: {rate_reason}', state='done',
                               finished_at=_utc_iso_now(), current=None)
                 return {'scanned': total_clients, 'sent': sent, 'stopped': 'gateway_rate_limited'}
         SMS_LAST_SEND_TS[0] = time.time()
@@ -7002,8 +7044,9 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
                 _sms_refund_daily_segments(segments)
                 SMS_LAST_SEND_TS[0] = time.time()
                 _sms_scan_inc('failed')
-                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', 'http_429', res)
-                _sms_scan_set(stopped='gateway_rate_limited', state='done',
+                rate_reason = res.get('reason') or 'http_429'
+                _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'failed', rate_reason, res)
+                _sms_scan_set(stopped=f'gateway_rate_limited: {rate_reason}', state='done',
                               finished_at=_utc_iso_now(), current=None)
                 return {'scanned': len(idle), 'sent': sent, 'stopped': 'gateway_rate_limited'}
         SMS_LAST_SEND_TS[0] = time.time()
@@ -12285,7 +12328,7 @@ def fetch_direct_link_from_subscription(sub_url: str, fallback_func=None, fallba
 
 
 def generate_client_link(client, inbound, server_host):
-    """Generate share links for vmess / vless / trojan / shadowsocks."""
+    """Generate share links for client-capable inbound protocols."""
 
     def _as_json(obj, default=None):
         if default is None:
@@ -12497,6 +12540,19 @@ def generate_client_link(client, inbound, server_host):
             query = urlencode({k: str(v) for k, v in params.items() if v not in ('', None, 0)})
             suffix = f"?{query}" if query else ''
             return f"wireguard://{quote(str(private_key), safe='')}@{host}:{port}{suffix}#{remark}"
+
+        if protocol == 'mtproto':
+            secret = _client_value('secret', 'Secret')
+            if not secret:
+                return None
+            params = {
+                'server': host,
+                'port': port,
+                'secret': secret,
+                'adtag': _client_value('adTag', 'AdTag') or None,
+            }
+            query = urlencode({k: str(v) for k, v in params.items() if v not in ('', None)})
+            return f"tg://proxy?{query}"
 
         return None
     except Exception as exc:
@@ -24948,7 +25004,7 @@ TELEGRAM_ACCOUNT_NAME_TOKENS = {
 }
 TELEGRAM_INBOUND_ROUTE_MODES = {'manual', 'auto_detect'}
 TELEGRAM_CUSTOMER_INBOUND_PROTOCOLS = {
-    'vmess', 'vless', 'trojan', 'shadowsocks', 'wireguard', 'hysteria',
+    'vmess', 'vless', 'trojan', 'shadowsocks', 'wireguard', 'hysteria', 'mtproto',
 }
 
 

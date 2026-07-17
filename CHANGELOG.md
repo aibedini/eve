@@ -13,7 +13,11 @@ All notable changes to Eve - Xui Manager are documented in this file.
 - Bootstrap and self-update the CLI through authenticated Git objects rather than unauthenticated private-repository raw URLs.
 - Apply `EVE_REPO_URL` to existing installations during upgrades and report authentication-specific recovery steps when fetch fails.
 
+### SMS Automation
+- Preserve GMweb HTTP 429 response details in SMS logs and scan-stop messages, including rate-limit reason, minute/hour usage, and retry-after hints.
+
 ### 3x-ui compatibility
+- Refresh v3 compatibility coverage for 3x-ui v3.5.0 and add MTProto fallback subscription-link generation using per-client secret/adTag fields.
 - Detect the first-class v3 client API by endpoint capability instead of treating API Token presence as the panel version; cookie + CSRF and Bearer authentication are both supported.
 - Use native client attach/detach endpoints when available, with a 404-only legacy fallback, so 3.4.2+ WireGuard clients receive panel-generated keys and addresses safely.
 - Add WireGuard subscription-link fallback generation and preserve legacy string-encoded as well as modern nested inbound JSON.

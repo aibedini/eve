@@ -62,6 +62,7 @@ from app import (  # noqa: E402
     _cancel_sms_via_gmweb,
     _cancel_stale_account_sms,
     _run_sms_depletion_scan,
+    _send_sms_via_gmweb,
     _sms_db_segment_stats_today,
     _sms_db_segments_used_today,
     _sms_gateway_ready,
@@ -2073,6 +2074,38 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(result['reason'], 'gateway_not_paired')
         send.assert_not_called()
         get.assert_called()
+
+    def test_sms_gateway_429_keeps_rate_limit_details(self):
+        class FakeResponse:
+            status_code = 429
+            content = b'{}'
+            headers = {'retry-after': '60'}
+
+            def json(self):
+                return {
+                    'error': 'send_rate_limited',
+                    'reason': 'per_minute_limit',
+                    'limits': {'minute': 10, 'hour': 100},
+                    'used': {'minute': 10, 'hour': 10},
+                }
+
+        with patch('app.requests.post', return_value=FakeResponse()):
+            result = _send_sms_via_gmweb(
+                '989120000000',
+                'hello',
+                {
+                    'base_url': 'https://gmweb.test',
+                    'api_key': 'gmw_secret',
+                    'timeout_seconds': 7,
+                },
+            )
+
+        self.assertFalse(result['sent'])
+        self.assertEqual(result['status_code'], 429)
+        self.assertIn('send_rate_limited', result['reason'])
+        self.assertIn('per_minute_limit', result['reason'])
+        self.assertIn('minute 10/10', result['reason'])
+        self.assertIn('retry_after=60s', result['reason'])
 
     def test_sms_daily_limit_counts_completed_segments_only(self):
         db.session.add_all([
