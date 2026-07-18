@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.1"
+APP_VERSION = "2.5.2"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8049,6 +8049,7 @@ class CustomerAccount(db.Model):
     status = db.Column(db.String(24), nullable=False, default='active', index=True)
     risk_level = db.Column(db.String(24), nullable=False, default='standard', index=True)
     preferred_language = db.Column(db.String(12), nullable=False, default='fa')
+    credit = db.Column(db.Integer, nullable=False, default=0)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -8676,6 +8677,12 @@ class TelegramServiceRequest(db.Model):
     discount_amount = db.Column(db.BigInteger, nullable=True)
     promo_code = db.Column(db.String(64), nullable=True)
     note = db.Column(db.Text, nullable=True)
+    bank_card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id', ondelete='SET NULL'), nullable=True)
+    receipt_file_id = db.Column(db.Text, nullable=True)
+    receipt_file_kind = db.Column(db.String(16), nullable=True)
+    receipt_file_unique_id = db.Column(db.String(160), nullable=True, index=True)
+    duplicate_receipt = db.Column(db.Boolean, nullable=False, default=False)
+    payment_method = db.Column(db.String(16), nullable=False, default='card')
     status = db.Column(db.String(24), nullable=False, default='pending', index=True)
     reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
     reviewed_at = db.Column(db.DateTime, nullable=True)
@@ -8696,6 +8703,7 @@ class TelegramServiceRequest(db.Model):
     package = db.relationship('Package')
     bot = db.relationship('TelegramBotInstance')
     assigned_admin = db.relationship('Admin', foreign_keys=[assigned_admin_id])
+    bank_card = db.relationship('BankCard')
 
 
 class TelegramServiceRequestMessage(db.Model):
@@ -8774,6 +8782,7 @@ class TelegramPurchaseRequest(db.Model):
     source_message_id = db.Column(db.BigInteger, nullable=False)
     status = db.Column(db.String(24), nullable=False, default='pending', index=True)
     duplicate_receipt = db.Column(db.Boolean, nullable=False, default=False)
+    payment_method = db.Column(db.String(16), nullable=False, default='card')
     original_amount = db.Column(db.BigInteger, nullable=True)
     discount_amount = db.Column(db.BigInteger, nullable=True)
     promo_code = db.Column(db.String(64), nullable=True)
@@ -8784,6 +8793,57 @@ class TelegramPurchaseRequest(db.Model):
 
     server = db.relationship('Server')
     package = db.relationship('Package')
+    bank_card = db.relationship('BankCard')
+
+
+class CustomerTransaction(db.Model):
+    """Signed wallet ledger entry for an end customer."""
+    __tablename__ = 'customer_transactions'
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(
+        db.Integer, db.ForeignKey('customer_accounts.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    type = db.Column(db.String(24), nullable=False, index=True)  # topup|purchase|renewal|refund|adjust
+    amount = db.Column(db.Integer, nullable=False)
+    bank_card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id', ondelete='SET NULL'), nullable=True)
+    receipt_file_id = db.Column(db.Text, nullable=True)
+    receipt_file_kind = db.Column(db.String(16), nullable=True)
+    receipt_file_unique_id = db.Column(db.String(160), nullable=True)
+    status = db.Column(db.String(16), nullable=False, default='completed')
+    description = db.Column(db.String(255), nullable=True)
+    request_ref = db.Column(db.String(64), nullable=True, index=True)  # e.g. 'purchase:12'
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    customer = db.relationship('CustomerAccount')
+    bank_card = db.relationship('BankCard')
+
+
+class TelegramWalletTopup(db.Model):
+    """Customer wallet top-up awaiting manual receipt review in Telegram."""
+    __tablename__ = 'telegram_wallet_topups'
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    customer_id = db.Column(
+        db.Integer, db.ForeignKey('customer_accounts.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    bank_card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id', ondelete='SET NULL'), nullable=True)
+    amount = db.Column(db.Integer, nullable=False)
+    receipt_file_id = db.Column(db.Text, nullable=False)
+    receipt_file_kind = db.Column(db.String(16), nullable=False, default='photo')
+    receipt_file_unique_id = db.Column(db.String(160), nullable=True, index=True)
+    duplicate_receipt = db.Column(db.Boolean, nullable=False, default=False)
+    status = db.Column(db.String(16), nullable=False, default='pending', index=True)
+    reviewer_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    customer = db.relationship('CustomerAccount')
     bank_card = db.relationship('BankCard')
 
 
@@ -9879,6 +9939,22 @@ with app.app_context():
             conn.commit()
     except Exception as _support_routing_migration_error:
         print(f'Migration error (Telegram support group routing): {_support_routing_migration_error}')
+
+    # Customer wallet and card-to-card renewal/top-up payment metadata.
+    _migrate_add_columns('customer_accounts', [
+        ('credit', 'INTEGER DEFAULT 0'),
+    ])
+    _migrate_add_columns('telegram_service_requests', [
+        ('bank_card_id', 'INTEGER'),
+        ('receipt_file_id', 'TEXT'),
+        ('receipt_file_kind', 'VARCHAR(16)'),
+        ('receipt_file_unique_id', 'VARCHAR(160)'),
+        ('duplicate_receipt', 'BOOLEAN DEFAULT FALSE'),
+        ('payment_method', "VARCHAR(16) DEFAULT 'card'"),
+    ])
+    _migrate_add_columns('telegram_purchase_requests', [
+        ('payment_method', "VARCHAR(16) DEFAULT 'card'"),
+    ])
 
     # Ensure announcements columns exist — each in its own try so one failure
     # doesn't prevent the others from running.
@@ -26434,6 +26510,7 @@ def _telegram_operation_customer_payload(row, identity_map=None, customer_map=No
         'phone': phone,
         'customer_phone': phone,
         'customer_name': customer.display_name if customer else None,
+        'customer_credit': int(customer.credit or 0) if customer else None,
     }
 
 
@@ -26455,6 +26532,8 @@ def _serialize_telegram_purchase(row, identity_map=None, customer_map=None):
         'discount_amount': int(row.discount_amount or 0) if row.discount_amount is not None else None,
         'promo_code': row.promo_code,
         'duplicate_receipt': bool(getattr(row, 'duplicate_receipt', False)),
+        'payment_method': str(getattr(row, 'payment_method', '') or 'card'),
+        'bank_card_id': row.bank_card_id,
         'note': None,
         'receipt_kind': row.receipt_kind,
         'receipt_url': url_for('telegram_purchase_receipt', request_id=row.id),
@@ -26538,6 +26617,8 @@ def _serialize_telegram_service(row, identity_map=None, customer_map=None, admin
         'package_name': row.package.name if row.package else None,
         'amount': int(row.amount or 0),
         'note': row.note,
+        'payment_method': str(getattr(row, 'payment_method', '') or 'card'),
+        'bank_card_id': getattr(row, 'bank_card_id', None),
         'receipt_url': None,
         'messages': messages,
         'support_state': support_state if row.request_type == 'support' else None,
@@ -26760,6 +26841,114 @@ def _telegram_service_for_admin(request_id):
     return row, None
 
 
+def _telegram_topup_for_admin(topup_id):
+    row = db.session.get(TelegramWalletTopup, topup_id)
+    if not row:
+        return None, (jsonify({'success': False, 'error': 'Top-up request not found'}), 404)
+    admin = _telegram_operations_admin()
+    if not admin:
+        return None, (jsonify({'success': False, 'error': 'Access denied'}), 403)
+    if admin.is_superadmin or str(admin.role or '').lower() in ('admin', 'superadmin'):
+        return row, None
+    bot = db.session.get(TelegramBotInstance, row.bot_instance_id)
+    if str(admin.role or '').lower() == 'reseller' and bot and bot.owner_admin_id == admin.id:
+        return row, None
+    return None, (jsonify({'success': False, 'error': 'Access denied'}), 403)
+
+
+def _telegram_update_request_card(row, kind, request_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        card_id = int(payload.get('card_id') or 0)
+    except (TypeError, ValueError):
+        card_id = 0
+    card = db.session.get(BankCard, card_id) if card_id else None
+    if not card or not card.is_active:
+        return jsonify({'success': False, 'error': 'Active bank card not found'}), 400
+    row.bank_card_id = card.id
+    _log_audit(f'telegram_{kind}.update_card', row, actor=_telegram_operations_admin(),
+               meta={'bank_card_id': card.id})
+    db.session.commit()
+    return jsonify({'success': True, 'bank_card_id': card.id})
+
+
+@app.route('/api/telegram-operations/purchases/<int:request_id>/card', methods=['PUT'])
+@limiter.limit('20 per minute')
+@login_required
+def update_telegram_purchase_card(request_id):
+    row, error = _telegram_purchase_for_admin(request_id)
+    if error:
+        return error
+    return _telegram_update_request_card(row, 'purchase', request_id)
+
+
+@app.route('/api/telegram-operations/service-requests/<int:request_id>/card', methods=['PUT'])
+@limiter.limit('20 per minute')
+@login_required
+def update_telegram_service_request_card(request_id):
+    row, error = _telegram_service_for_admin(request_id)
+    if error:
+        return error
+    return _telegram_update_request_card(row, 'service', request_id)
+
+
+@app.route('/api/telegram-operations/wallet-topups/<int:topup_id>/card', methods=['PUT'])
+@limiter.limit('20 per minute')
+@login_required
+def update_telegram_wallet_topup_card(topup_id):
+    row, error = _telegram_topup_for_admin(topup_id)
+    if error:
+        return error
+    return _telegram_update_request_card(row, 'topup', topup_id)
+
+
+@app.route('/api/customers/<int:customer_id>/credit', methods=['POST'])
+@limiter.limit('20 per minute')
+@login_required
+def adjust_customer_credit(customer_id):
+    admin = _telegram_operations_admin()
+    if not admin or not (admin.is_superadmin or str(admin.role or '').lower() in ('admin', 'superadmin')):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    customer = db.session.get(CustomerAccount, customer_id)
+    if not customer:
+        return jsonify({'success': False, 'error': 'Customer not found'}), 404
+    payload = request.get_json(silent=True) or {}
+    try:
+        amount = int(payload.get('amount') or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount == 0:
+        return jsonify({'success': False, 'error': 'A non-zero amount is required'}), 400
+    customer.credit = int(customer.credit or 0) + amount
+    db.session.add(CustomerTransaction(
+        customer_id=customer.id,
+        type='adjust',
+        amount=amount,
+        description=str(payload.get('description') or '').strip()[:255] or None,
+    ))
+    _log_audit('customer.credit_adjust', customer, actor=admin, meta={'amount': amount})
+    db.session.commit()
+    return jsonify({'success': True, 'credit': int(customer.credit or 0)})
+
+
+def _refund_wallet_request(row, kind):
+    """Refund a wallet-paid request back to the customer wallet; returns the amount."""
+    if str(getattr(row, 'payment_method', '') or 'card') != 'wallet':
+        return 0
+    customer = db.session.get(CustomerAccount, row.customer_id)
+    amount = int(getattr(row, 'amount', 0) or 0)
+    if not customer or amount <= 0:
+        return 0
+    customer.credit = int(customer.credit or 0) + amount
+    db.session.add(CustomerTransaction(
+        customer_id=customer.id,
+        type='refund',
+        amount=amount,
+        request_ref=f'{kind}:{row.id}',
+    ))
+    return amount
+
+
 @app.route('/api/telegram-operations/purchases/<int:request_id>/<action>', methods=['POST'])
 @limiter.limit('20 per minute')
 @login_required
@@ -26776,6 +26965,7 @@ def review_telegram_purchase_operation(request_id, action):
         row.status = 'rejected'
         row.reviewed_by_admin_id = admin.id
         row.reviewed_at = datetime.utcnow()
+        _refund_wallet_request(row, 'purchase')
         _log_audit('telegram_purchase.reject', row, actor=admin)
         db.session.commit()
         _telegram_operation_notify(row)
@@ -26933,6 +27123,8 @@ def review_telegram_service_operation(request_id, action):
     row.status = 'completed' if action == 'complete' else 'rejected'
     row.reviewed_by_admin_id = admin.id
     row.reviewed_at = datetime.utcnow()
+    if action == 'reject' and row.request_type == 'renewal':
+        _refund_wallet_request(row, 'renewal')
     _log_audit(f'telegram_service.{action}', row, actor=admin)
     db.session.commit()
     _telegram_operation_notify(row)

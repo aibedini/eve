@@ -24,6 +24,7 @@ from app import (  # noqa: E402
     Admin,
     BankCard,
     CustomerAccount,
+    CustomerTransaction,
     GLOBAL_SERVER_DATA,
     OwnershipClaim,
     OwnershipClaimItem,
@@ -51,6 +52,7 @@ from app import (  # noqa: E402
     TelegramServiceRequestMessage,
     TelegramServiceSession,
     TelegramTrialGrant,
+    TelegramWalletTopup,
     _log_audit,
     _reseller_can_create_free,
     _telegram_bot_api_client,
@@ -867,6 +869,361 @@ def _purchase_card(bot: TelegramBotInstance, owner_id=None):
     return None
 
 
+def _wallet_customer(user_id: int):
+    """Resolve the verified end customer behind a Telegram user, like the purchase flow."""
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not identity or not identity.customer_id:
+        return None, None
+    return identity, db.session.get(CustomerAccount, identity.customer_id)
+
+
+def _receipt_is_duplicate(unique_id: str) -> bool:
+    if not unique_id:
+        return False
+    if TelegramPurchaseRequest.query.filter(
+        TelegramPurchaseRequest.receipt_file_unique_id == unique_id,
+        TelegramPurchaseRequest.status != 'rejected',
+    ).first() is not None:
+        return True
+    if TelegramServiceRequest.query.filter(
+        TelegramServiceRequest.receipt_file_unique_id == unique_id,
+        TelegramServiceRequest.status != 'rejected',
+    ).first() is not None:
+        return True
+    return TelegramWalletTopup.query.filter(
+        TelegramWalletTopup.receipt_file_unique_id == unique_id,
+        TelegramWalletTopup.status != 'rejected',
+    ).first() is not None
+
+
+def _send_wallet_menu(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
+                      user_id: int, language: str):
+    identity, customer = _wallet_customer(user_id)
+    if not identity or not customer or not identity.phone_verified_at:
+        _send_contact_prompt(api, chat_id, language)
+        return
+    api.send_message(
+        chat_id,
+        COPY[language]['wallet_balance'].format(balance=f"{int(customer.credit or 0):,}"),
+        parse_mode='HTML',
+        reply_markup={'inline_keyboard': [[
+            {'text': COPY[language]['wallet_topup_button'], 'callback_data': 'wallet-topup-start'},
+            {'text': COPY[language]['wallet_history_button'], 'callback_data': 'wallet-history'},
+        ]]},
+    )
+
+
+def _send_wallet_history(api: TelegramBotApi, chat_id: int, user_id: int, language: str):
+    _identity_row, customer = _wallet_customer(user_id)
+    rows = []
+    if customer:
+        rows = CustomerTransaction.query.filter_by(customer_id=customer.id).order_by(
+            CustomerTransaction.created_at.desc(), CustomerTransaction.id.desc(),
+        ).limit(10).all()
+    if not rows:
+        api.send_message(chat_id, COPY[language]['wallet_history_empty'])
+        return
+    lines = [COPY[language]['wallet_history_title']]
+    for row in rows:
+        type_label = COPY[language].get(f'wallet_type_{row.type}', str(row.type or ''))
+        card_label = ''
+        if row.bank_card:
+            card_label = f" • {row.bank_card.label or row.bank_card.card_number or ''}".rstrip()
+        lines.append(COPY[language]['wallet_history_line'].format(
+            date=row.created_at.strftime('%Y-%m-%d') if row.created_at else '-',
+            type=type_label,
+            amount=f"{int(row.amount or 0):+,}",
+            card=card_label,
+        ))
+    api.send_message(chat_id, '\n'.join(lines))
+
+
+def _handle_wallet_topup_amount(api: TelegramBotApi, bot: TelegramBotInstance,
+                                message: dict, sender: dict,
+                                state: TelegramBotUserState, text: str):
+    chat_id = int((message.get('chat') or {}).get('id'))
+    user_id = int(sender['id'])
+    language = state.language if state.language in COPY else bot.default_language
+    raw = str(text or '').strip().replace(',', '').replace('٬', '')
+    try:
+        amount = int(raw)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0 or amount > 100_000_000_000:
+        api.send_message(chat_id, COPY[language]['wallet_topup_invalid_amount'])
+        return
+    identity, customer = _wallet_customer(user_id)
+    if not identity or not customer or not identity.phone_verified_at:
+        state.step = 'verified'
+        db.session.flush()
+        _send_contact_prompt(api, chat_id, language)
+        return
+    owner_id = _effective_owner_id(bot, user_id)
+    card = _purchase_card(bot, owner_id=owner_id)
+    if card is None:
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    session_row = _service_session(bot.id, user_id)
+    session_row.service_ownership_id = None
+    session_row.action = f'topup_receipt:{amount}:{card.id}'
+    state.step = 'awaiting_topup_receipt'
+    db.session.flush()
+    api.send_message(
+        chat_id,
+        COPY[language]['wallet_topup_payment'].format(
+            amount=f"{amount:,}", card=_format_bank_card(card)),
+        parse_mode='HTML',
+    )
+
+
+def _notify_topup_admins(api: TelegramBotApi, topup: TelegramWalletTopup):
+    lines = [
+        f"Telegram wallet top-up #{topup.id}",
+        f"Amount: {int(topup.amount or 0):,} T",
+        f"Telegram user: {topup.telegram_user_id}",
+    ]
+    if topup.bank_card:
+        lines.append(f"Card: {topup.bank_card.label or topup.bank_card.card_number or ''}")
+    if topup.duplicate_receipt:
+        lines.append('⚠️ FRAUD WARNING: this receipt file was already used on another request!')
+    keyboard = {'inline_keyboard': [
+        [
+            {'text': '✅ Approve top-up', 'callback_data': f'admin-topup:{topup.id}:approve'},
+            {'text': '❌ Reject', 'callback_data': f'admin-topup:{topup.id}:reject'},
+        ],
+        [{'text': '✏️ Edit card', 'callback_data': f'admin-edit-card:topup:{topup.id}'}],
+    ]}
+    bot = db.session.get(TelegramBotInstance, topup.bot_instance_id)
+    owner_id = _effective_owner_id(bot, topup.telegram_user_id) if bot else None
+    for admin in Admin.query.filter_by(enabled=True).all():
+        role = str(admin.role or '').lower()
+        is_global = bool(admin.is_superadmin or role in ('admin', 'superadmin'))
+        is_owner = bool(owner_id and admin.id == owner_id)
+        if not (is_global or is_owner):
+            continue
+        try:
+            admin_chat_id = int(str(admin.telegram_id or '').strip())
+            if admin_chat_id <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        try:
+            if topup.receipt_file_kind == 'document':
+                api.send_document(admin_chat_id, topup.receipt_file_id)
+            else:
+                api.send_photo(admin_chat_id, topup.receipt_file_id)
+        except TelegramApiError:
+            pass
+        try:
+            api.send_message(admin_chat_id, '\n'.join(lines), reply_markup=keyboard)
+        except TelegramApiError:
+            continue
+
+
+def _handle_wallet_topup_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
+                                 message: dict, sender: dict,
+                                 state: TelegramBotUserState):
+    chat_id = int((message.get('chat') or {}).get('id'))
+    user_id = int(sender['id'])
+    if not _rate_ok(user_id, 'receipt', 10, 120):
+        return
+    language = state.language if state.language in COPY else bot.default_language
+    receipt = _receipt_from_message(message)
+    if receipt is None:
+        api.send_message(chat_id, COPY[language]['receipt_invalid'])
+        return
+    session_row = TelegramServiceSession.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id,
+    ).first()
+    identity, customer = _wallet_customer(user_id)
+    parts = str(getattr(session_row, 'action', '') or '').split(':')
+    try:
+        amount = int(parts[1])
+        card_id = int(parts[2])
+    except (IndexError, TypeError, ValueError):
+        amount, card_id = 0, 0
+    card = db.session.get(BankCard, card_id) if card_id else None
+    if (not session_row or parts[0] != 'topup_receipt' or amount <= 0
+            or not identity or not customer or not card or not card.is_active):
+        if session_row:
+            session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['start_first'])
+        return
+    kind, file_id, unique_id = receipt
+    topup = TelegramWalletTopup(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        customer_id=customer.id,
+        bank_card_id=card.id,
+        amount=amount,
+        receipt_file_id=file_id,
+        receipt_file_kind=kind,
+        receipt_file_unique_id=unique_id or None,
+        duplicate_receipt=_receipt_is_duplicate(unique_id),
+        status='pending',
+    )
+    db.session.add(topup)
+    session_row.action = None
+    state.step = 'verified'
+    db.session.flush()
+    api.send_message(chat_id, COPY[language]['wallet_topup_pending'])
+    _notify_topup_admins(api, topup)
+
+
+def _topup_reviewer(user_id: int, topup: TelegramWalletTopup):
+    admin = _telegram_admin(user_id)
+    if admin:
+        return admin
+    bot = db.session.get(TelegramBotInstance, topup.bot_instance_id)
+    owner_id = _effective_owner_id(bot, topup.telegram_user_id) if bot else None
+    owner = db.session.get(Admin, owner_id) if owner_id else None
+    try:
+        owner_telegram_id = int(str(getattr(owner, 'telegram_id', '') or '').strip())
+    except (TypeError, ValueError):
+        owner_telegram_id = 0
+    if owner and owner.enabled and owner_telegram_id == int(user_id):
+        return owner
+    return None
+
+
+def _handle_admin_topup_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if len(parts) != 3 or parts[0] != 'admin-topup' or parts[2] not in ('approve', 'reject'):
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    try:
+        topup = db.session.get(TelegramWalletTopup, int(parts[1]))
+    except (TypeError, ValueError):
+        topup = None
+    reviewer = _topup_reviewer(int(sender.get('id') or 0), topup) if topup else None
+    if not topup or not reviewer:
+        if callback_id:
+            api.answer_callback(callback_id, 'Access denied')
+        return True
+    if topup.status != 'pending':
+        api.answer_callback(callback_id, 'Already reviewed')
+        return True
+    topup.status = 'approved' if parts[2] == 'approve' else 'rejected'
+    topup.reviewer_admin_id = reviewer.id
+    topup.reviewed_at = datetime.utcnow()
+    customer = db.session.get(CustomerAccount, topup.customer_id)
+    if topup.status == 'approved' and customer:
+        customer.credit = int(customer.credit or 0) + int(topup.amount or 0)
+        db.session.add(CustomerTransaction(
+            customer_id=customer.id,
+            type='topup',
+            amount=int(topup.amount or 0),
+            bank_card_id=topup.bank_card_id,
+            receipt_file_id=topup.receipt_file_id,
+            receipt_file_kind=topup.receipt_file_kind,
+            receipt_file_unique_id=topup.receipt_file_unique_id,
+            request_ref=f'topup:{topup.id}',
+        ))
+    _log_audit(f"telegram_topup.{parts[2]}", topup, actor=reviewer)
+    db.session.flush()
+    api.answer_callback(callback_id, 'Saved')
+    if chat_id:
+        api.send_message(chat_id, f"Top-up #{topup.id}: {topup.status}")
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=topup.telegram_user_id,
+        customer_id=topup.customer_id,
+    ).first()
+    if identity and identity.telegram_chat_id:
+        language = str(getattr(customer, 'preferred_language', '') or 'fa')
+        if language not in COPY:
+            language = 'fa'
+        if topup.status == 'approved':
+            text = COPY[language]['wallet_topup_approved'].format(
+                amount=f"{int(topup.amount or 0):,}",
+                balance=f"{int(customer.credit or 0):,}",
+            )
+        else:
+            text = COPY[language]['wallet_topup_rejected']
+        api.send_message(identity.telegram_chat_id, text)
+    return True
+
+
+def _wallet_request_record(kind: str, record_id: int):
+    try:
+        record_id = int(record_id)
+    except (TypeError, ValueError):
+        return None
+    if kind == 'purchase':
+        return db.session.get(TelegramPurchaseRequest, record_id)
+    if kind == 'renewal':
+        return db.session.get(TelegramServiceRequest, record_id)
+    if kind == 'topup':
+        return db.session.get(TelegramWalletTopup, record_id)
+    return None
+
+
+def _handle_admin_edit_card_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if len(parts) != 3 or parts[0] != 'admin-edit-card' or parts[1] not in ('purchase', 'renewal', 'topup'):
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    reviewer = _telegram_admin(int(sender.get('id') or 0))
+    record = _wallet_request_record(parts[1], parts[2])
+    if not reviewer or not record:
+        if callback_id:
+            api.answer_callback(callback_id, 'Access denied')
+        return True
+    cards = BankCard.query.filter_by(is_active=True).order_by(BankCard.id.asc()).all()
+    if not cards:
+        api.answer_callback(callback_id, 'No active cards')
+        return True
+    keyboard = [[{
+        'text': (card.label or card.card_number or f'#{card.id}')[:60],
+        'callback_data': f'admin-set-card:{parts[1]}:{record.id}:{card.id}',
+    }] for card in cards[:30]]
+    api.answer_callback(callback_id)
+    if chat_id:
+        api.send_message(
+            chat_id, f"Select the new card for {parts[1]} #{record.id}:",
+            reply_markup={'inline_keyboard': keyboard},
+        )
+    return True
+
+
+def _handle_admin_set_card_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if len(parts) != 4 or parts[0] != 'admin-set-card' or parts[1] not in ('purchase', 'renewal', 'topup'):
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    reviewer = _telegram_admin(int(sender.get('id') or 0))
+    record = _wallet_request_record(parts[1], parts[2])
+    try:
+        card = db.session.get(BankCard, int(parts[3]))
+    except (TypeError, ValueError):
+        card = None
+    if not reviewer or not record or not card or not card.is_active:
+        if callback_id:
+            api.answer_callback(callback_id, 'Access denied')
+        return True
+    record.bank_card_id = card.id
+    _log_audit(f'telegram_{parts[1]}.update_card', record, actor=reviewer,
+               meta={'bank_card_id': card.id})
+    db.session.flush()
+    api.answer_callback(callback_id, 'Saved')
+    if chat_id:
+        api.send_message(
+            chat_id,
+            f"✅ Card on {parts[1]} #{record.id} updated:\n{_format_bank_card(card)}",
+            parse_mode='HTML',
+        )
+    return True
+
+
 def _purchase_name_draft(bot_id: int, user_id: int):
     return TelegramPurchaseNameDraft.query.filter_by(
         bot_instance_id=bot_id, telegram_user_id=user_id,
@@ -948,6 +1305,44 @@ def _render_purchase_account_name(bot: TelegramBotInstance,
     return rendered
 
 
+def _send_purchase_card_payment(api: TelegramBotApi, bot: TelegramBotInstance,
+                                chat_id: int, user_id: int, language: str,
+                                state: TelegramBotUserState):
+    """Card-to-card leg of a purchase: show the card and wait for the receipt."""
+    session_row = _purchase_session(bot.id, user_id)
+    server = db.session.get(Server, session_row.server_id) if session_row.server_id else None
+    package = db.session.get(Package, session_row.package_id) if session_row.package_id else None
+    owner_id = _effective_owner_id(bot, user_id)
+    card = db.session.get(BankCard, session_row.bank_card_id) if session_row.bank_card_id else None
+    if (card is None or not card.is_active
+            or not _purchase_card_accessible(card, bot, owner_id=owner_id)):
+        card = _purchase_card(bot, owner_id=owner_id)
+    if not server or not package or card is None:
+        session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    session_row.bank_card_id = card.id
+    session_row.action = 'awaiting_receipt'
+    state.step = 'awaiting_purchase_receipt'
+    db.session.flush()
+    discount = int(session_row.discount_amount or 0)
+    base_price = int(session_row.quoted_amount or 0) + discount
+    discount_block = ''
+    if discount > 0:
+        discount_block = COPY[language]['promo_discount_block'].format(
+            original=f"{base_price:,}", discount=f"{discount:,}")
+    api.send_message(
+        chat_id,
+        _brand_text(bot, language) + COPY[language]['purchase_payment'].format(
+            amount=f"{int(session_row.quoted_amount or 0):,}", card=_format_bank_card(card),
+            discount_block=discount_block,
+        ),
+        parse_mode='HTML',
+    )
+
+
 def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
                             chat_id: int, user_id: int, language: str,
                             server: Server, package: Package,
@@ -964,9 +1359,6 @@ def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
         return
     owner_id = _effective_owner_id(bot, user_id)
     card = _purchase_card(bot, owner_id=owner_id)
-    if card is None:
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
-        return
     session_row = _purchase_session(bot.id, user_id)
     base_price = int(_resolve_purchase_price(owner_id, package))
     final_amount, discount, applied, error_key = _evaluate_promos(
@@ -975,29 +1367,54 @@ def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
     )
     session_row.server_id = server.id
     session_row.package_id = package.id
-    session_row.bank_card_id = card.id
+    session_row.bank_card_id = card.id if card else None
     session_row.quoted_amount = final_amount
     session_row.promo_id = applied[0][0].id if applied else None
     session_row.discount_amount = discount or None
     session_row.promo_discounts_json = (
         json.dumps({str(promo.id): amount for promo, amount in applied}) if applied else None
     )
-    session_row.action = 'awaiting_receipt'
-    state.step = 'awaiting_purchase_receipt'
-    db.session.flush()
     if error_key == 'invalid_code':
         api.send_message(chat_id, COPY[language]['promo_code_invalid'])
-    discount_block = ''
-    if discount > 0:
-        discount_block = COPY[language]['promo_discount_block'].format(
-            original=f"{base_price:,}", discount=f"{discount:,}")
+    customer = db.session.get(CustomerAccount, identity.customer_id)
+    balance = int(getattr(customer, 'credit', 0) or 0)
+    if balance >= final_amount:
+        session_row.action = 'awaiting_payment_method'
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(
+            chat_id,
+            COPY[language]['wallet_balance'].format(balance=f"{balance:,}"),
+            parse_mode='HTML',
+            reply_markup={'inline_keyboard': [[{
+                'text': COPY[language]['pay_from_wallet'].format(balance=f"{balance:,}"),
+                'callback_data': 'purchase-pay-wallet',
+            }], [{
+                'text': COPY[language]['pay_by_card'],
+                'callback_data': 'purchase-pay-card',
+            }]]},
+        )
+        return
+    if card is None:
+        session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    session_row.action = 'awaiting_payment_method'
+    state.step = 'verified'
+    db.session.flush()
     api.send_message(
         chat_id,
-        _brand_text(bot, language) + COPY[language]['purchase_payment'].format(
-            amount=f"{final_amount:,}", card=_format_bank_card(card),
-            discount_block=discount_block,
-        ),
-        parse_mode='HTML',
+        COPY[language]['wallet_insufficient'].format(
+            balance=f"{balance:,}", needed=f"{max(0, final_amount - balance):,}"),
+        reply_markup={'inline_keyboard': [[{
+            'text': COPY[language]['wallet_topup_button'],
+            'callback_data': 'wallet-topup-start',
+        }], [{
+            'text': COPY[language]['pay_by_card'],
+            'callback_data': 'purchase-pay-card',
+        }]]},
     )
 
 
@@ -1155,7 +1572,11 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
                             request_type: str, *, package: Package | None, note: str | None,
                             attachment: dict | None = None, source_chat_id: int | None = None,
                             source_message_id: int | None = None,
-                            api: TelegramBotApi | None = None):
+                            api: TelegramBotApi | None = None,
+                            bank_card_id: int | None = None,
+                            receipt: tuple | None = None,
+                            duplicate_receipt: bool = False,
+                            payment_method: str = 'card'):
     if request_type == 'renewal':
         existing = TelegramServiceRequest.query.filter_by(
             service_ownership_id=ownership.id,
@@ -1222,6 +1643,12 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
         original_amount=original_amount,
         discount_amount=discount_amount,
         note=(str(note or '').strip()[:4000] or None),
+        bank_card_id=bank_card_id,
+        receipt_file_id=(receipt[1] if receipt else None),
+        receipt_file_kind=(receipt[0] if receipt else None),
+        receipt_file_unique_id=(receipt[2] or None) if receipt else None,
+        duplicate_receipt=bool(duplicate_receipt),
+        payment_method=payment_method,
         status='pending',
     )
     db.session.add(row)
@@ -1236,6 +1663,161 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
             **(attachment or {}),
         ))
     return row, False
+
+
+def _renewal_quoted_price(api: TelegramBotApi, bot: TelegramBotInstance, user_id: int,
+                          ownership: ServiceOwnership, package: Package) -> int:
+    base_price = _resolve_purchase_price(ownership.reseller_id, package)
+    final_price, _discount, _applied, _err = _evaluate_promos(
+        bot, user_id, package, base_price, 'renewal',
+        api=api, owner_id=ownership.reseller_id,
+    )
+    return int(final_price or 0)
+
+
+def _send_renewal_payment_choice(api: TelegramBotApi, bot: TelegramBotInstance,
+                                 chat_id: int, user_id: int, language: str,
+                                 ownership: ServiceOwnership, package: Package,
+                                 state: TelegramBotUserState):
+    """Step 2 of renewal: choose wallet or card-to-card before any request exists."""
+    _identity_row, customer = _wallet_customer(user_id)
+    session_row = _service_session(bot.id, user_id)
+    session_row.service_ownership_id = ownership.id
+    session_row.action = f'renew_package:{package.id}'
+    db.session.flush()
+    final_price = _renewal_quoted_price(api, bot, user_id, ownership, package)
+    balance = int(customer.credit or 0) if customer else 0
+    card_button = [{'text': COPY[language]['pay_by_card'],
+                    'callback_data': f'renew-pay-card:{ownership.id}:{package.id}'}]
+    if customer and balance >= final_price:
+        keyboard = [[{
+            'text': COPY[language]['pay_from_wallet'].format(balance=f"{balance:,}"),
+            'callback_data': f'renew-pay-wallet:{ownership.id}:{package.id}',
+        }], card_button]
+        api.send_message(
+            chat_id,
+            COPY[language]['wallet_balance'].format(balance=f"{balance:,}"),
+            parse_mode='HTML',
+            reply_markup={'inline_keyboard': keyboard},
+        )
+        return
+    needed = max(0, final_price - balance)
+    keyboard = [[{'text': COPY[language]['wallet_topup_button'],
+                  'callback_data': 'wallet-topup-start'}], card_button]
+    api.send_message(
+        chat_id,
+        COPY[language]['wallet_insufficient'].format(
+            balance=f"{balance:,}", needed=f"{needed:,}"),
+        reply_markup={'inline_keyboard': keyboard},
+    )
+
+
+def _begin_renewal_card_payment(api: TelegramBotApi, bot: TelegramBotInstance,
+                                chat_id: int, user_id: int, language: str,
+                                ownership: ServiceOwnership, package: Package,
+                                state: TelegramBotUserState):
+    card = _purchase_card(bot, owner_id=ownership.reseller_id)
+    if card is None:
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    session_row = _service_session(bot.id, user_id)
+    session_row.service_ownership_id = ownership.id
+    session_row.action = f'renew_receipt:{package.id}:{card.id}'
+    state.step = 'awaiting_renewal_receipt'
+    db.session.flush()
+    final_price = _renewal_quoted_price(api, bot, user_id, ownership, package)
+    api.send_message(
+        chat_id,
+        COPY[language]['renewal_payment'].format(
+            amount=f"{final_price:,}", card=_format_bank_card(card)),
+        parse_mode='HTML',
+    )
+
+
+def _create_renewal_wallet_request(api: TelegramBotApi, bot: TelegramBotInstance,
+                                   chat_id: int, user_id: int, language: str,
+                                   ownership: ServiceOwnership, package: Package):
+    request_row, duplicate = _create_service_request(
+        bot.id, user_id, ownership, 'renewal', package=package, note=None, api=api,
+        payment_method='wallet',
+    )
+    if duplicate:
+        _send_renewal_request_state(api, chat_id, language, request_row, duplicate=True)
+        return
+    amount = int(request_row.amount or 0)
+    customer = db.session.get(CustomerAccount, request_row.customer_id)
+    if not customer or int(customer.credit or 0) < amount:
+        # Balance changed since the choice screen; never create an unpaid wallet request.
+        db.session.delete(request_row)
+        db.session.flush()
+        balance = int(customer.credit or 0) if customer else 0
+        api.send_message(
+            chat_id,
+            COPY[language]['wallet_insufficient'].format(
+                balance=f"{balance:,}", needed=f"{max(0, amount - balance):,}"),
+        )
+        return
+    customer.credit = int(customer.credit or 0) - amount
+    db.session.add(CustomerTransaction(
+        customer_id=customer.id,
+        type='renewal',
+        amount=-amount,
+        request_ref=f'renewal:{request_row.id}',
+    ))
+    db.session.flush()
+    _send_renewal_request_state(api, chat_id, language, request_row, duplicate=False)
+    _notify_service_request_admins(api, request_row)
+
+
+def _handle_renewal_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
+                            message: dict, sender: dict,
+                            state: TelegramBotUserState):
+    chat_id = int((message.get('chat') or {}).get('id'))
+    user_id = int(sender['id'])
+    if not _rate_ok(user_id, 'receipt', 10, 120):
+        return
+    language = state.language if state.language in COPY else bot.default_language
+    receipt = _receipt_from_message(message)
+    if receipt is None:
+        api.send_message(chat_id, COPY[language]['receipt_invalid'])
+        return
+    session_row = TelegramServiceSession.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id,
+    ).first()
+    parts = str(getattr(session_row, 'action', '') or '').split(':')
+    try:
+        package_id = int(parts[1])
+        card_id = int(parts[2])
+    except (IndexError, TypeError, ValueError):
+        package_id, card_id = 0, 0
+    _identity_row, ownership = _owned_service(
+        user_id, int(session_row.service_ownership_id or 0)) if session_row else (None, None)
+    package = db.session.get(Package, package_id) if package_id else None
+    card = db.session.get(BankCard, card_id) if card_id else None
+    allowed_package_ids = {row.id for row in _available_packages(ownership)} if ownership else set()
+    if (not session_row or parts[0] != 'renew_receipt' or not ownership or not package
+            or package.id not in allowed_package_ids or not card or not card.is_active):
+        if session_row:
+            session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    kind, file_id, unique_id = receipt
+    request_row, duplicate = _create_service_request(
+        bot.id, user_id, ownership, 'renewal', package=package, note=None, api=api,
+        bank_card_id=card.id,
+        receipt=(kind, file_id, unique_id),
+        duplicate_receipt=_receipt_is_duplicate(unique_id),
+        payment_method='card',
+    )
+    session_row.action = None
+    session_row.service_ownership_id = None
+    state.step = 'verified'
+    db.session.flush()
+    _send_renewal_request_state(api, chat_id, language, request_row, duplicate=duplicate)
+    if not duplicate:
+        _notify_service_request_admins(api, request_row)
 
 
 def _send_renewal_request_state(api: TelegramBotApi, chat_id: int, language: str,
@@ -1277,6 +1859,14 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
     if request_row.package:
         lines.append(f"Package: {request_row.package.name}")
         lines.append(f"Amount: {int(request_row.amount or 0):,} T")
+    if request_row.request_type == 'renewal':
+        payment_method = str(getattr(request_row, 'payment_method', '') or 'card')
+        lines.append(f"Payment: {'💰 Wallet' if payment_method == 'wallet' else '💳 Card'}")
+        if request_row.bank_card:
+            lines.append(
+                f"Card: {request_row.bank_card.label or request_row.bank_card.card_number or ''}")
+        if getattr(request_row, 'duplicate_receipt', False):
+            lines.append('⚠️ FRAUD WARNING: this receipt file was already used on another request!')
     if request_row.note:
         lines.append(f"Message: {request_row.note[:1000]}")
     if request_row.request_type == 'support':
@@ -1306,10 +1896,13 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
         }])
         keyboard = {"inline_keyboard": rows}
     else:
-        keyboard = {"inline_keyboard": [[
-            {"text": "✅ Approve & renew", "callback_data": f"admin-service:{request_row.id}:complete"},
-            {"text": "❌ Reject", "callback_data": f"admin-service:{request_row.id}:reject"},
-        ]]}
+        keyboard = {"inline_keyboard": [
+            [
+                {"text": "✅ Approve & renew", "callback_data": f"admin-service:{request_row.id}:complete"},
+                {"text": "❌ Reject", "callback_data": f"admin-service:{request_row.id}:reject"},
+            ],
+            [{"text": "✏️ Edit card", "callback_data": f"admin-edit-card:renewal:{request_row.id}"}],
+        ]}
     for admin in Admin.query.filter_by(enabled=True).all():
         role = str(admin.role or '').lower()
         is_global_admin = bool(admin.is_superadmin or role in ('admin', 'superadmin'))
@@ -1319,6 +1912,14 @@ def _notify_service_request_admins(api: TelegramBotApi, request_row: TelegramSer
         try:
             admin_chat_id = int(str(admin.telegram_id or '').strip())
             if admin_chat_id > 0:
+                if request_row.receipt_file_id:
+                    try:
+                        if request_row.receipt_file_kind == 'document':
+                            api.send_document(admin_chat_id, request_row.receipt_file_id)
+                        else:
+                            api.send_photo(admin_chat_id, request_row.receipt_file_id)
+                    except TelegramApiError:
+                        pass
                 api.send_message(admin_chat_id, "\n".join(lines), reply_markup=keyboard)
                 source_chat = int(((incoming_message or {}).get('chat') or {}).get('id') or 0)
                 source_message = int((incoming_message or {}).get('message_id') or 0)
@@ -1814,6 +2415,21 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
     request_row.status = 'completed' if parts[2] == 'complete' else 'rejected'
     request_row.reviewed_by_admin_id = reviewer.id
     request_row.reviewed_at = datetime.utcnow()
+    refunded_amount = 0
+    if (request_row.status == 'rejected' and request_row.request_type == 'renewal'
+            and str(getattr(request_row, 'payment_method', '') or 'card') == 'wallet'):
+        wallet_customer = db.session.get(CustomerAccount, request_row.customer_id)
+        refunded_amount = int(request_row.amount or 0)
+        if wallet_customer and refunded_amount > 0:
+            wallet_customer.credit = int(wallet_customer.credit or 0) + refunded_amount
+            db.session.add(CustomerTransaction(
+                customer_id=wallet_customer.id,
+                type='refund',
+                amount=refunded_amount,
+                request_ref=f'renewal:{request_row.id}',
+            ))
+        else:
+            refunded_amount = 0
     _log_audit(f"telegram_service.{parts[2]}", request_row, actor=reviewer)
     db.session.flush()
     api.answer_callback(callback_id, 'Saved')
@@ -1828,8 +2444,16 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
         language = str(getattr(customer, 'preferred_language', '') or 'fa')
         if language not in COPY:
             language = 'fa'
-        key = 'request_completed' if request_row.status == 'completed' else 'request_rejected'
-        api.send_message(identity.telegram_chat_id, COPY[language][key])
+        if request_row.status == 'completed':
+            text = COPY[language]['request_completed']
+        elif refunded_amount:
+            text = COPY[language]['request_rejected_refund'].format(
+                amount=f"{refunded_amount:,}",
+                balance=f"{int(customer.credit or 0):,}",
+            )
+        else:
+            text = COPY[language]['request_rejected']
+        api.send_message(identity.telegram_chat_id, text)
     return True
 
 
@@ -1994,13 +2618,17 @@ def _purchase_admins(request_row: TelegramPurchaseRequest):
 
 
 def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRequest):
+    payment_method = str(getattr(request_row, 'payment_method', '') or 'card')
     lines = [
         f"Telegram purchase request #{request_row.id}",
         f"Server: {request_row.server.name}",
         f"Package: {request_row.package.name}",
         f"Amount: {int(request_row.amount or 0):,} T",
+        f"Payment: {'💰 Wallet' if payment_method == 'wallet' else '💳 Card'}",
         f"Telegram user: {request_row.telegram_user_id}",
     ]
+    if request_row.bank_card:
+        lines.append(f"Card: {request_row.bank_card.label or request_row.bank_card.card_number or ''}")
     if getattr(request_row, 'duplicate_receipt', False):
         lines.append('⚠️ FRAUD WARNING: this receipt file was already used on another purchase request!')
     if getattr(request_row, 'discount_amount', None):
@@ -2013,10 +2641,15 @@ def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRe
     approve_label = (
         '🔄 Retry provisioning' if request_row.status == 'approved' else '✅ Approve payment & create service'
     )
-    keyboard = {'inline_keyboard': [[
-        {'text': approve_label, 'callback_data': f'admin-purchase:{request_row.id}:approve'},
-        {'text': '❌ Reject', 'callback_data': f'admin-purchase:{request_row.id}:reject'},
-    ]]}
+    keyboard = {'inline_keyboard': [
+        [
+            {'text': approve_label, 'callback_data': f'admin-purchase:{request_row.id}:approve'},
+            {'text': '❌ Reject', 'callback_data': f'admin-purchase:{request_row.id}:reject'},
+        ],
+        [{'text': '✏️ Edit card', 'callback_data': f'admin-edit-card:purchase:{request_row.id}'}],
+    ]}
+    has_receipt_media = bool(request_row.receipt_file_id) and not str(
+        request_row.receipt_file_id).startswith(('wallet:', 'trial:'))
     for admin in _purchase_admins(request_row):
         try:
             admin_chat_id = int(str(admin.telegram_id or '').strip())
@@ -2025,13 +2658,14 @@ def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRe
         except (TypeError, ValueError):
             continue
         admin_lines = list(lines)
-        try:
-            if request_row.receipt_kind == 'document':
-                api.send_document(admin_chat_id, request_row.receipt_file_id)
-            else:
-                api.send_photo(admin_chat_id, request_row.receipt_file_id)
-        except TelegramApiError:
-            admin_lines.append('Receipt media delivery failed; open the order from the panel.')
+        if has_receipt_media:
+            try:
+                if request_row.receipt_kind == 'document':
+                    api.send_document(admin_chat_id, request_row.receipt_file_id)
+                else:
+                    api.send_photo(admin_chat_id, request_row.receipt_file_id)
+            except TelegramApiError:
+                admin_lines.append('Receipt media delivery failed; open the order from the panel.')
         try:
             api.send_message(admin_chat_id, '\n'.join(admin_lines), reply_markup=keyboard)
         except TelegramApiError:
@@ -2459,6 +3093,7 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
         if callback_id:
             api.answer_callback(callback_id, 'Access denied')
         return True
+    refunded_amount = 0
     if parts[2] == 'reject':
         if request_row.status != 'pending':
             api.answer_callback(callback_id, 'Already reviewed')
@@ -2466,6 +3101,19 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
         request_row.status = 'rejected'
         request_row.reviewed_by_admin_id = reviewer.id
         request_row.reviewed_at = datetime.utcnow()
+        if str(getattr(request_row, 'payment_method', '') or 'card') == 'wallet':
+            wallet_customer = db.session.get(CustomerAccount, request_row.customer_id)
+            refunded_amount = int(request_row.amount or 0)
+            if wallet_customer and refunded_amount > 0:
+                wallet_customer.credit = int(wallet_customer.credit or 0) + refunded_amount
+                db.session.add(CustomerTransaction(
+                    customer_id=wallet_customer.id,
+                    type='refund',
+                    amount=refunded_amount,
+                    request_ref=f'purchase:{request_row.id}',
+                ))
+            else:
+                refunded_amount = 0
         _log_audit('telegram_purchase.reject', request_row, actor=reviewer)
         db.session.flush()
         api.answer_callback(callback_id, 'Rejected')
@@ -2527,8 +3175,14 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
             )
         else:
             key = 'purchase_approved' if request_row.status == 'approved' else 'purchase_rejected'
+            text = COPY[language][key]
+            if request_row.status == 'rejected' and refunded_amount:
+                text = COPY[language]['purchase_rejected_refund'].format(
+                    amount=f"{refunded_amount:,}",
+                    balance=f"{int(customer.credit or 0):,}",
+                )
             api.send_message(
-                identity.telegram_chat_id, COPY[language][key],
+                identity.telegram_chat_id, text,
                 reply_markup={'inline_keyboard': [[{
                     'text': COPY[language]['menu_orders'],
                     'callback_data': f'purchase-order:{request_row.id}',
@@ -2658,6 +3312,15 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     if data.startswith('admin-purchase:'):
         _handle_admin_purchase_callback(api, callback, data)
         return
+    if data.startswith('admin-topup:'):
+        _handle_admin_topup_callback(api, callback, data)
+        return
+    if data.startswith('admin-edit-card:'):
+        _handle_admin_edit_card_callback(api, callback, data)
+        return
+    if data.startswith('admin-set-card:'):
+        _handle_admin_set_card_callback(api, callback, data)
+        return
     if not _is_allowed(bot, user_id):
         api.answer_callback(callback_id)
         return
@@ -2696,6 +3359,24 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             _send_purchase_servers(api, bot, chat_id, language, user_id=user_id)
         else:
             _send_purchase_packages(api, bot, chat_id, language, None, user_id=user_id)
+        return
+    if data == 'purchase-pay-card':
+        session_row = _purchase_session(bot.id, user_id)
+        if str(session_row.action or '') not in ('awaiting_payment_method', 'awaiting_receipt'):
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['start_first'])
+            return
+        api.answer_callback(callback_id)
+        _send_purchase_card_payment(api, bot, chat_id, user_id, language, state)
+        return
+    if data == 'purchase-pay-wallet':
+        session_row = _purchase_session(bot.id, user_id)
+        if str(session_row.action or '') != 'awaiting_payment_method':
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['start_first'])
+            return
+        api.answer_callback(callback_id)
+        _create_wallet_purchase_request(api, bot, chat_id, user_id, language, state)
         return
     if data.startswith('purchase-order:'):
         try:
@@ -2874,13 +3555,69 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             api.answer_callback(callback_id)
             api.send_message(chat_id, COPY[language]['invalid_service'])
             return
-        request_row, duplicate = _create_service_request(
-            bot.id, user_id, ownership, 'renewal', package=package, note=None, api=api,
-        )
         api.answer_callback(callback_id)
-        _send_renewal_request_state(api, chat_id, language, request_row, duplicate=duplicate)
-        if not duplicate:
-            _notify_service_request_admins(api, request_row)
+        _send_renewal_payment_choice(
+            api, bot, chat_id, user_id, language, ownership, package, state,
+        )
+        return
+    if data.startswith('renew-pay-card:'):
+        parts = data.split(':')
+        try:
+            ownership_id = int(parts[1])
+            package_id = int(parts[2])
+        except (IndexError, TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        _identity_row, ownership = _owned_service(user_id, ownership_id)
+        package = db.session.get(Package, package_id)
+        allowed_package_ids = {row.id for row in _available_packages(ownership)} if ownership else set()
+        if not ownership or not package or package.id not in allowed_package_ids:
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['invalid_service'])
+            return
+        api.answer_callback(callback_id)
+        _begin_renewal_card_payment(
+            api, bot, chat_id, user_id, language, ownership, package, state,
+        )
+        return
+    if data.startswith('renew-pay-wallet:'):
+        parts = data.split(':')
+        try:
+            ownership_id = int(parts[1])
+            package_id = int(parts[2])
+        except (IndexError, TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        _identity_row, ownership = _owned_service(user_id, ownership_id)
+        package = db.session.get(Package, package_id)
+        allowed_package_ids = {row.id for row in _available_packages(ownership)} if ownership else set()
+        if not ownership or not package or package.id not in allowed_package_ids:
+            api.answer_callback(callback_id)
+            api.send_message(chat_id, COPY[language]['invalid_service'])
+            return
+        api.answer_callback(callback_id)
+        _create_renewal_wallet_request(api, bot, chat_id, user_id, language, ownership, package)
+        return
+    if data == 'wallet-topup-start':
+        if not _rate_ok(user_id, 'wallet-topup-start', 10, 60):
+            api.answer_callback(callback_id)
+            return
+        identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+        if not identity or not identity.customer_id or not identity.phone_verified_at:
+            api.answer_callback(callback_id)
+            _send_contact_prompt(api, chat_id, language)
+            return
+        session_row = _service_session(bot.id, user_id)
+        session_row.service_ownership_id = None
+        session_row.action = 'topup_amount'
+        state.step = 'awaiting_topup_amount'
+        db.session.flush()
+        api.answer_callback(callback_id)
+        api.send_message(chat_id, COPY[language]['wallet_topup_enter_amount'])
+        return
+    if data == 'wallet-history':
+        api.answer_callback(callback_id)
+        _send_wallet_history(api, chat_id, user_id, language)
         return
     if data.startswith('service-support:'):
         try:
@@ -3260,78 +3997,13 @@ def _handle_purchase_account_name(api: TelegramBotApi, bot: TelegramBotInstance,
     _begin_purchase_payment(api, bot, chat_id, user_id, language, server, package, state)
 
 
-def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
-                             message: dict, sender: dict,
-                             state: TelegramBotUserState):
-    chat_id = int((message.get('chat') or {}).get('id'))
-    user_id = int(sender['id'])
-    if not _rate_ok(user_id, 'receipt', 10, 120):
-        return
-    language = state.language if state.language in COPY else bot.default_language
-    receipt = _receipt_from_message(message)
-    if receipt is None:
-        api.send_message(chat_id, COPY[language]['receipt_invalid'])
-        return
-    session_row = TelegramPurchaseSession.query.filter_by(
-        bot_instance_id=bot.id, telegram_user_id=user_id, action='awaiting_receipt',
-    ).first()
-    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
-    if not session_row or not identity or not identity.customer_id:
-        state.step = 'verified'
-        db.session.flush()
-        api.send_message(chat_id, COPY[language]['start_first'])
-        return
-    server = db.session.get(Server, session_row.server_id)
-    package = db.session.get(Package, session_row.package_id)
-    card = db.session.get(BankCard, session_row.bank_card_id)
-    owner_id = _effective_owner_id(bot, user_id)
-    if (not server or not package or not card or not card.is_active
-            or not _purchase_card_accessible(card, bot, owner_id=owner_id)):
-        session_row.action = None
-        state.step = 'verified'
-        db.session.flush()
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
-        return
-    duplicate = TelegramPurchaseRequest.query.filter_by(
-        bot_instance_id=bot.id, telegram_user_id=user_id, status='pending',
-    ).first()
-    if duplicate:
-        session_row.action = None
-        state.step = 'verified'
-        db.session.flush()
-        api.send_message(chat_id, COPY[language]['purchase_duplicate'])
-        return
-    kind, file_id, unique_id = receipt
-    duplicate_receipt = False
-    if unique_id:
-        duplicate_receipt = TelegramPurchaseRequest.query.filter(
-            TelegramPurchaseRequest.receipt_file_unique_id == unique_id,
-            TelegramPurchaseRequest.status != 'rejected',
-        ).first() is not None
-    quoted = session_row.quoted_amount
-    frozen_discount = int(session_row.discount_amount or 0)
-    final_amount = int(quoted) if quoted is not None else _resolve_purchase_price(owner_id, package)
-    request_row = TelegramPurchaseRequest(
-        bot_instance_id=bot.id,
-        telegram_user_id=user_id,
-        customer_id=identity.customer_id,
-        server_id=server.id,
-        package_id=package.id,
-        bank_card_id=card.id,
-        amount=final_amount,
-        original_amount=final_amount + frozen_discount,
-        discount_amount=frozen_discount or None,
-        promo_code=(str(session_row.promo_code or '').strip().upper() or None),
-        receipt_file_id=file_id,
-        receipt_file_unique_id=unique_id or None,
-        receipt_kind=kind,
-        duplicate_receipt=duplicate_receipt,
-        source_chat_id=chat_id,
-        source_message_id=int(message.get('message_id') or 0),
-        status='pending',
-    )
-    db.session.add(request_row)
-    db.session.flush()
+def _finalize_purchase_request(api: TelegramBotApi, bot: TelegramBotInstance,
+                               chat_id: int, user_id: int, language: str,
+                               state: TelegramBotUserState,
+                               session_row: TelegramPurchaseSession,
+                               identity: TelegramIdentity,
+                               request_row: TelegramPurchaseRequest):
+    """Record promo usage, name/detail, reset the session, then notify both sides."""
     try:
         promo_discounts = json.loads(session_row.promo_discounts_json or '{}')
     except (TypeError, ValueError):
@@ -3380,6 +4052,143 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
         }]]},
     )
     _notify_purchase_admins(api, request_row)
+
+
+def _create_wallet_purchase_request(api: TelegramBotApi, bot: TelegramBotInstance,
+                                    chat_id: int, user_id: int, language: str,
+                                    state: TelegramBotUserState):
+    session_row = _purchase_session(bot.id, user_id)
+    identity, customer = _wallet_customer(user_id)
+    server = db.session.get(Server, session_row.server_id) if session_row.server_id else None
+    package = db.session.get(Package, session_row.package_id) if session_row.package_id else None
+    if str(session_row.action or '') != 'awaiting_payment_method' or not server or not package \
+            or not identity or not customer:
+        api.send_message(chat_id, COPY[language]['start_first'])
+        return
+    amount = int(session_row.quoted_amount or 0)
+    if int(customer.credit or 0) < amount:
+        api.send_message(
+            chat_id,
+            COPY[language]['wallet_insufficient'].format(
+                balance=f"{int(customer.credit or 0):,}",
+                needed=f"{max(0, amount - int(customer.credit or 0)):,}"),
+        )
+        return
+    duplicate = TelegramPurchaseRequest.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id, status='pending',
+    ).first()
+    if duplicate:
+        session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['purchase_duplicate'])
+        return
+    frozen_discount = int(session_row.discount_amount or 0)
+    request_row = TelegramPurchaseRequest(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        customer_id=identity.customer_id,
+        server_id=server.id,
+        package_id=package.id,
+        bank_card_id=None,
+        amount=amount,
+        original_amount=amount + frozen_discount,
+        discount_amount=frozen_discount or None,
+        promo_code=(str(session_row.promo_code or '').strip().upper() or None),
+        receipt_file_id=f'wallet:{user_id}',
+        receipt_file_unique_id=None,
+        receipt_kind='photo',
+        duplicate_receipt=False,
+        payment_method='wallet',
+        source_chat_id=chat_id,
+        source_message_id=0,
+        status='pending',
+    )
+    db.session.add(request_row)
+    db.session.flush()
+    customer.credit = int(customer.credit or 0) - amount
+    db.session.add(CustomerTransaction(
+        customer_id=customer.id,
+        type='purchase',
+        amount=-amount,
+        request_ref=f'purchase:{request_row.id}',
+    ))
+    _finalize_purchase_request(
+        api, bot, chat_id, user_id, language, state, session_row, identity, request_row,
+    )
+
+
+def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
+                             message: dict, sender: dict,
+                             state: TelegramBotUserState):
+    chat_id = int((message.get('chat') or {}).get('id'))
+    user_id = int(sender['id'])
+    if not _rate_ok(user_id, 'receipt', 10, 120):
+        return
+    language = state.language if state.language in COPY else bot.default_language
+    receipt = _receipt_from_message(message)
+    if receipt is None:
+        api.send_message(chat_id, COPY[language]['receipt_invalid'])
+        return
+    session_row = TelegramPurchaseSession.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id, action='awaiting_receipt',
+    ).first()
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not session_row or not identity or not identity.customer_id:
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['start_first'])
+        return
+    server = db.session.get(Server, session_row.server_id)
+    package = db.session.get(Package, session_row.package_id)
+    card = db.session.get(BankCard, session_row.bank_card_id)
+    owner_id = _effective_owner_id(bot, user_id)
+    if (not server or not package or not card or not card.is_active
+            or not _purchase_card_accessible(card, bot, owner_id=owner_id)):
+        session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    duplicate = TelegramPurchaseRequest.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id, status='pending',
+    ).first()
+    if duplicate:
+        session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['purchase_duplicate'])
+        return
+    kind, file_id, unique_id = receipt
+    duplicate_receipt = _receipt_is_duplicate(unique_id)
+    quoted = session_row.quoted_amount
+    frozen_discount = int(session_row.discount_amount or 0)
+    final_amount = int(quoted) if quoted is not None else _resolve_purchase_price(owner_id, package)
+    request_row = TelegramPurchaseRequest(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        customer_id=identity.customer_id,
+        server_id=server.id,
+        package_id=package.id,
+        bank_card_id=card.id,
+        amount=final_amount,
+        original_amount=final_amount + frozen_discount,
+        discount_amount=frozen_discount or None,
+        promo_code=(str(session_row.promo_code or '').strip().upper() or None),
+        receipt_file_id=file_id,
+        receipt_file_unique_id=unique_id or None,
+        receipt_kind=kind,
+        duplicate_receipt=duplicate_receipt,
+        payment_method='card',
+        source_chat_id=chat_id,
+        source_message_id=int(message.get('message_id') or 0),
+        status='pending',
+    )
+    db.session.add(request_row)
+    db.session.flush()
+    _finalize_purchase_request(
+        api, bot, chat_id, user_id, language, state, session_row, identity, request_row,
+    )
 
 
 def _support_request_for_group_message(bot: TelegramBotInstance, message: dict):
@@ -3556,6 +4365,9 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     elif text in {COPY["fa"]["menu_orders"], COPY["en"]["menu_orders"]}:
         state.step = 'verified'
         _send_purchase_orders(api, bot, chat_id, user_id, state.language)
+    elif text in {COPY["fa"]["menu_wallet"], COPY["en"]["menu_wallet"]}:
+        state.step = 'verified'
+        _send_wallet_menu(api, bot, chat_id, user_id, state.language)
     elif text in {COPY["fa"]["menu_add_service"], COPY["en"]["menu_add_service"]}:
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
@@ -3586,6 +4398,12 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         _handle_promo_code_entry(api, bot, message, sender, state, text)
     elif state.step == "awaiting_purchase_receipt":
         _handle_purchase_receipt(api, bot, message, sender, state)
+    elif state.step == "awaiting_topup_amount":
+        _handle_wallet_topup_amount(api, bot, message, sender, state, text)
+    elif state.step == "awaiting_topup_receipt":
+        _handle_wallet_topup_receipt(api, bot, message, sender, state)
+    elif state.step == "awaiting_renewal_receipt":
+        _handle_renewal_receipt(api, bot, message, sender, state)
     elif state.step == "share_contact":
         _send_contact_prompt(api, chat_id, state.language)
     else:
