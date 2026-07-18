@@ -2,7 +2,7 @@ import io
 import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from sqlalchemy.exc import IntegrityError
 from cryptography.fernet import Fernet
@@ -27,6 +27,7 @@ from app import (  # noqa: E402
     Server,
     ServiceDelegation,
     ServiceOwnership,
+    SubAppConfig,
     TelegramIdentity,
     TelegramOwnershipSession,
     TelegramPurchaseRequest,
@@ -87,6 +88,7 @@ from telegram_bot_worker import (  # noqa: E402
     _extract_subscription_token,
     _purchase_provisioning_inbound_ids,
     _render_purchase_account_name,
+    _service_expiry,
     process_update,
 )
 from telegram_bot_runtime import COPY  # noqa: E402
@@ -191,6 +193,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         TelegramIdentity.query.delete()
         ServiceDelegation.query.delete()
         ServiceOwnership.query.delete()
+        SubAppConfig.query.delete()
         CustomerAccount.query.delete()
         Package.query.delete()
         BankCard.query.delete()
@@ -962,6 +965,92 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         keyboard = api.messages[-1]['reply_markup']
         self.assertTrue(keyboard['is_persistent'])
         self.assertEqual(keyboard['keyboard'][0][0]['text'], COPY['en']['menu_services'])
+        self.assertTrue(any(
+            button['text'] == COPY['en']['menu_tutorial']
+            for row in keyboard['keyboard'] for button in row
+        ))
+
+    def test_telegram_tutorial_uses_website_apps_recommendation_and_links(self):
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Test', enabled=True, test_mode=False,
+            enabled_languages_json='["fa","en"]', default_language='fa',
+        )
+        regular = SubAppConfig(
+            app_code='plain-android', name='Plain Client', os_type='android',
+            is_enabled=True, display_order=1,
+        )
+        recommended = SubAppConfig(
+            app_code='recommended-android', name='Recommended Client', os_type='android',
+            is_enabled=True, is_recommended=True, display_order=2,
+            title_fa='راهنمای برنامه پیشنهادی',
+            description_fa='برنامه را نصب کنید.\nلینک را اضافه کنید.',
+            download_link='https://downloads.example/client.apk',
+            store_link='https://play.google.com/store/apps/details?id=example.client',
+            tutorial_link='https://video.example/tutorial',
+        )
+        db.session.add_all([bot, regular, recommended])
+        db.session.commit()
+        api = FakeTelegramApi()
+
+        process_update(api, bot, {'update_id': 801, 'message': {
+            'message_id': 1, 'text': COPY['fa']['menu_tutorial'],
+            'from': {'id': 70801, 'first_name': 'Owner'},
+            'chat': {'id': 70801, 'type': 'private'},
+        }})
+        device_buttons = api.messages[-1]['reply_markup']['inline_keyboard']
+        self.assertEqual(
+            [row[0]['callback_data'] for row in device_buttons],
+            ['tutorial-os:android', 'tutorial-os:ios', 'tutorial-os:windows'],
+        )
+
+        process_update(api, bot, {'update_id': 802, 'callback_query': {
+            'id': 'tutorial-android', 'data': 'tutorial-os:android',
+            'from': {'id': 70801},
+            'message': {'chat': {'id': 70801, 'type': 'private'}},
+        }})
+        app_buttons = api.messages[-1]['reply_markup']['inline_keyboard']
+        recommended_button = next(
+            row[0] for row in app_buttons
+            if row[0].get('callback_data') == f'tutorial-app:{recommended.id}'
+        )
+        self.assertTrue(recommended_button['text'].startswith('⭐'))
+
+        process_update(api, bot, {'update_id': 803, 'callback_query': {
+            'id': 'tutorial-app', 'data': f'tutorial-app:{recommended.id}',
+            'from': {'id': 70801},
+            'message': {'chat': {'id': 70801, 'type': 'private'}},
+        }})
+        detail = api.messages[-1]
+        self.assertIn('راهنمای برنامه پیشنهادی', detail['text'])
+        self.assertIn('لینک را اضافه کنید.', detail['text'])
+        urls = {
+            button['text']: button['url']
+            for row in detail['reply_markup']['inline_keyboard'] for button in row
+            if button.get('url')
+        }
+        self.assertEqual(urls[COPY['fa']['tutorial_download']], recommended.download_link)
+        self.assertEqual(urls[COPY['fa']['tutorial_google_play']], recommended.store_link)
+        self.assertEqual(urls[COPY['fa']['tutorial_video']], recommended.tutorial_link)
+
+    def test_telegram_service_expiry_follows_global_site_calendar(self):
+        expiry = datetime(2027, 7, 19, 12, 0, tzinfo=timezone.utc)
+        expiry_ms = int(expiry.timestamp() * 1000)
+        client = {'expiryTimestamp': expiry_ms, 'raw_client': {}}
+        db.session.add(SystemSetting(key=GENERAL_TIMEZONE_SETTING_KEY, value='Asia/Tehran'))
+        calendar = SystemSetting(key=GENERAL_CALENDAR_SETTING_KEY, value='jalali')
+        db.session.add(calendar)
+        db.session.flush()
+
+        expected_jalali = format_app_datetime(expiry).split(' ', 1)[0].translate(
+            str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹')
+        )
+        self.assertIn(expected_jalali, _service_expiry(client, 'fa'))
+        self.assertNotIn('2027/07/19', _service_expiry(client, 'fa'))
+
+        calendar.value = 'gregorian'
+        db.session.flush()
+        expected_gregorian = format_app_datetime(expiry).split(' ', 1)[0]
+        self.assertIn(expected_gregorian, _service_expiry(client, 'en'))
 
     def test_telegram_owned_service_drilldown_link_renewal_and_support(self):
         previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')

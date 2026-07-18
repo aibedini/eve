@@ -13,7 +13,6 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote, urlparse
-from zoneinfo import ZoneInfo
 
 from flask import session as flask_session
 
@@ -31,6 +30,7 @@ from app import (  # noqa: E402
     Package,
     Server,
     ServiceOwnership,
+    SubAppConfig,
     TelegramBotInstance,
     TelegramBotRuntime,
     TelegramBotTestUser,
@@ -65,6 +65,7 @@ from app import (  # noqa: E402
     calculate_reseller_price,
     db,
     discover_phone_ownership_claim,
+    format_app_datetime,
     get_xui_session,
     load_snapshot_from_redis,
     normalize_iran_mobile,
@@ -461,6 +462,14 @@ def _format_traffic(value) -> str:
     return f"{size / 1024:.1f} KB"
 
 
+def _localized_app_date(value: datetime, language: str) -> str:
+    formatted = format_app_datetime(value) or ''
+    date_text = formatted.split(' ', 1)[0]
+    if language == 'fa':
+        return date_text.translate(str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹'))
+    return date_text
+
+
 def _service_expiry(client: dict | None, language: str) -> str:
     if not client:
         return COPY[language]["service_unavailable"]
@@ -476,11 +485,119 @@ def _service_expiry(client: dict | None, language: str) -> str:
         return f"{days} " + ("روز پس از اولین اتصال" if language == 'fa' else "days after first connection")
     expiry = datetime.fromtimestamp(expiry_ts / 1000, tz=timezone.utc)
     remaining_days = int((expiry - datetime.now(timezone.utc)).total_seconds() // 86400)
-    date_text = expiry.astimezone(ZoneInfo('Asia/Tehran')).strftime('%Y-%m-%d')
+    date_text = _localized_app_date(expiry, language)
     if remaining_days < 0:
         return f"{date_text} ({COPY[language]['status_expired']})"
-    suffix = f"{remaining_days} روز" if language == 'fa' else f"{remaining_days} days"
+    days_text = str(remaining_days)
+    if language == 'fa':
+        days_text = days_text.translate(str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹'))
+    suffix = f"{days_text} روز" if language == 'fa' else f"{days_text} days"
     return f"{date_text} ({suffix})"
+
+
+_TUTORIAL_OS_TYPES = ('android', 'ios', 'windows')
+
+
+def _tutorial_device_keyboard(language: str):
+    lang = language if language in COPY else 'fa'
+    return {'inline_keyboard': [[{
+        'text': COPY[lang][f'tutorial_device_{os_type}'],
+        'callback_data': f'tutorial-os:{os_type}',
+    }] for os_type in _TUTORIAL_OS_TYPES]}
+
+
+def _send_tutorial_devices(api: TelegramBotApi, chat_id: int, language: str):
+    lang = language if language in COPY else 'fa'
+    api.send_message(
+        chat_id, COPY[lang]['tutorial_choose_device'],
+        reply_markup=_tutorial_device_keyboard(lang),
+    )
+
+
+def _tutorial_apps(os_type: str):
+    if os_type not in _TUTORIAL_OS_TYPES:
+        return []
+    return SubAppConfig.query.filter_by(
+        os_type=os_type, is_enabled=True,
+    ).order_by(SubAppConfig.display_order.asc(), SubAppConfig.id.asc()).all()
+
+
+def _send_tutorial_apps(api: TelegramBotApi, chat_id: int, language: str, os_type: str):
+    lang = language if language in COPY else 'fa'
+    apps = _tutorial_apps(os_type)
+    if not apps:
+        api.send_message(
+            chat_id, COPY[lang]['tutorial_no_apps'],
+            reply_markup=_tutorial_device_keyboard(lang),
+        )
+        return
+    keyboard = []
+    recommended = next((item for item in apps if item.is_recommended), apps[0])
+    for item in apps:
+        marker = '⭐ ' if item.id == recommended.id else ''
+        keyboard.append([{
+            'text': f'{marker}{item.name or item.app_code}'[:60],
+            'callback_data': f'tutorial-app:{item.id}',
+        }])
+    keyboard.append([{
+        'text': COPY[lang]['tutorial_back_devices'],
+        'callback_data': 'tutorial-devices',
+    }])
+    api.send_message(
+        chat_id, COPY[lang]['tutorial_choose_app'],
+        reply_markup={'inline_keyboard': keyboard},
+    )
+
+
+def _tutorial_url(raw_url: str | None) -> str | None:
+    value = str(raw_url or '').strip()
+    if not value:
+        return None
+    if value.startswith(('https://', 'http://')):
+        return value
+    if value.startswith('/'):
+        base_url = _public_base_url().rstrip('/')
+        return f'{base_url}{value}' if base_url else None
+    return None
+
+
+def _send_tutorial_app(api: TelegramBotApi, chat_id: int, language: str, app_id: int):
+    lang = language if language in COPY else 'fa'
+    item = db.session.get(SubAppConfig, app_id)
+    if not item or not item.is_enabled or item.os_type not in _TUTORIAL_OS_TYPES:
+        api.send_message(
+            chat_id, COPY[lang]['tutorial_app_unavailable'],
+            reply_markup=_tutorial_device_keyboard(lang),
+        )
+        return
+    title = (item.title_fa if lang == 'fa' else item.title_en) or item.name or item.app_code
+    description = (item.description_fa if lang == 'fa' else item.description_en) or ''
+    lines = [f'<b>{html.escape(str(title))}</b>']
+    if item.is_recommended:
+        lines.append(COPY[lang]['tutorial_recommended'])
+    if description.strip():
+        lines.extend(['', html.escape(description.strip())])
+    keyboard = []
+    download_url = _tutorial_url(item.download_link)
+    store_url = _tutorial_url(item.store_link)
+    video_url = _tutorial_url(item.tutorial_link)
+    if download_url:
+        keyboard.append([{'text': COPY[lang]['tutorial_download'], 'url': download_url}])
+    if store_url:
+        store_key = 'tutorial_google_play' if item.os_type == 'android' else (
+            'tutorial_app_store' if item.os_type == 'ios' else 'tutorial_store'
+        )
+        keyboard.append([{'text': COPY[lang][store_key], 'url': store_url}])
+    if video_url:
+        keyboard.append([{'text': COPY[lang]['tutorial_video'], 'url': video_url}])
+    keyboard.append([{
+        'text': COPY[lang]['tutorial_back_devices'],
+        'callback_data': f'tutorial-os:{item.os_type}',
+    }])
+    api.send_message(
+        chat_id, '\n'.join(lines), parse_mode='HTML',
+        reply_markup={'inline_keyboard': keyboard},
+    )
 
 
 def _service_status(client: dict | None, language: str) -> str:
@@ -3329,6 +3446,24 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     if data == 'noop':
         api.answer_callback(callback_id)
         return
+    if data == 'tutorial-devices':
+        api.answer_callback(callback_id)
+        _send_tutorial_devices(api, chat_id, language)
+        return
+    if data.startswith('tutorial-os:'):
+        os_type = data.partition(':')[2]
+        api.answer_callback(callback_id)
+        _send_tutorial_apps(api, chat_id, language, os_type)
+        return
+    if data.startswith('tutorial-app:'):
+        try:
+            app_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        api.answer_callback(callback_id)
+        _send_tutorial_app(api, chat_id, language, app_id)
+        return
     if data == 'service-list':
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         api.answer_callback(callback_id)
@@ -4368,6 +4503,9 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     elif text in {COPY["fa"]["menu_wallet"], COPY["en"]["menu_wallet"]}:
         state.step = 'verified'
         _send_wallet_menu(api, bot, chat_id, user_id, state.language)
+    elif text in {COPY["fa"]["menu_tutorial"], COPY["en"]["menu_tutorial"]}:
+        state.step = 'verified'
+        _send_tutorial_devices(api, chat_id, state.language)
     elif text in {COPY["fa"]["menu_add_service"], COPY["en"]["menu_add_service"]}:
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
