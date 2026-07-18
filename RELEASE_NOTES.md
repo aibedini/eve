@@ -1,4 +1,26 @@
-# Eve - Xui Manager v2.4.0
+# Eve - Xui Manager v2.5.0
+
+## [2.5.0] - 2026-07-18
+
+A major **Telegram sales & support** release: reseller-owned bots with full lifecycle, customer notifications, controlled trials, fraud/audit controls, and a rule-based **promo engine**.
+
+English:
+- 🤖 **Reseller bots** — one dedicated bot per reseller with self-service settings page, token verification (getMe + duplicate-token rejection), branded messages, per-bot health badges, enable/disable/restart, and safe soft-archive/restore lifecycle
+- 🎯 **Reseller scoping** — packages, bank cards (owner + shared lists), servers, and reseller pricing applied throughout the bot purchase/renewal flows; central-bot fallback scopes customers by their service ownership
+- 🎁 **Promo engine** — percent/fixed codes and automatic promos with min-amount, first-purchase, 30/90-day purchase counts, referral count, channel-join (once ever), package/bot scope, time windows, usage caps, stacking + priority, and reseller-pricing opt-out; amounts frozen at payment time
+- 🔗 **Referrals** — personal invite links (`/start ref_`), qualified on phone verification, feeding promo conditions
+- 🆓 **Controlled trial & emergency access** — trial packages (one per phone per bot, durable ledger) and one-shot emergency renewals with cooldown, both policy-driven per bot
+- 🔔 **Customer notifications** — near-expiry and low-volume Telegram alerts via the right bot, plus renewal confirmations; shared cross-channel cooldowns
+- 🛡️ **Audit, rate-limit & fraud controls** — durable `AuditLog` for settings/lifecycle/review actions, API + in-bot rate limiting, duplicate-receipt fraud flagging, and per-bot operational reporting on the operations page
+
+فارسی:
+- 🤖 **بات‌های نماینده** — یک بات اختصاصی per نماینده با صفحه‌ی سلف‌سرویس، تأیید توکن (getMe + جلوگیری از توکن تکراری)، پیام‌های برندشده، بج سلامت per بات، enable/disable/restart و آرشیو/بازیابی امن
+- 🎯 **اسکوپ نماینده** — پکیج، کارت بانکی (مالک + لیست اشتراکی)، سرور و قیمت نماینده در کل فلو خرید/تمدید؛ fallback بات مرکزی بر اساس مالکیت سرویس مشتری
+- 🎁 **موتور تخفیف** — کد و پروموی خودکار درصدی/مبلغی با حداقل مبلغ، اولین خرید، تعداد خرید ۳۰/۹۰ روزه، رفرال، جوین کانال (فقط یک‌بار)، اسکوپ پکیج/بات، پنجره‌ی زمانی، سقف مصرف، stacking و اولویت؛ فریز مبلغ هنگام پرداخت
+- 🔗 **رفرال** — لینک دعوت شخصی (`/start ref_`)، qualify با تأیید شماره، مبنای شرط تخفیف
+- 🆓 **تریال کنترل‌شده و دسترسی اضطراری** — پکیج تست (یک‌بار per شماره per بات با لجر دوام‌دار) و تمدید اضطراری یک‌باره با cooldown، هر دو پالیسی‌محور per بات
+- 🔔 **اعلان‌های مشتری** — هشدار نزدیک-انقضا و حجم کم در تلگرام با بات درست، به‌علاوه‌ی تأیید تمدید؛ cooldown مشترک بین کانال‌ها
+- 🛡️ **Audit و کنترل تقلب** — `AuditLog` دوام‌دار برای اکشن‌ها، rate-limit روی API و داخل بات، تشخیص رسید تکراری، و گزارش عملیاتی per-bot
 
 ## [2.4.0] - 2026-06-26
 

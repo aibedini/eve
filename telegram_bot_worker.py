@@ -44,9 +44,15 @@ from app import (  # noqa: E402
     TelegramPurchasePolicy,
     TelegramPurchaseServerRule,
     TelegramPurchaseSession,
+    TelegramPromo,
+    TelegramPromoUse,
+    TelegramReferral,
     TelegramServiceRequest,
     TelegramServiceRequestMessage,
     TelegramServiceSession,
+    TelegramTrialGrant,
+    _log_audit,
+    _reseller_can_create_free,
     _telegram_bot_api_client,
     _decrypt_telegram_secret,
     _public_base_url,
@@ -54,6 +60,7 @@ from app import (  # noqa: E402
     _telegram_customer_inbounds,
     add_client,
     app,
+    calculate_reseller_price,
     db,
     discover_phone_ownership_claim,
     get_xui_session,
@@ -124,6 +131,24 @@ def _claim_lease(bot_id: int) -> TelegramBotRuntime | None:
     return row
 
 
+_RATE_BUCKETS: dict = {}
+_RATE_BUCKETS_LOCK = threading.Lock()
+
+
+def _rate_ok(user_id: int, action: str, limit: int, window_sec: int) -> bool:
+    """In-process sliding-window rate limit per telegram user and action."""
+    now = time.monotonic()
+    key = (int(user_id), action)
+    with _RATE_BUCKETS_LOCK:
+        hits = [ts for ts in _RATE_BUCKETS.get(key, []) if now - ts < window_sec]
+        if len(hits) >= limit:
+            _RATE_BUCKETS[key] = hits
+            return False
+        hits.append(now)
+        _RATE_BUCKETS[key] = hits
+    return True
+
+
 def _state(bot: TelegramBotInstance, user_id: int) -> TelegramBotUserState:
     row = TelegramBotUserState.query.filter_by(
         bot_instance_id=bot.id, telegram_user_id=user_id,
@@ -168,11 +193,187 @@ def _send_contact_prompt(api: TelegramBotApi, chat_id: int, language: str):
     )
 
 
-def _send_main_menu(api: TelegramBotApi, chat_id: int, language: str):
+def _brand_text(bot: TelegramBotInstance, language: str) -> str:
+    """Prefix shown before customer-facing copy on reseller-owned bots."""
+    if not bot or str(getattr(bot, 'owner_type', 'system') or 'system') == 'system':
+        return ''
+    name = str(getattr(bot, 'display_name', '') or '').strip()
+    return f"{name}\n\n" if name else ''
+
+
+def _effective_owner_id(bot: TelegramBotInstance, telegram_user_id: int | None):
+    """Reseller scope for a purchase on this bot.
+
+    The bot's own owner wins; on the central bot, fall back to the telegram
+    user's latest active ownership that is bound to a reseller. None keeps the
+    legacy global behavior.
+    """
+    if bot and bot.owner_admin_id:
+        return int(bot.owner_admin_id)
+    if not telegram_user_id:
+        return None
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=int(telegram_user_id)).first()
+    if not identity or not identity.customer_id:
+        return None
+    ownership = ServiceOwnership.query.filter(
+        ServiceOwnership.customer_id == identity.customer_id,
+        ServiceOwnership.reseller_id.isnot(None),
+        ServiceOwnership.revoked_at.is_(None),
+    ).order_by(ServiceOwnership.id.desc()).first()
+    return int(ownership.reseller_id) if ownership else None
+
+
+_CHANNEL_MEMBER_CACHE: dict = {}
+
+
+def _channel_member(api: TelegramBotApi, chat_id: int, user_id: int) -> bool:
+    """Live getChatMember check with a short in-memory cache; errors = not a member."""
+    key = (int(chat_id), int(user_id))
+    now = time.monotonic()
+    cached = _CHANNEL_MEMBER_CACHE.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+    ok = False
+    try:
+        result, _route = api.call('getChatMember', {
+            'chat_id': int(chat_id), 'user_id': int(user_id),
+        })
+        ok = str((result or {}).get('status') or '') in ('member', 'administrator', 'creator')
+    except Exception:
+        ok = False
+    _CHANNEL_MEMBER_CACHE[key] = (now + 300, ok)
+    return ok
+
+
+def _promo_discount(promo: TelegramPromo, amount: int) -> int:
+    if promo.kind == 'percent':
+        discount = int(round(int(amount) * float(promo.value or 0) / 100.0))
+        if promo.max_discount_amount is not None:
+            discount = min(discount, int(promo.max_discount_amount))
+    else:
+        discount = int(round(float(promo.value or 0)))
+    return max(0, min(discount, int(amount)))
+
+
+def _evaluate_promos(bot: TelegramBotInstance, user_id: int, package: Package,
+                     base_amount, applies_to: str, code: str | None = None,
+                     api: TelegramBotApi | None = None, owner_id=None):
+    """Evaluate automatic and code promos for this purchase/renewal.
+
+    Returns (final_amount, total_discount, applied_promos, error_key).
+    """
+    base = max(0, int(base_amount or 0))
+    now = datetime.utcnow()
+    code_norm = str(code or '').strip().upper()
+    owner = db.session.get(Admin, owner_id) if owner_id else None
+    reseller_pricing = bool(owner and str(getattr(owner, 'role', '') or '').lower() == 'reseller')
+    candidates = []
+    for promo in TelegramPromo.query.filter_by(enabled=True).all():
+        if promo.code:
+            if not code_norm or str(promo.code).upper() != code_norm:
+                continue
+        if promo.bot_instance_id and int(promo.bot_instance_id) != int(bot.id):
+            continue
+        if promo.package_id and int(promo.package_id) != int(package.id):
+            continue
+        if (promo.applies_to or 'both') not in ('both', applies_to):
+            continue
+        if promo.starts_at and promo.starts_at > now:
+            continue
+        if promo.ends_at and promo.ends_at < now:
+            continue
+        if promo.min_amount and base < int(promo.min_amount):
+            continue
+        if not promo.apply_on_reseller_pricing and reseller_pricing:
+            continue
+        candidates.append(promo)
+    if code_norm and not any(promo.code for promo in candidates):
+        return base, 0, [], 'invalid_code'
+
+    eligible = []
+    for promo in candidates:
+        if promo.first_purchase_only and TelegramPurchaseRequest.query.filter_by(
+                telegram_user_id=int(user_id), status='completed').count():
+            continue
+        if promo.min_purchases_30d:
+            count = TelegramPurchaseRequest.query.filter(
+                TelegramPurchaseRequest.telegram_user_id == int(user_id),
+                TelegramPurchaseRequest.status == 'completed',
+                TelegramPurchaseRequest.created_at >= now - timedelta(days=30),
+            ).count()
+            if count < int(promo.min_purchases_30d):
+                continue
+        if promo.min_purchases_90d:
+            count = TelegramPurchaseRequest.query.filter(
+                TelegramPurchaseRequest.telegram_user_id == int(user_id),
+                TelegramPurchaseRequest.status == 'completed',
+                TelegramPurchaseRequest.created_at >= now - timedelta(days=90),
+            ).count()
+            if count < int(promo.min_purchases_90d):
+                continue
+        if promo.min_referrals:
+            count = TelegramReferral.query.filter(
+                TelegramReferral.referrer_telegram_user_id == int(user_id),
+                TelegramReferral.qualified_at.isnot(None),
+            ).count()
+            if count < int(promo.min_referrals):
+                continue
+        if promo.requires_channel_chat_id:
+            # Channel promos are honored exactly once per user per promo, even
+            # after a leave/re-join cycle.
+            if TelegramPromoUse.query.filter_by(
+                    promo_id=promo.id, telegram_user_id=int(user_id)).first():
+                continue
+            if api is None or not _channel_member(
+                    api, int(promo.requires_channel_chat_id), int(user_id)):
+                continue
+        if promo.max_uses_total is not None and TelegramPromoUse.query.filter_by(
+                promo_id=promo.id).count() >= int(promo.max_uses_total):
+            continue
+        if promo.max_uses_per_user is not None and TelegramPromoUse.query.filter_by(
+                promo_id=promo.id, telegram_user_id=int(user_id),
+        ).count() >= int(promo.max_uses_per_user):
+            continue
+        eligible.append(promo)
+
+    non_stackable = [promo for promo in eligible if not promo.stackable]
+    stackable = sorted(
+        (promo for promo in eligible if promo.stackable),
+        key=lambda promo: -int(promo.priority or 0),
+    )
+    ordered = []
+    if non_stackable:
+        ordered.append(max(
+            non_stackable,
+            key=lambda promo: (_promo_discount(promo, base), int(promo.priority or 0)),
+        ))
+    ordered.extend(stackable)
+
+    amount = base
+    total_discount = 0
+    applied = []
+    for promo in ordered:
+        discount = _promo_discount(promo, amount)
+        if discount <= 0:
+            continue
+        amount -= discount
+        total_discount += discount
+        applied.append((promo, discount))
+    return max(0, amount), total_discount, applied, None
+
+
+def _scoped_owner_id(bot: TelegramBotInstance, owner_id=None):
+    if owner_id is not None:
+        return int(owner_id)
+    return int(bot.owner_admin_id) if bot and bot.owner_admin_id else None
+
+
+def _send_main_menu(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int, language: str):
     lang = language if language in COPY else "fa"
+    show_trial = _purchase_policy_values(bot)['trial_enabled']
     api.send_message(
-        chat_id, COPY[lang]["welcome_menu"],
-        reply_markup=main_menu_keyboard(lang),
+        chat_id, _brand_text(bot, lang) + COPY[lang]["welcome_menu"],
+        reply_markup=main_menu_keyboard(lang, show_trial=show_trial),
     )
 
 
@@ -309,8 +510,8 @@ def _service_keyboard(ownership: ServiceOwnership, language: str):
     ]}
 
 
-def _send_service_details(api: TelegramBotApi, chat_id: int, language: str,
-                          ownership: ServiceOwnership):
+def _send_service_details(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
+                          language: str, ownership: ServiceOwnership):
     lang = language if language in COPY else 'fa'
     client = _cached_owned_service(ownership)
     server_name = getattr(ownership.server, 'name', '') or f'#{ownership.server_id}'
@@ -334,9 +535,20 @@ def _send_service_details(api: TelegramBotApi, chat_id: int, language: str,
         f"{COPY[lang]['service_remaining']}: {remaining_text}",
         f"{COPY[lang]['service_updated']}: {freshness}",
     ])
+    keyboard = _service_keyboard(ownership, lang)
+    if client:
+        status_key = str(client.get('service_state') or '').strip().lower()
+        if not status_key:
+            status_key = 'active' if client.get('enable', True) else 'inactive'
+        if (status_key in ('expired', 'volume_ended')
+                and _purchase_policy_values(bot)['emergency_enabled']):
+            keyboard['inline_keyboard'].insert(0, [{
+                'text': COPY[lang]['emergency_button'],
+                'callback_data': f'service-emergency:{ownership.id}',
+            }])
     api.send_message(
         chat_id, text, parse_mode='HTML',
-        reply_markup=_service_keyboard(ownership, lang),
+        reply_markup=keyboard,
     )
 
 
@@ -356,6 +568,8 @@ def _available_packages(ownership: ServiceOwnership):
     ).all()
     visible = []
     for package in packages:
+        if getattr(package, 'is_trial', False):
+            continue
         scope = str(package.scope or 'global').lower()
         if scope == 'global':
             visible.append(package)
@@ -364,9 +578,19 @@ def _available_packages(ownership: ServiceOwnership):
             assigned = {int(value) for value in json.loads(package.assigned_reseller_ids or '[]')}
         except (TypeError, ValueError):
             assigned = set()
-        if ownership.reseller_id and int(ownership.reseller_id) in assigned:
+        if ownership.reseller_id and (
+            int(ownership.reseller_id) in assigned or
+            (scope == 'personal' and int(package.created_by or 0) == int(ownership.reseller_id))
+        ):
             visible.append(package)
     return visible[:20]
+
+
+def _resolve_purchase_price(owner_admin_id, package) -> int:
+    owner = db.session.get(Admin, owner_admin_id) if owner_admin_id else None
+    if owner and str(getattr(owner, 'role', '') or '').lower() == 'reseller':
+        return int(calculate_reseller_price(owner, package=package) or 0)
+    return int(package.price or 0)
 
 
 def _send_renew_packages(api: TelegramBotApi, bot: TelegramBotInstance,
@@ -383,7 +607,13 @@ def _send_renew_packages(api: TelegramBotApi, bot: TelegramBotInstance,
         return
     keyboard = []
     for package in packages:
-        price = f"{int(package.price or 0):,} T"
+        base_price = _resolve_purchase_price(ownership.reseller_id, package)
+        final_price, discount, _applied, _err = _evaluate_promos(
+            bot, user_id, package, base_price, 'renewal',
+            api=api, owner_id=ownership.reseller_id,
+        )
+        price = (f"~{base_price:,}~ {final_price:,} T" if discount > 0
+                 else f"{final_price:,} T")
         keyboard.append([{
             "text": f"{package.name} • {price}"[:60],
             "callback_data": f"renew-package:{ownership.id}:{package.id}",
@@ -396,12 +626,13 @@ def _send_renew_packages(api: TelegramBotApi, bot: TelegramBotInstance,
     )
 
 
-def _purchase_servers(bot: TelegramBotInstance):
+def _purchase_servers(bot: TelegramBotInstance, owner_id=None):
     query = Server.query.filter_by(enabled=True, hidden=False)
     servers = query.order_by(Server.name.asc(), Server.id.asc()).all()
-    if not bot.owner_admin_id:
+    owner_id = _scoped_owner_id(bot, owner_id)
+    if not owner_id:
         return servers[:30]
-    owner = db.session.get(Admin, bot.owner_admin_id)
+    owner = db.session.get(Admin, owner_id)
     raw_allowed = parse_allowed_servers(getattr(owner, 'allowed_servers', None)) if owner else []
     if raw_allowed == '*':
         return servers[:30]
@@ -423,6 +654,12 @@ def _purchase_policy_values(bot: TelegramBotInstance):
         'account_name_template': (
             policy.account_name_template if policy else None
         ) or 'tg{order_id}-{phone_last4}',
+        'trial_enabled': bool(policy.trial_enabled) if policy else False,
+        'trial_package_id': policy.trial_package_id if policy else None,
+        'emergency_enabled': bool(policy.emergency_enabled) if policy else False,
+        'emergency_days': max(1, int(policy.emergency_days or 1)) if policy else 1,
+        'emergency_volume_gb': max(0, int(policy.emergency_volume_gb or 1)) if policy else 1,
+        'emergency_cooldown_days': max(1, int(policy.emergency_cooldown_days or 30)) if policy else 30,
     }
 
 
@@ -443,8 +680,8 @@ def _purchase_inbound_routes(bot: TelegramBotInstance, package_id: int | None = 
     return query.all()
 
 
-def _eligible_purchase_servers(bot: TelegramBotInstance, package_id: int | None = None):
-    servers = _purchase_servers(bot)
+def _eligible_purchase_servers(bot: TelegramBotInstance, package_id: int | None = None, owner_id=None):
+    servers = _purchase_servers(bot, owner_id=owner_id)
     rules = _purchase_server_rules(bot)
     if rules:
         servers = [server for server in servers if rules.get(server.id) and rules[server.id].eligible]
@@ -470,8 +707,8 @@ def _server_active_client_counts():
     return counts, healthy
 
 
-def _assign_purchase_server(bot: TelegramBotInstance, package_id: int | None = None):
-    servers = _eligible_purchase_servers(bot, package_id)
+def _assign_purchase_server(bot: TelegramBotInstance, package_id: int | None = None, owner_id=None):
+    servers = _eligible_purchase_servers(bot, package_id, owner_id=owner_id)
     if not servers:
         return None
     counts, healthy_ids = _server_active_client_counts()
@@ -491,12 +728,15 @@ def _assign_purchase_server(bot: TelegramBotInstance, package_id: int | None = N
     return min(servers, key=lambda server: (counts.get(server.id, 0), priority(server), server.id))
 
 
-def _purchase_packages(bot: TelegramBotInstance):
+def _purchase_packages(bot: TelegramBotInstance, owner_id=None):
+    owner_id = _scoped_owner_id(bot, owner_id)
     packages = Package.query.filter_by(enabled=True).order_by(
         Package.display_order.asc(), Package.id.asc(),
     ).all()
     visible = []
     for package in packages:
+        if getattr(package, 'is_trial', False):
+            continue
         scope = str(package.scope or 'global').lower()
         if scope == 'global':
             visible.append(package)
@@ -505,9 +745,9 @@ def _purchase_packages(bot: TelegramBotInstance):
             assigned = {int(value) for value in json.loads(package.assigned_reseller_ids or '[]')}
         except (TypeError, ValueError):
             assigned = set()
-        if bot.owner_admin_id and (
-            int(bot.owner_admin_id) in assigned or
-            (scope == 'personal' and int(package.created_by or 0) == int(bot.owner_admin_id))
+        if owner_id and (
+            int(owner_id) in assigned or
+            (scope == 'personal' and int(package.created_by or 0) == int(owner_id))
         ):
             visible.append(package)
     return visible[:30]
@@ -524,10 +764,11 @@ def _purchase_session(bot_id: int, user_id: int) -> TelegramPurchaseSession:
 
 
 def _send_purchase_servers(api: TelegramBotApi, bot: TelegramBotInstance,
-                           chat_id: int, language: str):
+                           chat_id: int, language: str, user_id: int | None = None):
+    owner_id = _effective_owner_id(bot, user_id)
     rules = _purchase_server_rules(bot)
     servers = [
-        server for server in _eligible_purchase_servers(bot)
+        server for server in _eligible_purchase_servers(bot, owner_id=owner_id)
         if rules.get(server.id) and rules[server.id].customer_visible
     ]
     if not servers:
@@ -544,15 +785,17 @@ def _send_purchase_servers(api: TelegramBotApi, bot: TelegramBotInstance,
 
 
 def _send_purchase_packages(api: TelegramBotApi, bot: TelegramBotInstance,
-                            chat_id: int, language: str, server: Server | None):
-    packages = _purchase_packages(bot)
+                            chat_id: int, language: str, server: Server | None,
+                            user_id: int | None = None):
+    owner_id = _effective_owner_id(bot, user_id)
+    packages = _purchase_packages(bot, owner_id=owner_id)
     configured_routes = _purchase_inbound_routes(bot)
     if configured_routes:
         configured_pairs = {(row.package_id, row.server_id) for row in configured_routes}
         if server:
             packages = [row for row in packages if (row.id, server.id) in configured_pairs]
         else:
-            eligible_ids = {row.id for row in _eligible_purchase_servers(bot)}
+            eligible_ids = {row.id for row in _eligible_purchase_servers(bot, owner_id=owner_id)}
             packages = [row for row in packages if any(
                 package_id == row.id and server_id in eligible_ids
                 for package_id, server_id in configured_pairs
@@ -561,9 +804,13 @@ def _send_purchase_packages(api: TelegramBotApi, bot: TelegramBotInstance,
         api.send_message(chat_id, COPY[language]['payment_unavailable'])
         return
     keyboard = [[{
-        'text': f"{package.name} • {int(package.price or 0):,} T"[:60],
+        'text': f"{package.name} • {_resolve_purchase_price(owner_id, package):,} T"[:60],
         'callback_data': f'buy-package:{server.id if server else 0}:{package.id}',
     }] for package in packages]
+    keyboard.append([{
+        'text': COPY[language]['promo_code_button'],
+        'callback_data': 'promo-code',
+    }])
     api.send_message(
         chat_id, COPY[language]['choose_purchase_package'],
         reply_markup={'inline_keyboard': keyboard},
@@ -585,6 +832,39 @@ def _format_bank_card(card: BankCard) -> str:
     if card.iban:
         lines.append(f"IBAN: <code>{html.escape(card.iban)}</code>")
     return '\n'.join(lines)
+
+
+def _purchase_card_accessible(card: BankCard, bot: TelegramBotInstance, owner_id=None) -> bool:
+    owner_id = _scoped_owner_id(bot, owner_id)
+    if owner_id is None:
+        return True
+    if not card.reseller_id or int(card.reseller_id) == owner_id:
+        return True
+    try:
+        assigned = {int(value) for value in json.loads(card.assigned_reseller_ids or '[]')}
+    except (TypeError, ValueError):
+        assigned = set()
+    return owner_id in assigned
+
+
+def _purchase_card(bot: TelegramBotInstance, owner_id=None):
+    cards = BankCard.query.filter_by(is_active=True).order_by(BankCard.id.asc()).all()
+    owner_id = _scoped_owner_id(bot, owner_id)
+    if owner_id is None:
+        central = [card for card in cards if not card.reseller_id]
+        return central[0] if central else (cards[0] if cards else None)
+    tiers = ([], [], [])  # own cards, assigned-to-owner cards, central cards
+    for card in cards:
+        if card.reseller_id and int(card.reseller_id) == owner_id:
+            tiers[0].append(card)
+        elif not card.reseller_id:
+            tiers[2].append(card)
+        elif _purchase_card_accessible(card, bot, owner_id=owner_id):
+            tiers[1].append(card)
+    for tier in tiers:
+        if tier:
+            return tier[0]
+    return None
 
 
 def _purchase_name_draft(bot_id: int, user_id: int):
@@ -682,21 +962,40 @@ def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
     if duplicate:
         api.send_message(chat_id, COPY[language]['purchase_duplicate'])
         return
-    card = BankCard.query.filter_by(is_active=True).order_by(BankCard.id.asc()).first()
+    owner_id = _effective_owner_id(bot, user_id)
+    card = _purchase_card(bot, owner_id=owner_id)
     if card is None:
         api.send_message(chat_id, COPY[language]['payment_unavailable'])
         return
     session_row = _purchase_session(bot.id, user_id)
+    base_price = int(_resolve_purchase_price(owner_id, package))
+    final_amount, discount, applied, error_key = _evaluate_promos(
+        bot, user_id, package, base_price, 'purchase',
+        code=session_row.promo_code, api=api, owner_id=owner_id,
+    )
     session_row.server_id = server.id
     session_row.package_id = package.id
     session_row.bank_card_id = card.id
+    session_row.quoted_amount = final_amount
+    session_row.promo_id = applied[0][0].id if applied else None
+    session_row.discount_amount = discount or None
+    session_row.promo_discounts_json = (
+        json.dumps({str(promo.id): amount for promo, amount in applied}) if applied else None
+    )
     session_row.action = 'awaiting_receipt'
     state.step = 'awaiting_purchase_receipt'
     db.session.flush()
+    if error_key == 'invalid_code':
+        api.send_message(chat_id, COPY[language]['promo_code_invalid'])
+    discount_block = ''
+    if discount > 0:
+        discount_block = COPY[language]['promo_discount_block'].format(
+            original=f"{base_price:,}", discount=f"{discount:,}")
     api.send_message(
         chat_id,
-        COPY[language]['purchase_payment'].format(
-            amount=f"{int(package.price or 0):,}", card=_format_bank_card(card),
+        _brand_text(bot, language) + COPY[language]['purchase_payment'].format(
+            amount=f"{final_amount:,}", card=_format_bank_card(card),
+            discount_block=discount_block,
         ),
         parse_mode='HTML',
     )
@@ -855,7 +1154,8 @@ def _telegram_admin(user_id: int):
 def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnership,
                             request_type: str, *, package: Package | None, note: str | None,
                             attachment: dict | None = None, source_chat_id: int | None = None,
-                            source_message_id: int | None = None):
+                            source_message_id: int | None = None,
+                            api: TelegramBotApi | None = None):
     if request_type == 'renewal':
         existing = TelegramServiceRequest.query.filter_by(
             service_ownership_id=ownership.id,
@@ -886,6 +1186,31 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
                     **(attachment or {}),
                 ))
             return existing, True
+    amount = None
+    original_amount = None
+    discount_amount = None
+    if package is not None:
+        # Renewal amount uses the reseller-aware resolver (not raw package.price),
+        # then automatic renewal promos.
+        base_price = _resolve_purchase_price(ownership.reseller_id, package)
+        if request_type == 'renewal':
+            bot = db.session.get(TelegramBotInstance, int(bot_id))
+            amount, discount, applied, _err = _evaluate_promos(
+                bot, user_id, package, base_price, 'renewal',
+                api=api, owner_id=ownership.reseller_id,
+            ) if bot else (base_price, 0, [], None)
+            original_amount = base_price
+            discount_amount = discount or None
+            for promo, discounted in applied:
+                db.session.add(TelegramPromoUse(
+                    promo_id=promo.id,
+                    telegram_user_id=user_id,
+                    customer_id=ownership.customer_id,
+                    purchase_request_id=None,
+                    amount_discounted=int(discounted or 0),
+                ))
+        else:
+            amount = base_price
     row = TelegramServiceRequest(
         bot_instance_id=bot_id,
         telegram_user_id=user_id,
@@ -893,7 +1218,9 @@ def _create_service_request(bot_id: int, user_id: int, ownership: ServiceOwnersh
         service_ownership_id=ownership.id,
         request_type=request_type,
         package_id=(package.id if package else None),
-        amount=(int(package.price or 0) if package else None),
+        amount=amount,
+        original_amount=original_amount,
+        discount_amount=discount_amount,
         note=(str(note or '').strip()[:4000] or None),
         status='pending',
     )
@@ -1487,6 +1814,7 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
     request_row.status = 'completed' if parts[2] == 'complete' else 'rejected'
     request_row.reviewed_by_admin_id = reviewer.id
     request_row.reviewed_at = datetime.utcnow()
+    _log_audit(f"telegram_service.{parts[2]}", request_row, actor=reviewer)
     db.session.flush()
     api.answer_callback(callback_id, 'Saved')
     if chat_id:
@@ -1641,7 +1969,8 @@ def _purchase_reviewer(user_id: int, request_row: TelegramPurchaseRequest):
     if admin:
         return admin
     bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
-    owner = db.session.get(Admin, bot.owner_admin_id) if bot and bot.owner_admin_id else None
+    owner_id = _effective_owner_id(bot, request_row.telegram_user_id) if bot else None
+    owner = db.session.get(Admin, owner_id) if owner_id else None
     try:
         owner_telegram_id = int(str(getattr(owner, 'telegram_id', '') or '').strip())
     except (TypeError, ValueError):
@@ -1653,11 +1982,12 @@ def _purchase_reviewer(user_id: int, request_row: TelegramPurchaseRequest):
 
 def _purchase_admins(request_row: TelegramPurchaseRequest):
     bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
+    owner_id = _effective_owner_id(bot, request_row.telegram_user_id) if bot else None
     admins = []
     for admin in Admin.query.filter_by(enabled=True).all():
         role = str(admin.role or '').lower()
         is_global = bool(admin.is_superadmin or role in ('admin', 'superadmin'))
-        is_owner = bool(bot and bot.owner_admin_id and admin.id == bot.owner_admin_id)
+        is_owner = bool(owner_id and admin.id == owner_id)
         if is_global or is_owner:
             admins.append(admin)
     return admins
@@ -1671,6 +2001,13 @@ def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRe
         f"Amount: {int(request_row.amount or 0):,} T",
         f"Telegram user: {request_row.telegram_user_id}",
     ]
+    if getattr(request_row, 'duplicate_receipt', False):
+        lines.append('⚠️ FRAUD WARNING: this receipt file was already used on another purchase request!')
+    if getattr(request_row, 'discount_amount', None):
+        lines.append(
+            f"Original: {int(request_row.original_amount or 0):,} T · "
+            f"Discount: {int(request_row.discount_amount or 0):,} T"
+            + (f" · Promo: {request_row.promo_code}" if request_row.promo_code else ''))
     if request_row.detail:
         lines.append(f"Account name: {request_row.detail.account_name}")
     approve_label = (
@@ -1699,6 +2036,220 @@ def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRe
             api.send_message(admin_chat_id, '\n'.join(admin_lines), reply_markup=keyboard)
         except TelegramApiError:
             continue
+
+
+def _provisioning_reviewer(bot: TelegramBotInstance):
+    """Admin identity used for free trial/emergency provisioning calls."""
+    owner = db.session.get(Admin, bot.owner_admin_id) if bot and bot.owner_admin_id else None
+    if owner and owner.enabled and _reseller_can_create_free(owner):
+        return owner
+    for admin in Admin.query.filter_by(enabled=True).all():
+        if admin.is_superadmin or str(admin.role or '').lower() == 'superadmin':
+            return admin
+    return None
+
+
+def _trial_grant_for(bot: TelegramBotInstance, telegram_user_id: int, phone_normalized: str):
+    query = TelegramTrialGrant.query.filter_by(bot_instance_id=bot.id, kind='trial')
+    grants = query.all()
+    phone = str(phone_normalized or '')
+    for grant in grants:
+        if int(grant.telegram_user_id or 0) == int(telegram_user_id):
+            return grant
+        if phone and grant.phone_normalized == phone:
+            return grant
+    return None
+
+
+def _notify_grant_admins(api: TelegramBotApi, request_row: TelegramPurchaseRequest, kind: str):
+    lines = [
+        f"Telegram {kind} grant on purchase #{request_row.id}",
+        f"Server: {request_row.server.name if request_row.server else request_row.server_id}",
+        f"Package: {request_row.package.name if request_row.package else request_row.package_id}",
+        f"Telegram user: {request_row.telegram_user_id}",
+    ]
+    for admin in _purchase_admins(request_row):
+        try:
+            admin_chat_id = int(str(admin.telegram_id or '').strip())
+            if admin_chat_id <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        try:
+            api.send_message(admin_chat_id, '\n'.join(lines))
+        except TelegramApiError:
+            continue
+
+
+def _grant_delivery_link(result: dict) -> str:
+    client = result.get('client') if isinstance(result, dict) else None
+    client = client if isinstance(client, dict) else {}
+    return str(
+        client.get('dashboard_link') or client.get('dash_sub_url')
+        or client.get('sub_link') or client.get('link') or ''
+    ).strip()
+
+
+def _start_trial(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
+                 user_id: int, state: TelegramBotUserState):
+    language = state.language if state.language in COPY else 'fa'
+    policy = _purchase_policy_values(bot)
+    package = None
+    if policy['trial_package_id']:
+        package = db.session.get(Package, int(policy['trial_package_id']))
+    if (not policy['trial_enabled'] or not package or not package.enabled
+            or not getattr(package, 'is_trial', False)):
+        api.send_message(chat_id, COPY[language]['trial_unavailable'])
+        return
+    identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+    if not identity or not identity.customer_id or not identity.phone_verified_at:
+        _send_contact_prompt(api, chat_id, language)
+        return
+    phone = str(identity.phone_normalized or '')
+    if _trial_grant_for(bot, user_id, phone):
+        api.send_message(chat_id, COPY[language]['trial_already_used'])
+        return
+    reviewer = _provisioning_reviewer(bot)
+    if reviewer is None:
+        api.send_message(chat_id, COPY[language]['trial_failed'])
+        return
+    server = _assign_purchase_server(bot, package.id, owner_id=_effective_owner_id(bot, user_id))
+    if server is None:
+        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        return
+    request_row = TelegramPurchaseRequest(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        customer_id=identity.customer_id,
+        server_id=server.id,
+        package_id=package.id,
+        amount=0,
+        receipt_file_id=f'trial:{user_id}',
+        receipt_kind='photo',
+        source_chat_id=chat_id,
+        source_message_id=0,
+        status='approved',
+        reviewed_by_admin_id=reviewer.id,
+        reviewed_at=datetime.utcnow(),
+    )
+    db.session.add(request_row)
+    db.session.flush()
+    success, result = _execute_purchase_request(
+        request_row, reviewer, free=True, verification_method='telegram_trial')
+    if not success:
+        request_row.status = 'rejected'
+        db.session.commit()
+        app.logger.warning('[telegram-trial] provisioning failed for bot %s: %s', bot.id, result)
+        api.send_message(chat_id, COPY[language]['trial_failed'])
+        return
+    request_row.status = 'completed'
+    db.session.add(TelegramTrialGrant(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        phone_normalized=phone,
+        customer_id=identity.customer_id,
+        package_id=package.id,
+        ownership_id=(result or {}).get('ownership_id') if isinstance(result, dict) else None,
+        kind='trial',
+    ))
+    _log_audit('telegram.trial_grant', request_row, actor='customer',
+               meta={'telegram_user_id': user_id, 'phone_normalized': phone})
+    db.session.commit()
+    api.send_message(
+        chat_id,
+        COPY[language]['trial_success'].format(link=_grant_delivery_link(result)),
+    )
+    _notify_grant_admins(api, request_row, 'trial')
+
+
+def _execute_emergency_renewal(ownership: ServiceOwnership, days: int, volume_gb: int,
+                               reviewer: Admin):
+    client, inbound_id = _cached_owned_service_location(ownership)
+    email = str(
+        (client or {}).get('email') or ownership.client_email_snapshot or ''
+    ).strip()
+    if not client or inbound_id is None or not email:
+        return False, 'The service is not present in the latest server snapshot. Refresh the server and retry.'
+    path = f"/api/client/{ownership.server_id}/{inbound_id}/{quote(email, safe='')}/renew"
+    with app.test_request_context(
+        path,
+        method='POST',
+        json={
+            'mode': 'custom',
+            'days': int(days),
+            'volume': int(volume_gb),
+            'reset_traffic': True,
+            'free': True,
+        },
+    ):
+        flask_session['admin_id'] = reviewer.id
+        flask_session['admin_username'] = reviewer.username
+        flask_session['role'] = reviewer.role
+        flask_session['is_superadmin'] = bool(reviewer.is_superadmin)
+        response = renew_client(ownership.server_id, inbound_id, email)
+    status_code = 200
+    if isinstance(response, tuple):
+        response, status_code = response[0], int(response[1])
+    payload = response.get_json(silent=True) if hasattr(response, 'get_json') else None
+    payload = payload if isinstance(payload, dict) else {}
+    if status_code < 400 and payload.get('success'):
+        return True, payload
+    return False, str(payload.get('error') or f'Renewal failed with HTTP {status_code}')
+
+
+def _grant_emergency_access(api: TelegramBotApi, bot: TelegramBotInstance, callback: dict,
+                            ownership_id: int):
+    sender = callback.get('from') or {}
+    callback_id = str(callback.get('id') or '')
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    user_id = int(sender.get('id') or 0)
+    identity, ownership = _owned_service(user_id, ownership_id)
+    state = _state(bot, user_id)
+    language = state.language if state.language in COPY else 'fa'
+    api.answer_callback(callback_id)
+    if not ownership:
+        api.send_message(chat_id, COPY[language]['invalid_service'])
+        return
+    policy = _purchase_policy_values(bot)
+    if not policy['emergency_enabled']:
+        api.send_message(chat_id, COPY[language]['emergency_unavailable'])
+        return
+    cutoff = datetime.utcnow() - timedelta(days=int(policy['emergency_cooldown_days']))
+    recent = TelegramTrialGrant.query.filter(
+        TelegramTrialGrant.kind == 'emergency',
+        TelegramTrialGrant.ownership_id == ownership.id,
+        TelegramTrialGrant.created_at >= cutoff,
+    ).first()
+    if recent:
+        api.send_message(chat_id, COPY[language]['emergency_cooldown'])
+        return
+    reviewer = _provisioning_reviewer(bot)
+    if reviewer is None:
+        api.send_message(chat_id, COPY[language]['emergency_failed'])
+        return
+    renewed, result = _execute_emergency_renewal(
+        ownership, policy['emergency_days'], policy['emergency_volume_gb'], reviewer)
+    if not renewed:
+        app.logger.warning('[telegram-emergency] renewal failed for bot %s: %s', bot.id, result)
+        api.send_message(chat_id, COPY[language]['emergency_failed'])
+        return
+    db.session.add(TelegramTrialGrant(
+        bot_instance_id=bot.id,
+        telegram_user_id=user_id,
+        phone_normalized=str(getattr(identity, 'phone_normalized', '') or '') if identity else '',
+        customer_id=ownership.customer_id,
+        ownership_id=ownership.id,
+        kind='emergency',
+    ))
+    _log_audit('telegram.emergency_grant', ('ServiceOwnership', ownership.id), actor='customer',
+               meta={'telegram_user_id': user_id})
+    db.session.commit()
+    api.send_message(
+        chat_id,
+        COPY[language]['emergency_success'].format(
+            days=policy['emergency_days'], volume=policy['emergency_volume_gb']),
+    )
+    _send_service_details(api, bot, chat_id, language, ownership)
 
 
 def _cached_purchase_client(request_row: TelegramPurchaseRequest):
@@ -1734,7 +2285,8 @@ def _ensure_purchase_detail(request_row: TelegramPurchaseRequest):
 
 
 def _ensure_purchase_ownership(request_row: TelegramPurchaseRequest, reviewer: Admin, client: dict,
-                               *, allow_create: bool):
+                               *, allow_create: bool,
+                               verification_method: str = 'telegram_purchase'):
     raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
     client_uuid = str(client.get('id') or client.get('uuid') or raw.get('id') or '').strip()
     if not client_uuid:
@@ -1749,7 +2301,8 @@ def _ensure_purchase_ownership(request_row: TelegramPurchaseRequest, reviewer: A
                 'Resolve ownership manually; Eve will not claim it automatically.'
             )
         bot = db.session.get(TelegramBotInstance, request_row.bot_instance_id)
-        owner = db.session.get(Admin, bot.owner_admin_id) if bot and bot.owner_admin_id else None
+        owner_id = _effective_owner_id(bot, request_row.telegram_user_id) if bot else None
+        owner = db.session.get(Admin, owner_id) if owner_id else None
         reseller_id = owner.id if owner and str(owner.role or '').lower() == 'reseller' else None
         ownership = ServiceOwnership(
             customer_id=request_row.customer_id,
@@ -1757,7 +2310,7 @@ def _ensure_purchase_ownership(request_row: TelegramPurchaseRequest, reviewer: A
             client_uuid=client_uuid,
             client_email_snapshot=request_row.detail.account_name,
             reseller_id=reseller_id,
-            verification_method='telegram_purchase',
+            verification_method=verification_method,
             verified_by_admin_id=reviewer.id,
             verified_at=datetime.utcnow(),
         )
@@ -1832,14 +2385,18 @@ def _purchase_provisioning_inbound_ids(server_id: int):
     return [row['id'] for row in _telegram_customer_inbounds(server_id)]
 
 
-def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Admin):
+def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Admin,
+                              free: bool = False,
+                              verification_method: str = 'telegram_purchase'):
     detail = _ensure_purchase_detail(request_row)
     if not request_row.package_id or not request_row.package or not detail:
         return False, 'Purchase package or provisioning details are missing.'
     existing = _cached_purchase_client(request_row)
     if existing:
         try:
-            _ensure_purchase_ownership(request_row, reviewer, existing, allow_create=False)
+            _ensure_purchase_ownership(
+                request_row, reviewer, existing, allow_create=False,
+                verification_method=verification_method)
             return True, {'client': existing, 'already_created': True}
         except ValueError as exc:
             return False, str(exc)
@@ -1858,7 +2415,7 @@ def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Ad
             'email': request_row.detail.account_name,
             'comment': f'Telegram purchase #{request_row.id}',
             'inbound_ids': inbound_ids,
-            'free': False,
+            'free': bool(free),
         },
     ):
         flask_session['admin_id'] = reviewer.id
@@ -1877,7 +2434,9 @@ def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Ad
     if not client:
         return False, 'The panel created the client but the local snapshot was not updated. Refresh and retry.'
     try:
-        ownership = _ensure_purchase_ownership(request_row, reviewer, client, allow_create=True)
+        ownership = _ensure_purchase_ownership(
+            request_row, reviewer, client, allow_create=True,
+            verification_method=verification_method)
     except ValueError as exc:
         return False, str(exc)
     payload['ownership_id'] = ownership.id
@@ -1907,6 +2466,7 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
         request_row.status = 'rejected'
         request_row.reviewed_by_admin_id = reviewer.id
         request_row.reviewed_at = datetime.utcnow()
+        _log_audit('telegram_purchase.reject', request_row, actor=reviewer)
         db.session.flush()
         api.answer_callback(callback_id, 'Rejected')
     else:
@@ -1921,6 +2481,7 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
         provisioned, provision_result = _execute_purchase_request(request_row, reviewer)
         if provisioned:
             request_row.status = 'completed'
+            _log_audit('telegram_purchase.approve', request_row, actor=reviewer)
             db.session.flush()
             api.answer_callback(callback_id, 'Service created')
         else:
@@ -2011,8 +2572,42 @@ def _handle_admin_claim_callback(api: TelegramBotApi, callback: dict, data: str)
     return True
 
 
+def _record_referral(referrer_id: int, referee_id: int) -> bool:
+    """Record a /start ref_<id> referral. No self-referrals; one referrer per user."""
+    try:
+        referrer_id = int(referrer_id)
+        referee_id = int(referee_id)
+    except (TypeError, ValueError):
+        return False
+    if referrer_id <= 0 or referrer_id == referee_id:
+        return False
+    if TelegramReferral.query.filter_by(referee_telegram_user_id=referee_id).first():
+        return False
+    db.session.add(TelegramReferral(
+        referrer_telegram_user_id=referrer_id,
+        referee_telegram_user_id=referee_id,
+    ))
+    db.session.flush()
+    return True
+
+
+def _qualify_referral(referee_id: int) -> None:
+    referral = TelegramReferral.query.filter_by(
+        referee_telegram_user_id=int(referee_id)).first()
+    if referral and referral.qualified_at is None:
+        referral.qualified_at = datetime.utcnow()
+        db.session.flush()
+
+
 def _handle_start(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
-                  user_id: int, state: TelegramBotUserState):
+                  user_id: int, state: TelegramBotUserState, payload: str = ''):
+    payload = str(payload or '').strip()
+    if payload.startswith('ref_'):
+        try:
+            _record_referral(int(payload[4:]), user_id)
+            db.session.flush()
+        except (TypeError, ValueError):
+            pass
     languages = bot.enabled_languages()
     identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
     if identity and identity.customer_id and identity.phone_verified_at:
@@ -2022,7 +2617,7 @@ def _handle_start(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
             state.language = preferred
         state.step = "verified"
         db.session.flush()
-        _send_main_menu(api, chat_id, state.language)
+        _send_main_menu(api, bot, chat_id, state.language)
         return
     if len(languages) > 1:
         state.step = "choose_language"
@@ -2080,13 +2675,27 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         api.answer_callback(callback_id)
         _send_purchase_orders(api, bot, chat_id, user_id, language)
         return
+    if data == 'promo-code':
+        if not _rate_ok(user_id, 'promo-code', 10, 60):
+            api.answer_callback(callback_id)
+            return
+        session_row = _purchase_session(bot.id, user_id)
+        session_row.action = 'awaiting_promo_code'
+        state.step = 'awaiting_promo_code'
+        db.session.flush()
+        api.answer_callback(callback_id)
+        api.send_message(chat_id, COPY[language]['promo_code_prompt'])
+        return
     if data == 'purchase-start':
+        if not _rate_ok(user_id, 'purchase-start', 10, 60):
+            api.answer_callback(callback_id)
+            return
         state.step = 'verified'
         api.answer_callback(callback_id)
         if _purchase_policy_values(bot)['customer_selects_server']:
-            _send_purchase_servers(api, bot, chat_id, language)
+            _send_purchase_servers(api, bot, chat_id, language, user_id=user_id)
         else:
-            _send_purchase_packages(api, bot, chat_id, language, None)
+            _send_purchase_packages(api, bot, chat_id, language, None, user_id=user_id)
         return
     if data.startswith('purchase-order:'):
         try:
@@ -2144,17 +2753,21 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             api.answer_callback(callback_id)
             return
         rules = _purchase_server_rules(bot)
+        owner_id = _effective_owner_id(bot, user_id)
         server = next((
-            row for row in _eligible_purchase_servers(bot)
+            row for row in _eligible_purchase_servers(bot, owner_id=owner_id)
             if row.id == server_id and rules.get(row.id) and rules[row.id].customer_visible
         ), None)
         api.answer_callback(callback_id)
         if server is None:
             api.send_message(chat_id, COPY[language]['payment_unavailable'])
             return
-        _send_purchase_packages(api, bot, chat_id, language, server)
+        _send_purchase_packages(api, bot, chat_id, language, server, user_id=user_id)
         return
     if data.startswith('buy-package:'):
+        if not _rate_ok(user_id, 'buy-package', 15, 60):
+            api.answer_callback(callback_id)
+            return
         parts = data.split(':')
         try:
             server_id = int(parts[1])
@@ -2163,13 +2776,14 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             api.answer_callback(callback_id)
             return
         policy_values = _purchase_policy_values(bot)
-        package = next((row for row in _purchase_packages(bot) if row.id == package_id), None)
+        owner_id = _effective_owner_id(bot, user_id)
+        package = next((row for row in _purchase_packages(bot, owner_id=owner_id) if row.id == package_id), None)
         if server_id == 0 and not policy_values['customer_selects_server']:
-            server = _assign_purchase_server(bot, package_id) if package else None
+            server = _assign_purchase_server(bot, package_id, owner_id=owner_id) if package else None
         elif server_id > 0 and policy_values['customer_selects_server']:
             rules = _purchase_server_rules(bot)
             server = next((
-                row for row in _eligible_purchase_servers(bot, package_id)
+                row for row in _eligible_purchase_servers(bot, package_id, owner_id=owner_id)
                 if row.id == server_id and rules.get(row.id) and rules[row.id].customer_visible
             ), None)
         else:
@@ -2181,6 +2795,14 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         _continue_purchase_selection(
             api, bot, chat_id, user_id, language, server, package, state,
         )
+        return
+    if data.startswith('service-emergency:'):
+        try:
+            ownership_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        _grant_emergency_access(api, bot, callback, ownership_id)
         return
     if data.startswith('service:'):
         try:
@@ -2194,7 +2816,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             api.send_message(chat_id, COPY[language]['invalid_service'])
             return
         api.answer_callback(callback_id)
-        _send_service_details(api, chat_id, language, ownership)
+        _send_service_details(api, bot, chat_id, language, ownership)
         return
     if data.startswith('service-link:'):
         try:
@@ -2253,7 +2875,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             api.send_message(chat_id, COPY[language]['invalid_service'])
             return
         request_row, duplicate = _create_service_request(
-            bot.id, user_id, ownership, 'renewal', package=package, note=None,
+            bot.id, user_id, ownership, 'renewal', package=package, note=None, api=api,
         )
         api.answer_callback(callback_id)
         _send_renewal_request_state(api, chat_id, language, request_row, duplicate=duplicate)
@@ -2294,7 +2916,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             db.session.flush()
             api.answer_callback(callback_id, "✓")
             if state.step == "verified":
-                _send_main_menu(api, chat_id, language)
+                _send_main_menu(api, bot, chat_id, language)
             else:
                 _send_contact_prompt(api, chat_id, language)
             return
@@ -2390,13 +3012,14 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         ]))[:120] or None
     identity.customer_id = customer.id
     identity.set_verified_phone(phone)
+    _qualify_referral(user_id)
     state.step = "verified"
     db.session.flush()
     api.send_message(
         chat_id, COPY[language]["verified"],
         reply_markup={"remove_keyboard": True},
     )
-    _send_main_menu(api, chat_id, language)
+    _send_main_menu(api, bot, chat_id, language)
     claim = discover_phone_ownership_claim(identity)
     _send_claim_candidates(api, chat_id, language, claim)
 
@@ -2444,7 +3067,7 @@ def _handle_subscription(api: TelegramBotApi, bot: TelegramBotInstance, message:
     session_row.locked_until = None
     db.session.flush()
     api.send_message(chat_id, COPY[language]["service_attached"])
-    _send_main_menu(api, chat_id, language)
+    _send_main_menu(api, bot, chat_id, language)
     _send_claim_candidates(api, chat_id, language, item.claim)
 
 
@@ -2452,6 +3075,8 @@ def _handle_support_message(api: TelegramBotApi, bot: TelegramBotInstance, messa
                             sender: dict, state: TelegramBotUserState, text: str):
     chat_id = int((message.get('chat') or {}).get('id'))
     user_id = int(sender['id'])
+    if not _rate_ok(user_id, 'support', 10, 60):
+        return
     language = state.language if state.language in COPY else bot.default_language
     session_row = TelegramServiceSession.query.filter_by(
         bot_instance_id=bot.id, telegram_user_id=user_id,
@@ -2575,6 +3200,32 @@ def _handle_admin_support_message(api: TelegramBotApi, bot: TelegramBotInstance,
     )
 
 
+def _handle_promo_code_entry(api: TelegramBotApi, bot: TelegramBotInstance,
+                             message: dict, sender: dict, state: TelegramBotUserState,
+                             text: str):
+    chat_id = int((message.get('chat') or {}).get('id'))
+    user_id = int(sender['id'])
+    language = state.language if state.language in COPY else bot.default_language
+    session_row = _purchase_session(bot.id, user_id)
+    code = str(text or '').strip().upper()
+    if not code or code in ('-', '/CANCEL'):
+        session_row.promo_code = None
+        session_row.action = None
+        state.step = 'verified'
+        db.session.flush()
+        api.send_message(chat_id, COPY[language]['promo_code_cleared'])
+        return
+    promo = TelegramPromo.query.filter_by(code=code, enabled=True).first()
+    session_row.promo_code = code if promo else None
+    session_row.action = None
+    state.step = 'verified'
+    db.session.flush()
+    api.send_message(
+        chat_id,
+        COPY[language]['promo_code_saved'] if promo else COPY[language]['promo_code_invalid'],
+    )
+
+
 def _handle_purchase_account_name(api: TelegramBotApi, bot: TelegramBotInstance,
                                   message: dict, sender: dict,
                                   state: TelegramBotUserState, text: str):
@@ -2614,6 +3265,8 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
                              state: TelegramBotUserState):
     chat_id = int((message.get('chat') or {}).get('id'))
     user_id = int(sender['id'])
+    if not _rate_ok(user_id, 'receipt', 10, 120):
+        return
     language = state.language if state.language in COPY else bot.default_language
     receipt = _receipt_from_message(message)
     if receipt is None:
@@ -2631,7 +3284,9 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     server = db.session.get(Server, session_row.server_id)
     package = db.session.get(Package, session_row.package_id)
     card = db.session.get(BankCard, session_row.bank_card_id)
-    if not server or not package or not card or not card.is_active:
+    owner_id = _effective_owner_id(bot, user_id)
+    if (not server or not package or not card or not card.is_active
+            or not _purchase_card_accessible(card, bot, owner_id=owner_id)):
         session_row.action = None
         state.step = 'verified'
         db.session.flush()
@@ -2647,6 +3302,15 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
         api.send_message(chat_id, COPY[language]['purchase_duplicate'])
         return
     kind, file_id, unique_id = receipt
+    duplicate_receipt = False
+    if unique_id:
+        duplicate_receipt = TelegramPurchaseRequest.query.filter(
+            TelegramPurchaseRequest.receipt_file_unique_id == unique_id,
+            TelegramPurchaseRequest.status != 'rejected',
+        ).first() is not None
+    quoted = session_row.quoted_amount
+    frozen_discount = int(session_row.discount_amount or 0)
+    final_amount = int(quoted) if quoted is not None else _resolve_purchase_price(owner_id, package)
     request_row = TelegramPurchaseRequest(
         bot_instance_id=bot.id,
         telegram_user_id=user_id,
@@ -2654,16 +3318,36 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
         server_id=server.id,
         package_id=package.id,
         bank_card_id=card.id,
-        amount=int(package.price or 0),
+        amount=final_amount,
+        original_amount=final_amount + frozen_discount,
+        discount_amount=frozen_discount or None,
+        promo_code=(str(session_row.promo_code or '').strip().upper() or None),
         receipt_file_id=file_id,
         receipt_file_unique_id=unique_id or None,
         receipt_kind=kind,
+        duplicate_receipt=duplicate_receipt,
         source_chat_id=chat_id,
         source_message_id=int(message.get('message_id') or 0),
         status='pending',
     )
     db.session.add(request_row)
     db.session.flush()
+    try:
+        promo_discounts = json.loads(session_row.promo_discounts_json or '{}')
+    except (TypeError, ValueError):
+        promo_discounts = {}
+    for promo_id_raw, discounted in promo_discounts.items():
+        try:
+            promo_id = int(promo_id_raw)
+        except (TypeError, ValueError):
+            continue
+        db.session.add(TelegramPromoUse(
+            promo_id=promo_id,
+            telegram_user_id=user_id,
+            customer_id=identity.customer_id,
+            purchase_request_id=request_row.id,
+            amount_discounted=int(discounted or 0),
+        ))
     draft = _purchase_name_draft(bot.id, user_id)
     customer = db.session.get(CustomerAccount, identity.customer_id)
     policy_values = _purchase_policy_values(bot)
@@ -2681,6 +3365,11 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     session_row.server_id = None
     session_row.package_id = None
     session_row.bank_card_id = None
+    session_row.quoted_amount = None
+    session_row.promo_id = None
+    session_row.promo_code = None
+    session_row.discount_amount = None
+    session_row.promo_discounts_json = None
     state.step = 'verified'
     db.session.flush()
     api.send_message(
@@ -2834,21 +3523,34 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     db.session.flush()
     text = str(message.get("text") or "").strip()
     if text == "/start" or text.startswith("/start "):
-        _handle_start(api, bot, chat_id, user_id, state)
+        parts = text.split(None, 1)
+        _handle_start(api, bot, chat_id, user_id, state,
+                      payload=(parts[1] if len(parts) > 1 else ''))
     elif state.step == "awaiting_admin_support_reply":
         _handle_admin_support_message(api, bot, message, sender, state, text)
     elif text in {COPY["fa"]["menu_services"], COPY["en"]["menu_services"]}:
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         _send_owned_services(api, chat_id, state.language, identity)
+    elif text in {COPY["fa"]["menu_trial"], COPY["en"]["menu_trial"]}:
+        state.step = 'verified'
+        _start_trial(api, bot, chat_id, user_id, state)
+    elif text in {COPY["fa"]["menu_invite"], COPY["en"]["menu_invite"]}:
+        state.step = 'verified'
+        username = str(bot.bot_username or '').lstrip('@')
+        if username:
+            link = f"https://t.me/{username}?start=ref_{user_id}"
+            api.send_message(chat_id, COPY[state.language]['invite_link'].format(link=link))
+        else:
+            api.send_message(chat_id, COPY[state.language]['invite_unavailable'])
     elif text in {COPY["fa"]["menu_buy_service"], COPY["en"]["menu_buy_service"]}:
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         if identity and identity.customer_id and identity.phone_verified_at:
             if _purchase_policy_values(bot)['customer_selects_server']:
-                _send_purchase_servers(api, bot, chat_id, state.language)
+                _send_purchase_servers(api, bot, chat_id, state.language, user_id=user_id)
             else:
-                _send_purchase_packages(api, bot, chat_id, state.language, None)
+                _send_purchase_packages(api, bot, chat_id, state.language, None, user_id=user_id)
         else:
             _send_contact_prompt(api, chat_id, state.language)
     elif text in {COPY["fa"]["menu_orders"], COPY["en"]["menu_orders"]}:
@@ -2880,6 +3582,8 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         _handle_support_message(api, bot, message, sender, state, text)
     elif state.step == "awaiting_purchase_account_name":
         _handle_purchase_account_name(api, bot, message, sender, state, text)
+    elif state.step == "awaiting_promo_code":
+        _handle_promo_code_entry(api, bot, message, sender, state, text)
     elif state.step == "awaiting_purchase_receipt":
         _handle_purchase_receipt(api, bot, message, sender, state)
     elif state.step == "share_contact":
@@ -2998,7 +3702,7 @@ def _run_bot(bot_id: int, stop_event: threading.Event):
         with app.app_context():
             try:
                 bot = db.session.get(TelegramBotInstance, int(bot_id))
-                if bot is None or bot.transport_mode != "polling":
+                if bot is None or bot.transport_mode != "polling" or bot.archived_at is not None:
                     return
                 if bot.enabled:
                     _poll_bot(bot)
@@ -3026,7 +3730,10 @@ def main():
             with app.app_context():
                 desired_ids = {
                     int(row.id) for row in
-                    TelegramBotInstance.query.filter_by(transport_mode="polling").all()
+                    TelegramBotInstance.query.filter(
+                        TelegramBotInstance.transport_mode == "polling",
+                        TelegramBotInstance.archived_at.is_(None),
+                    ).all()
                 }
             for bot_id in desired_ids:
                 current = bot_threads.get(bot_id)

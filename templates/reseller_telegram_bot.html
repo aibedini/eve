@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}My Telegram Bot{% endblock %}
+{% block page_title %}Telegram Bot{% endblock %}
+
+{% block content %}
+<div class="settings-content">
+    <div class="panel-card">
+        <div class="panel-card-header">
+            <div class="header-content">
+                <h2>My Telegram Bot</h2>
+                <p class="text-secondary">Run your own Telegram bot for your customers. Create it once, then configure the token and behavior here.</p>
+            </div>
+            <span id="rtb-runtime" class="text-secondary">—</span>
+        </div>
+        <div style="padding: 0 20px 20px;">
+            <div id="rtb-loading" class="loading-state">Loading bot settings…</div>
+
+            <div id="rtb-create" style="display:none; max-width: 520px;">
+                <p class="text-secondary">You do not have a bot yet. Create one to get started.</p>
+                <div class="form-group">
+                    <label for="rtb-create-name">Display name</label>
+                    <input type="text" id="rtb-create-name" class="form-input" placeholder="My shop bot">
+                </div>
+                <div class="form-group">
+                    <label for="rtb-create-token">Bot token (optional)</label>
+                    <input type="password" id="rtb-create-token" class="form-input" placeholder="Paste token from @BotFather" autocomplete="new-password">
+                </div>
+                <button class="btn btn-success" id="rtb-create-btn" onclick="rtbCreateBot(this)">Create my bot</button>
+            </div>
+
+            <div id="rtb-form" style="display:none; max-width: 620px;">
+                <div class="form-group">
+                    <label for="rtb-display-name">Display name</label>
+                    <input type="text" id="rtb-display-name" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label for="rtb-token">Bot token</label>
+                    <input type="password" id="rtb-token" class="form-input" autocomplete="new-password" placeholder="Paste token from @BotFather">
+                    <small id="rtb-token-hint" class="text-secondary">Leave blank to preserve the saved token.</small>
+                </div>
+                <div class="form-group">
+                    <label>Enabled languages</label>
+                    <label><input type="checkbox" id="rtb-lang-fa"> فارسی</label>
+                    <label style="margin-inline-start: 12px;"><input type="checkbox" id="rtb-lang-en"> English</label>
+                </div>
+                <div class="form-group">
+                    <label for="rtb-default-language">Default language</label>
+                    <select id="rtb-default-language" class="form-input">
+                        <option value="fa">فارسی</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rtb-connection-mode">Connection mode</label>
+                    <select id="rtb-connection-mode" class="form-input">
+                        <option value="proxy_first">Proxy first</option>
+                        <option value="auto">Auto</option>
+                        <option value="direct_only">Direct only</option>
+                        <option value="proxy_only">Proxy only</option>
+                    </select>
+                </div>
+                <div class="form-group" style="display:flex; gap:24px;">
+                    <label><input type="checkbox" id="rtb-enabled"> Enabled</label>
+                    <label><input type="checkbox" id="rtb-test-mode"> Test mode</label>
+                </div>
+                <div style="display:flex; gap:8px; margin-top: 8px;">
+                    <button class="btn btn-success" id="rtb-save" onclick="rtbSave(this)">Save settings</button>
+                    <button class="btn btn-secondary" id="rtb-verify" onclick="rtbVerify(this)">Verify token</button>
+                </div>
+                <div style="display:flex; gap:8px; margin-top: 8px; align-items:center;">
+                    <button class="btn btn-secondary" id="rtb-toggle-enabled" onclick="rtbRuntime(null, this)">Disable</button>
+                    <button class="btn btn-secondary" onclick="rtbRuntime('restart', this)">Restart</button>
+                    <span id="rtb-health" class="text-secondary" style="font-size:0.85rem;"></span>
+                </div>
+                <div id="rtb-last-error" class="alert alert-warning" style="margin-top:12px; display:none; padding:8px 12px; font-size:0.84rem;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let rtbBotId = null;
+
+async function rtbApi(url, options = {}) {
+    const response = await fetch(url, {
+        headers: {'Accept': 'application/json', ...(options.body ? {'Content-Type': 'application/json'} : {})},
+        ...options,
+    });
+    let data;
+    try { data = await response.json(); } catch (_) { throw new Error('The server returned an invalid response.'); }
+    if (!data || data.success !== true) throw new Error((data && data.error) || 'Request failed.');
+    return data;
+}
+
+function rtbUrl(path) {
+    return rtbBotId ? `${path}${path.includes('?') ? '&' : '?'}bot_id=${rtbBotId}` : path;
+}
+
+async function rtbLoad() {
+    document.getElementById('rtb-loading').style.display = '';
+    document.getElementById('rtb-create').style.display = 'none';
+    document.getElementById('rtb-form').style.display = 'none';
+    try {
+        const list = await rtbApi('/api/telegram-bots');
+        const bot = (list.bots || [])[0];
+        if (!bot) {
+            document.getElementById('rtb-loading').style.display = 'none';
+            document.getElementById('rtb-create').style.display = '';
+            return;
+        }
+        rtbBotId = bot.id;
+        const data = await rtbApi(rtbUrl('/api/settings/telegram-bots'));
+        const settings = data.bot || {};
+        document.getElementById('rtb-display-name').value = settings.display_name || '';
+        document.getElementById('rtb-token').value = '';
+        document.getElementById('rtb-token-hint').textContent = settings.token_configured
+            ? 'A token is saved. Leave blank to preserve it.'
+            : 'No token saved yet. Paste the token from @BotFather.';
+        const languages = Array.isArray(settings.enabled_languages) ? settings.enabled_languages : ['fa', 'en'];
+        document.getElementById('rtb-lang-fa').checked = languages.includes('fa');
+        document.getElementById('rtb-lang-en').checked = languages.includes('en');
+        document.getElementById('rtb-default-language').value = settings.default_language || 'fa';
+        document.getElementById('rtb-connection-mode').value = settings.connection_mode || 'proxy_first';
+        document.getElementById('rtb-enabled').checked = !!settings.enabled;
+        document.getElementById('rtb-test-mode').checked = !!settings.test_mode;
+        const runtime = data.runtime || {};
+        document.getElementById('rtb-runtime').textContent = `Runtime: ${runtime.status || (settings.enabled ? 'stopped' : 'disabled')}`;
+        const health = bot.health || {};
+        document.getElementById('rtb-toggle-enabled').textContent = settings.enabled ? 'Disable' : 'Enable';
+        document.getElementById('rtb-health').textContent = `Health: ${health.state || 'unknown'}` +
+            (health.last_heartbeat_at ? ` · heartbeat ${health.last_heartbeat_at}` : '');
+        const lastError = settings.last_test_error || runtime.last_error || health.last_error || '';
+        const errorBox = document.getElementById('rtb-last-error');
+        errorBox.style.display = lastError ? '' : 'none';
+        errorBox.textContent = lastError;
+        document.getElementById('rtb-loading').style.display = 'none';
+        document.getElementById('rtb-form').style.display = '';
+    } catch (error) {
+        document.getElementById('rtb-loading').textContent = `Could not load bot settings: ${error.message}`;
+    }
+}
+
+async function rtbCreateBot(button) {
+    button.disabled = true;
+    try {
+        await rtbApi('/api/telegram-bots', {method: 'POST', body: JSON.stringify({
+            display_name: document.getElementById('rtb-create-name').value.trim(),
+            bot_token: document.getElementById('rtb-create-token').value.trim(),
+        })});
+        showToast('Bot created.', 'success');
+        await rtbLoad();
+    } catch (error) {
+        showToast(error.message, 'error');
+    } finally { button.disabled = false; }
+}
+
+async function rtbSave(button) {
+    const languages = ['fa', 'en'].filter(code => document.getElementById(`rtb-lang-${code}`).checked);
+    if (!languages.length) return showToast('Enable at least one language.', 'error');
+    if (!languages.includes(document.getElementById('rtb-default-language').value)) return showToast('Default language must be enabled.', 'error');
+    button.disabled = true;
+    try {
+        await rtbApi(rtbUrl('/api/settings/telegram-bots'), {method: 'POST', body: JSON.stringify({
+            display_name: document.getElementById('rtb-display-name').value.trim(),
+            bot_token: document.getElementById('rtb-token').value.trim(),
+            enabled_languages: languages,
+            default_language: document.getElementById('rtb-default-language').value,
+            connection_mode: document.getElementById('rtb-connection-mode').value,
+            enabled: document.getElementById('rtb-enabled').checked,
+            test_mode: document.getElementById('rtb-test-mode').checked,
+        })});
+        showToast('Bot settings saved.', 'success');
+        await rtbLoad();
+    } catch (error) {
+        showToast(error.message, 'error');
+    } finally { button.disabled = false; }
+}
+
+async function rtbVerify(button) {
+    button.disabled = true;
+    try {
+        const data = await rtbApi(rtbUrl('/api/settings/telegram-bots/test'), {method: 'POST', body: JSON.stringify({route: 'configured', bot_id: rtbBotId})});
+        showToast(`Token verified${data.bot_username ? ` — @${data.bot_username}` : ''}.`, 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    } finally { button.disabled = false; await rtbLoad(); }
+}
+
+async function rtbRuntime(action, button) {
+    const verb = action || (document.getElementById('rtb-toggle-enabled').textContent.trim() === 'Disable' ? 'disable' : 'enable');
+    button.disabled = true;
+    try {
+        await rtbApi(`/api/telegram-bots/${rtbBotId}/runtime`, {method: 'POST', body: JSON.stringify({action: verb})});
+        showToast({enable: 'Bot enabled.', disable: 'Bot disabled.', restart: 'Bot restarted.'}[verb] || 'Done.', 'success');
+        await rtbLoad();
+    } catch (error) {
+        showToast(error.message, 'error');
+    } finally { button.disabled = false; }
+}
+
+document.addEventListener('DOMContentLoaded', rtbLoad);
+</script>
+{% endblock %}

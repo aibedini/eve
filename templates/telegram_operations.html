@@ -257,6 +257,8 @@
         <article class="tg-metric done"><span class="tg-metric-label">Completed today</span><strong class="tg-metric-value" id="metric-completed">—</strong><span class="tg-metric-note">Resolved operations</span></article>
     </div>
 
+    <div id="tg-per-bot" style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px;"></div>
+
     <form class="tg-toolbar" id="tg-filters" aria-label="Filter Telegram operations">
         <fieldset style="margin:0;padding:0;border:0;min-width:0">
             <legend class="tg-field-label">Request kind</legend>
@@ -358,6 +360,22 @@
         setMetric('metric-support', counters, ['open_support', 'support_open', 'support']);
         setMetric('metric-completed', counters, ['completed_today', 'today_completed']);
     }
+    function renderPerBot(perBot = []) {
+        const wrap = document.getElementById('tg-per-bot');
+        clear(wrap);
+        perBot.forEach(entry => {
+            const card = el('article', 'tg-metric');
+            card.style.minWidth = '190px';
+            const rate = entry.completion_rate === null || entry.completion_rate === undefined
+                ? '—' : `${Math.round(Number(entry.completion_rate) * 100)}%`;
+            append(card,
+                el('span', 'tg-metric-label', value(entry.bot_name)),
+                el('strong', 'tg-metric-value', `${Number(entry.purchases || 0)} purchases`),
+                el('span', 'tg-metric-note',
+                    `${fmtAmount(entry.revenue)} · ${Number(entry.completed || 0)} completed (${rate}) · ${Number(entry.open_tickets || 0)} open tickets`));
+            wrap.appendChild(card);
+        });
+    }
 
     function renderLoading() {
         clear(listEl);
@@ -425,6 +443,12 @@
     }
     function receiptSection(item) {
         const sec = section('Payment receipt');
+        if (item.duplicate_receipt) {
+            const warning = el('div', 'tg-duplicate-warning',
+                '⚠️ This receipt file was already used on another purchase request. Review carefully before approving.');
+            warning.style.cssText = 'padding:10px 12px;margin-bottom:8px;border:1px solid rgba(239,68,68,.5);background:rgba(239,68,68,.12);border-radius:8px;color:#f87171;font-weight:600;';
+            sec.appendChild(warning);
+        }
         const frame = el('div', 'tg-receipt');
         const safeUrl = safeReceiptUrl(item.receipt_url);
         if (!safeUrl) {
@@ -645,7 +669,7 @@
         if (item.provisioning_error) body.appendChild(el('div', 'tg-error-box', `Provisioning error: ${item.provisioning_error}`));
         const grid = el('div', 'tg-detail-grid'); const main = el('div'); const side = el('div');
         const summary = section('Request details'); const facts = el('dl', 'tg-facts');
-        append(facts, fact('Status', displayStatus(item)), fact('Amount', fmtAmount(item.amount) || '—'), fact('Server', item.server_name), fact('Account', item.account_name, true), fact('Package', item.package_name), fact('Phone', item.customer_phone || item.phone, true), fact('Telegram username', item.telegram_username ? `@${item.telegram_username}` : '—'), fact('Telegram user ID', item.telegram_user_id, true), fact('Created', fmtDate(item.created_at)), fact('Last updated', fmtDate(item.updated_at)));
+        append(facts, fact('Status', displayStatus(item)), fact('Amount', fmtAmount(item.amount) || '—'), ...(item.discount_amount ? [fact('Original amount', fmtAmount(item.original_amount) || '—'), fact('Discount', fmtAmount(item.discount_amount) || '—'), fact('Promo code', item.promo_code || '—', true)] : []), fact('Server', item.server_name), fact('Account', item.account_name, true), fact('Package', item.package_name), fact('Phone', item.customer_phone || item.phone, true), fact('Telegram username', item.telegram_username ? `@${item.telegram_username}` : '—'), fact('Telegram user ID', item.telegram_user_id, true), fact('Created', fmtDate(item.created_at)), fact('Last updated', fmtDate(item.updated_at)));
         summary.appendChild(facts); main.appendChild(summary);
         if (item.kind === 'support') {
             if (supportState(item) !== 'closed') main.appendChild(supportTriage(item));
@@ -673,7 +697,7 @@
             if (!response.ok || !data.success) throw new Error(data.error || `Request failed (${response.status})`);
             state.items = Array.isArray(data.items) ? data.items : [];
             if (state.selectedKey && !state.items.some(item => operationKey(item) === state.selectedKey)) state.selectedKey = null;
-            renderMetrics(data.counters || {}); renderList(); renderDetail();
+            renderMetrics(data.counters || {}); renderPerBot(data.per_bot || []); renderList(); renderDetail();
             if (state.selectedKey) workspaceEl.classList.add('detail-open');
             document.getElementById('tg-last-updated').textContent = `Synced ${EveDate.formatTime(new Date())}`;
         } catch (error) {

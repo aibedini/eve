@@ -74,6 +74,18 @@
                     </div>
                     <span>Active</span>
                 </label>
+                {% if is_superadmin %}
+                <div class="form-group">
+                    <label>Owner Reseller</label>
+                    <select id="card-reseller" class="form-input">
+                        <option value="">— Central (no owner) —</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Assigned Resellers</label>
+                    <div id="card-reseller-checkboxes" style="max-height:160px; overflow-y:auto; border:1px solid var(--border-color); border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:6px;"></div>
+                </div>
+                {% endif %}
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" onclick="closeCardModal()">Cancel</button>
                     <button type="submit" class="btn btn-primary">Save</button>
@@ -86,7 +98,38 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}">
+    const IS_SUPERADMIN = {{ 'true' if is_superadmin else 'false' }};
     let cards = [];
+    let _resellerCache = [];
+
+    async function loadResellerList() {
+        if (!IS_SUPERADMIN || _resellerCache.length) return;
+        try {
+            const resp = await fetch('/api/admins');
+            const data = await resp.json();
+            _resellerCache = (Array.isArray(data) ? data : []).filter(a => a.role === 'reseller');
+        } catch (err) { console.error(err); }
+    }
+
+    function renderCardResellerFields(card) {
+        if (!IS_SUPERADMIN) return;
+        const select = document.getElementById('card-reseller');
+        select.innerHTML = '<option value="">— Central (no owner) —</option>' +
+            _resellerCache.map(r => `<option value="${r.id}">${r.username}</option>`).join('');
+        select.value = card && card.reseller_id ? String(card.reseller_id) : '';
+        const container = document.getElementById('card-reseller-checkboxes');
+        const assigned = new Set(((card && card.assigned_reseller_ids) || []).map(id => parseInt(id)));
+        if (!_resellerCache.length) {
+            container.innerHTML = '<span style="font-size:0.85rem; color:var(--text-secondary);">No resellers found.</span>';
+            return;
+        }
+        container.innerHTML = _resellerCache.map(r => `
+            <label style="display:flex; align-items:center; gap:8px; font-size:0.9rem; cursor:pointer;">
+                <input type="checkbox" value="${r.id}" ${assigned.has(parseInt(r.id)) ? 'checked' : ''}>
+                <span>${r.username}</span>
+            </label>
+        `).join('');
+    }
 
     async function loadCards() {
         try {
@@ -184,6 +227,7 @@
             document.getElementById('card-form').reset();
             document.getElementById('card-id').value = '';
             document.getElementById('card-active').checked = true;
+            renderCardResellerFields(null);
             return;
         }
         document.getElementById('card-modal-title').textContent = 'Edit Card';
@@ -198,6 +242,7 @@
         document.getElementById('card-account').value = card.account_number || '';
         document.getElementById('card-notes').value = card.notes || '';
         document.getElementById('card-active').checked = !!card.is_active;
+        renderCardResellerFields(card);
     }
 
     function closeCardModal() {
@@ -217,6 +262,12 @@
             notes: document.getElementById('card-notes').value,
             is_active: document.getElementById('card-active').checked
         };
+        if (IS_SUPERADMIN) {
+            payload.reseller_id = document.getElementById('card-reseller').value || null;
+            payload.assigned_reseller_ids = [];
+            document.querySelectorAll('#card-reseller-checkboxes input[type=checkbox]:checked')
+                .forEach(cb => payload.assigned_reseller_ids.push(parseInt(cb.value)));
+        }
         const method = id ? 'PUT' : 'POST';
         const url = id ? `/api/bank-cards/${id}` : '/api/bank-cards';
         try {
@@ -254,6 +305,6 @@
         }
     }
 
-    document.addEventListener('DOMContentLoaded', loadCards);
+    document.addEventListener('DOMContentLoaded', () => { loadResellerList(); loadCards(); });
 </script>
 {% endblock %}

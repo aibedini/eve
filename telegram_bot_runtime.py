@@ -303,6 +303,25 @@ COPY = {
         "menu_add_service": "➕ افزودن سرویس موجود",
         "menu_support_requests": "🎫 درخواست‌های پشتیبانی من",
         "menu_language": "🌐 تغییر زبان",
+        "menu_invite": "🎁 لینک دعوت من",
+        "invite_link": "لینک دعوت شما:\n{link}\n\nدوستانتان با این لینک وارد ربات شوند تا دعوت موفق شما ثبت شود.",
+        "invite_unavailable": "لینک دعوت هنوز آماده نیست؛ کمی بعد دوباره تلاش کنید.",
+        "promo_code_button": "🏷 کد تخفیف دارم",
+        "promo_code_prompt": "کد تخفیف خود را ارسال کنید (برای انصراف «-» بفرستید):",
+        "promo_code_saved": "✅ کد تخفیف ثبت شد و روی خرید بعدی اعمال می‌شود.",
+        "promo_code_cleared": "کد تخفیف حذف شد.",
+        "promo_code_invalid": "این کد تخفیف معتبر نیست یا منقضی شده است.",
+        "promo_discount_block": "مبلغ اصلی: <s>{original}</s> تومان\nتخفیف: {discount} تومان\n",
+        "menu_trial": "🎁 دریافت تست رایگان",
+        "trial_unavailable": "در حال حاضر سرویس تست برای این ربات فعال نیست.",
+        "trial_already_used": "قبلاً از سرویس تست استفاده کرده‌اید. هر شماره موبایل فقط یک بار می‌تواند تست بگیرد.",
+        "trial_success": "✅ سرویس تست شما ساخته شد!\n\n{link}",
+        "trial_failed": "ساخت سرویس تست ناموفق بود. کمی بعد دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
+        "emergency_button": "🆘 دسترسی اضطراری",
+        "emergency_unavailable": "دسترسی اضطراری برای این ربات فعال نیست.",
+        "emergency_cooldown": "اخیراً برای این سرویس از دسترسی اضطراری استفاده شده است. لطفاً بعداً دوباره تلاش کنید یا سرویس را تمدید کنید.",
+        "emergency_success": "✅ دسترسی اضطراری فعال شد: {days} روز و {volume} گیگابایت به سرویس شما اضافه شد.",
+        "emergency_failed": "فعال‌سازی دسترسی اضطراری ناموفق بود. لطفاً با پشتیبانی تماس بگیرید.",
         "no_owned_services": "هنوز سرویسی به حساب شما متصل نشده است.",
         "owned_services": "سرویس‌های متصل به حساب شما:",
         "server_button": "🖥 سرور",
@@ -357,7 +376,7 @@ COPY = {
         "invalid_service": "این سرویس در حساب شما وجود ندارد یا دسترسی آن لغو شده است.",
         "choose_purchase_server": "سرور سرویس جدید را انتخاب کنید:",
         "choose_purchase_package": "پکیج خرید را انتخاب کنید:",
-        "purchase_payment": "برای ثبت سفارش، مبلغ <b>{amount}</b> تومان را به کارت زیر واریز کنید:\n\n{card}\n\nسپس تصویر رسید را همین‌جا ارسال کنید.",
+        "purchase_payment": "{discount_block}برای ثبت سفارش، مبلغ <b>{amount}</b> تومان را به کارت زیر واریز کنید:\n\n{card}\n\nسپس تصویر رسید را همین‌جا ارسال کنید.",
         "payment_unavailable": "فعلاً خرید برای این انتخاب فعال نیست یا کارت پرداختی تعریف نشده است. کمی بعد دوباره تلاش کنید.",
         "receipt_prompt": "لطفاً تصویر رسید کارت‌به‌کارت را ارسال کنید.",
         "receipt_invalid": "رسید باید عکس یا فایل JPG/PNG/WebP/PDF و حداکثر ۱۰ مگابایت باشد.",
@@ -411,6 +430,25 @@ COPY = {
         "menu_add_service": "➕ Add existing service",
         "menu_support_requests": "🎫 My support requests",
         "menu_language": "🌐 Change language",
+        "menu_invite": "🎁 My invite link",
+        "invite_link": "Your invite link:\n{link}\n\nWhen your friends join the bot through this link, your referral counts.",
+        "invite_unavailable": "The invite link is not ready yet; try again later.",
+        "promo_code_button": "🏷 I have a promo code",
+        "promo_code_prompt": "Send your promo code (send «-» to cancel):",
+        "promo_code_saved": "✅ Promo code saved and will apply to your next purchase.",
+        "promo_code_cleared": "Promo code removed.",
+        "promo_code_invalid": "This promo code is invalid or expired.",
+        "promo_discount_block": "Original: <s>{original}</s> Toman\nDiscount: {discount} Toman\n",
+        "menu_trial": "🎁 Get free trial",
+        "trial_unavailable": "The free trial is not available on this bot right now.",
+        "trial_already_used": "You have already used the free trial. Each phone number can claim it only once.",
+        "trial_success": "✅ Your trial service is ready!\n\n{link}",
+        "trial_failed": "Could not create the trial service. Try again later or contact support.",
+        "emergency_button": "🆘 Emergency access",
+        "emergency_unavailable": "Emergency access is not enabled on this bot.",
+        "emergency_cooldown": "Emergency access was already used for this service recently. Try again later or renew the service.",
+        "emergency_success": "✅ Emergency access activated: {days} day(s) and {volume} GB were added to your service.",
+        "emergency_failed": "Could not activate emergency access. Please contact support.",
         "no_owned_services": "No service is linked to your account yet.",
         "owned_services": "Services linked to your account:",
         "server_button": "🖥 Server",
@@ -465,7 +503,7 @@ COPY = {
         "invalid_service": "This service is not in your account or access was revoked.",
         "choose_purchase_server": "Choose a server for the new service:",
         "choose_purchase_package": "Choose a purchase package:",
-        "purchase_payment": "Transfer <b>{amount}</b> Toman to the card below:\n\n{card}\n\nThen send the receipt image here.",
+        "purchase_payment": "{discount_block}Transfer <b>{amount}</b> Toman to the card below:\n\n{card}\n\nThen send the receipt image here.",
         "payment_unavailable": "Purchasing is not available for this selection or no active payment card is configured. Try again later.",
         "receipt_prompt": "Please send the card-transfer receipt image.",
         "receipt_invalid": "The receipt must be a JPG/PNG/WebP/PDF up to 10 MB.",
@@ -516,14 +554,19 @@ def contact_keyboard(language: str):
     }
 
 
-def main_menu_keyboard(language: str):
+def main_menu_keyboard(language: str, show_trial: bool = False):
     lang = language if language in COPY else "fa"
+    rows = []
+    if show_trial:
+        rows.append([{"text": COPY[lang]["menu_trial"]}])
+    rows += [
+        [{"text": COPY[lang]["menu_services"]}, {"text": COPY[lang]["menu_buy_service"]}],
+        [{"text": COPY[lang]["menu_orders"]}, {"text": COPY[lang]["menu_add_service"]}],
+        [{"text": COPY[lang]["menu_support_requests"]}, {"text": COPY[lang]["menu_invite"]}],
+        [{"text": COPY[lang]["menu_language"]}],
+    ]
     return {
-        "keyboard": [
-            [{"text": COPY[lang]["menu_services"]}, {"text": COPY[lang]["menu_buy_service"]}],
-            [{"text": COPY[lang]["menu_orders"]}, {"text": COPY[lang]["menu_add_service"]}],
-            [{"text": COPY[lang]["menu_support_requests"]}, {"text": COPY[lang]["menu_language"]}],
-        ],
+        "keyboard": rows,
         "resize_keyboard": True,
         "is_persistent": True,
     }

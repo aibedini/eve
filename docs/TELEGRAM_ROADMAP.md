@@ -27,18 +27,19 @@ path without losing their design decisions.
 - [x] Customer purchase history and live order status
 - [ ] Reseller-specific bot instances, branding, packages, cards, and permissions
 - [ ] Payment provider interface for Iranian gateways, crypto, and future methods
-- [ ] Controlled trial and emergency-access policies with durable abuse limits
-- [ ] Customer notifications for expiry, low volume, renewal, and order events
-- [ ] Audit, rate-limit, fraud controls, and operational reporting
+- [x] Controlled trial and emergency-access policies with durable abuse limits
+- [x] Customer notifications for expiry, low volume, renewal, and order events
+- [x] Audit, rate-limit, fraud controls, and operational reporting
 
 ## Active phase — reseller bot foundation
 
 - [x] Independent long-poll worker per bot so one reseller cannot delay another
 - [x] Pooled HTTP/SOCKS connections and short route circuit breaker
 - [x] Customer updates take priority over periodic SLA scans
-- [ ] Reseller bot create/edit UI, token verification, branding, and central-bot fallback
-- [ ] Reseller-scoped packages, bank cards, server access, and operator permissions
-- [ ] Per-bot runtime controls, health reporting, and safe disable/delete lifecycle
+- [x] Reseller bot create/edit UI, token verification, branding, and central-bot fallback
+- [x] Reseller-scoped packages, bank cards, server access, and operator permissions
+- [x] Per-bot runtime controls, health reporting, and safe disable/delete lifecycle
+- [x] Promo engine with code/automatic discounts, referrals, and channel-join rewards
 
 ## Support phases — paused after 2.4.57
 

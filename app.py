@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.4.66"
+APP_VERSION = "2.5.0"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -4036,6 +4036,7 @@ class Package(db.Model):
     created_by = db.Column(db.Integer, nullable=True)
     display_order = db.Column(db.Integer, default=0)
     show_on_sub = db.Column(db.Boolean, default=False)  # show this package on customer subscription page
+    is_trial = db.Column(db.Boolean, nullable=False, default=False)  # free trial package, bot policy-gated
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=True)
 
@@ -4058,6 +4059,7 @@ class Package(db.Model):
             'created_by': self.created_by,
             'display_order': self.display_order or 0,
             'show_on_sub': bool(self.show_on_sub),
+            'is_trial': bool(self.is_trial),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -4136,6 +4138,9 @@ class BankCard(db.Model):
     notes = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # NULL = central card; reseller admin.id = reseller-owned card
+    reseller_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
+    assigned_reseller_ids = db.Column(db.Text, default='[]')  # JSON list of admin IDs
 
     def masked_card(self):
         if not self.card_number:
@@ -4146,6 +4151,10 @@ class BankCard(db.Model):
         return f"{'*' * (len(cleaned) - 4)}{cleaned[-4:]}"
 
     def to_dict(self):
+        try:
+            assigned = json.loads(self.assigned_reseller_ids or '[]')
+        except Exception:
+            assigned = []
         return {
             'id': self.id,
             'label': self.label,
@@ -4157,6 +4166,8 @@ class BankCard(db.Model):
             'account_number': self.account_number,
             'notes': self.notes,
             'is_active': self.is_active,
+            'reseller_id': self.reseller_id,
+            'assigned_reseller_ids': assigned,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
@@ -5496,6 +5507,274 @@ def whatsapp_bot_worker():
         except Exception as exc:
             try:
                 app.logger.warning(f"[whatsapp-bot] scan error: {exc}")
+            except Exception:
+                pass
+        time.sleep(1800)  # every 30 minutes
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Telegram customer notifications
+# Near-depletion scan + renewal confirmations delivered through the interactive
+# bot (reseller-owned bot when the account belongs to a reseller, else central).
+# ─────────────────────────────────────────────────────────────────────────────
+TG_DEPLETION_ENABLED_KEY = 'tg_depletion_enabled'
+TG_DEPLETION_EXPIRY_DAYS_KEY = 'tg_depletion_expiry_days'
+TG_DEPLETION_VOLUME_GB_KEY = 'tg_depletion_volume_gb'
+TG_DEPLETION_COOLDOWN_DAYS_KEY = 'tg_depletion_cooldown_days'
+TG_TPL_NEAR_EXPIRY_KEY = 'tg_tpl_near_expiry'
+TG_TPL_LOW_VOLUME_KEY = 'tg_tpl_low_volume'
+
+DEFAULT_TG_TPL_NEAR_EXPIRY = (
+    '⏳ سرویس «{account_name}» {remaining_time} دیگر منقضی می‌شود.\n'
+    '{if_dashboard_link}برای تمدید: {dashboard_link}{/if_dashboard_link}')
+DEFAULT_TG_TPL_LOW_VOLUME = (
+    '📉 حجم سرویس «{account_name}» رو به اتمام است (باقی‌مانده: {remaining_volume}).\n'
+    '{if_dashboard_link}برای تمدید: {dashboard_link}{/if_dashboard_link}')
+
+
+def _get_telegram_depletion_settings() -> dict:
+    keys = [
+        TG_DEPLETION_ENABLED_KEY, TG_DEPLETION_EXPIRY_DAYS_KEY,
+        TG_DEPLETION_VOLUME_GB_KEY, TG_DEPLETION_COOLDOWN_DAYS_KEY,
+        TG_TPL_NEAR_EXPIRY_KEY, TG_TPL_LOW_VOLUME_KEY,
+    ]
+    c = _get_system_configs_batch(keys)
+    wa = _get_whatsapp_runtime_settings()
+
+    def _txt(k, d=''):
+        v = c.get(k)
+        return str(v) if v is not None else d
+
+    def _bool(k, d=False):
+        return _parse_bool(_txt(k, 'true' if d else 'false'))
+
+    def _int(k, d, lo=None, hi=None):
+        return _parse_int(_txt(k, str(d)), d, min_value=lo, max_value=hi)
+
+    try:
+        volume_gb = float(_txt(TG_DEPLETION_VOLUME_GB_KEY, ''))
+    except (TypeError, ValueError):
+        volume_gb = float(wa.get('depletion_volume_gb') or 2.0)
+    return {
+        'enabled': _bool(TG_DEPLETION_ENABLED_KEY, False),
+        # Thresholds fall back to the WhatsApp/SMS depletion thresholds so one
+        # operator-tuned window drives every notification channel.
+        'expiry_days': _int(TG_DEPLETION_EXPIRY_DAYS_KEY,
+                            int(wa.get('depletion_expiry_days') or 3), lo=0, hi=60),
+        'volume_gb': max(0.0, volume_gb),
+        'cooldown_days': _int(TG_DEPLETION_COOLDOWN_DAYS_KEY,
+                              int(wa.get('depletion_cooldown_days') or 7), lo=1, hi=120),
+        'tpl_near_expiry': _txt(TG_TPL_NEAR_EXPIRY_KEY, '').strip() or DEFAULT_TG_TPL_NEAR_EXPIRY,
+        'tpl_low_volume': _txt(TG_TPL_LOW_VOLUME_KEY, '').strip() or DEFAULT_TG_TPL_LOW_VOLUME,
+    }
+
+
+def _notification_bot_for_reseller(reseller_id):
+    """Active, non-archived bot owned by this reseller; else the central bot."""
+    bot = None
+    if reseller_id:
+        bot = TelegramBotInstance.query.filter(
+            TelegramBotInstance.owner_type == 'reseller',
+            TelegramBotInstance.owner_admin_id == int(reseller_id),
+            TelegramBotInstance.enabled.is_(True),
+            TelegramBotInstance.archived_at.is_(None),
+            TelegramBotInstance.token_encrypted.isnot(None),
+        ).order_by(TelegramBotInstance.id.asc()).first()
+    if bot is None:
+        bot = TelegramBotInstance.query.filter(
+            TelegramBotInstance.scope_key == 'system',
+            TelegramBotInstance.enabled.is_(True),
+            TelegramBotInstance.archived_at.is_(None),
+            TelegramBotInstance.token_encrypted.isnot(None),
+        ).first()
+    return bot
+
+
+def _notification_bot_for_account(server_id, email):
+    """(bot, ownership) pair used to reach the owner of a panel account."""
+    try:
+        sid_norm = int(server_id)
+    except (TypeError, ValueError):
+        sid_norm = None
+    email_l = (email or '').strip().lower()
+    ownership = None
+    if sid_norm is not None and email_l:
+        ownership = ServiceOwnership.query.filter(
+            ServiceOwnership.server_id == sid_norm,
+            db.func.lower(ServiceOwnership.client_email_snapshot) == email_l,
+            ServiceOwnership.revoked_at.is_(None),
+        ).first()
+    bot = _notification_bot_for_reseller(ownership.reseller_id if ownership else None)
+    return bot, ownership
+
+
+def _notify_customer_telegram(customer_id, text, bot=None) -> None:
+    """Send a Telegram message to a customer's linked identity in a background
+    thread. No-op without a linked chat or a usable bot."""
+    if not customer_id or not (text or '').strip():
+        return
+
+    def _worker():
+        with app.app_context():
+            try:
+                identity = TelegramIdentity.query.filter_by(customer_id=int(customer_id)).first()
+                chat_id = int(getattr(identity, 'telegram_chat_id', 0) or 0) if identity else 0
+                if not chat_id:
+                    return
+                target = bot or _notification_bot_for_reseller(None)
+                if target is None:
+                    return
+                _telegram_bot_api_client(target).send_message(chat_id, text)
+            except Exception as exc:
+                try:
+                    db.session.rollback()
+                    app.logger.warning(f"[telegram-notify] customer {customer_id}: {exc}")
+                except Exception:
+                    pass
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _run_telegram_depletion_scan() -> dict:
+    """Telegram twin of _run_whatsapp_depletion_scan: message bot-linked
+    customers whose service is near expiry or low on volume, once per event
+    per cooldown window (shared WhatsappBotLog with tg_* events)."""
+    cfg = _get_telegram_depletion_settings()
+    if not cfg.get('enabled'):
+        return {'scanned': 0, 'sent': 0, 'reason': 'disabled'}
+
+    expiry_days = int(cfg.get('expiry_days') or 3)
+    volume_gb_thr = float(cfg.get('volume_gb') or 2.0)
+    cooldown_cut = datetime.utcnow() - timedelta(days=int(cfg.get('cooldown_days') or 7))
+    base_url = _public_base_url()
+
+    inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+    scanned = 0
+    sent = 0
+    seen = set()
+    api_by_bot = {}
+
+    for inbound in inbounds:
+        sid = inbound.get('server_id')
+        try:
+            sid_norm = int(sid)
+        except (TypeError, ValueError):
+            sid_norm = None
+        for client in (inbound.get('clients') or []):
+            email = (client.get('email') or '').strip()
+            email_l = email.lower()
+            if not email_l:
+                continue
+            dedupe = (sid_norm, email_l)
+            if dedupe in seen:
+                continue
+            seen.add(dedupe)
+            scanned += 1
+
+            if sid_norm is None:
+                continue
+            ownership = ServiceOwnership.query.filter(
+                ServiceOwnership.server_id == sid_norm,
+                db.func.lower(ServiceOwnership.client_email_snapshot) == email_l,
+                ServiceOwnership.revoked_at.is_(None),
+            ).first()
+            if not ownership:
+                continue
+            identity = TelegramIdentity.query.filter_by(
+                customer_id=ownership.customer_id).first()
+            chat_id = int(getattr(identity, 'telegram_chat_id', 0) or 0) if identity else 0
+            if not chat_id:
+                continue
+            bot = _notification_bot_for_reseller(ownership.reseller_id)
+            if bot is None:
+                continue
+
+            total_bytes = int(client.get('totalGB') or 0)
+            try:
+                used = int(client.get('up') or 0) + int(client.get('down') or 0)
+            except Exception:
+                used = 0
+            rem_bytes = client.get('remaining_bytes')
+            if rem_bytes is None or rem_bytes == -1:
+                rem_bytes = max(total_bytes - used, 0) if total_bytes > 0 else None
+            rem_gb = (float(rem_bytes) / (1024 ** 3)) if rem_bytes is not None else None
+
+            expiry_ts = int(client.get('expiryTimestamp') or 0)
+            exp = format_remaining_days(expiry_ts)
+            days_left = int(exp.get('days') or 0)
+            near_time = bool(expiry_ts and exp.get('type') in ('today', 'soon') and days_left <= expiry_days)
+            near_vol = bool(rem_gb is not None and 0 < rem_gb <= volume_gb_thr)
+            if not (near_time or near_vol):
+                continue
+            event = 'tg_near_expiry' if near_time else 'tg_low_volume'
+
+            try:
+                recent = WhatsappBotLog.query.filter(
+                    WhatsappBotLog.email == email_l,
+                    WhatsappBotLog.server_id == (sid_norm or 0),
+                    WhatsappBotLog.event == event,
+                    WhatsappBotLog.sent_at >= cooldown_cut,
+                ).first()
+            except Exception:
+                recent = None
+            if recent:
+                continue
+
+            final_id = client.get('subId') or client.get('id') or ''
+            dash = (client.get('dash_sub_url') or '').strip()
+            if dash and not dash.startswith('http') and base_url:
+                dash = base_url + (dash if dash.startswith('/') else f"/{dash}")
+            elif not dash and base_url and final_id and sid_norm is not None:
+                dash = f"{base_url}/s/{sid_norm}/{final_id}"
+
+            vars_dict = {
+                'email': email, 'account_name': email, 'user': email,
+                'remaining_time': exp.get('text') or '-',
+                'remaining_volume': client.get('remaining_formatted') or '-',
+                'days_left': days_left,
+                'dashboard_link': dash, 'sub_link': dash,
+                'server_name': inbound.get('server_name') or '',
+            }
+            template = cfg['tpl_near_expiry'] if near_time else cfg['tpl_low_volume']
+            try:
+                text_msg = _render_text_template(template, vars_dict)
+            except Exception:
+                continue
+            if not (text_msg or '').strip():
+                continue
+
+            try:
+                api = api_by_bot.get(bot.id)
+                if api is None:
+                    api = _telegram_bot_api_client(bot)
+                    api_by_bot[bot.id] = api
+                api.send_message(chat_id, text_msg)
+            except Exception as exc:
+                db.session.rollback()
+                app.logger.warning(f"[telegram-bot] depletion send failed for bot {bot.id}: {exc}")
+                continue
+            try:
+                db.session.add(WhatsappBotLog(
+                    email=email_l, server_id=(sid_norm or 0), event=event))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            sent += 1
+
+    return {'scanned': scanned, 'sent': sent}
+
+
+def telegram_depletion_worker():
+    """Background loop running the Telegram near-depletion scan periodically."""
+    while True:
+        try:
+            with app.app_context():
+                result = _run_telegram_depletion_scan()
+                if result.get('sent'):
+                    app.logger.info(f"[telegram-bot] depletion scan sent={result.get('sent')} scanned={result.get('scanned')}")
+        except Exception as exc:
+            try:
+                app.logger.warning(f"[telegram-bot] scan error: {exc}")
             except Exception:
                 pass
         time.sleep(1800)  # every 30 minutes
@@ -8191,6 +8470,8 @@ class TelegramBotInstance(db.Model):
     last_test_latency_ms = db.Column(db.Integer, nullable=True)
     last_test_error = db.Column(db.Text, nullable=True)
     last_test_at = db.Column(db.DateTime, nullable=True)
+    archived_at = db.Column(db.DateTime, nullable=True, index=True)
+    archived_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -8228,6 +8509,8 @@ class TelegramBotInstance(db.Model):
             'last_test_latency_ms': self.last_test_latency_ms,
             'last_test_error': self.last_test_error,
             'last_test_at': self.last_test_at.isoformat() if self.last_test_at else None,
+            'archived': self.archived_at is not None,
+            'archived_at': self.archived_at.isoformat() if self.archived_at else None,
         }
 
 
@@ -8264,6 +8547,8 @@ class TelegramBotRuntime(db.Model):
         return {
             'status': status,
             'next_update_id': int(self.next_update_id or 0),
+            'worker_id': self.worker_id,
+            'failed_update_count': int(self.failed_update_count or 0),
             'last_heartbeat_at': heartbeat.isoformat() if heartbeat else None,
             'last_update_at': self.last_update_at.isoformat() if self.last_update_at else None,
             'last_route': self.last_route,
@@ -8387,6 +8672,9 @@ class TelegramServiceRequest(db.Model):
     request_type = db.Column(db.String(24), nullable=False, index=True)
     package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='SET NULL'), nullable=True)
     amount = db.Column(db.BigInteger, nullable=True)
+    original_amount = db.Column(db.BigInteger, nullable=True)
+    discount_amount = db.Column(db.BigInteger, nullable=True)
+    promo_code = db.Column(db.String(64), nullable=True)
     note = db.Column(db.Text, nullable=True)
     status = db.Column(db.String(24), nullable=False, default='pending', index=True)
     reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
@@ -8452,6 +8740,11 @@ class TelegramPurchaseSession(db.Model):
     server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=True)
     package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='SET NULL'), nullable=True)
     bank_card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id', ondelete='SET NULL'), nullable=True)
+    quoted_amount = db.Column(db.Integer, nullable=True)  # price frozen at payment time (Wave D promo base)
+    promo_id = db.Column(db.Integer, nullable=True)  # primary applied promo at freeze time
+    promo_code = db.Column(db.String(64), nullable=True)  # customer-entered code
+    discount_amount = db.Column(db.Integer, nullable=True)
+    promo_discounts_json = db.Column(db.Text, nullable=True)  # {promo_id: discount} applied at freeze
     action = db.Column(db.String(32), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -8480,6 +8773,10 @@ class TelegramPurchaseRequest(db.Model):
     source_chat_id = db.Column(db.BigInteger, nullable=False)
     source_message_id = db.Column(db.BigInteger, nullable=False)
     status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    duplicate_receipt = db.Column(db.Boolean, nullable=False, default=False)
+    original_amount = db.Column(db.BigInteger, nullable=True)
+    discount_amount = db.Column(db.BigInteger, nullable=True)
+    promo_code = db.Column(db.String(64), nullable=True)
     reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
     reviewed_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
@@ -8503,6 +8800,12 @@ class TelegramPurchasePolicy(db.Model):
     account_name_template = db.Column(
         db.String(120), nullable=False, default='tg{order_id}-{phone_last4}',
     )
+    trial_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    trial_package_id = db.Column(db.Integer, db.ForeignKey('packages.id'), nullable=True)
+    emergency_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    emergency_days = db.Column(db.Integer, nullable=False, default=1)
+    emergency_volume_gb = db.Column(db.Integer, nullable=False, default=1)
+    emergency_cooldown_days = db.Column(db.Integer, nullable=False, default=30)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def to_safe_dict(self):
@@ -8511,7 +8814,124 @@ class TelegramPurchasePolicy(db.Model):
             'assignment_strategy': self.assignment_strategy or 'least_clients',
             'account_name_mode': self.account_name_mode or 'generated',
             'account_name_template': self.account_name_template or 'tg{order_id}-{phone_last4}',
+            'trial_enabled': bool(self.trial_enabled),
+            'trial_package_id': self.trial_package_id,
+            'emergency_enabled': bool(self.emergency_enabled),
+            'emergency_days': max(1, int(self.emergency_days or 1)),
+            'emergency_volume_gb': max(0, int(self.emergency_volume_gb or 1)),
+            'emergency_cooldown_days': max(1, int(self.emergency_cooldown_days or 30)),
         }
+
+
+class TelegramTrialGrant(db.Model):
+    """Durable abuse ledger for free trial and emergency-access grants.
+
+    One 'trial' grant per phone number (and per telegram user) per bot, and one
+    'emergency' grant per ownership per cooldown window — both enforced in code
+    inside the granting transaction."""
+    __tablename__ = 'telegram_trial_grants'
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    phone_normalized = db.Column(db.String(12), nullable=False, default='', index=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer_accounts.id'), nullable=True)
+    package_id = db.Column(db.Integer, db.ForeignKey('packages.id'), nullable=True)
+    ownership_id = db.Column(db.Integer, db.ForeignKey('service_ownerships.id'), nullable=True)
+    kind = db.Column(db.String(16), nullable=False, default='trial', index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class TelegramPromo(db.Model):
+    """Rule-based promotion: optional code (NULL = automatic), percent/fixed
+    action, bot/package scope, conditions, usage limits, and stacking order."""
+    __tablename__ = 'telegram_promos'
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(64), nullable=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    kind = db.Column(db.String(16), nullable=False, default='percent')  # percent | fixed
+    value = db.Column(db.Float, nullable=False, default=0)
+    max_discount_amount = db.Column(db.BigInteger, nullable=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id'), nullable=True, index=True)
+    package_id = db.Column(db.Integer, db.ForeignKey('packages.id'), nullable=True, index=True)
+    applies_to = db.Column(db.String(16), nullable=False, default='both')  # purchase | renewal | both
+    min_amount = db.Column(db.BigInteger, nullable=True)
+    first_purchase_only = db.Column(db.Boolean, nullable=False, default=False)
+    min_purchases_30d = db.Column(db.Integer, nullable=True)
+    min_purchases_90d = db.Column(db.Integer, nullable=True)
+    min_referrals = db.Column(db.Integer, nullable=True)
+    requires_channel_chat_id = db.Column(db.BigInteger, nullable=True)
+    starts_at = db.Column(db.DateTime, nullable=True)
+    ends_at = db.Column(db.DateTime, nullable=True)
+    max_uses_total = db.Column(db.Integer, nullable=True)
+    max_uses_per_user = db.Column(db.Integer, nullable=True)
+    stackable = db.Column(db.Boolean, nullable=False, default=False)
+    priority = db.Column(db.Integer, nullable=False, default=0)
+    apply_on_reseller_pricing = db.Column(db.Boolean, nullable=False, default=True)
+    owner_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'code': self.code,
+            'name': self.name,
+            'description': self.description,
+            'kind': self.kind,
+            'value': float(self.value or 0),
+            'max_discount_amount': self.max_discount_amount,
+            'bot_instance_id': self.bot_instance_id,
+            'package_id': self.package_id,
+            'applies_to': self.applies_to or 'both',
+            'min_amount': self.min_amount,
+            'first_purchase_only': bool(self.first_purchase_only),
+            'min_purchases_30d': self.min_purchases_30d,
+            'min_purchases_90d': self.min_purchases_90d,
+            'min_referrals': self.min_referrals,
+            'requires_channel_chat_id': self.requires_channel_chat_id,
+            'starts_at': self.starts_at.isoformat() if self.starts_at else None,
+            'ends_at': self.ends_at.isoformat() if self.ends_at else None,
+            'max_uses_total': self.max_uses_total,
+            'max_uses_per_user': self.max_uses_per_user,
+            'stackable': bool(self.stackable),
+            'priority': int(self.priority or 0),
+            'apply_on_reseller_pricing': bool(self.apply_on_reseller_pricing),
+            'owner_admin_id': self.owner_admin_id,
+            'enabled': bool(self.enabled),
+        }
+
+
+class TelegramPromoUse(db.Model):
+    """Durable record of one applied promo — usage-limit enforcement and stats."""
+    __tablename__ = 'telegram_promo_uses'
+    __table_args__ = (
+        db.Index('ix_telegram_promo_uses_promo_user', 'promo_id', 'telegram_user_id'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    promo_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_promos.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    telegram_user_id = db.Column(db.BigInteger, nullable=False)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer_accounts.id'), nullable=True)
+    purchase_request_id = db.Column(db.Integer, nullable=True)
+    amount_discounted = db.Column(db.BigInteger, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class TelegramReferral(db.Model):
+    """One inviter per telegram user; qualified when the invitee verifies a phone."""
+    __tablename__ = 'telegram_referrals'
+    id = db.Column(db.Integer, primary_key=True)
+    referrer_telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    referee_telegram_user_id = db.Column(db.BigInteger, nullable=False, unique=True)
+    qualified_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
 class TelegramPurchaseServerRule(db.Model):
@@ -8904,6 +9324,19 @@ class MonitorMessageLog(db.Model):
     channel = db.Column(db.String(16), nullable=False)  # 'sms' or 'whatsapp'
     sent_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     sent_by = db.Column(db.Integer)  # admin id
+
+
+class AuditLog(db.Model):
+    """Durable audit trail for sensitive panel and bot actions."""
+    __tablename__ = 'audit_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    actor_type = db.Column(db.String(16), nullable=False, default='system')  # admin | system | customer
+    actor_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True, index=True)
+    action = db.Column(db.String(64), nullable=False, index=True)
+    target_type = db.Column(db.String(32), nullable=True)
+    target_id = db.Column(db.String(64), nullable=True)
+    meta_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
 class WhatsappBotLog(db.Model):
@@ -9551,6 +9984,7 @@ with app.app_context():
                 ('created_by', 'INTEGER'),
                 ('display_order', 'INTEGER DEFAULT 0'),
                 ('show_on_sub', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+                ('is_trial', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
                 ('created_at', _ts_type),
                 ('updated_at', _ts_type),
             ]
@@ -9573,6 +10007,103 @@ with app.app_context():
                     _conn.commit()
     except Exception as _te:
         print(f"Migration error (price_tiers assigned_reseller_ids): {_te}")
+
+    # Ensure bank_cards supports reseller ownership (reseller_id, assigned_reseller_ids)
+    try:
+        inspector = inspect(db.engine)
+        if 'bank_cards' in set(inspector.get_table_names()):
+            _card_cols = [c['name'] for c in inspector.get_columns('bank_cards')]
+            _card_new = [
+                ('reseller_id', 'INTEGER'),
+                ('assigned_reseller_ids', "TEXT DEFAULT '[]'"),
+            ]
+            for _cn, _cd in _card_new:
+                if _cn not in _card_cols:
+                    with db.engine.connect() as _conn:
+                        _conn.execute(text(f'ALTER TABLE bank_cards ADD COLUMN {_cn} {_cd}'))
+                        _conn.commit()
+    except Exception as _ce:
+        print(f"Migration error (bank_cards reseller columns): {_ce}")
+
+    # Ensure telegram_bot_instances supports soft-archive lifecycle
+    try:
+        inspector = inspect(db.engine)
+        if 'telegram_bot_instances' in set(inspector.get_table_names()):
+            _bot_cols = [c['name'] for c in inspector.get_columns('telegram_bot_instances')]
+            for _cn, _cd in [('archived_at', 'DATETIME'), ('archived_by_admin_id', 'INTEGER')]:
+                if _cn not in _bot_cols:
+                    with db.engine.connect() as _conn:
+                        _conn.execute(text(f'ALTER TABLE telegram_bot_instances ADD COLUMN {_cn} {_cd}'))
+                        _conn.commit()
+    except Exception as _be:
+        print(f"Migration error (telegram_bot_instances archive columns): {_be}")
+
+    # Ensure telegram_purchase_policies supports trial and emergency access
+    try:
+        inspector = inspect(db.engine)
+        if 'telegram_purchase_policies' in set(inspector.get_table_names()):
+            _pol_cols = [c['name'] for c in inspector.get_columns('telegram_purchase_policies')]
+            _is_pg = db.engine.dialect.name == 'postgresql'
+            _bool_t = 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'
+            for _cn, _cd in [
+                ('trial_enabled', _bool_t),
+                ('trial_package_id', 'INTEGER'),
+                ('emergency_enabled', _bool_t),
+                ('emergency_days', 'INTEGER DEFAULT 1'),
+                ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
+                ('emergency_cooldown_days', 'INTEGER DEFAULT 30'),
+            ]:
+                if _cn not in _pol_cols:
+                    with db.engine.connect() as _conn:
+                        _conn.execute(text(f'ALTER TABLE telegram_purchase_policies ADD COLUMN {_cn} {_cd}'))
+                        _conn.commit()
+    except Exception as _ppe:
+        print(f"Migration error (telegram_purchase_policies trial/emergency columns): {_ppe}")
+
+    # Ensure telegram purchase tables support quoted-amount freeze and receipt fraud flags
+    try:
+        inspector = inspect(db.engine)
+        _is_pg = db.engine.dialect.name == 'postgresql'
+        _alters = []
+        if 'telegram_purchase_sessions' in set(inspector.get_table_names()):
+            _cols = [c['name'] for c in inspector.get_columns('telegram_purchase_sessions')]
+            for _cn, _cd in [
+                ('quoted_amount', 'INTEGER'),
+                ('promo_id', 'INTEGER'),
+                ('promo_code', 'VARCHAR(64)'),
+                ('discount_amount', 'INTEGER'),
+                ('promo_discounts_json', 'TEXT'),
+            ]:
+                if _cn not in _cols:
+                    _alters.append(f'ALTER TABLE telegram_purchase_sessions ADD COLUMN {_cn} {_cd}')
+        if 'telegram_purchase_requests' in set(inspector.get_table_names()):
+            _cols = [c['name'] for c in inspector.get_columns('telegram_purchase_requests')]
+            if 'duplicate_receipt' not in _cols:
+                _alters.append(
+                    'ALTER TABLE telegram_purchase_requests ADD COLUMN duplicate_receipt '
+                    + ('BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'))
+            for _cn, _cd in [
+                ('original_amount', 'BIGINT' if _is_pg else 'INTEGER'),
+                ('discount_amount', 'BIGINT' if _is_pg else 'INTEGER'),
+                ('promo_code', 'VARCHAR(64)'),
+            ]:
+                if _cn not in _cols:
+                    _alters.append(f'ALTER TABLE telegram_purchase_requests ADD COLUMN {_cn} {_cd}')
+        if 'telegram_service_requests' in set(inspector.get_table_names()):
+            _cols = [c['name'] for c in inspector.get_columns('telegram_service_requests')]
+            for _cn, _cd in [
+                ('original_amount', 'BIGINT' if _is_pg else 'INTEGER'),
+                ('discount_amount', 'BIGINT' if _is_pg else 'INTEGER'),
+                ('promo_code', 'VARCHAR(64)'),
+            ]:
+                if _cn not in _cols:
+                    _alters.append(f'ALTER TABLE telegram_service_requests ADD COLUMN {_cn} {_cd}')
+        for _sql in _alters:
+            with db.engine.connect() as _conn:
+                _conn.execute(text(_sql))
+                _conn.commit()
+    except Exception as _qe:
+        print(f"Migration error (telegram purchase audit columns): {_qe}")
 
     # Add icon_url and is_recommended to sub_app_configs (older DBs)
     try:
@@ -17725,6 +18256,14 @@ def renew_client(server_id, inbound_id, email):
                 _fire_automation_sms('renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
                                      DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,
                                      server_name=getattr(server, 'name', '') or '')
+                # Telegram confirmation for bot-linked customers — reseller-owned
+                # accounts are messaged through the reseller's own bot.
+                try:
+                    _tg_bot, _tg_own = _notification_bot_for_account(server.id, email)
+                    if _tg_own and _tg_bot and (copy_text or '').strip():
+                        _notify_customer_telegram(_tg_own.customer_id, copy_text, bot=_tg_bot)
+                except Exception:
+                    pass
                 whatsapp_meta = {
                     'enabled': whatsapp_runtime.get('enabled', False),
                     'deployment_region': whatsapp_runtime.get('deployment_region', 'outside'),
@@ -19158,6 +19697,7 @@ def create_package():
         assigned_reseller_ids=_j.dumps([int(r) for r in reseller_ids]),
         created_by=session.get('admin_id'),
         show_on_sub=bool(data.get('show_on_sub', False)),
+        is_trial=bool(data.get('is_trial', False)),
         created_at=datetime.utcnow(),
     )
     db.session.add(package)
@@ -19185,6 +19725,8 @@ def update_package(package_id):
         package.scope = data['scope']
     if 'show_on_sub' in data:
         package.show_on_sub = bool(data['show_on_sub'])
+    if 'is_trial' in data:
+        package.is_trial = bool(data['is_trial'])
     if 'assigned_reseller_ids' in data or 'reseller_ids' in data:
         import json as _j
         reseller_ids = data.get('assigned_reseller_ids', data.get('reseller_ids', []))
@@ -19272,18 +19814,19 @@ def reseller_create_package():
         price = int(data.get('price') or 0)
     except Exception:
         return jsonify({'success': False, 'error': 'Invalid numbers'}), 400
-    if not name or price <= 0:
+    if not name or (price <= 0 and not data.get('is_trial')):
         return jsonify({'success': False, 'error': 'Name and price are required'}), 400
 
     # Selling-price floor = SYSTEM base tariff (no reseller discount applied).
     floor, _cpg, _cpd, _tier = _calculate_minimum_price(volume, days, reseller_id=None, server_id=None, user=None)
-    if days > 0 and volume > 0 and floor and price < floor:
+    if not data.get('is_trial') and days > 0 and volume > 0 and floor and price < floor:
         return jsonify({'success': False, 'error': f'Price must be at least {floor:,} (system base tariff).', 'min_price': floor}), 400
 
     pkg = Package(
         name=name, days=days, volume=volume, price=price,
         enabled=True, scope='personal', assigned_reseller_ids='[]',
         created_by=user.id, show_on_sub=bool(data.get('show_on_sub', False)),
+        is_trial=bool(data.get('is_trial', False)),
         created_at=datetime.utcnow(),
     )
     db.session.add(pkg)
@@ -19312,17 +19855,19 @@ def reseller_update_package(package_id):
         price = int(data.get('price', pkg.price) or 0)
     except Exception:
         return jsonify({'success': False, 'error': 'Invalid numbers'}), 400
-    if not name or price <= 0:
+    if not name or (price <= 0 and not data.get('is_trial')):
         return jsonify({'success': False, 'error': 'Name and price are required'}), 400
 
     floor, _cpg, _cpd, _tier = _calculate_minimum_price(volume, days, reseller_id=None, server_id=None, user=None)
-    if days > 0 and volume > 0 and floor and price < floor:
+    if not data.get('is_trial') and days > 0 and volume > 0 and floor and price < floor:
         return jsonify({'success': False, 'error': f'Price must be at least {floor:,} (system base tariff).', 'min_price': floor}), 400
 
     pkg.name = name
     pkg.days = days
     pkg.volume = volume
     pkg.price = price
+    if 'is_trial' in data:
+        pkg.is_trial = bool(data['is_trial'])
     if 'show_on_sub' in data:
         pkg.show_on_sub = bool(data['show_on_sub'])
     pkg.updated_at = datetime.utcnow()
@@ -19397,6 +19942,18 @@ def reseller_packages_page():
     if not user or user.role != 'reseller':
         return redirect(url_for('dashboard'))
     return render_template('reseller_packages.html',
+                           admin_username=session.get('admin_username'),
+                           is_superadmin=False,
+                           role='reseller')
+
+
+@app.route('/reseller/telegram-bot')
+@login_required
+def reseller_telegram_bot_page():
+    user = db.session.get(Admin, session['admin_id'])
+    if not user or user.role != 'reseller':
+        return redirect(url_for('dashboard'))
+    return render_template('reseller_telegram_bot.html',
                            admin_username=session.get('admin_username'),
                            is_superadmin=False,
                            role='reseller')
@@ -24077,16 +24634,56 @@ def list_bank_cards():
     elif not include_inactive:
         query = query.filter_by(is_active=True)
     cards = query.order_by(BankCard.created_at.desc()).all()
+    if not (user.role == 'superadmin' or user.is_superadmin):
+        cards = [card for card in cards if _bank_card_accessible_to(card, user)]
     return jsonify({'success': True, 'cards': [card.to_dict() for card in cards]})
+
+
+def _bank_card_accessible_to(card, user):
+    """Non-superadmins see central cards, their own cards, and cards assigned to them."""
+    if not card.reseller_id:
+        return True
+    if user and card.reseller_id == user.id:
+        return True
+    try:
+        assigned = json.loads(card.assigned_reseller_ids or '[]')
+    except Exception:
+        assigned = []
+    return bool(user) and user.id in [int(value) for value in assigned]
+
+
+def _bank_card_reseller_fields(data):
+    """Validate and normalize reseller ownership fields; returns (reseller_id, assigned_json, error)."""
+    reseller_id = data.get('reseller_id')
+    if reseller_id in ('', 0, '0'):
+        reseller_id = None
+    if reseller_id is not None:
+        try:
+            reseller_id = int(reseller_id)
+        except (TypeError, ValueError):
+            return None, None, 'Invalid reseller_id'
+        owner = db.session.get(Admin, reseller_id)
+        if not owner or str(owner.role or '').lower() != 'reseller':
+            return None, None, 'reseller_id must reference a reseller admin'
+    assigned_ids = data.get('assigned_reseller_ids', [])
+    if not isinstance(assigned_ids, list):
+        assigned_ids = []
+    try:
+        assigned_json = json.dumps([int(value) for value in assigned_ids])
+    except (TypeError, ValueError):
+        return None, None, 'Invalid assigned_reseller_ids'
+    return reseller_id, assigned_json, None
+
 
 @app.route('/api/bank-cards', methods=['POST'])
 @user_management_required
 def create_bank_card():
+    user = db.session.get(Admin, session['admin_id'])
     data = request.get_json() or {}
     label = (data.get('label') or '').strip()
     if not label:
         return jsonify({'success': False, 'error': 'Label is required'}), 400
-    
+
     card = BankCard(
         label=sanitize_html(label),
         bank_name=sanitize_html((data.get('bank_name') or '').strip() or None),
@@ -24097,6 +24694,13 @@ def create_bank_card():
         notes=sanitize_html((data.get('notes') or '').strip() or None),
         is_active=bool(data.get('is_active', True))
     )
+    if user and (user.role == 'superadmin' or user.is_superadmin):
+        if 'reseller_id' in data or 'assigned_reseller_ids' in data:
+            reseller_id, assigned_json, error = _bank_card_reseller_fields(data)
+            if error:
+                return jsonify({'success': False, 'error': error}), 400
+            card.reseller_id = reseller_id
+            card.assigned_reseller_ids = assigned_json
     db.session.add(card)
     db.session.commit()
     return jsonify({'success': True, 'card': card.to_dict()})
@@ -24104,6 +24708,7 @@ def create_bank_card():
 @app.route('/api/bank-cards/<int:card_id>', methods=['PUT'])
 @user_management_required
 def update_bank_card(card_id):
+    user = db.session.get(Admin, session['admin_id'])
     card = db.session.get(BankCard, card_id)
     if not card:
         return jsonify({'success': False, 'error': 'Card not found'}), 404
@@ -24116,6 +24721,15 @@ def update_bank_card(card_id):
             setattr(card, field, value)
     if 'is_active' in data:
         card.is_active = bool(data.get('is_active'))
+    if user and (user.role == 'superadmin' or user.is_superadmin):
+        if 'reseller_id' in data or 'assigned_reseller_ids' in data:
+            reseller_id, assigned_json, error = _bank_card_reseller_fields(data)
+            if error:
+                return jsonify({'success': False, 'error': error}), 400
+            if 'reseller_id' in data:
+                card.reseller_id = reseller_id
+            if 'assigned_reseller_ids' in data:
+                card.assigned_reseller_ids = assigned_json
     db.session.commit()
     return jsonify({'success': True, 'card': card.to_dict()})
 
@@ -24997,6 +25611,117 @@ def _central_telegram_bot(create=False):
     return bot
 
 
+def _telegram_bot_manageable_by(user, bot) -> bool:
+    """Superadmins manage every bot; resellers only their own instance."""
+    if not user or not bot:
+        return False
+    if user.role == 'superadmin' or user.is_superadmin:
+        return True
+    return user.role == 'reseller' and bot.owner_admin_id == user.id
+
+
+def _log_audit(action, target=None, actor=None, meta=None) -> None:
+    """Best-effort audit row. Never raises and never commits — the caller's
+    transaction carries the row."""
+    try:
+        target_type = None
+        target_id = None
+        if isinstance(target, tuple):
+            target_type, target_id = target
+        elif target is not None:
+            target_type = target.__class__.__name__
+            target_id = getattr(target, 'id', None)
+        actor_type = 'system'
+        actor_admin_id = None
+        if isinstance(actor, Admin):
+            actor_type = 'admin'
+            actor_admin_id = actor.id
+        elif isinstance(actor, str) and actor in ('admin', 'system', 'customer'):
+            actor_type = actor
+        db.session.add(AuditLog(
+            actor_type=actor_type,
+            actor_admin_id=actor_admin_id,
+            action=str(action)[:64],
+            target_type=str(target_type)[:32] if target_type else None,
+            target_id=str(target_id)[:64] if target_id not in (None, '') else None,
+            meta_json=json.dumps(meta, ensure_ascii=False, default=str) if meta else None,
+        ))
+    except Exception:
+        pass
+
+
+def _requested_telegram_bot():
+    """Resolve the bot targeted by an optional bot_id with an ownership check.
+
+    Without bot_id the central bot is targeted, preserving legacy behavior.
+    Returns (bot, error_response); exactly one of the two is not None.
+    """
+    user = db.session.get(Admin, session['admin_id']) if 'admin_id' in session else None
+    if not user:
+        return None, (jsonify({'success': False, 'error': 'Unauthorized'}), 401)
+    raw = request.args.get('bot_id')
+    if raw in (None, '') and request.method != 'GET':
+        raw = (request.get_json(silent=True) or {}).get('bot_id')
+    if raw in (None, ''):
+        bot = _central_telegram_bot(create=True)
+    else:
+        try:
+            bot = db.session.get(TelegramBotInstance, int(raw))
+        except (TypeError, ValueError):
+            return None, (jsonify({'success': False, 'error': 'Invalid bot ID'}), 400)
+        if bot is None:
+            return None, (jsonify({'success': False, 'error': 'Telegram bot not found'}), 404)
+    if not _telegram_bot_manageable_by(user, bot):
+        return None, (jsonify({'success': False, 'error': 'Access Denied: not the bot owner'}), 403)
+    if bot.archived_at is not None:
+        return None, (jsonify({'success': False, 'error': 'This bot is archived'}), 409)
+    return bot, None
+
+
+def _telegram_bot_health(bot: TelegramBotInstance) -> dict:
+    """Server-side per-bot health summary derived from the runtime row."""
+    runtime = bot.runtime
+    snapshot = runtime.to_safe_dict() if runtime else {}
+    if bot.archived_at is not None:
+        state = 'archived'
+    elif not bot.enabled:
+        state = 'disabled'
+    elif runtime is None:
+        state = 'stopped'
+    else:
+        state = str(snapshot.get('status') or 'stopped')
+        if int(snapshot.get('failed_update_count') or 0) > 0 or (
+                snapshot.get('last_error') and state != 'running'):
+            state = 'error'
+    return {
+        'state': state,
+        'last_heartbeat_at': snapshot.get('last_heartbeat_at'),
+        'last_error': snapshot.get('last_error'),
+        'failed_update_count': int(snapshot.get('failed_update_count') or 0),
+    }
+
+
+def _telegram_bot_token_conflict(bot, token=None):
+    """Return the other instance already bound to this token, if any.
+
+    The token's numeric prefix is the bot's Telegram user ID, so a conflict
+    can be detected at save time without calling getMe.
+    """
+    bot_user_id = None
+    if token:
+        left = str(token).strip().partition(':')[0]
+        if left.isdigit():
+            bot_user_id = int(left)
+    elif bot.bot_user_id:
+        bot_user_id = int(bot.bot_user_id)
+    if bot_user_id is None:
+        return None
+    query = TelegramBotInstance.query.filter(TelegramBotInstance.bot_user_id == bot_user_id)
+    if bot.id is not None:
+        query = query.filter(TelegramBotInstance.id != bot.id)
+    return query.first()
+
+
 TELEGRAM_PURCHASE_STRATEGIES = {'least_clients', 'priority', 'weighted_random', 'random'}
 TELEGRAM_ACCOUNT_NAME_MODES = {'generated', 'customer'}
 TELEGRAM_ACCOUNT_NAME_TOKENS = {
@@ -25104,16 +25829,40 @@ def _telegram_purchase_routes_payload(bot: TelegramBotInstance):
     )]
 
 
-def _telegram_purchase_packages_payload():
-    return [{
-        'id': row.id,
-        'name': row.name,
-        'days': int(row.days or 0),
-        'volume': int(row.volume or 0),
-        'price': int(row.price or 0),
-    } for row in Package.query.filter_by(enabled=True).order_by(
+def _telegram_purchase_packages_payload(bot: TelegramBotInstance = None):
+    # Mirrors telegram_bot_worker._purchase_packages / _resolve_purchase_price;
+    # app.py cannot import the worker (the worker already imports app).
+    owner_id = int(bot.owner_admin_id) if bot and bot.owner_admin_id else None
+    owner = db.session.get(Admin, owner_id) if owner_id else None
+    packages = Package.query.filter_by(enabled=True).order_by(
         Package.display_order.asc(), Package.id.asc(),
-    ).all()]
+    ).all()
+    rows = []
+    for package in packages:
+        if getattr(package, 'is_trial', False):
+            continue
+        scope = str(package.scope or 'global').lower()
+        if scope != 'global':
+            try:
+                assigned = {int(value) for value in json.loads(package.assigned_reseller_ids or '[]')}
+            except (TypeError, ValueError):
+                assigned = set()
+            if not owner_id or (
+                owner_id not in assigned and
+                not (scope == 'personal' and int(package.created_by or 0) == owner_id)
+            ):
+                continue
+        price = int(package.price or 0)
+        if owner and str(getattr(owner, 'role', '') or '').lower() == 'reseller':
+            price = int(calculate_reseller_price(owner, package=package) or 0)
+        rows.append({
+            'id': package.id,
+            'name': package.name,
+            'days': int(package.days or 0),
+            'volume': int(package.volume or 0),
+            'price': price,
+        })
+    return rows
 
 
 def _v3_client_rows(payload):
@@ -25281,6 +26030,35 @@ def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
     policy.assignment_strategy = strategy
     policy.account_name_mode = name_mode
     policy.account_name_template = template
+    policy.trial_enabled = bool(policy_data.get('trial_enabled', policy.trial_enabled))
+    if 'trial_package_id' in policy_data:
+        trial_package_id = policy_data.get('trial_package_id')
+        if trial_package_id in (None, '', 0):
+            policy.trial_package_id = None
+        else:
+            try:
+                trial_package = db.session.get(Package, int(trial_package_id))
+            except (TypeError, ValueError):
+                trial_package = None
+            if not trial_package or not getattr(trial_package, 'is_trial', False):
+                raise ValueError('Trial package must reference a package marked as trial')
+            policy.trial_package_id = trial_package.id
+    policy.emergency_enabled = bool(policy_data.get('emergency_enabled', policy.emergency_enabled))
+    try:
+        policy.emergency_days = int(policy_data.get('emergency_days', policy.emergency_days or 1))
+        policy.emergency_volume_gb = int(policy_data.get('emergency_volume_gb', policy.emergency_volume_gb or 1))
+        policy.emergency_cooldown_days = int(policy_data.get(
+            'emergency_cooldown_days', policy.emergency_cooldown_days or 30))
+    except (TypeError, ValueError):
+        raise ValueError('Emergency days, volume, and cooldown must be whole numbers')
+    if not 1 <= policy.emergency_days <= 365:
+        raise ValueError('Emergency days must be between 1 and 365')
+    if not 0 <= policy.emergency_volume_gb <= 1024:
+        raise ValueError('Emergency volume must be between 0 and 1024 GB')
+    if not 1 <= policy.emergency_cooldown_days <= 365:
+        raise ValueError('Emergency cooldown must be between 1 and 365 days')
+    if policy.trial_enabled and not policy.trial_package_id:
+        raise ValueError('Choose a trial package before enabling the trial')
     if inbound_routes is not None:
         _save_telegram_purchase_routes(bot, inbound_routes)
 
@@ -25490,6 +26268,21 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
                 endpoint.last_error = result.get('error')
                 endpoint.last_failure_at = now
         if result['success']:
+            conflict = _telegram_bot_token_conflict(
+                bot, token=f"{result.get('bot_user_id')}:x") if result.get('bot_user_id') else None
+            if conflict:
+                result = {
+                    'success': False,
+                    'error': f"This token is already used by another bot ({conflict.display_name})",
+                    'attempts': attempts,
+                }
+                bot.last_test_status = 'failed'
+                bot.last_test_route = result.get('route') or attempts[-1].get('route')
+                bot.last_test_latency_ms = None
+                bot.last_test_error = result['error']
+                bot.last_test_at = now
+                db.session.commit()
+                return result
             bot.bot_user_id = result.get('bot_user_id')
             bot.bot_username = result.get('bot_username')
             bot.last_test_status = 'healthy'
@@ -25704,6 +26497,10 @@ def _serialize_telegram_purchase(row, identity_map=None, customer_map=None):
         'account_name': detail.account_name if detail else None,
         'package_name': row.package.name if row.package else None,
         'amount': int(row.amount or 0),
+        'original_amount': int(row.original_amount or 0) if row.original_amount is not None else None,
+        'discount_amount': int(row.discount_amount or 0) if row.discount_amount is not None else None,
+        'promo_code': row.promo_code,
+        'duplicate_receipt': bool(getattr(row, 'duplicate_receipt', False)),
         'note': None,
         'receipt_kind': row.receipt_kind,
         'receipt_url': url_for('telegram_purchase_receipt', request_id=row.id),
@@ -25868,6 +26665,7 @@ def telegram_operations_page():
 
 
 @app.route('/api/telegram-operations', methods=['GET'])
+@limiter.limit('60 per minute')
 @login_required
 def get_telegram_operations():
     admin = _telegram_operations_admin()
@@ -25956,7 +26754,38 @@ def get_telegram_operations():
             if search not in haystack:
                 continue
         filtered.append(item)
-    return jsonify({'success': True, 'items': filtered, 'counters': counters})
+    bot_names = {
+        int(bot.id): bot.display_name
+        for bot in TelegramBotInstance.query.all()
+    }
+    per_bot_map = {}
+    for row in visible_purchases:
+        entry = per_bot_map.setdefault(int(row.bot_instance_id), {
+            'bot_id': int(row.bot_instance_id),
+            'bot_name': bot_names.get(int(row.bot_instance_id)) or f'#{int(row.bot_instance_id)}',
+            'purchases': 0, 'completed': 0, 'revenue': 0, 'open_tickets': 0,
+        })
+        entry['purchases'] += 1
+        if row.status in ('approved', 'completed'):
+            entry['revenue'] += int(row.amount or 0)
+        if row.status == 'completed':
+            entry['completed'] += 1
+    for row in visible_services:
+        entry = per_bot_map.setdefault(int(row.bot_instance_id), {
+            'bot_id': int(row.bot_instance_id),
+            'bot_name': bot_names.get(int(row.bot_instance_id)) or f'#{int(row.bot_instance_id)}',
+            'purchases': 0, 'completed': 0, 'revenue': 0, 'open_tickets': 0,
+        })
+        if row.status == 'pending' and row.request_type == 'support':
+            entry['open_tickets'] += 1
+    per_bot = []
+    for entry in per_bot_map.values():
+        entry['completion_rate'] = (
+            round(entry['completed'] / entry['purchases'], 3) if entry['purchases'] else None
+        )
+        per_bot.append(entry)
+    per_bot.sort(key=lambda entry: entry['bot_id'])
+    return jsonify({'success': True, 'items': filtered, 'counters': counters, 'per_bot': per_bot})
 
 
 def _telegram_purchase_for_admin(request_id):
@@ -25978,6 +26807,7 @@ def _telegram_service_for_admin(request_id):
 
 
 @app.route('/api/telegram-operations/purchases/<int:request_id>/<action>', methods=['POST'])
+@limiter.limit('20 per minute')
 @login_required
 def review_telegram_purchase_operation(request_id, action):
     if action not in ('approve', 'retry', 'reject'):
@@ -25992,6 +26822,7 @@ def review_telegram_purchase_operation(request_id, action):
         row.status = 'rejected'
         row.reviewed_by_admin_id = admin.id
         row.reviewed_at = datetime.utcnow()
+        _log_audit('telegram_purchase.reject', row, actor=admin)
         db.session.commit()
         _telegram_operation_notify(row)
         return jsonify({'success': True, 'item': _serialize_telegram_purchase(row)})
@@ -26012,12 +26843,14 @@ def review_telegram_purchase_operation(request_id, action):
         return jsonify({'success': False, 'error': str(result),
                         'item': _serialize_telegram_purchase(row)}), 409
     row.status = 'completed'
+    _log_audit(f'telegram_purchase.{action}', row, actor=admin)
     db.session.commit()
     _telegram_operation_notify(row, result=result)
     return jsonify({'success': True, 'item': _serialize_telegram_purchase(row)})
 
 
 @app.route('/api/telegram-operations/purchases/<int:request_id>/receipt', methods=['GET'])
+@limiter.limit('60 per minute')
 @login_required
 def telegram_purchase_receipt(request_id):
     row, error = _telegram_purchase_for_admin(request_id)
@@ -26084,6 +26917,7 @@ def _telegram_support_attachment_from_result(result, *, fallback_kind, fallback_
 
 
 @app.route('/api/telegram-operations/services/<int:request_id>/messages/<int:message_id>/attachment')
+@limiter.limit('60 per minute')
 @login_required
 def telegram_support_message_attachment(request_id, message_id):
     row, error = _telegram_service_for_admin(request_id)
@@ -26125,6 +26959,7 @@ def telegram_support_message_attachment(request_id, message_id):
 
 
 @app.route('/api/telegram-operations/services/<int:request_id>/<action>', methods=['POST'])
+@limiter.limit('20 per minute')
 @login_required
 def review_telegram_service_operation(request_id, action):
     if action not in ('complete', 'reject'):
@@ -26144,12 +26979,14 @@ def review_telegram_service_operation(request_id, action):
     row.status = 'completed' if action == 'complete' else 'rejected'
     row.reviewed_by_admin_id = admin.id
     row.reviewed_at = datetime.utcnow()
+    _log_audit(f'telegram_service.{action}', row, actor=admin)
     db.session.commit()
     _telegram_operation_notify(row)
     return jsonify({'success': True, 'item': _serialize_telegram_service(row)})
 
 
 @app.route('/api/telegram-operations/services/<int:request_id>/triage', methods=['POST'])
+@limiter.limit('20 per minute')
 @login_required
 def triage_telegram_support_operation(request_id):
     row, error = _telegram_service_for_admin(request_id)
@@ -26182,6 +27019,7 @@ def triage_telegram_support_operation(request_id):
 
 
 @app.route('/api/telegram-operations/services/<int:request_id>/reply', methods=['POST'])
+@limiter.limit('20 per minute')
 @login_required
 def reply_telegram_support_operation(request_id):
     row, error = _telegram_service_for_admin(request_id)
@@ -26253,10 +27091,317 @@ def reply_telegram_support_operation(request_id):
     return jsonify({'success': True, 'item': _serialize_telegram_service(row)})
 
 
-@app.route('/api/settings/telegram-bots', methods=['GET'])
+def _telegram_promo_from_payload(promo: TelegramPromo, data: dict):
+    name = str(data.get('name') or promo.name or '').strip()[:120]
+    if not name:
+        raise ValueError('Promo name is required')
+    promo.name = name
+    promo.description = str(data.get('description') or '').strip()[:2000] or None
+    code = str(data.get('code') or '').strip().upper()
+    if code:
+        if not re.fullmatch(r'[A-Z0-9_-]{3,64}', code):
+            raise ValueError('Promo code must be 3-64 characters of A-Z, 0-9, underscore, or dash')
+        clash = TelegramPromo.query.filter(
+            TelegramPromo.code == code, TelegramPromo.id != (promo.id or 0)).first()
+        if clash:
+            raise ValueError('This promo code is already in use')
+    promo.code = code or None
+    kind = str(data.get('kind') or promo.kind or 'percent').strip().lower()
+    if kind not in ('percent', 'fixed'):
+        raise ValueError('Promo kind must be percent or fixed')
+    promo.kind = kind
+    try:
+        promo.value = float(data.get('value'))
+    except (TypeError, ValueError):
+        raise ValueError('Promo value must be a number')
+    if promo.value < 0 or (kind == 'percent' and promo.value > 100):
+        raise ValueError('Promo value is out of range')
+    applies_to = str(data.get('applies_to') or promo.applies_to or 'both').strip().lower()
+    if applies_to not in ('purchase', 'renewal', 'both'):
+        raise ValueError('Invalid applies_to value')
+    promo.applies_to = applies_to
+
+    def _int_or_none(key, minimum=0):
+        value = data.get(key)
+        if value in (None, ''):
+            return None
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f'{key} must be a whole number')
+        if value < minimum:
+            raise ValueError(f'{key} is out of range')
+        return value
+
+    promo.max_discount_amount = _int_or_none('max_discount_amount')
+    promo.min_amount = _int_or_none('min_amount')
+    promo.min_purchases_30d = _int_or_none('min_purchases_30d')
+    promo.min_purchases_90d = _int_or_none('min_purchases_90d')
+    promo.min_referrals = _int_or_none('min_referrals')
+    promo.requires_channel_chat_id = _int_or_none('requires_channel_chat_id')
+    promo.max_uses_total = _int_or_none('max_uses_total', minimum=1)
+    promo.max_uses_per_user = _int_or_none('max_uses_per_user', minimum=1)
+    promo.priority = _int_or_none('priority') or 0
+    for field, model, label in (
+            ('bot_instance_id', TelegramBotInstance, 'bot'),
+            ('package_id', Package, 'package'),
+            ('owner_admin_id', Admin, 'owner')):
+        raw = data.get(field)
+        if raw in (None, ''):
+            setattr(promo, field, None)
+            continue
+        try:
+            row = db.session.get(model, int(raw))
+        except (TypeError, ValueError):
+            row = None
+        if row is None:
+            raise ValueError(f'Invalid {label} reference')
+        setattr(promo, field, row.id)
+    for field in ('starts_at', 'ends_at'):
+        raw = str(data.get(field) or '').strip()
+        if not raw:
+            setattr(promo, field, None)
+            continue
+        try:
+            setattr(promo, field, datetime.fromisoformat(raw.replace('Z', '+00:00')).replace(tzinfo=None))
+        except ValueError:
+            raise ValueError(f'{field} must be an ISO datetime')
+    if promo.starts_at and promo.ends_at and promo.ends_at <= promo.starts_at:
+        raise ValueError('The promo window end must be after its start')
+    promo.first_purchase_only = bool(data.get('first_purchase_only', False))
+    promo.stackable = bool(data.get('stackable', False))
+    promo.apply_on_reseller_pricing = bool(data.get('apply_on_reseller_pricing', True))
+    promo.enabled = bool(data.get('enabled', True))
+
+
+@app.route('/api/settings/telegram-promos', methods=['GET'])
 @superadmin_required
+def list_telegram_promos():
+    promos = TelegramPromo.query.order_by(TelegramPromo.id.desc()).all()
+    stats = {
+        promo_id: (uses, discounted)
+        for promo_id, uses, discounted in db.session.query(
+            TelegramPromoUse.promo_id,
+            func.count(TelegramPromoUse.id),
+            func.coalesce(func.sum(TelegramPromoUse.amount_discounted), 0),
+        ).group_by(TelegramPromoUse.promo_id).all()
+    } if promos else {}
+    payload = []
+    for promo in promos:
+        item = promo.to_safe_dict()
+        uses, discounted = stats.get(promo.id, (0, 0))
+        item['uses'] = int(uses or 0)
+        item['discounted_total'] = int(discounted or 0)
+        payload.append(item)
+    return jsonify({'success': True, 'promos': payload})
+
+
+@app.route('/api/settings/telegram-promos', methods=['POST'])
+@superadmin_required
+def create_telegram_promo():
+    promo = TelegramPromo(name='')
+    try:
+        _telegram_promo_from_payload(promo, request.get_json(silent=True) or {})
+        db.session.add(promo)
+        _log_audit('telegram_promo.create', promo,
+                   actor=db.session.get(Admin, session['admin_id']))
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    return jsonify({'success': True, 'promo': promo.to_safe_dict()}), 201
+
+
+@app.route('/api/settings/telegram-promos/<int:promo_id>', methods=['PUT', 'DELETE'])
+@superadmin_required
+def update_telegram_promo(promo_id):
+    promo = db.session.get(TelegramPromo, promo_id)
+    if not promo:
+        return jsonify({'success': False, 'error': 'Promo not found'}), 404
+    if request.method == 'DELETE':
+        TelegramPromoUse.query.filter_by(promo_id=promo.id).delete(synchronize_session=False)
+        _log_audit('telegram_promo.delete', ('TelegramPromo', promo.id),
+                   actor=db.session.get(Admin, session['admin_id']),
+                   meta={'code': promo.code, 'name': promo.name})
+        db.session.delete(promo)
+        db.session.commit()
+        return jsonify({'success': True})
+    try:
+        _telegram_promo_from_payload(promo, request.get_json(silent=True) or {})
+        _log_audit('telegram_promo.update', promo,
+                   actor=db.session.get(Admin, session['admin_id']))
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    return jsonify({'success': True, 'promo': promo.to_safe_dict()})
+
+
+@app.route('/api/telegram-bots', methods=['GET'])
+@limiter.limit('60 per minute')
+@login_required
+def list_telegram_bots():
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    if user.role == 'superadmin' or user.is_superadmin:
+        query = TelegramBotInstance.query
+        if request.args.get('include_archived') != '1':
+            query = query.filter(TelegramBotInstance.archived_at.is_(None))
+        bots = query.order_by(TelegramBotInstance.id.asc()).all()
+    elif user.role == 'reseller':
+        bots = TelegramBotInstance.query.filter(
+            TelegramBotInstance.owner_admin_id == user.id,
+            TelegramBotInstance.archived_at.is_(None),
+        ).order_by(TelegramBotInstance.id.asc()).all()
+    else:
+        return jsonify({'success': False, 'error': 'Access Denied'}), 403
+    owner_names = {
+        admin.id: admin.username
+        for admin in Admin.query.filter(Admin.id.in_(
+            [bot.owner_admin_id for bot in bots if bot.owner_admin_id])).all()
+    } if bots else {}
+    payload = []
+    for bot in bots:
+        item = bot.to_safe_dict()
+        item['owner_username'] = owner_names.get(bot.owner_admin_id)
+        item['runtime'] = bot.runtime.to_safe_dict() if bot.runtime else None
+        item['health'] = _telegram_bot_health(bot)
+        payload.append(item)
+    return jsonify({'success': True, 'bots': payload})
+
+
+@app.route('/api/telegram-bots', methods=['POST'])
+@limiter.limit('20 per minute')
+@login_required
+def create_telegram_bot():
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    data = request.get_json(silent=True) or {}
+    if user.role == 'superadmin' or user.is_superadmin:
+        try:
+            owner_id = int(data.get('owner_admin_id'))
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'A reseller owner is required'}), 400
+        owner = db.session.get(Admin, owner_id)
+        if not owner or owner.role != 'reseller':
+            return jsonify({'success': False, 'error': 'Owner must be a reseller'}), 400
+    elif user.role == 'reseller':
+        owner = user
+    else:
+        return jsonify({'success': False, 'error': 'Access Denied'}), 403
+    scope_key = f'reseller:{owner.id}'
+    if TelegramBotInstance.query.filter_by(scope_key=scope_key).first():
+        return jsonify({'success': False, 'error': 'This reseller already has a bot'}), 409
+    display_name = str(data.get('display_name') or '').strip()[:120] or owner.username
+    token = str(data.get('bot_token') or '').strip()
+    if token and not _validate_telegram_token(token):
+        return jsonify({'success': False, 'error': 'Bot token format is invalid'}), 400
+    enabled = bool(data.get('enabled'))
+    if enabled and not token:
+        return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
+    bot = TelegramBotInstance(
+        scope_key=scope_key,
+        owner_type='reseller',
+        owner_admin_id=owner.id,
+        display_name=display_name,
+        enabled=enabled,
+        transport_mode='polling',
+    )
+    if token:
+        if _telegram_bot_token_conflict(bot, token=token):
+            return jsonify({'success': False, 'error': 'This token is already used by another bot'}), 409
+        try:
+            bot.token_encrypted = _encrypt_telegram_secret(token)
+        except RuntimeError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+    db.session.add(bot)
+    db.session.commit()
+    return jsonify({'success': True, 'bot': bot.to_safe_dict()}), 201
+
+
+@app.route('/api/telegram-bots/<int:bot_id>/runtime', methods=['POST'])
+@limiter.limit('20 per minute')
+@login_required
+def telegram_bot_runtime_action(bot_id):
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    bot = db.session.get(TelegramBotInstance, int(bot_id))
+    if bot is None:
+        return jsonify({'success': False, 'error': 'Telegram bot not found'}), 404
+    is_superadmin = bool(user.role == 'superadmin' or user.is_superadmin)
+    action = str((request.get_json(silent=True) or {}).get('action') or '').strip().lower()
+    if action not in ('enable', 'disable', 'restart', 'archive', 'restore'):
+        return jsonify({'success': False, 'error': 'Invalid runtime action'}), 400
+    if action in ('archive', 'restore'):
+        if not is_superadmin:
+            return jsonify({'success': False, 'error': 'Access Denied: SuperAdmin only'}), 403
+    elif not _telegram_bot_manageable_by(user, bot):
+        return jsonify({'success': False, 'error': 'Access Denied: not the bot owner'}), 403
+
+    if action == 'enable':
+        if bot.archived_at is not None:
+            return jsonify({'success': False, 'error': 'Restore the archived bot before enabling it'}), 409
+        if not bot.token_encrypted:
+            return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
+        bot.enabled = True
+    elif action == 'disable':
+        bot.enabled = False
+    elif action == 'restart':
+        if bot.archived_at is not None:
+            return jsonify({'success': False, 'error': 'This bot is archived'}), 409
+        runtime = bot.runtime
+        if runtime:
+            runtime.worker_id = None
+            runtime.lease_expires_at = None
+            runtime.status = 'stopped'
+            runtime.failed_update_count = 0
+    elif action == 'archive':
+        if bot.owner_type == 'system':
+            return jsonify({'success': False, 'error': 'The system bot cannot be archived'}), 400
+        if bot.archived_at is not None:
+            return jsonify({'success': False, 'error': 'This bot is already archived'}), 409
+        pending_purchases = TelegramPurchaseRequest.query.filter_by(
+            bot_instance_id=bot.id, status='pending').count()
+        pending_services = TelegramServiceRequest.query.filter_by(
+            bot_instance_id=bot.id, status='pending').count()
+        if pending_purchases or pending_services:
+            return jsonify({
+                'success': False,
+                'error': 'Resolve the pending requests before archiving this bot',
+                'pending_purchases': pending_purchases,
+                'pending_service_requests': pending_services,
+            }), 409
+        bot.enabled = False
+        bot.archived_at = datetime.utcnow()
+        bot.archived_by_admin_id = user.id
+        # Free the scope_key so the reseller can get a fresh bot.
+        bot.scope_key = f'{bot.scope_key}:archived:{bot.id}'
+    elif action == 'restore':
+        if bot.archived_at is None:
+            return jsonify({'success': False, 'error': 'This bot is not archived'}), 409
+        original_scope = str(bot.scope_key or '').partition(':archived:')[0]
+        if TelegramBotInstance.query.filter(
+                TelegramBotInstance.id != bot.id,
+                TelegramBotInstance.scope_key == original_scope).first():
+            return jsonify({'success': False, 'error': 'Another bot already uses this reseller scope'}), 409
+        bot.scope_key = original_scope
+        bot.archived_at = None
+        bot.archived_by_admin_id = None
+    _log_audit(f'telegram_bot.{action}', bot, actor=user,
+               meta={'bot_id': bot.id, 'scope_key': bot.scope_key})
+    db.session.commit()
+    return jsonify({'success': True, 'bot': bot.to_safe_dict(), 'health': _telegram_bot_health(bot)})
+
+
+@app.route('/api/settings/telegram-bots', methods=['GET'])
+@login_required
 def get_telegram_bot_settings():
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     purchase_policy = _telegram_purchase_policy(bot, create=True)
     runtime = TelegramBotRuntime.query.filter_by(bot_instance_id=bot.id).first()
     if runtime is None:
@@ -26277,7 +27422,14 @@ def get_telegram_bot_settings():
                     'runtime': runtime.to_safe_dict(),
                     'purchase_policy': purchase_policy.to_safe_dict(),
                     'purchase_servers': _telegram_purchase_servers_payload(bot),
-                    'purchase_packages': _telegram_purchase_packages_payload(),
+                    'purchase_packages': _telegram_purchase_packages_payload(bot),
+                    'trial_packages': [{
+                        'id': package.id,
+                        'name': package.name,
+                        'days': int(package.days or 0),
+                        'volume': int(package.volume or 0),
+                    } for package in Package.query.filter_by(enabled=True, is_trial=True).order_by(
+                        Package.id.asc()).all()],
                     'purchase_inbound_routes': _telegram_purchase_routes_payload(bot),
                     'purchase_inbounds': {
                         str(server.id): _telegram_customer_inbounds(server.id)
@@ -26289,10 +27441,15 @@ def get_telegram_bot_settings():
 
 
 @app.route('/api/settings/telegram-bots', methods=['POST'])
-@superadmin_required
+@login_required
 def save_telegram_bot_settings():
-    bot = _central_telegram_bot(create=True)
-    data = request.get_json(silent=True) or {}
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
+    return _save_telegram_bot_settings(bot, request.get_json(silent=True) or {})
+
+
+def _save_telegram_bot_settings(bot: TelegramBotInstance, data: dict):
     display_name = str(data.get('display_name') or bot.display_name or '').strip()[:120]
     if not display_name:
         return jsonify({'success': False, 'error': 'Bot display name is required'}), 400
@@ -26343,6 +27500,8 @@ def save_telegram_bot_settings():
         return jsonify({'success': False, 'error': 'SLA warning must be between 1 and 99 percent'}), 400
     if support_escalation_minutes < 0 or support_escalation_minutes > 10080:
         return jsonify({'success': False, 'error': 'Support escalation must be between 0 and 10080 minutes'}), 400
+    if token and _telegram_bot_token_conflict(bot, token=token):
+        return jsonify({'success': False, 'error': 'This token is already used by another bot'}), 409
     try:
         if token:
             bot.token_encrypted = _encrypt_telegram_secret(token)
@@ -26368,6 +27527,9 @@ def save_telegram_bot_settings():
     bot.support_escalation_minutes = support_escalation_minutes
     if bot.enabled and not bot.token_encrypted:
         return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
+    _log_audit('telegram_bot.settings_update', bot,
+               actor=db.session.get(Admin, session.get('admin_id')),
+               meta={'bot_id': bot.id, 'scope_key': bot.scope_key})
     db.session.commit()
     return jsonify({'success': True, 'bot': bot.to_safe_dict()})
 
@@ -26397,9 +27559,11 @@ def detect_telegram_purchase_routes():
 
 
 @app.route('/api/settings/telegram-bots/test', methods=['POST'])
-@superadmin_required
+@login_required
 def test_telegram_bot_settings():
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     route = str((request.get_json(silent=True) or {}).get('route') or 'configured').strip().lower()
     if route not in ('direct', 'configured'):
         return jsonify({'success': False, 'error': 'Invalid diagnostic route'}), 400
@@ -26417,9 +27581,11 @@ def _telegram_test_user_id(value):
 
 
 @app.route('/api/settings/telegram-bots/test-users', methods=['POST'])
-@superadmin_required
+@login_required
 def create_telegram_bot_test_user():
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     data = request.get_json(silent=True) or {}
     try:
         row = TelegramBotTestUser(
@@ -26440,9 +27606,11 @@ def create_telegram_bot_test_user():
 
 
 @app.route('/api/settings/telegram-bots/test-users/<int:test_user_id>', methods=['PUT', 'DELETE'])
-@superadmin_required
+@login_required
 def update_telegram_bot_test_user(test_user_id):
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     row = TelegramBotTestUser.query.filter_by(
         id=test_user_id, bot_instance_id=bot.id,
     ).first()
@@ -26471,9 +27639,11 @@ def update_telegram_bot_test_user(test_user_id):
 
 
 @app.route('/api/settings/telegram-bots/send-test', methods=['POST'])
-@superadmin_required
+@login_required
 def send_telegram_bot_test_message():
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     data = request.get_json(silent=True) or {}
     try:
         if not bot.enabled:
@@ -26496,9 +27666,11 @@ def send_telegram_bot_test_message():
 
 
 @app.route('/api/settings/telegram-bots/proxies', methods=['POST'])
-@superadmin_required
+@login_required
 def create_telegram_bot_proxy():
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     proxy = TelegramProxyEndpoint(bot_instance_id=bot.id)
     try:
         _telegram_proxy_from_payload(proxy, request.get_json(silent=True) or {})
@@ -26514,9 +27686,11 @@ def create_telegram_bot_proxy():
 
 
 @app.route('/api/settings/telegram-bots/proxies/<int:proxy_id>', methods=['PUT', 'DELETE'])
-@superadmin_required
+@login_required
 def update_telegram_bot_proxy(proxy_id):
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     proxy = TelegramProxyEndpoint.query.filter_by(id=proxy_id, bot_instance_id=bot.id).first()
     if not proxy:
         return jsonify({'success': False, 'error': 'Proxy not found'}), 404
@@ -26537,9 +27711,11 @@ def update_telegram_bot_proxy(proxy_id):
 
 
 @app.route('/api/settings/telegram-bots/proxies/<int:proxy_id>/test', methods=['POST'])
-@superadmin_required
+@login_required
 def test_telegram_bot_proxy(proxy_id):
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     proxy = TelegramProxyEndpoint.query.filter_by(id=proxy_id, bot_instance_id=bot.id).first()
     if not proxy:
         return jsonify({'success': False, 'error': 'Proxy not found'}), 404
@@ -26618,9 +27794,11 @@ def get_telegram_egress_candidates():
 
 
 @app.route('/api/settings/telegram-bots/egress', methods=['POST'])
-@superadmin_required
+@login_required
 def create_telegram_egress_profile():
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     profile = TelegramEgressProfile(bot_instance_id=bot.id, name='Managed Xray')
     try:
         _telegram_egress_from_payload(profile, request.get_json(silent=True) or {})
@@ -26636,9 +27814,11 @@ def create_telegram_egress_profile():
 
 
 @app.route('/api/settings/telegram-bots/egress/<int:profile_id>', methods=['PUT', 'DELETE'])
-@superadmin_required
+@login_required
 def update_telegram_egress_profile(profile_id):
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     profile = TelegramEgressProfile.query.filter_by(id=profile_id, bot_instance_id=bot.id).first()
     if not profile:
         return jsonify({'success': False, 'error': 'Egress profile not found'}), 404
@@ -26659,9 +27839,11 @@ def update_telegram_egress_profile(profile_id):
 
 
 @app.route('/api/settings/telegram-bots/egress/<int:profile_id>/test', methods=['POST'])
-@superadmin_required
+@login_required
 def test_telegram_egress_profile(profile_id):
-    bot = _central_telegram_bot(create=True)
+    bot, error = _requested_telegram_bot()
+    if error:
+        return error
     profile = TelegramEgressProfile.query.filter_by(id=profile_id, bot_instance_id=bot.id).first()
     if not profile:
         return jsonify({'success': False, 'error': 'Egress profile not found'}), 404
@@ -29904,6 +31086,15 @@ def ensure_background_threads_started():
             print(f"Failed to start sms bot thread: {e}")
     else:
         print("[Singleton] sms_bot_worker already owned by another worker, skipping.")
+
+    # Singleton: only one worker runs the Telegram near-depletion bot scanner
+    if _claim_singleton('telegram_depletion_worker'):
+        try:
+            threading.Thread(target=telegram_depletion_worker, daemon=True).start()
+        except Exception as e:
+            print(f"Failed to start telegram depletion thread: {e}")
+    else:
+        print("[Singleton] telegram_depletion_worker already owned by another worker, skipping.")
 
     # Singleton: reconcile queued GMweb tasks and persist their terminal status.
     if _claim_singleton('sms_status_worker'):

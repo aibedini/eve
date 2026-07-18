@@ -207,6 +207,9 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         ])).delete(synchronize_session=False)
         Admin.query.filter(Admin.username.like('claim-test-%')).delete(synchronize_session=False)
         db.session.commit()
+        # Reset the scoped session so stale/dirty instances from this test can
+        # never leak into the next test's identity map (flush-time corruption).
+        db.session.remove()
 
     def _make_claim(self, suffix, *, reviewer_role='admin', requested_reseller=False):
         customer = CustomerAccount(primary_phone=f'98912000{int(suffix):04d}')

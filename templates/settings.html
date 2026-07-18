@@ -522,6 +522,78 @@
         </div>
 
         <div id="tab-telegram_bots" class="tab-pane">
+            <section class="panel-card tgb-section" id="tgb-bots-card">
+                <div class="panel-card-header">
+                    <div class="header-content"><h2>Bots</h2><p>Select a bot to edit its settings below, or create a bot for a reseller.</p></div>
+                    <button class="btn btn-secondary" type="button" id="tgb-bot-new-toggle" onclick="toggleTelegramBotCreate()">New reseller bot</button>
+                </div>
+                <div id="tgb-bots-list"></div>
+                <div id="tgb-bot-actions" style="display:none; margin-top: 10px; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <button class="btn btn-secondary" type="button" id="tgb-bot-toggle-enabled" onclick="telegramBotRuntimeAction(null, this)">Disable</button>
+                    <button class="btn btn-secondary" type="button" onclick="telegramBotRuntimeAction('restart', this)">Restart</button>
+                    <button class="btn btn-danger" type="button" id="tgb-bot-archive" onclick="archiveTelegramBot(this)">Archive</button>
+                    <button class="btn btn-secondary" type="button" id="tgb-bot-restore" style="display:none;" onclick="telegramBotRuntimeAction('restore', this)">Restore</button>
+                    <span id="tgb-bot-health-detail" class="text-secondary" style="font-size:0.82rem;"></span>
+                </div>
+                <label style="display:inline-flex; align-items:center; gap:6px; margin-top:8px; font-size:0.85rem;">
+                    <input type="checkbox" id="tgb-show-archived" onchange="toggleTelegramArchived(this.checked)"> Show archived bots
+                </label>
+                <div id="tgb-bot-create" style="display:none; margin-top: 12px;">
+                    <div class="tgb-form-grid">
+                        <div class="form-group"><label for="tgb-bot-owner">Reseller</label><select id="tgb-bot-owner" class="form-select"></select></div>
+                        <div class="form-group"><label for="tgb-bot-name">Display name</label><input id="tgb-bot-name" class="form-control" placeholder="Reseller bot name" autocomplete="off"></div>
+                        <div class="form-group"><label for="tgb-bot-token">Bot token (optional)</label><input id="tgb-bot-token" type="password" class="form-control" placeholder="Paste token from @BotFather" autocomplete="new-password"></div>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn btn-primary" type="button" id="tgb-bot-create-btn" onclick="createTelegramBot(this)">Create bot</button>
+                        <button class="btn btn-secondary" type="button" onclick="toggleTelegramBotCreate(true)">Cancel</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel-card tgb-section" id="tgb-promos-card">
+                <div class="panel-card-header">
+                    <div class="header-content"><h2>Promotions</h2><p>Rule-based discounts for bot purchases and renewals. Codes are optional; promos without a code apply automatically.</p></div>
+                    <button class="btn btn-secondary" type="button" onclick="openTelegramPromoForm()">New promo</button>
+                </div>
+                <div id="tgb-promo-list"></div>
+                <div id="tgb-promo-empty" class="tgb-empty" style="display:none;"><strong>No promotions yet</strong><span>Create a promo to discount purchases or renewals.</span></div>
+                <div id="tgb-promo-form" style="display:none; margin-top: 12px;">
+                    <input type="hidden" id="tgb-promo-id">
+                    <div class="tgb-form-grid">
+                        <div class="form-group"><label for="tgb-promo-name">Name</label><input id="tgb-promo-name" class="form-control" autocomplete="off"></div>
+                        <div class="form-group"><label for="tgb-promo-code">Code (blank = automatic)</label><input id="tgb-promo-code" class="form-control" placeholder="WELCOME10" autocomplete="off" spellcheck="false"></div>
+                        <div class="form-group"><label for="tgb-promo-kind">Kind</label><select id="tgb-promo-kind" class="form-select"><option value="percent">Percent</option><option value="fixed">Fixed amount</option></select></div>
+                        <div class="form-group"><label for="tgb-promo-value">Value (% or Toman)</label><input id="tgb-promo-value" class="form-control" type="number" min="0" step="any"></div>
+                        <div class="form-group"><label for="tgb-promo-max-discount">Max discount (Toman)</label><input id="tgb-promo-max-discount" class="form-control" type="number" min="0" step="1"></div>
+                        <div class="form-group"><label for="tgb-promo-applies">Applies to</label><select id="tgb-promo-applies" class="form-select"><option value="both">Purchase & renewal</option><option value="purchase">Purchase only</option><option value="renewal">Renewal only</option></select></div>
+                        <div class="form-group"><label for="tgb-promo-bot">Bot</label><select id="tgb-promo-bot" class="form-select"></select></div>
+                        <div class="form-group"><label for="tgb-promo-package">Package</label><select id="tgb-promo-package" class="form-select"></select></div>
+                        <div class="form-group"><label for="tgb-promo-min-amount">Min amount (Toman)</label><input id="tgb-promo-min-amount" class="form-control" type="number" min="0" step="1"></div>
+                        <div class="form-group"><label for="tgb-promo-min-30d">Min purchases (30d)</label><input id="tgb-promo-min-30d" class="form-control" type="number" min="0" step="1"></div>
+                        <div class="form-group"><label for="tgb-promo-min-90d">Min purchases (90d)</label><input id="tgb-promo-min-90d" class="form-control" type="number" min="0" step="1"></div>
+                        <div class="form-group"><label for="tgb-promo-min-referrals">Min referrals</label><input id="tgb-promo-min-referrals" class="form-control" type="number" min="0" step="1"></div>
+                        <div class="form-group"><label for="tgb-promo-channel">Required channel chat ID</label><input id="tgb-promo-channel" class="form-control" type="number" step="1" placeholder="-1001234567890"></div>
+                        <div class="form-group"><label for="tgb-promo-starts">Starts at</label><input id="tgb-promo-starts" class="form-control" type="datetime-local"></div>
+                        <div class="form-group"><label for="tgb-promo-ends">Ends at</label><input id="tgb-promo-ends" class="form-control" type="datetime-local"></div>
+                        <div class="form-group"><label for="tgb-promo-max-total">Max uses (total)</label><input id="tgb-promo-max-total" class="form-control" type="number" min="1" step="1"></div>
+                        <div class="form-group"><label for="tgb-promo-max-user">Max uses (per user)</label><input id="tgb-promo-max-user" class="form-control" type="number" min="1" step="1"></div>
+                        <div class="form-group"><label for="tgb-promo-priority">Priority</label><input id="tgb-promo-priority" class="form-control" type="number" step="1" value="0"></div>
+                        <div class="form-group"><label for="tgb-promo-owner">Owner admin ID (blank = global)</label><input id="tgb-promo-owner" class="form-control" type="number" min="1" step="1"></div>
+                    </div>
+                    <div style="display:flex; gap:18px; flex-wrap:wrap; margin: 8px 0;">
+                        <label><input type="checkbox" id="tgb-promo-first-purchase"> First purchase only</label>
+                        <label><input type="checkbox" id="tgb-promo-stackable"> Stackable</label>
+                        <label><input type="checkbox" id="tgb-promo-reseller-pricing" checked> Apply on reseller pricing</label>
+                        <label><input type="checkbox" id="tgb-promo-enabled" checked> Enabled</label>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn btn-primary" type="button" id="tgb-promo-save" onclick="saveTelegramPromo(this)">Save promo</button>
+                        <button class="btn btn-secondary" type="button" onclick="document.getElementById('tgb-promo-form').style.display='none'">Cancel</button>
+                    </div>
+                </div>
+            </section>
+
             <div id="tgb-readiness" class="tgb-readiness" data-state="idle" aria-live="polite">
                 <div class="tgb-readiness-main">
                     <span class="tgb-status-dot"></span>
@@ -657,6 +729,35 @@
                                 <strong>Safe customer names only</strong>
                                 <span>Names must be 3–32 characters and use Latin letters, numbers, underscore, or hyphen. Eve still checks uniqueness before creation.</span>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="tgb-purchase-controls" style="margin-top: 12px;">
+                        <div class="tgb-purchase-choice">
+                            <div>
+                                <label for="tgb-trial-enabled">Free trial</label>
+                                <small>Verified customers can claim the selected trial package once per phone number.</small>
+                            </div>
+                            <label class="toggle-switch" aria-label="Enable free trial"><input id="tgb-trial-enabled" type="checkbox"><span class="slider"></span></label>
+                        </div>
+                        <div class="tgb-form-grid tgb-purchase-grid">
+                            <div class="form-group">
+                                <label for="tgb-trial-package">Trial package</label>
+                                <select id="tgb-trial-package" class="form-select"></select>
+                                <small class="text-secondary">Only packages marked as trial are listed.</small>
+                            </div>
+                        </div>
+                        <div class="tgb-purchase-choice">
+                            <div>
+                                <label for="tgb-emergency-enabled">Emergency access</label>
+                                <small>Customers with an expired service can claim a short free extension once per cooldown window.</small>
+                            </div>
+                            <label class="toggle-switch" aria-label="Enable emergency access"><input id="tgb-emergency-enabled" type="checkbox"><span class="slider"></span></label>
+                        </div>
+                        <div class="tgb-form-grid tgb-purchase-grid">
+                            <div class="form-group"><label for="tgb-emergency-days">Emergency days</label><input id="tgb-emergency-days" class="form-control" type="number" min="1" max="365" step="1" value="1"></div>
+                            <div class="form-group"><label for="tgb-emergency-volume">Emergency volume (GB)</label><input id="tgb-emergency-volume" class="form-control" type="number" min="0" max="1024" step="1" value="1"></div>
+                            <div class="form-group"><label for="tgb-emergency-cooldown">Cooldown (days)</label><input id="tgb-emergency-cooldown" class="form-control" type="number" min="1" max="365" step="1" value="30"></div>
                         </div>
                     </div>
 
@@ -3250,6 +3351,13 @@
     let telegramBotRuntime = {};
     let telegramBotFormReady = false;
     let telegramBotDirty = false;
+    let telegramBotList = [];
+    let telegramBotSelectedId = null;
+    let telegramBotIncludeArchived = false;
+
+    function telegramBotUrl(path) {
+        return telegramBotSelectedId ? `${path}${path.includes('?') ? '&' : '?'}bot_id=${telegramBotSelectedId}` : path;
+    }
 
     async function telegramBotApi(url, options = {}) {
         const method = String(options.method || 'GET').toUpperCase();
@@ -3829,7 +3937,7 @@
         const button = document.getElementById('tgb-tester-add');
         setTelegramButtonLoading(button, true, 'Adding…');
         try {
-            await telegramBotApi('/api/settings/telegram-bots/test-users', {method:'POST', body:JSON.stringify({telegram_user_id:telegramUserId, label:labelInput.value.trim(), enabled:true})});
+            await telegramBotApi(telegramBotUrl('/api/settings/telegram-bots/test-users'), {method:'POST', body:JSON.stringify({telegram_user_id:telegramUserId, label:labelInput.value.trim(), enabled:true})});
             idInput.value = '';
             labelInput.value = '';
             showToast('Telegram tester added.', 'success');
@@ -3846,7 +3954,7 @@
     async function updateTelegramTestUser(id, enabled, input) {
         input.disabled = true;
         try {
-            await telegramBotApi(`/api/settings/telegram-bots/test-users/${encodeURIComponent(id)}`, {method:'PUT', body:JSON.stringify({enabled})});
+            await telegramBotApi(telegramBotUrl(`/api/settings/telegram-bots/test-users/${encodeURIComponent(id)}`), {method:'PUT', body:JSON.stringify({enabled})});
             showToast(enabled ? 'Tester enabled.' : 'Tester disabled.', 'success');
             await loadTelegramBotSettings();
         } catch (error) {
@@ -3858,7 +3966,7 @@
     async function sendTelegramTestMessage(telegramUserId, button) {
         setTelegramButtonLoading(button, true, 'Sending…');
         try {
-            const data = await telegramBotApi('/api/settings/telegram-bots/send-test', {method:'POST', body:JSON.stringify({telegram_user_id:String(telegramUserId)})});
+            const data = await telegramBotApi(telegramBotUrl('/api/settings/telegram-bots/send-test'), {method:'POST', body:JSON.stringify({telegram_user_id:String(telegramUserId)})});
             showToast(`Test delivered via ${data.route || 'the configured route'}.`, 'success');
             await loadTelegramBotSettings();
         } catch (error) { showToast(error.message, 'error'); }
@@ -3870,9 +3978,270 @@
         if (!window.confirm(`Remove ${identity} from the Telegram test allowlist?`)) return;
         setTelegramButtonLoading(button, true, 'Deleting…');
         try {
-            await telegramBotApi(`/api/settings/telegram-bots/test-users/${encodeURIComponent(user.id)}`, {method:'DELETE'});
+            await telegramBotApi(telegramBotUrl(`/api/settings/telegram-bots/test-users/${encodeURIComponent(user.id)}`), {method:'DELETE'});
             showToast('Telegram tester removed.', 'success');
             await loadTelegramBotSettings();
+        } catch (error) { showToast(error.message, 'error'); }
+        finally { setTelegramButtonLoading(button, false); }
+    }
+
+    let telegramPromoList = [];
+
+    async function loadTelegramPromos() {
+        try {
+            const data = await telegramBotApi('/api/settings/telegram-promos');
+            telegramPromoList = Array.isArray(data.promos) ? data.promos : [];
+        } catch (error) {
+            telegramPromoList = [];
+        }
+        renderTelegramPromos();
+    }
+
+    function renderTelegramPromos() {
+        const list = document.getElementById('tgb-promo-list');
+        const empty = document.getElementById('tgb-promo-empty');
+        if (!list) return;
+        empty.style.display = telegramPromoList.length ? 'none' : 'flex';
+        list.innerHTML = telegramPromoList.map(promo => {
+            const action = promo.kind === 'percent'
+                ? `${Number(promo.value)}%${promo.max_discount_amount ? ` (max ${Number(promo.max_discount_amount).toLocaleString()} T)` : ''}`
+                : `${Number(promo.value).toLocaleString()} T`;
+            const scope = [promo.code ? `code ${escapeHtml(String(promo.code))}` : 'automatic',
+                promo.applies_to || 'both',
+                promo.bot_instance_id ? `bot #${promo.bot_instance_id}` : 'all bots',
+                promo.package_id ? `package #${promo.package_id}` : 'all packages'].join(' · ');
+            return `<article class="tgb-proxy-card${promo.enabled ? '' : ' is-disabled'}">
+                <div class="tgb-proxy-title"><strong>${escapeHtml(String(promo.name))}</strong><div class="tgb-proxy-meta">${action} · ${scope} · ${promo.enabled ? 'Enabled' : 'Disabled'}</div></div>
+                <div class="tgb-proxy-health"><div class="tgb-health-line"><strong>${Number(promo.uses || 0)} uses</strong><span class="text-secondary">${Number(promo.discounted_total || 0).toLocaleString()} T discounted</span></div></div>
+                <div class="tgb-proxy-actions"><button class="btn btn-secondary" type="button" onclick="openTelegramPromoForm(${Number(promo.id)})">Edit</button><button class="btn btn-danger" type="button" onclick="deleteTelegramPromo(${Number(promo.id)}, this)">Delete</button></div>
+            </article>`;
+        }).join('');
+    }
+
+    function _promoFillSelect(id, rows, value, blankLabel, labelFn) {
+        const select = document.getElementById(id);
+        select.innerHTML = `<option value="">${blankLabel}</option>` + rows.map(row =>
+            `<option value="${Number(row.id)}"${Number(row.id) === Number(value) ? ' selected' : ''}>${escapeHtml(labelFn(row))}</option>`).join('');
+    }
+
+    function openTelegramPromoForm(id = null) {
+        const promo = telegramPromoList.find(item => Number(item.id) === Number(id)) || {};
+        document.getElementById('tgb-promo-id').value = promo.id || '';
+        document.getElementById('tgb-promo-name').value = promo.name || '';
+        document.getElementById('tgb-promo-code').value = promo.code || '';
+        document.getElementById('tgb-promo-kind').value = promo.kind || 'percent';
+        document.getElementById('tgb-promo-value').value = promo.value ?? '';
+        document.getElementById('tgb-promo-max-discount').value = promo.max_discount_amount ?? '';
+        document.getElementById('tgb-promo-applies').value = promo.applies_to || 'both';
+        document.getElementById('tgb-promo-min-amount').value = promo.min_amount ?? '';
+        document.getElementById('tgb-promo-min-30d').value = promo.min_purchases_30d ?? '';
+        document.getElementById('tgb-promo-min-90d').value = promo.min_purchases_90d ?? '';
+        document.getElementById('tgb-promo-min-referrals').value = promo.min_referrals ?? '';
+        document.getElementById('tgb-promo-channel').value = promo.requires_channel_chat_id ?? '';
+        document.getElementById('tgb-promo-starts').value = promo.starts_at ? String(promo.starts_at).slice(0, 16) : '';
+        document.getElementById('tgb-promo-ends').value = promo.ends_at ? String(promo.ends_at).slice(0, 16) : '';
+        document.getElementById('tgb-promo-max-total').value = promo.max_uses_total ?? '';
+        document.getElementById('tgb-promo-max-user').value = promo.max_uses_per_user ?? '';
+        document.getElementById('tgb-promo-priority').value = Number(promo.priority || 0);
+        document.getElementById('tgb-promo-owner').value = promo.owner_admin_id ?? '';
+        document.getElementById('tgb-promo-first-purchase').checked = !!promo.first_purchase_only;
+        document.getElementById('tgb-promo-stackable').checked = !!promo.stackable;
+        document.getElementById('tgb-promo-reseller-pricing').checked = promo.apply_on_reseller_pricing !== false;
+        document.getElementById('tgb-promo-enabled').checked = promo.enabled !== false;
+        const bots = telegramBotList.map(bot => ({id: bot.id, name: bot.display_name}));
+        _promoFillSelect('tgb-promo-bot', bots, promo.bot_instance_id, 'All bots', bot => bot.name);
+        const packages = telegramPurchasePackages.map(pkg => ({id: pkg.id, name: pkg.name}));
+        _promoFillSelect('tgb-promo-package', packages, promo.package_id, 'All packages', pkg => pkg.name);
+        document.getElementById('tgb-promo-form').style.display = '';
+        document.getElementById('tgb-promo-name').focus();
+    }
+
+    function _promoNum(id) {
+        const value = document.getElementById(id).value.trim();
+        return value === '' ? null : Number(value);
+    }
+
+    async function saveTelegramPromo(button) {
+        const id = document.getElementById('tgb-promo-id').value;
+        const payload = {
+            name: document.getElementById('tgb-promo-name').value.trim(),
+            code: document.getElementById('tgb-promo-code').value.trim(),
+            kind: document.getElementById('tgb-promo-kind').value,
+            value: Number(document.getElementById('tgb-promo-value').value),
+            max_discount_amount: _promoNum('tgb-promo-max-discount'),
+            applies_to: document.getElementById('tgb-promo-applies').value,
+            bot_instance_id: _promoNum('tgb-promo-bot'),
+            package_id: _promoNum('tgb-promo-package'),
+            min_amount: _promoNum('tgb-promo-min-amount'),
+            min_purchases_30d: _promoNum('tgb-promo-min-30d'),
+            min_purchases_90d: _promoNum('tgb-promo-min-90d'),
+            min_referrals: _promoNum('tgb-promo-min-referrals'),
+            requires_channel_chat_id: _promoNum('tgb-promo-channel'),
+            starts_at: document.getElementById('tgb-promo-starts').value || null,
+            ends_at: document.getElementById('tgb-promo-ends').value || null,
+            max_uses_total: _promoNum('tgb-promo-max-total'),
+            max_uses_per_user: _promoNum('tgb-promo-max-user'),
+            priority: _promoNum('tgb-promo-priority') || 0,
+            owner_admin_id: _promoNum('tgb-promo-owner'),
+            first_purchase_only: document.getElementById('tgb-promo-first-purchase').checked,
+            stackable: document.getElementById('tgb-promo-stackable').checked,
+            apply_on_reseller_pricing: document.getElementById('tgb-promo-reseller-pricing').checked,
+            enabled: document.getElementById('tgb-promo-enabled').checked,
+        };
+        setTelegramButtonLoading(button, true, 'Saving…');
+        try {
+            await telegramBotApi(id ? `/api/settings/telegram-promos/${id}` : '/api/settings/telegram-promos',
+                {method: id ? 'PUT' : 'POST', body: JSON.stringify(payload)});
+            document.getElementById('tgb-promo-form').style.display = 'none';
+            showToast('Promo saved.', 'success');
+            await loadTelegramPromos();
+        } catch (error) { showToast(error.message, 'error'); }
+        finally { setTelegramButtonLoading(button, false); }
+    }
+
+    async function deleteTelegramPromo(id, button) {
+        if (!window.confirm('Delete this promo? Its usage history is removed too.')) return;
+        setTelegramButtonLoading(button, true, 'Deleting…');
+        try {
+            await telegramBotApi(`/api/settings/telegram-promos/${id}`, {method: 'DELETE'});
+            showToast('Promo deleted.', 'success');
+            await loadTelegramPromos();
+        } catch (error) { showToast(error.message, 'error'); }
+        finally { setTelegramButtonLoading(button, false); }
+    }
+
+    async function loadTelegramBotsList() {
+        try {
+            const data = await telegramBotApi(`/api/telegram-bots${telegramBotIncludeArchived ? '?include_archived=1' : ''}`);
+            telegramBotList = Array.isArray(data.bots) ? data.bots : [];
+        } catch (error) {
+            telegramBotList = [];
+        }
+        if (telegramBotSelectedId && !telegramBotList.some(bot => Number(bot.id) === Number(telegramBotSelectedId))) {
+            telegramBotSelectedId = null;
+        }
+        renderTelegramBots();
+    }
+
+    function renderTelegramBots() {
+        const list = document.getElementById('tgb-bots-list');
+        if (!list) return;
+        const card = (bot, isCentral, selected) => {
+            const health = bot.health || {};
+            const status = isCentral && !health.state ? 'central' : String(health.state || (bot.enabled ? 'stopped' : 'disabled'));
+            const statusKey = status.toLowerCase().replace('_', ' ');
+            const statusClass = ['running', 'healthy'].includes(statusKey) ? 'is-good' : ['failed', 'error', 'stale'].includes(statusKey) ? 'is-error' : ['starting', 'cooldown', 'degraded'].includes(statusKey) ? 'is-warning' : '';
+            const owner = isCentral ? 'System' : (bot.owner_username ? escapeHtml(String(bot.owner_username)) : `Reseller #${Number(bot.owner_admin_id || 0)}`);
+            return `<article class="tgb-proxy-card${bot.enabled === false && !isCentral ? ' is-disabled' : ''}" style="cursor:pointer;${selected ? ' outline: 2px solid var(--primary);' : ''}" onclick="selectTelegramBot(${isCentral ? 'null' : Number(bot.id)})">
+                <div class="tgb-proxy-title"><strong>${escapeHtml(String(bot.display_name || 'Unnamed bot'))}</strong><div class="tgb-proxy-meta">${owner}${bot.bot_username ? ` · @${escapeHtml(String(bot.bot_username))}` : ''} · ${bot.enabled ? 'Enabled' : 'Disabled'}${bot.archived ? ' · Archived' : ''}</div></div>
+                <div class="tgb-proxy-health"><div class="tgb-health-line"><span class="tgb-status-dot ${statusClass}"></span><strong>${escapeHtml(status)}</strong></div></div>
+            </article>`;
+        };
+        const central = telegramBotList.find(bot => bot.owner_type === 'system') || {display_name: 'Eve Central Bot', enabled: true};
+        const others = telegramBotList.filter(bot => bot.owner_type !== 'system')
+            .map(bot => card(bot, false, Number(bot.id) === Number(telegramBotSelectedId))).join('');
+        list.innerHTML = card(central, true, !telegramBotSelectedId) + others;
+        renderTelegramBotActions();
+    }
+
+    function renderTelegramBotActions() {
+        const bar = document.getElementById('tgb-bot-actions');
+        const bot = telegramBotList.find(item => Number(item.id) === Number(telegramBotSelectedId));
+        if (!bar) return;
+        bar.style.display = bot ? 'flex' : 'none';
+        if (!bot) return;
+        const health = bot.health || {};
+        document.getElementById('tgb-bot-toggle-enabled').textContent = bot.enabled ? 'Disable' : 'Enable';
+        document.getElementById('tgb-bot-archive').style.display = bot.archived ? 'none' : '';
+        document.getElementById('tgb-bot-restore').style.display = bot.archived ? '' : 'none';
+        const heartbeat = health.last_heartbeat_at ? formatTelegramTimestamp(health.last_heartbeat_at) : 'no heartbeat';
+        document.getElementById('tgb-bot-health-detail').textContent =
+            `Health: ${health.state || 'unknown'} · heartbeat ${heartbeat}` +
+            (Number(health.failed_update_count || 0) > 0 ? ` · ${Number(health.failed_update_count)} failed updates` : '') +
+            (health.last_error ? ` · last error: ${String(health.last_error).slice(0, 140)}` : '');
+    }
+
+    async function telegramBotRuntimeAction(action, button) {
+        const bot = telegramBotList.find(item => Number(item.id) === Number(telegramBotSelectedId));
+        if (!bot) return;
+        const verb = action || (bot.enabled ? 'disable' : 'enable');
+        setTelegramButtonLoading(button, true, 'Working…');
+        try {
+            await telegramBotApi(`/api/telegram-bots/${Number(bot.id)}/runtime`, {method:'POST', body:JSON.stringify({action: verb})});
+            showToast({enable: 'Bot enabled.', disable: 'Bot disabled.', restart: 'Bot restarted.', restore: 'Bot restored.'}[verb] || 'Done.', 'success');
+            await loadTelegramBotSettings();
+        } catch (error) { showToast(error.message, 'error'); }
+        finally { setTelegramButtonLoading(button, false); }
+    }
+
+    async function archiveTelegramBot(button) {
+        const bot = telegramBotList.find(item => Number(item.id) === Number(telegramBotSelectedId));
+        if (!bot) return;
+        if (!window.confirm(`Archive "${bot.display_name}"? The bot is disabled and the reseller can create a fresh one. This cannot be undone from the reseller side.`)) return;
+        setTelegramButtonLoading(button, true, 'Archiving…');
+        try {
+            await telegramBotApi(`/api/telegram-bots/${Number(bot.id)}/runtime`, {method:'POST', body:JSON.stringify({action: 'archive'})});
+            showToast('Bot archived.', 'success');
+            telegramBotSelectedId = null;
+            await loadTelegramBotSettings();
+        } catch (error) {
+            const payload = error.payload || {};
+            const pending = Number(payload.pending_purchases || 0) + Number(payload.pending_service_requests || 0);
+            showToast(pending ? `${error.message} (${pending} pending request${pending === 1 ? '' : 's'})` : error.message, 'error');
+        }
+        finally { setTelegramButtonLoading(button, false); }
+    }
+
+    async function toggleTelegramArchived(show) {
+        telegramBotIncludeArchived = !!show;
+        await loadTelegramBotsList();
+    }
+
+    async function selectTelegramBot(id) {
+        telegramBotSelectedId = id ? Number(id) : null;
+        renderTelegramBots();
+        await loadTelegramBotSettings();
+    }
+
+    function toggleTelegramBotCreate(hide = false) {
+        const form = document.getElementById('tgb-bot-create');
+        form.style.display = hide || form.style.display !== 'none' ? 'none' : '';
+        if (form.style.display !== 'none') loadTelegramBotOwnerOptions();
+    }
+
+    async function loadTelegramBotOwnerOptions() {
+        const select = document.getElementById('tgb-bot-owner');
+        select.innerHTML = '<option value="">Loading…</option>';
+        try {
+            const response = await fetch('/api/admins', {headers: {'Accept': 'application/json'}});
+            const admins = await response.json();
+            const taken = new Set(telegramBotList.filter(bot => bot.owner_admin_id).map(bot => Number(bot.owner_admin_id)));
+            const resellers = (Array.isArray(admins) ? admins : []).filter(admin => admin.role === 'reseller' && !taken.has(Number(admin.id)));
+            select.innerHTML = resellers.length
+                ? resellers.map(admin => `<option value="${Number(admin.id)}">${escapeHtml(String(admin.username))}</option>`).join('')
+                : '<option value="">No available resellers</option>';
+        } catch (error) {
+            select.innerHTML = '<option value="">Could not load resellers</option>';
+        }
+    }
+
+    async function createTelegramBot(button) {
+        const ownerId = Number(document.getElementById('tgb-bot-owner').value || 0);
+        if (!ownerId) return showToast('Choose a reseller.', 'error');
+        const payload = {
+            owner_admin_id: ownerId,
+            display_name: document.getElementById('tgb-bot-name').value.trim(),
+            bot_token: document.getElementById('tgb-bot-token').value.trim(),
+        };
+        setTelegramButtonLoading(button, true, 'Creating…');
+        try {
+            const data = await telegramBotApi('/api/telegram-bots', {method:'POST', body:JSON.stringify(payload)});
+            document.getElementById('tgb-bot-name').value = '';
+            document.getElementById('tgb-bot-token').value = '';
+            toggleTelegramBotCreate(true);
+            showToast('Reseller bot created.', 'success');
+            await loadTelegramBotsList();
+            if (data.bot && data.bot.id) await selectTelegramBot(data.bot.id);
         } catch (error) { showToast(error.message, 'error'); }
         finally { setTelegramButtonLoading(button, false); }
     }
@@ -3884,7 +4253,9 @@
         content.style.display = 'none';
         telegramBotFormReady = false;
         try {
-            const data = await telegramBotApi('/api/settings/telegram-bots');
+            await loadTelegramBotsList();
+            loadTelegramPromos();
+            const data = await telegramBotApi(telegramBotUrl('/api/settings/telegram-bots'));
             const bot = data.bot || {};
             document.getElementById('tgb-display-name').value = bot.display_name || '';
             document.getElementById('tgb-token').value = '';
@@ -3908,6 +4279,16 @@
             document.getElementById('tgb-purchase-assignment-strategy').value = ['least_clients', 'priority', 'weighted_random', 'random'].includes(purchasePolicy.assignment_strategy) ? purchasePolicy.assignment_strategy : 'least_clients';
             document.getElementById('tgb-purchase-account-naming').value = ['generated', 'customer'].includes(purchasePolicy.account_name_mode) ? purchasePolicy.account_name_mode : 'generated';
             document.getElementById('tgb-purchase-account-template').value = purchasePolicy.account_name_template || 'tg{order_id}-{phone_last4}';
+            document.getElementById('tgb-trial-enabled').checked = !!purchasePolicy.trial_enabled;
+            document.getElementById('tgb-emergency-enabled').checked = !!purchasePolicy.emergency_enabled;
+            document.getElementById('tgb-emergency-days').value = Number.isFinite(Number(purchasePolicy.emergency_days)) ? Number(purchasePolicy.emergency_days) : 1;
+            document.getElementById('tgb-emergency-volume').value = Number.isFinite(Number(purchasePolicy.emergency_volume_gb)) ? Number(purchasePolicy.emergency_volume_gb) : 1;
+            document.getElementById('tgb-emergency-cooldown').value = Number.isFinite(Number(purchasePolicy.emergency_cooldown_days)) ? Number(purchasePolicy.emergency_cooldown_days) : 30;
+            const trialSelect = document.getElementById('tgb-trial-package');
+            const trialPackages = Array.isArray(data.trial_packages) ? data.trial_packages : [];
+            trialSelect.innerHTML = '<option value="">—</option>' + trialPackages.map(pkg =>
+                `<option value="${Number(pkg.id)}"${Number(pkg.id) === Number(purchasePolicy.trial_package_id) ? ' selected' : ''}>${escapeHtml(String(pkg.name))} (${Number(pkg.days)}d / ${Number(pkg.volume)}GB)</option>`
+            ).join('');
             telegramPurchaseServers = Array.isArray(data.purchase_servers) ? data.purchase_servers : [];
             telegramPurchasePackages = Array.isArray(data.purchase_packages) ? data.purchase_packages : [];
             telegramPurchaseInboundRoutes = Array.isArray(data.purchase_inbound_routes) ? data.purchase_inbound_routes : [];
@@ -4018,14 +4399,20 @@
                 customer_selects_server: document.getElementById('tgb-purchase-customer-server-choice').checked,
                 assignment_strategy: document.getElementById('tgb-purchase-assignment-strategy').value,
                 account_name_mode: document.getElementById('tgb-purchase-account-naming').value,
-                account_name_template: document.getElementById('tgb-purchase-account-template').value.trim()
+                account_name_template: document.getElementById('tgb-purchase-account-template').value.trim(),
+                trial_enabled: document.getElementById('tgb-trial-enabled').checked,
+                trial_package_id: document.getElementById('tgb-trial-package').value ? Number(document.getElementById('tgb-trial-package').value) : null,
+                emergency_enabled: document.getElementById('tgb-emergency-enabled').checked,
+                emergency_days: Number(document.getElementById('tgb-emergency-days').value),
+                emergency_volume_gb: Number(document.getElementById('tgb-emergency-volume').value),
+                emergency_cooldown_days: Number(document.getElementById('tgb-emergency-cooldown').value)
             },
             purchase_servers: collectTelegramPurchaseServers(),
             purchase_inbound_routes: collectTelegramPurchaseInboundRoutes()
         };
         setTelegramButtonLoading(button, true, 'Saving…');
         try {
-            await telegramBotApi('/api/settings/telegram-bots', {method:'POST', body:JSON.stringify(payload)});
+            await telegramBotApi(telegramBotUrl('/api/settings/telegram-bots'), {method:'POST', body:JSON.stringify(payload)});
             document.getElementById('tgb-token').value = '';
             showToast('Telegram bot settings saved.', 'success');
             await loadTelegramBotSettings();
@@ -4037,7 +4424,7 @@
         setTelegramButtonLoading(button, true, 'Testing…');
         setTelegramBotReadiness('warning', 'Testing Telegram route…', route === 'direct' ? 'Checking a direct connection.' : 'Trying the configured failover order.');
         try {
-            const data = await telegramBotApi('/api/settings/telegram-bots/test', {method:'POST', body:JSON.stringify({route})});
+            const data = await telegramBotApi(telegramBotUrl('/api/settings/telegram-bots/test'), {method:'POST', body:JSON.stringify({route})});
             const d = data.diagnostic || data.result || data;
             renderTelegramDiagnostic(data);
             setTelegramBotReadiness('good', 'Telegram reachable', `Connected successfully via ${d.route_used || d.route || route}.`, d);
@@ -4269,7 +4656,7 @@
         }
         setTelegramButtonLoading(button, true, 'Saving…');
         try {
-            await telegramBotApi(id ? `/api/settings/telegram-bots/egress/${id}` : '/api/settings/telegram-bots/egress', {method:id ? 'PUT' : 'POST', body:JSON.stringify(payload)});
+            await telegramBotApi(telegramBotUrl(id ? `/api/settings/telegram-bots/egress/${id}` : '/api/settings/telegram-bots/egress'), {method:id ? 'PUT' : 'POST', body:JSON.stringify(payload)});
             closeTelegramEgressForm(); showToast('Managed Xray route saved.', 'success'); await loadTelegramBotSettings();
         } catch (error) { showToast(error.message, 'error'); }
         finally { setTelegramButtonLoading(button, false); }
@@ -4279,7 +4666,7 @@
         setTelegramButtonLoading(button, true, 'Testing…');
         setTelegramBotReadiness('warning', 'Testing managed Xray route…', 'Starting the loopback relay and checking every Telegram network layer.');
         try {
-            const data = await telegramBotApi(`/api/settings/telegram-bots/egress/${id}/test`, {method:'POST'});
+            const data = await telegramBotApi(telegramBotUrl(`/api/settings/telegram-bots/egress/${id}/test`), {method:'POST'});
             renderTelegramDiagnostic(data);
             const d = data.diagnostic || data.result || data;
             setTelegramBotReadiness('good', 'Managed route is healthy', 'Xray reached the Telegram API through the selected VLESS route.', d);
@@ -4294,7 +4681,7 @@
     async function deleteTelegramEgress(id, button) {
         if (!confirm('Delete this managed Xray route? Its local relay will be stopped.')) return;
         setTelegramButtonLoading(button, true, 'Deleting…');
-        try { await telegramBotApi(`/api/settings/telegram-bots/egress/${id}`, {method:'DELETE'}); showToast('Managed Xray route deleted.', 'success'); }
+        try { await telegramBotApi(telegramBotUrl(`/api/settings/telegram-bots/egress/${id}`), {method:'DELETE'}); showToast('Managed Xray route deleted.', 'success'); }
         catch (error) { showToast(error.message, 'error'); }
         finally { setTelegramButtonLoading(button, false); await loadTelegramBotSettings(); }
     }
@@ -4374,7 +4761,7 @@
         const payload = {proxy_type:document.getElementById('tgb-proxy-type').value, host:document.getElementById('tgb-proxy-host').value.trim(), port:Number(document.getElementById('tgb-proxy-port').value), username:document.getElementById('tgb-proxy-username').value.trim(), password:document.getElementById('tgb-proxy-password').value, priority:Number(document.getElementById('tgb-proxy-priority').value), enabled:document.getElementById('tgb-proxy-enabled').checked};
         setTelegramButtonLoading(button, true, 'Saving…');
         try {
-            await telegramBotApi(id ? `/api/settings/telegram-bots/proxies/${id}` : '/api/settings/telegram-bots/proxies', {method:id ? 'PUT' : 'POST', body:JSON.stringify(payload)});
+            await telegramBotApi(telegramBotUrl(id ? `/api/settings/telegram-bots/proxies/${id}` : '/api/settings/telegram-bots/proxies'), {method:id ? 'PUT' : 'POST', body:JSON.stringify(payload)});
             closeTelegramProxyForm(); showToast('Proxy saved.', 'success'); await loadTelegramBotSettings();
         } catch (error) { showToast(error.message, 'error'); }
         finally { setTelegramButtonLoading(button, false); }
@@ -4382,7 +4769,7 @@
 
     async function testTelegramProxy(id, button) {
         setTelegramButtonLoading(button, true, 'Testing…');
-        try { const data = await telegramBotApi(`/api/settings/telegram-bots/proxies/${id}/test`, {method:'POST'}); renderTelegramDiagnostic(data); showToast('Proxy test passed.', 'success'); }
+        try { const data = await telegramBotApi(telegramBotUrl(`/api/settings/telegram-bots/proxies/${id}/test`), {method:'POST'}); renderTelegramDiagnostic(data); showToast('Proxy test passed.', 'success'); }
         catch (error) { renderTelegramDiagnostic(error.payload || {success:false, error:error.message, attempts:[]}); showToast(error.message, 'error'); }
         finally { setTelegramButtonLoading(button, false); await loadTelegramBotSettings(); }
     }
@@ -4390,7 +4777,7 @@
     async function deleteTelegramProxy(id, button) {
         if (!confirm('Delete this proxy? This action cannot be undone.')) return;
         setTelegramButtonLoading(button, true, 'Deleting…');
-        try { await telegramBotApi(`/api/settings/telegram-bots/proxies/${id}`, {method:'DELETE'}); showToast('Proxy deleted.', 'success'); }
+        try { await telegramBotApi(telegramBotUrl(`/api/settings/telegram-bots/proxies/${id}`), {method:'DELETE'}); showToast('Proxy deleted.', 'success'); }
         catch (error) { showToast(error.message, 'error'); }
         finally { setTelegramButtonLoading(button, false); await loadTelegramBotSettings(); }
     }
