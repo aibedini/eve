@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -9700,6 +9700,33 @@ def _autodetect_ssl_paths():
     return '', ''
 
 
+def _migrate_add_columns(table_name, columns):
+    """Idempotently add columns to an existing table, ONE guard per column.
+
+    Each ALTER gets its own try/except: a single failure (two gunicorn workers
+    racing the same startup migration, a transient lock, a bad type on one
+    dialect) must never skip the remaining columns — a partially applied
+    migration is worse than a loud one.
+    """
+    try:
+        inspector = inspect(db.engine)
+        if table_name not in set(inspector.get_table_names()):
+            return
+        existing = {c['name'] for c in inspector.get_columns(table_name)}
+    except Exception as exc:
+        print(f"Migration error ({table_name} inspect): {exc}")
+        return
+    for col_name, col_def in columns:
+        if col_name in existing:
+            continue
+        try:
+            with db.engine.connect() as conn:
+                conn.execute(text(f'ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}'))
+                conn.commit()
+        except Exception as exc:
+            print(f"Migration error ({table_name}.{col_name}): {exc}")
+
+
 with app.app_context():
     db.create_all()
     
@@ -9972,138 +9999,65 @@ with app.app_context():
         print(f"[startup] SSL auto-detect error: {_ssl_e}")
 
     # Ensure packages table has extended columns (scope, assigned_reseller_ids, etc.)
-    try:
-        inspector = inspect(db.engine)
-        if 'packages' in set(inspector.get_table_names()):
-            _pkg_cols = [c['name'] for c in inspector.get_columns('packages')]
-            # TIMESTAMP works in both PostgreSQL and SQLite; DATETIME is SQLite-only
-            _ts_type = 'TIMESTAMP' if db.engine.dialect.name == 'postgresql' else 'DATETIME'
-            _pkg_new = [
-                ('scope', "VARCHAR(20) DEFAULT 'global'"),
-                ('assigned_reseller_ids', "TEXT DEFAULT '[]'"),
-                ('created_by', 'INTEGER'),
-                ('display_order', 'INTEGER DEFAULT 0'),
-                ('show_on_sub', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
-                ('is_trial', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
-                ('created_at', _ts_type),
-                ('updated_at', _ts_type),
-            ]
-            for _cn, _cd in _pkg_new:
-                if _cn not in _pkg_cols:
-                    with db.engine.connect() as _conn:
-                        _conn.execute(text(f'ALTER TABLE packages ADD COLUMN {_cn} {_cd}'))
-                        _conn.commit()
-    except Exception as _pe:
-        print(f"Migration error (packages extended columns): {_pe}")
+    # TIMESTAMP works in both PostgreSQL and SQLite; DATETIME is SQLite-only
+    _ts_type = 'TIMESTAMP' if db.engine.dialect.name == 'postgresql' else 'DATETIME'
+    _migrate_add_columns('packages', [
+        ('scope', "VARCHAR(20) DEFAULT 'global'"),
+        ('assigned_reseller_ids', "TEXT DEFAULT '[]'"),
+        ('created_by', 'INTEGER'),
+        ('display_order', 'INTEGER DEFAULT 0'),
+        ('show_on_sub', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+        ('is_trial', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+        ('created_at', _ts_type),
+        ('updated_at', _ts_type),
+    ])
 
     # Ensure price_tiers supports assigning one dynamic rule to multiple resellers.
-    try:
-        inspector = inspect(db.engine)
-        if 'price_tiers' in set(inspector.get_table_names()):
-            _tier_cols = [c['name'] for c in inspector.get_columns('price_tiers')]
-            if 'assigned_reseller_ids' not in _tier_cols:
-                with db.engine.connect() as _conn:
-                    _conn.execute(text("ALTER TABLE price_tiers ADD COLUMN assigned_reseller_ids TEXT DEFAULT '[]'"))
-                    _conn.commit()
-    except Exception as _te:
-        print(f"Migration error (price_tiers assigned_reseller_ids): {_te}")
+    _migrate_add_columns('price_tiers', [
+        ('assigned_reseller_ids', "TEXT DEFAULT '[]'"),
+    ])
 
     # Ensure bank_cards supports reseller ownership (reseller_id, assigned_reseller_ids)
-    try:
-        inspector = inspect(db.engine)
-        if 'bank_cards' in set(inspector.get_table_names()):
-            _card_cols = [c['name'] for c in inspector.get_columns('bank_cards')]
-            _card_new = [
-                ('reseller_id', 'INTEGER'),
-                ('assigned_reseller_ids', "TEXT DEFAULT '[]'"),
-            ]
-            for _cn, _cd in _card_new:
-                if _cn not in _card_cols:
-                    with db.engine.connect() as _conn:
-                        _conn.execute(text(f'ALTER TABLE bank_cards ADD COLUMN {_cn} {_cd}'))
-                        _conn.commit()
-    except Exception as _ce:
-        print(f"Migration error (bank_cards reseller columns): {_ce}")
+    _migrate_add_columns('bank_cards', [
+        ('reseller_id', 'INTEGER'),
+        ('assigned_reseller_ids', "TEXT DEFAULT '[]'"),
+    ])
 
     # Ensure telegram_bot_instances supports soft-archive lifecycle
-    try:
-        inspector = inspect(db.engine)
-        if 'telegram_bot_instances' in set(inspector.get_table_names()):
-            _bot_cols = [c['name'] for c in inspector.get_columns('telegram_bot_instances')]
-            for _cn, _cd in [('archived_at', 'DATETIME'), ('archived_by_admin_id', 'INTEGER')]:
-                if _cn not in _bot_cols:
-                    with db.engine.connect() as _conn:
-                        _conn.execute(text(f'ALTER TABLE telegram_bot_instances ADD COLUMN {_cn} {_cd}'))
-                        _conn.commit()
-    except Exception as _be:
-        print(f"Migration error (telegram_bot_instances archive columns): {_be}")
+    _migrate_add_columns('telegram_bot_instances', [
+        ('archived_at', 'TIMESTAMP' if db.engine.dialect.name == 'postgresql' else 'DATETIME'),
+        ('archived_by_admin_id', 'INTEGER'),
+    ])
 
     # Ensure telegram_purchase_policies supports trial and emergency access
-    try:
-        inspector = inspect(db.engine)
-        if 'telegram_purchase_policies' in set(inspector.get_table_names()):
-            _pol_cols = [c['name'] for c in inspector.get_columns('telegram_purchase_policies')]
-            _is_pg = db.engine.dialect.name == 'postgresql'
-            _bool_t = 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'
-            for _cn, _cd in [
-                ('trial_enabled', _bool_t),
-                ('trial_package_id', 'INTEGER'),
-                ('emergency_enabled', _bool_t),
-                ('emergency_days', 'INTEGER DEFAULT 1'),
-                ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
-                ('emergency_cooldown_days', 'INTEGER DEFAULT 30'),
-            ]:
-                if _cn not in _pol_cols:
-                    with db.engine.connect() as _conn:
-                        _conn.execute(text(f'ALTER TABLE telegram_purchase_policies ADD COLUMN {_cn} {_cd}'))
-                        _conn.commit()
-    except Exception as _ppe:
-        print(f"Migration error (telegram_purchase_policies trial/emergency columns): {_ppe}")
+    _migrate_add_columns('telegram_purchase_policies', [
+        ('trial_enabled', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+        ('trial_package_id', 'INTEGER'),
+        ('emergency_enabled', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+        ('emergency_days', 'INTEGER DEFAULT 1'),
+        ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
+        ('emergency_cooldown_days', 'INTEGER DEFAULT 30'),
+    ])
 
     # Ensure telegram purchase tables support quoted-amount freeze and receipt fraud flags
-    try:
-        inspector = inspect(db.engine)
-        _is_pg = db.engine.dialect.name == 'postgresql'
-        _alters = []
-        if 'telegram_purchase_sessions' in set(inspector.get_table_names()):
-            _cols = [c['name'] for c in inspector.get_columns('telegram_purchase_sessions')]
-            for _cn, _cd in [
-                ('quoted_amount', 'INTEGER'),
-                ('promo_id', 'INTEGER'),
-                ('promo_code', 'VARCHAR(64)'),
-                ('discount_amount', 'INTEGER'),
-                ('promo_discounts_json', 'TEXT'),
-            ]:
-                if _cn not in _cols:
-                    _alters.append(f'ALTER TABLE telegram_purchase_sessions ADD COLUMN {_cn} {_cd}')
-        if 'telegram_purchase_requests' in set(inspector.get_table_names()):
-            _cols = [c['name'] for c in inspector.get_columns('telegram_purchase_requests')]
-            if 'duplicate_receipt' not in _cols:
-                _alters.append(
-                    'ALTER TABLE telegram_purchase_requests ADD COLUMN duplicate_receipt '
-                    + ('BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'))
-            for _cn, _cd in [
-                ('original_amount', 'BIGINT' if _is_pg else 'INTEGER'),
-                ('discount_amount', 'BIGINT' if _is_pg else 'INTEGER'),
-                ('promo_code', 'VARCHAR(64)'),
-            ]:
-                if _cn not in _cols:
-                    _alters.append(f'ALTER TABLE telegram_purchase_requests ADD COLUMN {_cn} {_cd}')
-        if 'telegram_service_requests' in set(inspector.get_table_names()):
-            _cols = [c['name'] for c in inspector.get_columns('telegram_service_requests')]
-            for _cn, _cd in [
-                ('original_amount', 'BIGINT' if _is_pg else 'INTEGER'),
-                ('discount_amount', 'BIGINT' if _is_pg else 'INTEGER'),
-                ('promo_code', 'VARCHAR(64)'),
-            ]:
-                if _cn not in _cols:
-                    _alters.append(f'ALTER TABLE telegram_service_requests ADD COLUMN {_cn} {_cd}')
-        for _sql in _alters:
-            with db.engine.connect() as _conn:
-                _conn.execute(text(_sql))
-                _conn.commit()
-    except Exception as _qe:
-        print(f"Migration error (telegram purchase audit columns): {_qe}")
+    _migrate_add_columns('telegram_purchase_sessions', [
+        ('quoted_amount', 'INTEGER'),
+        ('promo_id', 'INTEGER'),
+        ('promo_code', 'VARCHAR(64)'),
+        ('discount_amount', 'INTEGER'),
+        ('promo_discounts_json', 'TEXT'),
+    ])
+    _migrate_add_columns('telegram_purchase_requests', [
+        ('duplicate_receipt', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+        ('original_amount', 'BIGINT' if _is_pg else 'INTEGER'),
+        ('discount_amount', 'BIGINT' if _is_pg else 'INTEGER'),
+        ('promo_code', 'VARCHAR(64)'),
+    ])
+    _migrate_add_columns('telegram_service_requests', [
+        ('original_amount', 'BIGINT' if _is_pg else 'INTEGER'),
+        ('discount_amount', 'BIGINT' if _is_pg else 'INTEGER'),
+        ('promo_code', 'VARCHAR(64)'),
+    ])
 
     # Add icon_url and is_recommended to sub_app_configs (older DBs)
     try:

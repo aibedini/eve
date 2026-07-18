@@ -2,6 +2,11 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.5.1] - 2026-07-18
+
+### Fixed
+- Telegram Bots settings tab failed to load with a 500 on upgraded databases: the startup migrations applied `ALTER TABLE` batches inside a single try/except, so one failed statement (e.g. two gunicorn workers racing the same migration, or a transient lock) silently skipped the remaining columns — leaving `telegram_purchase_policies`/`packages`/purchase tables partially migrated and breaking only `GET /api/settings/telegram-bots` while the bot list and promotions endpoints kept working. All telegram/package/bank-card migrations now add columns one-by-one through `_migrate_add_columns` with an independent guard per column, so migrations are fully resumable; the `archived_at` type is also postgres-safe (`TIMESTAMP`). Adds a regression test asserting the settings payload returns 200 with all sections and that partially applied migrations resume.
+
 ## [2.5.0] - 2026-07-18
 
 ### Telegram
