@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.3"
+APP_VERSION = "2.5.4"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8862,6 +8862,8 @@ class TelegramPurchasePolicy(db.Model):
     )
     trial_enabled = db.Column(db.Boolean, nullable=False, default=False)
     trial_package_id = db.Column(db.Integer, db.ForeignKey('packages.id'), nullable=True)
+    trial_requires_channel_membership = db.Column(db.Boolean, nullable=False, default=False)
+    trial_channel_chat_id = db.Column(db.BigInteger, nullable=True)
     emergency_enabled = db.Column(db.Boolean, nullable=False, default=False)
     emergency_days = db.Column(db.Integer, nullable=False, default=1)
     emergency_volume_gb = db.Column(db.Integer, nullable=False, default=1)
@@ -8876,6 +8878,8 @@ class TelegramPurchasePolicy(db.Model):
             'account_name_template': self.account_name_template or 'tg{order_id}-{phone_last4}',
             'trial_enabled': bool(self.trial_enabled),
             'trial_package_id': self.trial_package_id,
+            'trial_requires_channel_membership': bool(self.trial_requires_channel_membership),
+            'trial_channel_chat_id': self.trial_channel_chat_id,
             'emergency_enabled': bool(self.emergency_enabled),
             'emergency_days': max(1, int(self.emergency_days or 1)),
             'emergency_volume_gb': max(0, int(self.emergency_volume_gb or 1)),
@@ -10109,6 +10113,8 @@ with app.app_context():
     _migrate_add_columns('telegram_purchase_policies', [
         ('trial_enabled', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
         ('trial_package_id', 'INTEGER'),
+        ('trial_requires_channel_membership', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+        ('trial_channel_chat_id', 'BIGINT' if _is_pg else 'INTEGER'),
         ('emergency_enabled', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
         ('emergency_days', 'INTEGER DEFAULT 1'),
         ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
@@ -26073,6 +26079,19 @@ def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
             if not trial_package or not getattr(trial_package, 'is_trial', False):
                 raise ValueError('Trial package must reference a package marked as trial')
             policy.trial_package_id = trial_package.id
+    policy.trial_requires_channel_membership = bool(policy_data.get(
+        'trial_requires_channel_membership',
+        policy.trial_requires_channel_membership,
+    ))
+    if 'trial_channel_chat_id' in policy_data:
+        trial_channel_chat_id = policy_data.get('trial_channel_chat_id')
+        if trial_channel_chat_id in (None, ''):
+            policy.trial_channel_chat_id = None
+        else:
+            try:
+                policy.trial_channel_chat_id = int(trial_channel_chat_id)
+            except (TypeError, ValueError):
+                raise ValueError('Trial channel chat ID must be a whole number')
     policy.emergency_enabled = bool(policy_data.get('emergency_enabled', policy.emergency_enabled))
     try:
         policy.emergency_days = int(policy_data.get('emergency_days', policy.emergency_days or 1))
@@ -26089,6 +26108,8 @@ def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
         raise ValueError('Emergency cooldown must be between 1 and 365 days')
     if policy.trial_enabled and not policy.trial_package_id:
         raise ValueError('Choose a trial package before enabling the trial')
+    if policy.trial_requires_channel_membership and not policy.trial_channel_chat_id:
+        raise ValueError('Enter a Telegram channel chat ID before requiring trial membership')
     if inbound_routes is not None:
         _save_telegram_purchase_routes(bot, inbound_routes)
 

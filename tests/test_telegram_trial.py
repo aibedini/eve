@@ -34,13 +34,19 @@ from telegram_bot_worker import (  # noqa: E402
 
 
 class FakeBotApi:
-    def __init__(self):
+    def __init__(self, member=True):
         self.messages = []
         self.answers = []
+        self.member = member
 
     def send_message(self, chat_id, text, **kwargs):
         self.messages.append((int(chat_id), text))
         return ({'ok': True}, 'direct')
+
+    def call(self, method, payload=None, **kwargs):
+        if method == 'getChatMember':
+            return ({'status': 'member' if self.member else 'left'}, 'direct')
+        return ({}, 'direct')
 
     def answer_callback(self, callback_id, text=None):
         self.answers.append((callback_id, text))
@@ -142,8 +148,9 @@ class TelegramTrialTests(unittest.TestCase):
         db.session.flush()
         return state
 
-    def _trial_call(self, bot, user_id=8_500_001, phone='9120001111', verified=True):
-        api = FakeBotApi()
+    def _trial_call(self, bot, user_id=8_500_001, phone='9120001111',
+                    verified=True, member=True):
+        api = FakeBotApi(member=member)
         customer, identity = self._identity(user_id, phone, verified=verified)
         state = self._state(bot, user_id)
         with mock.patch('telegram_bot_worker._assign_purchase_server') as assign, \
@@ -198,6 +205,25 @@ class TelegramTrialTests(unittest.TestCase):
         api, execute = self._trial_call(bot, verified=False)
         self.assertEqual(api.messages[-1][1], COPY['fa']['share_phone'])
         execute.assert_not_called()
+
+    def test_trial_can_require_telegram_channel_membership(self):
+        self._admin('super')
+        bot = self._bot(suffix='channel')
+        package = self._package()
+        self._policy(
+            bot, trial_enabled=True, trial_package_id=package.id,
+            trial_requires_channel_membership=True,
+            trial_channel_chat_id=-1001234567890,
+        )
+        api, execute = self._trial_call(bot, member=False)
+        self.assertIn('کانال تلگرام', api.messages[-1][1])
+        execute.assert_not_called()
+        self.assertEqual(TelegramTrialGrant.query.count(), 0)
+
+        api2, execute2 = self._trial_call(
+            bot, user_id=8_500_002, phone='9120002222', member=True)
+        self.assertEqual(execute2.call_count, 1)
+        self.assertIn(COPY['fa']['trial_success'].split('{')[0], api2.messages[-1][1])
 
     # ── one trial per phone ──────────────────────────────────────────────
 

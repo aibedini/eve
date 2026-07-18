@@ -583,6 +583,7 @@
                     </div>
                     <div style="display:flex; gap:18px; flex-wrap:wrap; margin: 8px 0;">
                         <label><input type="checkbox" id="tgb-promo-first-purchase"> First purchase only</label>
+                        <label><input type="checkbox" id="tgb-promo-requires-channel"> Require Telegram channel membership</label>
                         <label><input type="checkbox" id="tgb-promo-stackable"> Stackable</label>
                         <label><input type="checkbox" id="tgb-promo-reseller-pricing" checked> Apply on reseller pricing</label>
                         <label><input type="checkbox" id="tgb-promo-enabled" checked> Enabled</label>
@@ -746,6 +747,15 @@
                                 <select id="tgb-trial-package" class="form-select"></select>
                                 <small class="text-secondary">Only packages marked as trial are listed.</small>
                             </div>
+                            <div class="form-group">
+                                <label for="tgb-trial-channel-chat-id">Trial channel chat ID</label>
+                                <input id="tgb-trial-channel-chat-id" class="form-control" type="number" step="1" placeholder="-1001234567890">
+                                <small class="text-secondary">Used only when channel membership is required.</small>
+                            </div>
+                            <label style="display:flex; align-items:center; gap:8px; margin: 4px 0 0;">
+                                <input type="checkbox" id="tgb-trial-requires-channel">
+                                Require Telegram channel membership for free trial
+                            </label>
                         </div>
                         <div class="tgb-purchase-choice">
                             <div>
@@ -4038,6 +4048,7 @@
         document.getElementById('tgb-promo-min-90d').value = promo.min_purchases_90d ?? '';
         document.getElementById('tgb-promo-min-referrals').value = promo.min_referrals ?? '';
         document.getElementById('tgb-promo-channel').value = promo.requires_channel_chat_id ?? '';
+        document.getElementById('tgb-promo-requires-channel').checked = !!promo.requires_channel_chat_id;
         document.getElementById('tgb-promo-starts').value = promo.starts_at ? String(promo.starts_at).slice(0, 16) : '';
         document.getElementById('tgb-promo-ends').value = promo.ends_at ? String(promo.ends_at).slice(0, 16) : '';
         document.getElementById('tgb-promo-max-total').value = promo.max_uses_total ?? '';
@@ -4063,6 +4074,12 @@
 
     async function saveTelegramPromo(button) {
         const id = document.getElementById('tgb-promo-id').value;
+        const promoRequiresChannel = document.getElementById('tgb-promo-requires-channel').checked;
+        const promoChannelChatId = _promoNum('tgb-promo-channel');
+        if (promoRequiresChannel && !promoChannelChatId) {
+            showToast('Enter a Telegram channel chat ID before requiring promo membership.', 'error');
+            return;
+        }
         const payload = {
             name: document.getElementById('tgb-promo-name').value.trim(),
             code: document.getElementById('tgb-promo-code').value.trim(),
@@ -4076,7 +4093,7 @@
             min_purchases_30d: _promoNum('tgb-promo-min-30d'),
             min_purchases_90d: _promoNum('tgb-promo-min-90d'),
             min_referrals: _promoNum('tgb-promo-min-referrals'),
-            requires_channel_chat_id: _promoNum('tgb-promo-channel'),
+            requires_channel_chat_id: promoRequiresChannel ? promoChannelChatId : null,
             starts_at: document.getElementById('tgb-promo-starts').value || null,
             ends_at: document.getElementById('tgb-promo-ends').value || null,
             max_uses_total: _promoNum('tgb-promo-max-total'),
@@ -4280,6 +4297,8 @@
             document.getElementById('tgb-purchase-account-naming').value = ['generated', 'customer'].includes(purchasePolicy.account_name_mode) ? purchasePolicy.account_name_mode : 'generated';
             document.getElementById('tgb-purchase-account-template').value = purchasePolicy.account_name_template || 'tg{order_id}-{phone_last4}';
             document.getElementById('tgb-trial-enabled').checked = !!purchasePolicy.trial_enabled;
+            document.getElementById('tgb-trial-requires-channel').checked = !!purchasePolicy.trial_requires_channel_membership;
+            document.getElementById('tgb-trial-channel-chat-id').value = purchasePolicy.trial_channel_chat_id || '';
             document.getElementById('tgb-emergency-enabled').checked = !!purchasePolicy.emergency_enabled;
             document.getElementById('tgb-emergency-days').value = Number.isFinite(Number(purchasePolicy.emergency_days)) ? Number(purchasePolicy.emergency_days) : 1;
             document.getElementById('tgb-emergency-volume').value = Number.isFinite(Number(purchasePolicy.emergency_volume_gb)) ? Number(purchasePolicy.emergency_volume_gb) : 1;
@@ -4374,6 +4393,9 @@
         const supportGroupEnabled = document.getElementById('tgb-support-group-enabled').checked;
         const supportGroupChatId = document.getElementById('tgb-support-group-chat-id').value.trim();
         if (supportGroupEnabled && !/^-\d+$/.test(supportGroupChatId)) return showToast('Enter a valid negative Telegram support group ID.', 'error');
+        const trialRequiresChannel = document.getElementById('tgb-trial-requires-channel').checked;
+        const trialChannelChatId = document.getElementById('tgb-trial-channel-chat-id').value.trim();
+        if (trialRequiresChannel && !/^-\d+$/.test(trialChannelChatId)) return showToast('Enter a valid negative Telegram channel ID before requiring trial membership.', 'error');
         const supportSlaMinutes = Number(document.getElementById('tgb-support-sla-minutes').value);
         if (!Number.isInteger(supportSlaMinutes) || supportSlaMinutes < 0 || supportSlaMinutes > 10080) return showToast('Support SLA must be between 0 and 10080 minutes.', 'error');
         const supportSlaWarningPercent = Number(document.getElementById('tgb-support-sla-warning-percent').value);
@@ -4402,6 +4424,8 @@
                 account_name_template: document.getElementById('tgb-purchase-account-template').value.trim(),
                 trial_enabled: document.getElementById('tgb-trial-enabled').checked,
                 trial_package_id: document.getElementById('tgb-trial-package').value ? Number(document.getElementById('tgb-trial-package').value) : null,
+                trial_requires_channel_membership: trialRequiresChannel,
+                trial_channel_chat_id: trialChannelChatId ? Number(trialChannelChatId) : null,
                 emergency_enabled: document.getElementById('tgb-emergency-enabled').checked,
                 emergency_days: Number(document.getElementById('tgb-emergency-days').value),
                 emergency_volume_gb: Number(document.getElementById('tgb-emergency-volume').value),

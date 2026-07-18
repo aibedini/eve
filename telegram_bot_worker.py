@@ -775,6 +775,10 @@ def _purchase_policy_values(bot: TelegramBotInstance):
         ) or 'tg{order_id}-{phone_last4}',
         'trial_enabled': bool(policy.trial_enabled) if policy else False,
         'trial_package_id': policy.trial_package_id if policy else None,
+        'trial_requires_channel_membership': (
+            bool(policy.trial_requires_channel_membership) if policy else False
+        ),
+        'trial_channel_chat_id': policy.trial_channel_chat_id if policy else None,
         'emergency_enabled': bool(policy.emergency_enabled) if policy else False,
         'emergency_days': max(1, int(policy.emergency_days or 1)) if policy else 1,
         'emergency_volume_gb': max(0, int(policy.emergency_volume_gb or 1)) if policy else 1,
@@ -2856,6 +2860,15 @@ def _start_trial(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
     if not identity or not identity.customer_id or not identity.phone_verified_at:
         _send_contact_prompt(api, chat_id, language)
         return
+    if policy.get('trial_requires_channel_membership') and policy.get('trial_channel_chat_id'):
+        if not _channel_member(api, int(policy['trial_channel_chat_id']), int(user_id)):
+            fallback = (
+                "برای دریافت سرویس تست، ابتدا باید عضو کانال تلگرام شوید و دوباره امتحان کنید."
+                if language == 'fa'
+                else "To claim the free trial, join the Telegram channel first and try again."
+            )
+            api.send_message(chat_id, COPY[language].get('trial_channel_required', fallback))
+            return
     phone = str(identity.phone_normalized or '')
     if _trial_grant_for(bot, user_id, phone):
         api.send_message(chat_id, COPY[language]['trial_already_used'])
