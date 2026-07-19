@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.7"
+APP_VERSION = "2.5.8"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -8539,6 +8539,7 @@ class TelegramBotInstance(db.Model):
     enabled = db.Column(db.Boolean, nullable=False, default=False)
     test_mode = db.Column(db.Boolean, nullable=False, default=True)
     enabled_languages_json = db.Column(db.Text, nullable=False, default='["fa","en"]')
+    copy_overrides_json = db.Column(db.Text, nullable=False, default='')
     default_language = db.Column(db.String(12), nullable=False, default='fa')
     connection_mode = db.Column(db.String(24), nullable=False, default='proxy_first')
     transport_mode = db.Column(db.String(24), nullable=False, default='polling')
@@ -10254,6 +10255,7 @@ with app.app_context():
     _migrate_add_columns('telegram_bot_instances', [
         ('archived_at', 'TIMESTAMP' if db.engine.dialect.name == 'postgresql' else 'DATETIME'),
         ('archived_by_admin_id', 'INTEGER'),
+        ('copy_overrides_json', "TEXT DEFAULT ''"),
     ])
 
     # Ensure telegram_purchase_policies supports trial and emergency access
@@ -27953,7 +27955,15 @@ def get_telegram_bot_settings():
         TelegramBotTestUser.id.asc(),
     ).all()
     db.session.commit()
+    from telegram_bot_runtime import (
+        COPY as TELEGRAM_BOT_COPY,
+        HIDEABLE_MENU_KEYS,
+        parse_copy_overrides,
+    )
     return jsonify({'success': True, 'bot': bot.to_safe_dict(),
+                    'copy_overrides': parse_copy_overrides(bot),
+                    'copy_defaults': TELEGRAM_BOT_COPY,
+                    'hideable_keys': list(HIDEABLE_MENU_KEYS),
                     'runtime': runtime.to_safe_dict(),
                     'purchase_policy': purchase_policy.to_safe_dict(),
                     'purchase_servers': _telegram_purchase_servers_payload(bot),
@@ -28060,6 +28070,41 @@ def _save_telegram_bot_settings(bot: TelegramBotInstance, data: dict):
     bot.support_sla_minutes = support_sla_minutes
     bot.support_sla_warning_percent = support_sla_warning_percent
     bot.support_escalation_minutes = support_escalation_minutes
+    copy_overrides = data.get('copy_overrides')
+    if copy_overrides is not None:
+        if not isinstance(copy_overrides, dict):
+            return jsonify({'success': False, 'error': 'copy_overrides must be an object'}), 400
+        from telegram_bot_runtime import COPY as TELEGRAM_BOT_COPY
+        cleaned_overrides = {}
+        for raw_key, spec in copy_overrides.items():
+            copy_key = str(raw_key).strip()
+            if copy_key not in TELEGRAM_BOT_COPY['fa']:
+                return jsonify({'success': False, 'error': f'Unknown copy key: {copy_key}'}), 400
+            if not isinstance(spec, dict):
+                return jsonify({'success': False, 'error': f'Copy override for {copy_key} must be an object'}), 400
+            entry = {}
+            for lang in ('fa', 'en'):
+                value = spec.get(lang)
+                if value is None:
+                    continue
+                if not isinstance(value, str):
+                    return jsonify({'success': False, 'error': f'Copy override {copy_key}.{lang} must be text'}), 400
+                value = value.strip()
+                if len(value) > 500:
+                    return jsonify({'success': False, 'error': f'Copy override {copy_key}.{lang} must be at most 500 characters'}), 400
+                if value:
+                    entry[lang] = value
+            hidden = spec.get('hidden')
+            if hidden is not None:
+                if not isinstance(hidden, bool):
+                    return jsonify({'success': False, 'error': f'Copy override {copy_key}.hidden must be a boolean'}), 400
+                if hidden:
+                    entry['hidden'] = True
+            if entry:
+                cleaned_overrides[copy_key] = entry
+        bot.copy_overrides_json = (
+            json.dumps(cleaned_overrides, ensure_ascii=False) if cleaned_overrides else ''
+        )
     if bot.enabled and not bot.token_encrypted:
         return jsonify({'success': False, 'error': 'Configure a bot token before enabling the bot'}), 400
     _log_audit('telegram_bot.settings_update', bot,

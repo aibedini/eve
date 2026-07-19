@@ -650,6 +650,25 @@
                     </div>
                 </section>
 
+                <section class="panel-card tgb-section" aria-labelledby="tgb-copy-title">
+                    <div class="panel-card-header">
+                        <div class="header-content">
+                            <h2 id="tgb-copy-title">شخصی‌سازی متن‌های ربات</h2>
+                            <p>متن هر پیام یا دکمهٔ ربات را بازنویسی کنید. فیلد خالی یعنی همان متن پیش‌فرض استفاده می‌شود.</p>
+                        </div>
+                    </div>
+                    <div class="tgb-route-help" style="margin-bottom: 12px;">
+                        <strong>راهنما</strong>
+                        <span>می‌توانید ایموجی‌های استاندارد تلگرام (یونیکد، مثل 🛒 💰) را مستقیماً در متن‌ها بگذارید. متن‌هایی که شامل <code>{placeholder}</code> هستند باید placeholderها را بدون تغییر نگه دارند. حداکثر طول هر متن ۵۰۰ کاراکتر است.</span>
+                    </div>
+                    <div class="form-group" style="max-width: 420px;">
+                        <label for="tgb-copy-search">جستجو در متن‌ها</label>
+                        <input id="tgb-copy-search" class="form-control" type="search" placeholder="جستجو بر اساس کلید یا متن پیش‌فرض…" autocomplete="off" spellcheck="false" oninput="filterTelegramCopyRows()">
+                    </div>
+                    <div id="tgb-copy-empty" class="tgb-empty" style="display:none;"><strong>متنی یافت نشد</strong><span>عبارت جستجو را تغییر دهید.</span></div>
+                    <div id="tgb-copy-list" style="max-height: 480px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;"></div>
+                </section>
+
                 <section class="panel-card tgb-section" aria-labelledby="tgb-support-group-title">
                     <div class="panel-card-header">
                         <div class="header-content">
@@ -3662,6 +3681,8 @@
     let telegramBotList = [];
     let telegramBotSelectedId = null;
     let telegramBotIncludeArchived = false;
+    let telegramCopyDefaults = {fa: {}, en: {}};
+    let telegramCopyHideable = new Set();
 
     function telegramBotUrl(path) {
         return telegramBotSelectedId ? `${path}${path.includes('?') ? '&' : '?'}bot_id=${telegramBotSelectedId}` : path;
@@ -4614,6 +4635,9 @@
             telegramBotEgressProfiles = Array.isArray(data.egress_profiles) ? data.egress_profiles : [];
             telegramBotTestUsers = Array.isArray(data.test_users) ? data.test_users : [];
             telegramBotRuntime = data.runtime || {};
+            telegramCopyDefaults = data.copy_defaults && typeof data.copy_defaults === 'object' ? data.copy_defaults : {fa: {}, en: {}};
+            telegramCopyHideable = new Set(Array.isArray(data.hideable_keys) ? data.hideable_keys : []);
+            renderTelegramCopyRows(data.copy_overrides && typeof data.copy_overrides === 'object' ? data.copy_overrides : {});
             renderTelegramPurchaseServers();
             renderTelegramPurchaseInboundRoutes();
             renderTelegramProxies();
@@ -4684,6 +4708,100 @@
         if (telegramBotFormReady) markTelegramBotDirty();
     }
 
+    function telegramCopyKeys() {
+        const keys = new Set([...Object.keys(telegramCopyDefaults.fa || {}), ...Object.keys(telegramCopyDefaults.en || {})]);
+        return [...keys].sort();
+    }
+
+    function renderTelegramCopyRows(overrides = {}) {
+        const list = document.getElementById('tgb-copy-list');
+        if (!list) return;
+        const search = document.getElementById('tgb-copy-search');
+        if (search) search.value = '';
+        const empty = document.getElementById('tgb-copy-empty');
+        if (empty) empty.style.display = 'none';
+        const keys = telegramCopyKeys();
+        if (!keys.length) {
+            list.innerHTML = '<div class="tgb-empty"><strong>متنی موجود نیست</strong><span>متن‌های پیش‌فرض ربات از سرور دریافت نشد.</span></div>';
+            return;
+        }
+        list.innerHTML = '';
+        keys.forEach(key => {
+            const override = overrides[key] && typeof overrides[key] === 'object' ? overrides[key] : {};
+            const defaultFa = String((telegramCopyDefaults.fa || {})[key] || '');
+            const defaultEn = String((telegramCopyDefaults.en || {})[key] || '');
+            const row = document.createElement('div');
+            row.className = 'tgb-copy-row';
+            row.dataset.copyKey = key;
+            row.dataset.search = `${key} ${defaultFa} ${defaultEn}`.toLowerCase();
+            row.style.cssText = 'border:1px solid rgba(148,163,184,0.25); border-radius:10px; padding:10px 12px; display:flex; flex-direction:column; gap:8px;';
+            row.innerHTML = `
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+                    <code style="font-size:0.8rem; direction:ltr; unicode-bidi:embed;">${escapeHtml(key)}</code>
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        ${telegramCopyHideable.has(key) ? `<label style="display:inline-flex; align-items:center; gap:6px; font-size:0.82rem; margin:0;"><input type="checkbox" class="tgb-copy-hidden"${override.hidden ? ' checked' : ''}> مخفی</label>` : ''}
+                        <button type="button" class="btn btn-secondary" style="padding:2px 10px; font-size:0.78rem;" onclick="resetTelegramCopyRow(this)">پیش‌فرض</button>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:8px;">
+                    <div>
+                        <small class="text-secondary" style="display:block; white-space:pre-wrap;">${escapeHtml(defaultFa)}</small>
+                        <input type="text" class="form-control tgb-copy-fa" maxlength="500" value="${escapeHtml(String(override.fa || ''))}" placeholder="متن فارسی سفارشی (خالی = پیش‌فرض)" autocomplete="off">
+                    </div>
+                    <div>
+                        <small class="text-secondary" style="display:block; white-space:pre-wrap;" dir="ltr">${escapeHtml(defaultEn)}</small>
+                        <input type="text" class="form-control tgb-copy-en" maxlength="500" value="${escapeHtml(String(override.en || ''))}" placeholder="Custom English text (blank = default)" autocomplete="off" dir="ltr">
+                    </div>
+                </div>`;
+            row.querySelectorAll('input').forEach(input => {
+                input.addEventListener('input', markTelegramBotDirty);
+                input.addEventListener('change', markTelegramBotDirty);
+            });
+            list.appendChild(row);
+        });
+    }
+
+    function filterTelegramCopyRows() {
+        const search = document.getElementById('tgb-copy-search');
+        const query = String(search ? search.value : '').trim().toLowerCase();
+        let visible = 0;
+        document.querySelectorAll('#tgb-copy-list .tgb-copy-row').forEach(row => {
+            const show = !query || (row.dataset.search || '').includes(query);
+            row.style.display = show ? '' : 'none';
+            if (show) visible += 1;
+        });
+        const empty = document.getElementById('tgb-copy-empty');
+        if (empty) empty.style.display = visible ? 'none' : '';
+    }
+
+    function resetTelegramCopyRow(button) {
+        const row = button.closest('.tgb-copy-row');
+        if (!row) return;
+        row.querySelector('.tgb-copy-fa').value = '';
+        row.querySelector('.tgb-copy-en').value = '';
+        const hidden = row.querySelector('.tgb-copy-hidden');
+        if (hidden) hidden.checked = false;
+        markTelegramBotDirty();
+    }
+
+    function collectTelegramCopyOverrides() {
+        const overrides = {};
+        document.querySelectorAll('#tgb-copy-list .tgb-copy-row').forEach(row => {
+            const key = row.dataset.copyKey;
+            const fa = row.querySelector('.tgb-copy-fa').value.trim();
+            const en = row.querySelector('.tgb-copy-en').value.trim();
+            const hiddenInput = row.querySelector('.tgb-copy-hidden');
+            const hidden = hiddenInput ? hiddenInput.checked : false;
+            if (!fa && !en && !hidden) return;
+            const entry = {};
+            if (fa) entry.fa = fa;
+            if (en) entry.en = en;
+            if (hidden) entry.hidden = true;
+            overrides[key] = entry;
+        });
+        return overrides;
+    }
+
     async function saveTelegramBotSettings(button) {
         const languages = ['fa', 'en'].filter(code => document.getElementById(`tgb-lang-${code}`).checked);
         if (!languages.length) return showToast('Enable at least one language.', 'error');
@@ -4730,7 +4848,8 @@
                 emergency_cooldown_days: Number(document.getElementById('tgb-emergency-cooldown').value)
             },
             purchase_servers: collectTelegramPurchaseServers(),
-            purchase_inbound_routes: collectTelegramPurchaseInboundRoutes()
+            purchase_inbound_routes: collectTelegramPurchaseInboundRoutes(),
+            copy_overrides: collectTelegramCopyOverrides()
         };
         setTelegramButtonLoading(button, true, 'Saving…');
         try {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -617,6 +618,100 @@ COPY = {
 }
 
 
+class CopyString(str):
+    """An overridden copy string that falls back to the default text on format errors.
+
+    Bot owners can override any template; if their value breaks ``str.format``
+    (unknown placeholder, bad index, ...), the bot must keep working with the
+    stock string instead of crashing.
+    """
+
+    def __new__(cls, value, fallback=None):
+        instance = super().__new__(cls, value)
+        instance.fallback = fallback
+        return instance
+
+    def format(self, *args, **kwargs):
+        try:
+            return super().format(*args, **kwargs)
+        except Exception:
+            fallback = self.fallback if self.fallback is not None else str(self)
+            try:
+                return str(fallback).format(*args, **kwargs)
+            except Exception:
+                return str(fallback)
+
+
+# Reply-keyboard copy keys a bot owner is allowed to hide (main-menu buttons and
+# the share-phone button). Hiding only affects rendering; label-based routing
+# still accepts hidden labels so stale cached keyboards keep working.
+HIDEABLE_MENU_KEYS = (
+    "menu_services",
+    "menu_buy_service",
+    "menu_orders",
+    "menu_add_service",
+    "menu_support_requests",
+    "menu_language",
+    "menu_invite",
+    "menu_wallet",
+    "menu_tutorial",
+    "menu_trial",
+    "share_button",
+)
+
+
+def parse_copy_overrides(bot) -> dict:
+    """Safely load the per-bot copy override JSON column into a dict."""
+    raw = getattr(bot, "copy_overrides_json", "") or ""
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def resolve_copy(bot) -> dict:
+    """Return COPY merged with the bot's overrides (empty override values are ignored).
+
+    Accepts a bot instance (reads ``copy_overrides_json``) or a raw overrides dict.
+    Overridden values are wrapped in CopyString with the default as format fallback.
+    """
+    overrides = bot if isinstance(bot, dict) else parse_copy_overrides(bot)
+    if not overrides:
+        return COPY
+    merged = {lang: dict(strings) for lang, strings in COPY.items()}
+    for key, spec in overrides.items():
+        if key not in merged["fa"] or not isinstance(spec, dict):
+            continue
+        for lang in merged:
+            value = spec.get(lang)
+            if isinstance(value, str) and value.strip():
+                merged[lang][key] = CopyString(value.strip(), fallback=COPY[lang][key])
+    return merged
+
+
+def copy_key_hidden(overrides: dict, key: str) -> bool:
+    spec = (overrides or {}).get(key)
+    return bool(isinstance(spec, dict) and spec.get("hidden"))
+
+
+def menu_label_map(bot) -> dict:
+    """Reverse map of every effective main-menu label (all languages) to its copy key.
+
+    Hidden keys are included on purpose: a user with a stale cached keyboard may
+    still press a now-hidden button, and it should keep routing instead of
+    falling through to the catch-all reply.
+    """
+    copy = resolve_copy(bot)
+    mapping = {}
+    for key in HIDEABLE_MENU_KEYS:
+        for lang in copy:
+            label = copy[lang].get(key)
+            if label:
+                mapping[str(label)] = key
+    return mapping
+
+
 def language_keyboard(enabled_languages: list[str]):
     labels = {"fa": "فارسی 🇮🇷", "en": "English 🇬🇧"}
     return {
@@ -627,28 +722,50 @@ def language_keyboard(enabled_languages: list[str]):
     }
 
 
-def contact_keyboard(language: str):
-    lang = language if language in COPY else "fa"
+def contact_keyboard(language: str, copy: dict | None = None):
+    copy = copy or COPY
+    lang = language if language in copy else "fa"
     return {
-        "keyboard": [[{"text": COPY[lang]["share_button"], "request_contact": True}]],
+        "keyboard": [[{"text": copy[lang]["share_button"], "request_contact": True}]],
         "resize_keyboard": True,
         "one_time_keyboard": True,
-        "input_field_placeholder": COPY[lang]["share_button"],
+        "input_field_placeholder": copy[lang]["share_button"],
     }
 
 
-def main_menu_keyboard(language: str, show_trial: bool = False):
-    lang = language if language in COPY else "fa"
+def main_menu_keyboard(language: str, show_trial: bool = False,
+                       copy: dict | None = None, overrides: dict | None = None):
+    copy = copy or COPY
+    overrides = overrides or {}
+    lang = language if language in copy else "fa"
+    labels = copy[lang]
+
+    def _button(key):
+        if copy_key_hidden(overrides, key):
+            return None
+        return {"text": labels[key]}
+
+    def _row(*keys):
+        return [button for button in (_button(key) for key in keys) if button is not None]
+
     rows = []
     if show_trial:
-        rows.append([{"text": COPY[lang]["menu_trial"]}])
-    rows += [
-        [{"text": COPY[lang]["menu_services"]}, {"text": COPY[lang]["menu_buy_service"]}],
-        [{"text": COPY[lang]["menu_orders"]}, {"text": COPY[lang]["menu_wallet"]}],
-        [{"text": COPY[lang]["menu_tutorial"]}],
-        [{"text": COPY[lang]["menu_add_service"]}, {"text": COPY[lang]["menu_support_requests"]}],
-        [{"text": COPY[lang]["menu_invite"]}, {"text": COPY[lang]["menu_language"]}],
-    ]
+        row = _row("menu_trial")
+        if row:
+            rows.append(row)
+    for keys in (
+        ("menu_services", "menu_buy_service"),
+        ("menu_orders", "menu_wallet"),
+        ("menu_tutorial",),
+        ("menu_add_service", "menu_support_requests"),
+        ("menu_invite", "menu_language"),
+    ):
+        row = _row(*keys)
+        if row:
+            rows.append(row)
+    if not rows:
+        # Telegram rejects an empty keyboard; always keep a way back to the menu.
+        rows = [[{"text": labels["menu_language"]}]]
     return {
         "keyboard": rows,
         "resize_keyboard": True,

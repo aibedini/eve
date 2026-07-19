@@ -84,6 +84,9 @@ from telegram_bot_runtime import (  # noqa: E402
     contact_keyboard,
     language_keyboard,
     main_menu_keyboard,
+    menu_label_map,
+    parse_copy_overrides,
+    resolve_copy,
 )
 from telegram_diagnostics import redact_connection_error  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
@@ -94,6 +97,26 @@ worker_id = f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
 webhook_prepared_bot_ids: set[int] = set()
 sla_scan_at_by_bot: dict[int, float] = {}
 bot_threads: dict[int, tuple[threading.Thread, threading.Event]] = {}
+
+# Per-bot effective copy (COPY + per-bot overrides). Bots run in separate
+# threads of this process, so the resolved copy is kept in thread-local state
+# and set once per bot in process_update; helpers below fall back to the
+# default COPY when no bot context is active.
+_copy_context = threading.local()
+
+
+def _active_copy() -> dict:
+    return getattr(_copy_context, "copy", None) or COPY
+
+
+def _active_overrides() -> dict:
+    return getattr(_copy_context, "overrides", None) or {}
+
+
+def _cc(language: str) -> dict:
+    """Effective copy strings for a language, honoring the active bot's overrides."""
+    copy = _active_copy()
+    return copy.get(language) or COPY.get(language) or COPY["fa"]
 
 
 def _stop(_signum, _frame):
@@ -193,8 +216,8 @@ def _is_allowed(bot: TelegramBotInstance, user_id: int) -> bool:
 
 def _send_contact_prompt(api: TelegramBotApi, chat_id: int, language: str):
     api.send_message(
-        chat_id, COPY[language]["share_phone"],
-        reply_markup=contact_keyboard(language),
+        chat_id, _cc(language)["share_phone"],
+        reply_markup=contact_keyboard(language, copy=_active_copy()),
     )
 
 
@@ -377,8 +400,11 @@ def _send_main_menu(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
     lang = language if language in COPY else "fa"
     show_trial = _purchase_policy_values(bot)['trial_enabled']
     api.send_message(
-        chat_id, _brand_text(bot, lang) + COPY[lang]["welcome_menu"],
-        reply_markup=main_menu_keyboard(lang, show_trial=show_trial),
+        chat_id, _brand_text(bot, lang) + _cc(lang)["welcome_menu"],
+        reply_markup=main_menu_keyboard(
+            lang, show_trial=show_trial,
+            copy=_active_copy(), overrides=_active_overrides(),
+        ),
     )
 
 
@@ -386,13 +412,13 @@ def _send_owned_services(api: TelegramBotApi, chat_id: int, language: str,
                          identity: TelegramIdentity | None):
     lang = language if language in COPY else "fa"
     if identity is None or not identity.customer_id:
-        api.send_message(chat_id, COPY[lang]["no_owned_services"])
+        api.send_message(chat_id, _cc(lang)["no_owned_services"])
         return
     ownerships = ServiceOwnership.query.filter_by(
         customer_id=identity.customer_id, revoked_at=None,
     ).order_by(ServiceOwnership.id.asc()).all()
     if not ownerships:
-        api.send_message(chat_id, COPY[lang]["no_owned_services"])
+        api.send_message(chat_id, _cc(lang)["no_owned_services"])
         return
     keyboard = []
     current_server_id = None
@@ -401,16 +427,16 @@ def _send_owned_services(api: TelegramBotApi, chat_id: int, language: str,
             current_server_id = ownership.server_id
             server_name = getattr(ownership.server, 'name', '') or f'#{ownership.server_id}'
             keyboard.append([{
-                "text": f'{COPY[lang]["server_button"]}: {server_name}'[:60],
+                "text": f'{_cc(lang)["server_button"]}: {server_name}'[:60],
                 "callback_data": "noop",
             }])
-        label = ownership.client_email_snapshot or f'{COPY[lang]["service_button"]} {index}'
+        label = ownership.client_email_snapshot or f'{_cc(lang)["service_button"]} {index}'
         keyboard.append([{
-            "text": f'{COPY[lang]["account_button"]}: {label}'[:60],
+            "text": f'{_cc(lang)["account_button"]}: {label}'[:60],
             "callback_data": f"service:{ownership.id}",
         }])
     api.send_message(
-        chat_id, COPY[lang]["owned_services"],
+        chat_id, _cc(lang)["owned_services"],
         reply_markup={"inline_keyboard": keyboard},
     )
 
@@ -474,14 +500,14 @@ def _localized_app_date(value: datetime, language: str) -> str:
 
 def _service_expiry(client: dict | None, language: str) -> str:
     if not client:
-        return COPY[language]["service_unavailable"]
+        return _cc(language)["service_unavailable"]
     raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
     try:
         expiry_ts = int(client.get('expiryTimestamp') or raw.get('expiryTime') or 0)
     except (TypeError, ValueError):
         expiry_ts = 0
     if expiry_ts == 0:
-        return COPY[language]["unlimited"]
+        return _cc(language)["unlimited"]
     if expiry_ts < 0:
         days = max(1, int(round(abs(expiry_ts) / 86400000)))
         return f"{days} " + ("روز پس از اولین اتصال" if language == 'fa' else "days after first connection")
@@ -489,7 +515,7 @@ def _service_expiry(client: dict | None, language: str) -> str:
     remaining_days = int((expiry - datetime.now(timezone.utc)).total_seconds() // 86400)
     date_text = _localized_app_date(expiry, language)
     if remaining_days < 0:
-        return f"{date_text} ({COPY[language]['status_expired']})"
+        return f"{date_text} ({_cc(language)['status_expired']})"
     days_text = str(remaining_days)
     if language == 'fa':
         days_text = days_text.translate(str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹'))
@@ -503,7 +529,7 @@ _TUTORIAL_OS_TYPES = ('android', 'ios', 'windows')
 def _tutorial_device_keyboard(language: str):
     lang = language if language in COPY else 'fa'
     return {'inline_keyboard': [[{
-        'text': COPY[lang][f'tutorial_device_{os_type}'],
+        'text': _cc(lang)[f'tutorial_device_{os_type}'],
         'callback_data': f'tutorial-os:{os_type}',
     }] for os_type in _TUTORIAL_OS_TYPES]}
 
@@ -511,7 +537,7 @@ def _tutorial_device_keyboard(language: str):
 def _send_tutorial_devices(api: TelegramBotApi, chat_id: int, language: str):
     lang = language if language in COPY else 'fa'
     api.send_message(
-        chat_id, COPY[lang]['tutorial_choose_device'],
+        chat_id, _cc(lang)['tutorial_choose_device'],
         reply_markup=_tutorial_device_keyboard(lang),
     )
 
@@ -529,7 +555,7 @@ def _send_tutorial_apps(api: TelegramBotApi, chat_id: int, language: str, os_typ
     apps = _tutorial_apps(os_type)
     if not apps:
         api.send_message(
-            chat_id, COPY[lang]['tutorial_no_apps'],
+            chat_id, _cc(lang)['tutorial_no_apps'],
             reply_markup=_tutorial_device_keyboard(lang),
         )
         return
@@ -542,11 +568,11 @@ def _send_tutorial_apps(api: TelegramBotApi, chat_id: int, language: str, os_typ
             'callback_data': f'tutorial-app:{item.id}',
         }])
     keyboard.append([{
-        'text': COPY[lang]['tutorial_back_devices'],
+        'text': _cc(lang)['tutorial_back_devices'],
         'callback_data': 'tutorial-devices',
     }])
     api.send_message(
-        chat_id, COPY[lang]['tutorial_choose_app'],
+        chat_id, _cc(lang)['tutorial_choose_app'],
         reply_markup={'inline_keyboard': keyboard},
     )
 
@@ -568,7 +594,7 @@ def _send_tutorial_app(api: TelegramBotApi, chat_id: int, language: str, app_id:
     item = db.session.get(SubAppConfig, app_id)
     if not item or not item.is_enabled or item.os_type not in _TUTORIAL_OS_TYPES:
         api.send_message(
-            chat_id, COPY[lang]['tutorial_app_unavailable'],
+            chat_id, _cc(lang)['tutorial_app_unavailable'],
             reply_markup=_tutorial_device_keyboard(lang),
         )
         return
@@ -576,7 +602,7 @@ def _send_tutorial_app(api: TelegramBotApi, chat_id: int, language: str, app_id:
     description = (item.description_fa if lang == 'fa' else item.description_en) or ''
     lines = [f'<b>{html.escape(str(title))}</b>']
     if item.is_recommended:
-        lines.append(COPY[lang]['tutorial_recommended'])
+        lines.append(_cc(lang)['tutorial_recommended'])
     if description.strip():
         lines.extend(['', html.escape(description.strip())])
     keyboard = []
@@ -584,16 +610,16 @@ def _send_tutorial_app(api: TelegramBotApi, chat_id: int, language: str, app_id:
     store_url = _tutorial_url(item.store_link)
     video_url = _tutorial_url(item.tutorial_link)
     if download_url:
-        keyboard.append([{'text': COPY[lang]['tutorial_download'], 'url': download_url}])
+        keyboard.append([{'text': _cc(lang)['tutorial_download'], 'url': download_url}])
     if store_url:
         store_key = 'tutorial_google_play' if item.os_type == 'android' else (
             'tutorial_app_store' if item.os_type == 'ios' else 'tutorial_store'
         )
-        keyboard.append([{'text': COPY[lang][store_key], 'url': store_url}])
+        keyboard.append([{'text': _cc(lang)[store_key], 'url': store_url}])
     if video_url:
-        keyboard.append([{'text': COPY[lang]['tutorial_video'], 'url': video_url}])
+        keyboard.append([{'text': _cc(lang)['tutorial_video'], 'url': video_url}])
     keyboard.append([{
-        'text': COPY[lang]['tutorial_back_devices'],
+        'text': _cc(lang)['tutorial_back_devices'],
         'callback_data': f'tutorial-os:{item.os_type}',
     }])
     api.send_message(
@@ -604,7 +630,7 @@ def _send_tutorial_app(api: TelegramBotApi, chat_id: int, language: str, app_id:
 
 def _service_status(client: dict | None, language: str) -> str:
     if not client:
-        return f"⚪ {COPY[language]['status_unknown']}"
+        return f"⚪ {_cc(language)['status_unknown']}"
     key = str(client.get('service_state') or '').strip().lower()
     if not key:
         key = 'active' if client.get('enable', True) else 'inactive'
@@ -617,17 +643,17 @@ def _service_status(client: dict | None, language: str) -> str:
         'expiring_soon': ('🟠', 'status_expiring_soon'),
     }
     emoji, copy_key = labels.get(key, ('⚪', 'status_unknown'))
-    return f"{emoji} {COPY[language][copy_key]}"
+    return f"{emoji} {_cc(language)[copy_key]}"
 
 
 def _service_keyboard(ownership: ServiceOwnership, language: str):
     return {"inline_keyboard": [
-        [{"text": COPY[language]["get_link_button"], "callback_data": f"service-link:{ownership.id}"}],
+        [{"text": _cc(language)["get_link_button"], "callback_data": f"service-link:{ownership.id}"}],
         [
-            {"text": COPY[language]["renew_button"], "callback_data": f"service-renew:{ownership.id}"},
-            {"text": COPY[language]["support_button"], "callback_data": f"service-support:{ownership.id}"},
+            {"text": _cc(language)["renew_button"], "callback_data": f"service-renew:{ownership.id}"},
+            {"text": _cc(language)["support_button"], "callback_data": f"service-support:{ownership.id}"},
         ],
-        [{"text": COPY[language]["back_services_button"], "callback_data": "service-list"}],
+        [{"text": _cc(language)["back_services_button"], "callback_data": "service-list"}],
     ]}
 
 
@@ -640,21 +666,21 @@ def _send_service_details(api: TelegramBotApi, bot: TelegramBotInstance, chat_id
     if client:
         used = max(0, int(client.get('up') or 0)) + max(0, int(client.get('down') or 0))
         remaining = client.get('remaining_bytes')
-        remaining_text = COPY[lang]['unlimited'] if remaining in (None, -1) else _format_traffic(remaining)
-        freshness = COPY[lang]['service_live']
+        remaining_text = _cc(lang)['unlimited'] if remaining in (None, -1) else _format_traffic(remaining)
+        freshness = _cc(lang)['service_live']
     else:
         used = None
-        remaining_text = COPY[lang]['service_unavailable']
-        freshness = COPY[lang]['service_unavailable']
+        remaining_text = _cc(lang)['service_unavailable']
+        freshness = _cc(lang)['service_unavailable']
     text = "\n".join([
-        f"<b>{COPY[lang]['service_details']}</b>",
-        f"{COPY[lang]['service_server']}: <b>{html.escape(str(server_name))}</b>",
-        f"{COPY[lang]['service_account']}: <code>{html.escape(str(account))}</code>",
-        f"{COPY[lang]['service_status']}: {_service_status(client, lang)}",
-        f"{COPY[lang]['service_expiry']}: {_service_expiry(client, lang)}",
-        f"{COPY[lang]['service_usage']}: {_format_traffic(used) if used is not None else COPY[lang]['service_unavailable']}",
-        f"{COPY[lang]['service_remaining']}: {remaining_text}",
-        f"{COPY[lang]['service_updated']}: {freshness}",
+        f"<b>{_cc(lang)['service_details']}</b>",
+        f"{_cc(lang)['service_server']}: <b>{html.escape(str(server_name))}</b>",
+        f"{_cc(lang)['service_account']}: <code>{html.escape(str(account))}</code>",
+        f"{_cc(lang)['service_status']}: {_service_status(client, lang)}",
+        f"{_cc(lang)['service_expiry']}: {_service_expiry(client, lang)}",
+        f"{_cc(lang)['service_usage']}: {_format_traffic(used) if used is not None else _cc(lang)['service_unavailable']}",
+        f"{_cc(lang)['service_remaining']}: {remaining_text}",
+        f"{_cc(lang)['service_updated']}: {freshness}",
     ])
     keyboard = _service_keyboard(ownership, lang)
     if client:
@@ -664,7 +690,7 @@ def _send_service_details(api: TelegramBotApi, bot: TelegramBotInstance, chat_id
         if (status_key in ('expired', 'volume_ended')
                 and _purchase_policy_values(bot)['emergency_enabled']):
             keyboard['inline_keyboard'].insert(0, [{
-                'text': COPY[lang]['emergency_button'],
+                'text': _cc(lang)['emergency_button'],
                 'callback_data': f'service-emergency:{ownership.id}',
             }])
     api.send_message(
@@ -739,10 +765,10 @@ def _send_renew_packages(api: TelegramBotApi, bot: TelegramBotInstance,
             "text": f"{package.name} • {price}"[:60],
             "callback_data": f"renew-package:{ownership.id}:{package.id}",
         }])
-    keyboard.append([{"text": COPY[language]['back_services_button'],
+    keyboard.append([{"text": _cc(language)['back_services_button'],
                       "callback_data": f"service:{ownership.id}"}])
     api.send_message(
-        chat_id, COPY[language]['choose_package'],
+        chat_id, _cc(language)['choose_package'],
         reply_markup={"inline_keyboard": keyboard},
     )
 
@@ -897,14 +923,14 @@ def _send_purchase_servers(api: TelegramBotApi, bot: TelegramBotInstance,
         if rules.get(server.id) and rules[server.id].customer_visible
     ]
     if not servers:
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     keyboard = [[{
-        'text': f"{COPY[language]['server_button']}: {(rules[server.id].display_name or server.name)}"[:60],
+        'text': f"{_cc(language)['server_button']}: {(rules[server.id].display_name or server.name)}"[:60],
         'callback_data': f'buy-server:{server.id}',
     }] for server in servers]
     api.send_message(
-        chat_id, COPY[language]['choose_purchase_server'],
+        chat_id, _cc(language)['choose_purchase_server'],
         reply_markup={'inline_keyboard': keyboard},
     )
 
@@ -926,18 +952,18 @@ def _send_purchase_packages(api: TelegramBotApi, bot: TelegramBotInstance,
                 for package_id, server_id in configured_pairs
             )]
     if not packages:
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     keyboard = [[{
         'text': f"{package.name} • {_resolve_purchase_price(owner_id, package):,} T"[:60],
         'callback_data': f'buy-package:{server.id if server else 0}:{package.id}',
     }] for package in packages]
     keyboard.append([{
-        'text': COPY[language]['promo_code_button'],
+        'text': _cc(language)['promo_code_button'],
         'callback_data': 'promo-code',
     }])
     api.send_message(
-        chat_id, COPY[language]['choose_purchase_package'],
+        chat_id, _cc(language)['choose_purchase_package'],
         reply_markup={'inline_keyboard': keyboard},
     )
 
@@ -1027,11 +1053,11 @@ def _send_wallet_menu(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: in
         return
     api.send_message(
         chat_id,
-        COPY[language]['wallet_balance'].format(balance=f"{int(customer.credit or 0):,}"),
+        _cc(language)['wallet_balance'].format(balance=f"{int(customer.credit or 0):,}"),
         parse_mode='HTML',
         reply_markup={'inline_keyboard': [[
-            {'text': COPY[language]['wallet_topup_button'], 'callback_data': 'wallet-topup-start'},
-            {'text': COPY[language]['wallet_history_button'], 'callback_data': 'wallet-history'},
+            {'text': _cc(language)['wallet_topup_button'], 'callback_data': 'wallet-topup-start'},
+            {'text': _cc(language)['wallet_history_button'], 'callback_data': 'wallet-history'},
         ]]},
     )
 
@@ -1044,15 +1070,15 @@ def _send_wallet_history(api: TelegramBotApi, chat_id: int, user_id: int, langua
             CustomerTransaction.created_at.desc(), CustomerTransaction.id.desc(),
         ).limit(10).all()
     if not rows:
-        api.send_message(chat_id, COPY[language]['wallet_history_empty'])
+        api.send_message(chat_id, _cc(language)['wallet_history_empty'])
         return
-    lines = [COPY[language]['wallet_history_title']]
+    lines = [_cc(language)['wallet_history_title']]
     for row in rows:
-        type_label = COPY[language].get(f'wallet_type_{row.type}', str(row.type or ''))
+        type_label = _cc(language).get(f'wallet_type_{row.type}', str(row.type or ''))
         card_label = ''
         if row.bank_card:
             card_label = f" • {row.bank_card.label or row.bank_card.card_number or ''}".rstrip()
-        lines.append(COPY[language]['wallet_history_line'].format(
+        lines.append(_cc(language)['wallet_history_line'].format(
             date=row.created_at.strftime('%Y-%m-%d') if row.created_at else '-',
             type=type_label,
             amount=f"{int(row.amount or 0):+,}",
@@ -1073,7 +1099,7 @@ def _handle_wallet_topup_amount(api: TelegramBotApi, bot: TelegramBotInstance,
     except (TypeError, ValueError):
         amount = 0
     if amount <= 0 or amount > 100_000_000_000:
-        api.send_message(chat_id, COPY[language]['wallet_topup_invalid_amount'])
+        api.send_message(chat_id, _cc(language)['wallet_topup_invalid_amount'])
         return
     identity, customer = _wallet_customer(user_id)
     if not identity or not customer or not identity.phone_verified_at:
@@ -1086,7 +1112,7 @@ def _handle_wallet_topup_amount(api: TelegramBotApi, bot: TelegramBotInstance,
     if card is None:
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     session_row = _service_session(bot.id, user_id)
     session_row.service_ownership_id = None
@@ -1095,7 +1121,7 @@ def _handle_wallet_topup_amount(api: TelegramBotApi, bot: TelegramBotInstance,
     db.session.flush()
     api.send_message(
         chat_id,
-        COPY[language]['wallet_topup_payment'].format(
+        _cc(language)['wallet_topup_payment'].format(
             amount=f"{amount:,}", card=_format_bank_card(card)),
         parse_mode='HTML',
     )
@@ -1155,7 +1181,7 @@ def _handle_wallet_topup_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     language = state.language if state.language in COPY else bot.default_language
     receipt = _receipt_from_message(message)
     if receipt is None:
-        api.send_message(chat_id, COPY[language]['receipt_invalid'])
+        api.send_message(chat_id, _cc(language)['receipt_invalid'])
         return
     session_row = TelegramServiceSession.query.filter_by(
         bot_instance_id=bot.id, telegram_user_id=user_id,
@@ -1174,7 +1200,7 @@ def _handle_wallet_topup_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
             session_row.action = None
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['start_first'])
+        api.send_message(chat_id, _cc(language)['start_first'])
         return
     kind, file_id, unique_id = receipt
     topup = TelegramWalletTopup(
@@ -1193,7 +1219,7 @@ def _handle_wallet_topup_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     session_row.action = None
     state.step = 'verified'
     db.session.flush()
-    api.send_message(chat_id, COPY[language]['wallet_topup_pending'])
+    api.send_message(chat_id, _cc(language)['wallet_topup_pending'])
     _notify_topup_admins(api, topup)
 
 
@@ -1262,12 +1288,12 @@ def _handle_admin_topup_callback(api: TelegramBotApi, callback: dict, data: str)
         if language not in COPY:
             language = 'fa'
         if topup.status == 'approved':
-            text = COPY[language]['wallet_topup_approved'].format(
+            text = _cc(language)['wallet_topup_approved'].format(
                 amount=f"{int(topup.amount or 0):,}",
                 balance=f"{int(customer.credit or 0):,}",
             )
         else:
-            text = COPY[language]['wallet_topup_rejected']
+            text = _cc(language)['wallet_topup_rejected']
         api.send_message(identity.telegram_chat_id, text)
     return True
 
@@ -1385,7 +1411,7 @@ def _continue_purchase_selection(api: TelegramBotApi, bot: TelegramBotInstance,
         session_row.action = 'awaiting_account_name'
         state.step = 'awaiting_purchase_account_name'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['purchase_account_name_prompt'])
+        api.send_message(chat_id, _cc(language)['purchase_account_name_prompt'])
         return
     _begin_purchase_payment(api, bot, chat_id, user_id, language, server, package, state)
 
@@ -1444,7 +1470,7 @@ def _send_purchase_card_payment(api: TelegramBotApi, bot: TelegramBotInstance,
         session_row.action = None
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     session_row.bank_card_id = card.id
     session_row.action = 'awaiting_receipt'
@@ -1454,11 +1480,11 @@ def _send_purchase_card_payment(api: TelegramBotApi, bot: TelegramBotInstance,
     base_price = int(session_row.quoted_amount or 0) + discount
     discount_block = ''
     if discount > 0:
-        discount_block = COPY[language]['promo_discount_block'].format(
+        discount_block = _cc(language)['promo_discount_block'].format(
             original=f"{base_price:,}", discount=f"{discount:,}")
     api.send_message(
         chat_id,
-        _brand_text(bot, language) + COPY[language]['purchase_payment'].format(
+        _brand_text(bot, language) + _cc(language)['purchase_payment'].format(
             amount=f"{int(session_row.quoted_amount or 0):,}", card=_format_bank_card(card),
             discount_block=discount_block,
         ),
@@ -1478,7 +1504,7 @@ def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
         bot_instance_id=bot.id, telegram_user_id=user_id, status='pending',
     ).first()
     if duplicate:
-        api.send_message(chat_id, COPY[language]['purchase_duplicate'])
+        api.send_message(chat_id, _cc(language)['purchase_duplicate'])
         return
     owner_id = _effective_owner_id(bot, user_id)
     card = _purchase_card(bot, owner_id=owner_id)
@@ -1498,7 +1524,7 @@ def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
         json.dumps({str(promo.id): amount for promo, amount in applied}) if applied else None
     )
     if error_key == 'invalid_code':
-        api.send_message(chat_id, COPY[language]['promo_code_invalid'])
+        api.send_message(chat_id, _cc(language)['promo_code_invalid'])
     customer = db.session.get(CustomerAccount, identity.customer_id)
     balance = int(getattr(customer, 'credit', 0) or 0)
     if balance >= final_amount:
@@ -1507,13 +1533,13 @@ def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
         db.session.flush()
         api.send_message(
             chat_id,
-            COPY[language]['wallet_balance'].format(balance=f"{balance:,}"),
+            _cc(language)['wallet_balance'].format(balance=f"{balance:,}"),
             parse_mode='HTML',
             reply_markup={'inline_keyboard': [[{
-                'text': COPY[language]['pay_from_wallet'].format(balance=f"{balance:,}"),
+                'text': _cc(language)['pay_from_wallet'].format(balance=f"{balance:,}"),
                 'callback_data': 'purchase-pay-wallet',
             }], [{
-                'text': COPY[language]['pay_by_card'],
+                'text': _cc(language)['pay_by_card'],
                 'callback_data': 'purchase-pay-card',
             }]]},
         )
@@ -1522,20 +1548,20 @@ def _begin_purchase_payment(api: TelegramBotApi, bot: TelegramBotInstance,
         session_row.action = None
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     session_row.action = 'awaiting_payment_method'
     state.step = 'verified'
     db.session.flush()
     api.send_message(
         chat_id,
-        COPY[language]['wallet_insufficient'].format(
+        _cc(language)['wallet_insufficient'].format(
             balance=f"{balance:,}", needed=f"{max(0, final_amount - balance):,}"),
         reply_markup={'inline_keyboard': [[{
-            'text': COPY[language]['wallet_topup_button'],
+            'text': _cc(language)['wallet_topup_button'],
             'callback_data': 'wallet-topup-start',
         }], [{
-            'text': COPY[language]['pay_by_card'],
+            'text': _cc(language)['pay_by_card'],
             'callback_data': 'purchase-pay-card',
         }]]},
     )
@@ -1593,7 +1619,7 @@ def _support_attachment_from_message(message: dict):
 def _send_claim_candidates(api: TelegramBotApi, chat_id: int, language: str,
                            claim: OwnershipClaim | None):
     if claim is None:
-        api.send_message(chat_id, COPY[language]["no_candidates"])
+        api.send_message(chat_id, _cc(language)["no_candidates"])
         return
     items = [item for item in claim.items if item.status in ("pending", "conflict")][:20]
     if not items:
@@ -1605,20 +1631,20 @@ def _send_claim_candidates(api: TelegramBotApi, chat_id: int, language: str,
             current_server_id = item.server_id
             server_name = getattr(item.server, 'name', '') or f'#{item.server_id}'
             keyboard.append([{
-                "text": f'{COPY[language]["server_button"]}: {server_name}'[:60],
+                "text": f'{_cc(language)["server_button"]}: {server_name}'[:60],
                 "callback_data": "noop",
             }])
-        label = str(item.client_email_snapshot or f'{COPY[language]["service_button"]} {index}')
+        label = str(item.client_email_snapshot or f'{_cc(language)["service_button"]} {index}')
         keyboard.append([{
-            "text": f'{COPY[language]["account_button"]}: {label}'[:60],
+            "text": f'{_cc(language)["account_button"]}: {label}'[:60],
             "callback_data": f"claim:{item.id}",
         }])
     keyboard.append([{
-        "text": COPY[language]["no_link_button"],
+        "text": _cc(language)["no_link_button"],
         "callback_data": f"claim-none:{claim.id}",
     }])
     api.send_message(
-        chat_id, COPY[language]["choose_service"],
+        chat_id, _cc(language)["choose_service"],
         reply_markup={"inline_keyboard": keyboard},
     )
 
@@ -1810,26 +1836,26 @@ def _send_renewal_payment_choice(api: TelegramBotApi, bot: TelegramBotInstance,
     db.session.flush()
     final_price = _renewal_quoted_price(api, bot, user_id, ownership, package)
     balance = int(customer.credit or 0) if customer else 0
-    card_button = [{'text': COPY[language]['pay_by_card'],
+    card_button = [{'text': _cc(language)['pay_by_card'],
                     'callback_data': f'renew-pay-card:{ownership.id}:{package.id}'}]
     if customer and balance >= final_price:
         keyboard = [[{
-            'text': COPY[language]['pay_from_wallet'].format(balance=f"{balance:,}"),
+            'text': _cc(language)['pay_from_wallet'].format(balance=f"{balance:,}"),
             'callback_data': f'renew-pay-wallet:{ownership.id}:{package.id}',
         }], card_button]
         api.send_message(
             chat_id,
-            COPY[language]['wallet_balance'].format(balance=f"{balance:,}"),
+            _cc(language)['wallet_balance'].format(balance=f"{balance:,}"),
             parse_mode='HTML',
             reply_markup={'inline_keyboard': keyboard},
         )
         return
     needed = max(0, final_price - balance)
-    keyboard = [[{'text': COPY[language]['wallet_topup_button'],
+    keyboard = [[{'text': _cc(language)['wallet_topup_button'],
                   'callback_data': 'wallet-topup-start'}], card_button]
     api.send_message(
         chat_id,
-        COPY[language]['wallet_insufficient'].format(
+        _cc(language)['wallet_insufficient'].format(
             balance=f"{balance:,}", needed=f"{needed:,}"),
         reply_markup={'inline_keyboard': keyboard},
     )
@@ -1841,7 +1867,7 @@ def _begin_renewal_card_payment(api: TelegramBotApi, bot: TelegramBotInstance,
                                 state: TelegramBotUserState):
     card = _purchase_card(bot, owner_id=ownership.reseller_id)
     if card is None:
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     session_row = _service_session(bot.id, user_id)
     session_row.service_ownership_id = ownership.id
@@ -1851,7 +1877,7 @@ def _begin_renewal_card_payment(api: TelegramBotApi, bot: TelegramBotInstance,
     final_price = _renewal_quoted_price(api, bot, user_id, ownership, package)
     api.send_message(
         chat_id,
-        COPY[language]['renewal_payment'].format(
+        _cc(language)['renewal_payment'].format(
             amount=f"{final_price:,}", card=_format_bank_card(card)),
         parse_mode='HTML',
     )
@@ -1876,7 +1902,7 @@ def _create_renewal_wallet_request(api: TelegramBotApi, bot: TelegramBotInstance
         balance = int(customer.credit or 0) if customer else 0
         api.send_message(
             chat_id,
-            COPY[language]['wallet_insufficient'].format(
+            _cc(language)['wallet_insufficient'].format(
                 balance=f"{balance:,}", needed=f"{max(0, amount - balance):,}"),
         )
         return
@@ -1902,7 +1928,7 @@ def _handle_renewal_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     language = state.language if state.language in COPY else bot.default_language
     receipt = _receipt_from_message(message)
     if receipt is None:
-        api.send_message(chat_id, COPY[language]['receipt_invalid'])
+        api.send_message(chat_id, _cc(language)['receipt_invalid'])
         return
     session_row = TelegramServiceSession.query.filter_by(
         bot_instance_id=bot.id, telegram_user_id=user_id,
@@ -1924,7 +1950,7 @@ def _handle_renewal_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
             session_row.action = None
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     kind, file_id, unique_id = receipt
     request_row, duplicate = _create_service_request(
@@ -1946,13 +1972,13 @@ def _handle_renewal_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
 def _send_renewal_request_state(api: TelegramBotApi, chat_id: int, language: str,
                                 request_row: TelegramServiceRequest, *, duplicate: bool):
     if not duplicate:
-        api.send_message(chat_id, COPY[language]['renew_pending'])
+        api.send_message(chat_id, _cc(language)['renew_pending'])
         return
     api.send_message(
         chat_id,
-        COPY[language]['renew_duplicate'].format(request_id=request_row.id),
+        _cc(language)['renew_duplicate'].format(request_id=request_row.id),
         reply_markup={"inline_keyboard": [[{
-            "text": COPY[language]['renew_cancel_button'],
+            "text": _cc(language)['renew_cancel_button'],
             "callback_data": f"renew-request:{request_row.id}:cancel",
         }]]},
     )
@@ -2304,12 +2330,12 @@ def _support_waiting_state(request_row: TelegramServiceRequest) -> str:
 
 
 def _support_status_label(request_row: TelegramServiceRequest, language: str) -> str:
-    return COPY[language][f"support_status_{_support_waiting_state(request_row)}"]
+    return _cc(language)[f"support_status_{_support_waiting_state(request_row)}"]
 
 
 def _purchase_status_label(request_row: TelegramPurchaseRequest, language: str) -> str:
     status = str(request_row.status or 'pending').lower()
-    return COPY[language].get(f'purchase_status_{status}', status.replace('_', ' ').title())
+    return _cc(language).get(f'purchase_status_{status}', status.replace('_', ' ').title())
 
 
 def _customer_purchase_order(bot_id: int, user_id: int, request_id: int):
@@ -2328,7 +2354,7 @@ def _send_purchase_orders(api: TelegramBotApi, bot: TelegramBotInstance, chat_id
                           user_id: int, language: str):
     identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
     if not identity or not identity.customer_id:
-        api.send_message(chat_id, COPY[language]['purchase_orders_empty'])
+        api.send_message(chat_id, _cc(language)['purchase_orders_empty'])
         return
     rows = TelegramPurchaseRequest.query.filter_by(
         bot_instance_id=bot.id,
@@ -2338,7 +2364,7 @@ def _send_purchase_orders(api: TelegramBotApi, bot: TelegramBotInstance, chat_id
         TelegramPurchaseRequest.updated_at.desc(), TelegramPurchaseRequest.id.desc(),
     ).limit(20).all()
     if not rows:
-        api.send_message(chat_id, COPY[language]['purchase_orders_empty'])
+        api.send_message(chat_id, _cc(language)['purchase_orders_empty'])
         return
     keyboard = []
     for row in rows:
@@ -2349,7 +2375,7 @@ def _send_purchase_orders(api: TelegramBotApi, bot: TelegramBotInstance, chat_id
             'callback_data': f'purchase-order:{row.id}',
         }])
     api.send_message(
-        chat_id, COPY[language]['purchase_orders_list'],
+        chat_id, _cc(language)['purchase_orders_list'],
         reply_markup={'inline_keyboard': keyboard},
     )
 
@@ -2360,18 +2386,18 @@ def _send_purchase_order(api: TelegramBotApi, chat_id: int, language: str,
     package_name = getattr(request_row.package, 'name', '') or f'#{request_row.package_id}'
     account_name = str(getattr(request_row.detail, 'account_name', '') or '').strip()
     lines = [
-        f"<b>{html.escape(COPY[language]['purchase_order_title'].format(order_id=request_row.id))}</b>",
-        f"{COPY[language]['service_status']}: <b>{html.escape(_purchase_status_label(request_row, language))}</b>",
-        f"{COPY[language]['service_server']}: <b>{html.escape(str(server_name))}</b>",
-        f"{COPY[language]['purchase_order_package']}: <b>{html.escape(str(package_name))}</b>",
-        f"{COPY[language]['purchase_order_amount']}: <b>{int(request_row.amount or 0):,} T</b>",
+        f"<b>{html.escape(_cc(language)['purchase_order_title'].format(order_id=request_row.id))}</b>",
+        f"{_cc(language)['service_status']}: <b>{html.escape(_purchase_status_label(request_row, language))}</b>",
+        f"{_cc(language)['service_server']}: <b>{html.escape(str(server_name))}</b>",
+        f"{_cc(language)['purchase_order_package']}: <b>{html.escape(str(package_name))}</b>",
+        f"{_cc(language)['purchase_order_amount']}: <b>{int(request_row.amount or 0):,} T</b>",
     ]
     if account_name:
         lines.append(
-            f"{COPY[language]['service_account']}: <code>{html.escape(account_name)}</code>"
+            f"{_cc(language)['service_account']}: <code>{html.escape(account_name)}</code>"
         )
     keyboard = [[{
-        'text': COPY[language]['purchase_order_refresh'],
+        'text': _cc(language)['purchase_order_refresh'],
         'callback_data': f'purchase-order:{request_row.id}',
     }]]
     if request_row.status == 'completed' and account_name:
@@ -2382,12 +2408,12 @@ def _send_purchase_order(api: TelegramBotApi, chat_id: int, language: str,
         ).all() if str(row.client_email_snapshot or '').strip().lower() == account_name.lower()), None)
         if ownership:
             keyboard.append([{
-                'text': COPY[language]['menu_services'],
+                'text': _cc(language)['menu_services'],
                 'callback_data': f'service:{ownership.id}',
             }])
     if request_row.status in ('completed', 'rejected', 'cancelled'):
         keyboard.append([{
-            'text': COPY[language]['purchase_order_buy_again'],
+            'text': _cc(language)['purchase_order_buy_again'],
             'callback_data': 'purchase-start',
         }])
     api.send_message(
@@ -2404,7 +2430,7 @@ def _send_support_requests(api: TelegramBotApi, bot: TelegramBotInstance, chat_i
         request_type='support',
     ).order_by(TelegramServiceRequest.updated_at.desc(), TelegramServiceRequest.id.desc()).limit(20).all()
     if not rows:
-        api.send_message(chat_id, COPY[language]['support_no_tickets'])
+        api.send_message(chat_id, _cc(language)['support_no_tickets'])
         return
     keyboard = []
     for row in rows:
@@ -2412,7 +2438,7 @@ def _send_support_requests(api: TelegramBotApi, bot: TelegramBotInstance, chat_i
         label = f"#{row.id} • {_support_status_label(row, language)} • {account}"
         keyboard.append([{"text": label[:60], "callback_data": f"support-ticket:{row.id}"}])
     api.send_message(
-        chat_id, COPY[language]['support_ticket_list'],
+        chat_id, _cc(language)['support_ticket_list'],
         reply_markup={"inline_keyboard": keyboard},
     )
 
@@ -2423,17 +2449,17 @@ def _send_support_ticket(api: TelegramBotApi, chat_id: int, user_id: int,
     account = ownership.client_email_snapshot if ownership else f'#{request_row.id}'
     server_name = getattr(getattr(ownership, 'server', None), 'name', '') or '-'
     lines = [
-        f"<b>{html.escape(COPY[language]['support_ticket_title'].format(request_id=request_row.id))}</b>",
-        f"{COPY[language]['service_server']}: <b>{html.escape(str(server_name))}</b>",
-        f"{COPY[language]['service_account']}: <code>{html.escape(str(account))}</code>",
-        f"{COPY[language]['service_status']}: <b>{html.escape(_support_status_label(request_row, language))}</b>",
+        f"<b>{html.escape(_cc(language)['support_ticket_title'].format(request_id=request_row.id))}</b>",
+        f"{_cc(language)['service_server']}: <b>{html.escape(str(server_name))}</b>",
+        f"{_cc(language)['service_account']}: <code>{html.escape(str(account))}</code>",
+        f"{_cc(language)['service_status']}: <b>{html.escape(_support_status_label(request_row, language))}</b>",
         '',
     ]
     recent = list(request_row.messages or [])[-10:]
     for message in recent:
-        sender_label = (COPY[language]['support_sender_admin']
+        sender_label = (_cc(language)['support_sender_admin']
                         if message.sender_type == 'admin'
-                        else COPY[language]['support_sender_customer'])
+                        else _cc(language)['support_sender_customer'])
         body = str(message.message or '').strip()
         attachment = str(message.attachment_name or '').strip()
         rendered = body[:700] if body else ''
@@ -2443,16 +2469,16 @@ def _send_support_ticket(api: TelegramBotApi, chat_id: int, user_id: int,
     keyboard = []
     if request_row.status == 'pending':
         keyboard.append([{
-            "text": COPY[language]['support_continue_button'],
+            "text": _cc(language)['support_continue_button'],
             "callback_data": f"support-reply:{request_row.id}",
         }])
     elif ownership:
         keyboard.append([{
-            "text": COPY[language]['support_new_button'],
+            "text": _cc(language)['support_new_button'],
             "callback_data": f"service-support:{ownership.id}",
         }])
     keyboard.append([{
-        "text": COPY[language]['support_back_button'],
+        "text": _cc(language)['support_back_button'],
         "callback_data": "support-list",
     }])
     api.send_message(
@@ -2568,14 +2594,14 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
         if language not in COPY:
             language = 'fa'
         if request_row.status == 'completed':
-            text = COPY[language]['request_completed']
+            text = _cc(language)['request_completed']
         elif refunded_amount:
-            text = COPY[language]['request_rejected_refund'].format(
+            text = _cc(language)['request_rejected_refund'].format(
                 amount=f"{refunded_amount:,}",
                 balance=f"{int(customer.credit or 0):,}",
             )
         else:
-            text = COPY[language]['request_rejected']
+            text = _cc(language)['request_rejected']
         api.send_message(identity.telegram_chat_id, text)
     return True
 
@@ -2637,9 +2663,9 @@ def _handle_admin_support_callback(api: TelegramBotApi, bot: TelegramBotInstance
         if identity and identity.telegram_chat_id:
             api.send_message(
                 identity.telegram_chat_id,
-                COPY[language]['request_completed'],
+                _cc(language)['request_completed'],
                 reply_markup={"inline_keyboard": [[{
-                    "text": COPY[language]['support_view_button'],
+                    "text": _cc(language)['support_view_button'],
                     "callback_data": f"support-ticket:{request_row.id}",
                 }]]},
             )
@@ -2706,7 +2732,7 @@ def _handle_renewal_request_callback(api: TelegramBotApi, callback: dict, data: 
     api.answer_callback(callback_id, 'Cancelled')
     api.send_message(
         chat_id,
-        COPY[language]['renew_cancelled'].format(request_id=request_row.id),
+        _cc(language)['renew_cancelled'].format(request_id=request_row.id),
     )
     return True
 
@@ -2856,7 +2882,7 @@ def _start_trial(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
         package = db.session.get(Package, int(policy['trial_package_id']))
     if (not policy['trial_enabled'] or not package or not package.enabled
             or not getattr(package, 'is_trial', False)):
-        api.send_message(chat_id, COPY[language]['trial_unavailable'])
+        api.send_message(chat_id, _cc(language)['trial_unavailable'])
         return
     identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
     if not identity or not identity.customer_id or not identity.phone_verified_at:
@@ -2869,19 +2895,19 @@ def _start_trial(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
                 if language == 'fa'
                 else "To claim the free trial, join the Telegram channel first and try again."
             )
-            api.send_message(chat_id, COPY[language].get('trial_channel_required', fallback))
+            api.send_message(chat_id, _cc(language).get('trial_channel_required', fallback))
             return
     phone = str(identity.phone_normalized or '')
     if _trial_grant_for(bot, user_id, phone):
-        api.send_message(chat_id, COPY[language]['trial_already_used'])
+        api.send_message(chat_id, _cc(language)['trial_already_used'])
         return
     reviewer = _provisioning_reviewer(bot)
     if reviewer is None:
-        api.send_message(chat_id, COPY[language]['trial_failed'])
+        api.send_message(chat_id, _cc(language)['trial_failed'])
         return
     server = _assign_purchase_server(bot, package.id, owner_id=_effective_owner_id(bot, user_id))
     if server is None:
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     request_row = TelegramPurchaseRequest(
         bot_instance_id=bot.id,
@@ -2906,7 +2932,7 @@ def _start_trial(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
         request_row.status = 'rejected'
         db.session.commit()
         app.logger.warning('[telegram-trial] provisioning failed for bot %s: %s', bot.id, result)
-        api.send_message(chat_id, COPY[language]['trial_failed'])
+        api.send_message(chat_id, _cc(language)['trial_failed'])
         return
     request_row.status = 'completed'
     db.session.add(TelegramTrialGrant(
@@ -2923,7 +2949,7 @@ def _start_trial(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
     db.session.commit()
     api.send_message(
         chat_id,
-        COPY[language]['trial_success'].format(link=_grant_delivery_link(result)),
+        _cc(language)['trial_success'].format(link=_grant_delivery_link(result)),
     )
     _notify_grant_admins(api, request_row, 'trial')
 
@@ -2974,11 +3000,11 @@ def _grant_emergency_access(api: TelegramBotApi, bot: TelegramBotInstance, callb
     language = state.language if state.language in COPY else 'fa'
     api.answer_callback(callback_id)
     if not ownership:
-        api.send_message(chat_id, COPY[language]['invalid_service'])
+        api.send_message(chat_id, _cc(language)['invalid_service'])
         return
     policy = _purchase_policy_values(bot)
     if not policy['emergency_enabled']:
-        api.send_message(chat_id, COPY[language]['emergency_unavailable'])
+        api.send_message(chat_id, _cc(language)['emergency_unavailable'])
         return
     cutoff = datetime.utcnow() - timedelta(days=int(policy['emergency_cooldown_days']))
     recent = TelegramTrialGrant.query.filter(
@@ -2987,17 +3013,17 @@ def _grant_emergency_access(api: TelegramBotApi, bot: TelegramBotInstance, callb
         TelegramTrialGrant.created_at >= cutoff,
     ).first()
     if recent:
-        api.send_message(chat_id, COPY[language]['emergency_cooldown'])
+        api.send_message(chat_id, _cc(language)['emergency_cooldown'])
         return
     reviewer = _provisioning_reviewer(bot)
     if reviewer is None:
-        api.send_message(chat_id, COPY[language]['emergency_failed'])
+        api.send_message(chat_id, _cc(language)['emergency_failed'])
         return
     renewed, result = _execute_emergency_renewal(
         ownership, policy['emergency_days'], policy['emergency_volume_gb'], reviewer)
     if not renewed:
         app.logger.warning('[telegram-emergency] renewal failed for bot %s: %s', bot.id, result)
-        api.send_message(chat_id, COPY[language]['emergency_failed'])
+        api.send_message(chat_id, _cc(language)['emergency_failed'])
         return
     db.session.add(TelegramTrialGrant(
         bot_instance_id=bot.id,
@@ -3012,7 +3038,7 @@ def _grant_emergency_access(api: TelegramBotApi, bot: TelegramBotInstance, callb
     db.session.commit()
     api.send_message(
         chat_id,
-        COPY[language]['emergency_success'].format(
+        _cc(language)['emergency_success'].format(
             days=policy['emergency_days'], volume=policy['emergency_volume_gb']),
     )
     _send_service_details(api, bot, chat_id, language, ownership)
@@ -3296,27 +3322,27 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
             ).strip()
             api.send_message(
                 identity.telegram_chat_id,
-                COPY[language]['purchase_completed'].format(
+                _cc(language)['purchase_completed'].format(
                     account_name=request_row.detail.account_name,
                     delivery_link=delivery_link,
                 ).rstrip(),
                 reply_markup={'inline_keyboard': [[{
-                    'text': COPY[language]['menu_orders'],
+                    'text': _cc(language)['menu_orders'],
                     'callback_data': f'purchase-order:{request_row.id}',
                 }]]},
             )
         else:
             key = 'purchase_approved' if request_row.status == 'approved' else 'purchase_rejected'
-            text = COPY[language][key]
+            text = _cc(language)[key]
             if request_row.status == 'rejected' and refunded_amount:
-                text = COPY[language]['purchase_rejected_refund'].format(
+                text = _cc(language)['purchase_rejected_refund'].format(
                     amount=f"{refunded_amount:,}",
                     balance=f"{int(customer.credit or 0):,}",
                 )
             api.send_message(
                 identity.telegram_chat_id, text,
                 reply_markup={'inline_keyboard': [[{
-                    'text': COPY[language]['menu_orders'],
+                    'text': _cc(language)['menu_orders'],
                     'callback_data': f'purchase-order:{request_row.id}',
                 }]]},
             )
@@ -3351,7 +3377,7 @@ def _handle_admin_claim_callback(api: TelegramBotApi, callback: dict, data: str)
             key = ('service_attached' if result.get('status') == 'approved'
                    else 'claim_rejected' if result.get('status') == 'rejected'
                    else 'claim_conflict')
-            api.send_message(item.claim.telegram_identity.telegram_chat_id, COPY.get(language, COPY['fa'])[key])
+            api.send_message(item.claim.telegram_identity.telegram_chat_id, _cc(language)[key])
     except (ValueError, PermissionError) as exc:
         if callback_id:
             api.answer_callback(callback_id, str(exc)[:120])
@@ -3409,7 +3435,7 @@ def _handle_start(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
         state.step = "choose_language"
         db.session.flush()
         api.send_message(
-            chat_id, COPY[state.language]["choose_language"],
+            chat_id, _cc(state.language)["choose_language"],
             reply_markup=language_keyboard(languages),
         )
         return
@@ -3520,7 +3546,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         state.step = 'awaiting_promo_code'
         db.session.flush()
         api.answer_callback(callback_id)
-        api.send_message(chat_id, COPY[language]['promo_code_prompt'])
+        api.send_message(chat_id, _cc(language)['promo_code_prompt'])
         return
     if data == 'purchase-start':
         if not _rate_ok(user_id, 'purchase-start', 10, 60):
@@ -3537,7 +3563,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         session_row = _purchase_session(bot.id, user_id)
         if str(session_row.action or '') not in ('awaiting_payment_method', 'awaiting_receipt'):
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['start_first'])
+            api.send_message(chat_id, _cc(language)['start_first'])
             return
         api.answer_callback(callback_id)
         _send_purchase_card_payment(api, bot, chat_id, user_id, language, state)
@@ -3546,7 +3572,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         session_row = _purchase_session(bot.id, user_id)
         if str(session_row.action or '') != 'awaiting_payment_method':
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['start_first'])
+            api.send_message(chat_id, _cc(language)['start_first'])
             return
         api.answer_callback(callback_id)
         _create_wallet_purchase_request(api, bot, chat_id, user_id, language, state)
@@ -3562,7 +3588,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         if request_row:
             _send_purchase_order(api, chat_id, language, request_row)
         else:
-            api.send_message(chat_id, COPY[language]['purchase_order_missing'])
+            api.send_message(chat_id, _cc(language)['purchase_order_missing'])
         return
     if data == 'support-list':
         api.answer_callback(callback_id)
@@ -3579,7 +3605,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         if request_row:
             _send_support_ticket(api, chat_id, user_id, language, request_row)
         else:
-            api.send_message(chat_id, COPY[language]['support_ticket_missing'])
+            api.send_message(chat_id, _cc(language)['support_ticket_missing'])
         return
     if data.startswith('support-reply:'):
         try:
@@ -3590,7 +3616,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         request_row = _customer_support_request(user_id, request_id)
         if not request_row or request_row.status != 'pending':
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['support_ticket_missing'])
+            api.send_message(chat_id, _cc(language)['support_ticket_missing'])
             return
         session_row = _service_session(bot.id, user_id)
         session_row.service_ownership_id = request_row.service_ownership_id
@@ -3598,7 +3624,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         state.step = 'awaiting_support_message'
         db.session.flush()
         api.answer_callback(callback_id)
-        api.send_message(chat_id, COPY[language]['support_prompt'])
+        api.send_message(chat_id, _cc(language)['support_prompt'])
         return
     if data.startswith('buy-server:'):
         try:
@@ -3614,7 +3640,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         ), None)
         api.answer_callback(callback_id)
         if server is None:
-            api.send_message(chat_id, COPY[language]['payment_unavailable'])
+            api.send_message(chat_id, _cc(language)['payment_unavailable'])
             return
         _send_purchase_packages(api, bot, chat_id, language, server, user_id=user_id)
         return
@@ -3644,7 +3670,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
             server = None
         api.answer_callback(callback_id)
         if server is None or package is None:
-            api.send_message(chat_id, COPY[language]['payment_unavailable'])
+            api.send_message(chat_id, _cc(language)['payment_unavailable'])
             return
         _continue_purchase_selection(
             api, bot, chat_id, user_id, language, server, package, state,
@@ -3667,7 +3693,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         _identity_row, ownership = _owned_service(user_id, ownership_id)
         if not ownership:
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['invalid_service'])
+            api.send_message(chat_id, _cc(language)['invalid_service'])
             return
         api.answer_callback(callback_id)
         _send_service_details(api, bot, chat_id, language, ownership)
@@ -3681,7 +3707,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         _identity_row, ownership = _owned_service(user_id, ownership_id)
         if not ownership:
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['invalid_service'])
+            api.send_message(chat_id, _cc(language)['invalid_service'])
             return
         client = _cached_owned_service(ownership)
         raw = client.get('raw_client') if client and isinstance(client.get('raw_client'), dict) else {}
@@ -3690,13 +3716,13 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         api.answer_callback(callback_id)
         if sub_id and base_url:
             safe_sub_id = quote(sub_id, safe='')
-            api.send_message(chat_id, f"{COPY[language]['get_link_button']}:\n{base_url}/s/{ownership.server_id}/{safe_sub_id}")
+            api.send_message(chat_id, f"{_cc(language)['get_link_button']}:\n{base_url}/s/{ownership.server_id}/{safe_sub_id}")
         else:
             request_row, _duplicate = _create_service_request(
                 bot.id, user_id, ownership, 'support', package=None,
                 note='Connection link unavailable in Telegram worker snapshot',
             )
-            api.send_message(chat_id, COPY[language]['link_unavailable'])
+            api.send_message(chat_id, _cc(language)['link_unavailable'])
             _notify_service_request_admins(api, request_row)
         return
     if data.startswith('service-renew:'):
@@ -3708,7 +3734,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         _identity_row, ownership = _owned_service(user_id, ownership_id)
         if not ownership:
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['invalid_service'])
+            api.send_message(chat_id, _cc(language)['invalid_service'])
             return
         api.answer_callback(callback_id)
         _send_renew_packages(api, bot, chat_id, user_id, language, ownership)
@@ -3726,7 +3752,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         allowed_package_ids = {row.id for row in _available_packages(ownership)} if ownership else set()
         if not ownership or not package or package.id not in allowed_package_ids:
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['invalid_service'])
+            api.send_message(chat_id, _cc(language)['invalid_service'])
             return
         api.answer_callback(callback_id)
         _send_renewal_payment_choice(
@@ -3746,7 +3772,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         allowed_package_ids = {row.id for row in _available_packages(ownership)} if ownership else set()
         if not ownership or not package or package.id not in allowed_package_ids:
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['invalid_service'])
+            api.send_message(chat_id, _cc(language)['invalid_service'])
             return
         api.answer_callback(callback_id)
         _begin_renewal_card_payment(
@@ -3766,7 +3792,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         allowed_package_ids = {row.id for row in _available_packages(ownership)} if ownership else set()
         if not ownership or not package or package.id not in allowed_package_ids:
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['invalid_service'])
+            api.send_message(chat_id, _cc(language)['invalid_service'])
             return
         api.answer_callback(callback_id)
         _create_renewal_wallet_request(api, bot, chat_id, user_id, language, ownership, package)
@@ -3786,7 +3812,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         state.step = 'awaiting_topup_amount'
         db.session.flush()
         api.answer_callback(callback_id)
-        api.send_message(chat_id, COPY[language]['wallet_topup_enter_amount'])
+        api.send_message(chat_id, _cc(language)['wallet_topup_enter_amount'])
         return
     if data == 'wallet-history':
         api.answer_callback(callback_id)
@@ -3801,7 +3827,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         _identity_row, ownership = _owned_service(user_id, ownership_id)
         if not ownership:
             api.answer_callback(callback_id)
-            api.send_message(chat_id, COPY[language]['invalid_service'])
+            api.send_message(chat_id, _cc(language)['invalid_service'])
             return
         session_row = _service_session(bot.id, user_id)
         session_row.service_ownership_id = ownership.id
@@ -3809,7 +3835,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         state.step = 'awaiting_support_message'
         db.session.flush()
         api.answer_callback(callback_id)
-        api.send_message(chat_id, COPY[language]['support_prompt'])
+        api.send_message(chat_id, _cc(language)['support_prompt'])
         return
     if data.startswith("lang:"):
         language = data.partition(":")[2]
@@ -3846,7 +3872,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         state.step = "awaiting_subscription"
         db.session.flush()
         api.answer_callback(callback_id, "✓")
-        api.send_message(chat_id, COPY[state.language]["send_subscription"])
+        api.send_message(chat_id, _cc(state.language)["send_subscription"])
         return
     if data.startswith("claim-none:"):
         try:
@@ -3866,7 +3892,7 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         session_row.selected_item_id = None
         db.session.flush()
         api.answer_callback(callback_id, "✓")
-        api.send_message(chat_id, COPY[state.language]["admin_review"])
+        api.send_message(chat_id, _cc(state.language)["admin_review"])
         _notify_claim_admins(api, claim, user_id)
         return
     api.answer_callback(callback_id)
@@ -3879,11 +3905,11 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     language = state.language if state.language in COPY else bot.default_language
     contact = message.get("contact") or {}
     if int(contact.get("user_id") or 0) != user_id:
-        api.send_message(chat_id, COPY[language]["phone_mismatch"])
+        api.send_message(chat_id, _cc(language)["phone_mismatch"])
         return
     phone = normalize_iran_mobile(contact.get("phone_number"))
     if not phone:
-        api.send_message(chat_id, COPY[language]["phone_invalid"])
+        api.send_message(chat_id, _cc(language)["phone_invalid"])
         return
 
     identity = _identity(sender, chat_id)
@@ -3892,7 +3918,7 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         if current and current.primary_phone and current.primary_phone != phone:
             state.step = "needs_review"
             db.session.flush()
-            api.send_message(chat_id, COPY[language]["phone_conflict"])
+            api.send_message(chat_id, _cc(language)["phone_conflict"])
             return
     customer = CustomerAccount.query.filter_by(primary_phone=phone).first()
     if customer is not None:
@@ -3904,7 +3930,7 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         if other_identity is not None:
             state.step = "needs_review"
             db.session.flush()
-            api.send_message(chat_id, COPY[language]["phone_conflict"])
+            api.send_message(chat_id, _cc(language)["phone_conflict"])
             return
     if customer is None:
         customer = CustomerAccount(
@@ -3926,7 +3952,7 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     state.step = "verified"
     db.session.flush()
     api.send_message(
-        chat_id, COPY[language]["verified"],
+        chat_id, _cc(language)["verified"],
         reply_markup={"remove_keyboard": True},
     )
     _send_main_menu(api, bot, chat_id, language)
@@ -3947,14 +3973,14 @@ def _handle_subscription(api: TelegramBotApi, bot: TelegramBotInstance, message:
     if not identity or not identity.customer_id or not item:
         state.step = "verified"
         db.session.flush()
-        api.send_message(chat_id, COPY[language]["start_first"])
+        api.send_message(chat_id, _cc(language)["start_first"])
         return
     if session_row.locked_until and session_row.locked_until > datetime.utcnow():
-        api.send_message(chat_id, COPY[language]["proof_limited"])
+        api.send_message(chat_id, _cc(language)["proof_limited"])
         return
     token = _extract_subscription_token(text)
     if not token:
-        api.send_message(chat_id, COPY[language]["invalid_subscription"])
+        api.send_message(chat_id, _cc(language)["invalid_subscription"])
         return
     result = verify_ownership_claim_subscription(item, identity.customer_id, token)
     if result.get("status") == "invalid_subscription":
@@ -3962,13 +3988,13 @@ def _handle_subscription(api: TelegramBotApi, bot: TelegramBotInstance, message:
         if session_row.failed_attempts >= 5:
             session_row.locked_until = datetime.utcnow() + timedelta(minutes=15)
         db.session.flush()
-        api.send_message(chat_id, COPY[language]["invalid_subscription"])
+        api.send_message(chat_id, _cc(language)["invalid_subscription"])
         return
     if result.get("status") == "conflict":
         state.step = "needs_review"
         session_row.selected_item_id = None
         db.session.flush()
-        api.send_message(chat_id, COPY[language]["claim_conflict"])
+        api.send_message(chat_id, _cc(language)["claim_conflict"])
         _notify_claim_admins(api, item.claim, user_id)
         return
     state.step = "verified"
@@ -3976,7 +4002,7 @@ def _handle_subscription(api: TelegramBotApi, bot: TelegramBotInstance, message:
     session_row.failed_attempts = 0
     session_row.locked_until = None
     db.session.flush()
-    api.send_message(chat_id, COPY[language]["service_attached"])
+    api.send_message(chat_id, _cc(language)["service_attached"])
     _send_main_menu(api, bot, chat_id, language)
     _send_claim_candidates(api, chat_id, language, item.claim)
 
@@ -3995,7 +4021,7 @@ def _handle_support_message(api: TelegramBotApi, bot: TelegramBotInstance, messa
     note = str(text or message.get('caption') or '').strip()[:4000]
     if (not session_row or not session_row.service_ownership_id
             or (not note and not attachment) or note.startswith('/')):
-        api.send_message(chat_id, COPY[language]['support_prompt'])
+        api.send_message(chat_id, _cc(language)['support_prompt'])
         return
     _identity_row, ownership = _owned_service(user_id, session_row.service_ownership_id)
     if not ownership:
@@ -4003,7 +4029,7 @@ def _handle_support_message(api: TelegramBotApi, bot: TelegramBotInstance, messa
         session_row.action = None
         session_row.service_ownership_id = None
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['invalid_service'])
+        api.send_message(chat_id, _cc(language)['invalid_service'])
         return
     requested_id = None
     if str(session_row.action or '').startswith('support_request:'):
@@ -4026,9 +4052,9 @@ def _handle_support_message(api: TelegramBotApi, bot: TelegramBotInstance, messa
     db.session.flush()
     api.send_message(
         chat_id,
-        COPY[language]['support_pending'].format(request_id=request_row.id),
+        _cc(language)['support_pending'].format(request_id=request_row.id),
         reply_markup={"inline_keyboard": [[{
-            "text": COPY[language]['support_view_button'],
+            "text": _cc(language)['support_view_button'],
             "callback_data": f"support-ticket:{request_row.id}",
         }]]},
     )
@@ -4123,7 +4149,7 @@ def _handle_promo_code_entry(api: TelegramBotApi, bot: TelegramBotInstance,
         session_row.action = None
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['promo_code_cleared'])
+        api.send_message(chat_id, _cc(language)['promo_code_cleared'])
         return
     promo = TelegramPromo.query.filter_by(code=code, enabled=True).first()
     session_row.promo_code = code if promo else None
@@ -4132,7 +4158,7 @@ def _handle_promo_code_entry(api: TelegramBotApi, bot: TelegramBotInstance,
     db.session.flush()
     api.send_message(
         chat_id,
-        COPY[language]['promo_code_saved'] if promo else COPY[language]['promo_code_invalid'],
+        _cc(language)['promo_code_saved'] if promo else _cc(language)['promo_code_invalid'],
     )
 
 
@@ -4144,7 +4170,7 @@ def _handle_purchase_account_name(api: TelegramBotApi, bot: TelegramBotInstance,
     language = state.language if state.language in COPY else bot.default_language
     value = str(text or '').strip()
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{2,31}', value):
-        api.send_message(chat_id, COPY[language]['purchase_account_name_invalid'])
+        api.send_message(chat_id, _cc(language)['purchase_account_name_invalid'])
         return
     session_row = TelegramPurchaseSession.query.filter_by(
         bot_instance_id=bot.id, telegram_user_id=user_id, action='awaiting_account_name',
@@ -4154,10 +4180,10 @@ def _handle_purchase_account_name(api: TelegramBotApi, bot: TelegramBotInstance,
     if not session_row or not server or not package:
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['start_first'])
+        api.send_message(chat_id, _cc(language)['start_first'])
         return
     if _purchase_account_name_exists(server.id, value):
-        api.send_message(chat_id, COPY[language]['purchase_account_name_taken'])
+        api.send_message(chat_id, _cc(language)['purchase_account_name_taken'])
         return
     draft = _purchase_name_draft(bot.id, user_id)
     if draft is None:
@@ -4218,9 +4244,9 @@ def _finalize_purchase_request(api: TelegramBotApi, bot: TelegramBotInstance,
     state.step = 'verified'
     db.session.flush()
     api.send_message(
-        chat_id, COPY[language]['purchase_pending'],
+        chat_id, _cc(language)['purchase_pending'],
         reply_markup={'inline_keyboard': [[{
-            'text': COPY[language]['menu_orders'],
+            'text': _cc(language)['menu_orders'],
             'callback_data': f'purchase-order:{request_row.id}',
         }]]},
     )
@@ -4236,13 +4262,13 @@ def _create_wallet_purchase_request(api: TelegramBotApi, bot: TelegramBotInstanc
     package = db.session.get(Package, session_row.package_id) if session_row.package_id else None
     if str(session_row.action or '') != 'awaiting_payment_method' or not server or not package \
             or not identity or not customer:
-        api.send_message(chat_id, COPY[language]['start_first'])
+        api.send_message(chat_id, _cc(language)['start_first'])
         return
     amount = int(session_row.quoted_amount or 0)
     if int(customer.credit or 0) < amount:
         api.send_message(
             chat_id,
-            COPY[language]['wallet_insufficient'].format(
+            _cc(language)['wallet_insufficient'].format(
                 balance=f"{int(customer.credit or 0):,}",
                 needed=f"{max(0, amount - int(customer.credit or 0)):,}"),
         )
@@ -4254,7 +4280,7 @@ def _create_wallet_purchase_request(api: TelegramBotApi, bot: TelegramBotInstanc
         session_row.action = None
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['purchase_duplicate'])
+        api.send_message(chat_id, _cc(language)['purchase_duplicate'])
         return
     frozen_discount = int(session_row.discount_amount or 0)
     request_row = TelegramPurchaseRequest(
@@ -4301,7 +4327,7 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     language = state.language if state.language in COPY else bot.default_language
     receipt = _receipt_from_message(message)
     if receipt is None:
-        api.send_message(chat_id, COPY[language]['receipt_invalid'])
+        api.send_message(chat_id, _cc(language)['receipt_invalid'])
         return
     session_row = TelegramPurchaseSession.query.filter_by(
         bot_instance_id=bot.id, telegram_user_id=user_id, action='awaiting_receipt',
@@ -4310,7 +4336,7 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
     if not session_row or not identity or not identity.customer_id:
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['start_first'])
+        api.send_message(chat_id, _cc(language)['start_first'])
         return
     server = db.session.get(Server, session_row.server_id)
     package = db.session.get(Package, session_row.package_id)
@@ -4321,7 +4347,7 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
         session_row.action = None
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['payment_unavailable'])
+        api.send_message(chat_id, _cc(language)['payment_unavailable'])
         return
     duplicate = TelegramPurchaseRequest.query.filter_by(
         bot_instance_id=bot.id, telegram_user_id=user_id, status='pending',
@@ -4330,7 +4356,7 @@ def _handle_purchase_receipt(api: TelegramBotApi, bot: TelegramBotInstance,
         session_row.action = None
         state.step = 'verified'
         db.session.flush()
-        api.send_message(chat_id, COPY[language]['purchase_duplicate'])
+        api.send_message(chat_id, _cc(language)['purchase_duplicate'])
         return
     kind, file_id, unique_id = receipt
     duplicate_receipt = _receipt_is_duplicate(unique_id)
@@ -4415,7 +4441,7 @@ def _handle_support_group_message(api: TelegramBotApi, bot: TelegramBotInstance,
         ).first()
         if identity and identity.telegram_chat_id:
             try:
-                api.send_message(identity.telegram_chat_id, COPY[language]['request_completed'])
+                api.send_message(identity.telegram_chat_id, _cc(language)['request_completed'])
             except TelegramApiError:
                 pass
         thread_id = int(message.get('message_thread_id') or 0)
@@ -4504,6 +4530,9 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     _identity(sender, chat_id)
     db.session.flush()
     text = str(message.get("text") or "").strip()
+    # Route main-menu reply buttons by copy key, not by raw text, so per-bot
+    # label overrides (both languages) keep working.
+    menu_key = menu_label_map(bot).get(text)
     if text == "/start" or text.startswith("/start "):
         parts = text.split(None, 1)
         _handle_start(api, bot, chat_id, user_id, state,
@@ -4542,22 +4571,22 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
             ]]})
     elif state.step == "awaiting_admin_support_reply":
         _handle_admin_support_message(api, bot, message, sender, state, text)
-    elif text in {COPY["fa"]["menu_services"], COPY["en"]["menu_services"]}:
+    elif menu_key == "menu_services":
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         _send_owned_services(api, chat_id, state.language, identity)
-    elif text in {COPY["fa"]["menu_trial"], COPY["en"]["menu_trial"]}:
+    elif menu_key == "menu_trial":
         state.step = 'verified'
         _start_trial(api, bot, chat_id, user_id, state)
-    elif text in {COPY["fa"]["menu_invite"], COPY["en"]["menu_invite"]}:
+    elif menu_key == "menu_invite":
         state.step = 'verified'
         username = str(bot.bot_username or '').lstrip('@')
         if username:
             link = f"https://t.me/{username}?start=ref_{user_id}"
-            api.send_message(chat_id, COPY[state.language]['invite_link'].format(link=link))
+            api.send_message(chat_id, _cc(state.language)['invite_link'].format(link=link))
         else:
-            api.send_message(chat_id, COPY[state.language]['invite_unavailable'])
-    elif text in {COPY["fa"]["menu_buy_service"], COPY["en"]["menu_buy_service"]}:
+            api.send_message(chat_id, _cc(state.language)['invite_unavailable'])
+    elif menu_key == "menu_buy_service":
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         if identity and identity.customer_id and identity.phone_verified_at:
@@ -4567,16 +4596,16 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
                 _send_purchase_packages(api, bot, chat_id, state.language, None, user_id=user_id)
         else:
             _send_contact_prompt(api, chat_id, state.language)
-    elif text in {COPY["fa"]["menu_orders"], COPY["en"]["menu_orders"]}:
+    elif menu_key == "menu_orders":
         state.step = 'verified'
         _send_purchase_orders(api, bot, chat_id, user_id, state.language)
-    elif text in {COPY["fa"]["menu_wallet"], COPY["en"]["menu_wallet"]}:
+    elif menu_key == "menu_wallet":
         state.step = 'verified'
         _send_wallet_menu(api, bot, chat_id, user_id, state.language)
-    elif text in {COPY["fa"]["menu_tutorial"], COPY["en"]["menu_tutorial"]}:
+    elif menu_key == "menu_tutorial":
         state.step = 'verified'
         _send_tutorial_devices(api, chat_id, state.language)
-    elif text in {COPY["fa"]["menu_add_service"], COPY["en"]["menu_add_service"]}:
+    elif menu_key == "menu_add_service":
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         if identity and identity.customer_id and identity.phone_verified_at:
@@ -4584,14 +4613,14 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
             _send_claim_candidates(api, chat_id, state.language, claim)
         else:
             _send_contact_prompt(api, chat_id, state.language)
-    elif text in {COPY["fa"]["menu_support_requests"], COPY["en"]["menu_support_requests"]}:
+    elif menu_key == "menu_support_requests":
         state.step = 'verified'
         _send_support_requests(api, bot, chat_id, user_id, state.language)
-    elif text in {COPY["fa"]["menu_language"], COPY["en"]["menu_language"]}:
+    elif menu_key == "menu_language":
         state.step = "choose_language"
         db.session.flush()
         api.send_message(
-            chat_id, COPY[state.language]["choose_language"],
+            chat_id, _cc(state.language)["choose_language"],
             reply_markup=language_keyboard(bot.enabled_languages()),
         )
     elif message.get("contact"):
@@ -4615,7 +4644,7 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     elif state.step == "share_contact":
         _send_contact_prompt(api, chat_id, state.language)
     else:
-        api.send_message(chat_id, COPY[state.language]["start_first"])
+        api.send_message(chat_id, _cc(state.language)["start_first"])
 
 
 def process_update(api: TelegramBotApi, bot: TelegramBotInstance, update: dict):
@@ -4623,6 +4652,8 @@ def process_update(api: TelegramBotApi, bot: TelegramBotInstance, update: dict):
     # are intentionally disabled here. Pull only when Redis' snapshot version
     # changed so service details never depend on stale process-local memory.
     load_snapshot_from_redis()
+    _copy_context.copy = resolve_copy(bot)
+    _copy_context.overrides = parse_copy_overrides(bot)
     if isinstance(update.get("callback_query"), dict):
         _handle_callback(api, bot, update["callback_query"])
     elif isinstance(update.get("message"), dict):

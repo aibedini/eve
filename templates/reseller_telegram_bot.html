@@ -63,6 +63,15 @@
                     <label><input type="checkbox" id="rtb-enabled"> Enabled</label>
                     <label><input type="checkbox" id="rtb-test-mode"> Test mode</label>
                 </div>
+                <div class="form-group" style="border-top: 1px solid rgba(148,163,184,0.25); padding-top: 14px; max-width: none;">
+                    <label>شخصی‌سازی متن‌های ربات</label>
+                    <small class="text-secondary" style="display:block; margin-bottom: 8px;">
+                        متن هر پیام یا دکمهٔ ربات را بازنویسی کنید؛ فیلد خالی یعنی متن پیش‌فرض. می‌توانید ایموجی‌های استاندارد تلگرام (یونیکد، مثل 🛒 💰) را مستقیماً در متن‌ها بگذارید. متن‌های دارای <code>{placeholder}</code> باید placeholderها را بدون تغییر نگه دارند. حداکثر ۵۰۰ کاراکتر.
+                    </small>
+                    <input type="search" id="rtb-copy-search" class="form-input" placeholder="جستجو بر اساس کلید یا متن پیش‌فرض…" autocomplete="off" spellcheck="false" oninput="rtbFilterCopyRows()" style="margin-bottom: 10px;">
+                    <div id="rtb-copy-empty" class="text-secondary" style="display:none; font-size:0.85rem; margin-bottom: 8px;">متنی مطابق جستجو یافت نشد.</div>
+                    <div id="rtb-copy-list" style="max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;"></div>
+                </div>
                 <div style="display:flex; gap:8px; margin-top: 8px;">
                     <button class="btn btn-success" id="rtb-save" onclick="rtbSave(this)">Save settings</button>
                     <button class="btn btn-secondary" id="rtb-verify" onclick="rtbVerify(this)">Verify token</button>
@@ -80,6 +89,14 @@
 
 <script>
 let rtbBotId = null;
+let rtbCopyDefaults = {fa: {}, en: {}};
+let rtbCopyHideable = new Set();
+
+function rtbEscape(text) {
+    const div = document.createElement('div');
+    div.textContent = String(text ?? '');
+    return div.innerHTML;
+}
 
 async function rtbApi(url, options = {}) {
     const response = await fetch(url, {
@@ -123,6 +140,9 @@ async function rtbLoad() {
         document.getElementById('rtb-connection-mode').value = settings.connection_mode || 'proxy_first';
         document.getElementById('rtb-enabled').checked = !!settings.enabled;
         document.getElementById('rtb-test-mode').checked = !!settings.test_mode;
+        rtbCopyDefaults = data.copy_defaults && typeof data.copy_defaults === 'object' ? data.copy_defaults : {fa: {}, en: {}};
+        rtbCopyHideable = new Set(Array.isArray(data.hideable_keys) ? data.hideable_keys : []);
+        rtbRenderCopyRows(data.copy_overrides && typeof data.copy_overrides === 'object' ? data.copy_overrides : {});
         const runtime = data.runtime || {};
         document.getElementById('rtb-runtime').textContent = `Runtime: ${runtime.status || (settings.enabled ? 'stopped' : 'disabled')}`;
         const health = bot.health || {};
@@ -154,6 +174,90 @@ async function rtbCreateBot(button) {
     } finally { button.disabled = false; }
 }
 
+function rtbRenderCopyRows(overrides = {}) {
+    const list = document.getElementById('rtb-copy-list');
+    if (!list) return;
+    const search = document.getElementById('rtb-copy-search');
+    if (search) search.value = '';
+    const empty = document.getElementById('rtb-copy-empty');
+    if (empty) empty.style.display = 'none';
+    const keys = [...new Set([...Object.keys(rtbCopyDefaults.fa || {}), ...Object.keys(rtbCopyDefaults.en || {})])].sort();
+    if (!keys.length) {
+        list.innerHTML = '<div class="text-secondary" style="font-size:0.85rem;">متن‌های پیش‌فرض ربات از سرور دریافت نشد.</div>';
+        return;
+    }
+    list.innerHTML = '';
+    keys.forEach(key => {
+        const override = overrides[key] && typeof overrides[key] === 'object' ? overrides[key] : {};
+        const defaultFa = String((rtbCopyDefaults.fa || {})[key] || '');
+        const defaultEn = String((rtbCopyDefaults.en || {})[key] || '');
+        const row = document.createElement('div');
+        row.className = 'rtb-copy-row';
+        row.dataset.copyKey = key;
+        row.dataset.search = `${key} ${defaultFa} ${defaultEn}`.toLowerCase();
+        row.style.cssText = 'border:1px solid rgba(148,163,184,0.25); border-radius:10px; padding:10px 12px; display:flex; flex-direction:column; gap:8px;';
+        row.innerHTML = `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+                <code style="font-size:0.8rem; direction:ltr; unicode-bidi:embed;">${rtbEscape(key)}</code>
+                <div style="display:flex; align-items:center; gap:12px;">
+                    ${rtbCopyHideable.has(key) ? `<label style="display:inline-flex; align-items:center; gap:6px; font-size:0.82rem; margin:0;"><input type="checkbox" class="rtb-copy-hidden"${override.hidden ? ' checked' : ''}> مخفی</label>` : ''}
+                    <button type="button" class="btn btn-secondary" style="padding:2px 10px; font-size:0.78rem;" onclick="rtbResetCopyRow(this)">پیش‌فرض</button>
+                </div>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:8px;">
+                <div>
+                    <small class="text-secondary" style="display:block; white-space:pre-wrap;">${rtbEscape(defaultFa)}</small>
+                    <input type="text" class="form-input rtb-copy-fa" maxlength="500" value="${rtbEscape(String(override.fa || ''))}" placeholder="متن فارسی سفارشی (خالی = پیش‌فرض)" autocomplete="off">
+                </div>
+                <div>
+                    <small class="text-secondary" style="display:block; white-space:pre-wrap;" dir="ltr">${rtbEscape(defaultEn)}</small>
+                    <input type="text" class="form-input rtb-copy-en" maxlength="500" value="${rtbEscape(String(override.en || ''))}" placeholder="Custom English text (blank = default)" autocomplete="off" dir="ltr">
+                </div>
+            </div>`;
+        list.appendChild(row);
+    });
+}
+
+function rtbFilterCopyRows() {
+    const search = document.getElementById('rtb-copy-search');
+    const query = String(search ? search.value : '').trim().toLowerCase();
+    let visible = 0;
+    document.querySelectorAll('#rtb-copy-list .rtb-copy-row').forEach(row => {
+        const show = !query || (row.dataset.search || '').includes(query);
+        row.style.display = show ? '' : 'none';
+        if (show) visible += 1;
+    });
+    const empty = document.getElementById('rtb-copy-empty');
+    if (empty) empty.style.display = visible ? 'none' : '';
+}
+
+function rtbResetCopyRow(button) {
+    const row = button.closest('.rtb-copy-row');
+    if (!row) return;
+    row.querySelector('.rtb-copy-fa').value = '';
+    row.querySelector('.rtb-copy-en').value = '';
+    const hidden = row.querySelector('.rtb-copy-hidden');
+    if (hidden) hidden.checked = false;
+}
+
+function rtbCollectCopyOverrides() {
+    const overrides = {};
+    document.querySelectorAll('#rtb-copy-list .rtb-copy-row').forEach(row => {
+        const key = row.dataset.copyKey;
+        const fa = row.querySelector('.rtb-copy-fa').value.trim();
+        const en = row.querySelector('.rtb-copy-en').value.trim();
+        const hiddenInput = row.querySelector('.rtb-copy-hidden');
+        const hidden = hiddenInput ? hiddenInput.checked : false;
+        if (!fa && !en && !hidden) return;
+        const entry = {};
+        if (fa) entry.fa = fa;
+        if (en) entry.en = en;
+        if (hidden) entry.hidden = true;
+        overrides[key] = entry;
+    });
+    return overrides;
+}
+
 async function rtbSave(button) {
     const languages = ['fa', 'en'].filter(code => document.getElementById(`rtb-lang-${code}`).checked);
     if (!languages.length) return showToast('Enable at least one language.', 'error');
@@ -168,6 +272,7 @@ async function rtbSave(button) {
             connection_mode: document.getElementById('rtb-connection-mode').value,
             enabled: document.getElementById('rtb-enabled').checked,
             test_mode: document.getElementById('rtb-test-mode').checked,
+            copy_overrides: rtbCollectCopyOverrides(),
         })});
         showToast('Bot settings saved.', 'success');
         await rtbLoad();
