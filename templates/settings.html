@@ -26,21 +26,9 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             Backup & Restore
         </button>
-        <button class="settings-tab" onclick="switchTab('telegram_backup')">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"></path><path d="M22 2L15 22l-4-9-9-4 20-7z"></path></svg>
-            Telegram Backup
-        </button>
-        <button class="settings-tab" onclick="switchTab('telegram_bots')">
+        <button class="settings-tab" onclick="switchTab('telegram')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path></svg>
-            Telegram Bots
-        </button>
-        <button class="settings-tab" onclick="switchTab('telegram_notifications')">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-            Telegram Notify
-        </button>
-        <button class="settings-tab" onclick="switchTab('telegram_announcements'); loadTelegramAnnouncements()">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11v2a2 2 0 0 0 2 2h2l4 4V5L7 9H5a2 2 0 0 0-2 2z"></path><path d="M15 9a4 4 0 0 1 0 6"></path><path d="M18 6a8 8 0 0 1 0 12"></path></svg>
-            اطلاع‌رسانی
+            Telegram
         </button>
         <button class="settings-tab" onclick="switchTab('whatsapp')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.38 7.55L3 21l1.98-5.44A8.5 8.5 0 1 1 21 11.5z"></path></svg>
@@ -386,14 +374,40 @@
             </div>
         </div>
 
-        <div id="tab-telegram_backup" class="tab-pane">
+        <div id="tab-telegram" class="tab-pane">
+            <div class="telegram-settings-heading">
+                <div>
+                    <h2>Telegram</h2>
+                    <p class="text-secondary">Manage bots, customer messages, announcements, and backups in one place.</p>
+                </div>
+            </div>
+            <div class="telegram-subtabs" role="tablist" aria-label="Telegram settings">
+                <button class="telegram-subtab active" type="button" role="tab" aria-selected="true" aria-controls="telegram-subtab-bots" onclick="switchTelegramTab('bots', this)">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8M8 13h5"></path></svg>
+                    Bots
+                </button>
+                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-notifications" onclick="switchTelegramTab('notifications', this)">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                    Customer Notifications
+                </button>
+                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-announcements" onclick="switchTelegramTab('announcements', this)">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11v2a2 2 0 0 0 2 2h2l4 4V5L7 9H5a2 2 0 0 0-2 2z"></path><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"></path></svg>
+                    Announcements
+                </button>
+                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-backup" onclick="switchTelegramTab('backup', this)">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13"></path><path d="m22 2-7 20-4-9-9-4 20-7z"></path></svg>
+                    Backups
+                </button>
+            </div>
+
+        <div id="telegram-subtab-backup" class="telegram-subpane" role="tabpanel">
             <div class="panel-card" style="margin-bottom: 24px;">
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>Telegram Backup</h2>
                         <p class="text-secondary">Send X-UI panel backups to Telegram on a schedule.</p>
                     </div>
-                    <div style="display: flex; gap: 10px; align-items: center;">
+                    <div class="telegram-backup-header-actions">
                         <button class="btn btn-secondary" onclick="testTelegramBackupSettings(this)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>
                             Test Connection
@@ -529,7 +543,7 @@
             </div>
         </div>
 
-        <div id="tab-telegram_bots" class="tab-pane">
+        <div id="telegram-subtab-bots" class="telegram-subpane active" role="tabpanel">
             <section class="panel-card tgb-section" id="tgb-bots-card">
                 <div class="panel-card-header">
                     <div class="header-content"><h2>Bots</h2><p>Select a bot to edit its settings below, or create a bot for a reseller.</p></div>
@@ -900,7 +914,7 @@
             </div>
         </div>
 
-        <div id="tab-telegram_notifications" class="tab-pane">
+        <div id="telegram-subtab-notifications" class="telegram-subpane" role="tabpanel">
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
@@ -933,7 +947,7 @@
 
                 <div class="form-group">
                     <label>Reminder thresholds</label>
-                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
+                    <div class="telegram-notification-thresholds">
                         <div>
                             <small class="text-secondary">Days before expiry</small>
                             <input type="number" id="tg-depletion-expiry-days" class="form-control" min="0" max="60" value="{{ tg_depletion_expiry_days }}">
@@ -969,36 +983,37 @@
             </div>
         </div>
 
-        <div id="tab-telegram_announcements" class="tab-pane">
+        <div id="telegram-subtab-announcements" class="telegram-subpane" role="tabpanel">
             <div class="panel-card">
                 <div class="panel-card-header"><div class="header-content">
-                    <h2>اطلاع‌رسانی تلگرام</h2>
-                    <p class="text-secondary">پیام همگانی یا هدفمند برای کاربرانی که بات را استارت کرده‌اند؛ با صف پایدار، توقف و گزارش ارسال.</p>
+                    <h2>Telegram Announcements</h2>
+                    <p class="text-secondary">Send broadcast or targeted messages to users who have started a bot, with a durable queue and delivery reporting.</p>
                 </div></div>
-                <div class="form-group"><label>عنوان داخلی</label><input id="tga-title" class="form-input" maxlength="160" placeholder="مثلاً تغییر سرور ایران"></div>
-                <div class="form-group"><label>متن پیام</label><textarea id="tga-message" class="form-input" rows="6" maxlength="4096" placeholder="متن قابل ارسال در تلگرام"></textarea></div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-                    <div class="form-group"><label>دامنه بات‌ها</label><select id="tga-bot-scope" class="form-select">
-                        <option value="all">بات مرکزی و همه ریسلرها</option><option value="central">فقط بات مرکزی</option>
-                        <option value="reseller">فقط بات‌های ریسلر</option><option value="selected">بات‌های انتخابی</option>
+                <div class="form-group"><label>Internal title</label><input id="tga-title" class="form-input" maxlength="160" placeholder="For example: Iran server maintenance"></div>
+                <div class="form-group"><label>Message</label><textarea id="tga-message" class="form-input" rows="6" maxlength="4096" placeholder="Message to send through Telegram"></textarea></div>
+                <div class="telegram-announcement-grid">
+                    <div class="form-group"><label>Bot audience</label><select id="tga-bot-scope" class="form-select">
+                        <option value="all">Central bot and all reseller bots</option><option value="central">Central bot only</option>
+                        <option value="reseller">Reseller bots only</option><option value="selected">Selected bots</option>
                     </select></div>
-                    <div class="form-group"><label>شناسه بات‌های انتخابی</label><input id="tga-bot-ids" class="form-input" placeholder="1, 4, 8"></div>
-                    <div class="form-group"><label>شناسه سرورهای انتخابی</label><input id="tga-server-ids" class="form-input" placeholder="خالی = همه سرورها"></div>
-                    <div class="form-group"><label>ترکیب شرط‌های زمانی</label><select id="tga-event-match" class="form-select"><option value="any">حداقل یکی</option><option value="all">همه شرط‌ها</option></select></div>
+                    <div class="form-group"><label>Selected bot IDs</label><input id="tga-bot-ids" class="form-input" placeholder="1, 4, 8"></div>
+                    <div class="form-group"><label>Selected server IDs</label><input id="tga-server-ids" class="form-input" placeholder="Leave blank for all servers"></div>
+                    <div class="form-group"><label>Date filter matching</label><select id="tga-event-match" class="form-select"><option value="any">Match any range</option><option value="all">Match all ranges</option></select></div>
                 </div>
-                <label class="checkbox-label" onclick="event.stopPropagation()"><input id="tga-linked-only" type="checkbox"><span class="checkmark"></span><span>فقط کاربرانی که اکانت را لینک کرده‌اند</span></label>
-                <div style="margin-top:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
-                    <div class="form-group"><label>بازه استارت بات</label><div style="display:flex;gap:8px"><input id="tga-started-from" type="datetime-local" class="form-input"><input id="tga-started-to" type="datetime-local" class="form-input"></div></div>
-                    <div class="form-group"><label>بازه خرید موفق</label><div style="display:flex;gap:8px"><input id="tga-purchased-from" type="datetime-local" class="form-input"><input id="tga-purchased-to" type="datetime-local" class="form-input"></div></div>
-                    <div class="form-group"><label>بازه تمدید موفق</label><div style="display:flex;gap:8px"><input id="tga-renewed-from" type="datetime-local" class="form-input"><input id="tga-renewed-to" type="datetime-local" class="form-input"></div></div>
+                <label class="checkbox-label" onclick="event.stopPropagation()"><input id="tga-linked-only" type="checkbox"><span class="checkmark"></span><span>Only users with a linked account</span></label>
+                <div class="telegram-announcement-dates">
+                    <div class="form-group"><label>Bot started between</label><div class="telegram-date-range"><input id="tga-started-from" type="datetime-local" class="form-input" aria-label="Started from"><input id="tga-started-to" type="datetime-local" class="form-input" aria-label="Started to"></div></div>
+                    <div class="form-group"><label>Successful purchase between</label><div class="telegram-date-range"><input id="tga-purchased-from" type="datetime-local" class="form-input" aria-label="Purchased from"><input id="tga-purchased-to" type="datetime-local" class="form-input" aria-label="Purchased to"></div></div>
+                    <div class="form-group"><label>Successful renewal between</label><div class="telegram-date-range"><input id="tga-renewed-from" type="datetime-local" class="form-input" aria-label="Renewed from"><input id="tga-renewed-to" type="datetime-local" class="form-input" aria-label="Renewed to"></div></div>
                 </div>
-                <div style="display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:16px">
+                <div class="telegram-announcement-actions">
                     <span id="tga-preview-result" class="text-secondary"></span>
-                    <button class="btn btn-secondary" type="button" onclick="previewTelegramAnnouncement()">محاسبه گیرندگان</button>
-                    <button class="btn btn-primary" type="button" onclick="createTelegramAnnouncement()">ساخت پیش‌نویس</button>
+                    <button class="btn btn-secondary" type="button" onclick="previewTelegramAnnouncement()">Preview recipients</button>
+                    <button class="btn btn-primary" type="button" onclick="createTelegramAnnouncement()">Create draft</button>
                 </div>
             </div>
-            <div class="panel-card" style="margin-top:16px"><div class="panel-card-header"><div class="header-content"><h2>کمپین‌ها</h2><p class="text-secondary">وضعیت صف، موفق، ناموفق و کاربران مسدودکننده بات.</p></div><button class="btn btn-secondary" onclick="loadTelegramAnnouncements()">بروزرسانی</button></div><div id="tga-list"></div></div>
+            <div class="panel-card" style="margin-top:16px"><div class="panel-card-header"><div class="header-content"><h2>Campaigns</h2><p class="text-secondary">Monitor queued, delivered, failed, and blocked messages.</p></div><button class="btn btn-secondary" onclick="loadTelegramAnnouncements()">Refresh</button></div><div id="tga-list"></div></div>
+        </div>
         </div>
 
         <div id="tab-whatsapp" class="tab-pane">
@@ -2255,6 +2270,163 @@
         display: block;
     }
 
+    .telegram-settings-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+    }
+
+    .telegram-settings-heading h2 {
+        margin: 0 0 4px;
+        font-size: 1.5rem;
+    }
+
+    .telegram-settings-heading p {
+        margin: 0;
+        font-size: 0.9rem;
+    }
+
+    .telegram-subtabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 20px;
+        padding: 6px;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: thin;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+    }
+
+    .telegram-subtab {
+        display: inline-flex;
+        flex: 1 0 auto;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 40px;
+        padding: 9px 14px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text-secondary);
+        font: inherit;
+        font-size: 0.86rem;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: background 0.2s, color 0.2s;
+    }
+
+    .telegram-subtab:hover {
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
+    }
+
+    .telegram-subtab.active {
+        background: rgba(99, 102, 241, 0.15);
+        color: var(--primary);
+        font-weight: 500;
+    }
+
+    .telegram-subpane { display: none; min-width: 0; }
+    .telegram-subpane.active { display: block; }
+
+    .telegram-announcement-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+    }
+
+    .telegram-announcement-dates {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 12px;
+        margin-top: 16px;
+    }
+
+    .telegram-date-range {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 8px;
+    }
+
+    .telegram-announcement-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+    }
+
+    .telegram-backup-header-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .telegram-notification-thresholds {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+    .telegram-campaign-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .telegram-campaign-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    @media (max-width: 640px) {
+        .telegram-settings-heading { margin-bottom: 12px; }
+        .telegram-subtabs {
+            margin-inline: -4px;
+            padding: 5px;
+            scroll-snap-type: inline proximity;
+        }
+        .telegram-subtab {
+            flex: 0 0 auto;
+            min-height: 42px;
+            scroll-snap-align: start;
+        }
+        .telegram-date-range { grid-template-columns: 1fr; }
+        .telegram-announcement-actions {
+            align-items: stretch;
+            flex-direction: column;
+        }
+        .telegram-announcement-actions .btn { width: 100%; justify-content: center; }
+        .telegram-backup-header-actions { width: 100%; }
+        .telegram-backup-header-actions .btn { flex: 1; justify-content: center; }
+        .telegram-notification-thresholds { grid-template-columns: 1fr; }
+        .telegram-campaign-row { align-items: stretch; flex-direction: column; }
+        .telegram-campaign-actions .btn { flex: 1; justify-content: center; }
+        #telegram-subtab-notifications .panel-card-header,
+        #telegram-subtab-backup .panel-card-header,
+        #telegram-subtab-announcements .panel-card-header {
+            align-items: stretch;
+            flex-direction: column;
+            gap: 12px;
+        }
+        #telegram-subtab-notifications .panel-card-header > .btn,
+        #telegram-subtab-announcements .panel-card-header > .btn {
+            width: 100%;
+            justify-content: center;
+        }
+    }
+
     /* Header Styles */
     .panel-card-header {
         display: flex;
@@ -3381,8 +3553,7 @@
             else if (onclick.includes("'renew_template'")) { loadRenewTemplates(); loadAccountMessageTemplates(); }
             else if (onclick.includes("'account_message'")) loadAccountMessageTemplates();
             else if (onclick.includes("'backups'")) { loadBackups(); loadBackupSettings(); }
-            else if (onclick.includes("'telegram_backup'")) loadTelegramBackupSettings();
-            else if (onclick.includes("'telegram_bots'")) loadTelegramBotSettings();
+            else if (onclick.includes("'telegram'")) switchTelegramTab(telegramActiveSubtab);
             else if (onclick.includes("'whatsapp'")) loadWhatsAppSettings();
             else if (onclick.includes("'ssl'")) loadSSLSettings();
             else if (onclick.includes("'session'")) loadSessionSettings();
@@ -3422,6 +3593,26 @@
         syncThemeToggleUI();
     }
 
+    let telegramActiveSubtab = 'bots';
+
+    function switchTelegramTab(tabName, trigger) {
+        const pane = document.getElementById(`telegram-subtab-${tabName}`);
+        if (!pane) return;
+
+        telegramActiveSubtab = tabName;
+        document.querySelectorAll('.telegram-subtab').forEach(button => {
+            const active = button === trigger || button.getAttribute('aria-controls') === pane.id;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll('.telegram-subpane').forEach(item => item.classList.toggle('active', item === pane));
+
+        if (tabName === 'bots') loadTelegramBotSettings();
+        else if (tabName === 'notifications') { /* Values are rendered by the server. */ }
+        else if (tabName === 'announcements') loadTelegramAnnouncements();
+        else if (tabName === 'backup') loadTelegramBackupSettings();
+    }
+
     function switchTab(tabName) {
         document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
@@ -3436,10 +3627,8 @@
         } else if (tabName === 'backups') {
             loadBackups();
             loadBackupSettings();
-        } else if (tabName === 'telegram_backup') {
-            loadTelegramBackupSettings();
-        } else if (tabName === 'telegram_bots') {
-            loadTelegramBotSettings();
+        } else if (tabName === 'telegram') {
+            switchTelegramTab(telegramActiveSubtab);
         } else if (tabName === 'whatsapp') {
             loadWhatsAppSettings();
         } else if (tabName === 'ssl') {
@@ -8496,32 +8685,32 @@ function tgaFilters() {
     };
 }
 async function previewTelegramAnnouncement() {
-    const out = document.getElementById('tga-preview-result'); out.textContent = 'در حال محاسبه…';
+    const out = document.getElementById('tga-preview-result'); out.textContent = 'Calculating…';
     const res = await fetch('/api/telegram-announcements/preview', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filters:tgaFilters()})});
-    const data = await res.json(); out.textContent = data.success ? `${Number(data.count).toLocaleString('fa-IR')} گیرنده` : (data.error || 'خطا');
+    const data = await res.json(); out.textContent = data.success ? `${Number(data.count).toLocaleString()} recipients` : (data.error || 'Unable to preview recipients.');
 }
 async function createTelegramAnnouncement() {
     const payload = {title:document.getElementById('tga-title').value.trim(), message_text:document.getElementById('tga-message').value.trim(), filters:tgaFilters()};
     const res = await fetch('/api/telegram-announcements', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     const data = await res.json();
-    if (!data.success) return showToast(data.error || 'ساخت اطلاع‌رسانی ناموفق بود', 'error');
-    showToast('پیش‌نویس ساخته شد؛ برای شروع ارسال دکمه ارسال را بزنید.', 'success'); loadTelegramAnnouncements();
+    if (!data.success) return showToast(data.error || 'Could not create the announcement.', 'error');
+    showToast('Draft created. Review it below before sending.', 'success'); loadTelegramAnnouncements();
 }
 async function mutateTelegramAnnouncement(id, action) {
-    if (action === 'send' && !confirm('گیرندگان اکنون محاسبه و پیام در صف ارسال قرار بگیرد؟')) return;
+    if (action === 'send' && !confirm('Calculate recipients now and queue this message for delivery?')) return;
     const res = await fetch(`/api/telegram-announcements/${id}/${action}`, {method:'POST'}); const data = await res.json();
-    if (!data.success) showToast(data.error || 'عملیات ناموفق بود', 'error'); else loadTelegramAnnouncements();
+    if (!data.success) showToast(data.error || 'The requested action failed.', 'error'); else loadTelegramAnnouncements();
 }
 async function loadTelegramAnnouncements() {
     const list = document.getElementById('tga-list'); if (!list) return;
     const res = await fetch('/api/telegram-announcements'); const data = await res.json();
-    if (!data.success) { list.textContent = data.error || 'خطا'; return; }
-    if (!data.announcements.length) { list.innerHTML = '<div class="text-secondary">هنوز اطلاع‌رسانی ساخته نشده است.</div>'; return; }
+    if (!data.success) { list.textContent = data.error || 'Unable to load campaigns.'; return; }
+    if (!data.announcements.length) { list.innerHTML = '<div class="text-secondary">No announcement campaigns yet.</div>'; return; }
     list.innerHTML = data.announcements.map(a => {
-        const actions = a.status === 'draft' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'send')">ارسال</button>`
-            : ['queued','sending'].includes(a.status) ? `<button class="btn btn-secondary" onclick="mutateTelegramAnnouncement(${a.id},'pause')">توقف</button>`
-            : a.status === 'paused' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'resume')">ادامه</button>` : '';
-        return `<div style="padding:14px 0;border-bottom:1px solid var(--border-color);display:flex;gap:12px;justify-content:space-between;align-items:center"><div><strong>${escapeHtml(a.title)}</strong><div class="text-secondary" style="margin-top:5px">${escapeHtml(a.status)} · کل ${a.total_count} · موفق ${a.sent_count} · ناموفق ${a.failed_count} · بلاک ${a.blocked_count}</div></div><div style="display:flex;gap:8px">${actions}${!['completed','cancelled'].includes(a.status) ? `<button class="btn btn-danger" onclick="mutateTelegramAnnouncement(${a.id},'cancel')">لغو</button>` : ''}</div></div>`;
+        const actions = a.status === 'draft' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'send')">Send</button>`
+            : ['queued','sending'].includes(a.status) ? `<button class="btn btn-secondary" onclick="mutateTelegramAnnouncement(${a.id},'pause')">Pause</button>`
+            : a.status === 'paused' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'resume')">Resume</button>` : '';
+        return `<div class="telegram-campaign-row"><div><strong>${escapeHtml(a.title)}</strong><div class="text-secondary" style="margin-top:5px">${escapeHtml(a.status)} · Total ${a.total_count} · Sent ${a.sent_count} · Failed ${a.failed_count} · Blocked ${a.blocked_count}</div></div><div class="telegram-campaign-actions">${actions}${!['completed','cancelled'].includes(a.status) ? `<button class="btn btn-danger" onclick="mutateTelegramAnnouncement(${a.id},'cancel')">Cancel</button>` : ''}</div></div>`;
     }).join('');
 }
 </script>
