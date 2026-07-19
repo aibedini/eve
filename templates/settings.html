@@ -8813,24 +8813,46 @@ async function createTelegramAnnouncement() {
     const res = await fetch('/api/telegram-announcements', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     const data = await res.json();
     if (!data.success) return showToast(data.error || 'Could not create the announcement.', 'error');
-    showToast('Draft created. Review it below before sending.', 'success'); loadTelegramAnnouncements();
+    await loadTelegramAnnouncements(data.announcement);
+    const createdRow = document.getElementById(`tga-campaign-${data.announcement.id}`);
+    if (createdRow) createdRow.scrollIntoView({behavior:'smooth', block:'nearest'});
+    showToast('Draft created and added to Campaigns below.', 'success');
 }
 async function mutateTelegramAnnouncement(id, action) {
     if (action === 'send' && !confirm('Calculate recipients now and queue this message for delivery?')) return;
     const res = await fetch(`/api/telegram-announcements/${id}/${action}`, {method:'POST'}); const data = await res.json();
     if (!data.success) showToast(data.error || 'The requested action failed.', 'error'); else loadTelegramAnnouncements();
 }
-async function loadTelegramAnnouncements() {
+let telegramAnnouncementsLoadSerial = 0;
+async function loadTelegramAnnouncements(createdAnnouncement = null) {
     const list = document.getElementById('tga-list'); if (!list) return;
-    const res = await fetch('/api/telegram-announcements'); const data = await res.json();
-    if (!data.success) { list.textContent = data.error || 'Unable to load campaigns.'; return; }
-    if (!data.announcements.length) { list.innerHTML = '<div class="text-secondary">No announcement campaigns yet.</div>'; return; }
-    list.innerHTML = data.announcements.map(a => {
+    const loadSerial = ++telegramAnnouncementsLoadSerial;
+    try {
+        const res = await fetch(`/api/telegram-announcements?_=${Date.now()}`, {
+            cache:'no-store', headers:{'Cache-Control':'no-cache'}
+        });
+        const data = await res.json();
+        if (loadSerial !== telegramAnnouncementsLoadSerial) return;
+        if (!data.success) { list.textContent = data.error || 'Unable to load campaigns.'; return; }
+        const announcements = Array.isArray(data.announcements) ? [...data.announcements] : [];
+        if (createdAnnouncement && !announcements.some(item => item.id === createdAnnouncement.id)) {
+            announcements.unshift(createdAnnouncement);
+        }
+        if (!announcements.length) { list.innerHTML = '<div class="text-secondary">No announcement campaigns yet.</div>'; return; }
+        list.innerHTML = announcements.map(a => {
         const actions = a.status === 'draft' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'send')">Send</button>`
             : ['queued','sending'].includes(a.status) ? `<button class="btn btn-secondary" onclick="mutateTelegramAnnouncement(${a.id},'pause')">Pause</button>`
             : a.status === 'paused' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'resume')">Resume</button>` : '';
-        return `<div class="telegram-campaign-row"><div><strong>${escapeHtml(a.title)}</strong><div class="text-secondary" style="margin-top:5px">${escapeHtml(a.status)} · Total ${a.total_count} · Sent ${a.sent_count} · Failed ${a.failed_count} · Blocked ${a.blocked_count}</div></div><div class="telegram-campaign-actions">${actions}${!['completed','cancelled'].includes(a.status) ? `<button class="btn btn-danger" onclick="mutateTelegramAnnouncement(${a.id},'cancel')">Cancel</button>` : ''}</div></div>`;
-    }).join('');
+            return `<div id="tga-campaign-${a.id}" class="telegram-campaign-row"><div><strong>${escapeHtml(a.title)}</strong><div class="text-secondary" style="margin-top:5px">${escapeHtml(a.status)} · Total ${a.total_count} · Sent ${a.sent_count} · Failed ${a.failed_count} · Blocked ${a.blocked_count}</div></div><div class="telegram-campaign-actions">${actions}${!['completed','cancelled'].includes(a.status) ? `<button class="btn btn-danger" onclick="mutateTelegramAnnouncement(${a.id},'cancel')">Cancel</button>` : ''}</div></div>`;
+        }).join('');
+    } catch (error) {
+        if (loadSerial !== telegramAnnouncementsLoadSerial) return;
+        if (createdAnnouncement) {
+            list.innerHTML = `<div id="tga-campaign-${createdAnnouncement.id}" class="telegram-campaign-row"><div><strong>${escapeHtml(createdAnnouncement.title)}</strong><div class="text-secondary" style="margin-top:5px">draft · Refresh to load delivery totals.</div></div></div>`;
+        } else {
+            list.textContent = 'Unable to load campaigns.';
+        }
+    }
 }
 </script>
 {% endblock %}

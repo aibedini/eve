@@ -85,6 +85,27 @@ class TelegramAnnouncementTests(unittest.TestCase):
         self.assertEqual(1, row.sent_count)
         self.assertEqual([(99101, 'Hello')], fake.sent)
 
+    def test_created_draft_is_immediately_listed_without_cache(self):
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = self.admin.id
+
+        created_response = client.post('/api/telegram-announcements', json={
+            'title': 'Immediate draft', 'message_text': 'Review me',
+            'filters': {'bot_scope': 'central'},
+        })
+        created = created_response.get_json()
+        self.assertEqual(201, created_response.status_code)
+        self.assertTrue(created['success'])
+
+        listed_response = client.get('/api/telegram-announcements')
+        listed = listed_response.get_json()
+        self.assertTrue(listed['success'])
+        self.assertEqual(created['announcement']['id'], listed['announcements'][0]['id'])
+        self.assertIn('no-store', created_response.headers.get('Cache-Control', ''))
+        self.assertIn('no-store', listed_response.headers.get('Cache-Control', ''))
+        self.assertEqual('no-store', listed_response.headers.get('Surrogate-Control'))
+
 
 if __name__ == '__main__':
     unittest.main()

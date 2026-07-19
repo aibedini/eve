@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.8"
+APP_VERSION = "2.5.9"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2755,7 +2755,9 @@ def add_security_headers(response):
     # browser, reverse proxy, or CDN. In particular, Telegram tester/runtime
     # rows change immediately after mutations and a stale GET is misleading.
     try:
-        if request.path == '/settings' or request.path.startswith('/api/settings/'):
+        if (request.path == '/settings'
+                or request.path.startswith('/api/settings/')
+                or request.path.startswith('/api/telegram-announcements')):
             response.headers['Cache-Control'] = 'private, no-store, no-cache, must-revalidate, max-age=0'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
