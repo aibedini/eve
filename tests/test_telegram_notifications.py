@@ -233,17 +233,51 @@ class TelegramNotificationTests(unittest.TestCase):
         self.assertEqual(cfg['expiry_days'], 3)
         self.assertEqual(cfg['volume_gb'], 2.0)
         self.assertEqual(cfg['cooldown_days'], 7)
+        self.assertTrue(cfg['trigger_renew_success'])
+        self.assertIn('{account_name}', cfg['tpl_renew'])
         self.assertIn('{account_name}', cfg['tpl_near_expiry'])
         db.session.add_all([
             SystemConfig(key='tg_depletion_enabled', value='true'),
+            SystemConfig(key='tg_trigger_renew_success', value='false'),
             SystemConfig(key='tg_depletion_expiry_days', value='5'),
+            SystemConfig(key='tg_tpl_renew', value='renewed {date}'),
             SystemConfig(key='tg_tpl_low_volume', value='custom {remaining_volume}'),
         ])
         db.session.flush()
         cfg = _get_telegram_depletion_settings()
         self.assertTrue(cfg['enabled'])
+        self.assertFalse(cfg['trigger_renew_success'])
         self.assertEqual(cfg['expiry_days'], 5)
+        self.assertEqual(cfg['tpl_renew'], 'renewed {date}')
         self.assertEqual(cfg['tpl_low_volume'], 'custom {remaining_volume}')
+
+    def test_system_config_api_saves_telegram_notification_settings(self):
+        admin = self._admin('super', role='superadmin', is_superadmin=True)
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess['admin_id'] = admin.id
+                sess['admin_username'] = admin.username
+                sess['role'] = admin.role
+                sess['is_superadmin'] = True
+            response = client.post('/api/system-config', json={
+                'tg_trigger_renew_success': False,
+                'tg_depletion_enabled': True,
+                'tg_depletion_expiry_days': 9,
+                'tg_depletion_volume_gb': 1.5,
+                'tg_depletion_cooldown_days': 11,
+                'tg_tpl_renew': 'renew {account_name}',
+                'tg_tpl_near_expiry': 'soon {remaining_time}',
+                'tg_tpl_low_volume': 'low {remaining_volume}',
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['success'])
+        cfg = _get_telegram_depletion_settings()
+        self.assertFalse(cfg['trigger_renew_success'])
+        self.assertTrue(cfg['enabled'])
+        self.assertEqual(cfg['expiry_days'], 9)
+        self.assertEqual(cfg['volume_gb'], 1.5)
+        self.assertEqual(cfg['cooldown_days'], 11)
+        self.assertEqual(cfg['tpl_renew'], 'renew {account_name}')
 
 
 if __name__ == '__main__':

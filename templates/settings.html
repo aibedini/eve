@@ -34,6 +34,10 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path></svg>
             Telegram Bots
         </button>
+        <button class="settings-tab" onclick="switchTab('telegram_notifications')">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+            Telegram Notify
+        </button>
         <button class="settings-tab" onclick="switchTab('whatsapp')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.38 7.55L3 21l1.98-5.44A8.5 8.5 0 1 1 21 11.5z"></path></svg>
             WhatsApp
@@ -888,6 +892,75 @@
                 <div class="tgb-footer-actions">
                     <div><button class="btn btn-secondary" type="button" onclick="testTelegramBotRoute('direct', this)">Test direct</button><button class="btn btn-secondary" type="button" onclick="testTelegramBotRoute('configured', this)">Test configured route</button></div>
                     <button id="tgb-save" class="btn btn-primary" type="button" onclick="saveTelegramBotSettings(this)">Save bot settings</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="tab-telegram_notifications" class="tab-pane">
+            <div class="panel-card">
+                <div class="panel-card-header">
+                    <div class="header-content">
+                        <h2>Telegram Customer Notifications</h2>
+                        <p class="text-secondary">Message customers who have started the bot and linked their account.</p>
+                    </div>
+                    <button class="btn btn-primary" type="button" onclick="saveTelegramNotificationSettings()">Save Telegram Notifications</button>
+                </div>
+
+                <div class="form-group" style="background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.3); border-radius: 10px; padding: 12px;">
+                    <strong>Only linked bot users are messaged.</strong>
+                    <div style="margin-top: 4px; font-size: 0.85rem;">The panel resolves each account through Service Ownership, finds the customer's Telegram chat, and sends via the reseller bot when one owns the account, otherwise the central bot.</div>
+                </div>
+
+                <div class="form-group">
+                    <label>Triggers</label>
+                    <div style="display:grid; grid-template-columns:1fr; gap:8px;">
+                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <input type="checkbox" id="tg-trigger-renew" {% if tg_trigger_renew_success %}checked{% endif %}>
+                            <span class="checkmark"></span>
+                            <span>After successful renewal</span>
+                        </label>
+                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <input type="checkbox" id="tg-depletion-enabled" {% if tg_depletion_enabled %}checked{% endif %}>
+                            <span class="checkmark"></span>
+                            <span>Background near-expiry and low-volume reminders</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Reminder thresholds</label>
+                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
+                        <div>
+                            <small class="text-secondary">Days before expiry</small>
+                            <input type="number" id="tg-depletion-expiry-days" class="form-control" min="0" max="60" value="{{ tg_depletion_expiry_days }}">
+                        </div>
+                        <div>
+                            <small class="text-secondary">Remaining volume (GB) <=</small>
+                            <input type="number" id="tg-depletion-volume-gb" class="form-control" min="0" max="1000" step="0.1" value="{{ tg_depletion_volume_gb }}">
+                        </div>
+                        <div>
+                            <small class="text-secondary">Cooldown (days)</small>
+                            <input type="number" id="tg-depletion-cooldown-days" class="form-control" min="1" max="120" value="{{ tg_depletion_cooldown_days }}">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Renewal message</label>
+                    <textarea id="tg-tpl-renew" class="form-input" rows="3">{{ tg_tpl_renew }}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Near-expiry message</label>
+                    <textarea id="tg-tpl-near-expiry" class="form-input" rows="3">{{ tg_tpl_near_expiry }}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Low-volume message</label>
+                    <textarea id="tg-tpl-low-volume" class="form-input" rows="3">{{ tg_tpl_low_volume }}</textarea>
+                    <small class="text-secondary">Supported placeholders include <code>{account_name}</code>, <code>{remaining_time}</code>, <code>{remaining_volume}</code>, <code>{days_left}</code>, <code>{date}</code>, and <code>{dashboard_link}</code>.</small>
+                </div>
+
+                <div style="display:flex; justify-content:flex-end; margin-top:20px;">
+                    <button class="btn btn-primary" type="button" onclick="saveTelegramNotificationSettings()">Save Telegram Notifications</button>
                 </div>
             </div>
         </div>
@@ -4864,6 +4937,31 @@
         if (isIran) {
             const enabled = document.getElementById('wa-enabled');
             if (enabled) enabled.checked = false;
+        }
+    }
+
+    async function saveTelegramNotificationSettings() {
+        const payload = {
+            tg_trigger_renew_success: !!(document.getElementById('tg-trigger-renew') || {}).checked,
+            tg_depletion_enabled: !!(document.getElementById('tg-depletion-enabled') || {}).checked,
+            tg_depletion_expiry_days: Number((document.getElementById('tg-depletion-expiry-days') || {}).value || 3),
+            tg_depletion_volume_gb: Number((document.getElementById('tg-depletion-volume-gb') || {}).value || 2),
+            tg_depletion_cooldown_days: Number((document.getElementById('tg-depletion-cooldown-days') || {}).value || 7),
+            tg_tpl_renew: (document.getElementById('tg-tpl-renew') || {}).value || '',
+            tg_tpl_near_expiry: (document.getElementById('tg-tpl-near-expiry') || {}).value || '',
+            tg_tpl_low_volume: (document.getElementById('tg-tpl-low-volume') || {}).value || '',
+        };
+        try {
+            const res = await fetch('/api/system-config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (data && data.success) showToast('Telegram notification settings saved');
+            else showToast((data && data.error) ? data.error : 'Error saving settings', 'error');
+        } catch (e) {
+            showToast('Network error', 'error');
         }
     }
 

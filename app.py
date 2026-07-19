@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.4"
+APP_VERSION = "2.5.5"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -5518,15 +5518,21 @@ def whatsapp_bot_worker():
 # bot (reseller-owned bot when the account belongs to a reseller, else central).
 # ─────────────────────────────────────────────────────────────────────────────
 TG_DEPLETION_ENABLED_KEY = 'tg_depletion_enabled'
+TG_TRIGGER_RENEW_KEY = 'tg_trigger_renew_success'
 TG_DEPLETION_EXPIRY_DAYS_KEY = 'tg_depletion_expiry_days'
 TG_DEPLETION_VOLUME_GB_KEY = 'tg_depletion_volume_gb'
 TG_DEPLETION_COOLDOWN_DAYS_KEY = 'tg_depletion_cooldown_days'
+TG_TPL_RENEW_KEY = 'tg_tpl_renew'
 TG_TPL_NEAR_EXPIRY_KEY = 'tg_tpl_near_expiry'
 TG_TPL_LOW_VOLUME_KEY = 'tg_tpl_low_volume'
 
 DEFAULT_TG_TPL_NEAR_EXPIRY = (
     '⏳ سرویس «{account_name}» {remaining_time} دیگر منقضی می‌شود.\n'
     '{if_dashboard_link}برای تمدید: {dashboard_link}{/if_dashboard_link}')
+DEFAULT_TG_TPL_RENEW = (
+    'Service "{account_name}" was renewed successfully.\n'
+    'New expiry: {date}\n'
+    '{if_dashboard_link}{dashboard_link}{/if_dashboard_link}')
 DEFAULT_TG_TPL_LOW_VOLUME = (
     '📉 حجم سرویس «{account_name}» رو به اتمام است (باقی‌مانده: {remaining_volume}).\n'
     '{if_dashboard_link}برای تمدید: {dashboard_link}{/if_dashboard_link}')
@@ -5534,9 +5540,9 @@ DEFAULT_TG_TPL_LOW_VOLUME = (
 
 def _get_telegram_depletion_settings() -> dict:
     keys = [
-        TG_DEPLETION_ENABLED_KEY, TG_DEPLETION_EXPIRY_DAYS_KEY,
+        TG_DEPLETION_ENABLED_KEY, TG_TRIGGER_RENEW_KEY, TG_DEPLETION_EXPIRY_DAYS_KEY,
         TG_DEPLETION_VOLUME_GB_KEY, TG_DEPLETION_COOLDOWN_DAYS_KEY,
-        TG_TPL_NEAR_EXPIRY_KEY, TG_TPL_LOW_VOLUME_KEY,
+        TG_TPL_RENEW_KEY, TG_TPL_NEAR_EXPIRY_KEY, TG_TPL_LOW_VOLUME_KEY,
     ]
     c = _get_system_configs_batch(keys)
     wa = _get_whatsapp_runtime_settings()
@@ -5557,6 +5563,7 @@ def _get_telegram_depletion_settings() -> dict:
         volume_gb = float(wa.get('depletion_volume_gb') or 2.0)
     return {
         'enabled': _bool(TG_DEPLETION_ENABLED_KEY, False),
+        'trigger_renew_success': _bool(TG_TRIGGER_RENEW_KEY, True),
         # Thresholds fall back to the WhatsApp/SMS depletion thresholds so one
         # operator-tuned window drives every notification channel.
         'expiry_days': _int(TG_DEPLETION_EXPIRY_DAYS_KEY,
@@ -5564,6 +5571,7 @@ def _get_telegram_depletion_settings() -> dict:
         'volume_gb': max(0.0, volume_gb),
         'cooldown_days': _int(TG_DEPLETION_COOLDOWN_DAYS_KEY,
                               int(wa.get('depletion_cooldown_days') or 7), lo=1, hi=120),
+        'tpl_renew': _txt(TG_TPL_RENEW_KEY, '').strip() or DEFAULT_TG_TPL_RENEW,
         'tpl_near_expiry': _txt(TG_TPL_NEAR_EXPIRY_KEY, '').strip() or DEFAULT_TG_TPL_NEAR_EXPIRY,
         'tpl_low_volume': _txt(TG_TPL_LOW_VOLUME_KEY, '').strip() or DEFAULT_TG_TPL_LOW_VOLUME,
     }
@@ -15791,6 +15799,7 @@ def settings_page():
         return redirect(url_for('dashboard'))
     whatsapp_cfg = _get_whatsapp_runtime_settings()
     sms_cfg = _get_sms_runtime_settings()
+    telegram_notify_cfg = _get_telegram_depletion_settings()
     return render_template('settings.html',
                          current_user=user,
                          is_superadmin=user.is_superadmin,
@@ -15827,6 +15836,14 @@ def settings_page():
                          sms_trigger_royalty=sms_cfg.get('trigger_royalty', False),
                          sms_royalty_days=sms_cfg.get('royalty_days', 3),
                          sms_royalty_cooldown_days=sms_cfg.get('royalty_cooldown_days', 30),
+                         tg_depletion_enabled=telegram_notify_cfg.get('enabled', False),
+                         tg_trigger_renew_success=telegram_notify_cfg.get('trigger_renew_success', True),
+                         tg_depletion_expiry_days=telegram_notify_cfg.get('expiry_days', 3),
+                         tg_depletion_volume_gb=telegram_notify_cfg.get('volume_gb', 2.0),
+                         tg_depletion_cooldown_days=telegram_notify_cfg.get('cooldown_days', 7),
+                         tg_tpl_renew=telegram_notify_cfg.get('tpl_renew', DEFAULT_TG_TPL_RENEW),
+                         tg_tpl_near_expiry=telegram_notify_cfg.get('tpl_near_expiry', DEFAULT_TG_TPL_NEAR_EXPIRY),
+                         tg_tpl_low_volume=telegram_notify_cfg.get('tpl_low_volume', DEFAULT_TG_TPL_LOW_VOLUME),
                          whatsapp_deployment_region=whatsapp_cfg.get('deployment_region', 'outside'),
                          whatsapp_enabled=whatsapp_cfg.get('enabled_requested', False),
                          whatsapp_provider=whatsapp_cfg.get('provider', 'baileys'),
@@ -18295,9 +18312,15 @@ def renew_client(server_id, inbound_id, email):
                 # Telegram confirmation for bot-linked customers — reseller-owned
                 # accounts are messaged through the reseller's own bot.
                 try:
+                    telegram_runtime = _get_telegram_depletion_settings()
                     _tg_bot, _tg_own = _notification_bot_for_account(server.id, email)
-                    if _tg_own and _tg_bot and (copy_text or '').strip():
-                        _notify_customer_telegram(_tg_own.customer_id, copy_text, bot=_tg_bot)
+                    _tg_text = _render_text_template(
+                        telegram_runtime.get('tpl_renew') or DEFAULT_TG_TPL_RENEW,
+                        _renew_tpl_vars,
+                    )
+                    if (telegram_runtime.get('trigger_renew_success', True)
+                            and _tg_own and _tg_bot and (_tg_text or '').strip()):
+                        _notify_customer_telegram(_tg_own.customer_id, _tg_text, bot=_tg_bot)
                 except Exception:
                     pass
                 whatsapp_meta = {
@@ -24139,6 +24162,20 @@ def update_system_config():
             }:
                 sanitized_value = sanitize_html(str(value))[:2000]
             # ── SMS Automation (GMweb) ──
+            elif key in {TG_DEPLETION_ENABLED_KEY, TG_TRIGGER_RENEW_KEY}:
+                sanitized_value = 'true' if _parse_bool(value) else 'false'
+            elif key == TG_DEPLETION_EXPIRY_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 3, min_value=0, max_value=60))
+            elif key == TG_DEPLETION_VOLUME_GB_KEY:
+                try:
+                    _v = max(0.0, min(1000.0, float(value)))
+                except (TypeError, ValueError):
+                    _v = 2.0
+                sanitized_value = str(_v)
+            elif key == TG_DEPLETION_COOLDOWN_DAYS_KEY:
+                sanitized_value = str(_parse_int(value, 7, min_value=1, max_value=120))
+            elif key in {TG_TPL_RENEW_KEY, TG_TPL_NEAR_EXPIRY_KEY, TG_TPL_LOW_VOLUME_KEY}:
+                sanitized_value = sanitize_html(str(value))[:2000]
             elif key in {
                 SMS_AUTOMATION_ENABLED_KEY, SMS_TRIGGER_CREATED_KEY,
                 SMS_TRIGGER_RENEW_KEY, SMS_TRIGGER_DEPLETION_KEY,
