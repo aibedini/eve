@@ -961,6 +961,12 @@
                             <span class="checkmark"></span>
                             <span>Background near-expiry and low-volume reminders</span>
                         </label>
+                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <input type="checkbox" id="tg-depletion-recommend" {% if tg_depletion_recommend %}checked{% endif %}>
+                            <span class="checkmark"></span>
+                            <span>پیشنهاد بسته مناسب + دکمه تمدید سریع در پیام</span>
+                        </label>
+                        <small class="text-secondary">وقتی فعال باشد، پیام یادآوری شامل بسته پیشنهادی بر اساس مصرف ۳۱ روز اخیر و دکمه «تمدید سریع» برای پرداخت کارت‌به‌کارت همان بسته می‌شود.</small>
                     </div>
                 </div>
 
@@ -5288,6 +5294,7 @@
         const payload = {
             tg_trigger_renew_success: !!(document.getElementById('tg-trigger-renew') || {}).checked,
             tg_depletion_enabled: !!(document.getElementById('tg-depletion-enabled') || {}).checked,
+            tg_depletion_recommend: !!(document.getElementById('tg-depletion-recommend') || {}).checked,
             tg_depletion_expiry_days: Number((document.getElementById('tg-depletion-expiry-days') || {}).value || 3),
             tg_depletion_volume_gb: Number((document.getElementById('tg-depletion-volume-gb') || {}).value || 2),
             tg_depletion_cooldown_days: Number((document.getElementById('tg-depletion-cooldown-days') || {}).value || 7),

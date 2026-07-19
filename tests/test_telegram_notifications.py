@@ -17,6 +17,7 @@ from app import (  # noqa: E402
     Admin,
     CustomerAccount,
     GLOBAL_SERVER_DATA,
+    Package,
     Server,
     ServiceOwnership,
     SystemConfig,
@@ -34,9 +35,11 @@ from app import (  # noqa: E402
 class FakeBotApi:
     def __init__(self):
         self.sent = []
+        self.extras = []
 
     def send_message(self, chat_id, text, **kwargs):
         self.sent.append((int(chat_id), text))
+        self.extras.append(kwargs)
         return ({'ok': True}, 'direct')
 
 
@@ -75,6 +78,8 @@ class TelegramNotificationTests(unittest.TestCase):
         CustomerAccount.query.delete()
         Server.query.delete()
         SystemConfig.query.filter(SystemConfig.key.startswith('tg_')).delete(
+            synchronize_session=False)
+        Package.query.filter(Package.name.like('tg-test-%')).delete(
             synchronize_session=False)
         Admin.query.filter(Admin.username.like('tg-test-%')).delete(
             synchronize_session=False)
@@ -131,6 +136,14 @@ class TelegramNotificationTests(unittest.TestCase):
     def _enable_scan(self):
         db.session.add(SystemConfig(key='tg_depletion_enabled', value='true'))
         db.session.flush()
+
+    def _package(self, suffix='pkg', volume=10, days=31, price=150_000):
+        package = Package(
+            name=f'tg-test-{suffix}', days=days, volume=volume, price=price,
+            enabled=True, scope='global', show_on_sub=True)
+        db.session.add(package)
+        db.session.flush()
+        return package
 
     def _inbounds(self, server, email, **client_overrides):
         client = {
@@ -224,11 +237,72 @@ class TelegramNotificationTests(unittest.TestCase):
         self.assertEqual(result['sent'], 0)
         self.assertEqual(self.fake_api.sent, [])
 
+    # ── package recommendation + quick-renew button ──────────────────────
+
+    def _recommendable_inbounds(self, server, email, **overrides):
+        """Near-expiry client whose 10 GB limit matches the test package, with
+        live usage so the 31-day recommender has evidence."""
+        base = {
+            'totalGB': 10 * 1024 ** 3,
+            'up': 3 * 1024 ** 3, 'down': 2 * 1024 ** 3,
+        }
+        base.update(overrides)
+        return self._inbounds(server, email, **base)
+
+    def test_recommend_adds_line_and_quick_renew_button(self):
+        self._enable_scan()
+        db.session.add(SystemConfig(key='tg_depletion_recommend', value='true'))
+        self._bot(suffix='central-rec', central=True)
+        package = self._package()
+        server, ownership, _identity = self._account('rec@example.com')
+        GLOBAL_SERVER_DATA['inbounds'] = self._recommendable_inbounds(server, 'rec@example.com')
+        result = _run_telegram_depletion_scan()
+        self.assertEqual(result['sent'], 1)
+        chat_id, text = self.fake_api.sent[0]
+        self.assertIn('tg-test-pkg', text)
+        self.assertIn('💡', text)
+        markup = self.fake_api.extras[0].get('reply_markup')
+        self.assertIsNotNone(markup)
+        buttons = markup['inline_keyboard'][0]
+        self.assertEqual(len(buttons), 1)
+        self.assertEqual(
+            buttons[0]['callback_data'],
+            f'renew-pay-card:{ownership.id}:{package.id}')
+        self.assertIn('tg-test-pkg', buttons[0]['text'])
+
+    def test_recommend_off_keeps_message_unchanged(self):
+        self._enable_scan()
+        self._bot(suffix='central-norec', central=True)
+        self._package()
+        server, _own, _identity = self._account('norec@example.com')
+        GLOBAL_SERVER_DATA['inbounds'] = self._recommendable_inbounds(server, 'norec@example.com')
+        result = _run_telegram_depletion_scan()
+        self.assertEqual(result['sent'], 1)
+        _chat_id, text = self.fake_api.sent[0]
+        self.assertNotIn('💡', text)
+        self.assertNotIn('tg-test-pkg', text)
+        self.assertNotIn('reply_markup', self.fake_api.extras[0])
+
+    def test_recommend_without_usage_history_has_no_line_or_button(self):
+        self._enable_scan()
+        db.session.add(SystemConfig(key='tg_depletion_recommend', value='true'))
+        self._bot(suffix='central-nohist', central=True)
+        self._package()
+        server, _own, _identity = self._account('nohist@example.com')
+        # No up/down counters and no UsageDaily rows → no recommendation.
+        GLOBAL_SERVER_DATA['inbounds'] = self._inbounds(server, 'nohist@example.com')
+        result = _run_telegram_depletion_scan()
+        self.assertEqual(result['sent'], 1)
+        _chat_id, text = self.fake_api.sent[0]
+        self.assertNotIn('💡', text)
+        self.assertNotIn('reply_markup', self.fake_api.extras[0])
+
     # ── settings ─────────────────────────────────────────────────────────
 
     def test_settings_defaults_and_threshold_fallback(self):
         cfg = _get_telegram_depletion_settings()
         self.assertFalse(cfg['enabled'])
+        self.assertFalse(cfg['recommend'])
         # Falls back to the shared WhatsApp/SMS thresholds when unset.
         self.assertEqual(cfg['expiry_days'], 3)
         self.assertEqual(cfg['volume_gb'], 2.0)
@@ -262,6 +336,7 @@ class TelegramNotificationTests(unittest.TestCase):
             response = client.post('/api/system-config', json={
                 'tg_trigger_renew_success': False,
                 'tg_depletion_enabled': True,
+                'tg_depletion_recommend': True,
                 'tg_depletion_expiry_days': 9,
                 'tg_depletion_volume_gb': 1.5,
                 'tg_depletion_cooldown_days': 11,
@@ -274,6 +349,7 @@ class TelegramNotificationTests(unittest.TestCase):
         cfg = _get_telegram_depletion_settings()
         self.assertFalse(cfg['trigger_renew_success'])
         self.assertTrue(cfg['enabled'])
+        self.assertTrue(cfg['recommend'])
         self.assertEqual(cfg['expiry_days'], 9)
         self.assertEqual(cfg['volume_gb'], 1.5)
         self.assertEqual(cfg['cooldown_days'], 11)

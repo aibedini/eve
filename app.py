@@ -5520,6 +5520,7 @@ def whatsapp_bot_worker():
 # bot (reseller-owned bot when the account belongs to a reseller, else central).
 # ─────────────────────────────────────────────────────────────────────────────
 TG_DEPLETION_ENABLED_KEY = 'tg_depletion_enabled'
+TG_DEPLETION_RECOMMEND_KEY = 'tg_depletion_recommend'
 TG_TRIGGER_RENEW_KEY = 'tg_trigger_renew_success'
 TG_DEPLETION_EXPIRY_DAYS_KEY = 'tg_depletion_expiry_days'
 TG_DEPLETION_VOLUME_GB_KEY = 'tg_depletion_volume_gb'
@@ -5530,19 +5531,22 @@ TG_TPL_LOW_VOLUME_KEY = 'tg_tpl_low_volume'
 
 DEFAULT_TG_TPL_NEAR_EXPIRY = (
     '⏳ سرویس «{account_name}» {remaining_time} دیگر منقضی می‌شود.\n'
-    '{if_dashboard_link}برای تمدید: {dashboard_link}{/if_dashboard_link}')
+    '{if_dashboard_link}برای تمدید: {dashboard_link}{/if_dashboard_link}'
+    '{if_recommendation}\n💡 با توجه به مصرف شما، بسته «{recommended_package}» ({recommended_volume} گیگ / {recommended_days} روز — {recommended_price} تومان) پیشنهاد می‌شود.{/if_recommendation}')
 DEFAULT_TG_TPL_RENEW = (
     'Service "{account_name}" was renewed successfully.\n'
     'New expiry: {date}\n'
     '{if_dashboard_link}{dashboard_link}{/if_dashboard_link}')
 DEFAULT_TG_TPL_LOW_VOLUME = (
     '📉 حجم سرویس «{account_name}» رو به اتمام است (باقی‌مانده: {remaining_volume}).\n'
-    '{if_dashboard_link}برای تمدید: {dashboard_link}{/if_dashboard_link}')
+    '{if_dashboard_link}برای تمدید: {dashboard_link}{/if_dashboard_link}'
+    '{if_recommendation}\n💡 با توجه به مصرف شما، بسته «{recommended_package}» ({recommended_volume} گیگ / {recommended_days} روز — {recommended_price} تومان) پیشنهاد می‌شود.{/if_recommendation}')
 
 
 def _get_telegram_depletion_settings() -> dict:
     keys = [
-        TG_DEPLETION_ENABLED_KEY, TG_TRIGGER_RENEW_KEY, TG_DEPLETION_EXPIRY_DAYS_KEY,
+        TG_DEPLETION_ENABLED_KEY, TG_DEPLETION_RECOMMEND_KEY, TG_TRIGGER_RENEW_KEY,
+        TG_DEPLETION_EXPIRY_DAYS_KEY,
         TG_DEPLETION_VOLUME_GB_KEY, TG_DEPLETION_COOLDOWN_DAYS_KEY,
         TG_TPL_RENEW_KEY, TG_TPL_NEAR_EXPIRY_KEY, TG_TPL_LOW_VOLUME_KEY,
     ]
@@ -5565,6 +5569,7 @@ def _get_telegram_depletion_settings() -> dict:
         volume_gb = float(wa.get('depletion_volume_gb') or 2.0)
     return {
         'enabled': _bool(TG_DEPLETION_ENABLED_KEY, False),
+        'recommend': _bool(TG_DEPLETION_RECOMMEND_KEY, False),
         'trigger_renew_success': _bool(TG_TRIGGER_RENEW_KEY, True),
         # Thresholds fall back to the WhatsApp/SMS depletion thresholds so one
         # operator-tuned window drives every notification channel.
@@ -5643,6 +5648,48 @@ def _notify_customer_telegram(customer_id, text, bot=None) -> None:
                     pass
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+def _depletion_renew_reply_markup(bot, ownership, package_id, package_name):
+    """Inline 'quick renew' button for a depletion reminder, or None.
+
+    The callback jumps into the existing renewal card-payment flow
+    (``renew-pay-card:<ownership_id>:<package_id>`` in telegram_bot_worker).
+    The button is only attached when the package is actually renewable for this
+    ownership; the worker re-validates regardless, so any failure here degrades
+    to no button rather than a dead one."""
+    try:
+        package_id = int(package_id)
+        ownership_id = int(ownership.id)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    try:
+        from telegram_bot_worker import _available_packages
+        allowed_ids = {int(p.id) for p in _available_packages(ownership)}
+        if package_id not in allowed_ids:
+            return None
+    except Exception:
+        # Availability check unavailable; the worker-side handler re-validates
+        # ownership and package availability before starting the payment flow.
+        pass
+    try:
+        from telegram_bot_runtime import COPY as _TG_COPY, resolve_copy
+        copy = resolve_copy(bot)
+        lang = str(getattr(bot, 'default_language', 'fa') or 'fa')
+        if lang not in copy:
+            lang = 'fa'
+        label = str(copy[lang].get('depletion_renew_button')
+                    or _TG_COPY['fa']['depletion_renew_button'])
+        try:
+            label = label.format(package=package_name or '')
+        except Exception:
+            label = _TG_COPY['fa']['depletion_renew_button'].format(package=package_name or '')
+        return {'inline_keyboard': [[{
+            'text': label,
+            'callback_data': f'renew-pay-card:{ownership_id}:{package_id}',
+        }]]}
+    except Exception:
+        return None
 
 
 def _run_telegram_depletion_scan() -> dict:
@@ -5745,6 +5792,18 @@ def _run_telegram_depletion_scan() -> dict:
                 'dashboard_link': dash, 'sub_link': dash,
                 'server_name': inbound.get('server_name') or '',
             }
+            reply_markup = None
+            if cfg.get('recommend'):
+                rec_vars = _recommendation_template_vars(
+                    sid_norm, final_id, email,
+                    terminal=bool((rem_gb is not None and rem_gb <= 0) or
+                                  (expiry_ts and expiry_ts <= int(time.time() * 1000))),
+                )
+                vars_dict.update(rec_vars)
+                if rec_vars.get('recommended_package_id'):
+                    reply_markup = _depletion_renew_reply_markup(
+                        bot, ownership, rec_vars['recommended_package_id'],
+                        rec_vars.get('recommended_package'))
             template = cfg['tpl_near_expiry'] if near_time else cfg['tpl_low_volume']
             try:
                 text_msg = _render_text_template(template, vars_dict)
@@ -5758,7 +5817,10 @@ def _run_telegram_depletion_scan() -> dict:
                 if api is None:
                     api = _telegram_bot_api_client(bot)
                     api_by_bot[bot.id] = api
-                api.send_message(chat_id, text_msg)
+                if reply_markup:
+                    api.send_message(chat_id, text_msg, reply_markup=reply_markup)
+                else:
+                    api.send_message(chat_id, text_msg)
             except Exception as exc:
                 db.session.rollback()
                 app.logger.warning(f"[telegram-bot] depletion send failed for bot {bot.id}: {exc}")
@@ -10999,6 +11061,7 @@ def _empty_recommendation_template_vars() -> dict:
         'recommended_package': '', 'recommended_volume': '',
         'recommended_days': '', 'recommended_price': '',
         'recommended_daily_usage': '', 'recommended_31d_usage': '',
+        'recommended_package_id': None,
         'comfort_recommendation': '', 'comfort_recommendation_given': False,
         'comfort_package': '', 'comfort_volume': '',
         'comfort_days': '', 'comfort_price': '',
@@ -11052,6 +11115,7 @@ def _recommendation_template_vars(server_id, sub_id: str, email: str = '', *,
             'recommended_price': f"{int(recommendation.get('package_price') or 0):,}",
             'recommended_daily_usage': str(recommendation.get('average_daily_gb') or ''),
             'recommended_31d_usage': str(recommendation.get('projected_31d_gb') or ''),
+            'recommended_package_id': recommendation.get('package_id'),
         })
         if recommendation.get('comfort_package_id'):
             values.update({
@@ -15980,6 +16044,7 @@ def settings_page():
                          sms_royalty_days=sms_cfg.get('royalty_days', 3),
                          sms_royalty_cooldown_days=sms_cfg.get('royalty_cooldown_days', 30),
                          tg_depletion_enabled=telegram_notify_cfg.get('enabled', False),
+                         tg_depletion_recommend=telegram_notify_cfg.get('recommend', False),
                          tg_trigger_renew_success=telegram_notify_cfg.get('trigger_renew_success', True),
                          tg_depletion_expiry_days=telegram_notify_cfg.get('expiry_days', 3),
                          tg_depletion_volume_gb=telegram_notify_cfg.get('volume_gb', 2.0),
@@ -24305,7 +24370,7 @@ def update_system_config():
             }:
                 sanitized_value = sanitize_html(str(value))[:2000]
             # ── SMS Automation (GMweb) ──
-            elif key in {TG_DEPLETION_ENABLED_KEY, TG_TRIGGER_RENEW_KEY}:
+            elif key in {TG_DEPLETION_ENABLED_KEY, TG_DEPLETION_RECOMMEND_KEY, TG_TRIGGER_RENEW_KEY}:
                 sanitized_value = 'true' if _parse_bool(value) else 'false'
             elif key == TG_DEPLETION_EXPIRY_DAYS_KEY:
                 sanitized_value = str(_parse_int(value, 3, min_value=0, max_value=60))
