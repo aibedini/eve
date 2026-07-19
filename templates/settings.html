@@ -38,6 +38,10 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
             Telegram Notify
         </button>
+        <button class="settings-tab" onclick="switchTab('telegram_announcements'); loadTelegramAnnouncements()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11v2a2 2 0 0 0 2 2h2l4 4V5L7 9H5a2 2 0 0 0-2 2z"></path><path d="M15 9a4 4 0 0 1 0 6"></path><path d="M18 6a8 8 0 0 1 0 12"></path></svg>
+            اطلاع‌رسانی
+        </button>
         <button class="settings-tab" onclick="switchTab('whatsapp')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.38 7.55L3 21l1.98-5.44A8.5 8.5 0 1 1 21 11.5z"></path></svg>
             WhatsApp
@@ -963,6 +967,38 @@
                     <button class="btn btn-primary" type="button" onclick="saveTelegramNotificationSettings()">Save Telegram Notifications</button>
                 </div>
             </div>
+        </div>
+
+        <div id="tab-telegram_announcements" class="tab-pane">
+            <div class="panel-card">
+                <div class="panel-card-header"><div class="header-content">
+                    <h2>اطلاع‌رسانی تلگرام</h2>
+                    <p class="text-secondary">پیام همگانی یا هدفمند برای کاربرانی که بات را استارت کرده‌اند؛ با صف پایدار، توقف و گزارش ارسال.</p>
+                </div></div>
+                <div class="form-group"><label>عنوان داخلی</label><input id="tga-title" class="form-input" maxlength="160" placeholder="مثلاً تغییر سرور ایران"></div>
+                <div class="form-group"><label>متن پیام</label><textarea id="tga-message" class="form-input" rows="6" maxlength="4096" placeholder="متن قابل ارسال در تلگرام"></textarea></div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+                    <div class="form-group"><label>دامنه بات‌ها</label><select id="tga-bot-scope" class="form-select">
+                        <option value="all">بات مرکزی و همه ریسلرها</option><option value="central">فقط بات مرکزی</option>
+                        <option value="reseller">فقط بات‌های ریسلر</option><option value="selected">بات‌های انتخابی</option>
+                    </select></div>
+                    <div class="form-group"><label>شناسه بات‌های انتخابی</label><input id="tga-bot-ids" class="form-input" placeholder="1, 4, 8"></div>
+                    <div class="form-group"><label>شناسه سرورهای انتخابی</label><input id="tga-server-ids" class="form-input" placeholder="خالی = همه سرورها"></div>
+                    <div class="form-group"><label>ترکیب شرط‌های زمانی</label><select id="tga-event-match" class="form-select"><option value="any">حداقل یکی</option><option value="all">همه شرط‌ها</option></select></div>
+                </div>
+                <label class="checkbox-label" onclick="event.stopPropagation()"><input id="tga-linked-only" type="checkbox"><span class="checkmark"></span><span>فقط کاربرانی که اکانت را لینک کرده‌اند</span></label>
+                <div style="margin-top:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+                    <div class="form-group"><label>بازه استارت بات</label><div style="display:flex;gap:8px"><input id="tga-started-from" type="datetime-local" class="form-input"><input id="tga-started-to" type="datetime-local" class="form-input"></div></div>
+                    <div class="form-group"><label>بازه خرید موفق</label><div style="display:flex;gap:8px"><input id="tga-purchased-from" type="datetime-local" class="form-input"><input id="tga-purchased-to" type="datetime-local" class="form-input"></div></div>
+                    <div class="form-group"><label>بازه تمدید موفق</label><div style="display:flex;gap:8px"><input id="tga-renewed-from" type="datetime-local" class="form-input"><input id="tga-renewed-to" type="datetime-local" class="form-input"></div></div>
+                </div>
+                <div style="display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:16px">
+                    <span id="tga-preview-result" class="text-secondary"></span>
+                    <button class="btn btn-secondary" type="button" onclick="previewTelegramAnnouncement()">محاسبه گیرندگان</button>
+                    <button class="btn btn-primary" type="button" onclick="createTelegramAnnouncement()">ساخت پیش‌نویس</button>
+                </div>
+            </div>
+            <div class="panel-card" style="margin-top:16px"><div class="panel-card-header"><div class="header-content"><h2>کمپین‌ها</h2><p class="text-secondary">وضعیت صف، موفق، ناموفق و کاربران مسدودکننده بات.</p></div><button class="btn btn-secondary" onclick="loadTelegramAnnouncements()">بروزرسانی</button></div><div id="tga-list"></div></div>
         </div>
 
         <div id="tab-whatsapp" class="tab-pane">
@@ -8445,5 +8481,48 @@ async function deleteSubApp(id, name) {
 document.getElementById('sa-modal').addEventListener('click', function(e) {
     if (e.target === this) closeSaModal();
 });
+
+function tgaIds(id) {
+    return [...new Set((document.getElementById(id).value || '').split(',').map(v => Number(v.trim())).filter(v => Number.isInteger(v) && v > 0))];
+}
+function tgaFilters() {
+    const value = id => document.getElementById(id).value || null;
+    return {
+        bot_scope: value('tga-bot-scope'), bot_ids: tgaIds('tga-bot-ids'), server_ids: tgaIds('tga-server-ids'),
+        linked_only: document.getElementById('tga-linked-only').checked, event_match: value('tga-event-match'),
+        started_from: value('tga-started-from'), started_to: value('tga-started-to'),
+        purchased_from: value('tga-purchased-from'), purchased_to: value('tga-purchased-to'),
+        renewed_from: value('tga-renewed-from'), renewed_to: value('tga-renewed-to')
+    };
+}
+async function previewTelegramAnnouncement() {
+    const out = document.getElementById('tga-preview-result'); out.textContent = 'در حال محاسبه…';
+    const res = await fetch('/api/telegram-announcements/preview', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filters:tgaFilters()})});
+    const data = await res.json(); out.textContent = data.success ? `${Number(data.count).toLocaleString('fa-IR')} گیرنده` : (data.error || 'خطا');
+}
+async function createTelegramAnnouncement() {
+    const payload = {title:document.getElementById('tga-title').value.trim(), message_text:document.getElementById('tga-message').value.trim(), filters:tgaFilters()};
+    const res = await fetch('/api/telegram-announcements', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    const data = await res.json();
+    if (!data.success) return showToast(data.error || 'ساخت اطلاع‌رسانی ناموفق بود', 'error');
+    showToast('پیش‌نویس ساخته شد؛ برای شروع ارسال دکمه ارسال را بزنید.', 'success'); loadTelegramAnnouncements();
+}
+async function mutateTelegramAnnouncement(id, action) {
+    if (action === 'send' && !confirm('گیرندگان اکنون محاسبه و پیام در صف ارسال قرار بگیرد؟')) return;
+    const res = await fetch(`/api/telegram-announcements/${id}/${action}`, {method:'POST'}); const data = await res.json();
+    if (!data.success) showToast(data.error || 'عملیات ناموفق بود', 'error'); else loadTelegramAnnouncements();
+}
+async function loadTelegramAnnouncements() {
+    const list = document.getElementById('tga-list'); if (!list) return;
+    const res = await fetch('/api/telegram-announcements'); const data = await res.json();
+    if (!data.success) { list.textContent = data.error || 'خطا'; return; }
+    if (!data.announcements.length) { list.innerHTML = '<div class="text-secondary">هنوز اطلاع‌رسانی ساخته نشده است.</div>'; return; }
+    list.innerHTML = data.announcements.map(a => {
+        const actions = a.status === 'draft' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'send')">ارسال</button>`
+            : ['queued','sending'].includes(a.status) ? `<button class="btn btn-secondary" onclick="mutateTelegramAnnouncement(${a.id},'pause')">توقف</button>`
+            : a.status === 'paused' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'resume')">ادامه</button>` : '';
+        return `<div style="padding:14px 0;border-bottom:1px solid var(--border-color);display:flex;gap:12px;justify-content:space-between;align-items:center"><div><strong>${escapeHtml(a.title)}</strong><div class="text-secondary" style="margin-top:5px">${escapeHtml(a.status)} · کل ${a.total_count} · موفق ${a.sent_count} · ناموفق ${a.failed_count} · بلاک ${a.blocked_count}</div></div><div style="display:flex;gap:8px">${actions}${!['completed','cancelled'].includes(a.status) ? `<button class="btn btn-danger" onclick="mutateTelegramAnnouncement(${a.id},'cancel')">لغو</button>` : ''}</div></div>`;
+    }).join('');
+}
 </script>
 {% endblock %}

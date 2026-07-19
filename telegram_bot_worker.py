@@ -35,6 +35,7 @@ from app import (  # noqa: E402
     TelegramBotRuntime,
     TelegramBotTestUser,
     TelegramBotUserState,
+    TelegramAnnouncement,
     TelegramIdentity,
     TelegramOwnershipSession,
     TelegramPurchaseRequest,
@@ -56,6 +57,7 @@ from app import (  # noqa: E402
     _log_audit,
     _reseller_can_create_free,
     _telegram_bot_api_client,
+    _queue_telegram_announcement,
     _decrypt_telegram_secret,
     _public_base_url,
     _detect_telegram_inbound_profiles,
@@ -3427,6 +3429,29 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     data = str(callback.get("data") or "")
     if not user_id or not chat_id or not callback_id:
         return
+    if data.startswith(('announcement-send:', 'announcement-cancel:')):
+        try:
+            action, raw_id = data.split(':', 1)
+            row = db.session.get(TelegramAnnouncement, int(raw_id))
+            reviewer = _telegram_admin(user_id)
+            allowed = row and reviewer and (reviewer.is_superadmin or reviewer.role == 'superadmin'
+                or (reviewer.id == bot.owner_admin_id and row.source_bot_instance_id == bot.id))
+            if not allowed:
+                api.answer_callback(callback_id, text='دسترسی ندارید.', show_alert=True)
+                return
+            if action == 'announcement-send':
+                _queue_telegram_announcement(row)
+                db.session.commit()
+                api.answer_callback(callback_id, text=f'در صف ارسال قرار گرفت: {row.total_count} گیرنده')
+                api.send_message(chat_id, f'✅ اطلاع‌رسانی برای {row.total_count} گیرنده در صف قرار گرفت.')
+            else:
+                row.status = 'cancelled'
+                db.session.commit()
+                api.answer_callback(callback_id, text='لغو شد')
+        except (TypeError, ValueError) as exc:
+            db.session.rollback()
+            api.answer_callback(callback_id, text=str(exc)[:180], show_alert=True)
+        return
     if data.startswith('admin-claim:'):
         _handle_admin_claim_callback(api, callback, data)
         return
@@ -4483,6 +4508,38 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         parts = text.split(None, 1)
         _handle_start(api, bot, chat_id, user_id, state,
                       payload=(parts[1] if len(parts) > 1 else ''))
+    elif text in ('/announce', '/announcement', '/اطلاع_رسانی'):
+        reviewer = _telegram_admin(user_id)
+        can_manage = reviewer and (reviewer.is_superadmin or reviewer.role == 'superadmin'
+                                   or reviewer.id == bot.owner_admin_id)
+        if not can_manage:
+            api.send_message(chat_id, 'این دستور فقط برای مدیر مجاز است.')
+        else:
+            state.step = 'awaiting_announcement'
+            db.session.flush()
+            api.send_message(chat_id,
+                'متن اطلاع‌رسانی را ارسال کنید. این پیام برای تمام کاربرانی که همین ربات را استارت کرده‌اند آماده می‌شود؛ قبل از ارسال نهایی پیش‌نمایش می‌بینید.')
+    elif state.step == 'awaiting_announcement':
+        reviewer = _telegram_admin(user_id)
+        if not reviewer or not text or len(text) > 4096:
+            api.send_message(chat_id, 'متن معتبر تا ۴۰۹۶ کاراکتر ارسال کنید.')
+        else:
+            filters = {'bot_scope': 'selected', 'bot_ids': [bot.id], 'server_ids': [],
+                       'linked_only': False, 'event_match': 'any',
+                       'started_from': None, 'started_to': None,
+                       'purchased_from': None, 'purchased_to': None,
+                       'renewed_from': None, 'renewed_to': None}
+            row = TelegramAnnouncement(
+                title=f'Bot announcement {datetime.utcnow():%Y-%m-%d %H:%M}',
+                message_text=text, filters_json=json.dumps(filters, separators=(',', ':')),
+                created_by_admin_id=reviewer.id, source_bot_instance_id=bot.id)
+            db.session.add(row)
+            db.session.flush()
+            state.step = 'verified'
+            api.send_message(chat_id, f'پیش‌نمایش پیام:\n\n{text}', reply_markup={'inline_keyboard': [[
+                {'text': '✅ ارسال همگانی', 'callback_data': f'announcement-send:{row.id}'},
+                {'text': '❌ لغو', 'callback_data': f'announcement-cancel:{row.id}'},
+            ]]})
     elif state.step == "awaiting_admin_support_reply":
         _handle_admin_support_message(api, bot, message, sender, state, text)
     elif text in {COPY["fa"]["menu_services"], COPY["en"]["menu_services"]}:

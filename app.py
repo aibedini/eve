@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.5"
+APP_VERSION = "2.5.6"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -5788,6 +5788,80 @@ def telegram_depletion_worker():
         time.sleep(1800)  # every 30 minutes
 
 
+def _run_telegram_announcement_batch(batch_size=25):
+    """Send a small resumable batch; delivery rows make retries idempotent."""
+    now = datetime.utcnow()
+    campaigns = TelegramAnnouncement.query.filter(
+        TelegramAnnouncement.status.in_(('queued', 'sending')),
+    ).order_by(TelegramAnnouncement.id.asc()).limit(5).all()
+    processed = 0
+    api_by_bot = {}
+    for campaign in campaigns:
+        campaign.status = 'sending'
+        deliveries = TelegramAnnouncementDelivery.query.filter(
+            TelegramAnnouncementDelivery.announcement_id == campaign.id,
+            TelegramAnnouncementDelivery.status.in_(('pending', 'retry')),
+            db.or_(TelegramAnnouncementDelivery.next_attempt_at.is_(None),
+                   TelegramAnnouncementDelivery.next_attempt_at <= now),
+        ).order_by(TelegramAnnouncementDelivery.id.asc()).limit(max(1, batch_size - processed)).all()
+        for delivery in deliveries:
+            bot = db.session.get(TelegramBotInstance, delivery.bot_instance_id)
+            if not bot or not bot.enabled or bot.archived_at is not None:
+                delivery.status, delivery.last_error = 'failed', 'Bot is unavailable'
+                continue
+            try:
+                api = api_by_bot.get(bot.id)
+                if api is None:
+                    api = _telegram_bot_api_client(bot)
+                    api_by_bot[bot.id] = api
+                api.send_message(delivery.chat_id, campaign.message_text,
+                                 disable_web_page_preview=True)
+                delivery.status, delivery.sent_at, delivery.last_error = 'sent', datetime.utcnow(), None
+            except Exception as exc:
+                safe_error = redact_connection_error(exc)
+                delivery.attempts = int(delivery.attempts or 0) + 1
+                lower_error = str(safe_error).lower()
+                if any(term in lower_error for term in ('blocked', 'chat not found', 'user is deactivated', 'forbidden')):
+                    delivery.status = 'blocked'
+                elif delivery.attempts >= 5:
+                    delivery.status = 'failed'
+                else:
+                    delivery.status = 'retry'
+                    retry_after = max(5, int(getattr(exc, 'retry_after', 0) or 0))
+                    delivery.next_attempt_at = datetime.utcnow() + timedelta(seconds=retry_after)
+                delivery.last_error = str(safe_error)[:500]
+            processed += 1
+            if processed >= batch_size:
+                break
+        counts = dict(db.session.query(
+            TelegramAnnouncementDelivery.status, db.func.count(TelegramAnnouncementDelivery.id),
+        ).filter_by(announcement_id=campaign.id).group_by(TelegramAnnouncementDelivery.status).all())
+        campaign.sent_count = int(counts.get('sent', 0))
+        campaign.failed_count = int(counts.get('failed', 0))
+        campaign.blocked_count = int(counts.get('blocked', 0))
+        if not any(counts.get(value, 0) for value in ('pending', 'retry')):
+            campaign.status, campaign.finished_at = 'completed', datetime.utcnow()
+        db.session.commit()
+        if processed >= batch_size:
+            break
+    return processed
+
+
+def telegram_announcement_worker():
+    while True:
+        try:
+            with app.app_context():
+                processed = _run_telegram_announcement_batch()
+        except Exception as exc:
+            processed = 0
+            try:
+                db.session.rollback()
+                app.logger.warning(f'[telegram-announcement] worker error: {exc}')
+            except Exception:
+                pass
+        time.sleep(1 if processed else 10)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SMS Automation (via the GMweb-API gateway)
 # Auto-sends SMS on create / renew / near-depletion using the existing SMS
@@ -8616,6 +8690,71 @@ class TelegramBotUserState(db.Model):
     bot = db.relationship('TelegramBotInstance', backref=db.backref(
         'user_states', lazy=True, cascade='all, delete-orphan',
     ))
+
+
+class TelegramAnnouncement(db.Model):
+    """Durable, resumable Telegram broadcast with an immutable audience filter."""
+    __tablename__ = 'telegram_announcements'
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(160), nullable=False)
+    message_text = db.Column(db.Text, nullable=False)
+    filters_json = db.Column(db.Text, nullable=False, default='{}')
+    status = db.Column(db.String(24), nullable=False, default='draft', index=True)
+    created_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=False, index=True)
+    source_bot_instance_id = db.Column(db.Integer, db.ForeignKey('telegram_bot_instances.id'), nullable=True)
+    total_count = db.Column(db.Integer, nullable=False, default=0)
+    sent_count = db.Column(db.Integer, nullable=False, default=0)
+    failed_count = db.Column(db.Integer, nullable=False, default=0)
+    blocked_count = db.Column(db.Integer, nullable=False, default=0)
+    started_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def filters(self):
+        try:
+            value = json.loads(self.filters_json or '{}')
+        except (TypeError, ValueError):
+            value = {}
+        return value if isinstance(value, dict) else {}
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id, 'title': self.title, 'message_text': self.message_text,
+            'filters': self.filters(), 'status': self.status,
+            'created_by_admin_id': self.created_by_admin_id,
+            'source_bot_instance_id': self.source_bot_instance_id,
+            'total_count': int(self.total_count or 0), 'sent_count': int(self.sent_count or 0),
+            'failed_count': int(self.failed_count or 0), 'blocked_count': int(self.blocked_count or 0),
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TelegramAnnouncementDelivery(db.Model):
+    """One idempotent delivery record per campaign, bot, and Telegram user."""
+    __tablename__ = 'telegram_announcement_deliveries'
+    __table_args__ = (db.UniqueConstraint(
+        'announcement_id', 'bot_instance_id', 'telegram_user_id',
+        name='uq_telegram_announcement_delivery'),)
+    id = db.Column(db.Integer, primary_key=True)
+    announcement_id = db.Column(db.Integer, db.ForeignKey(
+        'telegram_announcements.id', ondelete='CASCADE'), nullable=False, index=True)
+    bot_instance_id = db.Column(db.Integer, db.ForeignKey(
+        'telegram_bot_instances.id', ondelete='CASCADE'), nullable=False, index=True)
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    chat_id = db.Column(db.BigInteger, nullable=False)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer_accounts.id'), nullable=True, index=True)
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    last_error = db.Column(db.String(500), nullable=True)
+    next_attempt_at = db.Column(db.DateTime, nullable=True, index=True)
+    sent_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    announcement = db.relationship('TelegramAnnouncement', backref=db.backref(
+        'deliveries', lazy=True, cascade='all, delete-orphan'))
 
 
 class TelegramOwnershipSession(db.Model):
@@ -27441,6 +27580,198 @@ def update_telegram_promo(promo_id):
     return jsonify({'success': True, 'promo': promo.to_safe_dict()})
 
 
+def _telegram_announcement_datetime(value):
+    if value in (None, ''):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    except (TypeError, ValueError):
+        raise ValueError('Invalid date filter')
+
+
+def _telegram_announcement_filters(data, actor=None):
+    source = data if isinstance(data, dict) else {}
+    filters = {
+        'bot_scope': str(source.get('bot_scope') or 'all').strip().lower(),
+        'bot_ids': sorted({int(v) for v in (source.get('bot_ids') or []) if str(v).isdigit()}),
+        'server_ids': sorted({int(v) for v in (source.get('server_ids') or []) if str(v).isdigit()}),
+        'linked_only': bool(source.get('linked_only')),
+        'event_match': 'all' if source.get('event_match') == 'all' else 'any',
+    }
+    if filters['bot_scope'] not in ('all', 'central', 'reseller', 'selected'):
+        raise ValueError('Invalid bot scope')
+    for event in ('started', 'purchased', 'renewed'):
+        start = _telegram_announcement_datetime(source.get(f'{event}_from'))
+        end = _telegram_announcement_datetime(source.get(f'{event}_to'))
+        if start and end and start > end:
+            raise ValueError(f'{event} date range is invalid')
+        filters[f'{event}_from'] = start.isoformat() if start else None
+        filters[f'{event}_to'] = end.isoformat() if end else None
+    if actor and actor.role == 'reseller' and not actor.is_superadmin:
+        owned = TelegramBotInstance.query.filter_by(owner_admin_id=actor.id).first()
+        if not owned:
+            raise ValueError('No Telegram bot is assigned to this reseller')
+        filters['bot_scope'], filters['bot_ids'] = 'selected', [owned.id]
+    return filters
+
+
+def _telegram_announcement_recipients(filters):
+    query = db.session.query(TelegramBotUserState, TelegramIdentity).outerjoin(
+        TelegramIdentity, TelegramIdentity.telegram_user_id == TelegramBotUserState.telegram_user_id,
+    ).join(TelegramBotInstance, TelegramBotInstance.id == TelegramBotUserState.bot_instance_id).filter(
+        TelegramBotInstance.archived_at.is_(None), TelegramBotInstance.enabled.is_(True))
+    scope = filters.get('bot_scope', 'all')
+    if scope == 'central':
+        query = query.filter(TelegramBotInstance.owner_type == 'system')
+    elif scope == 'reseller':
+        query = query.filter(TelegramBotInstance.owner_type == 'reseller')
+    elif scope == 'selected':
+        ids = [int(v) for v in filters.get('bot_ids') or []]
+        query = query.filter(TelegramBotUserState.bot_instance_id.in_(ids or [-1]))
+    rows = query.order_by(TelegramBotUserState.id.asc()).all()
+    server_ids = {int(v) for v in filters.get('server_ids') or []}
+    event_ranges = {}
+    for event in ('started', 'purchased', 'renewed'):
+        start = _telegram_announcement_datetime(filters.get(f'{event}_from'))
+        end = _telegram_announcement_datetime(filters.get(f'{event}_to'))
+        if start or end:
+            event_ranges[event] = (start, end)
+    customer_ids = {identity.customer_id for _, identity in rows if identity and identity.customer_id}
+    telegram_user_ids = {int(state.telegram_user_id) for state, _ in rows}
+    customers_on_servers = set()
+    if server_ids and customer_ids:
+        customers_on_servers = {int(r[0]) for r in db.session.query(ServiceOwnership.customer_id).filter(
+            ServiceOwnership.customer_id.in_(customer_ids), ServiceOwnership.revoked_at.is_(None),
+            ServiceOwnership.server_id.in_(server_ids)).distinct().all()}
+    purchase_dates = defaultdict(list)
+    if 'purchased' in event_ranges and telegram_user_ids:
+        for telegram_user_id, created_at in db.session.query(
+                TelegramPurchaseRequest.telegram_user_id, TelegramPurchaseRequest.created_at).filter(
+                TelegramPurchaseRequest.telegram_user_id.in_(telegram_user_ids),
+                TelegramPurchaseRequest.status == 'completed').all():
+            purchase_dates[int(telegram_user_id)].append(created_at)
+    renewal_dates = defaultdict(list)
+    if 'renewed' in event_ranges and customer_ids:
+        for customer_id, created_at in db.session.query(
+                CustomerTransaction.customer_id, CustomerTransaction.created_at).filter(
+                CustomerTransaction.customer_id.in_(customer_ids), CustomerTransaction.type == 'renewal',
+                CustomerTransaction.status == 'completed').all():
+            renewal_dates[int(customer_id)].append(created_at)
+    recipients = []
+    for state, identity in rows:
+        chat_id = identity.telegram_chat_id if identity else state.telegram_user_id
+        customer_id = identity.customer_id if identity else None
+        if filters.get('linked_only') and not customer_id:
+            continue
+        if server_ids and customer_id not in customers_on_servers:
+            continue
+        matches = []
+        for event, (start, end) in event_ranges.items():
+            if event == 'started':
+                dates = [state.created_at]
+            elif event == 'purchased':
+                dates = purchase_dates.get(int(state.telegram_user_id), [])
+            else:
+                dates = renewal_dates.get(int(customer_id), []) if customer_id else []
+            matches.append(any((not start or d >= start) and (not end or d <= end) for d in dates if d))
+        if matches and (all(matches) if filters.get('event_match') == 'all' else any(matches)) is False:
+            continue
+        recipients.append({
+            'bot_instance_id': state.bot_instance_id,
+            'telegram_user_id': int(state.telegram_user_id),
+            'chat_id': int(chat_id), 'customer_id': customer_id,
+        })
+    return recipients
+
+
+def _queue_telegram_announcement(row):
+    if row.status not in ('draft', 'paused'):
+        raise ValueError('Only draft or paused announcements can be queued')
+    if row.status == 'draft':
+        recipients = _telegram_announcement_recipients(row.filters())
+        for item in recipients:
+            db.session.add(TelegramAnnouncementDelivery(announcement_id=row.id, **item))
+        row.total_count = len(recipients)
+    row.status = 'queued'
+    row.started_at = row.started_at or datetime.utcnow()
+    row.finished_at = datetime.utcnow() if not row.total_count else None
+    if not row.total_count:
+        row.status = 'completed'
+
+
+@app.route('/api/telegram-announcements', methods=['GET', 'POST'])
+@login_required
+def telegram_announcements_api():
+    actor = db.session.get(Admin, session['admin_id'])
+    if not actor or actor.role not in ('superadmin', 'reseller'):
+        return jsonify({'success': False, 'error': 'Access Denied'}), 403
+    if request.method == 'GET':
+        query = TelegramAnnouncement.query
+        if actor.role == 'reseller' and not actor.is_superadmin:
+            query = query.filter_by(created_by_admin_id=actor.id)
+        rows = query.order_by(TelegramAnnouncement.id.desc()).limit(100).all()
+        return jsonify({'success': True, 'announcements': [row.to_safe_dict() for row in rows]})
+    data = request.get_json(silent=True) or {}
+    title = str(data.get('title') or '').strip()[:160]
+    message = str(data.get('message_text') or '').strip()
+    if not title or not message or len(message) > 4096:
+        return jsonify({'success': False, 'error': 'Title and a message up to 4096 characters are required'}), 400
+    try:
+        filters = _telegram_announcement_filters(data.get('filters'), actor)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    row = TelegramAnnouncement(title=title, message_text=message,
+        filters_json=json.dumps(filters, separators=(',', ':'), sort_keys=True),
+        created_by_admin_id=actor.id)
+    db.session.add(row)
+    db.session.commit()
+    return jsonify({'success': True, 'announcement': row.to_safe_dict()}), 201
+
+
+@app.route('/api/telegram-announcements/preview', methods=['POST'])
+@login_required
+def preview_telegram_announcement():
+    actor = db.session.get(Admin, session['admin_id'])
+    if not actor or actor.role not in ('superadmin', 'reseller'):
+        return jsonify({'success': False, 'error': 'Access Denied'}), 403
+    try:
+        filters = _telegram_announcement_filters((request.get_json(silent=True) or {}).get('filters'), actor)
+        recipients = _telegram_announcement_recipients(filters)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    by_bot = {}
+    for item in recipients:
+        by_bot[str(item['bot_instance_id'])] = by_bot.get(str(item['bot_instance_id']), 0) + 1
+    return jsonify({'success': True, 'count': len(recipients), 'by_bot': by_bot})
+
+
+@app.route('/api/telegram-announcements/<int:announcement_id>/<action>', methods=['POST'])
+@login_required
+def mutate_telegram_announcement(announcement_id, action):
+    actor = db.session.get(Admin, session['admin_id'])
+    row = db.session.get(TelegramAnnouncement, announcement_id)
+    if not actor or not row or (actor.role == 'reseller' and not actor.is_superadmin and row.created_by_admin_id != actor.id):
+        return jsonify({'success': False, 'error': 'Announcement not found'}), 404
+    try:
+        if action in ('send', 'resume'):
+            _queue_telegram_announcement(row)
+        elif action == 'pause' and row.status in ('queued', 'sending'):
+            row.status = 'paused'
+        elif action == 'cancel' and row.status not in ('completed', 'cancelled'):
+            row.status = 'cancelled'
+        else:
+            raise ValueError('Action is not valid for the current status')
+        _log_audit(f'telegram_announcement.{action}', row, actor=actor)
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 409
+    return jsonify({'success': True, 'announcement': row.to_safe_dict()})
+
+
 @app.route('/api/telegram-bots', methods=['GET'])
 @limiter.limit('60 per minute')
 @login_required
@@ -31299,6 +31630,15 @@ def ensure_background_threads_started():
             print(f"Failed to start telegram depletion thread: {e}")
     else:
         print("[Singleton] telegram_depletion_worker already owned by another worker, skipping.")
+
+    # Singleton: durable targeted Telegram announcement queue.
+    if _claim_singleton('telegram_announcement_worker'):
+        try:
+            threading.Thread(target=telegram_announcement_worker, daemon=True).start()
+        except Exception as e:
+            print(f"Failed to start telegram announcement thread: {e}")
+    else:
+        print("[Singleton] telegram_announcement_worker already owned by another worker, skipping.")
 
     # Singleton: reconcile queued GMweb tasks and persist their terminal status.
     if _claim_singleton('sms_status_worker'):

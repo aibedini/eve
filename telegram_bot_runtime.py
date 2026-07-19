@@ -269,10 +269,11 @@ class TelegramBotApi:
                 errors.append(f"{route.name}: {redact_connection_error(exc, (self._token,))}")
         raise TelegramApiError('; '.join(errors) or 'Could not download Telegram file')
 
-    def answer_callback(self, callback_query_id: str, text: str = ""):
+    def answer_callback(self, callback_query_id: str, text: str = "", **extra):
         return self.call("answerCallbackQuery", {
             "callback_query_id": callback_query_id,
             "text": text,
+            **extra,
         })
 
 
