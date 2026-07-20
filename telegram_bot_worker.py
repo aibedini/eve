@@ -74,6 +74,7 @@ from app import (  # noqa: E402
     parse_allowed_servers,
     renew_client,
     review_ownership_claim_item,
+    rotate_client,
     server_is_v3,
     verify_ownership_claim_subscription,
 )
@@ -684,6 +685,10 @@ def _send_service_details(api: TelegramBotApi, bot: TelegramBotInstance, chat_id
     ])
     keyboard = _service_keyboard(ownership, lang)
     if client:
+        keyboard['inline_keyboard'].insert(1, [{
+            'text': _cc(lang)['service_rotate'],
+            'callback_data': f'service-rotate:{ownership.id}',
+        }])
         status_key = str(client.get('service_state') or '').strip().lower()
         if not status_key:
             status_key = 'active' if client.get('enable', True) else 'inactive'
@@ -792,6 +797,16 @@ def _purchase_servers(bot: TelegramBotInstance, owner_id=None):
     return [server for server in servers if server.id in allowed][:30]
 
 
+def _trial_channels(policy) -> list:
+    """Effective trial gate channels: the JSON list, falling back to the legacy single chat ID."""
+    if not policy:
+        return []
+    channels = policy.trial_channels()
+    if not channels and policy.trial_channel_chat_id:
+        channels = [{'chat_id': int(policy.trial_channel_chat_id), 'title': '', 'invite_url': ''}]
+    return channels
+
+
 def _purchase_policy_values(bot: TelegramBotInstance):
     policy = db.session.get(TelegramPurchasePolicy, bot.id)
     return {
@@ -807,6 +822,7 @@ def _purchase_policy_values(bot: TelegramBotInstance):
             bool(policy.trial_requires_channel_membership) if policy else False
         ),
         'trial_channel_chat_id': policy.trial_channel_chat_id if policy else None,
+        'trial_channels': _trial_channels(policy),
         'emergency_enabled': bool(policy.emergency_enabled) if policy else False,
         'emergency_days': max(1, int(policy.emergency_days or 1)) if policy else 1,
         'emergency_volume_gb': max(0, int(policy.emergency_volume_gb or 1)) if policy else 1,
@@ -983,6 +999,34 @@ def _format_bank_card(card: BankCard) -> str:
     if card.iban:
         lines.append(f"IBAN: <code>{html.escape(card.iban)}</code>")
     return '\n'.join(lines)
+
+
+def _send_link_with_qr(api: TelegramBotApi, chat_id: int, link: str, caption: str = ''):
+    """Deliver a connection link as a QR photo (caption carries the copyable link).
+
+    Any QR/upload failure falls back to a plain text message with the link.
+    """
+    link = str(link or '').strip()
+    if not link:
+        return
+    text = str(caption or link).strip() or link
+    try:
+        import io as _io
+
+        import qrcode as _qrcode
+
+        qr = _qrcode.QRCode(version=1, box_size=10, border=2)
+        qr.add_data(link)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color='black', back_color='white')
+        buffer = _io.BytesIO()
+        img.save(buffer, format='PNG')
+        api.send_upload(
+            chat_id, buffer.getvalue(), 'connection-link.png', 'image/png',
+            as_photo=True, caption=text[:1024],
+        )
+    except Exception:
+        api.send_message(chat_id, text)
 
 
 def _purchase_card_accessible(card: BankCard, bot: TelegramBotInstance, owner_id=None) -> bool:
@@ -2766,27 +2810,61 @@ def _purchase_admins(request_row: TelegramPurchaseRequest):
     return admins
 
 
+def _identity_display_phone(identity: TelegramIdentity | None,
+                            customer: CustomerAccount | None = None) -> str:
+    canonical = normalize_iran_mobile(
+        (identity.phone_normalized if identity else None)
+        or (customer.primary_phone if customer else None),
+    )
+    if canonical and canonical.startswith('98') and len(canonical) == 12:
+        return f'0{canonical[2:]}'
+    return ''
+
+
+def _buyer_contact_line(request_row: TelegramPurchaseRequest) -> str:
+    """Admin-facing buyer identity: @username (t.me link), numeric id, phone."""
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=request_row.telegram_user_id,
+        customer_id=request_row.customer_id,
+    ).first()
+    if identity is None:
+        identity = TelegramIdentity.query.filter_by(
+            telegram_user_id=request_row.telegram_user_id,
+        ).first()
+    username = re.sub(
+        r'[^A-Za-z0-9_]+', '', str((identity.username if identity else '') or '').lstrip('@'),
+    )
+    parts = []
+    if username:
+        parts.append(f"@{username} (https://t.me/{username})")
+    parts.append(str(request_row.telegram_user_id))
+    phone = _identity_display_phone(identity)
+    if phone:
+        parts.append(phone)
+    return ' · '.join(parts)
+
+
 def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRequest):
     payment_method = str(getattr(request_row, 'payment_method', '') or 'card')
     lines = [
         f"Telegram purchase request #{request_row.id}",
-        f"Server: {request_row.server.name}",
-        f"Package: {request_row.package.name}",
+        f"Server: {html.escape(str(request_row.server.name))}",
+        f"Package: {html.escape(str(request_row.package.name))}",
         f"Amount: {int(request_row.amount or 0):,} T",
         f"Payment: {'💰 Wallet' if payment_method == 'wallet' else '💳 Card'}",
-        f"Telegram user: {request_row.telegram_user_id}",
+        f"Telegram user: {_buyer_contact_line(request_row)}",
     ]
     if request_row.bank_card:
-        lines.append(f"Card: {request_row.bank_card.label or request_row.bank_card.card_number or ''}")
+        lines.append(f"Card:\n{_format_bank_card(request_row.bank_card)}")
     if getattr(request_row, 'duplicate_receipt', False):
         lines.append('⚠️ FRAUD WARNING: this receipt file was already used on another purchase request!')
     if getattr(request_row, 'discount_amount', None):
         lines.append(
             f"Original: {int(request_row.original_amount or 0):,} T · "
             f"Discount: {int(request_row.discount_amount or 0):,} T"
-            + (f" · Promo: {request_row.promo_code}" if request_row.promo_code else ''))
+            + (f" · Promo: {html.escape(str(request_row.promo_code))}" if request_row.promo_code else ''))
     if request_row.detail:
-        lines.append(f"Account name: {request_row.detail.account_name}")
+        lines.append(f"Account name: {html.escape(str(request_row.detail.account_name))}")
     approve_label = (
         '🔄 Retry provisioning' if request_row.status == 'approved' else '✅ Approve payment & create service'
     )
@@ -2816,7 +2894,9 @@ def _notify_purchase_admins(api: TelegramBotApi, request_row: TelegramPurchaseRe
             except TelegramApiError:
                 admin_lines.append('Receipt media delivery failed; open the order from the panel.')
         try:
-            api.send_message(admin_chat_id, '\n'.join(admin_lines), reply_markup=keyboard)
+            api.send_message(
+                admin_chat_id, '\n'.join(admin_lines),
+                parse_mode='HTML', reply_markup=keyboard)
         except TelegramApiError:
             continue
 
@@ -2888,14 +2968,28 @@ def _start_trial(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
     if not identity or not identity.customer_id or not identity.phone_verified_at:
         _send_contact_prompt(api, chat_id, language)
         return
-    if policy.get('trial_requires_channel_membership') and policy.get('trial_channel_chat_id'):
-        if not _channel_member(api, int(policy['trial_channel_chat_id']), int(user_id)):
-            fallback = (
-                "برای دریافت سرویس تست، ابتدا باید عضو کانال تلگرام شوید و دوباره امتحان کنید."
-                if language == 'fa'
-                else "To claim the free trial, join the Telegram channel first and try again."
+    if policy.get('trial_requires_channel_membership') and policy.get('trial_channels'):
+        missing = [
+            channel for channel in policy['trial_channels']
+            if not _channel_member(api, int(channel['chat_id']), int(user_id))
+        ]
+        if missing:
+            copy = _cc(language)
+            titles = [channel.get('title') or str(channel['chat_id']) for channel in missing]
+            keyboard = []
+            for channel in missing:
+                invite_url = channel.get('invite_url') or ''
+                if invite_url:
+                    keyboard.append([{
+                        'text': channel.get('title') or str(channel['chat_id']),
+                        'url': invite_url,
+                    }])
+            keyboard.append([{'text': copy['trial_channel_recheck'], 'callback_data': 'trial_recheck'}])
+            api.send_message(
+                chat_id,
+                copy['trial_channel_required'].format(channels='\n'.join(f'• {t}' for t in titles)),
+                reply_markup={'inline_keyboard': keyboard},
             )
-            api.send_message(chat_id, _cc(language).get('trial_channel_required', fallback))
             return
     phone = str(identity.phone_normalized or '')
     if _trial_grant_for(bot, user_id, phone):
@@ -3177,6 +3271,30 @@ def _purchase_provisioning_inbound_ids(server_id: int):
     return [row['id'] for row in _telegram_customer_inbounds(server_id)]
 
 
+def _purchase_account_comment(request_row: TelegramPurchaseRequest, free: bool,
+                              verification_method: str) -> str:
+    """Buyer identity baked into the panel comment: label | phone:x | @username."""
+    is_trial = (
+        verification_method == 'telegram_trial'
+        or str(getattr(request_row, 'receipt_file_id', '') or '').startswith('trial:')
+    )
+    label = 'Telegram trial' if is_trial else f'Telegram purchase #{request_row.id}'
+    identity = TelegramIdentity.query.filter_by(
+        telegram_user_id=request_row.telegram_user_id,
+        customer_id=request_row.customer_id,
+    ).first()
+    parts = [label]
+    phone = _identity_display_phone(identity)
+    if phone:
+        parts.append(f'phone:{phone}')
+    username = re.sub(
+        r'[^A-Za-z0-9_]+', '', str((identity.username if identity else '') or '').lstrip('@'),
+    )
+    if username:
+        parts.append(f'@{username}')
+    return ' | '.join(parts)[:200]
+
+
 def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Admin,
                               free: bool = False,
                               verification_method: str = 'telegram_purchase'):
@@ -3205,7 +3323,7 @@ def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Ad
             'mode': 'package',
             'package_id': request_row.package_id,
             'email': request_row.detail.account_name,
-            'comment': f'Telegram purchase #{request_row.id}',
+            'comment': _purchase_account_comment(request_row, free, verification_method),
             'inbound_ids': inbound_ids,
             'free': bool(free),
         },
@@ -3233,6 +3351,137 @@ def _execute_purchase_request(request_row: TelegramPurchaseRequest, reviewer: Ad
         return False, str(exc)
     payload['ownership_id'] = ownership.id
     return True, payload
+
+
+def _service_action_reviewer(bot: TelegramBotInstance):
+    """Admin identity used for customer-initiated panel actions (link rotate)."""
+    owner = db.session.get(Admin, bot.owner_admin_id) if bot and bot.owner_admin_id else None
+    if owner and owner.enabled:
+        return owner
+    for admin in Admin.query.filter_by(enabled=True).all():
+        if admin.is_superadmin or str(admin.role or '').lower() == 'superadmin':
+            return admin
+    return None
+
+
+def _service_remaining_days(client: dict | None):
+    if not client:
+        return None
+    raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
+    try:
+        expiry_ts = int(client.get('expiryTimestamp') or raw.get('expiryTime') or 0)
+    except (TypeError, ValueError):
+        return None
+    if expiry_ts <= 0:
+        return None
+    return max(0, int((expiry_ts / 1000 - time.time()) // 86400))
+
+
+def _service_rotate_capacity(client: dict | None, language: str):
+    """(days_text, gb_text) for rotate prompts/results; 'unlimited' when unset."""
+    days = _service_remaining_days(client)
+    days_text = _cc(language)['unlimited'] if days is None else str(days)
+    remaining = client.get('remaining_bytes') if client else None
+    if remaining in (None, -1):
+        gb_text = _cc(language)['unlimited']
+    else:
+        gb_text = f"{max(0, int(remaining or 0)) / (1024 ** 3):.2f}"
+    return days_text, gb_text
+
+
+def _execute_service_rotate(ownership: ServiceOwnership, reviewer: Admin):
+    """Call the panel rotate route in-process, mirroring _execute_purchase_request."""
+    email = str(ownership.client_email_snapshot or '').strip()
+    if not email:
+        return False, 'The service account name is missing from the local snapshot.'
+    path = f"/api/client/{ownership.server_id}/rotate"
+    public_base_url = str(_public_base_url() or '').strip().rstrip('/') or 'http://localhost'
+    with app.test_request_context(
+        path,
+        base_url=public_base_url,
+        method='POST',
+        json={'client_email': email},
+    ):
+        flask_session['admin_id'] = reviewer.id
+        flask_session['admin_username'] = reviewer.username
+        flask_session['role'] = reviewer.role
+        flask_session['is_superadmin'] = bool(reviewer.is_superadmin)
+        response = rotate_client(ownership.server_id)
+    status_code = 200
+    if isinstance(response, tuple):
+        response, status_code = response[0], int(response[1])
+    payload = response.get_json(silent=True) if hasattr(response, 'get_json') else None
+    payload = payload if isinstance(payload, dict) else {}
+    if status_code >= 400 or not payload.get('success'):
+        return False, str(payload.get('error') or f'Rotate failed with HTTP {status_code}')
+    return True, payload
+
+
+def _handle_service_rotate_callback(api: TelegramBotApi, bot: TelegramBotInstance,
+                                    callback: dict, data: str) -> bool:
+    parts = data.split(':')
+    if parts[0] != 'service-rotate':
+        return False
+    confirm = len(parts) == 3 and parts[1] == 'confirm'
+    if len(parts) != 2 and not confirm:
+        return False
+    callback_id = str(callback.get('id') or '')
+    sender = callback.get('from') or {}
+    user_id = int(sender.get('id') or 0)
+    chat_id = int((((callback.get('message') or {}).get('chat') or {}).get('id')) or 0)
+    try:
+        ownership_id = int(parts[-1])
+    except (TypeError, ValueError):
+        api.answer_callback(callback_id)
+        return True
+    state = _state(bot, user_id)
+    language = state.language if state.language in COPY else bot.default_language
+    _identity_row, ownership = _owned_service(user_id, ownership_id)
+    if not ownership:
+        api.answer_callback(callback_id)
+        api.send_message(chat_id, _cc(language)['invalid_service'])
+        return True
+    if not confirm:
+        client = _cached_owned_service(ownership)
+        days_text, gb_text = _service_rotate_capacity(client, language)
+        api.answer_callback(callback_id)
+        api.send_message(
+            chat_id,
+            _cc(language)['service_rotate_confirm'].format(days=days_text, gb=gb_text),
+            reply_markup={'inline_keyboard': [[
+                {'text': _cc(language)['service_rotate_yes'],
+                 'callback_data': f'service-rotate:confirm:{ownership.id}'},
+                {'text': _cc(language)['service_rotate_no'],
+                 'callback_data': f'service:{ownership.id}'},
+            ]]},
+        )
+        return True
+    if not _rate_ok(user_id, 'service_rotate', 3, 86400):
+        api.answer_callback(callback_id, _cc(language)['service_rotate_limited'])
+        return True
+    reviewer = _service_action_reviewer(bot)
+    if reviewer is None:
+        api.answer_callback(callback_id)
+        api.send_message(chat_id, _cc(language)['service_rotate_failed'].format(
+            error='no reviewer available'))
+        return True
+    api.answer_callback(callback_id)
+    success, result = _execute_service_rotate(ownership, reviewer)
+    if not success:
+        api.send_message(chat_id, _cc(language)['service_rotate_failed'].format(error=result))
+        return True
+    link = str(result.get('dash_sub_url') or result.get('sub_url') or '').strip()
+    days = result.get('remaining_days')
+    gb = result.get('remaining_gb')
+    days_text = _cc(language)['unlimited'] if days is None else str(days)
+    gb_text = _cc(language)['unlimited'] if gb is None else str(gb)
+    text = _cc(language)['service_rotate_done'].format(
+        days=days_text, gb=gb_text, link=link)
+    if link:
+        _send_link_with_qr(api, chat_id, link, caption=text)
+    else:
+        api.send_message(chat_id, text)
+    return True
 
 
 def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: str) -> bool:
@@ -3320,6 +3569,8 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
                 client.get('dashboard_link') or client.get('dash_sub_url')
                 or client.get('sub_link') or ''
             ).strip()
+            if delivery_link:
+                _send_link_with_qr(api, identity.telegram_chat_id, delivery_link)
             api.send_message(
                 identity.telegram_chat_id,
                 _cc(language)['purchase_completed'].format(
@@ -3510,6 +3761,13 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
     if data == 'noop':
         api.answer_callback(callback_id)
         return
+    if data == 'trial_recheck':
+        api.answer_callback(callback_id)
+        # Drop cached membership entries for this user so a fresh join is seen at once.
+        for key in [key for key in _CHANNEL_MEMBER_CACHE if key[1] == int(user_id)]:
+            _CHANNEL_MEMBER_CACHE.pop(key, None)
+        _start_trial(api, bot, chat_id, user_id, state)
+        return
     if data == 'tutorial-devices':
         api.answer_callback(callback_id)
         _send_tutorial_devices(api, chat_id, language)
@@ -3698,6 +3956,9 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         api.answer_callback(callback_id)
         _send_service_details(api, bot, chat_id, language, ownership)
         return
+    if data.startswith('service-rotate:'):
+        _handle_service_rotate_callback(api, bot, callback, data)
+        return
     if data.startswith('service-link:'):
         try:
             ownership_id = int(data.partition(':')[2])
@@ -3716,7 +3977,11 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         api.answer_callback(callback_id)
         if sub_id and base_url:
             safe_sub_id = quote(sub_id, safe='')
-            api.send_message(chat_id, f"{_cc(language)['get_link_button']}:\n{base_url}/s/{ownership.server_id}/{safe_sub_id}")
+            link = f"{base_url}/s/{ownership.server_id}/{safe_sub_id}"
+            _send_link_with_qr(
+                api, chat_id, link,
+                caption=f"{_cc(language)['get_link_button']}:\n{link}",
+            )
         else:
             request_row, _duplicate = _create_service_request(
                 bot.id, user_id, ownership, 'support', package=None,

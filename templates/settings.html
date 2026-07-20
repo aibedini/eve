@@ -798,6 +798,12 @@
                                 Require Telegram channel membership for free trial
                             </label>
                         </div>
+                        <div class="form-group" style="margin-top: 8px;">
+                            <label>Trial gate channels</label>
+                            <small class="text-secondary">The bot must be an admin in each channel. When this list is non-empty it takes precedence over the single channel chat ID above.</small>
+                            <div id="tgb-trial-channels"></div>
+                            <button class="btn btn-secondary" type="button" onclick="addTelegramTrialChannel()">Add channel</button>
+                        </div>
                         <div class="tgb-purchase-choice">
                             <div>
                                 <label for="tgb-emergency-enabled">Emergency access</label>
@@ -3678,6 +3684,7 @@
     let telegramBotEgressCandidates = [];
     let telegramBotTestUsers = [];
     let telegramPurchaseServers = [];
+    let telegramTrialChannels = [];
     let telegramPurchasePackages = [];
     let telegramPurchaseInboundRoutes = [];
     let telegramPurchaseInbounds = {};
@@ -4624,6 +4631,8 @@
             document.getElementById('tgb-trial-enabled').checked = !!purchasePolicy.trial_enabled;
             document.getElementById('tgb-trial-requires-channel').checked = !!purchasePolicy.trial_requires_channel_membership;
             document.getElementById('tgb-trial-channel-chat-id').value = purchasePolicy.trial_channel_chat_id || '';
+            telegramTrialChannels = Array.isArray(purchasePolicy.trial_channels) ? purchasePolicy.trial_channels : [];
+            renderTelegramTrialChannels();
             document.getElementById('tgb-emergency-enabled').checked = !!purchasePolicy.emergency_enabled;
             document.getElementById('tgb-emergency-days').value = Number.isFinite(Number(purchasePolicy.emergency_days)) ? Number(purchasePolicy.emergency_days) : 1;
             document.getElementById('tgb-emergency-volume').value = Number.isFinite(Number(purchasePolicy.emergency_volume_gb)) ? Number(purchasePolicy.emergency_volume_gb) : 1;
@@ -4817,7 +4826,7 @@
         if (supportGroupEnabled && !/^-\d+$/.test(supportGroupChatId)) return showToast('Enter a valid negative Telegram support group ID.', 'error');
         const trialRequiresChannel = document.getElementById('tgb-trial-requires-channel').checked;
         const trialChannelChatId = document.getElementById('tgb-trial-channel-chat-id').value.trim();
-        if (trialRequiresChannel && !/^-\d+$/.test(trialChannelChatId)) return showToast('Enter a valid negative Telegram channel ID before requiring trial membership.', 'error');
+        if (trialRequiresChannel && !/^-\d+$/.test(trialChannelChatId) && !collectTelegramTrialChannels().length) return showToast('Enter a valid negative Telegram channel ID or add at least one gate channel before requiring trial membership.', 'error');
         const supportSlaMinutes = Number(document.getElementById('tgb-support-sla-minutes').value);
         if (!Number.isInteger(supportSlaMinutes) || supportSlaMinutes < 0 || supportSlaMinutes > 10080) return showToast('Support SLA must be between 0 and 10080 minutes.', 'error');
         const supportSlaWarningPercent = Number(document.getElementById('tgb-support-sla-warning-percent').value);
@@ -4848,6 +4857,7 @@
                 trial_package_id: document.getElementById('tgb-trial-package').value ? Number(document.getElementById('tgb-trial-package').value) : null,
                 trial_requires_channel_membership: trialRequiresChannel,
                 trial_channel_chat_id: trialChannelChatId ? Number(trialChannelChatId) : null,
+                trial_channels: collectTelegramTrialChannels(),
                 emergency_enabled: document.getElementById('tgb-emergency-enabled').checked,
                 emergency_days: Number(document.getElementById('tgb-emergency-days').value),
                 emergency_volume_gb: Number(document.getElementById('tgb-emergency-volume').value),
@@ -5164,6 +5174,41 @@
         }).join('');
         const hint = data.runtime_hint || (payload && payload.runtime_hint);
         if (hint) container.insertAdjacentHTML('beforeend', `<div class="tgb-runtime-hint"><strong>Runtime action:</strong> ${escapeHtml(String(hint))}</div>`);
+    }
+
+    function renderTelegramTrialChannels() {
+        const list = document.getElementById('tgb-trial-channels');
+        if (!list) return;
+        list.innerHTML = telegramTrialChannels.map((channel, index) => `
+            <div class="tgb-form-grid tgb-purchase-grid" style="align-items:end; margin-top:6px;">
+                <div class="form-group"><label>Chat ID</label><input class="form-control" type="number" step="1" placeholder="-1001234567890" value="${escapeHtml(String(channel.chat_id ?? ''))}" onchange="telegramTrialChannels[${index}].chat_id = this.value.trim()"></div>
+                <div class="form-group"><label>Title</label><input class="form-control" type="text" maxlength="200" placeholder="Channel name" value="${escapeHtml(String(channel.title || ''))}" onchange="telegramTrialChannels[${index}].title = this.value.trim()"></div>
+                <div class="form-group"><label>Invite URL (optional)</label><input class="form-control" type="text" maxlength="200" placeholder="https://t.me/..." value="${escapeHtml(String(channel.invite_url || ''))}" onchange="telegramTrialChannels[${index}].invite_url = this.value.trim()"></div>
+                <button class="btn btn-danger" type="button" onclick="removeTelegramTrialChannel(${index})">Remove</button>
+            </div>`).join('');
+    }
+
+    function addTelegramTrialChannel() {
+        if (telegramTrialChannels.length >= 10) return showToast('At most 10 trial channels are allowed.', 'error');
+        telegramTrialChannels.push({chat_id: '', title: '', invite_url: ''});
+        renderTelegramTrialChannels();
+    }
+
+    function removeTelegramTrialChannel(index) {
+        telegramTrialChannels.splice(index, 1);
+        renderTelegramTrialChannels();
+    }
+
+    function collectTelegramTrialChannels() {
+        return telegramTrialChannels
+            .map(channel => ({
+                chat_id: String(channel.chat_id ?? '').trim(),
+                title: String(channel.title || '').trim(),
+                invite_url: String(channel.invite_url || '').trim(),
+            }))
+            .filter(channel => channel.chat_id !== '')
+            .map(channel => ({chat_id: Number(channel.chat_id), title: channel.title, invite_url: channel.invite_url}))
+            .filter(channel => Number.isInteger(channel.chat_id));
     }
 
     function renderTelegramProxies() {

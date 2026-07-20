@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -28,24 +29,30 @@ from app import (  # noqa: E402
 from telegram_bot_runtime import COPY, main_menu_keyboard  # noqa: E402
 from telegram_bot_worker import (  # noqa: E402
     _grant_emergency_access,
+    _handle_callback,
     _start_trial,
     _trial_grant_for,
 )
 
 
 class FakeBotApi:
-    def __init__(self, member=True):
+    def __init__(self, member=True, members=None):
         self.messages = []
+        self.markups = []
         self.answers = []
         self.member = member
+        self.members = members or {}
 
     def send_message(self, chat_id, text, **kwargs):
         self.messages.append((int(chat_id), text))
+        self.markups.append(kwargs.get('reply_markup'))
         return ({'ok': True}, 'direct')
 
     def call(self, method, payload=None, **kwargs):
         if method == 'getChatMember':
-            return ({'status': 'member' if self.member else 'left'}, 'direct')
+            chat_id = int((payload or {}).get('chat_id') or 0)
+            ok = self.members.get(chat_id, self.member)
+            return ({'status': 'member' if ok else 'left'}, 'direct')
         return ({}, 'direct')
 
     def answer_callback(self, callback_id, text=None):
@@ -77,6 +84,8 @@ class TelegramTrialTests(unittest.TestCase):
 
     def tearDown(self):
         db.session.rollback()
+        from telegram_bot_worker import _CHANNEL_MEMBER_CACHE
+        _CHANNEL_MEMBER_CACHE.clear()
         TelegramTrialGrant.query.delete()
         TelegramPurchaseRequest.query.delete()
         TelegramPurchasePolicy.query.delete()
@@ -216,7 +225,9 @@ class TelegramTrialTests(unittest.TestCase):
             trial_channel_chat_id=-1001234567890,
         )
         api, execute = self._trial_call(bot, member=False)
-        self.assertIn('کانال تلگرام', api.messages[-1][1])
+        self.assertTrue(api.messages[-1][1].startswith(
+            COPY['fa']['trial_channel_required'].split('{')[0]))
+        self.assertIn('-1001234567890', api.messages[-1][1])
         execute.assert_not_called()
         self.assertEqual(TelegramTrialGrant.query.count(), 0)
 
@@ -224,6 +235,78 @@ class TelegramTrialTests(unittest.TestCase):
             bot, user_id=8_500_002, phone='9120002222', member=True)
         self.assertEqual(execute2.call_count, 1)
         self.assertIn(COPY['fa']['trial_success'].split('{')[0], api2.messages[-1][1])
+
+    def _multi_channel_policy(self, bot, package):
+        return self._policy(
+            bot, trial_enabled=True, trial_package_id=package.id,
+            trial_requires_channel_membership=True,
+            trial_channel_list_json=json.dumps([
+                {'chat_id': -100111, 'title': 'News', 'invite_url': 'https://t.me/news'},
+                {'chat_id': -100222, 'title': 'Offers', 'invite_url': ''},
+            ]))
+
+    def test_trial_multi_channel_gate_blocks_non_member(self):
+        self._admin('super')
+        bot = self._bot(suffix='multi-block')
+        package = self._package()
+        self._multi_channel_policy(bot, package)
+        api, execute = self._trial_call(bot, member=False)
+        message = api.messages[-1][1]
+        self.assertIn('News', message)
+        self.assertIn('Offers', message)
+        keyboard = api.markups[-1]['inline_keyboard']
+        self.assertEqual(keyboard[0][0]['url'], 'https://t.me/news')
+        self.assertEqual(keyboard[-1][0]['callback_data'], 'trial_recheck')
+        execute.assert_not_called()
+        self.assertEqual(TelegramTrialGrant.query.count(), 0)
+
+    def test_trial_multi_channel_gate_allows_member_of_all(self):
+        self._admin('super')
+        bot = self._bot(suffix='multi-ok')
+        package = self._package()
+        self._multi_channel_policy(bot, package)
+        api, execute = self._trial_call(bot, member=True)
+        self.assertEqual(execute.call_count, 1)
+        self.assertIn(COPY['fa']['trial_success'].split('{')[0], api.messages[-1][1])
+
+    def test_trial_recheck_callback_bypasses_membership_cache(self):
+        self._admin('super')
+        bot = self._bot(suffix='recheck')
+        bot.test_mode = False
+        db.session.flush()
+        package = self._package()
+        self._multi_channel_policy(bot, package)
+        user_id = 8_500_030
+        api = FakeBotApi(members={-100111: False, -100222: False})
+        self._identity(user_id, '9120005555')
+        state = self._state(bot, user_id)
+        server = Server(
+            name='Trial Server', host='https://trial.test', username='u', password='p')
+        db.session.add(server)
+        db.session.flush()
+        with mock.patch('telegram_bot_worker._assign_purchase_server') as assign, \
+                mock.patch('telegram_bot_worker._execute_purchase_request') as execute:
+            assign.return_value = server
+            execute.return_value = (True, {
+                'client': {'dashboard_link': 'https://dash.test/s/1'},
+                'ownership_id': None,
+            })
+            _start_trial(api, bot, user_id, user_id, state)
+            execute.assert_not_called()
+            # The negative result is now cached; joining the channels and pressing
+            # "check again" must trigger a fresh lookup and issue the trial.
+            api.members[-100111] = True
+            api.members[-100222] = True
+            _handle_callback(api, bot, {
+                'id': 'cb-recheck',
+                'from': {'id': user_id},
+                'message': {'chat': {'id': user_id}},
+                'data': 'trial_recheck',
+            })
+            self.assertEqual(execute.call_count, 1)
+        self.assertEqual(api.answers[-1][0], 'cb-recheck')
+        self.assertIn(COPY['fa']['trial_success'].split('{')[0], api.messages[-1][1])
+        self.assertEqual(TelegramTrialGrant.query.filter_by(kind='trial').count(), 1)
 
     # ── one trial per phone ──────────────────────────────────────────────
 

@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.9"
+APP_VERSION = "2.5.11"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -9076,6 +9076,7 @@ class TelegramPurchasePolicy(db.Model):
     trial_package_id = db.Column(db.Integer, db.ForeignKey('packages.id'), nullable=True)
     trial_requires_channel_membership = db.Column(db.Boolean, nullable=False, default=False)
     trial_channel_chat_id = db.Column(db.BigInteger, nullable=True)
+    trial_channel_list_json = db.Column(db.Text, nullable=False, default='')
     emergency_enabled = db.Column(db.Boolean, nullable=False, default=False)
     emergency_days = db.Column(db.Integer, nullable=False, default=1)
     emergency_volume_gb = db.Column(db.Integer, nullable=False, default=1)
@@ -9092,11 +9093,33 @@ class TelegramPurchasePolicy(db.Model):
             'trial_package_id': self.trial_package_id,
             'trial_requires_channel_membership': bool(self.trial_requires_channel_membership),
             'trial_channel_chat_id': self.trial_channel_chat_id,
+            'trial_channels': self.trial_channels(),
             'emergency_enabled': bool(self.emergency_enabled),
             'emergency_days': max(1, int(self.emergency_days or 1)),
             'emergency_volume_gb': max(0, int(self.emergency_volume_gb or 1)),
             'emergency_cooldown_days': max(1, int(self.emergency_cooldown_days or 30)),
         }
+
+    def trial_channels(self):
+        """Parsed multi-channel trial gate list: [{chat_id, title, invite_url}]."""
+        try:
+            raw = json.loads(self.trial_channel_list_json or '[]')
+        except (TypeError, ValueError):
+            raw = []
+        channels = []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                chat_id = int(item.get('chat_id'))
+            except (TypeError, ValueError):
+                continue
+            channels.append({
+                'chat_id': chat_id,
+                'title': str(item.get('title') or '').strip()[:200],
+                'invite_url': str(item.get('invite_url') or '').strip()[:200],
+            })
+        return channels
 
 
 class TelegramTrialGrant(db.Model):
@@ -10328,6 +10351,7 @@ with app.app_context():
         ('trial_package_id', 'INTEGER'),
         ('trial_requires_channel_membership', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
         ('trial_channel_chat_id', 'BIGINT' if _is_pg else 'INTEGER'),
+        ('trial_channel_list_json', "TEXT DEFAULT ''"),
         ('emergency_enabled', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
         ('emergency_days', 'INTEGER DEFAULT 1'),
         ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
@@ -18591,6 +18615,314 @@ def renew_client(server_id, inbound_id, email):
         return _finish({"success": False, "error": str(e)}, 400)
 
 
+@app.route('/api/client/<int:server_id>/rotate', methods=['POST'])
+@login_required
+def rotate_client(server_id):
+    """Replace a leaked client: disable the old one (uid/link revoked) and create
+    a fresh client (new UUID + new subId) carrying over the remaining traffic
+    bytes and remaining time."""
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({"ok": False, "success": False, "error": "User not found"}), 401
+
+    server = db.session.get(Server, server_id)
+    if not server:
+        return jsonify({"ok": False, "success": False, "error": "Server not found"}), 404
+
+    try:
+        data = request.get_json() or {}
+    except Exception:
+        return jsonify({"ok": False, "success": False, "error": "Invalid request data"}), 400
+
+    email = (data.get('client_email') or '').strip()
+    if not email:
+        return jsonify({"ok": False, "success": False, "error": "client_email is required"}), 400
+
+    try:
+        if user.role == 'reseller' and not _has_client_access(user, server_id, email):
+            return jsonify({"ok": False, "success": False, "error": "Access denied"}), 403
+    except Exception as e:
+        app.logger.error(f"Rotate access-check error: {e}", exc_info=True)
+        return jsonify({"ok": False, "success": False, "error": "Server error during access check"}), 500
+
+    # Locate the client in the global cache first (any inbound on this server).
+    target_client = None
+    cached_client_row = None
+    inbound_id = None
+    known_emails = set()
+    for ib in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(ib.get('server_id', -1)) != int(server.id):
+                continue
+        except (ValueError, TypeError):
+            continue
+        for c in ib.get('clients', []):
+            c_email = c.get('email')
+            if c_email:
+                known_emails.add(c_email)
+            if c_email == email and 'raw_client' in c and target_client is None:
+                target_client = copy.deepcopy(c['raw_client'])
+                cached_client_row = c
+                try:
+                    inbound_id = int(ib.get('id'))
+                except (ValueError, TypeError):
+                    inbound_id = None
+
+    session_obj, error = get_xui_session(server)
+    if error:
+        return jsonify({"ok": False, "success": False, "error": error}), 400
+
+    # Same lock family as renew: a rotate must never overlap a renew (or a second
+    # rotate) of the same account — both rewrite the client on the panel.
+    _rotate_lock_key = f"renew:lock:{server_id}:{email.lower()}"
+    if not _acquire_renew_lock(_rotate_lock_key, ttl=45):
+        return jsonify({"ok": False, "success": False, "code": "rotate_in_progress",
+                        "error": "This account is already being rotated/renewed — please wait a moment."}), 409
+
+    fetched_inbound_row = None
+    try:
+        if not target_client:
+            # Fallback to fetching from the panel if not in cache
+            inbounds, fetch_err, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type)
+            if fetch_err:
+                _release_renew_lock(_rotate_lock_key)
+                return jsonify({"ok": False, "success": False, "error": "Failed to fetch inbounds"}), 400
+            persist_detected_panel_type(server, detected_type)
+            for ib in (inbounds or []):
+                settings = _json_field(ib.get('settings'), {})
+                for c in settings.get('clients', []):
+                    c_email = c.get('email')
+                    if c_email:
+                        known_emails.add(c_email)
+                    if c_email == email and target_client is None:
+                        target_client = copy.deepcopy(c)
+                        fetched_inbound_row = ib
+                        try:
+                            inbound_id = int(ib.get('id'))
+                        except (ValueError, TypeError):
+                            inbound_id = None
+            if not target_client:
+                _release_renew_lock(_rotate_lock_key)
+                return jsonify({"ok": False, "success": False, "error": "Client not found"}), 404
+
+        if inbound_id is None:
+            _release_renew_lock(_rotate_lock_key)
+            return jsonify({"ok": False, "success": False, "error": "Could not determine client's inbound"}), 400
+
+        # Merge in traffic/cap fields from the cached row (raw_client often lacks usage).
+        if cached_client_row and isinstance(target_client, dict):
+            for _field in ('up', 'down'):
+                try:
+                    _cached_v = int(cached_client_row.get(_field) or 0)
+                except Exception:
+                    _cached_v = 0
+                try:
+                    _cur_v = int(target_client.get(_field) or 0)
+                except Exception:
+                    _cur_v = 0
+                if _cached_v > _cur_v:
+                    target_client[_field] = _cached_v
+            try:
+                if target_client.get('totalGB') in (None, '', 0) and cached_client_row.get('totalGB') not in (None, ''):
+                    target_client['totalGB'] = cached_client_row.get('totalGB')
+            except Exception:
+                pass
+            try:
+                if target_client.get('expiryTime') in (None, '', 0) and cached_client_row.get('expiryTimestamp') not in (None, ''):
+                    target_client['expiryTime'] = cached_client_row.get('expiryTimestamp')
+            except Exception:
+                pass
+
+        # ── Snapshot remaining quota ──
+        try:
+            current_total_bytes = int(target_client.get('totalGB') or 0)
+        except (TypeError, ValueError):
+            current_total_bytes = 0
+        try:
+            used_bytes = max(0, int(target_client.get('up') or 0) + int(target_client.get('down') or 0))
+        except (TypeError, ValueError):
+            used_bytes = 0
+        # 0 totalGB = unlimited → stays unlimited (0)
+        remaining_bytes = max(0, current_total_bytes - used_bytes) if current_total_bytes > 0 else 0
+
+        try:
+            current_expiry_ms = int(target_client.get('expiryTime') or 0)
+        except (TypeError, ValueError):
+            current_expiry_ms = 0
+        now_ms = int(time.time() * 1000)
+        if current_expiry_ms > 0:
+            remaining_ms = max(0, current_expiry_ms - now_ms)
+            new_expiry_ms = now_ms + remaining_ms
+            remaining_days = remaining_ms // 86400000
+        elif current_expiry_ms < 0:
+            # start-after-first-use pending form → preserve as-is
+            new_expiry_ms = current_expiry_ms
+            remaining_days = (-current_expiry_ms) // 86400000
+        else:
+            # 0 = unlimited expiry → stays unlimited
+            new_expiry_ms = 0
+            remaining_days = None
+
+        # ── New email: <base>_vN with N above any existing suffix on this server ──
+        base_email = re.sub(r'_v\d+$', '', email)
+        _max_v = 1
+        for _e in known_emails:
+            _m = re.match(r'^(.*)_v(\d+)$', _e or '')
+            if _m and _m.group(1) == base_email:
+                try:
+                    _max_v = max(_max_v, int(_m.group(2)))
+                except (TypeError, ValueError):
+                    pass
+        new_email = f"{base_email}_v{_max_v + 1}"
+        while new_email in known_emails:
+            _max_v += 1
+            new_email = f"{base_email}_v{_max_v + 1}"
+
+        # ── Disable the old client with a documentation comment ──
+        old_comment = (target_client.get('comment') or '').strip()
+        rotate_note = f"rotated -> {new_email} (uid/link revoked)"
+        disabled_client = copy.deepcopy(target_client)
+        disabled_client['enable'] = False
+        disabled_client['comment'] = f"{old_comment} | {rotate_note}" if old_comment else rotate_note
+
+        _is_v3 = server_is_v3(server)
+        if _is_v3:
+            ok, _vr, verr = v3_update_client(server, session_obj, email, disabled_client)
+            if not ok:
+                _release_renew_lock(_rotate_lock_key)
+                return jsonify({"ok": False, "success": False, "error": f"v3 disable failed: {verr}"}), 502
+        else:
+            # Legacy/SS: no per-client disable endpoint — push the full inbound.
+            if fetched_inbound_row is None:
+                _ibs_fresh, _fe, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                if not _fe:
+                    for _ib in (_ibs_fresh or []):
+                        if _ib.get('id') == inbound_id:
+                            fetched_inbound_row = _ib
+                            break
+            if fetched_inbound_row is None:
+                _release_renew_lock(_rotate_lock_key)
+                return jsonify({"ok": False, "success": False, "error": "Could not fetch full inbound for update"}), 502
+            _full_settings = _json_field(fetched_inbound_row.get('settings'), {})
+            _full_settings['clients'] = [
+                disabled_client if c.get('email') == email else c
+                for c in _full_settings.get('clients', [])
+            ]
+            _ok_push, _push_err = _push_full_inbound(server, session_obj, fetched_inbound_row, _full_settings)
+            if not _ok_push:
+                _release_renew_lock(_rotate_lock_key)
+                return jsonify({"ok": False, "success": False, "error": f"Disable failed: {_push_err}"}), 502
+
+        # ── Create the replacement client ──
+        _is_shadowsocks_no_id = 'id' not in target_client
+        new_sub_id = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+        new_client = {
+            "email": new_email,
+            "comment": f"rotated from {email} | uid/link replaced",
+            "enable": True,
+            "expiryTime": new_expiry_ms,
+            "totalGB": remaining_bytes,
+            "subId": new_sub_id,
+            "limitIp": target_client.get('limitIp', 0),
+            "flow": target_client.get('flow', ''),
+            "tgId": target_client.get('tgId', ''),
+            "reset": target_client.get('reset', 0),
+        }
+        if not _is_shadowsocks_no_id:
+            new_client["id"] = str(uuid.uuid4())
+        new_client_uuid = new_client.get('id') or ''
+
+        if _is_v3:
+            ok, _vr, verr = v3_add_client(server, session_obj, new_client, [inbound_id])
+            if not ok:
+                _release_renew_lock(_rotate_lock_key)
+                return jsonify({"ok": False, "success": False, "error": f"v3 add failed: {verr}"}), 502
+        else:
+            _ok_add, _add_err = _add_client_to_inbound(server, session_obj, fetched_inbound_row, new_client)
+            if not _ok_add:
+                _release_renew_lock(_rotate_lock_key)
+                return jsonify({"ok": False, "success": False, "error": f"Add failed: {_add_err}"}), 502
+
+        # ── Ownership rows ──
+        old_uuid = str(target_client.get('id') or '')
+        now_utc = datetime.utcnow()
+        try:
+            old_so = None
+            if old_uuid:
+                old_so = ServiceOwnership.query.filter_by(
+                    server_id=server.id, client_uuid=old_uuid).first()
+            if old_so is None:
+                old_so = ServiceOwnership.query.filter_by(
+                    server_id=server.id, client_email_snapshot=email, revoked_at=None).first()
+            if old_so is not None:
+                old_so.revoked_at = now_utc
+                db.session.add(ServiceOwnership(
+                    customer_id=old_so.customer_id,
+                    server_id=server.id,
+                    client_uuid=new_client_uuid or new_email,
+                    client_email_snapshot=new_email,
+                    reseller_id=old_so.reseller_id,
+                    verification_method=old_so.verification_method,
+                    verified_by_admin_id=old_so.verified_by_admin_id,
+                    verified_at=old_so.verified_at,
+                ))
+            # ClientOwnership has no revoke field — point it at the new identity.
+            co_query = ClientOwnership.query.filter_by(server_id=server.id, client_email=email)
+            for co in co_query.all():
+                co.client_email = new_email
+                co.client_uuid = new_client_uuid or co.client_uuid
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Rotate ownership update failed for {email}: {e}", exc_info=True)
+            _release_renew_lock(_rotate_lock_key)
+            return jsonify({"ok": False, "success": False, "error": "Rotated on panel, but ownership update failed"}), 500
+
+        invalidate_ownership_cache()
+        add_cached_client(server.id, [inbound_id], new_client)
+        # Mark the old client disabled in the cache too.
+        try:
+            if cached_client_row is not None:
+                with GLOBAL_REFRESH_LOCK:
+                    cached_client_row.setdefault('raw_client', {})
+                    cached_client_row['raw_client']['enable'] = False
+                    cached_client_row['raw_client']['comment'] = disabled_client['comment']
+                    _recompute_cached_client(cached_client_row)
+        except Exception:
+            pass
+
+        # ── New subscription links ──
+        parsed_host = urlparse(server.host)
+        final_port = server.sub_port if server.sub_port else parsed_host.port
+        port_str = f":{final_port}" if final_port else ""
+        base_sub = f"{parsed_host.scheme}://{parsed_host.hostname}{port_str}"
+        final_id = new_sub_id or new_client_uuid
+        sub_url = f"{base_sub}/{(server.sub_path or '').strip('/')}/{final_id}"
+        try:
+            app_base = request.url_root.rstrip('/')
+        except Exception:
+            app_base = ''
+        dash_sub_url = f"{app_base}/s/{server.id}/{final_id}"
+
+        remaining_gb = None
+        if current_total_bytes > 0:
+            remaining_gb = round(remaining_bytes / float(1024 * 1024 * 1024), 2)
+
+        return jsonify({
+            "ok": True,
+            "success": True,
+            "new_email": new_email,
+            "sub_url": sub_url,
+            "dash_sub_url": dash_sub_url,
+            "remaining_days": remaining_days,
+            "remaining_gb": remaining_gb,
+        })
+    except Exception as e:
+        app.logger.error(f"Rotate error for {email}: {e}", exc_info=True)
+        _release_renew_lock(_rotate_lock_key)  # failed → allow an immediate retry
+        return jsonify({"ok": False, "success": False, "error": str(e)}), 400
+
+
 @app.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew/verify', methods=['POST'])
 @login_required
 def verify_renew_client(server_id, inbound_id, email):
@@ -26337,6 +26669,24 @@ def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
                 policy.trial_channel_chat_id = int(trial_channel_chat_id)
             except (TypeError, ValueError):
                 raise ValueError('Trial channel chat ID must be a whole number')
+    if 'trial_channels' in policy_data:
+        raw_channels = policy_data.get('trial_channels') or []
+        if not isinstance(raw_channels, list):
+            raise ValueError('Trial channels must be a list')
+        if len(raw_channels) > 10:
+            raise ValueError('At most 10 trial channels are allowed')
+        channels = []
+        for item in raw_channels:
+            if not isinstance(item, dict):
+                raise ValueError('Each trial channel must be an object')
+            try:
+                chat_id = int(item.get('chat_id'))
+            except (TypeError, ValueError):
+                raise ValueError('Trial channel chat ID must be a whole number')
+            title = str(item.get('title') or '').strip()[:200]
+            invite_url = str(item.get('invite_url') or '').strip()[:200]
+            channels.append({'chat_id': chat_id, 'title': title, 'invite_url': invite_url})
+        policy.trial_channel_list_json = json.dumps(channels, separators=(',', ':'))
     policy.emergency_enabled = bool(policy_data.get('emergency_enabled', policy.emergency_enabled))
     try:
         policy.emergency_days = int(policy_data.get('emergency_days', policy.emergency_days or 1))
@@ -26353,8 +26703,9 @@ def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
         raise ValueError('Emergency cooldown must be between 1 and 365 days')
     if policy.trial_enabled and not policy.trial_package_id:
         raise ValueError('Choose a trial package before enabling the trial')
-    if policy.trial_requires_channel_membership and not policy.trial_channel_chat_id:
-        raise ValueError('Enter a Telegram channel chat ID before requiring trial membership')
+    if policy.trial_requires_channel_membership and not (
+            policy.trial_channel_chat_id or policy.trial_channels()):
+        raise ValueError('Enter at least one Telegram channel before requiring trial membership')
     if inbound_routes is not None:
         _save_telegram_purchase_routes(bot, inbound_routes)
 
