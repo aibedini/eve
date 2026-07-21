@@ -141,6 +141,7 @@ PYTHON_VERSION="3.11"
 APP_PORT="5000"
 ENV_FILE="$APP_DIR/.env"
 LOG_DIR="/var/log/$SERVICE_NAME"
+PULSE_SITES_FILE="$APP_DIR/instance/pulse_sites.txt"
 SELF_SIGNED_SSL_DIR="/etc/ssl/eve-manager"
 DOMAIN=""
 ENVIRONMENT="production"
@@ -2926,6 +2927,330 @@ full_offline_install() {
 }
 
 # ──────────────────────────────────────────────────────────────
+# Eve Pulse — config health monitor (pulse_runner.py bridge)
+# ──────────────────────────────────────────────────────────────
+
+pulse_runner_exec() {
+    # Run pulse_runner.py as the app user with the panel .env loaded
+    # (DATABASE_URL, XRAY_BIN), mirroring the maintenance.py invocation.
+    local quoted
+    printf -v quoted '%q ' "$@"
+    sudo -u "$APP_USER" bash -c "set -a; [ -f '$ENV_FILE' ] && source '$ENV_FILE' || true; set +a; cd '$APP_DIR' && export DISABLE_BACKGROUND_THREADS=true && '${APP_DIR}/venv/bin/python' '${APP_DIR}/pulse_runner.py' $quoted"
+}
+
+pulse_check_prereqs() {
+    if [ ! -x "${APP_DIR}/venv/bin/python" ] || [ ! -f "${APP_DIR}/pulse_runner.py" ]; then
+        print_error "pulse_runner.py not found — this Eve install is missing Pulse."
+        print_warning "Run an Eve update first (menu option [2])."
+        return 1
+    fi
+    if ! find_xray_binary >/dev/null 2>&1; then
+        print_error "Xray runtime not found."
+        print_warning "Install it first with menu option [x] or: eve --install-xray"
+        return 1
+    fi
+    return 0
+}
+
+pulse_pick_server() {
+    # Sets PULSE_SERVER_ID; returns 1 on cancel/failure.
+    PULSE_SERVER_ID=""
+    local json
+    json=$(pulse_runner_exec list-servers 2>/dev/null) || true
+    if ! printf '%s' "$json" | grep -q '"servers"'; then
+        print_error "Could not list servers (is the panel database reachable?)."
+        return 1
+    fi
+    local -a ids=() names=()
+    while IFS=$'\t' read -r sid sname; do
+        [ -n "$sid" ] || continue
+        ids+=("$sid"); names+=("$sname")
+    done < <(printf '%s' "$json" | python3 -c '
+import json, sys
+for s in json.load(sys.stdin).get("servers", []):
+    print("%d\t%s" % (s["id"], s["name"]))
+')
+    if [ ${#ids[@]} -eq 0 ]; then
+        print_error "No enabled servers found."
+        return 1
+    fi
+    local i pick
+    for i in "${!ids[@]}"; do
+        echo -e "   ${GREEN}[$((i+1))]${NC}  ${names[$i]} ${DIM}(id ${ids[$i]})${NC}"
+    done
+    read -rp "  Select server [1-${#ids[@]}] (empty = cancel): " pick
+    if ! [[ "$pick" =~ ^[0-9]+$ ]] || [ "$pick" -lt 1 ] || [ "$pick" -gt ${#ids[@]} ]; then
+        return 1
+    fi
+    PULSE_SERVER_ID="${ids[$((pick-1))]}"
+    return 0
+}
+
+pulse_pick_inbound() {
+    # Sets PULSE_INBOUND_ID to an inbound id or "all"; returns 1 on cancel/failure.
+    PULSE_INBOUND_ID=""
+    local json
+    json=$(pulse_runner_exec list-inbounds --server-id "$1" 2>/dev/null) || true
+    if ! printf '%s' "$json" | grep -q '"inbounds"'; then
+        local err
+        err=$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("error","unknown error"))' 2>/dev/null || true)
+        print_error "Could not list inbounds: ${err:-unknown error}"
+        return 1
+    fi
+    local -a ids=() labels=()
+    while IFS=$'\t' read -r iid ilabel; do
+        [ -n "$iid" ] || continue
+        ids+=("$iid"); labels+=("$ilabel")
+    done < <(printf '%s' "$json" | python3 -c '
+import json, sys
+for i in json.load(sys.stdin).get("inbounds", []):
+    print("%s\t%s:%s (%s clients)" % (i["id"], i["protocol"], i["remark"], i["clients"]))
+')
+    if [ ${#ids[@]} -eq 0 ]; then
+        print_error "No inbounds found on this server."
+        return 1
+    fi
+    echo -e "   ${GREEN}[a]${NC}  ALL inbounds"
+    local i pick
+    for i in "${!ids[@]}"; do
+        echo -e "   ${GREEN}[$((i+1))]${NC}  ${labels[$i]}"
+    done
+    read -rp "  Select inbound (empty = cancel): " pick
+    if [ "$pick" = "a" ] || [ "$pick" = "A" ]; then
+        PULSE_INBOUND_ID="all"
+        return 0
+    fi
+    if ! [[ "$pick" =~ ^[0-9]+$ ]] || [ "$pick" -lt 1 ] || [ "$pick" -gt ${#ids[@]} ]; then
+        return 1
+    fi
+    PULSE_INBOUND_ID="${ids[$((pick-1))]}"
+    return 0
+}
+
+pulse_print_run_results() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception as exc:
+    print("  x could not parse pulse output: %s" % exc)
+    sys.exit(1)
+
+if data.get("error"):
+    print("  x %s" % data["error"])
+    sys.exit(1)
+
+summary = data.get("summary") or {}
+print("  Run #%s - %s [%s] probed %s/%s configs" % (
+    data.get("run_id"), (data.get("server") or {}).get("name"),
+    data.get("profile"), data.get("probed"), data.get("total_available")))
+print("  healthy: %s  degraded: %s  down: %s" % (
+    summary.get("healthy", 0), summary.get("degraded", 0), summary.get("down", 0)))
+print()
+
+
+def fmt(value, width):
+    if value is None:
+        return " " * (width - 1) + "-"
+    return "%*.1f" % (width, value)
+
+
+print("  %-32s %-9s %8s %7s %8s  %s" % ("CONFIG", "VERDICT", "LAT ms", "LOSS %", "Mbps", "FAILED SITES"))
+print("  " + "-" * 78)
+for row in data.get("results", []):
+    label = (row.get("label") or "")[:32]
+    sites = ",".join(row.get("failed_sites") or []) or "-"
+    if row.get("error") and sites == "-":
+        sites = "err: %s" % str(row["error"])[:40]
+    print("  %-32s %-9s %s %s %s  %s" % (
+        label, row.get("verdict") or "?",
+        fmt(row.get("latency_avg_ms"), 8), fmt(row.get("loss_pct"), 7),
+        fmt(row.get("download_mbps"), 8), sites))
+
+for warning in data.get("warnings") or []:
+    print("  ! %s" % warning)
+PY
+}
+
+pulse_run_probe() {
+    print_header "Pulse — Run Probe"
+    pulse_check_prereqs || return 1
+    if ! pulse_pick_server; then
+        print_warning "Cancelled."
+        return 1
+    fi
+    local server_id="$PULSE_SERVER_ID"
+    if ! pulse_pick_inbound "$server_id"; then
+        print_warning "Cancelled."
+        return 1
+    fi
+
+    local profile limit
+    read -rp "  Profile [quick/full] (default quick): " profile
+    [ "$profile" = "full" ] || profile="quick"
+
+    local -a site_args=()
+    if [ -s "$PULSE_SITES_FILE" ]; then
+        site_args+=(--sites-file "$PULSE_SITES_FILE")
+        echo -e "  ${DIM}Using site checklist: $PULSE_SITES_FILE${NC}"
+    fi
+    local custom_site
+    while true; do
+        read -rp "  Extra site check name=url[::expect] (empty = done): " custom_site
+        [ -n "$custom_site" ] || break
+        site_args+=(--site "$custom_site")
+    done
+
+    read -rp "  Max configs to probe [10]: " limit
+    limit="${limit:-10}"
+
+    local -a cmd=(run --server-id "$server_id" --profile "$profile" --limit "$limit")
+    if [ "$PULSE_INBOUND_ID" = "all" ]; then
+        cmd+=(--all-inbounds)
+    else
+        cmd+=(--inbound-id "$PULSE_INBOUND_ID")
+    fi
+    cmd+=("${site_args[@]}")
+
+    echo
+    print_warning "Probing (live progress below; this can take a while)..."
+    local tmp_json rc
+    tmp_json=$(mktemp /tmp/eve-pulse-run-XXXXXX.json) || return 1
+    rc=0
+    pulse_runner_exec "${cmd[@]}" > "$tmp_json" || rc=$?
+    echo
+    pulse_print_run_results "$tmp_json"
+    rm -f "$tmp_json"
+    if [ $rc -gt 1 ]; then
+        return 1
+    fi
+    return 0
+}
+
+pulse_show_history() {
+    print_header "Pulse — History"
+    if [ ! -x "${APP_DIR}/venv/bin/python" ] || [ ! -f "${APP_DIR}/pulse_runner.py" ]; then
+        print_error "pulse_runner.py not found — run an Eve update first (menu option [2])."
+        return 1
+    fi
+    local filter
+    read -rp "  Server ID filter (empty = all): " filter
+    local -a cmd=(history --limit 20)
+    if [[ "$filter" =~ ^[0-9]+$ ]]; then
+        cmd+=(--server-id "$filter")
+    fi
+    local tmp_json rc
+    tmp_json=$(mktemp /tmp/eve-pulse-hist-XXXXXX.json) || return 1
+    rc=0
+    pulse_runner_exec "${cmd[@]}" > "$tmp_json" || rc=$?
+    if [ $rc -ne 0 ]; then
+        print_error "Could not read history."
+        rm -f "$tmp_json"
+        return 1
+    fi
+    python3 - "$tmp_json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+runs = data.get("runs") or []
+if not runs:
+    print("  (no pulse runs yet)")
+for run in runs:
+    s = run.get("summary") or {}
+    print("  #%-4s %-19s %-20s %-8s %-6s %-8s ok=%s deg=%s down=%s" % (
+        run.get("id"), str(run.get("created_at") or "?")[:19],
+        str(run.get("server_name") or "?")[:20], run.get("scope"),
+        run.get("profile"), run.get("status"),
+        s.get("healthy", 0), s.get("degraded", 0), s.get("down", 0)))
+PY
+    rm -f "$tmp_json"
+}
+
+pulse_sites_menu() {
+    while true; do
+        print_header "Pulse — Site Checklist"
+        echo -e "  ${DIM}File: $PULSE_SITES_FILE (one name=url[::expect] per line)${NC}"
+        local n=0 line
+        if [ -s "$PULSE_SITES_FILE" ]; then
+            while IFS= read -r line; do
+                case "$line" in ''|\#*) continue ;; esac
+                n=$((n+1))
+                echo -e "   ${GREEN}[$n]${NC}  $line"
+            done < "$PULSE_SITES_FILE"
+        fi
+        [ $n -eq 0 ] && echo -e "  ${DIM}(empty)${NC}"
+        echo
+        echo -e "   ${GREEN}[a]${NC}  Add site"
+        echo -e "   ${GREEN}[d]${NC}  Delete site by number"
+        echo -e "   ${DIM}[b]${NC}  Back"
+        read -rp "  Select option: " schoice
+        case "$schoice" in
+            a|A)
+                local new_site
+                read -rp "  Site (name=url[::expect]): " new_site
+                if [ -n "$new_site" ]; then
+                    mkdir -p "$(dirname "$PULSE_SITES_FILE")"
+                    touch "$PULSE_SITES_FILE"
+                    echo "$new_site" >> "$PULSE_SITES_FILE"
+                    chown "$APP_USER:$APP_USER" "$PULSE_SITES_FILE" 2>/dev/null || true
+                    chmod 644 "$PULSE_SITES_FILE" 2>/dev/null || true
+                    print_success "Added."
+                fi
+                ;;
+            d|D)
+                local del
+                read -rp "  Number to delete: " del
+                if [[ "$del" =~ ^[0-9]+$ ]] && [ -s "$PULSE_SITES_FILE" ]; then
+                    local tmp
+                    tmp=$(mktemp /tmp/eve-pulse-sites-XXXXXX) || continue
+                    n=0
+                    : > "$tmp"
+                    while IFS= read -r line; do
+                        case "$line" in ''|\#*) continue ;; esac
+                        n=$((n+1))
+                        [ "$n" -eq "$del" ] || echo "$line" >> "$tmp"
+                    done < "$PULSE_SITES_FILE"
+                    cat "$tmp" > "$PULSE_SITES_FILE"
+                    rm -f "$tmp"
+                    print_success "Deleted."
+                fi
+                ;;
+            b|B|q|Q)
+                return 0
+                ;;
+            *)
+                print_error "Invalid option: $schoice"
+                ;;
+        esac
+    done
+}
+
+pulse_menu() {
+    require_root
+    while true; do
+        print_header "Pulse — Config Health Monitor"
+        echo -e "   ${MAGENTA}[1]${NC}  Run probe"
+        echo -e "   ${MAGENTA}[2]${NC}  History"
+        echo -e "   ${MAGENTA}[3]${NC}  Site checklist"
+        echo -e "   ${DIM}[4]${NC}  Back"
+        echo
+        read -rp "  Select option: " pchoice
+        case "$pchoice" in
+            1) pulse_run_probe ;;
+            2) pulse_show_history ;;
+            3) pulse_sites_menu ;;
+            4|b|B|q|Q) return 0 ;;
+            *) print_error "Invalid option: $pchoice" ;;
+        esac
+    done
+}
+
+# ──────────────────────────────────────────────────────────────
 # Main interactive menu (loops until quit)
 # ──────────────────────────────────────────────────────────────
 
@@ -2952,6 +3277,9 @@ show_menu() {
         echo -e "   ${MAGENTA}[x]${NC}  Install / Update Eve Xray Runtime"
         echo -e "   ${MAGENTA}[r]${NC}  Restart Telegram Egress Worker"
         echo -e "   ${MAGENTA}[b]${NC}  Restart Telegram Bot Worker"
+        echo
+        echo -e "  ${BOLD}Monitoring${NC}"
+        echo -e "   ${MAGENTA}[p]${NC}  Pulse — Config Health Monitor"
         echo
         echo -e "  ${BOLD}System${NC}"
         echo -e "   ${DIM}[s]${NC}  Update this Script (Online — GitHub)"
@@ -3053,6 +3381,9 @@ show_menu() {
                 require_root
                 restart_telegram_bot_service || true
                 read -rp "  Press Enter to return to menu..." _dummy
+                ;;
+            p|P)
+                pulse_menu
                 ;;
             s|S)
                 update_self

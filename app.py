@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.11"
+APP_VERSION = "2.5.12"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -9612,6 +9612,89 @@ class HealthLog(db.Model):
             'action_taken': self.action_taken,
             'details': self.details,
             'resolved': self.resolved,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Eve Pulse models – config health-check runs & per-config probe results
+# ---------------------------------------------------------------------------
+class PulseRun(db.Model):
+    __tablename__ = 'pulse_runs'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=True, index=True)
+    server_name = db.Column(db.String(100), nullable=True)      # snapshot in case the server is renamed/removed
+    scope = db.Column(db.String(16), default='server')          # server / inbound / config
+    inbound_label = db.Column(db.String(255), nullable=True)
+    profile = db.Column(db.String(16), default='quick')         # quick / full / custom
+    vantage = db.Column(db.String(32), default='local')         # 'local' now; remote agents later
+    status = db.Column(db.String(16), default='running')        # running / done / failed
+    summary_json = db.Column(db.Text, nullable=True)            # counts: healthy/degraded/down
+    triggered_by = db.Column(db.String(32), default='cli')
+    error = db.Column(db.Text, nullable=True)
+    results = db.relationship('PulseResultRecord', backref='run',
+                              cascade='all, delete-orphan', lazy=True)
+
+    def summary(self):
+        try:
+            return json.loads(self.summary_json) if self.summary_json else {}
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'finished_at': self.finished_at.isoformat() + 'Z' if self.finished_at else None,
+            'server_id': self.server_id,
+            'server_name': self.server_name,
+            'scope': self.scope,
+            'inbound_label': self.inbound_label,
+            'profile': self.profile,
+            'vantage': self.vantage,
+            'status': self.status,
+            'summary': self.summary(),
+            'triggered_by': self.triggered_by,
+            'error': self.error,
+            'result_count': len(self.results) if self.results is not None else 0,
+        }
+
+
+class PulseResultRecord(db.Model):
+    """One probed config within a PulseRun (named to avoid clashing with
+    pulse.ProbeResult when both are imported in the same module)."""
+    __tablename__ = 'pulse_results'
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.Integer, db.ForeignKey('pulse_runs.id'), nullable=False, index=True)
+    config_label = db.Column(db.String(255), nullable=True)
+    uri_scheme = db.Column(db.String(32), nullable=True)
+    verdict = db.Column(db.String(16), default='down', index=True)   # healthy / degraded / down
+    latency_avg_ms = db.Column(db.Float, nullable=True)
+    loss_pct = db.Column(db.Float, nullable=True)
+    download_mbps = db.Column(db.Float, nullable=True)
+    sites_json = db.Column(db.Text, nullable=True)                   # site-check array
+    detail_json = db.Column(db.Text, nullable=True)                  # full ProbeResult.to_dict()
+    is_probe = db.Column(db.Boolean, default=False)                  # email contains 'probe'
+    error = db.Column(db.Text, nullable=True)
+
+    def to_dict(self):
+        try:
+            sites = json.loads(self.sites_json) if self.sites_json else []
+        except Exception:
+            sites = []
+        return {
+            'id': self.id,
+            'run_id': self.run_id,
+            'config_label': self.config_label,
+            'uri_scheme': self.uri_scheme,
+            'verdict': self.verdict,
+            'latency_avg_ms': self.latency_avg_ms,
+            'loss_pct': self.loss_pct,
+            'download_mbps': self.download_mbps,
+            'sites': sites,
+            'is_probe': bool(self.is_probe),
+            'error': self.error,
         }
 
 
