@@ -28,6 +28,7 @@ from telegram_xray import build_xray_config_from_uri, find_xray_binary
 
 DEFAULT_LATENCY_ENDPOINT = "https://cp.cloudflare.com/generate_204"
 DEFAULT_DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=10000000"
+DEFAULT_UPLOAD_URL = "https://speed.cloudflare.com/__up"
 
 VERDICT_HEALTHY = "healthy"
 VERDICT_DEGRADED = "degraded"
@@ -63,6 +64,7 @@ class ProbeProfile:
 
     run_latency: bool = True
     run_download: bool = True
+    run_upload: bool = True
     run_loss: bool = True
     run_sites: bool = True
 
@@ -73,6 +75,11 @@ class ProbeProfile:
     download_url: str = DEFAULT_DOWNLOAD_URL
     download_timeout: float = 30.0
     download_chunk_bytes: int = 65536
+
+    upload_url: str = DEFAULT_UPLOAD_URL
+    upload_bytes: int = 2_000_000
+    upload_timeout: float = 30.0
+    upload_chunk_bytes: int = 65536
 
     loss_requests: int = 10
 
@@ -88,12 +95,13 @@ class ProbeProfile:
 
 
 def quick_profile(site_checks: Optional[List[SiteCheck]] = None) -> ProbeProfile:
-    """Latency, loss, and site checks only — no large download."""
-    return ProbeProfile(run_download=False, site_checks=site_checks or [])
+    """Latency, loss, and site checks only — no large download/upload."""
+    return ProbeProfile(run_download=False, run_upload=False,
+                        site_checks=site_checks or [])
 
 
 def full_profile(site_checks: Optional[List[SiteCheck]] = None) -> ProbeProfile:
-    """Everything, including the download-speed test."""
+    """Everything, including the download- and upload-speed tests."""
     return ProbeProfile(site_checks=site_checks or [])
 
 
@@ -261,6 +269,53 @@ def _run_download(session, profile: ProbeProfile) -> dict:
     return result
 
 
+class _UploadDeadlineExceeded(Exception):
+    """Raised inside the upload stream generator when the budget is spent."""
+
+
+def _run_upload(session, profile: ProbeProfile) -> dict:
+    result = {
+        "url": profile.upload_url,
+        "bytes": 0,
+        "seconds": None,
+        "mbps": None,
+        "partial": False,
+        "error": None,
+    }
+    start = time.monotonic()
+    deadline = start + profile.upload_timeout
+    sent = {"bytes": 0}
+
+    def _stream():
+        remaining = max(0, int(profile.upload_bytes))
+        while remaining > 0:
+            if time.monotonic() > deadline:
+                raise _UploadDeadlineExceeded()
+            size = min(int(profile.upload_chunk_bytes), remaining)
+            sent["bytes"] += size
+            remaining -= size
+            yield b"\x00" * size
+
+    try:
+        response = session.post(profile.upload_url, data=_stream(),
+                                timeout=profile.request_timeout)
+        if response.status_code >= 400:
+            result["partial"] = True
+            result["error"] = f"http {response.status_code}"
+    except _UploadDeadlineExceeded:
+        result["partial"] = True
+        result["error"] = "overall upload timeout exceeded"
+    except Exception as exc:
+        result["partial"] = True
+        result["error"] = str(exc)
+    result["bytes"] = sent["bytes"]
+    elapsed = time.monotonic() - start
+    result["seconds"] = round(elapsed, 3)
+    if elapsed > 0 and result["bytes"] > 0:
+        result["mbps"] = round(result["bytes"] * 8 / elapsed / 1_000_000, 3)
+    return result
+
+
 def _run_sites(session, profile: ProbeProfile) -> dict:
     checks = []
     for site in profile.site_checks:
@@ -376,6 +431,8 @@ def run_probe(
             phases.append(("loss", _run_loss))
         if profile.run_download:
             phases.append(("download", _run_download))
+        if profile.run_upload:
+            phases.append(("upload", _run_upload))
         if profile.run_sites and profile.site_checks:
             phases.append(("sites", _run_sites))
         for name, runner in phases:

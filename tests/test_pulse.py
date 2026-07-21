@@ -73,13 +73,25 @@ class FakeSession:
         self._responses = list(responses or [])
         self._default = default if default is not None else FakeResponse()
         self.calls = []
+        self.uploaded_bytes = 0
 
-    def get(self, url, **kwargs):
-        self.calls.append(url)
+    def _next(self):
         item = self._responses.pop(0) if self._responses else self._default
         if isinstance(item, Exception):
             raise item
         return item
+
+    def get(self, url, **kwargs):
+        self.calls.append(url)
+        return self._next()
+
+    def post(self, url, data=None, **kwargs):
+        self.calls.append(url)
+        response = self._next()
+        if data is not None:
+            for chunk in data:  # stream the body like requests would
+                self.uploaded_bytes += len(chunk)
+        return response
 
 
 def _probe_mocks(process):
@@ -112,6 +124,7 @@ class RunProbeLifecycleTest(unittest.TestCase):
         self.assertIn("loss", result.tests)
         self.assertIn("sites", result.tests)
         self.assertNotIn("download", result.tests)
+        self.assertNotIn("upload", result.tests)
         self.assertEqual(result.label, "demo")
         self.assertEqual(result.scheme, "vless")
 
@@ -135,6 +148,11 @@ class RunProbeLifecycleTest(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertEqual(result.tests["download"]["bytes"], 2000)
         self.assertFalse(result.tests["download"]["partial"])
+        # full profile also runs the upload test through the same session
+        self.assertIn("upload", result.tests)
+        self.assertEqual(result.tests["upload"]["bytes"], 2_000_000)
+        self.assertFalse(result.tests["upload"]["partial"])
+        self.assertEqual(session.uploaded_bytes, 2_000_000)
 
     def test_teardown_on_unexpected_exception(self):
         process = FakeProcess()
@@ -269,6 +287,45 @@ class DownloadTest(unittest.TestCase):
         self.assertIn("stalled", result["error"])
 
 
+class UploadTest(unittest.TestCase):
+    def test_mbps_math(self):
+        profile = pulse.ProbeProfile(upload_bytes=1_000_000,
+                                     upload_chunk_bytes=500_000)
+        session = FakeSession(responses=[FakeResponse(status_code=200)])
+        with mock.patch("pulse.time.monotonic",
+                        side_effect=itertools.count(0, 0.5).__next__):
+            result = pulse._run_upload(session, profile)
+        self.assertEqual(result["bytes"], 1_000_000)
+        self.assertEqual(session.uploaded_bytes, 1_000_000)
+        self.assertEqual(result["seconds"], 1.5)
+        self.assertAlmostEqual(result["mbps"], 1_000_000 * 8 / 1.5 / 1_000_000, places=3)
+        self.assertFalse(result["partial"])
+
+    def test_overall_timeout_marks_partial(self):
+        profile = pulse.ProbeProfile(upload_timeout=30.0)
+        session = FakeSession(responses=[FakeResponse(status_code=200)])
+        with mock.patch("pulse.time.monotonic",
+                        side_effect=itertools.count(0, 100.0).__next__):
+            result = pulse._run_upload(session, profile)
+        self.assertTrue(result["partial"])
+        self.assertIn("timeout", result["error"])
+
+    def test_request_failure_marks_partial(self):
+        profile = pulse.ProbeProfile()
+        session = FakeSession(responses=[requests.ConnectionError("reset")])
+        result = pulse._run_upload(session, profile)
+        self.assertTrue(result["partial"])
+        self.assertEqual(result["bytes"], 0)
+        self.assertIn("reset", result["error"])
+
+    def test_http_error_marks_partial(self):
+        profile = pulse.ProbeProfile(upload_bytes=1000)
+        session = FakeSession(responses=[FakeResponse(status_code=503)])
+        result = pulse._run_upload(session, profile)
+        self.assertTrue(result["partial"])
+        self.assertIn("503", result["error"])
+
+
 class SiteCheckTest(unittest.TestCase):
     def test_pass_fail_and_substring(self):
         profile = pulse.ProbeProfile(site_checks=[
@@ -390,6 +447,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["verdict"], "healthy")
         profile = run.call_args[0][1]
         self.assertFalse(profile.run_download)
+        self.assertFalse(profile.run_upload)
         self.assertEqual(profile.site_checks[0].name, "ex")
 
     def test_main_down_exit_code(self):

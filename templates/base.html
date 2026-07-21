@@ -263,6 +263,13 @@
                     <span>Monitor</span>
                 </a>
 
+                <a href="{{ url_for('pulse_page') }}" class="nav-item {% if request.endpoint == 'pulse_page' %}active{% endif %}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+                    </svg>
+                    <span>Pulse</span>
+                </a>
+
                 <a href="{{ url_for('royalty_page') }}" class="nav-item {% if request.endpoint == 'royalty_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7z"></path>

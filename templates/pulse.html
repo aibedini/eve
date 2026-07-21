@@ -1,0 +1,511 @@
+{% extends "base.html" %}
+{% block title %}Pulse{% endblock %}
+{% block page_title %}Pulse{% endblock %}
+
+{% block content %}
+<style nonce="{{ csp_nonce }}">
+.pulse-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 20px;
+    margin-bottom: 24px;
+}
+.pulse-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 20px;
+}
+.pulse-card h3 {
+    margin: 0 0 14px;
+    font-size: 1rem;
+}
+.pulse-card .form-group { margin-bottom: 12px; }
+.pulse-card label {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+}
+.pulse-card select,
+.pulse-card input[type="number"],
+.pulse-card input[type="text"],
+.pulse-card textarea {
+    width: 100%;
+    background: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
+    padding: 8px 10px;
+    font-size: 0.85rem;
+    font-family: inherit;
+}
+.pulse-card textarea { resize: vertical; min-height: 64px; }
+.pulse-checks {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.pulse-checks label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    cursor: pointer;
+}
+.pulse-table-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 20px;
+    overflow-x: auto;
+}
+.pulse-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.pulse-table th, .pulse-table td {
+    padding: 10px 8px;
+    text-align: start;
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
+}
+.pulse-table th { color: var(--text-secondary); font-weight: 500; }
+.pulse-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+.pulse-badge.healthy { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+.pulse-badge.degraded { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+.pulse-badge.down { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.pulse-badge.queued { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+.pulse-badge.running { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+.pulse-badge.done { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+.pulse-badge.failed { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.pulse-run-row { cursor: pointer; }
+.pulse-run-row:hover td { background: rgba(99, 102, 241, 0.06); }
+.pulse-detail-row td { white-space: normal; background: rgba(99, 102, 241, 0.04); }
+.pulse-detail-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 6px; }
+.pulse-detail-table th, .pulse-detail-table td {
+    padding: 6px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: start;
+}
+.pulse-hint { font-size: 0.72rem; color: var(--text-secondary); margin-top: 4px; }
+.pulse-msg { font-size: 0.8rem; margin-top: 10px; min-height: 1em; }
+.pulse-msg.error { color: #ef4444; }
+.pulse-msg.ok { color: #22c55e; }
+</style>
+
+<div class="pulse-grid">
+    <div class="pulse-card">
+        <h3>اجرای فوری بررسی</h3>
+        <form id="pulse-run-form">
+            <div class="form-group">
+                <label for="pulse-server">سرور</label>
+                <select id="pulse-server" name="server_id" required>
+                    {% for srv in servers %}
+                    <option value="{{ srv.id }}">{{ srv.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="pulse-inbound">اینباند</label>
+                <select id="pulse-inbound" name="inbound_id">
+                    <option value="all">همه اینباندها</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="pulse-profile">پروفایل بررسی</label>
+                <select id="pulse-profile" name="profile">
+                    <option value="quick">سریع (بدون تست دانلود)</option>
+                    <option value="full">کامل (شامل تست سرعت دانلود/آپلود)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="pulse-vantage">محل اجرا (دیدگاه)</label>
+                <select id="pulse-vantage" name="vantage">
+                    <option value="local">محلی (ایران)</option>
+                    {% for agent in agents %}
+                    <option value="agent:{{ agent.name }}">ایجنت خارج: {{ agent.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="pulse-limit">حداکثر تعداد کانفیگ</label>
+                <input type="number" id="pulse-limit" name="limit" value="10" min="1" max="200">
+            </div>
+            <div class="form-group">
+                <label for="pulse-sites">سایت‌های سفارشی (اختیاری)</label>
+                <textarea id="pulse-sites" name="sites" dir="ltr"
+                          placeholder="name=https://example.com::expected text"></textarea>
+                <div class="pulse-hint">در هر خط یک مورد: name=url یا name=url::متن مورد انتظار</div>
+            </div>
+            <button type="submit" class="btn btn-primary" id="pulse-run-btn">اجرای بررسی</button>
+            <div class="pulse-msg" id="pulse-run-msg"></div>
+        </form>
+    </div>
+
+    <div class="pulse-card">
+        <h3>بررسی زمان‌بندی‌شده</h3>
+        <form method="post" action="{{ url_for('pulse_settings_save') }}">
+            <div class="pulse-checks">
+                <label>
+                    <input type="checkbox" name="enabled" {% if settings.enabled %}checked{% endif %}>
+                    فعال
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="pulse-sched-interval">بازه اجرا (دقیقه)</label>
+                <input type="number" id="pulse-sched-interval" name="interval_minutes"
+                       value="{{ settings.interval_minutes or 60 }}" min="5" max="1440">
+            </div>
+            <div class="form-group">
+                <label for="pulse-sched-server">سرور</label>
+                <select id="pulse-sched-server" name="server_id">
+                    <option value="all" {% if not settings.server_id %}selected{% endif %}>همه سرورها</option>
+                    {% for srv in servers %}
+                    <option value="{{ srv.id }}" {% if settings.server_id == srv.id %}selected{% endif %}>{{ srv.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="pulse-sched-inbound">اینباند</label>
+                <select id="pulse-sched-inbound" name="inbound_id" data-current="{{ settings.inbound_id or '' }}">
+                    <option value="all">همه اینباندها</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="pulse-sched-profile">پروفایل بررسی</label>
+                <select id="pulse-sched-profile" name="profile">
+                    <option value="quick" {% if settings.profile != 'full' %}selected{% endif %}>سریع</option>
+                    <option value="full" {% if settings.profile == 'full' %}selected{% endif %}>کامل</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="pulse-sched-limit">حداکثر تعداد کانفیگ</label>
+                <input type="number" id="pulse-sched-limit" name="limit"
+                       value="{{ settings.probe_limit or 10 }}" min="1" max="200">
+            </div>
+            <div class="form-group">
+                <label for="pulse-sched-sites">سایت‌های سفارشی (اختیاری)</label>
+                <textarea id="pulse-sched-sites" name="sites" dir="ltr">{% for site in settings.sites() %}{{ site.name }}={{ site.url }}{% if site.expect_substring %}::{{ site.expect_substring }}{% endif %}
+{% endfor %}</textarea>
+            </div>
+            <div class="pulse-checks">
+                <label>
+                    <input type="checkbox" name="alert_on_down" {% if settings.alert_on_down %}checked{% endif %}>
+                    هشدار تلگرام هنگام قطعی
+                </label>
+                <label>
+                    <input type="checkbox" name="alert_on_degraded" {% if settings.alert_on_degraded %}checked{% endif %}>
+                    هشدار تلگرام هنگام تضعیف
+                </label>
+            </div>
+            <button type="submit" class="btn btn-primary">ذخیره تنظیمات</button>
+            {% if settings.last_run_at %}
+            <div class="pulse-hint">آخرین اجرای زمان‌بندی‌شده: {{ format_app_datetime(settings.last_run_at) }}</div>
+            {% endif %}
+        </form>
+    </div>
+
+    <div class="pulse-card">
+        <h3>ایجنت‌های خارج از ایران</h3>
+        <table class="pulse-detail-table" id="pulse-agents-table">
+            <thead><tr><th>نام</th><th>آخرین اتصال</th><th>وضعیت</th><th></th></tr></thead>
+            <tbody>
+                {% for agent in agents %}
+                <tr>
+                    <td dir="ltr">{{ agent.name }}</td>
+                    <td>
+                        {%- if agent.last_seen_at -%}
+                            {{ format_app_datetime(agent.last_seen_at) }}{% if agent.last_ip %} ({{ agent.last_ip }}){% endif %}
+                        {%- else %}هرگز{% endif -%}
+                    </td>
+                    <td>{{ 'فعال' if agent.enabled else 'غیرفعال' }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('pulse_agent_delete', agent_id=agent.id) }}"
+                              onsubmit="return confirm('ایجنت «{{ agent.name }}» حذف شود؟');">
+                            <button type="submit" class="btn btn-sm">حذف</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" style="color: var(--text-secondary);">ایجنتی ثبت نشده است</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <form id="pulse-agent-form" style="margin-top: 14px;">
+            <div class="form-group">
+                <label for="pulse-agent-name">نام ایجنت جدید</label>
+                <input type="text" id="pulse-agent-name" name="name" dir="ltr" placeholder="de-fra-1" required>
+            </div>
+            <button type="submit" class="btn btn-primary">ایجاد ایجنت</button>
+            <div class="pulse-msg" id="pulse-agent-msg"></div>
+        </form>
+        <div id="pulse-agent-token-box" style="display: none; margin-top: 10px;">
+            <div class="pulse-hint">توکن فقط همین یک بار نمایش داده می‌شود؛ دستورات زیر را کپی و ذخیره کنید، سپس صفحه را تازه‌سازی کنید.</div>
+            <textarea id="pulse-agent-install" dir="ltr" readonly rows="3" style="width: 100%;"></textarea>
+        </div>
+    </div>
+</div>
+
+<div class="pulse-table-wrap">
+    <h3 style="margin-top: 0;">اجراهای اخیر</h3>
+    <table class="pulse-table" id="pulse-runs-table">
+        <thead>
+            <tr>
+                <th>زمان</th>
+                <th>سرور</th>
+                <th>محدوده</th>
+                <th>پروفایل</th>
+                <th>دیدگاه</th>
+                <th>وضعیت</th>
+                <th>سالم</th>
+                <th>تضعیف</th>
+                <th>قطع</th>
+                <th>مدت</th>
+                <th>منشأ</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in runs %}
+            {% set summary = run.summary() %}
+            <tr class="pulse-run-row" data-run-id="{{ run.id }}">
+                <td>{{ format_app_datetime(run.created_at) }}</td>
+                <td>{{ run.server_name or '—' }}</td>
+                <td>{{ run.inbound_label or ('همه اینباندها' if run.scope == 'server' else run.scope) }}</td>
+                <td>{{ run.profile }}</td>
+                <td>{{ 'محلی' if (run.vantage or 'local') == 'local' else (run.vantage or '').replace('agent:', 'ایجنت ') }}</td>
+                <td>
+                    <span class="pulse-badge {{ run.status }}">
+                        {%- if run.status == 'queued' %}در صف
+                        {%- elif run.status == 'running' %}در حال اجرا
+                        {%- elif run.status == 'done' %}تمام‌شده
+                        {%- elif run.status == 'failed' %}ناموفق
+                        {%- else %}{{ run.status }}{% endif -%}
+                    </span>
+                </td>
+                <td><span class="pulse-badge healthy">{{ summary.get('healthy', 0) }}</span></td>
+                <td><span class="pulse-badge degraded">{{ summary.get('degraded', 0) }}</span></td>
+                <td><span class="pulse-badge down">{{ summary.get('down', 0) }}</span></td>
+                <td>
+                    {%- if run.finished_at and run.created_at -%}
+                        {{ '%.1f' | format((run.finished_at - run.created_at).total_seconds()) }} ثانیه
+                    {%- else %}—{% endif -%}
+                </td>
+                <td>{{ {'cli': 'CLI', 'web': 'پنل', 'schedule': 'زمان‌بندی'}.get(run.triggered_by, run.triggered_by) }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="11" style="text-align: center; color: var(--text-secondary);">هنوز اجرایی ثبت نشده است</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    'use strict';
+
+    var VERDICT_LABELS = {healthy: 'سالم', degraded: 'تضعیف', down: 'قطع'};
+
+    function loadInbounds(serverId, selectEl, keepValue) {
+        if (!serverId || serverId === 'all') {
+            selectEl.innerHTML = '<option value="all">همه اینباندها</option>';
+            return;
+        }
+        fetch('/pulse/servers/' + encodeURIComponent(serverId) + '/inbounds',
+              {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                selectEl.innerHTML = '<option value="all">همه اینباندها</option>';
+                if (!data.ok) { return; }
+                data.inbounds.forEach(function (inb) {
+                    var opt = document.createElement('option');
+                    opt.value = inb.id;
+                    opt.textContent = (inb.remark || ('inbound-' + inb.id)) +
+                        ' (' + inb.protocol + ':' + (inb.port || '?') + ', ' + inb.clients + ' کلاینت)';
+                    selectEl.appendChild(opt);
+                });
+                if (keepValue) { selectEl.value = keepValue; }
+            })
+            .catch(function () { /* keep the "all" fallback */ });
+    }
+
+    // ── Run-now form ─────────────────────────────────────────
+    var runForm = document.getElementById('pulse-run-form');
+    var runServer = document.getElementById('pulse-server');
+    var runInbound = document.getElementById('pulse-inbound');
+    var runMsg = document.getElementById('pulse-run-msg');
+
+    runServer.addEventListener('change', function () {
+        loadInbounds(runServer.value, runInbound);
+    });
+    if (runServer.value) { loadInbounds(runServer.value, runInbound); }
+
+    runForm.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        runMsg.className = 'pulse-msg';
+        runMsg.textContent = '';
+        var payload = {
+            server_id: runServer.value,
+            inbound_id: runInbound.value || 'all',
+            profile: document.getElementById('pulse-profile').value,
+            vantage: document.getElementById('pulse-vantage').value,
+            limit: document.getElementById('pulse-limit').value,
+            sites: document.getElementById('pulse-sites').value,
+        };
+        fetch('/pulse/run', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+            body: JSON.stringify(payload),
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    runMsg.className = 'pulse-msg ok';
+                    runMsg.textContent = 'اجرای #' + data.run_id + ' در صف قرار گرفت؛ نتیجه پس از اتمام نمایش داده می‌شود.';
+                    setTimeout(function () { window.location.reload(); }, 4000);
+                } else {
+                    runMsg.className = 'pulse-msg error';
+                    runMsg.textContent = data.error || 'خطا در ثبت اجرا';
+                }
+            })
+            .catch(function () {
+                runMsg.className = 'pulse-msg error';
+                runMsg.textContent = 'خطا در ارتباط با سرور';
+            });
+    });
+
+    // ── Scheduled-probe settings form ────────────────────────
+    var schedServer = document.getElementById('pulse-sched-server');
+    var schedInbound = document.getElementById('pulse-sched-inbound');
+    schedServer.addEventListener('change', function () {
+        loadInbounds(schedServer.value, schedInbound);
+    });
+    if (schedServer.value && schedServer.value !== 'all') {
+        loadInbounds(schedServer.value, schedInbound, schedInbound.dataset.current);
+    }
+
+    // ── Agent creation ───────────────────────────────────────
+    var agentForm = document.getElementById('pulse-agent-form');
+    var agentMsg = document.getElementById('pulse-agent-msg');
+    agentForm.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        agentMsg.className = 'pulse-msg';
+        agentMsg.textContent = '';
+        fetch('/pulse/agents', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+            body: JSON.stringify({name: document.getElementById('pulse-agent-name').value}),
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    agentMsg.className = 'pulse-msg ok';
+                    agentMsg.textContent = 'ایجنت «' + data.agent.name + '» ساخته شد.';
+                    document.getElementById('pulse-agent-token-box').style.display = 'block';
+                    document.getElementById('pulse-agent-install').value =
+                        'scp pulse_agent.py pulse.py telegram_xray.py user@your-foreign-host:~/\n' +
+                        'python3 pulse_agent.py --eve-url ' + window.location.origin +
+                        ' --token ' + data.agent.token + ' --agent-name ' + data.agent.name;
+                } else {
+                    agentMsg.className = 'pulse-msg error';
+                    agentMsg.textContent = data.error || 'خطا در ساخت ایجنت';
+                }
+            })
+            .catch(function () {
+                agentMsg.className = 'pulse-msg error';
+                agentMsg.textContent = 'خطا در ارتباط با سرور';
+            });
+    });
+
+    // ── Expandable run rows ──────────────────────────────────
+    function escapeHtml(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function vantageLabel(vantage) {
+        if (!vantage || vantage === 'local') { return 'ایران (محلی)'; }
+        return 'خارج (' + vantage.replace(/^agent:/, '') + ')';
+    }
+
+    function comparisonHint(run, res) {
+        var cmp = run.comparison;
+        if (!cmp || !cmp.configs) { return ''; }
+        var other = cmp.configs[res.config_label];
+        if (!other) { return ''; }
+        var parts = ['مقایسه دید ایران/خارج — ' + vantageLabel(cmp.vantage) + ': ' +
+            (VERDICT_LABELS[other.verdict] || other.verdict)];
+        if (other.latency_avg_ms != null) { parts.push(Math.round(other.latency_avg_ms) + ' ms'); }
+        if (other.loss_pct != null) { parts.push('افت ' + other.loss_pct + '%'); }
+        return '<div class="pulse-hint">' + escapeHtml(parts.join(' | ')) + '</div>';
+    }
+
+    function buildDetailRow(run, colspan) {
+        var row = document.createElement('tr');
+        row.className = 'pulse-detail-row';
+        var cell = document.createElement('td');
+        cell.colSpan = colspan;
+        var html = '';
+        if (run.error) {
+            html += '<div class="pulse-msg error">خطا: ' + escapeHtml(run.error) + '</div>';
+        }
+        if (run.status === 'queued') {
+            html += '<div class="pulse-hint">این اجرا در صف است و به‌زودی توسط ورکر پس‌زمینه انجام می‌شود.</div>';
+        }
+        if (run.results && run.results.length) {
+            html += '<table class="pulse-detail-table"><thead><tr>' +
+                '<th>کانفیگ</th><th>نتیجه</th><th>تأخیر</th><th>افت</th><th>سرعت</th>' +
+                '<th>سایت‌های ناموفق</th><th>خطا</th></tr></thead><tbody>';
+            run.results.forEach(function (res) {
+                var failedSites = (res.sites || []).filter(function (s) { return !s.ok; })
+                    .map(function (s) { return s.name; }).join(', ');
+                html += '<tr>' +
+                    '<td>' + escapeHtml(res.config_label) + comparisonHint(run, res) + '</td>' +
+                    '<td><span class="pulse-badge ' + escapeHtml(res.verdict) + '">' +
+                        escapeHtml(VERDICT_LABELS[res.verdict] || res.verdict) + '</span></td>' +
+                    '<td>' + (res.latency_avg_ms != null ? escapeHtml(Math.round(res.latency_avg_ms)) + ' ms' : '—') + '</td>' +
+                    '<td>' + (res.loss_pct != null ? escapeHtml(res.loss_pct) + '%' : '—') + '</td>' +
+                    '<td>' + (res.download_mbps != null ? escapeHtml(res.download_mbps) + ' Mbps' : '—') + '</td>' +
+                    '<td>' + (failedSites ? escapeHtml(failedSites) : '—') + '</td>' +
+                    '<td>' + (res.error ? escapeHtml(res.error) : '—') + '</td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table>';
+        } else if (run.status === 'done') {
+            html += '<div class="pulse-hint">نتیجه‌ای ثبت نشده است.</div>';
+        }
+        cell.innerHTML = html;
+        row.appendChild(cell);
+        return row;
+    }
+
+    var table = document.getElementById('pulse-runs-table');
+    table.addEventListener('click', function (ev) {
+        var row = ev.target.closest('tr.pulse-run-row');
+        if (!row) { return; }
+        var next = row.nextElementSibling;
+        if (next && next.classList.contains('pulse-detail-row')) {
+            next.remove();
+            return;
+        }
+        var runId = row.dataset.runId;
+        fetch('/pulse/run/' + encodeURIComponent(runId),
+              {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (!data.ok) { return; }
+                var colspan = row.children.length;
+                row.parentNode.insertBefore(buildDetailRow(data, colspan), row.nextSibling);
+            })
+            .catch(function () { /* ignore transient fetch errors */ });
+    });
+})();
+</script>
+{% endblock %}

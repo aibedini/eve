@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.12"
+APP_VERSION = "2.5.14"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -9629,9 +9629,10 @@ class PulseRun(db.Model):
     inbound_label = db.Column(db.String(255), nullable=True)
     profile = db.Column(db.String(16), default='quick')         # quick / full / custom
     vantage = db.Column(db.String(32), default='local')         # 'local' now; remote agents later
-    status = db.Column(db.String(16), default='running')        # running / done / failed
+    status = db.Column(db.String(16), default='running')        # queued / running / done / failed
     summary_json = db.Column(db.Text, nullable=True)            # counts: healthy/degraded/down
     triggered_by = db.Column(db.String(32), default='cli')
+    params_json = db.Column(db.Text, nullable=True)             # queued-run params: inbound_id/limit/sites
     error = db.Column(db.Text, nullable=True)
     results = db.relationship('PulseResultRecord', backref='run',
                               cascade='all, delete-orphan', lazy=True)
@@ -9639,6 +9640,12 @@ class PulseRun(db.Model):
     def summary(self):
         try:
             return json.loads(self.summary_json) if self.summary_json else {}
+        except Exception:
+            return {}
+
+    def params(self):
+        try:
+            return json.loads(self.params_json) if self.params_json else {}
         except Exception:
             return {}
 
@@ -9656,6 +9663,7 @@ class PulseRun(db.Model):
             'status': self.status,
             'summary': self.summary(),
             'triggered_by': self.triggered_by,
+            'params': self.params(),
             'error': self.error,
             'result_count': len(self.results) if self.results is not None else 0,
         }
@@ -9696,6 +9704,84 @@ class PulseResultRecord(db.Model):
             'is_probe': bool(self.is_probe),
             'error': self.error,
         }
+
+
+class PulseSettings(db.Model):
+    """Singleton row: scheduled-probe and alert configuration for Eve Pulse."""
+    __tablename__ = 'pulse_settings'
+    id = db.Column(db.Integer, primary_key=True)
+    enabled = db.Column(db.Boolean, default=False)
+    interval_minutes = db.Column(db.Integer, default=60)
+    server_id = db.Column(db.Integer, nullable=True)         # null = all enabled servers
+    inbound_id = db.Column(db.Integer, nullable=True)        # null = whole server(s)
+    profile = db.Column(db.String(16), default='quick')      # quick / full
+    probe_limit = db.Column(db.Integer, default=10)
+    sites_json = db.Column(db.Text, nullable=True)           # [{name,url,expect_substring}]
+    alert_on_down = db.Column(db.Boolean, default=True)
+    alert_on_degraded = db.Column(db.Boolean, default=False)
+    last_run_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    def sites(self):
+        try:
+            value = json.loads(self.sites_json) if self.sites_json else []
+            return value if isinstance(value, list) else []
+        except Exception:
+            return []
+
+    def to_dict(self):
+        return {
+            'enabled': bool(self.enabled),
+            'interval_minutes': self.interval_minutes or 60,
+            'server_id': self.server_id,
+            'inbound_id': self.inbound_id,
+            'profile': self.profile or 'quick',
+            'probe_limit': self.probe_limit or 10,
+            'sites': self.sites(),
+            'alert_on_down': bool(self.alert_on_down),
+            'alert_on_degraded': bool(self.alert_on_degraded),
+            'last_run_at': self.last_run_at.isoformat() + 'Z' if self.last_run_at else None,
+        }
+
+
+def get_pulse_settings(create=True):
+    """Return the singleton PulseSettings row (created with defaults if missing)."""
+    row = PulseSettings.query.order_by(PulseSettings.id.asc()).first()
+    if row is None and create:
+        row = PulseSettings()
+        db.session.add(row)
+        db.session.commit()
+    return row
+
+
+class PulseAgent(db.Model):
+    """A remote vantage host running pulse_agent.py outside Iran.
+
+    Agents authenticate to the pull/push API with a random bearer token that
+    is shown exactly once at creation time.
+    """
+    __tablename__ = 'pulse_agents'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    name = db.Column(db.String(64), unique=True, nullable=False)
+    token = db.Column(db.String(64), nullable=False)
+    enabled = db.Column(db.Boolean, default=True)
+    last_seen_at = db.Column(db.DateTime, nullable=True)
+    last_ip = db.Column(db.String(64), nullable=True)
+
+    def to_dict(self, include_token=False):
+        payload = {
+            'id': self.id,
+            'name': self.name,
+            'enabled': bool(self.enabled),
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'last_seen_at': self.last_seen_at.isoformat() + 'Z' if self.last_seen_at else None,
+            'last_ip': self.last_ip,
+        }
+        if include_token:
+            payload['token'] = self.token
+        return payload
 
 
 class MonitorMessageLog(db.Model):
@@ -10276,6 +10362,9 @@ with app.app_context():
     ])
     _migrate_add_columns('telegram_purchase_requests', [
         ('payment_method', "VARCHAR(16) DEFAULT 'card'"),
+    ])
+    _migrate_add_columns('pulse_runs', [
+        ('params_json', 'TEXT'),
     ])
 
     # Ensure announcements columns exist — each in its own try so one failure
@@ -13971,6 +14060,373 @@ def monitor_page():
                          admin_username=session.get('admin_username'),
                          is_superadmin=session.get('is_superadmin', False),
                          role=session.get('role', 'admin'))
+
+
+# ---------------------------------------------------------------------------
+# Eve Pulse web UI – health-check dashboard, on-demand runs, scheduling
+# ---------------------------------------------------------------------------
+def _pulse_runner_module():
+    """Lazy import: pulse_runner imports app, so a top-level import would cycle."""
+    import pulse_runner
+    return pulse_runner
+
+
+def _pulse_accessible_server(user, server_id):
+    """The Server row when the logged-in admin may see it, else None."""
+    server = db.session.get(Server, server_id) if server_id else None
+    if not server:
+        return None
+    accessible_ids = {srv.id for srv in get_accessible_servers(user)}
+    return server if server.id in accessible_ids else None
+
+
+def _pulse_parse_sites_text(text):
+    """Parse the sites textarea: one ``name=url[::expect]`` spec per line."""
+    pr = _pulse_runner_module()
+    specs = []
+    for raw_line in (text or '').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#'):
+            continue
+        specs.append(pr._parse_site_spec(line))  # raises ValueError on bad lines
+    return specs
+
+
+def _pulse_form_int(value, default, lo=1, hi=1000):
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+@app.route('/pulse')
+@login_required
+def pulse_page():
+    user = db.session.get(Admin, session['admin_id'])
+    servers = get_accessible_servers(user)
+    runs = (PulseRun.query
+            .order_by(PulseRun.created_at.desc(), PulseRun.id.desc())
+            .limit(25).all())
+    agents = PulseAgent.query.order_by(PulseAgent.name.asc()).all()
+    return render_template('pulse.html',
+                         runs=runs,
+                         servers=servers,
+                         settings=get_pulse_settings(),
+                         agents=agents,
+                         format_app_datetime=format_app_datetime,
+                         admin_username=session.get('admin_username'),
+                         is_superadmin=session.get('is_superadmin', False),
+                         role=session.get('role', 'admin'))
+
+
+def _pulse_run_comparison(run):
+    """Latest done run for the same server from a DIFFERENT vantage.
+
+    Used to show local-vs-remote (ایران/خارج) verdicts side-by-side on the
+    run detail view. Returns None when no other-vantage run exists.
+    """
+    if not run.server_id:
+        return None
+    other = (PulseRun.query
+             .filter(PulseRun.server_id == run.server_id,
+                     PulseRun.id != run.id,
+                     PulseRun.status == 'done',
+                     PulseRun.vantage != (run.vantage or 'local'))
+             .order_by(PulseRun.created_at.desc(), PulseRun.id.desc())
+             .first())
+    if other is None:
+        return None
+    configs = {}
+    for rec in other.results:
+        configs[rec.config_label] = {
+            'verdict': rec.verdict,
+            'latency_avg_ms': rec.latency_avg_ms,
+            'loss_pct': rec.loss_pct,
+        }
+    return {
+        'run_id': other.id,
+        'vantage': other.vantage or 'local',
+        'created_at': other.created_at.isoformat() + 'Z' if other.created_at else None,
+        'configs': configs,
+    }
+
+
+@app.route('/pulse/run/<int:run_id>')
+@login_required
+def pulse_run_detail(run_id):
+    run = db.session.get(PulseRun, run_id)
+    if run is None:
+        return jsonify({'ok': False, 'error': 'run not found'}), 404
+    payload = run.to_dict()
+    payload['ok'] = True
+    payload['results'] = [rec.to_dict() for rec in run.results]
+    payload['comparison'] = _pulse_run_comparison(run)
+    return jsonify(payload)
+
+
+@app.route('/pulse/run', methods=['POST'])
+@login_required
+def pulse_run_create():
+    user = db.session.get(Admin, session['admin_id'])
+    data = request.get_json(silent=True) or request.form
+    wants_json = (request.is_json
+                  or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                  or 'application/json' in (request.headers.get('Accept') or ''))
+
+    def _error(message, status=400):
+        if wants_json:
+            return jsonify({'ok': False, 'error': message}), status
+        return redirect(url_for('pulse_page'))
+
+    server = _pulse_accessible_server(user, _pulse_form_int(data.get('server_id'), 0, lo=0))
+    if server is None:
+        return _error('سرور نامعتبر است')
+
+    inbound_id = None
+    inbound_raw = str(data.get('inbound_id') or '').strip()
+    if inbound_raw and inbound_raw != 'all':
+        try:
+            inbound_id = int(inbound_raw)
+        except ValueError:
+            return _error('اینباند نامعتبر است')
+
+    profile = str(data.get('profile') or 'quick').strip()
+    if profile not in ('quick', 'full'):
+        profile = 'quick'
+    limit = _pulse_form_int(data.get('limit'), 10, lo=1, hi=200)
+
+    vantage = str(data.get('vantage') or 'local').strip()
+    if vantage.startswith('agent:'):
+        agent_name = vantage.split(':', 1)[1].strip()
+        agent_row = PulseAgent.query.filter_by(name=agent_name, enabled=True).first()
+        if agent_row is None:
+            return _error('ایجنت نامعتبر یا غیرفعال است')
+        vantage = f'agent:{agent_name}'
+    elif vantage != 'local':
+        return _error('دیدگاه (vantage) نامعتبر است')
+
+    try:
+        site_specs = _pulse_parse_sites_text(data.get('sites'))
+    except ValueError as exc:
+        return _error(str(exc))
+
+    run = PulseRun(
+        server_id=server.id,
+        server_name=server.name,
+        scope='inbound' if inbound_id is not None else 'server',
+        profile=profile,
+        vantage=vantage,
+        status='queued',
+        triggered_by='web',
+        params_json=json.dumps({
+            'inbound_id': inbound_id,
+            'limit': limit,
+            'sites': site_specs,
+        }, ensure_ascii=False),
+    )
+    db.session.add(run)
+    db.session.commit()
+    if wants_json:
+        return jsonify({'ok': True, 'run_id': run.id})
+    return redirect(url_for('pulse_page'))
+
+
+@app.route('/pulse/settings', methods=['POST'])
+@login_required
+def pulse_settings_save():
+    data = request.form
+    wants_json = (request.is_json
+                  or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                  or 'application/json' in (request.headers.get('Accept') or ''))
+
+    def _error(message, status=400):
+        if wants_json:
+            return jsonify({'ok': False, 'error': message}), status
+        return redirect(url_for('pulse_page'))
+
+    try:
+        site_specs = _pulse_parse_sites_text(data.get('sites'))
+    except ValueError as exc:
+        return _error(str(exc))
+
+    settings = get_pulse_settings()
+    settings.enabled = bool(data.get('enabled'))
+    settings.interval_minutes = _pulse_form_int(
+        data.get('interval_minutes'), 60, lo=5, hi=24 * 60)
+
+    server_raw = str(data.get('server_id') or '').strip()
+    if server_raw and server_raw != 'all':
+        settings.server_id = _pulse_form_int(server_raw, 0, lo=0) or None
+    else:
+        settings.server_id = None
+
+    inbound_raw = str(data.get('inbound_id') or '').strip()
+    if settings.server_id and inbound_raw and inbound_raw != 'all':
+        try:
+            settings.inbound_id = int(inbound_raw)
+        except ValueError:
+            settings.inbound_id = None
+    else:
+        settings.inbound_id = None
+
+    profile = str(data.get('profile') or 'quick').strip()
+    settings.profile = profile if profile in ('quick', 'full') else 'quick'
+    settings.probe_limit = _pulse_form_int(data.get('limit'), 10, lo=1, hi=200)
+
+    settings.sites_json = json.dumps(site_specs, ensure_ascii=False) if site_specs else None
+
+    settings.alert_on_down = bool(data.get('alert_on_down'))
+    settings.alert_on_degraded = bool(data.get('alert_on_degraded'))
+    db.session.commit()
+    if wants_json:
+        return jsonify({'ok': True, 'settings': settings.to_dict()})
+    return redirect(url_for('pulse_page'))
+
+
+@app.route('/pulse/servers/<int:server_id>/inbounds')
+@login_required
+def pulse_server_inbounds(server_id):
+    user = db.session.get(Admin, session['admin_id'])
+    server = _pulse_accessible_server(user, server_id)
+    if server is None:
+        return jsonify({'ok': False, 'error': 'server not found'}), 404
+    pr = _pulse_runner_module()
+    inbounds, error = pr._fetch_server_inbounds(server)
+    if error:
+        return jsonify({'ok': False, 'error': error}), 502
+    return jsonify({
+        'ok': True,
+        'server': {'id': server.id, 'name': server.name},
+        'inbounds': [
+            {
+                'id': inb.get('id'),
+                'remark': inb.get('remark') or '',
+                'protocol': inb.get('protocol') or '',
+                'port': inb.get('port'),
+                'enabled': bool(inb.get('enable', True)),
+                'clients': len(pr._inbound_clients(inb)),
+            }
+            for inb in inbounds
+        ],
+    })
+
+
+# ---------------------------------------------------------------------------
+# Eve Pulse remote agents – bearer-token pull/push API + admin CRUD
+# ---------------------------------------------------------------------------
+def _pulse_agent_required(view):
+    """Bearer-token auth for the agent API (no session auth involved).
+
+    On success the agent row is passed as the first view argument and its
+    last_seen_at / last_ip are refreshed.
+    """
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        auth = request.headers.get('Authorization') or ''
+        token = auth[7:].strip() if auth.startswith('Bearer ') else ''
+        agent = PulseAgent.query.filter_by(token=token).first() if token else None
+        if agent is None or not agent.enabled:
+            return jsonify({'ok': False, 'error': 'invalid agent token'}), 401
+        agent.last_seen_at = datetime.utcnow()
+        agent.last_ip = request.remote_addr
+        db.session.commit()
+        return view(agent, *args, **kwargs)
+    return wrapper
+
+
+@app.route('/api/pulse/agent/tasks')
+@_pulse_agent_required
+def pulse_agent_tasks(agent):
+    """Claim the oldest queued remote run for this agent (queued → running)."""
+    name = str(request.args.get('agent') or '').strip()
+    if name != agent.name:
+        return jsonify({'ok': False, 'error': 'agent name mismatch'}), 403
+    run = (PulseRun.query
+           .filter(PulseRun.status == 'queued',
+                   PulseRun.vantage.in_([f'agent:{agent.name}', 'agent:any']))
+           .order_by(PulseRun.created_at.asc(), PulseRun.id.asc())
+           .first())
+    if run is None:
+        return jsonify({'ok': True, 'run_id': None})
+    pr = _pulse_runner_module()
+    try:
+        task = pr.build_agent_task(run)
+    except Exception as exc:
+        db.session.rollback()
+        run.status = 'failed'
+        run.error = str(exc)
+        run.finished_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'ok': False, 'error': f'failed to prepare run: {exc}'}), 502
+    task['ok'] = True
+    return jsonify(task)
+
+
+@app.route('/api/pulse/agent/report', methods=['POST'])
+@_pulse_agent_required
+def pulse_agent_report(agent):
+    """Accept the ProbeResult dicts for a claimed run and finalize it."""
+    payload = request.get_json(silent=True) or {}
+    run_id = payload.get('run_id')
+    run = db.session.get(PulseRun, run_id) if run_id else None
+    if run is None or run.vantage not in (f'agent:{agent.name}', 'agent:any'):
+        return jsonify({'ok': False, 'error': 'run not found'}), 404
+    if run.status != 'running':
+        return jsonify({'ok': False,
+                        'error': f'run is not running (status={run.status})'}), 409
+    pr = _pulse_runner_module()
+    try:
+        summary, _results = pr.persist_agent_report(run, payload.get('results'))
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+    try:
+        _pulse_maybe_alert(run)
+    except Exception as exc:
+        app.logger.warning(f'[pulse] telegram alert failed: {exc}')
+    return jsonify({'ok': True, 'run_id': run.id, 'summary': summary})
+
+
+@app.route('/pulse/agents', methods=['POST'])
+@login_required
+def pulse_agent_create():
+    data = request.get_json(silent=True) or request.form
+    wants_json = (request.is_json
+                  or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                  or 'application/json' in (request.headers.get('Accept') or ''))
+
+    def _error(message, status=400):
+        if wants_json:
+            return jsonify({'ok': False, 'error': message}), status
+        return redirect(url_for('pulse_page'))
+
+    name = str(data.get('name') or '').strip()
+    if not re.match(r'^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$', name):
+        return _error('نام ایجنت نامعتبر است (حروف، عدد، خط تیره؛ حداقل ۲ کاراکتر)')
+    if PulseAgent.query.filter_by(name=name).first() is not None:
+        return _error('ایجنتی با این نام از قبل وجود دارد', status=409)
+    agent = PulseAgent(name=name, token=secrets.token_hex(16))
+    db.session.add(agent)
+    db.session.commit()
+    if wants_json:
+        # the token is returned exactly once, at creation time
+        return jsonify({'ok': True, 'agent': agent.to_dict(include_token=True)})
+    return redirect(url_for('pulse_page'))
+
+
+@app.route('/pulse/agents/<int:agent_id>/delete', methods=['POST'])
+@login_required
+def pulse_agent_delete(agent_id):
+    agent = db.session.get(PulseAgent, agent_id)
+    if agent is not None:
+        db.session.delete(agent)
+        db.session.commit()
+    wants_json = (request.is_json
+                  or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                  or 'application/json' in (request.headers.get('Accept') or ''))
+    if wants_json:
+        return jsonify({'ok': True})
+    return redirect(url_for('pulse_page'))
 
 
 @app.route('/royalty')
@@ -32066,6 +32522,143 @@ def _claim_singleton(name):
         return True
 
 
+# ---------------------------------------------------------------------------
+# Eve Pulse scheduler – drains queued probe runs and fires scheduled probes.
+# Runs inside the background process only (started by
+# ensure_background_threads_started); tests call pulse_scheduler_tick()
+# directly with DISABLE_BACKGROUND_THREADS set.
+# ---------------------------------------------------------------------------
+PULSE_WORKER_POLL_SECONDS = 30
+
+
+def _pulse_maybe_alert(run):
+    """Send the Telegram alert when a finished run crosses the thresholds."""
+    settings = get_pulse_settings(create=False)
+    summary = run.summary()
+    down = int(summary.get('down') or 0)
+    degraded = int(summary.get('degraded') or 0)
+    alert_down = down > 0 and (settings.alert_on_down if settings else True)
+    alert_degraded = degraded > 0 and bool(settings and settings.alert_on_degraded)
+    if not (alert_down or alert_degraded):
+        return
+
+    offenders = [rec for rec in run.results if rec.verdict in ('down', 'degraded')]
+    offenders.sort(key=lambda rec: (rec.verdict != 'down', -(rec.loss_pct or 0)))
+    lines = [
+        f'📡 Pulse alert — {run.server_name or "server"} (run #{run.id})',
+        f"healthy: {int(summary.get('healthy') or 0)} | degraded: {degraded} | down: {down}",
+    ]
+    for rec in offenders[:5]:
+        parts = [f'{rec.config_label or "?"}: {rec.verdict}']
+        if rec.latency_avg_ms is not None:
+            parts.append(f'{rec.latency_avg_ms:.0f}ms')
+        if rec.loss_pct is not None:
+            parts.append(f'loss {rec.loss_pct:.0f}%')
+        if rec.error:
+            parts.append(str(rec.error)[:80])
+        lines.append('• ' + ' | '.join(parts))
+    _pulse_send_telegram_alert(run, '\n'.join(lines))
+
+
+def _pulse_send_telegram_alert(run, text):
+    """Deliver a pulse alert to every enabled global admin via the central bot."""
+    if not (text or '').strip():
+        return
+    bot = _notification_bot_for_reseller(None)
+    if bot is None:
+        return
+    api = _telegram_bot_api_client(bot)
+    for admin in Admin.query.filter_by(enabled=True).all():
+        role = str(admin.role or '').lower()
+        if not (admin.is_superadmin or role in ('admin', 'superadmin')):
+            continue
+        try:
+            chat_id = int(str(admin.telegram_id or '').strip())
+            if chat_id <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        try:
+            api.send_message(chat_id, text)
+        except Exception as exc:
+            app.logger.warning(f'[pulse] alert to admin {admin.id} failed: {exc}')
+
+
+def pulse_scheduler_tick(now=None):
+    """One scheduler pass: enqueue due scheduled runs, then drain the queue.
+
+    Called by pulse_scheduler_worker (background thread) and directly by tests.
+    Web-triggered runs are queued as status='queued' PulseRun rows so the web
+    worker never blocks on probing.
+    """
+    import pulse_runner  # lazy: pulse_runner imports app
+    now = now or datetime.utcnow()
+
+    settings = get_pulse_settings(create=False)
+    if settings and settings.enabled:
+        interval = max(5, int(settings.interval_minutes or 60))
+        due = (settings.last_run_at is None
+               or (now - settings.last_run_at) >= timedelta(minutes=interval))
+        if due:
+            if settings.server_id:
+                target = db.session.get(Server, settings.server_id)
+                targets = [target] if target and target.enabled else []
+            else:
+                targets = Server.query.filter_by(enabled=True).all()
+            for server in targets:
+                db.session.add(PulseRun(
+                    server_id=server.id,
+                    server_name=server.name,
+                    scope='inbound' if settings.inbound_id else 'server',
+                    profile=settings.profile or 'quick',
+                    vantage='local',
+                    status='queued',
+                    triggered_by='schedule',
+                    params_json=json.dumps({
+                        'inbound_id': settings.inbound_id,
+                        'limit': settings.probe_limit or 10,
+                        'sites': settings.sites(),
+                    }, ensure_ascii=False),
+                ))
+            settings.last_run_at = now
+            db.session.commit()
+
+    # Drain the queue sequentially — one probe run at a time. Remote runs
+    # (vantage 'agent:<name>') are claimed by their agents instead.
+    while True:
+        run = (PulseRun.query.filter_by(status='queued', vantage='local')
+               .order_by(PulseRun.created_at.asc(), PulseRun.id.asc())
+               .first())
+        if run is None:
+            break
+        run.status = 'running'
+        db.session.commit()
+        try:
+            pulse_runner.execute_queued_run(run)
+        except Exception as exc:
+            db.session.rollback()
+            run.status = 'failed'
+            run.error = str(exc)
+            run.finished_at = datetime.utcnow()
+            db.session.commit()
+        if run.status == 'done' and run.triggered_by in ('web', 'schedule'):
+            try:
+                _pulse_maybe_alert(run)
+            except Exception as exc:
+                app.logger.warning(f'[pulse] telegram alert failed: {exc}')
+
+
+def pulse_scheduler_worker():
+    """Long-running loop: pulse queue drain + scheduled probes."""
+    while True:
+        try:
+            with app.app_context():
+                pulse_scheduler_tick()
+        except Exception as exc:
+            print(f'[pulse] scheduler tick failed: {exc}')
+        time.sleep(PULSE_WORKER_POLL_SECONDS)
+
+
 def ensure_background_threads_started():
     """Start background threads once per process.
 
@@ -32194,6 +32787,15 @@ def ensure_background_threads_started():
             print(f"Failed to start sms status thread: {e}")
     else:
         print("[Singleton] sms_status_worker already owned by another worker, skipping.")
+
+    # Singleton: pulse health-check queue worker (web-triggered + scheduled probes).
+    if _claim_singleton('pulse_scheduler'):
+        try:
+            threading.Thread(target=pulse_scheduler_worker, daemon=True).start()
+        except Exception as e:
+            print(f"Failed to start pulse scheduler thread: {e}")
+    else:
+        print("[Singleton] pulse_scheduler already owned by another worker, skipping.")
 
 if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
     # Start threads on module import (works under gunicorn as well)
