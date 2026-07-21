@@ -136,6 +136,7 @@ class PulsePageTest(PulseWebTestBase):
             summary_json=json.dumps({'healthy': 2, 'degraded': 1, 'down': 0}),
         )
         db.session.add(run)
+        db.session.add(PulseTemplate(name='UI template', targets_json='[]'))
         db.session.commit()
 
         resp = self.client.get('/pulse')
@@ -154,6 +155,9 @@ class PulsePageTest(PulseWebTestBase):
         self.assertIn('id="pulse-search-clear"', html)
         self.assertIn('row.hidden=!matches', html)
         self.assertIn('pulse-config[hidden]{display:none!important}', html)
+        self.assertIn('action-icon danger plan-remove', html)
+        self.assertIn('pulse-edit-template', html)
+        self.assertIn('action-icon danger pulse-delete-template', html)
         self.assertIn('Choose the server, inbound, and exact configs', html)
 
     def test_page_requires_login(self):
@@ -368,6 +372,31 @@ class PulsePlanAndTemplateTest(PulseWebTestBase):
         self.assertEqual(run.triggered_by, 'template')
         self.assertEqual(run.params()['template_name'], 'EU baseline')
 
+    def test_template_can_be_loaded_and_updated_in_place(self):
+        created = self.client.post('/pulse/templates', json={
+            'name': 'Before', 'targets': [self._target()],
+            'profile': 'quick', 'vantage': 'local',
+        }).get_json()['template']
+
+        loaded = self.client.get(f"/pulse/templates/{created['id']}")
+        self.assertEqual(loaded.status_code, 200)
+        self.assertEqual(loaded.get_json()['template']['name'], 'Before')
+
+        updated = self.client.put(f"/pulse/templates/{created['id']}", json={
+            'name': 'After', 'targets': [self._target(2, ['uuid-b'])],
+            'profile': 'full', 'vantage': 'local',
+            'download_mb': 30, 'upload_mb': 6,
+            'schedule_enabled': True, 'interval_minutes': 45,
+        })
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(PulseTemplate.query.count(), 1)
+        template = PulseTemplate.query.one()
+        self.assertEqual(template.name, 'After')
+        self.assertEqual(template.targets()[0]['inbound_id'], 2)
+        self.assertEqual(template.download_bytes, 30_000_000)
+        self.assertEqual(template.upload_bytes, 6_000_000)
+        self.assertTrue(template.schedule_enabled)
+
     def test_queue_endpoint_exposes_positions_and_selection_count(self):
         self._enqueue_run(inbound_id=1)
         second = self._enqueue_run(inbound_id=2)
@@ -378,6 +407,26 @@ class PulsePlanAndTemplateTest(PulseWebTestBase):
         payload = self.client.get('/pulse/queue').get_json()
         self.assertEqual([row['position'] for row in payload['runs']], [1, 2])
         self.assertEqual(payload['runs'][1]['params']['config_ids'], ['a', 'b'])
+
+    def test_queue_keeps_recently_finished_runs_visible(self):
+        queued = self._enqueue_run(inbound_id=1)
+        recent = self._enqueue_run(inbound_id=2)
+        recent.status = 'done'
+        recent.finished_at = app_module.datetime.utcnow()
+        old = self._enqueue_run(inbound_id=3)
+        old.status = 'failed'
+        old.created_at = app_module.datetime.utcnow() - app_module.timedelta(minutes=6)
+        old.finished_at = old.created_at
+        db.session.commit()
+
+        rows = self.client.get('/pulse/queue').get_json()['runs']
+        ids = [row['id'] for row in rows]
+        self.assertIn(queued.id, ids)
+        self.assertIn(recent.id, ids)
+        self.assertNotIn(old.id, ids)
+        recent_row = next(row for row in rows if row['id'] == recent.id)
+        self.assertIsNone(recent_row['position'])
+        self.assertTrue(recent_row['recent'])
 
     def test_worker_probes_only_selected_configs_in_selected_order(self):
         run = self._enqueue_run(inbound_id=1)

@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.18"
+APP_VERSION = "2.5.19"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -14154,7 +14154,7 @@ def _pulse_form_int(value, default, lo=1, hi=1000):
 PULSE_COPY = {
     'en': {
         'subtitle': 'Build an explicit test plan, see every queued job, and reuse it as a template.',
-        'queue': 'Live queue', 'queue_help': 'Queued and running jobs update automatically.',
+        'queue': 'Live queue', 'queue_help': 'Active jobs and jobs finished in the last 5 minutes update automatically.',
         'empty_queue': 'The queue is empty.', 'position': 'Position', 'job': 'Job',
         'target': 'Target', 'configs': 'Configs', 'status': 'Status', 'source': 'Source',
         'wizard': 'Create a test plan', 'wizard_help': 'Choose the server, inbound, and exact configs in order. Nothing is selected automatically.',
@@ -14167,6 +14167,8 @@ PULSE_COPY = {
         'tests_ready': 'tests will be queued for this selection',
         'clear_search': 'Clear search', 'clear_selection': 'Clear selection',
         'no_search_results': 'No matching client was found.',
+        'edit': 'Edit', 'edit_template': 'Edit template', 'update_template': 'Update template',
+        'update_step': 'Update this plan step', 'cancel_edit': 'Cancel edit',
         'choose_server': 'Choose a server…', 'choose_inbound': 'Choose an inbound…',
         'loading': 'Loading…', 'load_error': 'Could not load this selection.',
         'no_configs': 'No enabled, shareable configs were found.', 'select_all': 'Select all',
@@ -14199,7 +14201,7 @@ PULSE_COPY = {
     },
     'fa': {
         'subtitle': 'برنامه تست را دقیق بسازید، تمام کارهای صف را ببینید و آن را به‌صورت تمپلیت دوباره اجرا کنید.',
-        'queue': 'صف زنده', 'queue_help': 'کارهای در صف و در حال اجرا به‌صورت خودکار به‌روز می‌شوند.',
+        'queue': 'صف زنده', 'queue_help': 'کارهای فعال و اجراهای تمام‌شده در ۵ دقیقه اخیر خودکار به‌روز می‌شوند.',
         'empty_queue': 'صف خالی است.', 'position': 'ردیف', 'job': 'کار',
         'target': 'مقصد', 'configs': 'کانفیگ‌ها', 'status': 'وضعیت', 'source': 'منشأ',
         'wizard': 'ساخت برنامه تست', 'wizard_help': 'سرور، اینباند و کانفیگ‌های دقیق را به‌ترتیب انتخاب کنید؛ چیزی خودکار انتخاب نمی‌شود.',
@@ -14212,6 +14214,8 @@ PULSE_COPY = {
         'tests_ready': 'تست برای این انتخاب وارد صف می‌شود',
         'clear_search': 'پاک‌کردن جست‌وجو', 'clear_selection': 'پاک‌کردن انتخاب',
         'no_search_results': 'کلاینتی مطابق این جست‌وجو پیدا نشد.',
+        'edit': 'ویرایش', 'edit_template': 'ویرایش تمپلیت', 'update_template': 'به‌روزرسانی تمپلیت',
+        'update_step': 'به‌روزرسانی این مرحله', 'cancel_edit': 'لغو ویرایش',
         'choose_server': 'یک سرور انتخاب کنید…', 'choose_inbound': 'یک اینباند انتخاب کنید…',
         'loading': 'در حال دریافت…', 'load_error': 'دریافت این انتخاب ناموفق بود.',
         'no_configs': 'کانفیگ فعال و قابل اشتراکی پیدا نشد.', 'select_all': 'انتخاب همه',
@@ -14245,6 +14249,32 @@ PULSE_COPY = {
 }
 
 
+def _pulse_queue_snapshot(limit=100, now=None):
+    """Return active jobs plus a short terminal-state visibility window."""
+    limit = max(1, min(int(limit or 100), 200))
+    active = (PulseRun.query
+              .filter(PulseRun.status.in_(('queued', 'running')))
+              .order_by(PulseRun.created_at.asc(), PulseRun.id.asc())
+              .limit(limit).all())
+    remaining = limit - len(active)
+    recent = []
+    if remaining > 0:
+        cutoff = (now or datetime.utcnow()) - timedelta(minutes=5)
+        recent = (PulseRun.query
+                  .filter(PulseRun.status.in_(('done', 'failed')),
+                          PulseRun.created_at >= cutoff)
+                  .order_by(PulseRun.created_at.desc(), PulseRun.id.desc())
+                  .limit(remaining).all())
+    queue_position = 0
+    for run in active + recent:
+        if run.status == 'queued':
+            queue_position += 1
+            run.queue_position = queue_position
+        else:
+            run.queue_position = None
+    return active + recent
+
+
 @app.route('/pulse')
 @login_required
 def pulse_page():
@@ -14253,7 +14283,7 @@ def pulse_page():
     runs = (PulseRun.query
             .order_by(PulseRun.created_at.desc(), PulseRun.id.desc())
             .limit(25).all())
-    queue_runs = [run for run in runs if run.status in ('queued', 'running')]
+    queue_runs = _pulse_queue_snapshot()
     history_runs = [run for run in runs if run.status not in ('queued', 'running')]
     agents = PulseAgent.query.order_by(PulseAgent.name.asc()).all()
     templates = PulseTemplate.query.order_by(PulseTemplate.name.asc()).all()
@@ -14481,6 +14511,36 @@ def _pulse_enqueue_targets(targets, profile='quick', vantage='local', sites=None
     return run_ids
 
 
+def _pulse_template_values(user, data):
+    name = str(data.get('name') or '').strip()
+    if not name or len(name) > 120:
+        raise ValueError('template name is required')
+    targets = _pulse_normalize_targets(user, data.get('targets'))
+    sites = _pulse_parse_sites_text(data.get('sites'))
+    vantage = str(data.get('vantage') or 'local').strip()
+    if vantage.startswith('agent:'):
+        agent_name = vantage.split(':', 1)[1]
+        if PulseAgent.query.filter_by(name=agent_name, enabled=True).first() is None:
+            raise ValueError('invalid or disabled agent')
+    elif vantage != 'local':
+        raise ValueError('invalid vantage')
+    return {
+        'name': name,
+        'targets_json': json.dumps(targets, ensure_ascii=False),
+        'profile': (str(data.get('profile') or 'quick')
+                    if data.get('profile') in ('quick', 'full') else 'quick'),
+        'vantage': vantage,
+        'sites_json': json.dumps(sites, ensure_ascii=False) if sites else None,
+        'download_bytes': _pulse_form_int(
+            data.get('download_mb'), 10, lo=1, hi=200) * 1_000_000,
+        'upload_bytes': _pulse_form_int(
+            data.get('upload_mb'), 2, lo=1, hi=200) * 1_000_000,
+        'schedule_enabled': bool(data.get('schedule_enabled')),
+        'interval_minutes': _pulse_form_int(
+            data.get('interval_minutes'), 60, lo=5, hi=1440),
+    }
+
+
 @app.route('/pulse/plan/run', methods=['POST'])
 @login_required
 def pulse_plan_run():
@@ -14511,33 +14571,31 @@ def pulse_plan_run():
 def pulse_template_create():
     user = db.session.get(Admin, session['admin_id'])
     data = request.get_json(silent=True) or {}
-    name = str(data.get('name') or '').strip()
-    if not name or len(name) > 120:
-        return jsonify({'ok': False, 'error': 'template name is required'}), 400
     try:
-        targets = _pulse_normalize_targets(user, data.get('targets'))
-        sites = _pulse_parse_sites_text(data.get('sites'))
+        values = _pulse_template_values(user, data)
     except ValueError as exc:
         return jsonify({'ok': False, 'error': str(exc)}), 400
-    vantage = str(data.get('vantage') or 'local').strip()
-    if vantage.startswith('agent:'):
-        agent_name = vantage.split(':', 1)[1]
-        if PulseAgent.query.filter_by(name=agent_name, enabled=True).first() is None:
-            return jsonify({'ok': False, 'error': 'invalid or disabled agent'}), 400
-    elif vantage != 'local':
-        return jsonify({'ok': False, 'error': 'invalid vantage'}), 400
-    row = PulseTemplate(
-        name=name,
-        targets_json=json.dumps(targets, ensure_ascii=False),
-        profile=str(data.get('profile') or 'quick') if data.get('profile') in ('quick', 'full') else 'quick',
-        vantage=vantage,
-        sites_json=json.dumps(sites, ensure_ascii=False) if sites else None,
-        download_bytes=_pulse_form_int(data.get('download_mb'), 10, lo=1, hi=200) * 1_000_000,
-        upload_bytes=_pulse_form_int(data.get('upload_mb'), 2, lo=1, hi=200) * 1_000_000,
-        schedule_enabled=bool(data.get('schedule_enabled')),
-        interval_minutes=_pulse_form_int(data.get('interval_minutes'), 60, lo=5, hi=1440),
-    )
+    row = PulseTemplate(**values)
     db.session.add(row)
+    db.session.commit()
+    return jsonify({'ok': True, 'template': row.to_dict()})
+
+
+@app.route('/pulse/templates/<int:template_id>', methods=['GET', 'PUT'])
+@login_required
+def pulse_template_detail(template_id):
+    row = db.session.get(PulseTemplate, template_id)
+    if row is None:
+        return jsonify({'ok': False, 'error': 'template not found'}), 404
+    if request.method == 'GET':
+        return jsonify({'ok': True, 'template': row.to_dict()})
+    user = db.session.get(Admin, session['admin_id'])
+    try:
+        values = _pulse_template_values(user, request.get_json(silent=True) or {})
+    except ValueError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    for key, value in values.items():
+        setattr(row, key, value)
     db.session.commit()
     return jsonify({'ok': True, 'template': row.to_dict()})
 
@@ -14569,12 +14627,12 @@ def pulse_template_delete(template_id):
 @app.route('/pulse/queue')
 @login_required
 def pulse_queue_status():
-    runs = (PulseRun.query.filter(PulseRun.status.in_(('queued', 'running')))
-            .order_by(PulseRun.created_at.asc(), PulseRun.id.asc()).limit(100).all())
+    runs = _pulse_queue_snapshot()
     payload = []
-    for position, run in enumerate(runs, 1):
+    for run in runs:
         item = run.to_dict()
-        item['position'] = position if run.status == 'queued' else None
+        item['position'] = run.queue_position
+        item['recent'] = run.status in ('done', 'failed')
         payload.append(item)
     return jsonify({'ok': True, 'runs': payload})
 
