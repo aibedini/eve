@@ -169,11 +169,18 @@ def cmd_list_inbounds(args):
     return 0
 
 
-def _collect_configs(server, inbounds, inbound_id=None):
+def _client_key(client):
+    """Return the stable panel-side identifier used by the Pulse picker."""
+    return str(client.get('id') or client.get('email') or '').strip()
+
+
+def _collect_configs(server, inbounds, inbound_id=None, config_ids=None):
     """Build PulseConfig entries for every client of the selected inbounds."""
     engine = _load_pulse()
     configs = []
     skipped = 0
+    selected_ids = [str(value).strip() for value in (config_ids or []) if str(value).strip()]
+    selected_set = set(selected_ids)
     for inb in inbounds:
         if inbound_id is not None and inb.get('id') != inbound_id:
             continue
@@ -182,6 +189,9 @@ def _collect_configs(server, inbounds, inbound_id=None):
         remark = inb.get('remark') or f"inbound-{inb.get('id')}"
         for client in _inbound_clients(inb):
             if client.get('enable') is False:
+                continue
+            client_key = _client_key(client)
+            if selected_set and client_key not in selected_set:
                 continue
             uri = app_module.generate_client_link(client, inb, server.host)
             if not uri:
@@ -194,7 +204,11 @@ def _collect_configs(server, inbounds, inbound_id=None):
                     uri=uri, label=label,
                     server=server.name, inbound=remark),
                 'is_probe': 'probe' in email.lower(),
+                'client_key': client_key,
             })
+    if selected_ids:
+        order = {value: index for index, value in enumerate(selected_ids)}
+        configs.sort(key=lambda entry: order.get(entry['client_key'], len(order)))
     return configs, skipped
 
 
@@ -217,7 +231,7 @@ def _result_metrics(result_dict):
     }
 
 
-def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT):
+def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT, config_ids=None):
     """Resolve the bounded config list for a run against one server.
 
     Shared by the CLI and the web/scheduler queue worker. Raises
@@ -234,14 +248,22 @@ def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT):
             f'inbound {inbound_id} not found on server {server.id}',
             server_id=server.id)
 
-    configs, skipped = _collect_configs(server, inbounds, inbound_id)
+    configs, skipped = _collect_configs(
+        server, inbounds, inbound_id, config_ids=config_ids)
+    if config_ids:
+        found = {entry['client_key'] for entry in configs}
+        missing = [str(value) for value in config_ids if str(value) not in found]
+        if missing:
+            raise PulseInputError(
+                f'{len(missing)} selected config(s) no longer exist or cannot be shared',
+                server_id=server.id, missing_config_ids=missing)
     if not configs:
         raise PulseInputError(
             'no client configs could be generated for the selection',
             server_id=server.id, skipped=skipped)
 
     total_available = len(configs)
-    limit = max(1, int(limit or DEFAULT_LIMIT))
+    limit = len(configs) if config_ids else max(1, int(limit or DEFAULT_LIMIT))
     truncated = total_available > limit
     configs = configs[:limit]
 
@@ -363,7 +385,8 @@ def execute_queued_run(run):
         raise PulseInputError(
             'xray runtime not found; install it with: eve --install-xray')
     prep = prepare_probe_run(
-        server, inbound_id=params.get('inbound_id'), limit=params.get('limit'))
+        server, inbound_id=params.get('inbound_id'), limit=params.get('limit'),
+        config_ids=params.get('config_ids'))
     run.scope = prep['scope']
     run.inbound_label = prep['inbound_label']
     db.session.commit()
@@ -390,7 +413,8 @@ def build_agent_task(run):
         raise PulseInputError(f'server {run.server_id} not found')
 
     prep = prepare_probe_run(
-        server, inbound_id=params.get('inbound_id'), limit=params.get('limit'))
+        server, inbound_id=params.get('inbound_id'), limit=params.get('limit'),
+        config_ids=params.get('config_ids'))
     run.scope = prep['scope']
     run.inbound_label = prep['inbound_label']
     run.status = 'running'

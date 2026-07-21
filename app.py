@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.14"
+APP_VERSION = "2.5.15"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -9745,6 +9745,50 @@ class PulseSettings(db.Model):
         }
 
 
+class PulseTemplate(db.Model):
+    """Reusable, ordered Pulse test plan selected explicitly by an admin."""
+    __tablename__ = 'pulse_templates'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    targets_json = db.Column(db.Text, nullable=False, default='[]')
+    profile = db.Column(db.String(16), default='quick')
+    vantage = db.Column(db.String(64), default='local')
+    sites_json = db.Column(db.Text, nullable=True)
+    schedule_enabled = db.Column(db.Boolean, default=False)
+    interval_minutes = db.Column(db.Integer, default=60)
+    last_run_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    def targets(self):
+        try:
+            value = json.loads(self.targets_json or '[]')
+            return value if isinstance(value, list) else []
+        except Exception:
+            return []
+
+    def sites(self):
+        try:
+            value = json.loads(self.sites_json or '[]')
+            return value if isinstance(value, list) else []
+        except Exception:
+            return []
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'targets': self.targets(),
+            'profile': self.profile or 'quick',
+            'vantage': self.vantage or 'local',
+            'sites': self.sites(),
+            'schedule_enabled': bool(self.schedule_enabled),
+            'interval_minutes': self.interval_minutes or 60,
+            'last_run_at': self.last_run_at.isoformat() + 'Z' if self.last_run_at else None,
+        }
+
+
 def get_pulse_settings(create=True):
     """Return the singleton PulseSettings row (created with defaults if missing)."""
     row = PulseSettings.query.order_by(PulseSettings.id.asc()).first()
@@ -14099,6 +14143,80 @@ def _pulse_form_int(value, default, lo=1, hi=1000):
         return default
 
 
+PULSE_COPY = {
+    'en': {
+        'subtitle': 'Build an explicit test plan, see every queued job, and reuse it as a template.',
+        'queue': 'Live queue', 'queue_help': 'Queued and running jobs update automatically.',
+        'empty_queue': 'The queue is empty.', 'position': 'Position', 'job': 'Job',
+        'target': 'Target', 'configs': 'Configs', 'status': 'Status', 'source': 'Source',
+        'wizard': 'Create a test plan', 'wizard_help': 'Choose the server, inbound, and exact configs in order. Nothing is selected automatically.',
+        'step1': '1. Choose server', 'step2': '2. Choose inbound', 'step3': '3. Choose configs',
+        'choose_server': 'Choose a server…', 'choose_inbound': 'Choose an inbound…',
+        'loading': 'Loading…', 'load_error': 'Could not load this selection.',
+        'no_configs': 'No enabled, shareable configs were found.', 'select_all': 'Select all',
+        'clear': 'Clear', 'add_step': 'Add this selection to the plan',
+        'plan': 'Ordered plan', 'plan_empty': 'Add at least one server/inbound/config selection.',
+        'move_up': 'Up', 'move_down': 'Down', 'remove': 'Remove',
+        'options': '4. Test options', 'profile': 'Test profile', 'quick': 'Quick (latency, loss, sites)',
+        'full': 'Full (also consumes traffic for speed tests)', 'vantage': 'Run from',
+        'local': 'This Eve server (local)', 'sites': 'Custom sites (optional)',
+        'sites_help': 'One per line: name=url or name=url::expected text',
+        'run_now': 'Queue this plan now', 'queued_ok': 'jobs were added to the queue.',
+        'template_name': 'Template name', 'save_template': 'Save as template',
+        'schedule': 'Run this template automatically', 'interval': 'Every (minutes)',
+        'templates': 'Saved templates', 'templates_help': 'Each template keeps the exact target order and config selection.',
+        'no_templates': 'No template has been saved yet.', 'run_template': 'Queue now',
+        'delete': 'Delete', 'scheduled': 'Scheduled', 'manual': 'Manual', 'steps': 'steps',
+        'recent': 'Recent completed/failed runs', 'time': 'Time', 'server': 'Server',
+        'scope': 'Selection', 'healthy': 'Healthy', 'degraded': 'Degraded', 'down': 'Down',
+        'duration': 'Duration', 'details': 'Click a row for details.', 'never': 'Never',
+        'agent': 'Agent', 'agents': 'External test agents', 'agents_help': 'Optional: run tests from another country.',
+        'agent_name': 'New agent name', 'create_agent': 'Create agent', 'last_seen': 'Last seen',
+        'enabled': 'Enabled', 'disabled': 'Disabled', 'created': 'Agent created. Save this one-time command.',
+        'confirm_delete': 'Delete this item?', 'queued': 'Queued', 'running': 'Running',
+        'done': 'Done', 'failed': 'Failed', 'web': 'Panel', 'template': 'Template',
+        'schedule_source': 'Schedule', 'seconds': 'sec', 'config': 'Config', 'result': 'Result',
+        'latency': 'Latency', 'loss': 'Loss', 'speed': 'Speed', 'error': 'Error',
+        'save_ok': 'Template saved.', 'request_error': 'The request failed.',
+    },
+    'fa': {
+        'subtitle': 'برنامه تست را دقیق بسازید، تمام کارهای صف را ببینید و آن را به‌صورت تمپلیت دوباره اجرا کنید.',
+        'queue': 'صف زنده', 'queue_help': 'کارهای در صف و در حال اجرا به‌صورت خودکار به‌روز می‌شوند.',
+        'empty_queue': 'صف خالی است.', 'position': 'ردیف', 'job': 'کار',
+        'target': 'مقصد', 'configs': 'کانفیگ‌ها', 'status': 'وضعیت', 'source': 'منشأ',
+        'wizard': 'ساخت برنامه تست', 'wizard_help': 'سرور، اینباند و کانفیگ‌های دقیق را به‌ترتیب انتخاب کنید؛ چیزی خودکار انتخاب نمی‌شود.',
+        'step1': '۱. انتخاب سرور', 'step2': '۲. انتخاب اینباند', 'step3': '۳. انتخاب کانفیگ‌ها',
+        'choose_server': 'یک سرور انتخاب کنید…', 'choose_inbound': 'یک اینباند انتخاب کنید…',
+        'loading': 'در حال دریافت…', 'load_error': 'دریافت این انتخاب ناموفق بود.',
+        'no_configs': 'کانفیگ فعال و قابل اشتراکی پیدا نشد.', 'select_all': 'انتخاب همه',
+        'clear': 'پاک‌کردن', 'add_step': 'افزودن این انتخاب به برنامه',
+        'plan': 'ترتیب اجرای برنامه', 'plan_empty': 'حداقل یک انتخاب سرور/اینباند/کانفیگ اضافه کنید.',
+        'move_up': 'بالا', 'move_down': 'پایین', 'remove': 'حذف',
+        'options': '۴. تنظیمات تست', 'profile': 'پروفایل تست', 'quick': 'سریع (تأخیر، افت و سایت‌ها)',
+        'full': 'کامل (تست سرعت نیز ترافیک مصرف می‌کند)', 'vantage': 'محل اجرا',
+        'local': 'همین سرور Eve (محلی)', 'sites': 'سایت‌های سفارشی (اختیاری)',
+        'sites_help': 'هر خط: name=url یا name=url::متن مورد انتظار',
+        'run_now': 'افزودن این برنامه به صف', 'queued_ok': 'کار به صف اضافه شد.',
+        'template_name': 'نام تمپلیت', 'save_template': 'ذخیره به‌عنوان تمپلیت',
+        'schedule': 'این تمپلیت خودکار اجرا شود', 'interval': 'هر چند دقیقه',
+        'templates': 'تمپلیت‌های ذخیره‌شده', 'templates_help': 'هر تمپلیت ترتیب مقصدها و کانفیگ‌های انتخاب‌شده را نگه می‌دارد.',
+        'no_templates': 'هنوز تمپلیتی ذخیره نشده است.', 'run_template': 'افزودن به صف',
+        'delete': 'حذف', 'scheduled': 'زمان‌بندی‌شده', 'manual': 'دستی', 'steps': 'مرحله',
+        'recent': 'اجراهای تمام‌شده یا ناموفق اخیر', 'time': 'زمان', 'server': 'سرور',
+        'scope': 'انتخاب', 'healthy': 'سالم', 'degraded': 'ضعیف', 'down': 'قطع',
+        'duration': 'مدت', 'details': 'برای دیدن جزئیات روی ردیف کلیک کنید.', 'never': 'هرگز',
+        'agent': 'ایجنت', 'agents': 'ایجنت‌های تست خارج', 'agents_help': 'اختیاری: تست را از کشور دیگری اجرا کنید.',
+        'agent_name': 'نام ایجنت جدید', 'create_agent': 'ساخت ایجنت', 'last_seen': 'آخرین اتصال',
+        'enabled': 'فعال', 'disabled': 'غیرفعال', 'created': 'ایجنت ساخته شد؛ این دستور یک‌بارمصرف را ذخیره کنید.',
+        'confirm_delete': 'این مورد حذف شود؟', 'queued': 'در صف', 'running': 'در حال اجرا',
+        'done': 'تمام‌شده', 'failed': 'ناموفق', 'web': 'پنل', 'template': 'تمپلیت',
+        'schedule_source': 'زمان‌بندی', 'seconds': 'ثانیه', 'config': 'کانفیگ', 'result': 'نتیجه',
+        'latency': 'تأخیر', 'loss': 'افت', 'speed': 'سرعت', 'error': 'خطا',
+        'save_ok': 'تمپلیت ذخیره شد.', 'request_error': 'انجام درخواست ناموفق بود.',
+    },
+}
+
+
 @app.route('/pulse')
 @login_required
 def pulse_page():
@@ -14107,12 +14225,19 @@ def pulse_page():
     runs = (PulseRun.query
             .order_by(PulseRun.created_at.desc(), PulseRun.id.desc())
             .limit(25).all())
+    queue_runs = [run for run in runs if run.status in ('queued', 'running')]
+    history_runs = [run for run in runs if run.status not in ('queued', 'running')]
     agents = PulseAgent.query.order_by(PulseAgent.name.asc()).all()
+    templates = PulseTemplate.query.order_by(PulseTemplate.name.asc()).all()
+    panel_lang = _get_panel_ui_lang()
     return render_template('pulse.html',
-                         runs=runs,
+                         runs=history_runs,
+                         queue_runs=queue_runs,
                          servers=servers,
                          settings=get_pulse_settings(),
                          agents=agents,
+                         pulse_templates=templates,
+                         pulse_copy=PULSE_COPY[panel_lang],
                          format_app_datetime=format_app_datetime,
                          admin_username=session.get('admin_username'),
                          is_superadmin=session.get('is_superadmin', False),
@@ -14194,6 +14319,10 @@ def pulse_run_create():
     if profile not in ('quick', 'full'):
         profile = 'quick'
     limit = _pulse_form_int(data.get('limit'), 10, lo=1, hi=200)
+    config_ids = data.get('config_ids') if hasattr(data, 'get') else None
+    if not isinstance(config_ids, list):
+        config_ids = []
+    config_ids = [str(value).strip() for value in config_ids if str(value).strip()]
 
     vantage = str(data.get('vantage') or 'local').strip()
     if vantage.startswith('agent:'):
@@ -14221,6 +14350,7 @@ def pulse_run_create():
         params_json=json.dumps({
             'inbound_id': inbound_id,
             'limit': limit,
+            'config_ids': config_ids,
             'sites': site_specs,
         }, ensure_ascii=False),
     )
@@ -14229,6 +14359,166 @@ def pulse_run_create():
     if wants_json:
         return jsonify({'ok': True, 'run_id': run.id})
     return redirect(url_for('pulse_page'))
+
+
+def _pulse_normalize_targets(user, raw_targets):
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise ValueError('test plan must contain at least one target')
+    if len(raw_targets) > 100:
+        raise ValueError('test plan is too large')
+    targets = []
+    for raw in raw_targets:
+        if not isinstance(raw, dict):
+            raise ValueError('invalid test-plan target')
+        server = _pulse_accessible_server(
+            user, _pulse_form_int(raw.get('server_id'), 0, lo=0))
+        if server is None:
+            raise ValueError('invalid server in test plan')
+        inbound_id = _pulse_form_int(raw.get('inbound_id'), 0, lo=0) or None
+        if inbound_id is None:
+            raise ValueError('each test-plan target needs an inbound')
+        config_ids = raw.get('config_ids')
+        if not isinstance(config_ids, list):
+            config_ids = []
+        config_ids = list(dict.fromkeys(
+            str(value).strip() for value in config_ids if str(value).strip()))
+        if not config_ids:
+            raise ValueError('select at least one config for every target')
+        if len(config_ids) > 200:
+            raise ValueError('too many configs in one target')
+        targets.append({
+            'server_id': server.id,
+            'server_name': server.name,
+            'inbound_id': inbound_id,
+            'inbound_label': str(raw.get('inbound_label') or f'inbound-{inbound_id}')[:255],
+            'config_ids': config_ids,
+            'config_labels': [str(value)[:255] for value in (raw.get('config_labels') or [])],
+        })
+    return targets
+
+
+def _pulse_enqueue_targets(targets, profile='quick', vantage='local', sites=None,
+                           triggered_by='web', template_name=None):
+    run_ids = []
+    batch_id = secrets.token_hex(6)
+    for index, target in enumerate(targets, 1):
+        run = PulseRun(
+            server_id=target['server_id'],
+            server_name=target.get('server_name'),
+            scope='config',
+            inbound_label=target.get('inbound_label'),
+            profile=profile if profile in ('quick', 'full') else 'quick',
+            vantage=vantage or 'local',
+            status='queued',
+            triggered_by=triggered_by,
+            params_json=json.dumps({
+                'inbound_id': target['inbound_id'],
+                'config_ids': target['config_ids'],
+                'limit': len(target['config_ids']),
+                'sites': sites or [],
+                'batch_id': batch_id,
+                'batch_index': index,
+                'batch_total': len(targets),
+                'template_name': template_name,
+            }, ensure_ascii=False),
+        )
+        db.session.add(run)
+        db.session.flush()
+        run_ids.append(run.id)
+    db.session.commit()
+    return run_ids
+
+
+@app.route('/pulse/plan/run', methods=['POST'])
+@login_required
+def pulse_plan_run():
+    user = db.session.get(Admin, session['admin_id'])
+    data = request.get_json(silent=True) or {}
+    try:
+        targets = _pulse_normalize_targets(user, data.get('targets'))
+        sites = _pulse_parse_sites_text(data.get('sites'))
+    except ValueError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    vantage = str(data.get('vantage') or 'local').strip()
+    if vantage.startswith('agent:'):
+        name = vantage.split(':', 1)[1]
+        if PulseAgent.query.filter_by(name=name, enabled=True).first() is None:
+            return jsonify({'ok': False, 'error': 'invalid or disabled agent'}), 400
+    elif vantage != 'local':
+        return jsonify({'ok': False, 'error': 'invalid vantage'}), 400
+    run_ids = _pulse_enqueue_targets(
+        targets, profile=str(data.get('profile') or 'quick'), vantage=vantage,
+        sites=sites, triggered_by='web')
+    return jsonify({'ok': True, 'run_ids': run_ids, 'queued': len(run_ids)})
+
+
+@app.route('/pulse/templates', methods=['POST'])
+@login_required
+def pulse_template_create():
+    user = db.session.get(Admin, session['admin_id'])
+    data = request.get_json(silent=True) or {}
+    name = str(data.get('name') or '').strip()
+    if not name or len(name) > 120:
+        return jsonify({'ok': False, 'error': 'template name is required'}), 400
+    try:
+        targets = _pulse_normalize_targets(user, data.get('targets'))
+        sites = _pulse_parse_sites_text(data.get('sites'))
+    except ValueError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    vantage = str(data.get('vantage') or 'local').strip()
+    if vantage.startswith('agent:'):
+        agent_name = vantage.split(':', 1)[1]
+        if PulseAgent.query.filter_by(name=agent_name, enabled=True).first() is None:
+            return jsonify({'ok': False, 'error': 'invalid or disabled agent'}), 400
+    elif vantage != 'local':
+        return jsonify({'ok': False, 'error': 'invalid vantage'}), 400
+    row = PulseTemplate(
+        name=name,
+        targets_json=json.dumps(targets, ensure_ascii=False),
+        profile=str(data.get('profile') or 'quick') if data.get('profile') in ('quick', 'full') else 'quick',
+        vantage=vantage,
+        sites_json=json.dumps(sites, ensure_ascii=False) if sites else None,
+        schedule_enabled=bool(data.get('schedule_enabled')),
+        interval_minutes=_pulse_form_int(data.get('interval_minutes'), 60, lo=5, hi=1440),
+    )
+    db.session.add(row)
+    db.session.commit()
+    return jsonify({'ok': True, 'template': row.to_dict()})
+
+
+@app.route('/pulse/templates/<int:template_id>/run', methods=['POST'])
+@login_required
+def pulse_template_run(template_id):
+    row = db.session.get(PulseTemplate, template_id)
+    if row is None:
+        return jsonify({'ok': False, 'error': 'template not found'}), 404
+    run_ids = _pulse_enqueue_targets(
+        row.targets(), profile=row.profile, vantage=row.vantage, sites=row.sites(),
+        triggered_by='template', template_name=row.name)
+    return jsonify({'ok': True, 'run_ids': run_ids, 'queued': len(run_ids)})
+
+
+@app.route('/pulse/templates/<int:template_id>/delete', methods=['POST'])
+@login_required
+def pulse_template_delete(template_id):
+    row = db.session.get(PulseTemplate, template_id)
+    if row is not None:
+        db.session.delete(row)
+        db.session.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/pulse/queue')
+@login_required
+def pulse_queue_status():
+    runs = (PulseRun.query.filter(PulseRun.status.in_(('queued', 'running')))
+            .order_by(PulseRun.created_at.asc(), PulseRun.id.asc()).limit(100).all())
+    payload = []
+    for position, run in enumerate(runs, 1):
+        item = run.to_dict()
+        item['position'] = position if run.status == 'queued' else None
+        payload.append(item)
+    return jsonify({'ok': True, 'runs': payload})
 
 
 @app.route('/pulse/settings', methods=['POST'])
@@ -14308,6 +14598,46 @@ def pulse_server_inbounds(server_id):
             }
             for inb in inbounds
         ],
+    })
+
+
+@app.route('/pulse/servers/<int:server_id>/inbounds/<int:inbound_id>/configs')
+@login_required
+def pulse_inbound_configs(server_id, inbound_id):
+    """List exact selectable client configs; never return their share URIs."""
+    user = db.session.get(Admin, session['admin_id'])
+    server = _pulse_accessible_server(user, server_id)
+    if server is None:
+        return jsonify({'ok': False, 'error': 'server not found'}), 404
+    pr = _pulse_runner_module()
+    inbounds, error = pr._fetch_server_inbounds(server)
+    if error:
+        return jsonify({'ok': False, 'error': error}), 502
+    inbound = next((row for row in inbounds
+                    if str(row.get('id')) == str(inbound_id)), None)
+    if inbound is None:
+        return jsonify({'ok': False, 'error': 'inbound not found'}), 404
+    remark = inbound.get('remark') or f'inbound-{inbound_id}'
+    configs = []
+    for client in pr._inbound_clients(inbound):
+        if client.get('enable') is False:
+            continue
+        key = pr._client_key(client)
+        if not key:
+            continue
+        if not generate_client_link(client, inbound, server.host):
+            continue
+        email = str(client.get('email') or '').strip()
+        configs.append({
+            'id': key,
+            'label': email or key,
+            'is_probe': 'probe' in email.lower(),
+        })
+    return jsonify({
+        'ok': True,
+        'server': {'id': server.id, 'name': server.name},
+        'inbound': {'id': inbound_id, 'label': remark},
+        'configs': configs,
     })
 
 
@@ -32593,6 +32923,20 @@ def pulse_scheduler_tick(now=None):
     """
     import pulse_runner  # lazy: pulse_runner imports app
     now = now or datetime.utcnow()
+
+    # Reusable templates are the explicit scheduler: every saved target is
+    # enqueued in its stored order, with its exact config selection.
+    for template in PulseTemplate.query.filter_by(schedule_enabled=True).all():
+        interval = max(5, int(template.interval_minutes or 60))
+        due = (template.last_run_at is None
+               or (now - template.last_run_at) >= timedelta(minutes=interval))
+        if not due or not template.targets():
+            continue
+        _pulse_enqueue_targets(
+            template.targets(), profile=template.profile, vantage=template.vantage,
+            sites=template.sites(), triggered_by='schedule', template_name=template.name)
+        template.last_run_at = now
+        db.session.commit()
 
     settings = get_pulse_settings(create=False)
     if settings and settings.enabled:

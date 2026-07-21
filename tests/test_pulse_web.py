@@ -20,6 +20,7 @@ from app import (  # noqa: E402
     PulseResultRecord,
     PulseRun,
     PulseSettings,
+    PulseTemplate,
     Server,
     app,
     db,
@@ -81,6 +82,7 @@ class PulseWebTestBase(unittest.TestCase):
         PulseResultRecord.query.delete()
         PulseRun.query.delete()
         PulseSettings.query.delete()
+        PulseTemplate.query.delete()
         Server.query.delete()
         Admin.query.delete()
         db.session.commit()
@@ -142,14 +144,22 @@ class PulsePageTest(PulseWebTestBase):
         # Sidebar entry (base.html) and page content both present.
         self.assertIn('<span>Pulse</span>', html)
         self.assertIn('panel-1', html)
-        self.assertIn('pulse-run-form', html)
-        self.assertIn('/pulse/settings', html)
+        self.assertIn('pulse-add-step', html)
+        self.assertIn('pulse-queue-body', html)
+        self.assertIn('Choose the server, inbound, and exact configs', html)
 
     def test_page_requires_login(self):
         anon = app.test_client()
         resp = anon.get('/pulse')
         self.assertEqual(resp.status_code, 302)
         self.assertIn('/login', resp.headers.get('Location', ''))
+
+    def test_page_copy_follows_panel_language(self):
+        with mock.patch.object(app_module, '_get_panel_ui_lang', return_value='fa'):
+            html = self.client.get('/pulse').get_data(as_text=True)
+        self.assertIn('ساخت برنامه تست', html)
+        self.assertIn('صف زنده', html)
+        self.assertNotIn('Create a test plan</h3>', html)
 
 
 class PulseRunCreateTest(PulseWebTestBase):
@@ -260,6 +270,104 @@ class PulseInboundsEndpointTest(PulseWebTestBase):
     def test_inbounds_unknown_server_404(self):
         resp = self.client.get('/pulse/servers/9999/inbounds')
         self.assertEqual(resp.status_code, 404)
+
+    def test_configs_endpoint_lists_exact_safe_choices(self):
+        inbounds = [_inbound(1, 'main', [
+            _client('alice'), _client('disabled', enable=False),
+        ])]
+        patches = self._panel_patches(inbounds)
+        for patcher in patches:
+            patcher.start()
+        try:
+            resp = self.client.get(
+                f'/pulse/servers/{self.server.id}/inbounds/1/configs')
+        finally:
+            for patcher in patches:
+                patcher.stop()
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual([row['label'] for row in payload['configs']], ['alice'])
+        self.assertNotIn('uri', payload['configs'][0])
+
+
+class PulsePlanAndTemplateTest(PulseWebTestBase):
+    def _target(self, inbound_id=1, config_ids=None):
+        return {
+            'server_id': self.server.id,
+            'server_name': self.server.name,
+            'inbound_id': inbound_id,
+            'inbound_label': f'inbound-{inbound_id}',
+            'config_ids': config_ids or ['uuid-alice'],
+            'config_labels': ['alice'],
+        }
+
+    def test_plan_enqueues_targets_and_configs_in_order(self):
+        resp = self.client.post('/pulse/plan/run', json={
+            'targets': [self._target(2, ['uuid-b']), self._target(1, ['uuid-a'])],
+            'profile': 'quick', 'vantage': 'local',
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()['queued'], 2)
+        runs = PulseRun.query.order_by(PulseRun.id.asc()).all()
+        self.assertEqual([run.params()['inbound_id'] for run in runs], [2, 1])
+        self.assertEqual(runs[0].params()['config_ids'], ['uuid-b'])
+        self.assertEqual(runs[0].params()['batch_index'], 1)
+        self.assertEqual(runs[1].params()['batch_index'], 2)
+
+    def test_template_saves_exact_plan_and_can_queue_it(self):
+        created = self.client.post('/pulse/templates', json={
+            'name': 'EU baseline', 'targets': [self._target()],
+            'profile': 'full', 'vantage': 'local',
+            'schedule_enabled': True, 'interval_minutes': 30,
+        })
+        self.assertEqual(created.status_code, 200)
+        template = PulseTemplate.query.one()
+        self.assertEqual(template.targets()[0]['config_ids'], ['uuid-alice'])
+        self.assertTrue(template.schedule_enabled)
+        page = self.client.get('/pulse')
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('EU baseline', page.get_data(as_text=True))
+
+        queued = self.client.post(f'/pulse/templates/{template.id}/run')
+        self.assertEqual(queued.status_code, 200)
+        run = PulseRun.query.one()
+        self.assertEqual(run.triggered_by, 'template')
+        self.assertEqual(run.params()['template_name'], 'EU baseline')
+
+    def test_queue_endpoint_exposes_positions_and_selection_count(self):
+        self._enqueue_run(inbound_id=1)
+        second = self._enqueue_run(inbound_id=2)
+        second.params_json = json.dumps({
+            'inbound_id': 2, 'config_ids': ['a', 'b'], 'sites': [],
+        })
+        db.session.commit()
+        payload = self.client.get('/pulse/queue').get_json()
+        self.assertEqual([row['position'] for row in payload['runs']], [1, 2])
+        self.assertEqual(payload['runs'][1]['params']['config_ids'], ['a', 'b'])
+
+    def test_worker_probes_only_selected_configs_in_selected_order(self):
+        run = self._enqueue_run(inbound_id=1)
+        run.params_json = json.dumps({
+            'inbound_id': 1,
+            'config_ids': ['uuid-carol', 'uuid-alice'],
+            'limit': 2, 'sites': [],
+        })
+        db.session.commit()
+        inbounds = [_inbound(1, 'main', [
+            _client('alice'), _client('bob'), _client('carol'),
+        ])]
+        patches = self._panel_patches(inbounds)
+        for patcher in patches:
+            patcher.start()
+        try:
+            with mock.patch('pulse.run_probe', side_effect=_fake_probe()) as probe:
+                app_module.pulse_scheduler_tick()
+        finally:
+            for patcher in patches:
+                patcher.stop()
+        self.assertEqual(
+            [call.args[0].label for call in probe.call_args_list],
+            ['carol @ main', 'alice @ main'])
 
 
 class PulseWorkerTickTest(PulseWebTestBase):

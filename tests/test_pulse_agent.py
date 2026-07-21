@@ -293,7 +293,7 @@ class PulseAgentAdminTest(PulseAgentApiTestBase):
         html = resp.get_data(as_text=True)
         self.assertIn('de-1', html)
         self.assertIn('agent:de-1', html)  # vantage selector option
-        self.assertIn('pulse-agent-form', html)
+        self.assertIn('pulse-create-agent', html)
 
     def test_run_create_with_agent_vantage(self):
         resp = self.client.post('/pulse/run', json={
