@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.16"
+APP_VERSION = "2.5.17"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -14158,10 +14158,13 @@ PULSE_COPY = {
         'empty_queue': 'The queue is empty.', 'position': 'Position', 'job': 'Job',
         'target': 'Target', 'configs': 'Configs', 'status': 'Status', 'source': 'Source',
         'wizard': 'Create a test plan', 'wizard_help': 'Choose the server, inbound, and exact configs in order. Nothing is selected automatically.',
-        'step1': '1. Choose server', 'step2': '2. Choose inbound', 'step3': '3. Choose configs',
+        'step1': '1. Choose server', 'step2': '2. Choose inbound(s)', 'step3': '3. Choose client(s)',
         'v3_multi_hint': 'v3+ detected: choose one or more inbounds, then choose one client attached to all of them.',
         'legacy_hint': 'Choose one inbound, then select the configs to test.',
         'search_configs': 'Search clients…', 'common_clients': 'clients match every selected inbound',
+        'selection_empty': 'Choose an inbound and client to see the final test count.',
+        'selected_inbounds': 'inbounds selected', 'common_clients_count': 'common clients',
+        'tests_ready': 'tests will be queued for this selection',
         'choose_server': 'Choose a server…', 'choose_inbound': 'Choose an inbound…',
         'loading': 'Loading…', 'load_error': 'Could not load this selection.',
         'no_configs': 'No enabled, shareable configs were found.', 'select_all': 'Select all',
@@ -14198,10 +14201,13 @@ PULSE_COPY = {
         'empty_queue': 'صف خالی است.', 'position': 'ردیف', 'job': 'کار',
         'target': 'مقصد', 'configs': 'کانفیگ‌ها', 'status': 'وضعیت', 'source': 'منشأ',
         'wizard': 'ساخت برنامه تست', 'wizard_help': 'سرور، اینباند و کانفیگ‌های دقیق را به‌ترتیب انتخاب کنید؛ چیزی خودکار انتخاب نمی‌شود.',
-        'step1': '۱. انتخاب سرور', 'step2': '۲. انتخاب اینباند', 'step3': '۳. انتخاب کانفیگ‌ها',
+        'step1': '۱. انتخاب سرور', 'step2': '۲. انتخاب اینباندها', 'step3': '۳. انتخاب کلاینت',
         'v3_multi_hint': 'نسخه ۳ یا جدیدتر تشخیص داده شد: چند اینباند را انتخاب کنید، سپس یک کاربر مشترک میان همه را برگزینید.',
         'legacy_hint': 'یک اینباند را انتخاب کنید، سپس کانفیگ‌های موردنظر را برگزینید.',
         'search_configs': 'جست‌وجوی کلاینت…', 'common_clients': 'کلاینت با همه اینباندهای انتخاب‌شده مطابقت دارد',
+        'selection_empty': 'برای دیدن تعداد تست نهایی، اینباند و کلاینت را انتخاب کنید.',
+        'selected_inbounds': 'اینباند انتخاب‌شده', 'common_clients_count': 'کلاینت مشترک',
+        'tests_ready': 'تست برای این انتخاب وارد صف می‌شود',
         'choose_server': 'یک سرور انتخاب کنید…', 'choose_inbound': 'یک اینباند انتخاب کنید…',
         'loading': 'در حال دریافت…', 'load_error': 'دریافت این انتخاب ناموفق بود.',
         'no_configs': 'کانفیگ فعال و قابل اشتراکی پیدا نشد.', 'select_all': 'انتخاب همه',

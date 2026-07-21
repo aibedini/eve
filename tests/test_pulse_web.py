@@ -146,6 +146,10 @@ class PulsePageTest(PulseWebTestBase):
         self.assertIn('panel-1', html)
         self.assertIn('pulse-add-step', html)
         self.assertIn('pulse-queue-body', html)
+        self.assertIn('pulse-picker-grid', html)
+        self.assertIn('pulse-inbound-select-all', html)
+        self.assertIn('pulse-common-count', html)
+        self.assertIn('pulse-selection-summary', html)
         self.assertIn('Choose the server, inbound, and exact configs', html)
 
     def test_page_requires_login(self):
