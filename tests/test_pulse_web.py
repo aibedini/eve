@@ -150,6 +150,10 @@ class PulsePageTest(PulseWebTestBase):
         self.assertIn('pulse-inbound-select-all', html)
         self.assertIn('pulse-common-count', html)
         self.assertIn('pulse-selection-summary', html)
+        self.assertIn('class="search-wrapper pulse-search-wrapper"', html)
+        self.assertIn('id="pulse-search-clear"', html)
+        self.assertIn('row.hidden=!matches', html)
+        self.assertIn('pulse-config[hidden]{display:none!important}', html)
         self.assertIn('Choose the server, inbound, and exact configs', html)
 
     def test_page_requires_login(self):

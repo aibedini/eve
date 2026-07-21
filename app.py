@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.17"
+APP_VERSION = "2.5.18"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -14165,6 +14165,8 @@ PULSE_COPY = {
         'selection_empty': 'Choose an inbound and client to see the final test count.',
         'selected_inbounds': 'inbounds selected', 'common_clients_count': 'common clients',
         'tests_ready': 'tests will be queued for this selection',
+        'clear_search': 'Clear search', 'clear_selection': 'Clear selection',
+        'no_search_results': 'No matching client was found.',
         'choose_server': 'Choose a server…', 'choose_inbound': 'Choose an inbound…',
         'loading': 'Loading…', 'load_error': 'Could not load this selection.',
         'no_configs': 'No enabled, shareable configs were found.', 'select_all': 'Select all',
@@ -14208,6 +14210,8 @@ PULSE_COPY = {
         'selection_empty': 'برای دیدن تعداد تست نهایی، اینباند و کلاینت را انتخاب کنید.',
         'selected_inbounds': 'اینباند انتخاب‌شده', 'common_clients_count': 'کلاینت مشترک',
         'tests_ready': 'تست برای این انتخاب وارد صف می‌شود',
+        'clear_search': 'پاک‌کردن جست‌وجو', 'clear_selection': 'پاک‌کردن انتخاب',
+        'no_search_results': 'کلاینتی مطابق این جست‌وجو پیدا نشد.',
         'choose_server': 'یک سرور انتخاب کنید…', 'choose_inbound': 'یک اینباند انتخاب کنید…',
         'loading': 'در حال دریافت…', 'load_error': 'دریافت این انتخاب ناموفق بود.',
         'no_configs': 'کانفیگ فعال و قابل اشتراکی پیدا نشد.', 'select_all': 'انتخاب همه',
