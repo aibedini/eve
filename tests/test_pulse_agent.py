@@ -387,6 +387,33 @@ class PulseAgentTasksEndpointTest(PulseAgentApiTestBase):
             headers={'Authorization': 'Bearer tok123'})
         self.assertIsNone(resp2.get_json()['run_id'])
 
+    def test_claim_manual_run_returns_links_without_panel_lookup(self):
+        uri = (
+            'vless://11111111-1111-1111-1111-111111111111@'
+            'manual.example.com:443?type=tcp&security=none#Manual-Agent'
+        )
+        run = PulseRun(
+            server_id=None, server_name='Manual links', scope='config',
+            profile='quick', vantage='agent:de-1', status='queued',
+            triggered_by='web', params_json=json.dumps({
+                'config_source': 'manual',
+                'manual_configs': [{'uri': uri, 'label': 'Manual Agent'}],
+                'sites': [],
+            }),
+        )
+        db.session.add(run)
+        db.session.commit()
+        with mock.patch.object(pulse_runner, '_get_server') as get_server:
+            response = self.client.get(
+                '/api/pulse/agent/tasks?agent=de-1',
+                headers={'Authorization': 'Bearer tok123'})
+        self.assertEqual(response.status_code, 200)
+        get_server.assert_not_called()
+        task = response.get_json()
+        self.assertEqual(task['configs'], [
+            {'label': 'Manual Agent', 'uri': uri},
+        ])
+
     def test_full_task_carries_custom_speed_sample_sizes(self):
         run = self._enqueue_remote_run()
         run.profile = 'full'

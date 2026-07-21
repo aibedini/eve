@@ -48,6 +48,13 @@ def _inbound(iid=1, remark='main', clients=None, enable=True):
     }
 
 
+def _manual_uri(name='Manual-One', host='example.com'):
+    return (
+        'vless://11111111-1111-1111-1111-111111111111@'
+        f'{host}:443?type=tcp&security=none#{name}'
+    )
+
+
 def _fake_probe(verdict_by_label=None):
     verdict_by_label = verdict_by_label or {}
 
@@ -153,6 +160,10 @@ class PulsePageTest(PulseWebTestBase):
         self.assertIn('pulse-selection-summary', html)
         self.assertIn('class="search-wrapper pulse-search-wrapper"', html)
         self.assertIn('id="pulse-search-clear"', html)
+        self.assertIn('id="pulse-source-manual"', html)
+        self.assertIn('id="pulse-manual-configs"', html)
+        self.assertIn("manualConfigs.addEventListener('input'", html)
+        self.assertIn("manualConfigRows().length", html)
         self.assertIn('row.hidden=!matches', html)
         self.assertIn('pulse-config[hidden]{display:none!important}', html)
         self.assertIn('action-icon danger plan-remove', html)
@@ -349,6 +360,43 @@ class PulsePlanAndTemplateTest(PulseWebTestBase):
         self.assertEqual(runs[0].params()['download_bytes'], 25_000_000)
         self.assertEqual(runs[0].params()['upload_bytes'], 5_000_000)
 
+    def test_plan_accepts_manual_links_and_redacts_them_from_queue(self):
+        first = _manual_uri('First')
+        second = _manual_uri('Second', 'two.example.com')
+        response = self.client.post('/pulse/plan/run', json={
+            'targets': [{
+                'config_source': 'manual',
+                'manual_configs': [first, '', first, second],
+            }],
+            'profile': 'quick', 'vantage': 'local',
+        })
+        self.assertEqual(response.status_code, 200)
+        run = PulseRun.query.one()
+        params = run.params()
+        self.assertIsNone(run.server_id)
+        self.assertEqual(params['config_source'], 'manual')
+        self.assertEqual(
+            [row['uri'] for row in params['manual_configs']],
+            [first, first, second])
+        self.assertEqual(params['limit'], 3)
+
+        public = self.client.get('/pulse/queue').get_json()['runs'][0]['params']
+        self.assertEqual(public['manual_config_count'], 3)
+        self.assertNotIn('manual_configs', public)
+        self.assertNotIn(first, json.dumps(public))
+
+    def test_plan_reports_the_invalid_manual_line_number(self):
+        response = self.client.post('/pulse/plan/run', json={
+            'targets': [{
+                'config_source': 'manual',
+                'manual_configs': [_manual_uri(), 'not-a-share-link'],
+            }],
+            'profile': 'quick', 'vantage': 'local',
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('line 2', response.get_json()['error'])
+        self.assertEqual(PulseRun.query.count(), 0)
+
     def test_template_saves_exact_plan_and_can_queue_it(self):
         created = self.client.post('/pulse/templates', json={
             'name': 'EU baseline', 'targets': [self._target()],
@@ -371,6 +419,23 @@ class PulsePlanAndTemplateTest(PulseWebTestBase):
         run = PulseRun.query.one()
         self.assertEqual(run.triggered_by, 'template')
         self.assertEqual(run.params()['template_name'], 'EU baseline')
+
+    def test_template_preserves_manual_links_for_editing(self):
+        uri = _manual_uri('Editable')
+        created = self.client.post('/pulse/templates', json={
+            'name': 'Manual template',
+            'targets': [{
+                'config_source': 'manual',
+                'manual_configs': [uri],
+            }],
+            'profile': 'quick', 'vantage': 'local',
+        })
+        self.assertEqual(created.status_code, 200)
+        template_id = created.get_json()['template']['id']
+        loaded = self.client.get(f'/pulse/templates/{template_id}').get_json()
+        target = loaded['template']['targets'][0]
+        self.assertEqual(target['config_source'], 'manual')
+        self.assertEqual(target['manual_configs'][0]['uri'], uri)
 
     def test_template_can_be_loaded_and_updated_in_place(self):
         created = self.client.post('/pulse/templates', json={

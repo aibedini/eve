@@ -40,6 +40,13 @@ def _inbound(iid=1, remark='main', clients=None, enable=True):
     }
 
 
+def _manual_uri(name='Manual-One', host='example.com'):
+    return (
+        'vless://11111111-1111-1111-1111-111111111111@'
+        f'{host}:443?type=tcp&security=none#{name}'
+    )
+
+
 def _fake_probe(verdict_by_label=None):
     verdict_by_label = verdict_by_label or {}
 
@@ -137,6 +144,35 @@ class ListInboundsTest(PulseRunnerTestBase):
 
 
 class RunTest(PulseRunnerTestBase):
+    def test_manual_queued_run_uses_links_without_panel_lookup(self):
+        first = _manual_uri('First')
+        second = _manual_uri('Second', 'two.example.com')
+        run = PulseRun(
+            server_id=None, server_name='Manual links', scope='config',
+            profile='quick', vantage='local', status='running',
+            triggered_by='web', params_json=json.dumps({
+                'config_source': 'manual',
+                'manual_configs': [
+                    {'uri': first, 'label': 'First'},
+                    {'uri': second, 'label': 'Second'},
+                ],
+                'sites': [],
+            }),
+        )
+        db.session.add(run)
+        db.session.commit()
+        with mock.patch.object(pulse_runner, '_get_server') as get_server, \
+                mock.patch.object(pulse_runner, 'execute_probe_run',
+                                  return_value=({}, [])) as execute:
+            pulse_runner.execute_queued_run(run)
+        get_server.assert_not_called()
+        configs = execute.call_args.args[1]
+        self.assertEqual([entry['config'].uri for entry in configs],
+                         [first, second])
+        self.assertEqual([entry['config'].label for entry in configs],
+                         ['First', 'Second'])
+        self.assertEqual(run.inbound_label, 'Manual links')
+
     def test_run_persists_run_and_rows(self):
         inbounds = [_inbound(1, 'main', [_client('alice'), _client('probe-bob')])]
         with self._mock_inbounds(inbounds), \

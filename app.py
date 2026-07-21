@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.19"
+APP_VERSION = "2.5.20"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -9650,6 +9650,15 @@ class PulseRun(db.Model):
             return {}
 
     def to_dict(self):
+        public_params = self.params()
+        manual_configs = public_params.pop('manual_configs', None)
+        if isinstance(manual_configs, list):
+            public_params['manual_config_count'] = len(manual_configs)
+        if isinstance(public_params.get('configs'), list):
+            public_params['configs'] = [
+                {key: value for key, value in entry.items() if key != 'uri'}
+                for entry in public_params['configs'] if isinstance(entry, dict)
+            ]
         return {
             'id': self.id,
             'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
@@ -9663,7 +9672,7 @@ class PulseRun(db.Model):
             'status': self.status,
             'summary': self.summary(),
             'triggered_by': self.triggered_by,
-            'params': self.params(),
+            'params': public_params,
             'error': self.error,
             'result_count': len(self.results) if self.results is not None else 0,
         }
@@ -14169,6 +14178,9 @@ PULSE_COPY = {
         'no_search_results': 'No matching client was found.',
         'edit': 'Edit', 'edit_template': 'Edit template', 'update_template': 'Update template',
         'update_step': 'Update this plan step', 'cancel_edit': 'Cancel edit',
+        'panel_configs': 'Panel clients', 'manual_links': 'Manual links',
+        'manual_links_help': 'Paste one VLESS, VMess, Trojan, Shadowsocks, or WireGuard link per line.',
+        'manual_links_placeholder': 'vless://…\nvmess://…', 'manual_configs': 'manual configs',
         'choose_server': 'Choose a server…', 'choose_inbound': 'Choose an inbound…',
         'loading': 'Loading…', 'load_error': 'Could not load this selection.',
         'no_configs': 'No enabled, shareable configs were found.', 'select_all': 'Select all',
@@ -14216,6 +14228,9 @@ PULSE_COPY = {
         'no_search_results': 'کلاینتی مطابق این جست‌وجو پیدا نشد.',
         'edit': 'ویرایش', 'edit_template': 'ویرایش تمپلیت', 'update_template': 'به‌روزرسانی تمپلیت',
         'update_step': 'به‌روزرسانی این مرحله', 'cancel_edit': 'لغو ویرایش',
+        'panel_configs': 'کلاینت‌های پنل', 'manual_links': 'لینک‌های دستی',
+        'manual_links_help': 'در هر خط یک لینک VLESS، VMess، Trojan، Shadowsocks یا WireGuard وارد کنید.',
+        'manual_links_placeholder': 'vless://…\nvmess://…', 'manual_configs': 'کانفیگ دستی',
         'choose_server': 'یک سرور انتخاب کنید…', 'choose_inbound': 'یک اینباند انتخاب کنید…',
         'loading': 'در حال دریافت…', 'load_error': 'دریافت این انتخاب ناموفق بود.',
         'no_configs': 'کانفیگ فعال و قابل اشتراکی پیدا نشد.', 'select_all': 'انتخاب همه',
@@ -14425,6 +14440,41 @@ def pulse_run_create():
     return redirect(url_for('pulse_page'))
 
 
+def _pulse_normalize_manual_configs(raw_configs):
+    if isinstance(raw_configs, str):
+        raw_configs = raw_configs.splitlines()
+    if not isinstance(raw_configs, list):
+        raw_configs = []
+    configs = []
+    for line_number, raw in enumerate(raw_configs, 1):
+        supplied_label = ''
+        if isinstance(raw, dict):
+            uri = str(raw.get('uri') or '').strip()
+            supplied_label = str(raw.get('label') or '').strip()
+        else:
+            uri = str(raw or '').strip()
+        if not uri:
+            continue
+        if len(uri) > 16_384:
+            raise ValueError('a manual config link is too long')
+        try:
+            build_xray_config_from_uri(uri, 12_080)
+        except Exception as exc:
+            raise ValueError(
+                f'invalid manual config on line {line_number}: {exc}') from exc
+        fragment = unquote(urlparse(uri).fragment or '').strip()
+        configs.append({
+            'uri': uri,
+            'label': (supplied_label or fragment or
+                      f'Manual config {len(configs) + 1}')[:160],
+        })
+        if len(configs) > 200:
+            raise ValueError('too many manual configs (maximum 200)')
+    if not configs:
+        raise ValueError('enter at least one manual config link')
+    return configs
+
+
 def _pulse_normalize_targets(user, raw_targets):
     if not isinstance(raw_targets, list) or not raw_targets:
         raise ValueError('test plan must contain at least one target')
@@ -14434,6 +14484,26 @@ def _pulse_normalize_targets(user, raw_targets):
     for raw in raw_targets:
         if not isinstance(raw, dict):
             raise ValueError('invalid test-plan target')
+        config_source = str(raw.get('config_source') or 'panel').strip().lower()
+        if config_source == 'manual':
+            manual_configs = _pulse_normalize_manual_configs(
+                raw.get('manual_configs'))
+            targets.append({
+                'server_id': None,
+                'server_name': 'Manual links',
+                'inbound_id': None,
+                'inbound_ids': [],
+                'inbound_label': 'Manual links',
+                'inbound_labels': [],
+                'config_ids': [],
+                'config_labels': [entry['label'] for entry in manual_configs],
+                'config_source': 'manual',
+                'manual_configs': manual_configs,
+                'v3_mode': False,
+            })
+            continue
+        if config_source != 'panel':
+            raise ValueError('invalid config source')
         server = _pulse_accessible_server(
             user, _pulse_form_int(raw.get('server_id'), 0, lo=0))
         if server is None:
@@ -14469,6 +14539,8 @@ def _pulse_normalize_targets(user, raw_targets):
                                (raw.get('inbound_labels') or [])],
             'config_ids': config_ids,
             'config_labels': [str(value)[:255] for value in (raw.get('config_labels') or [])],
+            'config_source': 'panel',
+            'manual_configs': [],
             'v3_mode': bool(raw.get('v3_mode')),
         })
     return targets
@@ -14491,10 +14563,14 @@ def _pulse_enqueue_targets(targets, profile='quick', vantage='local', sites=None
             triggered_by=triggered_by,
             params_json=json.dumps({
                 'inbound_id': target['inbound_id'],
-                'inbound_ids': target.get('inbound_ids') or [target['inbound_id']],
+                'inbound_ids': (target.get('inbound_ids') or
+                                ([] if target.get('config_source') == 'manual'
+                                 else [target['inbound_id']])),
                 'config_ids': target['config_ids'],
+                'config_source': target.get('config_source') or 'panel',
+                'manual_configs': target.get('manual_configs') or [],
                 'v3_mode': bool(target.get('v3_mode')),
-                'limit': len(target['config_ids']),
+                'limit': len(target.get('manual_configs') or target['config_ids']),
                 'sites': sites or [],
                 'download_bytes': download_bytes,
                 'upload_bytes': upload_bytes,

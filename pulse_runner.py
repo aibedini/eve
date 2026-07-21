@@ -373,6 +373,43 @@ def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT, config_ids=N
     }
 
 
+def prepare_manual_probe_run(raw_configs):
+    """Build a bounded probe list from already validated manual share links."""
+    engine = _load_pulse()
+    configs = []
+    for index, raw in enumerate(raw_configs or [], 1):
+        if not isinstance(raw, dict):
+            raise PulseInputError(f'invalid manual config at line {index}')
+        uri = str(raw.get('uri') or '').strip()
+        label = str(raw.get('label') or f'Manual config {index}').strip()
+        if not uri:
+            raise PulseInputError(f'missing manual config at line {index}')
+        try:
+            app_module.build_xray_config_from_uri(uri, 12_080)
+        except Exception as exc:
+            raise PulseInputError(
+                f'invalid manual config at line {index}: {exc}') from exc
+        configs.append({
+            'config': engine.PulseConfig(
+                uri=uri, label=label[:160], server='Manual', inbound='Manual'),
+            'is_probe': 'probe' in label.lower(),
+            'client_key': f'manual-{index}',
+        })
+    if not configs:
+        raise PulseInputError('no manual configs were provided')
+    if len(configs) > 200:
+        raise PulseInputError('too many manual configs (maximum 200)')
+    return {
+        'configs': configs,
+        'skipped': 0,
+        'total_available': len(configs),
+        'truncated': False,
+        'limit': len(configs),
+        'scope': 'config',
+        'inbound_label': 'Manual links',
+    }
+
+
 def _build_profile(profile_name, site_specs, download_bytes=None, upload_bytes=None):
     """Construct the engine ProbeProfile for a run (quick/full + site checks)."""
     engine = _load_pulse()
@@ -482,16 +519,19 @@ def execute_queued_run(run):
         params = json.loads(run.params_json) if run.params_json else {}
     except ValueError:
         params = {}
-    server = _get_server(run.server_id)
-    if not server:
-        raise PulseInputError(f'server {run.server_id} not found')
     if not find_xray_binary():
         raise PulseInputError(
             'xray runtime not found; install it with: eve --install-xray')
-    prep = prepare_probe_run(
-        server, inbound_id=params.get('inbound_id'), limit=params.get('limit'),
-        config_ids=params.get('config_ids'), inbound_ids=params.get('inbound_ids'),
-        v3_mode=bool(params.get('v3_mode')))
+    if params.get('config_source') == 'manual':
+        prep = prepare_manual_probe_run(params.get('manual_configs'))
+    else:
+        server = _get_server(run.server_id)
+        if not server:
+            raise PulseInputError(f'server {run.server_id} not found')
+        prep = prepare_probe_run(
+            server, inbound_id=params.get('inbound_id'), limit=params.get('limit'),
+            config_ids=params.get('config_ids'), inbound_ids=params.get('inbound_ids'),
+            v3_mode=bool(params.get('v3_mode')))
     run.scope = prep['scope']
     run.inbound_label = prep['inbound_label']
     db.session.commit()
@@ -515,14 +555,16 @@ def build_agent_task(run):
         params = json.loads(run.params_json) if run.params_json else {}
     except ValueError:
         params = {}
-    server = _get_server(run.server_id)
-    if not server:
-        raise PulseInputError(f'server {run.server_id} not found')
-
-    prep = prepare_probe_run(
-        server, inbound_id=params.get('inbound_id'), limit=params.get('limit'),
-        config_ids=params.get('config_ids'), inbound_ids=params.get('inbound_ids'),
-        v3_mode=bool(params.get('v3_mode')))
+    if params.get('config_source') == 'manual':
+        prep = prepare_manual_probe_run(params.get('manual_configs'))
+    else:
+        server = _get_server(run.server_id)
+        if not server:
+            raise PulseInputError(f'server {run.server_id} not found')
+        prep = prepare_probe_run(
+            server, inbound_id=params.get('inbound_id'), limit=params.get('limit'),
+            config_ids=params.get('config_ids'), inbound_ids=params.get('inbound_ids'),
+            v3_mode=bool(params.get('v3_mode')))
     run.scope = prep['scope']
     run.inbound_label = prep['inbound_label']
     run.status = 'running'
