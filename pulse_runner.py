@@ -174,15 +174,22 @@ def _client_key(client):
     return str(client.get('id') or client.get('email') or '').strip()
 
 
-def _collect_configs(server, inbounds, inbound_id=None, config_ids=None):
+def _collect_configs(server, inbounds, inbound_id=None, config_ids=None,
+                     inbound_ids=None):
     """Build PulseConfig entries for every client of the selected inbounds."""
     engine = _load_pulse()
     configs = []
     skipped = 0
     selected_ids = [str(value).strip() for value in (config_ids or []) if str(value).strip()]
     selected_set = set(selected_ids)
+    selected_inbound_ids = {
+        int(value) for value in (inbound_ids or []) if value is not None
+    }
+    if inbound_id is not None:
+        selected_inbound_ids.add(int(inbound_id))
     for inb in inbounds:
-        if inbound_id is not None and inb.get('id') != inbound_id:
+        if (selected_inbound_ids
+                and int(inb.get('id')) not in selected_inbound_ids):
             continue
         if not inb.get('enable', True):
             continue
@@ -212,6 +219,71 @@ def _collect_configs(server, inbounds, inbound_id=None, config_ids=None):
     return configs, skipped
 
 
+def _v3_client_inbound_ids(client):
+    raw = client.get('inboundIds')
+    if raw is None:
+        raw = client.get('inbound_ids')
+    values = []
+    for value in raw if isinstance(raw, list) else []:
+        try:
+            inbound_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if inbound_id not in values:
+            values.append(inbound_id)
+    return values
+
+
+def _fetch_v3_clients(server):
+    session_obj, login_err = app_module.get_xui_session(server)
+    if not session_obj:
+        raise PulseInputError(
+            f'panel login failed: {login_err or "unknown error"}',
+            server_id=server.id)
+    if not app_module.server_is_v3(server, session_obj):
+        raise PulseInputError('multi-inbound selection requires a v3+ panel',
+                              server_id=server.id)
+    ok, payload, error = app_module._v3_get(
+        server, session_obj, '/panel/api/clients/list')
+    if not ok:
+        raise PulseInputError(
+            error or 'failed to fetch v3 clients', server_id=server.id)
+    return app_module._v3_client_rows(payload)
+
+
+def _collect_v3_configs(server, selected_inbounds, clients, config_ids):
+    """Build one URI per selected inbound for explicitly selected v3 clients."""
+    engine = _load_pulse()
+    selected_ids = [str(value).strip() for value in config_ids or [] if str(value).strip()]
+    by_key = {_client_key(client): client for client in clients if _client_key(client)}
+    configs = []
+    skipped = 0
+    required_inbounds = {int(inb.get('id')) for inb in selected_inbounds}
+    for client_key in selected_ids:
+        client = by_key.get(client_key)
+        if client is None or not required_inbounds.issubset(
+                set(_v3_client_inbound_ids(client))):
+            continue
+        email = str(client.get('email') or '')
+        for inbound in selected_inbounds:
+            remark = inbound.get('remark') or f"inbound-{inbound.get('id')}"
+            uri = app_module.generate_client_link(client, inbound, server.host)
+            if not uri:
+                skipped += 1
+                continue
+            configs.append({
+                'config': engine.PulseConfig(
+                    uri=uri,
+                    label=f'{email} @ {remark}' if email else remark,
+                    server=server.name,
+                    inbound=remark,
+                ),
+                'is_probe': 'probe' in email.lower(),
+                'client_key': client_key,
+            })
+    return configs, skipped
+
+
 def _result_metrics(result_dict):
     tests = result_dict.get('tests') or {}
     latency = tests.get('latency') or {}
@@ -231,7 +303,8 @@ def _result_metrics(result_dict):
     }
 
 
-def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT, config_ids=None):
+def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT, config_ids=None,
+                      inbound_ids=None, v3_mode=False):
     """Resolve the bounded config list for a run against one server.
 
     Shared by the CLI and the web/scheduler queue worker. Raises
@@ -241,15 +314,34 @@ def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT, config_ids=N
     if error:
         raise PulseInputError(error, server_id=server.id)
 
+    requested_ids = []
+    for value in (inbound_ids or []):
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed not in requested_ids:
+            requested_ids.append(parsed)
+    if inbound_id is not None and not requested_ids:
+        requested_ids = [int(inbound_id)]
     selected = [inb for inb in inbounds
-                if inbound_id is None or inb.get('id') == inbound_id]
+                if not requested_ids or int(inb.get('id')) in requested_ids]
     if not selected:
         raise PulseInputError(
-            f'inbound {inbound_id} not found on server {server.id}',
+            f'inbound selection not found on server {server.id}',
             server_id=server.id)
 
-    configs, skipped = _collect_configs(
-        server, inbounds, inbound_id, config_ids=config_ids)
+    if v3_mode:
+        if not requested_ids:
+            raise PulseInputError('v3 runs require at least one inbound',
+                                  server_id=server.id)
+        clients = _fetch_v3_clients(server)
+        configs, skipped = _collect_v3_configs(
+            server, selected, clients, config_ids or [])
+    else:
+        configs, skipped = _collect_configs(
+            server, inbounds, inbound_id, config_ids=config_ids,
+            inbound_ids=requested_ids)
     if config_ids:
         found = {entry['client_key'] for entry in configs}
         missing = [str(value) for value in config_ids if str(value) not in found]
@@ -267,9 +359,9 @@ def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT, config_ids=N
     truncated = total_available > limit
     configs = configs[:limit]
 
-    scope = 'server' if inbound_id is None else 'inbound'
-    inbound_label = None if inbound_id is None else (
-        selected[0].get('remark') or f'inbound-{inbound_id}')
+    scope = 'server' if not requested_ids else ('inbound' if len(requested_ids) == 1 else 'config')
+    inbound_label = None if not requested_ids else ', '.join(
+        inb.get('remark') or f"inbound-{inb.get('id')}" for inb in selected)
     return {
         'configs': configs,
         'skipped': skipped,
@@ -281,11 +373,20 @@ def prepare_probe_run(server, inbound_id=None, limit=DEFAULT_LIMIT, config_ids=N
     }
 
 
-def _build_profile(profile_name, site_specs):
+def _build_profile(profile_name, site_specs, download_bytes=None, upload_bytes=None):
     """Construct the engine ProbeProfile for a run (quick/full + site checks)."""
     engine = _load_pulse()
     profile_factory = engine.full_profile if profile_name == 'full' else engine.quick_profile
-    return profile_factory(site_checks=_site_checks(site_specs or []))
+    profile = profile_factory(site_checks=_site_checks(site_specs or []))
+    if profile_name == 'full':
+        download_bytes = max(1_000_000, min(
+            200_000_000, int(download_bytes or engine.DEFAULT_DOWNLOAD_BYTES)))
+        upload_bytes = max(1_000_000, min(
+            200_000_000, int(upload_bytes or engine.DEFAULT_UPLOAD_BYTES)))
+        profile.download_url = (
+            f'https://speed.cloudflare.com/__down?bytes={download_bytes}')
+        profile.upload_bytes = upload_bytes
+    return profile
 
 
 def _persist_results(run, entries):
@@ -335,6 +436,7 @@ def _persist_results(run, entries):
 
 
 def execute_probe_run(run, configs, profile_name='quick', site_specs=None,
+                      download_bytes=None, upload_bytes=None,
                       progress_cb=None):
     """Probe every config, persist PulseResultRecord rows, finalize the run.
 
@@ -344,7 +446,9 @@ def execute_probe_run(run, configs, profile_name='quick', site_specs=None,
     """
     progress = progress_cb or _progress
     engine = _load_pulse()
-    profile = _build_profile(profile_name, site_specs)
+    profile = _build_profile(
+        profile_name, site_specs,
+        download_bytes=download_bytes, upload_bytes=upload_bytes)
 
     summary = {'healthy': 0, 'degraded': 0, 'down': 0}
     entries = []
@@ -386,13 +490,16 @@ def execute_queued_run(run):
             'xray runtime not found; install it with: eve --install-xray')
     prep = prepare_probe_run(
         server, inbound_id=params.get('inbound_id'), limit=params.get('limit'),
-        config_ids=params.get('config_ids'))
+        config_ids=params.get('config_ids'), inbound_ids=params.get('inbound_ids'),
+        v3_mode=bool(params.get('v3_mode')))
     run.scope = prep['scope']
     run.inbound_label = prep['inbound_label']
     db.session.commit()
     return execute_probe_run(
         run, prep['configs'], profile_name=run.profile or 'quick',
-        site_specs=params.get('sites') or [])
+        site_specs=params.get('sites') or [],
+        download_bytes=params.get('download_bytes'),
+        upload_bytes=params.get('upload_bytes'))
 
 
 def build_agent_task(run):
@@ -414,7 +521,8 @@ def build_agent_task(run):
 
     prep = prepare_probe_run(
         server, inbound_id=params.get('inbound_id'), limit=params.get('limit'),
-        config_ids=params.get('config_ids'))
+        config_ids=params.get('config_ids'), inbound_ids=params.get('inbound_ids'),
+        v3_mode=bool(params.get('v3_mode')))
     run.scope = prep['scope']
     run.inbound_label = prep['inbound_label']
     run.status = 'running'
@@ -429,7 +537,10 @@ def build_agent_task(run):
     run.params_json = json.dumps(params, ensure_ascii=False)
     db.session.commit()
 
-    profile = _build_profile(run.profile or 'quick', params.get('sites') or [])
+    profile = _build_profile(
+        run.profile or 'quick', params.get('sites') or [],
+        download_bytes=params.get('download_bytes'),
+        upload_bytes=params.get('upload_bytes'))
     return {
         'run_id': run.id,
         'configs': [

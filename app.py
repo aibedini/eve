@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.15"
+APP_VERSION = "2.5.16"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -9754,6 +9754,8 @@ class PulseTemplate(db.Model):
     profile = db.Column(db.String(16), default='quick')
     vantage = db.Column(db.String(64), default='local')
     sites_json = db.Column(db.Text, nullable=True)
+    download_bytes = db.Column(db.Integer, default=10_000_000)
+    upload_bytes = db.Column(db.Integer, default=2_000_000)
     schedule_enabled = db.Column(db.Boolean, default=False)
     interval_minutes = db.Column(db.Integer, default=60)
     last_run_at = db.Column(db.DateTime, nullable=True)
@@ -9783,6 +9785,8 @@ class PulseTemplate(db.Model):
             'profile': self.profile or 'quick',
             'vantage': self.vantage or 'local',
             'sites': self.sites(),
+            'download_bytes': self.download_bytes or 10_000_000,
+            'upload_bytes': self.upload_bytes or 2_000_000,
             'schedule_enabled': bool(self.schedule_enabled),
             'interval_minutes': self.interval_minutes or 60,
             'last_run_at': self.last_run_at.isoformat() + 'Z' if self.last_run_at else None,
@@ -10409,6 +10413,10 @@ with app.app_context():
     ])
     _migrate_add_columns('pulse_runs', [
         ('params_json', 'TEXT'),
+    ])
+    _migrate_add_columns('pulse_templates', [
+        ('download_bytes', 'INTEGER DEFAULT 10000000'),
+        ('upload_bytes', 'INTEGER DEFAULT 2000000'),
     ])
 
     # Ensure announcements columns exist — each in its own try so one failure
@@ -14151,6 +14159,9 @@ PULSE_COPY = {
         'target': 'Target', 'configs': 'Configs', 'status': 'Status', 'source': 'Source',
         'wizard': 'Create a test plan', 'wizard_help': 'Choose the server, inbound, and exact configs in order. Nothing is selected automatically.',
         'step1': '1. Choose server', 'step2': '2. Choose inbound', 'step3': '3. Choose configs',
+        'v3_multi_hint': 'v3+ detected: choose one or more inbounds, then choose one client attached to all of them.',
+        'legacy_hint': 'Choose one inbound, then select the configs to test.',
+        'search_configs': 'Search clients…', 'common_clients': 'clients match every selected inbound',
         'choose_server': 'Choose a server…', 'choose_inbound': 'Choose an inbound…',
         'loading': 'Loading…', 'load_error': 'Could not load this selection.',
         'no_configs': 'No enabled, shareable configs were found.', 'select_all': 'Select all',
@@ -14159,6 +14170,8 @@ PULSE_COPY = {
         'move_up': 'Up', 'move_down': 'Down', 'remove': 'Remove',
         'options': '4. Test options', 'profile': 'Test profile', 'quick': 'Quick (latency, loss, sites)',
         'full': 'Full (also consumes traffic for speed tests)', 'vantage': 'Run from',
+        'download_size': 'Download sample (MB)', 'upload_size': 'Upload sample (MB)',
+        'speed_size_help': 'Defaults: 10 MB download and 2 MB upload. Larger samples improve stability but consume more client traffic.',
         'local': 'This Eve server (local)', 'sites': 'Custom sites (optional)',
         'sites_help': 'One per line: name=url or name=url::expected text',
         'run_now': 'Queue this plan now', 'queued_ok': 'jobs were added to the queue.',
@@ -14186,6 +14199,9 @@ PULSE_COPY = {
         'target': 'مقصد', 'configs': 'کانفیگ‌ها', 'status': 'وضعیت', 'source': 'منشأ',
         'wizard': 'ساخت برنامه تست', 'wizard_help': 'سرور، اینباند و کانفیگ‌های دقیق را به‌ترتیب انتخاب کنید؛ چیزی خودکار انتخاب نمی‌شود.',
         'step1': '۱. انتخاب سرور', 'step2': '۲. انتخاب اینباند', 'step3': '۳. انتخاب کانفیگ‌ها',
+        'v3_multi_hint': 'نسخه ۳ یا جدیدتر تشخیص داده شد: چند اینباند را انتخاب کنید، سپس یک کاربر مشترک میان همه را برگزینید.',
+        'legacy_hint': 'یک اینباند را انتخاب کنید، سپس کانفیگ‌های موردنظر را برگزینید.',
+        'search_configs': 'جست‌وجوی کلاینت…', 'common_clients': 'کلاینت با همه اینباندهای انتخاب‌شده مطابقت دارد',
         'choose_server': 'یک سرور انتخاب کنید…', 'choose_inbound': 'یک اینباند انتخاب کنید…',
         'loading': 'در حال دریافت…', 'load_error': 'دریافت این انتخاب ناموفق بود.',
         'no_configs': 'کانفیگ فعال و قابل اشتراکی پیدا نشد.', 'select_all': 'انتخاب همه',
@@ -14194,6 +14210,8 @@ PULSE_COPY = {
         'move_up': 'بالا', 'move_down': 'پایین', 'remove': 'حذف',
         'options': '۴. تنظیمات تست', 'profile': 'پروفایل تست', 'quick': 'سریع (تأخیر، افت و سایت‌ها)',
         'full': 'کامل (تست سرعت نیز ترافیک مصرف می‌کند)', 'vantage': 'محل اجرا',
+        'download_size': 'حجم نمونه دانلود (MB)', 'upload_size': 'حجم نمونه آپلود (MB)',
+        'speed_size_help': 'پیش‌فرض: دانلود ۱۰ MB و آپلود ۲ MB. حجم بیشتر نتیجه را پایدارتر می‌کند اما ترافیک بیشتری مصرف می‌شود.',
         'local': 'همین سرور Eve (محلی)', 'sites': 'سایت‌های سفارشی (اختیاری)',
         'sites_help': 'هر خط: name=url یا name=url::متن مورد انتظار',
         'run_now': 'افزودن این برنامه به صف', 'queued_ok': 'کار به صف اضافه شد.',
@@ -14323,6 +14341,10 @@ def pulse_run_create():
     if not isinstance(config_ids, list):
         config_ids = []
     config_ids = [str(value).strip() for value in config_ids if str(value).strip()]
+    download_bytes = _pulse_form_int(
+        data.get('download_mb'), 10, lo=1, hi=200) * 1_000_000
+    upload_bytes = _pulse_form_int(
+        data.get('upload_mb'), 2, lo=1, hi=200) * 1_000_000
 
     vantage = str(data.get('vantage') or 'local').strip()
     if vantage.startswith('agent:'):
@@ -14351,6 +14373,8 @@ def pulse_run_create():
             'inbound_id': inbound_id,
             'limit': limit,
             'config_ids': config_ids,
+            'download_bytes': download_bytes,
+            'upload_bytes': upload_bytes,
             'sites': site_specs,
         }, ensure_ascii=False),
     )
@@ -14374,8 +14398,15 @@ def _pulse_normalize_targets(user, raw_targets):
             user, _pulse_form_int(raw.get('server_id'), 0, lo=0))
         if server is None:
             raise ValueError('invalid server in test plan')
-        inbound_id = _pulse_form_int(raw.get('inbound_id'), 0, lo=0) or None
-        if inbound_id is None:
+        raw_inbound_ids = raw.get('inbound_ids')
+        if not isinstance(raw_inbound_ids, list):
+            raw_inbound_ids = [raw.get('inbound_id')]
+        inbound_ids = []
+        for value in raw_inbound_ids:
+            inbound_id = _pulse_form_int(value, 0, lo=0) or None
+            if inbound_id is not None and inbound_id not in inbound_ids:
+                inbound_ids.append(inbound_id)
+        if not inbound_ids:
             raise ValueError('each test-plan target needs an inbound')
         config_ids = raw.get('config_ids')
         if not isinstance(config_ids, list):
@@ -14389,16 +14420,23 @@ def _pulse_normalize_targets(user, raw_targets):
         targets.append({
             'server_id': server.id,
             'server_name': server.name,
-            'inbound_id': inbound_id,
-            'inbound_label': str(raw.get('inbound_label') or f'inbound-{inbound_id}')[:255],
+            'inbound_id': inbound_ids[0] if len(inbound_ids) == 1 else None,
+            'inbound_ids': inbound_ids,
+            'inbound_label': str(
+                raw.get('inbound_label') or ', '.join(
+                    f'inbound-{value}' for value in inbound_ids))[:255],
+            'inbound_labels': [str(value)[:255] for value in
+                               (raw.get('inbound_labels') or [])],
             'config_ids': config_ids,
             'config_labels': [str(value)[:255] for value in (raw.get('config_labels') or [])],
+            'v3_mode': bool(raw.get('v3_mode')),
         })
     return targets
 
 
 def _pulse_enqueue_targets(targets, profile='quick', vantage='local', sites=None,
-                           triggered_by='web', template_name=None):
+                           triggered_by='web', template_name=None,
+                           download_bytes=10_000_000, upload_bytes=2_000_000):
     run_ids = []
     batch_id = secrets.token_hex(6)
     for index, target in enumerate(targets, 1):
@@ -14413,9 +14451,13 @@ def _pulse_enqueue_targets(targets, profile='quick', vantage='local', sites=None
             triggered_by=triggered_by,
             params_json=json.dumps({
                 'inbound_id': target['inbound_id'],
+                'inbound_ids': target.get('inbound_ids') or [target['inbound_id']],
                 'config_ids': target['config_ids'],
+                'v3_mode': bool(target.get('v3_mode')),
                 'limit': len(target['config_ids']),
                 'sites': sites or [],
+                'download_bytes': download_bytes,
+                'upload_bytes': upload_bytes,
                 'batch_id': batch_id,
                 'batch_index': index,
                 'batch_total': len(targets),
@@ -14448,7 +14490,9 @@ def pulse_plan_run():
         return jsonify({'ok': False, 'error': 'invalid vantage'}), 400
     run_ids = _pulse_enqueue_targets(
         targets, profile=str(data.get('profile') or 'quick'), vantage=vantage,
-        sites=sites, triggered_by='web')
+        sites=sites, triggered_by='web',
+        download_bytes=_pulse_form_int(data.get('download_mb'), 10, lo=1, hi=200) * 1_000_000,
+        upload_bytes=_pulse_form_int(data.get('upload_mb'), 2, lo=1, hi=200) * 1_000_000)
     return jsonify({'ok': True, 'run_ids': run_ids, 'queued': len(run_ids)})
 
 
@@ -14478,6 +14522,8 @@ def pulse_template_create():
         profile=str(data.get('profile') or 'quick') if data.get('profile') in ('quick', 'full') else 'quick',
         vantage=vantage,
         sites_json=json.dumps(sites, ensure_ascii=False) if sites else None,
+        download_bytes=_pulse_form_int(data.get('download_mb'), 10, lo=1, hi=200) * 1_000_000,
+        upload_bytes=_pulse_form_int(data.get('upload_mb'), 2, lo=1, hi=200) * 1_000_000,
         schedule_enabled=bool(data.get('schedule_enabled')),
         interval_minutes=_pulse_form_int(data.get('interval_minutes'), 60, lo=5, hi=1440),
     )
@@ -14494,7 +14540,9 @@ def pulse_template_run(template_id):
         return jsonify({'ok': False, 'error': 'template not found'}), 404
     run_ids = _pulse_enqueue_targets(
         row.targets(), profile=row.profile, vantage=row.vantage, sites=row.sites(),
-        triggered_by='template', template_name=row.name)
+        triggered_by='template', template_name=row.name,
+        download_bytes=row.download_bytes or 10_000_000,
+        upload_bytes=row.upload_bytes or 2_000_000)
     return jsonify({'ok': True, 'run_ids': run_ids, 'queued': len(run_ids)})
 
 
@@ -14584,9 +14632,13 @@ def pulse_server_inbounds(server_id):
     inbounds, error = pr._fetch_server_inbounds(server)
     if error:
         return jsonify({'ok': False, 'error': error}), 502
+    panel_session, panel_error = get_xui_session(server)
+    is_v3 = bool(panel_session and not panel_error
+                 and server_is_v3(server, panel_session))
     return jsonify({
         'ok': True,
         'server': {'id': server.id, 'name': server.name},
+        'is_v3': is_v3,
         'inbounds': [
             {
                 'id': inb.get('id'),
@@ -14598,6 +14650,68 @@ def pulse_server_inbounds(server_id):
             }
             for inb in inbounds
         ],
+    })
+
+
+@app.route('/pulse/servers/<int:server_id>/configs')
+@login_required
+def pulse_v3_common_configs(server_id):
+    """Return v3 clients attached to every requested inbound, without URIs."""
+    user = db.session.get(Admin, session['admin_id'])
+    server = _pulse_accessible_server(user, server_id)
+    if server is None:
+        return jsonify({'ok': False, 'error': 'server not found'}), 404
+    inbound_ids = []
+    for raw in request.args.getlist('inbound_id'):
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value not in inbound_ids:
+            inbound_ids.append(value)
+    if not inbound_ids:
+        return jsonify({'ok': False, 'error': 'select at least one inbound'}), 400
+    panel_session, panel_error = get_xui_session(server)
+    if not panel_session or panel_error:
+        return jsonify({'ok': False, 'error': panel_error or 'panel login failed'}), 502
+    if not server_is_v3(server, panel_session):
+        return jsonify({'ok': False, 'error': 'server is not v3+'}), 400
+    ok, payload, api_error = _v3_get(
+        server, panel_session, '/panel/api/clients/list')
+    if not ok:
+        return jsonify({'ok': False, 'error': api_error or 'failed to fetch clients'}), 502
+    required = set(inbound_ids)
+    configs = []
+    for client in _v3_client_rows(payload):
+        if client.get('enable') is False:
+            continue
+        raw_ids = client.get('inboundIds')
+        if raw_ids is None:
+            raw_ids = client.get('inbound_ids')
+        assigned = set()
+        for raw in raw_ids if isinstance(raw_ids, list) else []:
+            try:
+                assigned.add(int(raw))
+            except (TypeError, ValueError):
+                continue
+        if not required.issubset(assigned):
+            continue
+        key = str(client.get('id') or client.get('email') or '').strip()
+        if not key:
+            continue
+        email = str(client.get('email') or '').strip()
+        configs.append({
+            'id': key,
+            'label': email or key,
+            'is_probe': 'probe' in email.lower(),
+            'inbound_count': len(assigned),
+        })
+    configs.sort(key=lambda item: item['label'].lower())
+    return jsonify({
+        'ok': True,
+        'server': {'id': server.id, 'name': server.name},
+        'inbound_ids': inbound_ids,
+        'configs': configs,
     })
 
 
@@ -32934,7 +33048,9 @@ def pulse_scheduler_tick(now=None):
             continue
         _pulse_enqueue_targets(
             template.targets(), profile=template.profile, vantage=template.vantage,
-            sites=template.sites(), triggered_by='schedule', template_name=template.name)
+            sites=template.sites(), triggered_by='schedule', template_name=template.name,
+            download_bytes=template.download_bytes or 10_000_000,
+            upload_bytes=template.upload_bytes or 2_000_000)
         template.last_run_at = now
         db.session.commit()
 

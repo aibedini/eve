@@ -387,6 +387,34 @@ class PulseAgentTasksEndpointTest(PulseAgentApiTestBase):
             headers={'Authorization': 'Bearer tok123'})
         self.assertIsNone(resp2.get_json()['run_id'])
 
+    def test_full_task_carries_custom_speed_sample_sizes(self):
+        run = self._enqueue_remote_run()
+        run.profile = 'full'
+        run.params_json = json.dumps({
+            'inbound_id': 1,
+            'limit': 1,
+            'sites': [],
+            'download_bytes': 30_000_000,
+            'upload_bytes': 6_000_000,
+        })
+        db.session.commit()
+        patches = self._panel_patches([
+            _inbound(1, 'main', [_client('alice')]),
+        ])
+        for patcher in patches:
+            patcher.start()
+        try:
+            response = self.client.get(
+                '/api/pulse/agent/tasks?agent=de-1',
+                headers={'Authorization': 'Bearer tok123'})
+        finally:
+            for patcher in patches:
+                patcher.stop()
+        self.assertEqual(response.status_code, 200)
+        profile = response.get_json()['profile']
+        self.assertIn('bytes=30000000', profile['download_url'])
+        self.assertEqual(profile['upload_bytes'], 6_000_000)
+
     def test_scheduler_does_not_drain_remote_runs(self):
         self._enqueue_remote_run()
         app_module.pulse_scheduler_tick()

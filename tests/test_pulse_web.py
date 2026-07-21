@@ -289,6 +289,26 @@ class PulseInboundsEndpointTest(PulseWebTestBase):
         self.assertEqual([row['label'] for row in payload['configs']], ['alice'])
         self.assertNotIn('uri', payload['configs'][0])
 
+    def test_v3_common_configs_filters_by_every_selected_inbound(self):
+        clients = [
+            dict(_client('alice'), inboundIds=[1, 2, 3]),
+            dict(_client('bob'), inboundIds=[1]),
+            dict(_client('carol'), inboundIds=[1, 2]),
+        ]
+        with mock.patch.object(app_module, 'get_xui_session',
+                               return_value=(object(), None)), \
+                mock.patch.object(app_module, 'server_is_v3', return_value=True), \
+                mock.patch.object(app_module, '_v3_get',
+                                  return_value=(True, {'obj': clients}, None)):
+            resp = self.client.get(
+                f'/pulse/servers/{self.server.id}/configs'
+                '?inbound_id=1&inbound_id=2')
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(
+            [row['label'] for row in payload['configs']], ['alice', 'carol'])
+        self.assertNotIn('uri', payload['configs'][0])
+
 
 class PulsePlanAndTemplateTest(PulseWebTestBase):
     def _target(self, inbound_id=1, config_ids=None):
@@ -304,7 +324,8 @@ class PulsePlanAndTemplateTest(PulseWebTestBase):
     def test_plan_enqueues_targets_and_configs_in_order(self):
         resp = self.client.post('/pulse/plan/run', json={
             'targets': [self._target(2, ['uuid-b']), self._target(1, ['uuid-a'])],
-            'profile': 'quick', 'vantage': 'local',
+            'profile': 'full', 'vantage': 'local',
+            'download_mb': 25, 'upload_mb': 5,
         })
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json()['queued'], 2)
@@ -313,17 +334,22 @@ class PulsePlanAndTemplateTest(PulseWebTestBase):
         self.assertEqual(runs[0].params()['config_ids'], ['uuid-b'])
         self.assertEqual(runs[0].params()['batch_index'], 1)
         self.assertEqual(runs[1].params()['batch_index'], 2)
+        self.assertEqual(runs[0].params()['download_bytes'], 25_000_000)
+        self.assertEqual(runs[0].params()['upload_bytes'], 5_000_000)
 
     def test_template_saves_exact_plan_and_can_queue_it(self):
         created = self.client.post('/pulse/templates', json={
             'name': 'EU baseline', 'targets': [self._target()],
             'profile': 'full', 'vantage': 'local',
             'schedule_enabled': True, 'interval_minutes': 30,
+            'download_mb': 20, 'upload_mb': 4,
         })
         self.assertEqual(created.status_code, 200)
         template = PulseTemplate.query.one()
         self.assertEqual(template.targets()[0]['config_ids'], ['uuid-alice'])
         self.assertTrue(template.schedule_enabled)
+        self.assertEqual(template.download_bytes, 20_000_000)
+        self.assertEqual(template.upload_bytes, 4_000_000)
         page = self.client.get('/pulse')
         self.assertEqual(page.status_code, 200)
         self.assertIn('EU baseline', page.get_data(as_text=True))
@@ -368,6 +394,41 @@ class PulsePlanAndTemplateTest(PulseWebTestBase):
         self.assertEqual(
             [call.args[0].label for call in probe.call_args_list],
             ['carol @ main', 'alice @ main'])
+
+    def test_v3_worker_uses_one_common_client_across_selected_inbounds(self):
+        run = self._enqueue_run(inbound_id=None)
+        run.params_json = json.dumps({
+            'inbound_id': None,
+            'inbound_ids': [1, 2],
+            'config_ids': ['uuid-alice'],
+            'v3_mode': True,
+            'limit': 1, 'sites': [],
+            'download_bytes': 15_000_000,
+            'upload_bytes': 3_000_000,
+        })
+        db.session.commit()
+        inbounds = [
+            _inbound(1, 'tcp', []),
+            _inbound(2, 'grpc', []),
+        ]
+        v3_clients = [dict(_client('alice'), inboundIds=[1, 2])]
+        patches = self._panel_patches(inbounds)
+        for patcher in patches:
+            patcher.start()
+        try:
+            with mock.patch.object(pulse_runner, '_fetch_v3_clients',
+                                   return_value=v3_clients), \
+                    mock.patch('pulse.run_probe', side_effect=_fake_probe()) as probe:
+                app_module.pulse_scheduler_tick()
+        finally:
+            for patcher in patches:
+                patcher.stop()
+        self.assertEqual(
+            [call.args[0].label for call in probe.call_args_list],
+            ['alice @ tcp', 'alice @ grpc'])
+        db.session.expire_all()
+        run = db.session.get(PulseRun, run.id)
+        self.assertEqual(run.inbound_label, 'tcp, grpc')
 
 
 class PulseWorkerTickTest(PulseWebTestBase):

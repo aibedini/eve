@@ -209,6 +209,16 @@ class RunTest(PulseRunnerTestBase):
         self.assertEqual(code, 0)
         self.assertTrue(any('traffic' in w for w in payload['warnings']))
 
+    def test_full_profile_uses_custom_download_and_upload_samples(self):
+        profile = pulse_runner._build_profile(
+            'full', [], download_bytes=25_000_000, upload_bytes=4_000_000)
+        self.assertIn('bytes=25000000', profile.download_url)
+        self.assertEqual(profile.upload_bytes, 4_000_000)
+
+        default_profile = pulse_runner._build_profile('full', [])
+        self.assertIn('bytes=10000000', default_profile.download_url)
+        self.assertEqual(default_profile.upload_bytes, 2_000_000)
+
     def test_site_args_passed_to_profile(self):
         inbounds = [_inbound(1, 'main', [_client('alice')])]
         sites_file = tempfile.NamedTemporaryFile(

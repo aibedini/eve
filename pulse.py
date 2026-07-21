@@ -27,7 +27,9 @@ import requests
 from telegram_xray import build_xray_config_from_uri, find_xray_binary
 
 DEFAULT_LATENCY_ENDPOINT = "https://cp.cloudflare.com/generate_204"
-DEFAULT_DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=10000000"
+DEFAULT_DOWNLOAD_BYTES = 10_000_000
+DEFAULT_UPLOAD_BYTES = 2_000_000
+DEFAULT_DOWNLOAD_URL = f"https://speed.cloudflare.com/__down?bytes={DEFAULT_DOWNLOAD_BYTES}"
 DEFAULT_UPLOAD_URL = "https://speed.cloudflare.com/__up"
 
 VERDICT_HEALTHY = "healthy"
@@ -77,7 +79,7 @@ class ProbeProfile:
     download_chunk_bytes: int = 65536
 
     upload_url: str = DEFAULT_UPLOAD_URL
-    upload_bytes: int = 2_000_000
+    upload_bytes: int = DEFAULT_UPLOAD_BYTES
     upload_timeout: float = 30.0
     upload_chunk_bytes: int = 65536
 
