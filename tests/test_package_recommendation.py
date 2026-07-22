@@ -78,6 +78,8 @@ from app import (  # noqa: E402
     _telegram_bot_attempt,
     _telegram_bot_diagnostic,
     _detect_telegram_inbound_profiles,
+    _get_telegram_backup_settings,
+    _telegram_backup_route_proxies,
     _telegram_proxy_from_payload,
     verify_ownership_claim_subscription,
     v3_add_client,
@@ -213,6 +215,9 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             GENERAL_CALENDAR_SETTING_KEY,
             GENERAL_TIMEZONE_SETTING_KEY,
         ])).delete(synchronize_session=False)
+        SystemSetting.query.filter(
+            SystemSetting.key.like('telegram_backup_%')
+        ).delete(synchronize_session=False)
         Admin.query.filter(Admin.username.like('claim-test-%')).delete(synchronize_session=False)
         db.session.commit()
         # Reset the scoped session so stale/dirty instances from this test can
@@ -733,6 +738,72 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(profile.config_encrypted, encrypted)
         self.assertNotIn(uri, str(loaded))
         self.assertNotIn('config_encrypted', str(loaded))
+
+    def test_telegram_backup_can_select_existing_panel_account(self):
+        reviewer = Admin(
+            username='claim-test-backup-account', role='superadmin',
+            is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        server = Server(
+            name='Backup Netherlands', host='https://backup-edge.example.com',
+            username='u', password='p', enabled=True,
+        )
+        db.session.add_all([reviewer, server])
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+            session_data['role'] = 'superadmin'
+            session_data['is_superadmin'] = True
+        previous = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': server.id, 'id': 23597, 'remark': 'Telegram backup',
+            'protocol': 'shadowsocks', 'port': 23597,
+            'settings': {'method': 'chacha20-ietf-poly1305'},
+            'streamSettings': {'network': 'tcp', 'security': 'none'},
+            'clients': [{
+                'email': 'backup-system-route',
+                'password': 'test-shadowsocks-password',
+                'raw_client': {'enable': True},
+            }],
+        }]
+        fernet = Fernet(Fernet.generate_key())
+        try:
+            with patch('app.load_snapshot_from_redis'), \
+                    patch('app._get_server_password_fernet', return_value=fernet):
+                response = client.post('/api/settings/telegram-backup', json={
+                    'enabled': True,
+                    'bot_token': '123456:abcdefghijklmnopqrstuvwxyz',
+                    'chat_id': '-1001234567890',
+                    'route_source': 'panel_account',
+                    'server_id': server.id,
+                    'inbound_id': 23597,
+                    'client_id': 'backup-system-route',
+                })
+                loaded = client.get('/api/settings/telegram-backup').get_json()
+                bot_settings = client.get('/api/settings/telegram-bots').get_json()
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous
+
+        self.assertTrue(response.get_json()['success'])
+        self.assertEqual(loaded['route_source'], 'panel_account')
+        self.assertTrue(loaded['use_proxy'])
+        self.assertEqual(loaded['managed_account']['client_email'], 'backup-system-route')
+        profile = db.session.get(
+            TelegramEgressProfile, loaded['managed_account']['profile_id'])
+        self.assertEqual(profile.source_type, 'telegram_backup_account')
+        self.assertTrue(profile.config_encrypted.startswith('enc:'))
+        self.assertNotIn('test-shadowsocks-password', str(loaded))
+        self.assertEqual(bot_settings['egress_profiles'], [])
+
+        profile.runtime_status = 'running'
+        db.session.commit()
+        proxies, error = _telegram_backup_route_proxies(
+            _get_telegram_backup_settings())
+        self.assertIsNone(error)
+        self.assertEqual(
+            proxies['https'], f'socks5h://127.0.0.1:{profile.local_port}')
 
     def test_telegram_egress_test_waits_for_pending_worker_reload(self):
         reviewer = Admin(

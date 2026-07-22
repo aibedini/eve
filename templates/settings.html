@@ -483,18 +483,46 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Use SOCKS Proxy</label>
+                    <label>Use a Telegram Route</label>
                     <div class="refresh-toggle" style="gap: 10px;">
                         <label class="toggle-switch" style="margin: 0;">
                             <input type="checkbox" id="telegram-backup-use-proxy" onchange="updateTelegramProxyModeUI()">
                             <span class="slider"></span>
                         </label>
-                        <span class="toggle-label">SOCKS</span>
+                        <span class="toggle-label">Route traffic through a proxy or panel account</span>
                     </div>
                     <small class="text-secondary">Route Telegram API calls through a SOCKS5 proxy. Useful when the server's IP is blocked by Telegram (e.g. Iranian servers).</small>
                 </div>
 
                 <div id="telegram-proxy-fields" style="display:none;">
+                    <div class="form-group">
+                        <label for="telegram-backup-route-source">Route Source</label>
+                        <select id="telegram-backup-route-source" class="form-select" onchange="updateTelegramProxyModeUI()">
+                            <option value="manual_proxy">Manual SOCKS proxy</option>
+                            <option value="panel_account">Existing panel account</option>
+                        </select>
+                        <small class="text-secondary">Choose a proxy address manually, or let Eve build and maintain a local Xray route from an existing account.</small>
+                    </div>
+
+                    <div id="telegram-backup-account-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="telegram-backup-account-search">Find Account</label>
+                            <input id="telegram-backup-account-search" class="form-control" type="search" placeholder="Search account, phone, or server…" autocomplete="off" spellcheck="false" oninput="renderTelegramBackupAccounts()">
+                        </div>
+                        <div class="telegram-backup-account-grid">
+                            <div class="form-group">
+                                <label for="telegram-backup-account">Account</label>
+                                <select id="telegram-backup-account" class="form-select" size="6" onchange="renderTelegramBackupInbounds()"></select>
+                            </div>
+                            <div class="form-group">
+                                <label for="telegram-backup-inbound">Inbound</label>
+                                <select id="telegram-backup-inbound" class="form-select" size="6"></select>
+                            </div>
+                        </div>
+                        <small id="telegram-backup-account-hint" class="text-secondary" aria-live="polite">Loading active accounts…</small>
+                    </div>
+
+                    <div id="telegram-backup-manual-proxy-fields">
                     <div class="form-group">
                         <label>SOCKS Proxy Mode</label>
                         <select id="telegram-backup-proxy-mode" class="form-select" onchange="updateTelegramProxyModeUI()">
@@ -526,6 +554,7 @@
                     <div class="form-group" id="tg-proxy-pass-group">
                         <label>SOCKS Password</label>
                         <input type="password" id="telegram-backup-proxy-password" class="form-control" placeholder="password (optional)" spellcheck="false" autocomplete="off">
+                    </div>
                     </div>
                 </div>
 
@@ -2405,6 +2434,22 @@
         gap: 10px;
     }
 
+    .telegram-backup-account-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
+    .telegram-backup-account-grid .form-group { min-width: 0; }
+    .telegram-backup-account-grid select { min-height: 150px; }
+    #telegram-backup-account-fields {
+        margin-bottom: 14px;
+        padding: 14px;
+        background: var(--bg-dark);
+        border: 1px solid var(--border-color);
+        border-radius: 9px;
+    }
+    #telegram-backup-account-hint { display: block; margin-top: 2px; line-height: 1.45; }
+
     .telegram-notification-thresholds {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2446,6 +2491,8 @@
         .telegram-announcement-actions .btn { width: 100%; justify-content: center; }
         .telegram-backup-header-actions { width: 100%; }
         .telegram-backup-header-actions .btn { flex: 1; justify-content: center; }
+        .telegram-backup-account-grid { grid-template-columns: 1fr; }
+        .telegram-backup-account-grid select { min-height: 120px; }
         .telegram-notification-thresholds { grid-template-columns: 1fr; }
         .telegram-campaign-row { align-items: stretch; flex-direction: column; }
         .telegram-campaign-actions .btn { flex: 1; justify-content: center; }
@@ -6889,6 +6936,7 @@
             const token = document.getElementById('telegram-backup-token');
             const chatId = document.getElementById('telegram-backup-chat-id');
             const useProxy = document.getElementById('telegram-backup-use-proxy');
+            const routeSource = document.getElementById('telegram-backup-route-source');
             const proxyMode = document.getElementById('telegram-backup-proxy-mode');
             const proxy = document.getElementById('telegram-backup-proxy');
             const proxyHost = document.getElementById('telegram-backup-proxy-host');
@@ -6908,6 +6956,7 @@
             if (token) token.value = data.bot_token || '';
             if (chatId) chatId.value = data.chat_id || '';
             if (useProxy) useProxy.checked = !!data.use_proxy;
+            if (routeSource) routeSource.value = data.route_source === 'panel_account' ? 'panel_account' : 'manual_proxy';
             if (proxyMode) proxyMode.value = data.proxy_mode || 'url';
             if (proxy) proxy.value = data.proxy_url || '';
             if (proxyHost) proxyHost.value = data.proxy_host || '';
@@ -6917,6 +6966,13 @@
             if (proxyPass) proxyPass.value = data.proxy_password || '';
             if (lastRun) lastRun.textContent = data.last_run_jalali || 'Never';
 
+            if (data.route_source === 'panel_account') {
+                await loadTelegramEgressCandidates();
+                const managed = data.managed_account || {};
+                const selectedKey = [managed.server_id, managed.inbound_id, managed.client_id]
+                    .map(value => String(value ?? '')).join(':');
+                renderTelegramBackupAccounts(selectedKey);
+            }
             updateTelegramProxyModeUI();
         } catch (e) {
             console.error('Error loading telegram backup settings', e);
@@ -6931,6 +6987,20 @@
         // Show/hide the entire proxy config block based on toggle
         if (proxyFields) proxyFields.style.display = enabled ? '' : 'none';
         if (!enabled) return;
+
+        const routeSource = document.getElementById('telegram-backup-route-source')?.value || 'manual_proxy';
+        const manualFields = document.getElementById('telegram-backup-manual-proxy-fields');
+        const accountFields = document.getElementById('telegram-backup-account-fields');
+        if (manualFields) manualFields.style.display = routeSource === 'manual_proxy' ? '' : 'none';
+        if (accountFields) accountFields.style.display = routeSource === 'panel_account' ? '' : 'none';
+        if (routeSource === 'panel_account') {
+            if (!telegramBotEgressCandidates.length) {
+                loadTelegramEgressCandidates().then(() => renderTelegramBackupAccounts());
+            } else {
+                renderTelegramBackupAccounts();
+            }
+            return;
+        }
 
         const mode = (document.getElementById('telegram-backup-proxy-mode') || {}).value || 'url';
         const urlGroup  = document.getElementById('tg-proxy-url-group');
@@ -6980,6 +7050,9 @@
         const token = document.getElementById('telegram-backup-token').value.trim();
         const chatId = document.getElementById('telegram-backup-chat-id').value.trim();
         const useProxy = document.getElementById('telegram-backup-use-proxy').checked;
+        const routeSource = useProxy
+            ? document.getElementById('telegram-backup-route-source').value
+            : 'direct';
         const proxyMode = document.getElementById('telegram-backup-proxy-mode').value;
         const proxyUrl = document.getElementById('telegram-backup-proxy').value.trim();
         const proxyHost = document.getElementById('telegram-backup-proxy-host').value.trim();
@@ -6995,7 +7068,13 @@
         }
 
         // Client-side validation when proxy is enabled
-        if (useProxy) {
+        const managedCandidate = routeSource === 'panel_account' ? selectedTelegramBackupCandidate() : null;
+        if (routeSource === 'panel_account' && !managedCandidate) {
+            showToast('Choose an account and inbound for the backup route', 'error');
+            document.getElementById('telegram-backup-account').focus();
+            return;
+        }
+        if (routeSource === 'manual_proxy') {
             if (proxyMode === 'hostport') {
                 if (!proxyHost) {
                     showToast('SOCKS Host is required', 'error');
@@ -7027,12 +7106,16 @@
                     bot_token: token,
                     chat_id: chatId,
                     use_proxy: useProxy,
+                    route_source: routeSource,
                     proxy_mode: proxyMode,
                     proxy_url: proxyUrl,
                     proxy_host: proxyHost,
                     proxy_port: proxyPort,
                     proxy_username: proxyUser,
-                    proxy_password: proxyPass
+                    proxy_password: proxyPass,
+                    server_id: managedCandidate?.server_id || null,
+                    inbound_id: managedCandidate?.inbound_id || null,
+                    client_id: managedCandidate?.client_id || null
                 })
             });
             const data = await res.json();
@@ -7053,6 +7136,11 @@
 
     function getTelegramBackupPayload() {
         const proxyPortRaw = parseInt(document.getElementById('telegram-backup-proxy-port').value, 10);
+        const useProxy = document.getElementById('telegram-backup-use-proxy').checked;
+        const routeSource = useProxy
+            ? document.getElementById('telegram-backup-route-source').value
+            : 'direct';
+        const managedCandidate = routeSource === 'panel_account' ? selectedTelegramBackupCandidate() : null;
         return {
             enabled: document.getElementById('telegram-backup-enabled').checked,
             send_panel_backup: document.getElementById('telegram-backup-send-panel').checked,
@@ -7061,13 +7149,17 @@
             interval_minutes: parseInt(document.getElementById('telegram-backup-interval').value, 10),
             bot_token: document.getElementById('telegram-backup-token').value.trim(),
             chat_id: document.getElementById('telegram-backup-chat-id').value.trim(),
-            use_proxy: document.getElementById('telegram-backup-use-proxy').checked,
+            use_proxy: useProxy,
+            route_source: routeSource,
             proxy_mode: document.getElementById('telegram-backup-proxy-mode').value,
             proxy_url: document.getElementById('telegram-backup-proxy').value.trim(),
             proxy_host: document.getElementById('telegram-backup-proxy-host').value.trim(),
             proxy_port: Number.isNaN(proxyPortRaw) ? 0 : proxyPortRaw,
             proxy_username: document.getElementById('telegram-backup-proxy-username').value.trim(),
-            proxy_password: document.getElementById('telegram-backup-proxy-password').value.trim()
+            proxy_password: document.getElementById('telegram-backup-proxy-password').value.trim(),
+            server_id: managedCandidate?.server_id || null,
+            inbound_id: managedCandidate?.inbound_id || null,
+            client_id: managedCandidate?.client_id || null
         };
     }
 
@@ -7087,10 +7179,14 @@
         btn.disabled = true;
 
         try {
+            const payload = getTelegramBackupPayload();
+            if (payload.route_source === 'panel_account' && !payload.client_id) {
+                throw new Error('Choose an account and inbound before testing.');
+            }
             const res = await fetch('/api/settings/telegram-backup/test', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-                body: JSON.stringify(getTelegramBackupPayload())
+                body: JSON.stringify(payload)
             });
             const data = await readTelegramBackupJson(res);
             if (data.success) {
@@ -8989,6 +9085,73 @@ async function loadTelegramAnnouncements(createdAnnouncement = null) {
         } else {
             list.textContent = 'Unable to load campaigns.';
         }
+    }
+
+    function renderTelegramBackupAccounts(selectedCandidateKey = '') {
+        const accountSelect = document.getElementById('telegram-backup-account');
+        const inboundSelect = document.getElementById('telegram-backup-inbound');
+        const hint = document.getElementById('telegram-backup-account-hint');
+        if (!accountSelect || !inboundSelect || !hint) return;
+        const currentAccount = accountSelect.value;
+        const selectedCandidate = telegramBotEgressCandidates.find(
+            item => telegramEgressCandidateKey(item) === selectedCandidateKey);
+        const wantedAccount = selectedCandidate ? telegramEgressAccountKey(selectedCandidate) : currentAccount;
+        const terms = telegramEgressSearchAliases(
+            document.getElementById('telegram-backup-account-search')?.value || '');
+        const accounts = new Map();
+        telegramBotEgressCandidates.forEach(candidate => {
+            const key = telegramEgressAccountKey(candidate);
+            if (!accounts.has(key)) accounts.set(key, []);
+            accounts.get(key).push(candidate);
+        });
+        const matches = [...accounts.entries()].filter(([, candidates]) => {
+            if (!terms.length) return true;
+            const haystack = telegramEgressSearchValue(candidates.map(candidate => [
+                candidate.client_email, candidate.server_name, candidate.inbound_remark,
+            ].join(' ')).join(' '));
+            return terms.every(term => haystack.includes(term));
+        });
+        accountSelect.replaceChildren();
+        matches.sort((a, b) => String(a[1][0].client_email || '').localeCompare(String(b[1][0].client_email || '')))
+            .forEach(([key, candidates]) => {
+                const candidate = candidates[0];
+                const option = document.createElement('option');
+                option.value = key;
+                option.textContent = `${candidate.client_email || 'Unnamed account'} · ${candidate.server_name || `Server ${candidate.server_id}`} · ${candidates.length} inbound${candidates.length === 1 ? '' : 's'}`;
+                accountSelect.appendChild(option);
+            });
+        accountSelect.disabled = !matches.length;
+        if (wantedAccount && matches.some(([key]) => key === wantedAccount)) accountSelect.value = wantedAccount;
+        hint.textContent = matches.length
+            ? `${matches.length} active account${matches.length === 1 ? '' : 's'} available for the backup route.`
+            : 'No compatible active account matched your search.';
+        renderTelegramBackupInbounds(selectedCandidateKey);
+    }
+
+    function renderTelegramBackupInbounds(selectedCandidateKey = '') {
+        const accountSelect = document.getElementById('telegram-backup-account');
+        const inboundSelect = document.getElementById('telegram-backup-inbound');
+        if (!accountSelect || !inboundSelect) return;
+        const current = selectedCandidateKey || inboundSelect.value;
+        const candidates = telegramBotEgressCandidates.filter(
+            candidate => telegramEgressAccountKey(candidate) === accountSelect.value);
+        inboundSelect.replaceChildren();
+        candidates.sort((a, b) => Number(a.inbound_id || 0) - Number(b.inbound_id || 0))
+            .forEach(candidate => {
+                const option = document.createElement('option');
+                option.value = telegramEgressCandidateKey(candidate);
+                option.textContent = `${candidate.inbound_remark || `Inbound ${candidate.inbound_id}`} · ${String(candidate.protocol || '').toUpperCase()} · ${candidate.network || 'tcp'} / ${candidate.security || 'none'}`;
+                inboundSelect.appendChild(option);
+            });
+        inboundSelect.disabled = !candidates.length;
+        if (current && candidates.some(candidate => telegramEgressCandidateKey(candidate) === current)) {
+            inboundSelect.value = current;
+        }
+    }
+
+    function selectedTelegramBackupCandidate() {
+        const key = document.getElementById('telegram-backup-inbound')?.value || '';
+        return telegramBotEgressCandidates.find(candidate => telegramEgressCandidateKey(candidate) === key) || null;
     }
 }
 </script>

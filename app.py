@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.23"
+APP_VERSION = "2.5.24"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -3283,6 +3283,26 @@ def _get_telegram_backup_settings() -> dict:
     proxy_port = _parse_int(_get_system_setting_value('telegram_backup_proxy_port', ''), 0, min_value=0, max_value=65535)
     proxy_username = (_get_system_setting_value('telegram_backup_proxy_username', '') or '').strip()
     proxy_password = (_get_system_setting_value('telegram_backup_proxy_password', '') or '').strip()
+    route_source = (_get_system_setting_value('telegram_backup_route_source', '') or '').strip().lower()
+    if route_source not in ('direct', 'manual_proxy', 'panel_account'):
+        route_source = 'manual_proxy' if use_proxy else 'direct'
+    egress_profile_id = _parse_int(
+        _get_system_setting_value('telegram_backup_egress_profile_id', ''), 0, min_value=0,
+    )
+    managed_account = None
+    if egress_profile_id:
+        profile = db.session.get(TelegramEgressProfile, egress_profile_id)
+        if profile:
+            managed_account = {
+                'profile_id': profile.id,
+                'server_id': profile.server_id,
+                'server_name': profile.server.name if profile.server else None,
+                'inbound_id': profile.inbound_id,
+                'client_id': profile.client_email_snapshot,
+                'client_email': profile.client_email_snapshot,
+                'runtime_status': profile.runtime_status,
+                'health_status': profile.health_status,
+            }
     last_run = _get_system_setting_value('telegram_backup_last_run', '') or ''
     last_dt = _parse_iso_datetime(last_run)
     schedule_mode = (_get_system_setting_value('telegram_backup_schedule_mode', 'interval') or 'interval').strip().lower()
@@ -3298,6 +3318,8 @@ def _get_telegram_backup_settings() -> dict:
         'bot_token': _get_system_setting_value('telegram_backup_bot_token', '') or '',
         'chat_id': _get_system_setting_value('telegram_backup_chat_id', '') or '',
         'use_proxy': use_proxy,
+        'route_source': route_source,
+        'managed_account': managed_account,
         'proxy_mode': proxy_mode,
         'proxy_url': proxy_url,
         'proxy_host': proxy_host,
@@ -3360,6 +3382,43 @@ def _build_telegram_proxies(use_proxy: bool, proxy_mode: str, proxy_url: str, pr
         return None
 
     return {'http': normalized, 'https': normalized}
+
+
+def _telegram_backup_route_proxies(settings: dict, *, wait_for_runtime=False):
+    """Resolve the configured backup route without exposing its connection URI."""
+    source = str(settings.get('route_source') or '').strip().lower()
+    if source == 'panel_account':
+        managed = settings.get('managed_account') or {}
+        profile_id = _parse_int(managed.get('profile_id'), 0, min_value=0)
+        profile = db.session.get(TelegramEgressProfile, profile_id) if profile_id else None
+        if not profile or not profile.enabled:
+            return None, 'The selected panel account route is missing or disabled.'
+        if wait_for_runtime and profile.runtime_status == 'pending':
+            deadline = time.monotonic() + 12
+            while profile.runtime_status == 'pending' and time.monotonic() < deadline:
+                time.sleep(0.25)
+                db.session.expire_all()
+                profile = db.session.get(TelegramEgressProfile, profile_id)
+                if not profile:
+                    break
+        if not profile or profile.runtime_status != 'running':
+            state = profile.runtime_status if profile else 'missing'
+            detail = redact_connection_error(profile.last_error) if profile and profile.last_error else ''
+            return None, detail or f'The selected panel account route is not ready ({state}).'
+        proxy_url = f'socks5h://127.0.0.1:{int(profile.local_port)}'
+        return {'http': proxy_url, 'https': proxy_url}, None
+    if source == 'direct' or not bool(settings.get('use_proxy')):
+        return None, None
+    proxies = _build_telegram_proxies(
+        True,
+        settings.get('proxy_mode') or 'url',
+        settings.get('proxy_url') or '',
+        settings.get('proxy_host') or '',
+        int(settings.get('proxy_port') or 0),
+        settings.get('proxy_username') or '',
+        settings.get('proxy_password') or '',
+    )
+    return proxies, None if proxies else 'Manual proxy settings are incomplete.'
 
 
 def _check_proxy_reachable(proxies: dict | None, timeout_sec: float = 5) -> tuple[bool, str | None]:
@@ -3637,15 +3696,11 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
             except Exception:
                 pass
 
-        proxies = _build_telegram_proxies(
-            bool(settings.get('use_proxy')),
-            settings.get('proxy_mode') or 'url',
-            settings.get('proxy_url') or '',
-            settings.get('proxy_host') or '',
-            int(settings.get('proxy_port') or 0),
-            settings.get('proxy_username') or '',
-            settings.get('proxy_password') or ''
+        proxies, route_error = _telegram_backup_route_proxies(
+            settings, wait_for_runtime=True,
         )
+        if route_error:
+            return {'success': False, 'error': route_error}
 
         if proxies:
             if progress_cb:
@@ -27892,6 +27947,8 @@ def _telegram_bot_api_client(bot: TelegramBotInstance):
     ).order_by(TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc()).all()
     egress_rows = TelegramEgressProfile.query.filter_by(
         bot_instance_id=bot.id, enabled=True,
+    ).filter(
+        TelegramEgressProfile.source_type != 'telegram_backup_account',
     ).order_by(TelegramEgressProfile.priority.asc(), TelegramEgressProfile.id.asc()).all()
     managed = sorted(
         [('egress', row) for row in egress_rows] + [('proxy', row) for row in proxy_rows],
@@ -28007,7 +28064,9 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
     if only_proxy_id is not None:
         proxies = proxies.filter_by(id=int(only_proxy_id))
     proxy_rows = proxies.order_by(TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc()).all()
-    egresses = TelegramEgressProfile.query.filter_by(bot_instance_id=bot.id, enabled=True)
+    egresses = TelegramEgressProfile.query.filter_by(
+        bot_instance_id=bot.id, enabled=True,
+    ).filter(TelegramEgressProfile.source_type != 'telegram_backup_account')
     if only_egress_id is not None:
         egresses = egresses.filter_by(id=int(only_egress_id))
     egress_rows = egresses.order_by(
@@ -28228,6 +28287,63 @@ def _telegram_egress_from_payload(profile, data):
     else:
         build_xray_config_from_uri(_decrypt_telegram_secret(profile.config_encrypted), profile.local_port)
     return profile
+
+
+def _allocate_telegram_backup_egress_port() -> int:
+    used = {int(value) for (value,) in db.session.query(TelegramEgressProfile.local_port).all()}
+    for port in range(13080, 13181):
+        if port in used:
+            continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.05)
+            if probe.connect_ex(('127.0.0.1', port)) != 0:
+                return port
+    raise RuntimeError('No free local port is available for the Telegram backup route')
+
+
+def _ensure_telegram_backup_egress_profile(data: dict) -> TelegramEgressProfile:
+    """Create or refresh the dedicated Xray route used only by backups."""
+    existing_id = _parse_int(
+        _get_system_setting_value('telegram_backup_egress_profile_id', ''), 0, min_value=0,
+    )
+    profile = db.session.get(TelegramEgressProfile, existing_id) if existing_id else None
+    if profile and profile.source_type != 'telegram_backup_account':
+        profile = None
+    if profile is None:
+        bot = _central_telegram_bot(create=True)
+        profile = TelegramEgressProfile(
+            bot_instance_id=bot.id,
+            name='Telegram backup route',
+            local_port=_allocate_telegram_backup_egress_port(),
+            priority=10,
+            enabled=True,
+            config_encrypted='',
+        )
+        db.session.add(profile)
+    payload = {
+        'name': 'Telegram backup route',
+        'local_port': profile.local_port,
+        'priority': 10,
+        'enabled': True,
+        'server_id': data.get('server_id'),
+        'inbound_id': data.get('inbound_id'),
+        'client_id': data.get('client_id'),
+    }
+    _telegram_egress_from_payload(profile, payload)
+    profile.source_type = 'telegram_backup_account'
+    db.session.flush()
+    _set_system_setting_value('telegram_backup_egress_profile_id', str(profile.id))
+    return profile
+
+
+def _disable_telegram_backup_egress_profile():
+    profile_id = _parse_int(
+        _get_system_setting_value('telegram_backup_egress_profile_id', ''), 0, min_value=0,
+    )
+    profile = db.session.get(TelegramEgressProfile, profile_id) if profile_id else None
+    if profile and profile.source_type == 'telegram_backup_account':
+        profile.enabled = False
+        profile.runtime_status = 'disabled'
 
 
 def _telegram_operations_admin():
@@ -29520,7 +29636,9 @@ def get_telegram_bot_settings():
     proxies = TelegramProxyEndpoint.query.filter_by(bot_instance_id=bot.id).order_by(
         TelegramProxyEndpoint.priority.asc(), TelegramProxyEndpoint.id.asc(),
     ).all()
-    egresses = TelegramEgressProfile.query.filter_by(bot_instance_id=bot.id).order_by(
+    egresses = TelegramEgressProfile.query.filter_by(bot_instance_id=bot.id).filter(
+        TelegramEgressProfile.source_type != 'telegram_backup_account',
+    ).order_by(
         TelegramEgressProfile.priority.asc(), TelegramEgressProfile.id.asc(),
     ).all()
     test_users = TelegramBotTestUser.query.filter_by(bot_instance_id=bot.id).order_by(
@@ -30069,6 +30187,10 @@ def save_telegram_backup_settings():
     bot_token = (data.get('bot_token') or '').strip()
     chat_id = (data.get('chat_id') or '').strip()
     use_proxy = bool(data.get('use_proxy'))
+    route_source = str(data.get('route_source') or '').strip().lower()
+    if route_source not in ('direct', 'manual_proxy', 'panel_account'):
+        route_source = 'manual_proxy' if use_proxy else 'direct'
+    use_proxy = route_source != 'direct'
     proxy_mode = (data.get('proxy_mode') or 'url').strip().lower()
     if proxy_mode not in ('url', 'hostport'):
         proxy_mode = 'url'
@@ -30078,11 +30200,21 @@ def save_telegram_backup_settings():
     proxy_username = (data.get('proxy_username') or '').strip()
     proxy_password = (data.get('proxy_password') or '').strip()
 
-    if use_proxy:
+    managed_profile = None
+    if route_source == 'panel_account':
+        try:
+            managed_profile = _ensure_telegram_backup_egress_profile(data)
+        except (ValueError, RuntimeError) as exc:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': redact_connection_error(exc)}), 400
+    elif route_source == 'manual_proxy':
         if proxy_mode == 'hostport' and (not proxy_host or not proxy_port):
             return jsonify({'success': False, 'error': 'Proxy host and port are required'}), 400
         if proxy_mode == 'url' and not proxy_url:
             return jsonify({'success': False, 'error': 'Proxy URL is required'}), 400
+        _disable_telegram_backup_egress_profile()
+    else:
+        _disable_telegram_backup_egress_profile()
 
     _set_system_setting_value('telegram_backup_enabled', 'true' if enabled else 'false')
     _set_system_setting_value('telegram_backup_send_panel_backup', 'true' if send_panel_backup else 'false')
@@ -30092,6 +30224,9 @@ def save_telegram_backup_settings():
     _set_system_setting_value('telegram_backup_bot_token', bot_token)
     _set_system_setting_value('telegram_backup_chat_id', chat_id)
     _set_system_setting_value('telegram_backup_use_proxy', 'true' if use_proxy else 'false')
+    _set_system_setting_value('telegram_backup_route_source', route_source)
+    if managed_profile:
+        _set_system_setting_value('telegram_backup_egress_profile_id', str(managed_profile.id))
     _set_system_setting_value('telegram_backup_proxy_mode', proxy_mode)
     _set_system_setting_value('telegram_backup_proxy_url', proxy_url)
     _set_system_setting_value('telegram_backup_proxy_host', proxy_host)
@@ -30119,16 +30254,38 @@ def test_telegram_backup_settings():
     proxy_port = _parse_int(data.get('proxy_port') if 'proxy_port' in data else settings.get('proxy_port'), 0, min_value=0, max_value=65535)
     proxy_username = ((data.get('proxy_username') if 'proxy_username' in data else settings.get('proxy_username')) or '')
     proxy_password = ((data.get('proxy_password') if 'proxy_password' in data else settings.get('proxy_password')) or '')
+    route_source = str(
+        data.get('route_source') if 'route_source' in data else settings.get('route_source') or ''
+    ).strip().lower()
+    if route_source not in ('direct', 'manual_proxy', 'panel_account'):
+        route_source = 'manual_proxy' if use_proxy else 'direct'
+    route_settings = {
+        **settings,
+        'use_proxy': route_source != 'direct',
+        'route_source': route_source,
+        'proxy_mode': proxy_mode,
+        'proxy_url': proxy_url,
+        'proxy_host': proxy_host,
+        'proxy_port': proxy_port,
+        'proxy_username': proxy_username,
+        'proxy_password': proxy_password,
+    }
+    if route_source == 'panel_account' and all(
+            data.get(key) not in (None, '') for key in ('server_id', 'inbound_id', 'client_id')):
+        try:
+            profile = _ensure_telegram_backup_egress_profile(data)
+            db.session.commit()
+            route_settings['managed_account'] = {'profile_id': profile.id}
+        except (ValueError, RuntimeError) as exc:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': redact_connection_error(exc)}), 400
 
-    proxies = _build_telegram_proxies(
-        use_proxy,
-        proxy_mode or 'url',
-        proxy_url or '',
-        proxy_host or '',
-        proxy_port,
-        proxy_username or '',
-        proxy_password or ''
+    proxies, route_error = _telegram_backup_route_proxies(
+        route_settings, wait_for_runtime=True,
     )
+    if route_error:
+        return jsonify({'success': False, 'error': route_error,
+                        'error_code': 'backup_route_not_ready'}), 503
 
     try:
         resp = _telegram_get_me(token, proxies=proxies, timeout_sec=10)
