@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.24"
+APP_VERSION = "2.5.27"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2775,7 +2775,8 @@ def add_security_headers(response):
     try:
         if (request.path == '/settings'
                 or request.path.startswith('/api/settings/')
-                or request.path.startswith('/api/telegram-announcements')):
+                or request.path.startswith('/api/telegram-announcements')
+                or request.path.startswith('/api/custom-subscriptions')):
             response.headers['Cache-Control'] = 'private, no-store, no-cache, must-revalidate, max-age=0'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
@@ -2789,7 +2790,7 @@ def add_security_headers(response):
     # (all branches/return paths) so neither the browser nor the CDN (WCDN) serves
     # a stale copy. Covers the "mobile shows disabled, desktop active" cache bug.
     try:
-        if request.path.startswith('/s/'):
+        if request.path.startswith('/s/') or request.path.startswith('/cs/'):
             response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
@@ -4072,6 +4073,66 @@ class SubAppConfig(db.Model):
             'icon_url': self.icon_url,
             'is_recommended': self.is_recommended or False,
             'display_order': self.display_order or 0,
+        }
+
+
+class CustomSubscription(db.Model):
+    __tablename__ = 'custom_subscriptions'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    token = db.Column(db.String(48), nullable=False, unique=True, index=True)
+    tag_prefix = db.Column(db.String(64), nullable=False, default='')
+    enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    update_interval_min = db.Column(db.Integer, nullable=False, default=0)
+    sort_order = db.Column(db.Integer, nullable=False, default=0, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    configs = db.relationship(
+        'CustomSubscriptionConfig', backref='subscription', lazy=True,
+        cascade='all, delete-orphan', passive_deletes=True,
+        order_by='CustomSubscriptionConfig.sort_order, CustomSubscriptionConfig.id',
+    )
+
+    def to_dict(self, public_url=None, include_configs=True):
+        configs = list(self.configs)
+        payload = {
+            'id': self.id, 'name': self.name, 'token': self.token,
+            'tag_prefix': self.tag_prefix or '', 'enabled': bool(self.enabled),
+            'update_interval_min': max(0, int(self.update_interval_min or 0)),
+            'sort_order': int(self.sort_order or 0),
+            'config_count': len(configs),
+            'active_config_count': sum(bool(row.enabled) for row in configs),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+        if public_url:
+            payload['public_url'] = public_url
+        if include_configs:
+            payload['configs'] = [row.to_dict() for row in configs]
+        return payload
+
+
+class CustomSubscriptionConfig(db.Model):
+    __tablename__ = 'custom_subscription_configs'
+    __table_args__ = (
+        db.UniqueConstraint('subscription_id', 'uri', name='uq_custom_subscription_uri'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    subscription_id = db.Column(
+        db.Integer, db.ForeignKey('custom_subscriptions.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    uri = db.Column(db.Text, nullable=False)
+    remark = db.Column(db.String(190), nullable=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'subscription_id': self.subscription_id,
+            'uri': self.uri, 'remark': self.remark or '',
+            'enabled': bool(self.enabled), 'sort_order': int(self.sort_order or 0),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
 class FAQ(db.Model):
@@ -8686,6 +8747,9 @@ class TelegramBotInstance(db.Model):
     support_sla_minutes = db.Column(db.Integer, nullable=False, default=60)
     support_sla_warning_percent = db.Column(db.Integer, nullable=False, default=80)
     support_escalation_minutes = db.Column(db.Integer, nullable=False, default=30)
+    required_channels_json = db.Column(db.Text, nullable=False, default='[]')
+    require_membership_on_start = db.Column(db.Boolean, nullable=False, default=False)
+    require_membership_on_delivery = db.Column(db.Boolean, nullable=False, default=False)
     last_test_status = db.Column(db.String(24), nullable=True)
     last_test_route = db.Column(db.String(120), nullable=True)
     last_test_latency_ms = db.Column(db.Integer, nullable=True)
@@ -8702,6 +8766,13 @@ class TelegramBotInstance(db.Model):
         except (TypeError, ValueError):
             values = []
         return [lang for lang in ('fa', 'en') if lang in values] or ['fa']
+
+    def required_channels(self):
+        try:
+            values = json.loads(self.required_channels_json or '[]')
+        except (TypeError, ValueError):
+            values = []
+        return values if isinstance(values, list) else []
 
     def to_safe_dict(self):
         return {
@@ -8725,6 +8796,9 @@ class TelegramBotInstance(db.Model):
             'support_sla_minutes': max(0, int(self.support_sla_minutes or 0)),
             'support_sla_warning_percent': max(1, min(99, int(self.support_sla_warning_percent or 80))),
             'support_escalation_minutes': max(0, int(self.support_escalation_minutes or 0)),
+            'required_channels': self.required_channels(),
+            'require_membership_on_start': bool(self.require_membership_on_start),
+            'require_membership_on_delivery': bool(self.require_membership_on_delivery),
             'last_test_status': self.last_test_status,
             'last_test_route': self.last_test_route,
             'last_test_latency_ms': self.last_test_latency_ms,
@@ -8828,6 +8902,19 @@ class TelegramBotUserState(db.Model):
     bot = db.relationship('TelegramBotInstance', backref=db.backref(
         'user_states', lazy=True, cascade='all, delete-orphan',
     ))
+
+
+class TelegramBotStartEvent(db.Model):
+    """One /start invocation, classified at the time it was received."""
+    __tablename__ = 'telegram_bot_start_events'
+    id = db.Column(db.Integer, primary_key=True)
+    bot_instance_id = db.Column(
+        db.Integer, db.ForeignKey('telegram_bot_instances.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
+    is_new_user = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
 class TelegramAnnouncement(db.Model):
@@ -10649,6 +10736,9 @@ with app.app_context():
         ('archived_at', 'TIMESTAMP' if db.engine.dialect.name == 'postgresql' else 'DATETIME'),
         ('archived_by_admin_id', 'INTEGER'),
         ('copy_overrides_json', "TEXT DEFAULT ''"),
+        ('required_channels_json', "TEXT DEFAULT '[]'"),
+        ('require_membership_on_start', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+        ('require_membership_on_delivery', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
     ])
 
     # Ensure telegram_purchase_policies supports trial and emergency access
@@ -14235,6 +14325,8 @@ def _pulse_form_int(value, default, lo=1, hi=1000):
 
 PULSE_COPY = {
     'en': {
+        'xray_missing_title': 'Xray runtime is not installed',
+        'xray_missing_help': 'Pulse cannot run local probes until Xray is installed. Install it from Settings → Telegram → Xray Runtime, or run eve --install-xray on the server.',
         'subtitle': 'Build an explicit test plan, see every queued job, and reuse it as a template.',
         'queue': 'Live queue', 'queue_help': 'Active jobs and jobs finished in the last 5 minutes update automatically.',
         'empty_queue': 'The queue is empty.', 'position': 'Position', 'job': 'Job',
@@ -14285,6 +14377,8 @@ PULSE_COPY = {
         'save_ok': 'Template saved.', 'request_error': 'The request failed.',
     },
     'fa': {
+        'xray_missing_title': 'هسته Xray نصب نیست',
+        'xray_missing_help': 'Pulse تا قبل از نصب Xray نمی‌تواند تست محلی اجرا کند. آن را از تنظیمات ← تلگرام ← Xray Runtime نصب کنید یا روی سرور دستور eve --install-xray را اجرا کنید.',
         'subtitle': 'برنامه تست را دقیق بسازید، تمام کارهای صف را ببینید و آن را به‌صورت تمپلیت دوباره اجرا کنید.',
         'queue': 'صف زنده', 'queue_help': 'کارهای فعال و اجراهای تمام‌شده در ۵ دقیقه اخیر خودکار به‌روز می‌شوند.',
         'empty_queue': 'صف خالی است.', 'position': 'ردیف', 'job': 'کار',
@@ -14376,6 +14470,7 @@ def pulse_page():
     agents = PulseAgent.query.order_by(PulseAgent.name.asc()).all()
     templates = PulseTemplate.query.order_by(PulseTemplate.name.asc()).all()
     panel_lang = _get_panel_ui_lang()
+    xray_installed = bool(find_xray_binary())
     return render_template('pulse.html',
                          runs=history_runs,
                          queue_runs=queue_runs,
@@ -14384,6 +14479,7 @@ def pulse_page():
                          agents=agents,
                          pulse_templates=templates,
                          pulse_copy=PULSE_COPY[panel_lang],
+                         xray_installed=xray_installed,
                          format_app_datetime=format_app_datetime,
                          admin_username=session.get('admin_username'),
                          is_superadmin=session.get('is_superadmin', False),
@@ -26434,6 +26530,252 @@ def bank_cards_page():
                          is_superadmin=session.get('is_superadmin', False),
                          role=session.get('role', 'admin'))
 
+
+CUSTOM_SUBSCRIPTION_SCHEMES = {
+    'vless', 'vmess', 'trojan', 'ss', 'ssr', 'wireguard', 'hysteria2', 'tuic',
+}
+
+
+def _custom_subscription_uri(value):
+    uri = str(value or '').strip()
+    scheme = urlparse(uri).scheme.lower()
+    if not uri or scheme not in CUSTOM_SUBSCRIPTION_SCHEMES:
+        raise ValueError(
+            'Unsupported config URI. Allowed schemes: '
+            + ', '.join(sorted(CUSTOM_SUBSCRIPTION_SCHEMES))
+        )
+    return uri
+
+
+def _custom_subscription_remark(row):
+    if str(row.remark or '').strip():
+        return str(row.remark).strip()
+    fragment = str(row.uri or '').partition('#')[2]
+    if fragment:
+        try:
+            return unquote(fragment).strip()
+        except Exception:
+            return fragment.strip()
+    return f'config-{row.id}'
+
+
+def _custom_subscription_render_uri(subscription, row):
+    base = str(row.uri or '').partition('#')[0]
+    label = f'{subscription.tag_prefix or ""}{_custom_subscription_remark(row)}'
+    return f'{base}#{quote(label, safe="")}'
+
+
+def _custom_subscription_public_url(row):
+    return f'{request.url_root.rstrip("/")}/cs/{row.token}'
+
+
+@app.route('/custom-subscriptions')
+@user_management_required
+def custom_subscriptions_page():
+    return render_template(
+        'custom_subscriptions.html',
+        admin_username=session.get('admin_username'),
+        is_superadmin=session.get('is_superadmin', False),
+        role=session.get('role', 'admin'),
+    )
+
+
+@app.route('/cs/<token>')
+@limiter.limit('60 per minute')
+def public_custom_subscription(token):
+    row = CustomSubscription.query.filter_by(token=str(token), enabled=True).first()
+    if not row:
+        return 'Subscription not found', 404
+    configs = CustomSubscriptionConfig.query.filter_by(
+        subscription_id=row.id, enabled=True,
+    ).order_by(CustomSubscriptionConfig.sort_order.asc(), CustomSubscriptionConfig.id.asc()).all()
+    raw = '\n'.join(_custom_subscription_render_uri(row, item) for item in configs)
+    body = raw if request.args.get('format', '').lower() == 'raw' else base64.b64encode(
+        raw.encode('utf-8')).decode('ascii')
+    response = make_response(body)
+    response.headers['Content-Type'] = 'text/plain; charset=utf-8'
+    response.headers['Profile-Title'] = 'base64:' + base64.b64encode(
+        row.name.encode('utf-8')).decode('ascii')
+    if int(row.update_interval_min or 0) > 0:
+        response.headers['Profile-Update-Interval'] = str(int(row.update_interval_min))
+    return response
+
+
+@app.route('/api/custom-subscriptions', methods=['GET'])
+@login_required
+def list_custom_subscriptions():
+    rows = CustomSubscription.query.order_by(
+        CustomSubscription.sort_order.asc(), CustomSubscription.id.asc()).all()
+    return jsonify({'success': True, 'subscriptions': [
+        row.to_dict(public_url=_custom_subscription_public_url(row)) for row in rows
+    ]})
+
+
+@app.route('/api/custom-subscriptions/<int:subscription_id>/preview', methods=['GET'])
+@login_required
+def preview_custom_subscription(subscription_id):
+    row = db.session.get(CustomSubscription, subscription_id)
+    if not row:
+        return jsonify({'success': False, 'error': 'Subscription not found'}), 404
+    configs = CustomSubscriptionConfig.query.filter_by(
+        subscription_id=row.id, enabled=True,
+    ).order_by(CustomSubscriptionConfig.sort_order.asc(), CustomSubscriptionConfig.id.asc()).all()
+    return jsonify({
+        'success': True,
+        'raw': '\n'.join(_custom_subscription_render_uri(row, item) for item in configs),
+    })
+
+
+@app.route('/api/custom-subscriptions', methods=['POST'])
+@user_management_required
+def create_custom_subscription():
+    data = request.get_json(silent=True) or {}
+    name = str(data.get('name') or '').strip()[:120]
+    if not name:
+        return jsonify({'success': False, 'error': 'Name is required'}), 400
+    try:
+        interval = int(data.get('update_interval_min') or 0)
+        sort_order = int(data.get('sort_order') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Interval and sort order must be whole numbers'}), 400
+    if interval < 0 or interval > 10080:
+        return jsonify({'success': False, 'error': 'Update interval must be between 0 and 10080 minutes'}), 400
+    row = CustomSubscription(
+        name=name, token=secrets.token_urlsafe(16),
+        tag_prefix=str(data.get('tag_prefix') or '')[:64],
+        enabled=bool(data.get('enabled', True)), update_interval_min=interval,
+        sort_order=sort_order,
+    )
+    db.session.add(row)
+    db.session.commit()
+    return jsonify({'success': True, 'subscription': row.to_dict(
+        public_url=_custom_subscription_public_url(row))}), 201
+
+
+@app.route('/api/custom-subscriptions/<int:subscription_id>', methods=['PUT'])
+@user_management_required
+def update_custom_subscription(subscription_id):
+    row = db.session.get(CustomSubscription, subscription_id)
+    if not row:
+        return jsonify({'success': False, 'error': 'Subscription not found'}), 404
+    data = request.get_json(silent=True) or {}
+    if 'name' in data:
+        name = str(data.get('name') or '').strip()[:120]
+        if not name:
+            return jsonify({'success': False, 'error': 'Name is required'}), 400
+        row.name = name
+    if 'tag_prefix' in data:
+        row.tag_prefix = str(data.get('tag_prefix') or '')[:64]
+    if 'enabled' in data:
+        row.enabled = bool(data.get('enabled'))
+    try:
+        if 'update_interval_min' in data:
+            row.update_interval_min = int(data.get('update_interval_min') or 0)
+        if 'sort_order' in data:
+            row.sort_order = int(data.get('sort_order') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Interval and sort order must be whole numbers'}), 400
+    if row.update_interval_min < 0 or row.update_interval_min > 10080:
+        return jsonify({'success': False, 'error': 'Update interval must be between 0 and 10080 minutes'}), 400
+    if bool(data.get('regenerate_token')):
+        row.token = secrets.token_urlsafe(16)
+    db.session.commit()
+    return jsonify({'success': True, 'subscription': row.to_dict(
+        public_url=_custom_subscription_public_url(row))})
+
+
+@app.route('/api/custom-subscriptions/<int:subscription_id>', methods=['DELETE'])
+@user_management_required
+def delete_custom_subscription(subscription_id):
+    row = db.session.get(CustomSubscription, subscription_id)
+    if not row:
+        return jsonify({'success': False, 'error': 'Subscription not found'}), 404
+    db.session.delete(row)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/api/custom-subscriptions/<int:subscription_id>/configs', methods=['POST'])
+@user_management_required
+def add_custom_subscription_configs(subscription_id):
+    row = db.session.get(CustomSubscription, subscription_id)
+    if not row:
+        return jsonify({'success': False, 'error': 'Subscription not found'}), 404
+    data = request.get_json(silent=True) or {}
+    lines = [line.strip() for line in str(data.get('configs') or '').splitlines() if line.strip()]
+    if not lines:
+        return jsonify({'success': False, 'error': 'Paste at least one config URI'}), 400
+    if len(lines) > 1000:
+        return jsonify({'success': False, 'error': 'At most 1000 configs can be added at once'}), 400
+    try:
+        uris = [_custom_subscription_uri(line) for line in lines]
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    if len(set(uris)) != len(uris):
+        return jsonify({'success': False, 'error': 'The pasted list contains duplicate configs'}), 409
+    existing = {value for value, in db.session.query(CustomSubscriptionConfig.uri).filter_by(
+        subscription_id=row.id).all()}
+    duplicates = [uri for uri in uris if uri in existing]
+    if duplicates:
+        return jsonify({'success': False, 'error': 'One or more configs already exist in this subscription'}), 409
+    next_order = max([item.sort_order for item in row.configs] or [-1]) + 1
+    created = []
+    for offset, uri in enumerate(uris):
+        item = CustomSubscriptionConfig(
+            subscription_id=row.id, uri=uri, enabled=True,
+            sort_order=next_order + offset,
+        )
+        db.session.add(item)
+        created.append(item)
+    db.session.commit()
+    return jsonify({'success': True, 'configs': [item.to_dict() for item in created]}), 201
+
+
+@app.route('/api/custom-subscriptions/<int:subscription_id>/configs/<int:config_id>', methods=['PUT'])
+@user_management_required
+def update_custom_subscription_config(subscription_id, config_id):
+    item = CustomSubscriptionConfig.query.filter_by(
+        id=config_id, subscription_id=subscription_id).first()
+    if not item:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+    data = request.get_json(silent=True) or {}
+    if 'uri' in data:
+        try:
+            uri = _custom_subscription_uri(data.get('uri'))
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        duplicate = CustomSubscriptionConfig.query.filter(
+            CustomSubscriptionConfig.subscription_id == subscription_id,
+            CustomSubscriptionConfig.uri == uri,
+            CustomSubscriptionConfig.id != item.id,
+        ).first()
+        if duplicate:
+            return jsonify({'success': False, 'error': 'This config already exists'}), 409
+        item.uri = uri
+    if 'remark' in data:
+        item.remark = str(data.get('remark') or '').strip()[:190] or None
+    if 'enabled' in data:
+        item.enabled = bool(data.get('enabled'))
+    if 'sort_order' in data:
+        try:
+            item.sort_order = int(data.get('sort_order'))
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Sort order must be a whole number'}), 400
+    db.session.commit()
+    return jsonify({'success': True, 'config': item.to_dict()})
+
+
+@app.route('/api/custom-subscriptions/<int:subscription_id>/configs/<int:config_id>', methods=['DELETE'])
+@user_management_required
+def delete_custom_subscription_config(subscription_id, config_id):
+    item = CustomSubscriptionConfig.query.filter_by(
+        id=config_id, subscription_id=subscription_id).first()
+    if not item:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({'success': True})
+
 @app.route('/api/bank-cards', methods=['GET'])
 @login_required
 def list_bank_cards():
@@ -28545,21 +28887,17 @@ def _telegram_operation_notify(row, *, result=None, reply=None):
     customer = db.session.get(CustomerAccount, row.customer_id)
     language = str(getattr(customer, 'preferred_language', '') or 'fa')
     try:
-        from telegram_bot_worker import COPY
+        from telegram_bot_worker import COPY, _deliver_or_request_membership
         language_copy = COPY.get(language, COPY['fa'])
         if reply is not None:
             heading = 'پاسخ پشتیبانی:' if language == 'fa' else 'Support reply:'
             text_value = f'{heading}\n{reply}'
         elif isinstance(row, TelegramPurchaseRequest):
             if row.status == 'completed':
-                result = result if isinstance(result, dict) else {}
-                client = result.get('client') if isinstance(result.get('client'), dict) else {}
-                delivery_link = str(client.get('dashboard_link') or client.get('dash_sub_url')
-                                    or client.get('sub_link') or '').strip()
-                text_value = language_copy['purchase_completed'].format(
-                    account_name=(row.detail.account_name if row.detail else ''),
-                    delivery_link=delivery_link,
-                ).rstrip()
+                return _deliver_or_request_membership(
+                    _telegram_bot_api_client(bot), bot, row, identity.telegram_chat_id,
+                    language, row.telegram_user_id, result=result,
+                )
             else:
                 key = 'purchase_approved' if row.status == 'approved' else 'purchase_rejected'
                 text_value = language_copy[key]
@@ -29650,7 +29988,16 @@ def get_telegram_bot_settings():
         HIDEABLE_MENU_KEYS,
         parse_copy_overrides,
     )
+    start_events = TelegramBotStartEvent.query.filter_by(bot_instance_id=bot.id)
+    start_stats = {
+        'total': start_events.count(),
+        'new_users': start_events.filter_by(is_new_user=True).count(),
+        'existing_users': start_events.filter_by(is_new_user=False).count(),
+        'unique_users': db.session.query(TelegramBotStartEvent.telegram_user_id).filter_by(
+            bot_instance_id=bot.id).distinct().count(),
+    }
     return jsonify({'success': True, 'bot': bot.to_safe_dict(),
+                    'start_stats': start_stats,
                     'copy_overrides': parse_copy_overrides(bot),
                     'copy_defaults': TELEGRAM_BOT_COPY,
                     'hideable_keys': list(HIDEABLE_MENU_KEYS),
@@ -29760,6 +30107,33 @@ def _save_telegram_bot_settings(bot: TelegramBotInstance, data: dict):
     bot.support_sla_minutes = support_sla_minutes
     bot.support_sla_warning_percent = support_sla_warning_percent
     bot.support_escalation_minutes = support_escalation_minutes
+    channels = data.get('required_channels', bot.required_channels())
+    if not isinstance(channels, list) or len(channels) > 20:
+        return jsonify({'success': False, 'error': 'required_channels must be a list of at most 20 channels'}), 400
+    cleaned_channels = []
+    seen_chat_ids = set()
+    for item in channels:
+        if not isinstance(item, dict):
+            return jsonify({'success': False, 'error': 'Each required channel must be an object'}), 400
+        try:
+            chat_id = int(str(item.get('chat_id') or '').strip())
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Required channel chat ID must be numeric'}), 400
+        title = str(item.get('title') or '').strip()[:80]
+        invite_url = str(item.get('invite_url') or '').strip()[:500]
+        if chat_id >= 0 or chat_id in seen_chat_ids:
+            return jsonify({'success': False, 'error': 'Channel chat IDs must be unique negative IDs'}), 400
+        if not re.match(r'^https://t\.me/(?:\+|joinchat/)?[^\s]+$', invite_url, re.I):
+            return jsonify({'success': False, 'error': 'Each channel needs a valid https://t.me join URL'}), 400
+        seen_chat_ids.add(chat_id)
+        cleaned_channels.append({'chat_id': chat_id, 'title': title or str(chat_id), 'invite_url': invite_url})
+    require_start = bool(data.get('require_membership_on_start', bot.require_membership_on_start))
+    require_delivery = bool(data.get('require_membership_on_delivery', bot.require_membership_on_delivery))
+    if (require_start or require_delivery) and not cleaned_channels:
+        return jsonify({'success': False, 'error': 'Add at least one required channel before enabling membership checks'}), 400
+    bot.required_channels_json = json.dumps(cleaned_channels, ensure_ascii=False, separators=(',', ':'))
+    bot.require_membership_on_start = require_start
+    bot.require_membership_on_delivery = require_delivery
     copy_overrides = data.get('copy_overrides')
     if copy_overrides is not None:
         if not isinstance(copy_overrides, dict):

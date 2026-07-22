@@ -854,11 +854,13 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         previous = GLOBAL_SERVER_DATA.get('inbounds')
         GLOBAL_SERVER_DATA['inbounds'] = [{
             'server_id': server.id, 'id': 91, 'remark': 'Telegram route',
-            'protocol': 'vless', 'streamSettings': {'network': 'ws', 'security': 'tls'},
+            'protocol': 'vless', 'port': 443,
+            'streamSettings': {'network': 'tcp', 'security': 'none'},
             'clients': [{'id': secret_uuid, 'email': 'eve-system-route'}],
         }]
         try:
-            payload = client.get('/api/settings/telegram-bots/egress/candidates').get_json()
+            with patch('app.load_snapshot_from_redis'):
+                payload = client.get('/api/settings/telegram-bots/egress/candidates').get_json()
         finally:
             GLOBAL_SERVER_DATA['inbounds'] = previous
 
@@ -1239,7 +1241,9 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         expected_gregorian = format_app_datetime(expiry).split(' ', 1)[0]
         self.assertIn(expected_gregorian, _service_expiry(client, 'en'))
 
-    def test_telegram_owned_service_drilldown_link_renewal_and_support(self):
+    @patch('telegram_bot_worker.load_snapshot_from_redis')
+    def test_telegram_owned_service_drilldown_link_renewal_and_support(
+            self, _load_snapshot):
         previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
         bot = TelegramBotInstance(
             scope_key='system', display_name='Test', enabled=True, test_mode=False,
@@ -1258,12 +1262,15 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             name='30GB / 30 Days', days=30, volume=30, price=320000,
             enabled=True, scope='global', display_order=1,
         )
+        card = BankCard(
+            label='Renewal card', card_number='6037997512345678', is_active=True,
+        )
         reviewer = Admin(
             username='claim-test-service-reviewer', role='superadmin',
             is_superadmin=True, enabled=True, telegram_id='70010',
         )
         reviewer.set_password('StrongClaimPassword123!')
-        db.session.add_all([bot, customer, identity, server, package, reviewer])
+        db.session.add_all([bot, customer, identity, server, package, card, reviewer])
         db.session.flush()
         ownership = ServiceOwnership(
             customer_id=customer.id, server_id=server.id,
@@ -1315,8 +1322,11 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                     'from': {'id': 70010},
                     'message': {'chat': {'id': 70010, 'type': 'private'}},
                 }})
-            self.assertIn('/s/', api.messages[-1]['text'])
-            self.assertIn('private-sub-token', api.messages[-1]['text'])
+            delivered_link = (
+                api.uploads[-1]['caption'] if api.uploads else api.messages[-1]['text']
+            )
+            self.assertIn('/s/', delivered_link)
+            self.assertIn('private-sub-token', delivered_link)
 
             process_update(api, bot, {'update_id': 12, 'callback_query': {
                 'id': 'service-renew', 'data': f'service-renew:{ownership.id}',
@@ -1332,6 +1342,28 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                 'from': {'id': 70010},
                 'message': {'chat': {'id': 70010, 'type': 'private'}},
             }})
+            renewal_payment_callbacks = [
+                button['callback_data']
+                for row in api.messages[-1]['reply_markup']['inline_keyboard']
+                for button in row
+            ]
+            self.assertIn(
+                f'renew-pay-card:{ownership.id}:{package.id}',
+                renewal_payment_callbacks,
+            )
+            process_update(api, bot, {'update_id': 130, 'callback_query': {
+                'id': 'renew-pay-card',
+                'data': f'renew-pay-card:{ownership.id}:{package.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            process_update(api, bot, {'update_id': 1301, 'message': {
+                'message_id': 1301,
+                'photo': [{'file_id': 'renew-receipt', 'file_unique_id': 'renew-unique',
+                           'file_size': 10}],
+                'from': {'id': 70010},
+                'chat': {'id': 70010, 'type': 'private'},
+            }})
             renewal = TelegramServiceRequest.query.filter_by(request_type='renewal').one()
             self.assertEqual(renewal.package_id, package.id)
             self.assertEqual(renewal.amount, 320000)
@@ -1345,6 +1377,19 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                 'data': f'renew-package:{ownership.id}:{package.id}',
                 'from': {'id': 70010},
                 'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            process_update(api, bot, {'update_id': 132, 'callback_query': {
+                'id': 'renew-pay-card-duplicate',
+                'data': f'renew-pay-card:{ownership.id}:{package.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            process_update(api, bot, {'update_id': 133, 'message': {
+                'message_id': 133,
+                'photo': [{'file_id': 'renew-receipt-duplicate',
+                           'file_unique_id': 'renew-unique-duplicate', 'file_size': 10}],
+                'from': {'id': 70010},
+                'chat': {'id': 70010, 'type': 'private'},
             }})
             self.assertEqual(
                 TelegramServiceRequest.query.filter_by(request_type='renewal').count(), 1,
@@ -1434,6 +1479,19 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                 'from': {'id': 70010},
                 'message': {'chat': {'id': 70010, 'type': 'private'}},
             }})
+            process_update(api, bot, {'update_id': 171, 'callback_query': {
+                'id': 'renew-pay-card-after-complete',
+                'data': f'renew-pay-card:{ownership.id}:{package.id}',
+                'from': {'id': 70010},
+                'message': {'chat': {'id': 70010, 'type': 'private'}},
+            }})
+            process_update(api, bot, {'update_id': 172, 'message': {
+                'message_id': 172,
+                'photo': [{'file_id': 'renew-receipt-after-complete',
+                           'file_unique_id': 'renew-unique-after-complete', 'file_size': 10}],
+                'from': {'id': 70010},
+                'chat': {'id': 70010, 'type': 'private'},
+            }})
             pending_again = TelegramServiceRequest.query.filter_by(
                 request_type='renewal', status='pending',
             ).one()
@@ -1500,6 +1558,16 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertIn(f'buy-package:0:{package.id}', package_callbacks)
         process_update(api, bot, {'update_id': 22, 'callback_query': {
             'id': 'buy-package', 'data': f'buy-package:0:{package.id}',
+            'from': {'id': 70011},
+            'message': {'chat': {'id': 70011, 'type': 'private'}},
+        }})
+        payment_callbacks = [
+            button['callback_data']
+            for row in api.messages[-1]['reply_markup']['inline_keyboard'] for button in row
+        ]
+        self.assertIn('purchase-pay-card', payment_callbacks)
+        process_update(api, bot, {'update_id': 221, 'callback_query': {
+            'id': 'purchase-pay-card', 'data': 'purchase-pay-card',
             'from': {'id': 70011},
             'message': {'chat': {'id': 70011, 'type': 'private'}},
         }})
@@ -1859,6 +1927,16 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         process_update(api, bot, {'update_id': 34, 'message': {
             'message_id': 3, 'text': 'navid_01',
             'from': {'id': 70013}, 'chat': {'id': 70013, 'type': 'private'},
+        }})
+        payment_callbacks = [
+            button['callback_data']
+            for row in api.messages[-1]['reply_markup']['inline_keyboard'] for button in row
+        ]
+        self.assertIn('purchase-pay-card', payment_callbacks)
+        process_update(api, bot, {'update_id': 341, 'callback_query': {
+            'id': 'purchase-pay-card-name', 'data': 'purchase-pay-card',
+            'from': {'id': 70013},
+            'message': {'chat': {'id': 70013, 'type': 'private'}},
         }})
         self.assertIn('6037 9975 1234 5678', api.messages[-1]['text'])
         process_update(api, bot, {'update_id': 35, 'message': {

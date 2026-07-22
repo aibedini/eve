@@ -177,6 +177,14 @@ class PulsePageTest(PulseWebTestBase):
         self.assertEqual(resp.status_code, 302)
         self.assertIn('/login', resp.headers.get('Location', ''))
 
+    def test_page_warns_when_xray_runtime_is_missing(self):
+        with mock.patch.object(app_module, 'find_xray_binary', return_value=None), \
+                mock.patch.object(app_module, '_get_panel_ui_lang', return_value='en'):
+            html = self.client.get('/pulse').get_data(as_text=True)
+        self.assertIn('pulse-xray-warning', html)
+        self.assertIn('Xray runtime is not installed', html)
+        self.assertIn('eve --install-xray', html)
+
     def test_page_copy_follows_panel_language(self):
         with mock.patch.object(app_module, '_get_panel_ui_lang', return_value='fa'):
             html = self.client.get('/pulse').get_data(as_text=True)

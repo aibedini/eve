@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Custom Subscriptions{% endblock %}
+{% block page_title %}Custom Subscriptions{% endblock %}
+
+{% block content %}
+<style nonce="{{ csp_nonce }}">
+.cs-layout{display:grid;grid-template-columns:minmax(280px,.72fr) minmax(0,1.6fr);gap:18px;align-items:start}.cs-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:14px;padding:18px;margin-bottom:14px}.cs-card h2,.cs-card h3{margin:0 0 5px}.cs-help{color:var(--text-secondary);font-size:.8rem;line-height:1.6;margin:0 0 14px}.cs-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.cs-span{grid-column:1/-1}.cs-link{display:flex;gap:7px;align-items:center;margin:12px 0}.cs-link input{min-width:0;flex:1;font:12px monospace;direction:ltr}.cs-head{display:flex;align-items:start;justify-content:space-between;gap:12px}.cs-status{font-size:.72rem;padding:3px 9px;border-radius:999px;background:rgba(34,197,94,.14);color:#22c55e}.cs-status.off{background:rgba(148,163,184,.14);color:#94a3b8}.cs-actions{display:flex;gap:7px;flex-wrap:wrap}.cs-configs{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:12px}.cs-configs th,.cs-configs td{padding:8px;border-bottom:1px solid var(--border-color);text-align:start;vertical-align:middle}.cs-configs th{color:var(--text-secondary);font-weight:500}.cs-uri{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px monospace;direction:ltr}.cs-remark{min-width:130px}.cs-empty{text-align:center;color:var(--text-secondary);padding:30px}.cs-preview{width:100%;min-height:330px;box-sizing:border-box;font:12px/1.7 monospace;direction:ltr;text-align:left;resize:vertical}.cs-check{display:flex;align-items:center;gap:7px}.cs-order{display:flex;gap:4px}.cs-order button{padding:3px 7px}@media(max-width:950px){.cs-layout{grid-template-columns:1fr}.cs-grid{grid-template-columns:1fr}.cs-span{grid-column:auto}.cs-configs{min-width:780px}.cs-table-wrap{overflow:auto}}
+</style>
+
+<div class="cs-layout">
+  <aside class="cs-card">
+    <h2>New subscription</h2>
+    <p class="cs-help">Create a named public subscription, then paste raw proxy configs into it.</p>
+    <form id="cs-create-form">
+      <div class="form-group"><label for="cs-name">Name</label><input id="cs-name" class="form-input" maxlength="120" required placeholder="Customers — Main"></div>
+      <div class="form-group"><label for="cs-prefix">Tag prefix</label><input id="cs-prefix" class="form-input" maxlength="64" placeholder="Eve | "></div>
+      <div class="form-group"><label for="cs-interval">Profile update interval (minutes)</label><input id="cs-interval" class="form-input" type="number" min="0" max="10080" value="0"></div>
+      <label class="cs-check form-group"><input id="cs-enabled" type="checkbox" checked> Enabled</label>
+      <button class="btn btn-primary" type="submit">Add subscription</button>
+    </form>
+  </aside>
+  <main>
+    <div id="cs-list"><div class="cs-card cs-empty">Loading…</div></div>
+  </main>
+</div>
+
+<div class="modal-overlay hidden" id="cs-preview-modal">
+  <div class="modal" style="max-width:850px">
+    <div class="modal-header"><h2>Decoded preview</h2><button class="modal-close" type="button" onclick="closePreview()">&times;</button></div>
+    <div class="modal-body"><textarea class="form-input cs-preview" id="cs-preview" readonly></textarea></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+let customSubscriptions=[];
+const esc=value=>{const node=document.createElement('div');node.textContent=String(value??'');return node.innerHTML};
+async function csApi(url,options={}){const response=await fetch(url,{headers:{'Accept':'application/json',...(options.body?{'Content-Type':'application/json'}:{})},...options});let data;try{data=await response.json()}catch(_){throw new Error(`Invalid server response (${response.status})`)}if(!data||data.success!==true)throw new Error((data&&data.error)||`Request failed (${response.status})`);return data}
+async function loadSubscriptions(){try{const data=await csApi('/api/custom-subscriptions');customSubscriptions=data.subscriptions||[];renderSubscriptions()}catch(error){document.getElementById('cs-list').innerHTML=`<div class="cs-card cs-empty">${esc(error.message)}</div>`}}
+function configRows(sub){if(!sub.configs.length)return '<tr><td colspan="6" class="cs-empty">No configs yet.</td></tr>';return sub.configs.map((config,index)=>`<tr>
+<td><input type="checkbox" ${config.enabled?'checked':''} onchange="updateConfig(${sub.id},${config.id},{enabled:this.checked})"></td>
+<td><div class="cs-uri" title="${esc(config.uri)}">${esc(config.uri)}</div></td>
+<td><input class="form-input cs-remark" value="${esc(config.remark||'')}" placeholder="Auto from fragment" onchange="updateConfig(${sub.id},${config.id},{remark:this.value})"></td>
+<td>${config.sort_order}</td><td><div class="cs-order"><button class="btn btn-secondary" ${index===0?'disabled':''} onclick="moveConfig(${sub.id},${index},-1)">↑</button><button class="btn btn-secondary" ${index===sub.configs.length-1?'disabled':''} onclick="moveConfig(${sub.id},${index},1)">↓</button></div></td>
+<td><button class="btn btn-danger" onclick="deleteConfig(${sub.id},${config.id})">Delete</button></td></tr>`).join('')}
+function renderSubscriptions(){const list=document.getElementById('cs-list');if(!customSubscriptions.length){list.innerHTML='<div class="cs-card cs-empty">No custom subscriptions yet.</div>';return}list.innerHTML=customSubscriptions.map(sub=>`<section class="cs-card" data-id="${sub.id}">
+<div class="cs-head"><div><h3>${esc(sub.name)}</h3><div class="cs-help">${sub.active_config_count} active / ${sub.config_count} total configs</div></div><span class="cs-status ${sub.enabled?'':'off'}">${sub.enabled?'Enabled':'Disabled'}</span></div>
+<div class="cs-link"><input class="form-input" readonly value="${esc(sub.public_url)}"><button class="btn btn-secondary" onclick="copyLink(${sub.id})">Copy</button><button class="btn btn-secondary" onclick="previewSub(${sub.id})">Preview</button></div>
+<div class="cs-grid"><div class="form-group"><label>Name</label><input class="form-input cs-edit-name" value="${esc(sub.name)}" maxlength="120"></div><div class="form-group"><label>Tag prefix</label><input class="form-input cs-edit-prefix" value="${esc(sub.tag_prefix||'')}" maxlength="64"></div><div class="form-group"><label>Update interval (minutes)</label><input class="form-input cs-edit-interval" type="number" min="0" max="10080" value="${sub.update_interval_min||0}"></div><label class="cs-check"><input class="cs-edit-enabled" type="checkbox" ${sub.enabled?'checked':''}> Enabled</label></div>
+<div class="cs-actions"><button class="btn btn-primary" onclick="saveSub(${sub.id})">Save</button><button class="btn btn-secondary" onclick="regenerateToken(${sub.id})">Regenerate token</button><button class="btn btn-danger" onclick="deleteSub(${sub.id})">Delete</button></div>
+<div class="form-group" style="margin-top:16px"><label>Paste configs (one URI per line)</label><textarea class="form-input cs-paste" rows="4" spellcheck="false" dir="ltr" placeholder="vless://…&#10;vmess://…"></textarea><button class="btn btn-primary" style="margin-top:8px" onclick="addConfigs(${sub.id})">Add configs</button></div>
+<div class="cs-table-wrap"><table class="cs-configs"><thead><tr><th>On</th><th>URI</th><th>Remark</th><th>Order</th><th>Move</th><th></th></tr></thead><tbody>${configRows(sub)}</tbody></table></div></section>`).join('')}
+function subCard(id){return document.querySelector(`.cs-card[data-id="${id}"]`)}
+document.getElementById('cs-create-form').addEventListener('submit',async event=>{event.preventDefault();try{await csApi('/api/custom-subscriptions',{method:'POST',body:JSON.stringify({name:document.getElementById('cs-name').value,tag_prefix:document.getElementById('cs-prefix').value,update_interval_min:Number(document.getElementById('cs-interval').value)||0,enabled:document.getElementById('cs-enabled').checked})});event.target.reset();document.getElementById('cs-enabled').checked=true;showToast('Subscription created.','success');loadSubscriptions()}catch(error){showToast(error.message,'error')}});
+async function saveSub(id){const card=subCard(id);try{await csApi(`/api/custom-subscriptions/${id}`,{method:'PUT',body:JSON.stringify({name:card.querySelector('.cs-edit-name').value,tag_prefix:card.querySelector('.cs-edit-prefix').value,update_interval_min:Number(card.querySelector('.cs-edit-interval').value)||0,enabled:card.querySelector('.cs-edit-enabled').checked})});showToast('Subscription saved.','success');loadSubscriptions()}catch(error){showToast(error.message,'error')}}
+async function regenerateToken(id){if(!confirm('Regenerate this token? The previous public link will stop working.'))return;try{await csApi(`/api/custom-subscriptions/${id}`,{method:'PUT',body:JSON.stringify({regenerate_token:true})});showToast('Token regenerated.','success');loadSubscriptions()}catch(error){showToast(error.message,'error')}}
+async function deleteSub(id){if(!confirm('Delete this subscription and all of its configs?'))return;try{await csApi(`/api/custom-subscriptions/${id}`,{method:'DELETE'});showToast('Subscription deleted.','success');loadSubscriptions()}catch(error){showToast(error.message,'error')}}
+async function addConfigs(id){const area=subCard(id).querySelector('.cs-paste');try{await csApi(`/api/custom-subscriptions/${id}/configs`,{method:'POST',body:JSON.stringify({configs:area.value})});area.value='';showToast('Configs added.','success');loadSubscriptions()}catch(error){showToast(error.message,'error')}}
+async function updateConfig(subId,id,payload){try{await csApi(`/api/custom-subscriptions/${subId}/configs/${id}`,{method:'PUT',body:JSON.stringify(payload)});showToast('Config updated.','success');loadSubscriptions()}catch(error){showToast(error.message,'error');loadSubscriptions()}}
+async function deleteConfig(subId,id){if(!confirm('Delete this config?'))return;try{await csApi(`/api/custom-subscriptions/${subId}/configs/${id}`,{method:'DELETE'});showToast('Config deleted.','success');loadSubscriptions()}catch(error){showToast(error.message,'error')}}
+async function moveConfig(subId,index,direction){const sub=customSubscriptions.find(row=>row.id===subId),other=index+direction;if(!sub||other<0||other>=sub.configs.length)return;const first=sub.configs[index],second=sub.configs[other];try{await Promise.all([csApi(`/api/custom-subscriptions/${subId}/configs/${first.id}`,{method:'PUT',body:JSON.stringify({sort_order:second.sort_order})}),csApi(`/api/custom-subscriptions/${subId}/configs/${second.id}`,{method:'PUT',body:JSON.stringify({sort_order:first.sort_order})})]);loadSubscriptions()}catch(error){showToast(error.message,'error')}}
+async function copyLink(id){const sub=customSubscriptions.find(row=>row.id===id);try{await navigator.clipboard.writeText(sub.public_url);showToast('Link copied.','success')}catch(_){showToast('Could not copy the link.','error')}}
+async function previewSub(id){try{const data=await csApi(`/api/custom-subscriptions/${id}/preview`);document.getElementById('cs-preview').value=data.raw||'';document.getElementById('cs-preview-modal').classList.remove('hidden')}catch(error){showToast(error.message,'error')}}
+function closePreview(){document.getElementById('cs-preview-modal').classList.add('hidden')}
+document.addEventListener('DOMContentLoaded',loadSubscriptions);
+</script>
+{% endblock %}

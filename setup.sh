@@ -682,6 +682,7 @@ install_dependencies() {
         git \
         curl \
         wget \
+        unzip \
         rsync \
         nginx \
         build-essential \
@@ -2558,6 +2559,16 @@ install_or_update_eve_xray() {
         print_error "Install Eve first; $ENV_FILE does not exist."
         return 1
     }
+    if ! command -v unzip >/dev/null 2>&1; then
+        print_warning "unzip is required for Xray; installing it now..."
+        wait_for_apt
+        apt-get update -qq
+        if ! apt-get install -y -qq unzip; then
+            print_error "Could not install unzip. Check apt connectivity and retry."
+            return 1
+        fi
+        print_success "unzip installed"
+    fi
     for command_name in curl python3 unzip sha256sum install; do
         command -v "$command_name" >/dev/null 2>&1 || {
             print_error "Required command is missing: $command_name"

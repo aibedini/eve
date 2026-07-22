@@ -679,6 +679,16 @@
                     </div>
                 </section>
 
+                <section class="panel-card tgb-section">
+                    <div class="panel-card-header"><div class="header-content"><h2>Required Channel Membership</h2><p>The bot must be an admin in every channel so Telegram can verify each user ID.</p></div></div>
+                    <div class="tgb-form-grid">
+                        <label><input id="tgb-membership-start" type="checkbox"> Require membership before using the bot</label>
+                        <label><input id="tgb-membership-delivery" type="checkbox"> Require membership after payment, before account delivery</label>
+                        <div class="form-group tgb-form-span"><label for="tgb-required-channels">Channels (one per line: chat_id | title | join URL)</label><textarea id="tgb-required-channels" class="form-control" rows="4" placeholder="-1001234567890 | News | https://t.me/mychannel"></textarea></div>
+                        <div class="tgb-form-span text-secondary" id="tgb-start-stats">/start statistics: —</div>
+                    </div>
+                </section>
+
                 <section class="panel-card tgb-section" aria-labelledby="tgb-copy-title">
                     <div class="panel-card-header">
                         <div class="header-content">
@@ -4746,6 +4756,11 @@
             document.getElementById('tgb-lang-en').checked = languages.includes('en');
             document.getElementById('tgb-default-language').value = bot.default_language || 'fa';
             document.getElementById('tgb-connection-mode').value = bot.connection_mode || 'proxy_first';
+            document.getElementById('tgb-membership-start').checked = !!bot.require_membership_on_start;
+            document.getElementById('tgb-membership-delivery').checked = !!bot.require_membership_on_delivery;
+            document.getElementById('tgb-required-channels').value = (bot.required_channels || []).map(channel => `${channel.chat_id} | ${channel.title || ''} | ${channel.invite_url}`).join('\n');
+            const startStats = data.start_stats || {};
+            document.getElementById('tgb-start-stats').textContent = `/start: ${startStats.total || 0} total · ${startStats.new_users || 0} new · ${startStats.existing_users || 0} existing · ${startStats.unique_users || 0} unique`;
             document.getElementById('tgb-support-group-enabled').checked = !!bot.support_group_enabled;
             document.getElementById('tgb-support-group-chat-id').value = bot.support_group_chat_id || '';
             document.getElementById('tgb-support-group-topics').checked = bot.support_group_topics !== false;
@@ -4966,6 +4981,10 @@
         const supportEscalationMinutes = Number(document.getElementById('tgb-support-escalation-minutes').value);
         if (!Number.isInteger(supportEscalationMinutes) || supportEscalationMinutes < 0 || supportEscalationMinutes > 10080) return showToast('Support escalation must be between 0 and 10080 minutes.', 'error');
         if (!validateTelegramPurchaseSettings()) return;
+        const requiredChannels = document.getElementById('tgb-required-channels').value.split(/\r?\n/).filter(line => line.trim()).map(line => {
+            const [chatId, title, ...urlParts] = line.split('|');
+            return {chat_id: Number((chatId || '').trim()), title: (title || '').trim(), invite_url: urlParts.join('|').trim()};
+        });
         const payload = {
             display_name: document.getElementById('tgb-display-name').value.trim(),
             enabled: document.getElementById('tgb-enabled').checked,
@@ -4974,6 +4993,9 @@
             enabled_languages: languages,
             default_language: document.getElementById('tgb-default-language').value,
             connection_mode: document.getElementById('tgb-connection-mode').value,
+            required_channels: requiredChannels,
+            require_membership_on_start: document.getElementById('tgb-membership-start').checked,
+            require_membership_on_delivery: document.getElementById('tgb-membership-delivery').checked,
             support_group_enabled: supportGroupEnabled,
             support_group_chat_id: supportGroupChatId || null,
             support_group_topics: document.getElementById('tgb-support-group-topics').checked,

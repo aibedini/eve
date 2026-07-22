@@ -33,6 +33,7 @@ from app import (  # noqa: E402
     SubAppConfig,
     TelegramBotInstance,
     TelegramBotRuntime,
+    TelegramBotStartEvent,
     TelegramBotTestUser,
     TelegramBotUserState,
     TelegramAnnouncement,
@@ -96,6 +97,7 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 running = True
 worker_id = f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
 webhook_prepared_bot_ids: set[int] = set()
+commands_prepared_bot_ids: set[int] = set()
 sla_scan_at_by_bot: dict[int, float] = {}
 bot_threads: dict[int, tuple[threading.Thread, threading.Event]] = {}
 
@@ -267,11 +269,45 @@ def _channel_member(api: TelegramBotApi, chat_id: int, user_id: int) -> bool:
         result, _route = api.call('getChatMember', {
             'chat_id': int(chat_id), 'user_id': int(user_id),
         })
-        ok = str((result or {}).get('status') or '') in ('member', 'administrator', 'creator')
+        member = result or {}
+        status = str(member.get('status') or '')
+        ok = (status in ('member', 'administrator', 'creator')
+              or (status == 'restricted' and bool(member.get('is_member'))))
     except Exception:
         ok = False
     _CHANNEL_MEMBER_CACHE[key] = (now + 300, ok)
     return ok
+
+
+def _missing_required_channels(api: TelegramBotApi, bot: TelegramBotInstance,
+                               user_id: int) -> list[dict]:
+    return [channel for channel in bot.required_channels()
+            if not _channel_member(api, int(channel['chat_id']), int(user_id))]
+
+
+def _membership_keyboard(bot: TelegramBotInstance, callback_data: str) -> dict:
+    rows = [[{'text': f"🔗 {channel.get('title') or channel['chat_id']}",
+              'url': channel['invite_url']}]
+            for channel in bot.required_channels()]
+    rows.append([{'text': '✅ بررسی عضویت', 'callback_data': callback_data}])
+    return {'inline_keyboard': rows}
+
+
+def _send_membership_prompt(api: TelegramBotApi, bot: TelegramBotInstance,
+                            chat_id: int, language: str, callback_data: str,
+                            *, delivery: bool = False) -> None:
+    if language == 'en':
+        text = ('Your payment is approved. Join the required channel(s) to see your account.'
+                if delivery else 'You must join the required channel(s) before using this bot.')
+    else:
+        text = ('✅ پرداخت شما تأیید شد. برای نمایش اکانت، ابتدا عضو کانال‌های زیر شوید.'
+                if delivery else '⚠️ کاربر گرامی، برای استفاده از ربات ابتدا عضو کانال‌های زیر شوید.')
+    api.send_message(chat_id, text, reply_markup=_membership_keyboard(bot, callback_data))
+
+
+def _clear_membership_cache(user_id: int) -> None:
+    for key in [key for key in _CHANNEL_MEMBER_CACHE if key[1] == int(user_id)]:
+        _CHANNEL_MEMBER_CACHE.pop(key, None)
 
 
 def _promo_discount(promo: TelegramPromo, amount: int) -> int:
@@ -2394,6 +2430,47 @@ def _customer_purchase_order(bot_id: int, user_id: int, request_id: int):
     ).first()
 
 
+def _deliver_or_request_membership(api: TelegramBotApi, bot: TelegramBotInstance,
+                                   request_row: TelegramPurchaseRequest, chat_id: int,
+                                   language: str, user_id: int, result=None) -> bool:
+    """Deliver a completed purchase only after any configured channel gate passes."""
+    if (bot.require_membership_on_delivery
+            and _missing_required_channels(api, bot, user_id)):
+        _send_membership_prompt(
+            api, bot, chat_id, language,
+            f'membership-delivery-check:{request_row.id}', delivery=True,
+        )
+        return False
+    account_name = str(getattr(request_row.detail, 'account_name', '') or '').strip()
+    result = result if isinstance(result, dict) else {}
+    client = result.get('client') if isinstance(result.get('client'), dict) else {}
+    delivery_link = str(client.get('dashboard_link') or client.get('dash_sub_url')
+                        or client.get('sub_link') or '').strip()
+    if not delivery_link and account_name:
+        ownership = next((row for row in ServiceOwnership.query.filter_by(
+            customer_id=request_row.customer_id, server_id=request_row.server_id,
+            revoked_at=None,
+        ).all() if str(row.client_email_snapshot or '').strip().lower() == account_name.lower()), None)
+        if ownership:
+            live_client, _inbound_id = _cached_owned_service_location(ownership)
+            delivery_link = str((live_client or {}).get('dashboard_link')
+                                or (live_client or {}).get('dash_sub_url')
+                                or (live_client or {}).get('sub_link') or '').strip()
+    if delivery_link:
+        _send_link_with_qr(api, chat_id, delivery_link)
+    api.send_message(
+        chat_id,
+        _cc(language)['purchase_completed'].format(
+            account_name=account_name, delivery_link=delivery_link,
+        ).rstrip(),
+        reply_markup={'inline_keyboard': [[{
+            'text': _cc(language)['menu_orders'],
+            'callback_data': f'purchase-order:{request_row.id}',
+        }]]},
+    )
+    return True
+
+
 def _send_purchase_orders(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
                           user_id: int, language: str):
     identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
@@ -3563,24 +3640,10 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
         if language not in COPY:
             language = 'fa'
         if request_row.status == 'completed':
-            result = provision_result if isinstance(provision_result, dict) else {}
-            client = result.get('client') if isinstance(result.get('client'), dict) else {}
-            delivery_link = str(
-                client.get('dashboard_link') or client.get('dash_sub_url')
-                or client.get('sub_link') or ''
-            ).strip()
-            if delivery_link:
-                _send_link_with_qr(api, identity.telegram_chat_id, delivery_link)
-            api.send_message(
-                identity.telegram_chat_id,
-                _cc(language)['purchase_completed'].format(
-                    account_name=request_row.detail.account_name,
-                    delivery_link=delivery_link,
-                ).rstrip(),
-                reply_markup={'inline_keyboard': [[{
-                    'text': _cc(language)['menu_orders'],
-                    'callback_data': f'purchase-order:{request_row.id}',
-                }]]},
+            _deliver_or_request_membership(
+                api, db.session.get(TelegramBotInstance, request_row.bot_instance_id),
+                request_row, identity.telegram_chat_id,
+                language, request_row.telegram_user_id, result=provision_result,
             )
         else:
             key = 'purchase_approved' if request_row.status == 'approved' else 'purchase_rejected'
@@ -3671,6 +3734,11 @@ def _handle_start(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
             db.session.flush()
         except (TypeError, ValueError):
             pass
+    if bot.require_membership_on_start and _missing_required_channels(api, bot, user_id):
+        state.step = 'required_membership'
+        db.session.flush()
+        _send_membership_prompt(api, bot, chat_id, state.language, 'membership-start-check')
+        return
     languages = bot.enabled_languages()
     identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
     if identity and identity.customer_id and identity.phone_verified_at:
@@ -3758,6 +3826,36 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         return
     state = _state(bot, user_id)
     language = state.language if state.language in COPY else bot.default_language
+    if data == 'membership-start-check':
+        _clear_membership_cache(user_id)
+        api.answer_callback(callback_id)
+        _handle_start(api, bot, chat_id, user_id, state)
+        return
+    if data.startswith('membership-delivery-check:'):
+        _clear_membership_cache(user_id)
+        api.answer_callback(callback_id)
+        try:
+            request_row = _customer_purchase_order(bot.id, user_id, int(data.rsplit(':', 1)[1]))
+        except (TypeError, ValueError):
+            request_row = None
+        if not request_row or request_row.status != 'completed':
+            api.send_message(chat_id, _cc(language)['start_first'])
+        else:
+            _deliver_or_request_membership(api, bot, request_row, chat_id, language, user_id)
+        return
+    if bot.require_membership_on_start and _missing_required_channels(api, bot, user_id):
+        api.answer_callback(callback_id)
+        _send_membership_prompt(api, bot, chat_id, language, 'membership-start-check')
+        return
+    protected_delivery_action = (
+        data in ('service-list', 'purchase-list')
+        or data.startswith(('service:', 'service-renew:', 'purchase-order:'))
+    )
+    if (protected_delivery_action and bot.require_membership_on_delivery
+            and _missing_required_channels(api, bot, user_id)):
+        api.answer_callback(callback_id)
+        _send_membership_prompt(api, bot, chat_id, language, 'membership-start-check', delivery=True)
+        return
     if data == 'noop':
         api.answer_callback(callback_id)
         return
@@ -4791,7 +4889,10 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     )
     if not _is_allowed(bot, user_id) and not is_authorized_admin_reply:
         return
-    state = _state(bot, user_id)
+    existing_state = TelegramBotUserState.query.filter_by(
+        bot_instance_id=bot.id, telegram_user_id=user_id,
+    ).first()
+    state = existing_state or _state(bot, user_id)
     _identity(sender, chat_id)
     db.session.flush()
     text = str(message.get("text") or "").strip()
@@ -4799,9 +4900,33 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     # label overrides (both languages) keep working.
     menu_key = menu_label_map(bot).get(text)
     if text == "/start" or text.startswith("/start "):
+        db.session.add(TelegramBotStartEvent(
+            bot_instance_id=bot.id, telegram_user_id=user_id,
+            is_new_user=existing_state is None,
+        ))
         parts = text.split(None, 1)
         _handle_start(api, bot, chat_id, user_id, state,
                       payload=(parts[1] if len(parts) > 1 else ''))
+    elif text == '/new':
+        if bot.require_membership_on_start and _missing_required_channels(api, bot, user_id):
+            _send_membership_prompt(api, bot, chat_id, state.language, 'membership-start-check')
+        else:
+            identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+            if identity and identity.customer_id and identity.phone_verified_at:
+                if _purchase_policy_values(bot)['customer_selects_server']:
+                    _send_purchase_servers(api, bot, chat_id, state.language, user_id=user_id)
+                else:
+                    _send_purchase_packages(api, bot, chat_id, state.language, None, user_id=user_id)
+            else:
+                _send_contact_prompt(api, chat_id, state.language)
+    elif text in ('/renew', '/status'):
+        if ((bot.require_membership_on_start or bot.require_membership_on_delivery)
+                and _missing_required_channels(api, bot, user_id)):
+            _send_membership_prompt(api, bot, chat_id, state.language, 'membership-start-check',
+                                    delivery=bot.require_membership_on_delivery)
+        else:
+            identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+            _send_owned_services(api, chat_id, state.language, identity)
     elif text in ('/announce', '/announcement', '/اطلاع_رسانی'):
         reviewer = _telegram_admin(user_id)
         can_manage = reviewer and (reviewer.is_superadmin or reviewer.role == 'superadmin'
@@ -4838,8 +4963,13 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         _handle_admin_support_message(api, bot, message, sender, state, text)
     elif menu_key == "menu_services":
         state.step = 'verified'
-        identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
-        _send_owned_services(api, chat_id, state.language, identity)
+        if (bot.require_membership_on_delivery
+                and _missing_required_channels(api, bot, user_id)):
+            _send_membership_prompt(api, bot, chat_id, state.language,
+                                    'membership-start-check', delivery=True)
+        else:
+            identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
+            _send_owned_services(api, chat_id, state.language, identity)
     elif menu_key == "menu_trial":
         state.step = 'verified'
         _start_trial(api, bot, chat_id, user_id, state)
@@ -4863,7 +4993,12 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
             _send_contact_prompt(api, chat_id, state.language)
     elif menu_key == "menu_orders":
         state.step = 'verified'
-        _send_purchase_orders(api, bot, chat_id, user_id, state.language)
+        if (bot.require_membership_on_delivery
+                and _missing_required_channels(api, bot, user_id)):
+            _send_membership_prompt(api, bot, chat_id, state.language,
+                                    'membership-start-check', delivery=True)
+        else:
+            _send_purchase_orders(api, bot, chat_id, user_id, state.language)
     elif menu_key == "menu_wallet":
         state.step = 'verified'
         _send_wallet_menu(api, bot, chat_id, user_id, state.language)
@@ -4958,6 +5093,14 @@ def _poll_bot(bot: TelegramBotInstance):
             runtime.last_route = route_name
             runtime.last_heartbeat_at = datetime.utcnow()
             db.session.commit()
+        if bot.id not in commands_prepared_bot_ids:
+            api.call('setMyCommands', {'commands': [
+                {'command': 'start', 'description': 'شروع مجدد'},
+                {'command': 'new', 'description': '🚀 خرید سرویس جدید'},
+                {'command': 'renew', 'description': '♻️ تمدید سرویس'},
+                {'command': 'status', 'description': '📱 سرویس‌های من'},
+            ]})
+            commands_prepared_bot_ids.add(bot.id)
         updates, route_name = api.get_updates(int(runtime.next_update_id or 0), timeout=25)
         runtime = _runtime(bot.id)
         runtime.status = "running"
