@@ -48,9 +48,12 @@ class SystemUpdateApiTest(unittest.TestCase):
         self.state_dir.mkdir()
         self.unit_path = Path(self.temp.name) / 'eve-web-update.service'
         self.unit_path.write_text('[Service]\n', encoding='utf-8')
+        self.xray_unit_path = Path(self.temp.name) / 'eve-xray-install.service'
+        self.xray_unit_path.write_text('[Service]\n', encoding='utf-8')
         self.patches = [
             mock.patch.object(app_module, 'SYSTEM_UPDATE_STATE_DIR', str(self.state_dir)),
             mock.patch.object(app_module, 'SYSTEM_UPDATE_UNIT_PATH', str(self.unit_path)),
+            mock.patch.object(app_module, 'XRAY_INSTALL_UNIT_PATH', str(self.xray_unit_path)),
         ]
         for patcher in self.patches:
             patcher.start()
@@ -134,6 +137,43 @@ class SystemUpdateApiTest(unittest.TestCase):
         self.assertIn('id="system-update-version"', super_html)
         self.assertIn('id="system-update-log"', super_html)
         self.assertIn("body: JSON.stringify({confirm:'UPDATE'})", super_html)
+
+    def test_xray_status_reports_installed_version_without_exposing_path(self):
+        version = mock.Mock(returncode=0, stdout='Xray 25.7.26 (Eve)\n', stderr='')
+        with mock.patch.object(app_module, 'find_xray_binary', return_value='/private/xray'), \
+                mock.patch.object(app_module.subprocess, 'run', return_value=version):
+            response = self.client.get('/api/settings/telegram-bots/xray-runtime')
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload['installed'])
+        self.assertEqual(payload['state'], 'installed')
+        self.assertEqual(payload['version'], 'Xray 25.7.26 (Eve)')
+        self.assertNotIn('/private/xray', str(payload))
+
+    def test_xray_install_uses_only_fixed_systemd_command(self):
+        inactive = mock.Mock(returncode=3, stdout='success\n', stderr='')
+        started = mock.Mock(returncode=0, stdout='', stderr='')
+        with mock.patch.object(app_module, 'find_xray_binary', return_value=None), \
+                mock.patch.object(app_module.subprocess, 'run', side_effect=[inactive, inactive, started]) as run:
+            response = self.client.post(
+                '/api/settings/telegram-bots/xray-runtime/install',
+                json={'confirm': 'INSTALL'},
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(run.call_args.args[0], list(app_module.XRAY_INSTALL_START_COMMAND))
+        self.assertEqual(run.call_args.kwargs['timeout'], 10)
+
+    def test_xray_runtime_endpoints_are_superadmin_only(self):
+        regular_client = app.test_client()
+        with regular_client.session_transaction() as session:
+            session['admin_id'] = self.regular.id
+            session['role'] = 'admin'
+            session['is_superadmin'] = False
+        self.assertEqual(
+            regular_client.get('/api/settings/telegram-bots/xray-runtime').status_code, 403)
+        html = self.client.get('/settings').get_data(as_text=True)
+        self.assertIn('id="tgb-xray-runtime"', html)
+        self.assertIn("body:JSON.stringify({confirm:'INSTALL'})", html)
 
 
 class RenewalHistoryMarkupTest(unittest.TestCase):

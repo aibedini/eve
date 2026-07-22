@@ -19,6 +19,7 @@ def find_xray_binary(explicit=None):
     candidates = [
         explicit,
         os.environ.get("XRAY_BIN"),
+        str(Path(__file__).resolve().parent / "runtime" / "xray" / "xray"),
         shutil.which("xray"),
         "/usr/local/bin/xray",
         "/usr/bin/xray",
@@ -47,8 +48,9 @@ def _decode_base64(value: str) -> str:
 
 
 def _stream_settings(network: str, security: str, values: dict) -> dict:
+    original_network = (network or "tcp").lower()
     aliases = {"raw": "tcp", "websocket": "ws", "http": "tcp"}
-    network = aliases.get((network or "tcp").lower(), (network or "tcp").lower())
+    network = aliases.get(original_network, original_network)
     if network not in ("tcp", "ws", "grpc"):
         raise ValueError(f"Unsupported Xray transport: {network}")
     security = (security or "none").lower()
@@ -56,7 +58,21 @@ def _stream_settings(network: str, security: str, values: dict) -> dict:
         raise ValueError(f"Unsupported Xray transport security: {security}")
 
     stream = {"network": network, "security": security}
-    if network == "ws":
+    header_type = (values.get("headerType") or values.get("header_type") or "").lower()
+    if original_network == "http":
+        header_type = "http"
+    if network == "tcp" and header_type == "http":
+        hosts = [item for item in str(values.get("host") or values.get("address") or "").split(",") if item]
+        stream["tcpSettings"] = {
+            "header": {
+                "type": "http",
+                "request": {
+                    "path": [values.get("path") or "/"],
+                    "headers": {"Host": hosts},
+                },
+            },
+        }
+    elif network == "ws":
         stream["wsSettings"] = {
             "path": values.get("path") or "/",
             "headers": {"Host": values.get("host") or values.get("address") or ""},
@@ -123,6 +139,7 @@ def build_xray_config_from_uri(uri: str, local_port: int) -> dict:
             "serviceName": payload.get("serviceName") or payload.get("path"),
             "sni": payload.get("sni"), "alpn": payload.get("alpn"), "fp": payload.get("fp"),
             "pbk": payload.get("pbk"), "sid": payload.get("sid"),
+            "headerType": payload.get("type"),
         }
         security = str(payload.get("tls") or "none").lower()
         user = {"id": str(user_id), "alterId": int(payload.get("aid") or 0),
@@ -179,7 +196,7 @@ def build_xray_config_from_uri(uri: str, local_port: int) -> dict:
         raise ValueError(f"{scheme.upper()} configuration is missing credentials, host, or port")
     query = parse_qs(parsed.query, keep_blank_values=True)
     values = {key: _one(query, key) for key in (
-        "path", "host", "serviceName", "mode", "sni", "alpn", "fp", "pbk", "sid", "spx",
+        "path", "host", "headerType", "serviceName", "mode", "sni", "alpn", "fp", "pbk", "sid", "spx",
     )}
     values["address"] = parsed.hostname
 

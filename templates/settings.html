@@ -880,6 +880,11 @@
 
                 <section class="panel-card tgb-section">
                     <div class="panel-card-header"><div class="header-content"><h2>Managed Xray Routes</h2><p>Select an account, then choose one of its compatible 3x-ui inbounds for Telegram traffic.</p></div><button id="tgb-add-egress" class="btn btn-secondary" type="button" onclick="openTelegramEgressForm()">Add route</button></div>
+                    <div id="tgb-xray-runtime" class="tgb-xray-runtime" data-state="loading" aria-live="polite">
+                        <span class="tgb-status-dot"></span>
+                        <div class="tgb-xray-runtime-copy"><strong id="tgb-xray-runtime-title">Checking Xray runtime…</strong><span id="tgb-xray-runtime-detail">Managed routes need a local Xray runtime.</span></div>
+                        <button id="tgb-xray-install" class="btn btn-primary" type="button" style="display:none;" onclick="installTelegramXray(this)">Install Xray</button>
+                    </div>
                     <div class="tgb-egress-note"><span class="tgb-status-dot is-warning"></span><div><strong>Private local relay</strong><span>Xray listens only on <code>127.0.0.1</code> and requires an installed runtime configured by <code>XRAY_BIN</code>. Use customer accounts only temporarily; a dedicated system route is safer.</span></div></div>
                     <div id="tgb-egress-empty" class="tgb-empty" style="display:none;"><strong>No managed routes configured</strong><span>Select an existing account and inbound, or paste a supported URI to create a local Telegram route.</span></div>
                     <div id="tgb-egress-list" class="tgb-egress-list"></div>
@@ -3467,6 +3472,19 @@
     .tgb-egress-note strong, .tgb-egress-note span { display:block; }
     .tgb-egress-note strong { color:#f59e0b; margin-bottom:2px; }
     .tgb-egress-note code { color:var(--text-primary); }
+    .tgb-xray-runtime { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:11px; margin-bottom:12px; padding:12px 13px; color:var(--text-secondary); background:var(--bg-dark); border:1px solid var(--border-color); border-radius:9px; }
+    .tgb-xray-runtime .tgb-status-dot { width:9px; height:9px; }
+    .tgb-xray-runtime-copy { min-width:0; }
+    .tgb-xray-runtime-copy strong,.tgb-xray-runtime-copy span { display:block; }
+    .tgb-xray-runtime-copy strong { color:var(--text-primary); font-size:.8rem; }
+    .tgb-xray-runtime-copy span { margin-top:3px; font-size:.72rem; line-height:1.4; overflow-wrap:anywhere; }
+    .tgb-xray-runtime[data-state="installed"] { border-color:rgba(34,197,94,.3); background:rgba(34,197,94,.055); }
+    .tgb-xray-runtime[data-state="installed"] .tgb-status-dot { background:var(--success); box-shadow:0 0 0 4px rgba(34,197,94,.12); }
+    .tgb-xray-runtime[data-state="missing"],.tgb-xray-runtime[data-state="failed"] { border-color:rgba(239,68,68,.3); background:rgba(239,68,68,.055); }
+    .tgb-xray-runtime[data-state="missing"] .tgb-status-dot,.tgb-xray-runtime[data-state="failed"] .tgb-status-dot { background:#ef4444; box-shadow:0 0 0 4px rgba(239,68,68,.1); }
+    .tgb-xray-runtime[data-state="installing"] { border-color:rgba(59,130,246,.3); background:rgba(59,130,246,.055); }
+    .tgb-xray-runtime[data-state="installing"] .tgb-status-dot { background:#60a5fa; box-shadow:0 0 0 4px rgba(59,130,246,.11); animation:tgbRuntimePulse 1.3s infinite; }
+    @keyframes tgbRuntimePulse { 50% { opacity:.45; transform:scale(.82); } }
     .tgb-egress-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
     .tgb-egress-card { position:relative; min-width:0; padding:15px; background:var(--bg-dark); border:1px solid var(--border-color); border-top:3px solid var(--text-secondary); border-radius:9px; }
     .tgb-egress-card.is-healthy { border-top-color:var(--success); }
@@ -3541,6 +3559,8 @@
         .tgb-tester-enabled { justify-content:space-between; }
         .tgb-tester-actions { width:100%; }
         .tgb-tester-actions .btn { flex:1; }
+        .tgb-xray-runtime { grid-template-columns:auto minmax(0,1fr); }
+        .tgb-xray-runtime .btn { grid-column:1 / -1; width:100%; }
         .tgb-purchase-summary { grid-template-columns:1fr; gap:4px; }
         .tgb-purchase-summary > span:last-child { justify-self:start; text-align:left; }
         .tgb-purchase-choice { align-items:flex-start; }
@@ -3696,6 +3716,7 @@
     let telegramBotIncludeArchived = false;
     let telegramCopyDefaults = {fa: {}, en: {}};
     let telegramCopyHideable = new Set();
+    let telegramXrayRuntimeTimer = null;
 
     function telegramBotUrl(path) {
         return telegramBotSelectedId ? `${path}${path.includes('?') ? '&' : '?'}bot_id=${telegramBotSelectedId}` : path;
@@ -3722,6 +3743,69 @@
             throw error;
         }
         return data;
+    }
+
+    function renderTelegramXrayRuntime(data = {}) {
+        const box = document.getElementById('tgb-xray-runtime');
+        const title = document.getElementById('tgb-xray-runtime-title');
+        const detail = document.getElementById('tgb-xray-runtime-detail');
+        const button = document.getElementById('tgb-xray-install');
+        if (!box || !title || !detail || !button) return;
+        const state = String(data.state || 'missing').toLowerCase();
+        box.dataset.state = state;
+        if (state === 'installed') {
+            title.textContent = 'Xray runtime installed';
+            detail.textContent = data.version || 'Ready for managed Telegram routes.';
+            button.style.display = 'none';
+        } else if (state === 'installing') {
+            title.textContent = 'Installing Xray…';
+            detail.textContent = 'Downloading and verifying the official Xray release. Routes will restart automatically.';
+            button.style.display = '';
+            button.disabled = true;
+            button.textContent = 'Installing…';
+        } else {
+            title.textContent = state === 'failed' ? 'Xray installation failed' : 'Xray runtime is not installed';
+            detail.textContent = data.install_available
+                ? (state === 'failed' ? 'The installer stopped before Xray became ready. You can retry safely.' : 'Install it here before using managed configuration routes.')
+                : 'Run one Eve update from SSH to enable the secure browser installer.';
+            button.style.display = data.install_available ? '' : 'none';
+            button.disabled = false;
+            button.textContent = state === 'failed' ? 'Retry install' : 'Install Xray';
+        }
+    }
+
+    async function loadTelegramXrayRuntime() {
+        clearTimeout(telegramXrayRuntimeTimer);
+        try {
+            const data = await telegramBotApi('/api/settings/telegram-bots/xray-runtime');
+            renderTelegramXrayRuntime(data);
+            if (data.state === 'installing') {
+                telegramXrayRuntimeTimer = setTimeout(loadTelegramXrayRuntime, 2500);
+            }
+        } catch (error) {
+            renderTelegramXrayRuntime({state:'failed', install_available:false});
+            document.getElementById('tgb-xray-runtime-detail').textContent = error.message;
+        }
+    }
+
+    async function installTelegramXray(button) {
+        if (!confirm('Install the official Xray runtime for Eve managed Telegram routes?')) return;
+        setTelegramButtonLoading(button, true, 'Starting…');
+        let started = false;
+        try {
+            await telegramBotApi('/api/settings/telegram-bots/xray-runtime/install', {
+                method:'POST', body:JSON.stringify({confirm:'INSTALL'})
+            });
+            renderTelegramXrayRuntime({state:'installing', install_available:true});
+            started = true;
+            showToast('Xray installation started.', 'success');
+            telegramXrayRuntimeTimer = setTimeout(loadTelegramXrayRuntime, 1500);
+        } catch (error) {
+            showToast(error.message, 'error');
+            await loadTelegramXrayRuntime();
+        } finally {
+            if (!started && document.body.contains(button)) setTelegramButtonLoading(button, false);
+        }
     }
 
     function setTelegramButtonLoading(button, loading, label = 'Working…') {
@@ -4657,6 +4741,7 @@
             renderTelegramPurchaseInboundRoutes();
             renderTelegramProxies();
             renderTelegramEgressProfiles();
+            loadTelegramXrayRuntime();
             renderTelegramTestUsers();
             loadTelegramEgressCandidates();
             syncTelegramBotPreset();

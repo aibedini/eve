@@ -2,6 +2,7 @@ import io
 import os
 import tempfile
 import unittest
+import requests
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from sqlalchemy.exc import IntegrityError
@@ -74,13 +75,17 @@ from app import (  # noqa: E402
     format_app_datetime,
     parse_jalali_date,
     review_ownership_claim_item,
+    _telegram_bot_attempt,
     _telegram_bot_diagnostic,
     _detect_telegram_inbound_profiles,
     _telegram_proxy_from_payload,
     verify_ownership_claim_subscription,
     v3_add_client,
 )
-from telegram_diagnostics import probe_telegram_transport, redact_connection_error  # noqa: E402
+from telegram_diagnostics import (  # noqa: E402
+    classify_telegram_connection_error, probe_telegram_transport,
+    redact_connection_error,
+)
 from telegram_xray import XraySupervisor, build_xray_config_from_uri, write_xray_config  # noqa: E402
 from telegram_bot_worker import (  # noqa: E402
     _ensure_purchase_detail,
@@ -549,6 +554,30 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertNotIn('123456:abcdefghijklmnopqrstuvwxyz', safe)
         self.assertIn('/bot***', safe)
 
+    def test_ssl_zero_return_is_classified_as_closed_xray_outbound(self):
+        raw = ("SOCKSHTTPSConnectionPool(host='api.telegram.org', port=443): "
+               "SSLZeroReturnError: TLS/SSL connection has been closed (EOF)")
+        code, message = classify_telegram_connection_error(raw)
+        self.assertEqual(code, 'route_outbound_closed')
+        self.assertIn('selected route', message.lower())
+        self.assertNotIn('SOCKSHTTPSConnectionPool', message)
+
+    def test_get_me_eof_returns_friendly_route_error(self):
+        transport_ok = {'success': True, 'stages': [
+            {'name': 'telegram_tls', 'status': 'passed', 'latency_ms': 1},
+        ]}
+        failure = requests.exceptions.SSLError(
+            "TLS/SSL connection has been closed (EOF)")
+        with patch('app.probe_telegram_transport', return_value=transport_ok), \
+                patch('app._telegram_get_me', side_effect=failure):
+            result = _telegram_bot_attempt(
+                '123456:abcdefghijklmnopqrstuvwxyz', 'xray://test',
+                proxies={'https': 'socks5h://127.0.0.1:12080'},
+            )
+        self.assertFalse(result['success'])
+        self.assertEqual(result['error_code'], 'route_outbound_closed')
+        self.assertNotIn('SOCKSHTTPSConnectionPool', result['error'])
+
     def test_vless_ws_tls_is_rendered_as_loopback_only_xray_config(self):
         uri = ('vless://11111111-1111-1111-1111-111111111111@example.com:443'
                '?type=ws&security=tls&sni=edge.example.com&host=cdn.example.com&path=%2Feve#route')
@@ -561,6 +590,17 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(outbound['streamSettings']['network'], 'ws')
         self.assertEqual(outbound['streamSettings']['wsSettings']['path'], '/eve')
         self.assertEqual(outbound['streamSettings']['tlsSettings']['serverName'], 'edge.example.com')
+
+    def test_vless_http_obfuscation_is_not_silently_dropped(self):
+        uri = ('vless://11111111-1111-1111-1111-111111111111@example.com:80'
+               '?type=http&host=edge.example.com&path=%2Ftelegram#route')
+        config = build_xray_config_from_uri(uri, 12080)
+        stream = config['outbounds'][0]['streamSettings']
+        self.assertEqual(stream['network'], 'tcp')
+        header = stream['tcpSettings']['header']
+        self.assertEqual(header['type'], 'http')
+        self.assertEqual(header['request']['path'], ['/telegram'])
+        self.assertEqual(header['request']['headers']['Host'], ['edge.example.com'])
 
     def test_vless_reality_requires_public_key(self):
         uri = ('vless://11111111-1111-1111-1111-111111111111@example.com:443'

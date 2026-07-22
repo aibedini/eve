@@ -13,8 +13,11 @@ import base64
 import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from telegram_diagnostics import probe_telegram_transport, redact_connection_error
-from telegram_xray import build_xray_config_from_uri
+from telegram_diagnostics import (
+    classify_telegram_connection_error, probe_telegram_transport,
+    redact_connection_error,
+)
+from telegram_xray import build_xray_config_from_uri, find_xray_binary
 import logging
 import qrcode
 import uuid
@@ -102,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.21"
+APP_VERSION = "2.5.22"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -122,6 +125,12 @@ SYSTEM_UPDATE_UNIT_PATH = os.environ.get(
 SYSTEM_UPDATE_START_COMMAND = (
     'sudo', '-n', '/bin/systemctl', '--no-block', 'start',
     'eve-web-update.service',
+)
+XRAY_INSTALL_UNIT_PATH = os.environ.get(
+    'EVE_XRAY_INSTALL_UNIT_PATH', '/etc/systemd/system/eve-xray-install.service')
+XRAY_INSTALL_START_COMMAND = (
+    'sudo', '-n', '/bin/systemctl', '--no-block', 'start',
+    'eve-xray-install.service',
 )
 _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 
@@ -27960,14 +27969,9 @@ def _telegram_bot_attempt(token: str, route_name: str, proxies=None, proxy=None)
             'error': safe_error, 'error_code': 'telegram_api_rejected', 'stages': stages,
         }
     except Exception as exc:
-        safe_error = redact_connection_error(exc, (token, username, password))
-        lowered_error = safe_error.lower()
-        if 'unexpected_eof_while_reading' in lowered_error or 'unexpected eof' in lowered_error:
-            error_code = 'route_outbound_closed'
-        elif 'timed out' in lowered_error:
-            error_code = 'telegram_api_timeout'
-        else:
-            error_code = 'telegram_api_failed'
+        error_code, safe_error = classify_telegram_connection_error(
+            exc, (token, username, password),
+        )
         latency = max(0, int((time.perf_counter() - started) * 1000))
         api_latency = max(0, int((time.perf_counter() - api_started) * 1000))
         stages.append({'name': 'telegram_api', 'status': 'failed', 'latency_ms': api_latency,
@@ -30090,7 +30094,11 @@ def test_telegram_backup_settings():
     try:
         resp = _telegram_get_me(token, proxies=proxies, timeout_sec=10)
     except Exception as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 400
+        error_code, safe_error = classify_telegram_connection_error(
+            exc, (token, proxy_username, proxy_password),
+        )
+        return jsonify({'success': False, 'error': safe_error,
+                        'error_code': error_code}), 400
 
     if resp.status_code != 200:
         return jsonify({'success': False, 'error': f"HTTP {resp.status_code}"}), 400
@@ -31900,6 +31908,100 @@ def system_update_start():
         'Browser panel update started by admin_id=%s from %s',
         session.get('admin_id'), request.remote_addr)
     return jsonify({'success': True, 'state': 'starting'}), 202
+
+
+def _xray_runtime_status_payload():
+    """Report only the local Eve Xray runtime; never expose configuration URIs."""
+    binary = find_xray_binary()
+    version = None
+    if binary:
+        try:
+            result = subprocess.run(
+                [binary, 'version'], capture_output=True, text=True,
+                timeout=5, check=False,
+            )
+            first_line = (result.stdout or result.stderr or '').splitlines()
+            version = first_line[0].strip()[:120] if first_line else 'Installed'
+        except (OSError, subprocess.SubprocessError):
+            version = 'Installed'
+
+    installing = False
+    install_result = None
+    if os.path.isfile(XRAY_INSTALL_UNIT_PATH):
+        try:
+            installing = subprocess.run(
+                ['/bin/systemctl', 'is-active', '--quiet', 'eve-xray-install.service'],
+                capture_output=True, timeout=3, check=False,
+            ).returncode == 0
+            if not installing and not binary:
+                result = subprocess.run(
+                    ['/bin/systemctl', 'show', '--property=Result', '--value',
+                     'eve-xray-install.service'],
+                    capture_output=True, text=True, timeout=3, check=False,
+                )
+                install_result = (result.stdout or '').strip()[:80] or None
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    if binary:
+        state = 'installed'
+    elif installing:
+        state = 'installing'
+    elif install_result and install_result not in ('success', 'done'):
+        state = 'failed'
+    else:
+        state = 'missing'
+    return {
+        'success': True,
+        'installed': bool(binary),
+        'state': state,
+        'version': version,
+        'install_available': os.path.isfile(XRAY_INSTALL_UNIT_PATH),
+        'install_result': install_result,
+    }
+
+
+@app.route('/api/settings/telegram-bots/xray-runtime', methods=['GET'])
+@superadmin_required
+def telegram_xray_runtime_status():
+    response = jsonify(_xray_runtime_status_payload())
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/api/settings/telegram-bots/xray-runtime/install', methods=['POST'])
+@superadmin_required
+def telegram_xray_runtime_install():
+    data = request.get_json(silent=True) or {}
+    if data.get('confirm') != 'INSTALL':
+        return jsonify({'success': False, 'error': 'Install confirmation is required'}), 400
+    status = _xray_runtime_status_payload()
+    if status['installed']:
+        return jsonify({'success': True, 'state': 'installed',
+                        'message': 'Xray is already installed'})
+    if status['state'] == 'installing':
+        return jsonify({'success': True, 'state': 'installing'}), 202
+    if not status['install_available']:
+        return jsonify({
+            'success': False,
+            'error': 'Browser Xray installer is not available; run one Eve update from SSH first.',
+        }), 503
+    try:
+        result = subprocess.run(
+            list(XRAY_INSTALL_START_COMMAND), capture_output=True, text=True,
+            timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        app.logger.exception('Could not launch Xray installer')
+        return jsonify({'success': False, 'error': str(exc)}), 500
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or 'systemd rejected the install').strip()
+        return jsonify({'success': False, 'error': detail[:500]}), 500
+    app.logger.warning(
+        'Xray install started by admin_id=%s from %s',
+        session.get('admin_id'), request.remote_addr,
+    )
+    return jsonify({'success': True, 'state': 'installing'}), 202
 
 @app.route('/api/check-update', methods=['GET'])
 @login_required

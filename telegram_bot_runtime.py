@@ -12,7 +12,7 @@ from typing import Any
 import requests
 from requests.adapters import HTTPAdapter
 
-from telegram_diagnostics import redact_connection_error
+from telegram_diagnostics import classify_telegram_connection_error, redact_connection_error
 
 
 API_ROOT = "https://api.telegram.org"
@@ -126,7 +126,7 @@ class TelegramBotApi:
             except requests.RequestException as exc:
                 self._route_failed(route)
                 elapsed = max(1, int((time.perf_counter() - started) * 1000))
-                safe = redact_connection_error(exc, (self._token,))
+                _code, safe = classify_telegram_connection_error(exc, (self._token,))
                 errors.append(f"{route.name} ({elapsed} ms): {safe}")
         raise TelegramApiError("; ".join(errors) or "No Telegram route is available")
 
@@ -226,7 +226,8 @@ class TelegramBotApi:
                 errors.append(f"{route.name}: {exc}")
             except requests.RequestException as exc:
                 self._route_failed(route)
-                errors.append(f"{route.name}: {redact_connection_error(exc, (self._token,))}")
+                _code, safe = classify_telegram_connection_error(exc, (self._token,))
+                errors.append(f"{route.name}: {safe}")
         raise TelegramApiError("; ".join(errors) or "No Telegram route is available")
 
     def download_file(self, file_id: str, *, max_bytes: int = 20 * 1024 * 1024):

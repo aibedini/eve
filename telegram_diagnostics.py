@@ -32,6 +32,26 @@ def redact_connection_error(error: object, secrets=()) -> str:
     return message[:500]
 
 
+def classify_telegram_connection_error(error: object, secrets=()) -> tuple[str, str]:
+    """Return a stable code and an operator-friendly, secret-safe message."""
+    safe = redact_connection_error(error, secrets)
+    lowered = safe.lower()
+    if any(marker in lowered for marker in (
+        "sslzeroreturnerror", "tls/ssl connection has been closed", "closed (eof)",
+        "unexpected_eof_while_reading", "unexpected eof", "eof occurred",
+    )):
+        return (
+            "route_outbound_closed",
+            "The selected route opened its local proxy, but closed Telegram's TLS connection. "
+            "The Xray configuration may be expired, disabled, incompatible, or unable to reach Telegram.",
+        )
+    if "timed out" in lowered or "timeout" in lowered:
+        return "telegram_api_timeout", "Telegram did not respond through this route before the timeout."
+    if "connection refused" in lowered:
+        return "route_refused", "The selected proxy route refused the connection."
+    return "telegram_api_failed", safe
+
+
 def _stage(name: str, status: str, started: float, *, code=None, message=None) -> dict:
     result = {"name": name, "status": status, "latency_ms": _elapsed_ms(started)}
     if code:
@@ -50,7 +70,7 @@ def _failure_code(exc: Exception, prefix: str) -> str:
     if "refused" in text:
         return f"{prefix}_refused"
     if isinstance(exc, ssl.SSLError):
-        return "tls_failed"
+        return classify_telegram_connection_error(exc)[0]
     return f"{prefix}_failed"
 
 
@@ -216,10 +236,10 @@ def probe_telegram_transport(
         tls_socket = context.wrap_socket(tunnel, server_hostname=TELEGRAM_HOST)
         stages.append(_stage("telegram_tls", "passed", started))
     except Exception as exc:
-        message = redact_connection_error(exc, secrets)
+        code, message = classify_telegram_connection_error(exc, secrets)
         stages.append(_stage(
             "telegram_tls", "failed", started,
-            code=_failure_code(exc, "tls"), message=message,
+            code=code, message=message,
         ))
         return {"success": False, "stages": stages, "error": message,
                 "error_code": stages[-1]["error_code"]}

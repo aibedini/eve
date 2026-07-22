@@ -1326,6 +1326,7 @@ EOF
     fi
     install_maintenance_service
     install_web_update_service
+    install_xray_install_service
 }
 
 restart_eve_runtime_services() {
@@ -1422,6 +1423,31 @@ EOF
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl --no-block start eve-web-update.service
 EOF
     chmod 440 /etc/sudoers.d/eve-web-update
+    systemctl daemon-reload
+}
+
+install_xray_install_service() {
+    cat > /etc/systemd/system/eve-xray-install.service <<EOF
+[Unit]
+Description=Eve browser-triggered Xray runtime installer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/eve --install-xray
+TimeoutStartSec=infinity
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+EOF
+
+    cat > /etc/sudoers.d/eve-xray-install <<EOF
+# Eve Manager: allow only starting the fixed Xray installer service.
+${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl --no-block start eve-xray-install.service
+EOF
+    chmod 440 /etc/sudoers.d/eve-xray-install
     systemctl daemon-reload
 }
 
@@ -3478,6 +3504,7 @@ uninstall_project() {
     systemctl disable --now ${SERVICE_NAME}-telegram-bot 2>/dev/null || true
     systemctl disable --now eve-maintenance.service 2>/dev/null || true
     systemctl disable --now eve-web-update.service 2>/dev/null || true
+    systemctl disable --now eve-xray-install.service 2>/dev/null || true
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
     rm -f /etc/systemd/system/${SERVICE_NAME}-background.service
     rm -f /etc/systemd/system/${SERVICE_NAME}-telegram-egress.service
@@ -3485,8 +3512,10 @@ uninstall_project() {
     rm -f /etc/systemd/system/eve-maintenance.service
     rm -f /usr/local/sbin/eve-maintenance-root
     rm -f /etc/systemd/system/eve-web-update.service
+    rm -f /etc/systemd/system/eve-xray-install.service
     rm -f /usr/local/sbin/eve-web-update-runner
     rm -f /etc/sudoers.d/eve-web-update
+    rm -f /etc/sudoers.d/eve-xray-install
     rm -rf /var/lib/eve-manager/web-update
     systemctl daemon-reload
     rm -rf "$APP_DIR"
