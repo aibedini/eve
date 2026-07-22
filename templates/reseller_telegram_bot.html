@@ -63,6 +63,14 @@
                     <label><input type="checkbox" id="rtb-enabled"> Enabled</label>
                     <label><input type="checkbox" id="rtb-test-mode"> Test mode</label>
                 </div>
+                <div class="form-group" style="border-top:1px solid rgba(148,163,184,.25); padding-top:14px; max-width:none;">
+                    <label>Required channel membership</label>
+                    <label style="display:block;"><input type="checkbox" id="rtb-membership-start"> Before using the bot</label>
+                    <label style="display:block;"><input type="checkbox" id="rtb-membership-delivery"> After payment, before showing the account</label>
+                    <textarea id="rtb-required-channels" class="form-input" rows="4" placeholder="-1001234567890 | News | https://t.me/mychannel"></textarea>
+                    <small class="text-secondary">One channel per line. The bot must be an admin in every channel.</small>
+                    <div id="rtb-start-stats" class="text-secondary" style="margin-top:8px;">/start statistics: —</div>
+                </div>
                 <div class="form-group" style="border-top: 1px solid rgba(148,163,184,0.25); padding-top: 14px; max-width: none;">
                     <label>شخصی‌سازی متن‌های ربات</label>
                     <small class="text-secondary" style="display:block; margin-bottom: 8px;">
@@ -140,6 +148,11 @@ async function rtbLoad() {
         document.getElementById('rtb-connection-mode').value = settings.connection_mode || 'proxy_first';
         document.getElementById('rtb-enabled').checked = !!settings.enabled;
         document.getElementById('rtb-test-mode').checked = !!settings.test_mode;
+        document.getElementById('rtb-membership-start').checked = !!settings.require_membership_on_start;
+        document.getElementById('rtb-membership-delivery').checked = !!settings.require_membership_on_delivery;
+        document.getElementById('rtb-required-channels').value = (settings.required_channels || []).map(channel => `${channel.chat_id} | ${channel.title || ''} | ${channel.invite_url}`).join('\n');
+        const startStats = data.start_stats || {};
+        document.getElementById('rtb-start-stats').textContent = `/start: ${startStats.total || 0} total · ${startStats.new_users || 0} new · ${startStats.existing_users || 0} existing · ${startStats.unique_users || 0} unique`;
         rtbCopyDefaults = data.copy_defaults && typeof data.copy_defaults === 'object' ? data.copy_defaults : {fa: {}, en: {}};
         rtbCopyHideable = new Set(Array.isArray(data.hideable_keys) ? data.hideable_keys : []);
         rtbRenderCopyRows(data.copy_overrides && typeof data.copy_overrides === 'object' ? data.copy_overrides : {});
@@ -264,6 +277,10 @@ async function rtbSave(button) {
     if (!languages.includes(document.getElementById('rtb-default-language').value)) return showToast('Default language must be enabled.', 'error');
     button.disabled = true;
     try {
+        const requiredChannels = document.getElementById('rtb-required-channels').value.split(/\r?\n/).filter(line => line.trim()).map(line => {
+            const [chatId, title, ...urlParts] = line.split('|');
+            return {chat_id: Number((chatId || '').trim()), title: (title || '').trim(), invite_url: urlParts.join('|').trim()};
+        });
         await rtbApi(rtbUrl('/api/settings/telegram-bots'), {method: 'POST', body: JSON.stringify({
             display_name: document.getElementById('rtb-display-name').value.trim(),
             bot_token: document.getElementById('rtb-token').value.trim(),
@@ -272,6 +289,9 @@ async function rtbSave(button) {
             connection_mode: document.getElementById('rtb-connection-mode').value,
             enabled: document.getElementById('rtb-enabled').checked,
             test_mode: document.getElementById('rtb-test-mode').checked,
+            required_channels: requiredChannels,
+            require_membership_on_start: document.getElementById('rtb-membership-start').checked,
+            require_membership_on_delivery: document.getElementById('rtb-membership-delivery').checked,
             copy_overrides: rtbCollectCopyOverrides(),
         })});
         showToast('Bot settings saved.', 'success');
