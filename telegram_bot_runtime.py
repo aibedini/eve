@@ -53,6 +53,21 @@ class TelegramApiError(RuntimeError):
         self.retry_after = max(0, int(retry_after or 0))
 
 
+CHAT_ACCESS_ERROR_HINTS = (
+    "chat not found",
+    "bot is not a member",
+    "not enough rights",
+    "forbidden",
+    "bad request",
+)
+
+
+def is_chat_access_error(exc: BaseException) -> bool:
+    """True when a Telegram API error means the bot cannot see or admin the chat."""
+    text = str(exc).lower()
+    return any(hint in text for hint in CHAT_ACCESS_ERROR_HINTS)
+
+
 class TelegramBotApi:
     """Bot API client with ordered route failover and no token logging."""
 

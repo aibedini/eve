@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.27"
+APP_VERSION = "2.5.28"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -30031,6 +30031,58 @@ def save_telegram_bot_settings():
     return _save_telegram_bot_settings(bot, request.get_json(silent=True) or {})
 
 
+def _verify_required_channels(bot: TelegramBotInstance, channels: list[dict]) -> str | None:
+    """Check the bot can see and administers every required channel.
+
+    Returns an admin-facing error message, or None when all channels check out.
+    Skipped entirely when the bot has no usable token/route yet. Network or
+    route failures are reported as a soft 'could not verify' message instead of
+    a 500.
+    """
+    if not channels:
+        return None
+    try:
+        api = _telegram_bot_api_client(bot)
+    except ValueError:
+        return None  # no token/route configured yet — nothing to verify with
+    from telegram_bot_runtime import TelegramApiError, is_chat_access_error
+    try:
+        bot_user_id = int(bot.bot_user_id) if bot.bot_user_id else None
+        if bot_user_id is None:
+            me, _route = api.call('getMe', {})
+            bot_user_id = int((me or {}).get('id') or 0) or None
+            if bot_user_id is None:
+                return 'Could not read the bot identity from Telegram (getMe).'
+            bot.bot_user_id = bot_user_id
+            username = str((me or {}).get('username') or '').strip()[:64]
+            if username:
+                bot.bot_username = username
+        for channel in channels:
+            label = f"{channel.get('title') or channel['chat_id']} ({channel['chat_id']})"
+            try:
+                member, _route = api.call('getChatMember', {
+                    'chat_id': int(channel['chat_id']), 'user_id': bot_user_id,
+                })
+            except TelegramApiError as exc:
+                if is_chat_access_error(exc):
+                    return (f'Bot is not an admin in channel {label}. Add the bot as an '
+                            f'admin, then save again. Telegram said: {exc}')
+                return ('Could not verify the required channels right now '
+                        f'({exc}). Check the bot route/proxy and try again.')
+            status = str((member or {}).get('status') or '')
+            if status not in ('administrator', 'creator'):
+                return (f'Bot is not an admin in channel {label} '
+                        f'(current status: {status or "unknown"}). '
+                        'Add the bot as an admin, then save again.')
+        return None
+    except TelegramApiError as exc:
+        return ('Could not verify the required channels right now '
+                f'({exc}). Check the bot route/proxy and try again.')
+    except Exception:
+        app.logger.exception('[telegram-settings] required-channel verification failed for bot %s', bot.id)
+        return 'Could not verify the required channels right now. Check the bot route/proxy and try again.'
+
+
 def _save_telegram_bot_settings(bot: TelegramBotInstance, data: dict):
     display_name = str(data.get('display_name') or bot.display_name or '').strip()[:120]
     if not display_name:
@@ -30131,6 +30183,9 @@ def _save_telegram_bot_settings(bot: TelegramBotInstance, data: dict):
     require_delivery = bool(data.get('require_membership_on_delivery', bot.require_membership_on_delivery))
     if (require_start or require_delivery) and not cleaned_channels:
         return jsonify({'success': False, 'error': 'Add at least one required channel before enabling membership checks'}), 400
+    verification_error = _verify_required_channels(bot, cleaned_channels)
+    if verification_error:
+        return jsonify({'success': False, 'error': verification_error}), 400
     bot.required_channels_json = json.dumps(cleaned_channels, ensure_ascii=False, separators=(',', ':'))
     bot.require_membership_on_start = require_start
     bot.require_membership_on_delivery = require_delivery

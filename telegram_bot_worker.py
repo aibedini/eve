@@ -84,6 +84,7 @@ from telegram_bot_runtime import (  # noqa: E402
     TelegramApiError,
     TelegramBotApi,
     contact_keyboard,
+    is_chat_access_error,
     language_keyboard,
     main_menu_keyboard,
     menu_label_map,
@@ -258,13 +259,21 @@ _CHANNEL_MEMBER_CACHE: dict = {}
 
 
 def _channel_member(api: TelegramBotApi, chat_id: int, user_id: int) -> bool:
-    """Live getChatMember check with a short in-memory cache; errors = not a member."""
+    """Live getChatMember check with a short in-memory cache.
+
+    Only a genuine Telegram answer decides membership (member -> True, left /
+    kicked -> False, cached 300s). Config errors (bot not admin, chat gone) and
+    network/route failures FAIL OPEN with a 60s cache so an admin misconfig or
+    a Telegram outage never locks every user out, and a fixed config recovers
+    quickly.
+    """
     key = (int(chat_id), int(user_id))
     now = time.monotonic()
     cached = _CHANNEL_MEMBER_CACHE.get(key)
     if cached and cached[0] > now:
         return cached[1]
     ok = False
+    ttl = 300
     try:
         result, _route = api.call('getChatMember', {
             'chat_id': int(chat_id), 'user_id': int(user_id),
@@ -273,9 +282,22 @@ def _channel_member(api: TelegramBotApi, chat_id: int, user_id: int) -> bool:
         status = str(member.get('status') or '')
         ok = (status in ('member', 'administrator', 'creator')
               or (status == 'restricted' and bool(member.get('is_member'))))
-    except Exception:
-        ok = False
-    _CHANNEL_MEMBER_CACHE[key] = (now + 300, ok)
+    except TelegramApiError as exc:
+        ok = True
+        ttl = 60
+        if is_chat_access_error(exc):
+            app.logger.warning(
+                '[telegram-membership] required channel %s is unreachable for the bot '
+                '(add the bot as a channel admin): %s', chat_id, exc)
+        else:
+            app.logger.warning(
+                '[telegram-membership] getChatMember failed for channel %s: %s', chat_id, exc)
+    except Exception as exc:
+        ok = True
+        ttl = 60
+        app.logger.warning(
+            '[telegram-membership] getChatMember error for channel %s: %s', chat_id, exc)
+    _CHANNEL_MEMBER_CACHE[key] = (now + ttl, ok)
     return ok
 
 

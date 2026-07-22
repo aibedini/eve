@@ -682,9 +682,14 @@
                 <section class="panel-card tgb-section">
                     <div class="panel-card-header"><div class="header-content"><h2>Required Channel Membership</h2><p>The bot must be an admin in every channel so Telegram can verify each user ID.</p></div></div>
                     <div class="tgb-form-grid">
-                        <label><input id="tgb-membership-start" type="checkbox"> Require membership before using the bot</label>
-                        <label><input id="tgb-membership-delivery" type="checkbox"> Require membership after payment, before account delivery</label>
-                        <div class="form-group tgb-form-span"><label for="tgb-required-channels">Channels (one per line: chat_id | title | join URL)</label><textarea id="tgb-required-channels" class="form-control" rows="4" placeholder="-1001234567890 | News | https://t.me/mychannel"></textarea></div>
+                        <div class="tgb-toggle-label"><label for="tgb-membership-start">Require membership before using the bot</label><label class="toggle-switch" aria-label="Require membership before using the bot"><input id="tgb-membership-start" type="checkbox"><span class="slider"></span></label></div>
+                        <div class="tgb-toggle-label"><label for="tgb-membership-delivery">Require membership after payment, before account delivery</label><label class="toggle-switch" aria-label="Require membership before account delivery"><input id="tgb-membership-delivery" type="checkbox"><span class="slider"></span></label></div>
+                        <div class="form-group tgb-form-span" style="margin-top: 8px;">
+                            <label>Required channels</label>
+                            <small class="text-secondary">ربات باید در هر کانال ادمین باشد. شناسهٔ کانال با 100- شروع می‌شود.</small>
+                            <div id="tgb-required-channels"></div>
+                            <button class="btn btn-secondary" type="button" onclick="addTelegramRequiredChannel()">Add channel</button>
+                        </div>
                         <div class="tgb-form-span text-secondary" id="tgb-start-stats">/start statistics: —</div>
                     </div>
                 </section>
@@ -3762,6 +3767,7 @@
     let telegramBotTestUsers = [];
     let telegramPurchaseServers = [];
     let telegramTrialChannels = [];
+    let telegramRequiredChannels = [];
     let telegramPurchasePackages = [];
     let telegramPurchaseInboundRoutes = [];
     let telegramPurchaseInbounds = {};
@@ -4758,7 +4764,8 @@
             document.getElementById('tgb-connection-mode').value = bot.connection_mode || 'proxy_first';
             document.getElementById('tgb-membership-start').checked = !!bot.require_membership_on_start;
             document.getElementById('tgb-membership-delivery').checked = !!bot.require_membership_on_delivery;
-            document.getElementById('tgb-required-channels').value = (bot.required_channels || []).map(channel => `${channel.chat_id} | ${channel.title || ''} | ${channel.invite_url}`).join('\n');
+            telegramRequiredChannels = Array.isArray(bot.required_channels) ? bot.required_channels : [];
+            renderTelegramRequiredChannels();
             const startStats = data.start_stats || {};
             document.getElementById('tgb-start-stats').textContent = `/start: ${startStats.total || 0} total · ${startStats.new_users || 0} new · ${startStats.existing_users || 0} existing · ${startStats.unique_users || 0} unique`;
             document.getElementById('tgb-support-group-enabled').checked = !!bot.support_group_enabled;
@@ -4981,10 +4988,12 @@
         const supportEscalationMinutes = Number(document.getElementById('tgb-support-escalation-minutes').value);
         if (!Number.isInteger(supportEscalationMinutes) || supportEscalationMinutes < 0 || supportEscalationMinutes > 10080) return showToast('Support escalation must be between 0 and 10080 minutes.', 'error');
         if (!validateTelegramPurchaseSettings()) return;
-        const requiredChannels = document.getElementById('tgb-required-channels').value.split(/\r?\n/).filter(line => line.trim()).map(line => {
-            const [chatId, title, ...urlParts] = line.split('|');
-            return {chat_id: Number((chatId || '').trim()), title: (title || '').trim(), invite_url: urlParts.join('|').trim()};
-        });
+        const requiredChannels = collectTelegramRequiredChannels();
+        for (const channel of requiredChannels) {
+            if (!/^-\d+$/.test(channel.chat_id)) return showToast('Each channel chat ID must be a negative numeric ID (channel IDs start with -100).', 'error');
+            if (!channel.title || channel.title.length > 100) return showToast('Each channel needs a title of at most 100 characters.', 'error');
+            if (channel.invite_url && !/^https:\/\/t\.me\/(\+|joinchat\/)?\S+$/.test(channel.invite_url)) return showToast('Each channel join URL must look like https://t.me/...', 'error');
+        }
         const payload = {
             display_name: document.getElementById('tgb-display-name').value.trim(),
             enabled: document.getElementById('tgb-enabled').checked,
@@ -5363,6 +5372,39 @@
             .filter(channel => channel.chat_id !== '')
             .map(channel => ({chat_id: Number(channel.chat_id), title: channel.title, invite_url: channel.invite_url}))
             .filter(channel => Number.isInteger(channel.chat_id));
+    }
+
+    function renderTelegramRequiredChannels() {
+        const list = document.getElementById('tgb-required-channels');
+        if (!list) return;
+        list.innerHTML = telegramRequiredChannels.map((channel, index) => `
+            <div class="tgb-form-grid tgb-purchase-grid" style="align-items:end; margin-top:6px;">
+                <div class="form-group"><label>Chat ID</label><input class="form-control" type="text" inputmode="numeric" placeholder="-1001234567890" value="${escapeHtml(String(channel.chat_id ?? ''))}" onchange="telegramRequiredChannels[${index}].chat_id = this.value.trim()"></div>
+                <div class="form-group"><label>Title</label><input class="form-control" type="text" maxlength="100" placeholder="Channel name" value="${escapeHtml(String(channel.title || ''))}" onchange="telegramRequiredChannels[${index}].title = this.value.trim()"></div>
+                <div class="form-group"><label>Join URL</label><input class="form-control" type="text" maxlength="200" placeholder="https://t.me/..." value="${escapeHtml(String(channel.invite_url || ''))}" onchange="telegramRequiredChannels[${index}].invite_url = this.value.trim()"></div>
+                <button class="btn btn-danger" type="button" onclick="removeTelegramRequiredChannel(${index})">Remove</button>
+            </div>`).join('');
+    }
+
+    function addTelegramRequiredChannel() {
+        if (telegramRequiredChannels.length >= 20) return showToast('At most 20 required channels are allowed.', 'error');
+        telegramRequiredChannels.push({chat_id: '', title: '', invite_url: ''});
+        renderTelegramRequiredChannels();
+    }
+
+    function removeTelegramRequiredChannel(index) {
+        telegramRequiredChannels.splice(index, 1);
+        renderTelegramRequiredChannels();
+    }
+
+    function collectTelegramRequiredChannels() {
+        return telegramRequiredChannels
+            .map(channel => ({
+                chat_id: String(channel.chat_id ?? '').trim(),
+                title: String(channel.title || '').trim(),
+                invite_url: String(channel.invite_url || '').trim(),
+            }))
+            .filter(channel => channel.chat_id !== '' || channel.title !== '' || channel.invite_url !== '');
     }
 
     function renderTelegramProxies() {
