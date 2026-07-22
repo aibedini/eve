@@ -111,6 +111,7 @@ ensure_server_password_key() {
 ensure_systemd_envfile_evemanager() {
     local SERVICE="${SERVICE_NAME}.service"
     local ENV_PATH="$ENV_FILE"
+    local restart_now="${1:-true}"
 
     # If service exists, ensure it loads .env
     if systemctl list-unit-files | grep -qE "^${SERVICE}\\b"; then
@@ -120,7 +121,9 @@ ensure_systemd_envfile_evemanager() {
 EnvironmentFile=${ENV_PATH}
 EOF
         sudo systemctl daemon-reload
-        sudo systemctl restart "${SERVICE}" >/dev/null 2>&1 || true
+        if [ "$restart_now" = "true" ]; then
+            sudo systemctl restart "${SERVICE}" >/dev/null 2>&1 || true
+        fi
         echo "✓ systemd override set for ${SERVICE}: EnvironmentFile=${ENV_PATH}"
     else
         echo "ℹ ${SERVICE} not found (skipping systemd envfile override)"
@@ -1322,6 +1325,7 @@ EOF
         print_warning "Run 'eve' and choose [x], or run: eve --install-xray"
     fi
     install_maintenance_service
+    install_web_update_service
 }
 
 restart_eve_runtime_services() {
@@ -1381,6 +1385,44 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
     systemctl enable eve-maintenance.service >/dev/null 2>&1 || true
+}
+
+install_web_update_service() {
+    local runner_source="$APP_DIR/eve_web_update_runner.sh"
+    local runner_target="/usr/local/sbin/eve-web-update-runner"
+    [ -f "$runner_source" ] || return 0
+
+    mkdir -p /var/lib/eve-manager/web-update
+    chown root:"$APP_USER" /var/lib/eve-manager/web-update
+    chmod 750 /var/lib/eve-manager/web-update
+
+    # Atomic replacement leaves an already-running updater on its old inode.
+    install -m 750 "$runner_source" "${runner_target}.new"
+    chown root:root "${runner_target}.new"
+    mv -f "${runner_target}.new" "$runner_target"
+
+    cat > /etc/systemd/system/eve-web-update.service <<EOF
+[Unit]
+Description=Eve browser-triggered safe update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=${runner_target}
+TimeoutStartSec=infinity
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+EOF
+
+    cat > /etc/sudoers.d/eve-web-update <<EOF
+# Eve Manager: allow only starting the fixed browser-update service.
+${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl --no-block start eve-web-update.service
+EOF
+    chmod 440 /etc/sudoers.d/eve-web-update
+    systemctl daemon-reload
 }
 
 show_maintenance_preflight() {
@@ -2250,9 +2292,14 @@ _offer_rollback() {
     print_error "───────────────────────────────────────────────"
     echo -e "  ${YELLOW}Backup is at: ${BAK_PATH}${NC}"
     echo ""
-    echo -ne "  ${YELLOW}Roll back to previous version? [Y/n]: ${NC}"
-    read -r _RB_ANS </dev/tty
-    _RB_ANS="${_RB_ANS:-Y}"
+    if [ "${EVE_AUTO_ROLLBACK:-false}" = "true" ]; then
+        _RB_ANS="Y"
+        print_warning "Non-interactive update: rollback confirmed automatically."
+    else
+        echo -ne "  ${YELLOW}Roll back to previous version? [Y/n]: ${NC}"
+        read -r _RB_ANS </dev/tty
+        _RB_ANS="${_RB_ANS:-Y}"
+    fi
     if [[ "$_RB_ANS" =~ ^[Yy]$ ]]; then
         print_warning "Rolling back..."
         systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
@@ -2263,6 +2310,7 @@ _offer_rollback() {
         sleep 2
         if systemctl is-active --quiet "${SERVICE_NAME}"; then
             print_success "Rolled back successfully — previous version is running."
+            [ -n "${EVE_UPDATE_ROLLED_BACK_FILE:-}" ] && touch "$EVE_UPDATE_ROLLED_BACK_FILE"
         else
             print_error "Service failed to start after rollback."
             print_warning "Check logs: journalctl -u ${SERVICE_NAME} -n 50"
@@ -2331,8 +2379,15 @@ do_online_update() {
         if rsync -a --exclude='.env' --exclude='instance/' --exclude='venv/' \
             "$APP_DIR/" "${APP_DIR}.bak.${_BAK_TS}/" 2>/dev/null; then
             print_success "Backup saved to ${APP_DIR}.bak.${_BAK_TS}"
+            if [ -n "${EVE_UPDATE_BACKUP_FILE:-}" ]; then
+                printf '%s\n' "${APP_DIR}.bak.${_BAK_TS}" > "$EVE_UPDATE_BACKUP_FILE"
+            fi
             prune_app_backups 2
         else
+            if [ "${EVE_AUTO_ROLLBACK:-false}" = "true" ]; then
+                print_error "Backup failed; refusing browser update because rollback would be impossible."
+                return 1
+            fi
             print_warning "Backup failed (continuing anyway)"
         fi
     fi
@@ -2340,7 +2395,9 @@ do_online_update() {
     clone_or_update_repo
     create_env_file
     ensure_server_password_key
-    ensure_systemd_envfile_evemanager
+    # Keep the known-good web process serving while code, dependencies, and
+    # migrations are prepared. The controlled restart happens at the end.
+    ensure_systemd_envfile_evemanager false
     SKIP_DB_MIGRATIONS=true setup_python_env
     # Safety net: guarantee any newly-added requirement is installed before we
     # migrate/restart, even if the wheels-first path above skipped a new dep.
@@ -3420,12 +3477,17 @@ uninstall_project() {
     systemctl disable --now ${SERVICE_NAME}-telegram-egress 2>/dev/null || true
     systemctl disable --now ${SERVICE_NAME}-telegram-bot 2>/dev/null || true
     systemctl disable --now eve-maintenance.service 2>/dev/null || true
+    systemctl disable --now eve-web-update.service 2>/dev/null || true
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
     rm -f /etc/systemd/system/${SERVICE_NAME}-background.service
     rm -f /etc/systemd/system/${SERVICE_NAME}-telegram-egress.service
     rm -f /etc/systemd/system/${SERVICE_NAME}-telegram-bot.service
     rm -f /etc/systemd/system/eve-maintenance.service
     rm -f /usr/local/sbin/eve-maintenance-root
+    rm -f /etc/systemd/system/eve-web-update.service
+    rm -f /usr/local/sbin/eve-web-update-runner
+    rm -f /etc/sudoers.d/eve-web-update
+    rm -rf /var/lib/eve-manager/web-update
     systemctl daemon-reload
     rm -rf "$APP_DIR"
     rm -rf "$LOG_DIR"
@@ -3455,6 +3517,11 @@ elif [ "${1:-}" = "--restart-telegram-egress" ]; then
 elif [ "${1:-}" = "--restart-telegram-bot" ]; then
     require_root
     restart_telegram_bot_service
+    exit $?
+elif [ "${1:-}" = "--browser-update" ]; then
+    require_root
+    detect_os
+    run_latest_online_update
     exit $?
 elif [ "${1:-}" = "--online-update" ]; then
     require_root

@@ -102,7 +102,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.20"
+APP_VERSION = "2.5.21"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -115,6 +115,15 @@ UPDATE_CACHE = {
     'data': None,
     'ttl': 3600  # 1 hour cache
 }
+SYSTEM_UPDATE_STATE_DIR = os.environ.get(
+    'EVE_SYSTEM_UPDATE_STATE_DIR', '/var/lib/eve-manager/web-update')
+SYSTEM_UPDATE_UNIT_PATH = os.environ.get(
+    'EVE_SYSTEM_UPDATE_UNIT_PATH', '/etc/systemd/system/eve-web-update.service')
+SYSTEM_UPDATE_START_COMMAND = (
+    'sudo', '-n', '/bin/systemctl', '--no-block', 'start',
+    'eve-web-update.service',
+)
+_ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 
 # کش برای نگهداری وضعیت سرورها در RAM
 # این دیتا با هر بار ریستارت برنامه پاک می‌شود (امنیت بالا)
@@ -31791,6 +31800,106 @@ def inject_version():
         # Requests must remain available while an older schema is bootstrapping.
         db.session.rollback()
     return dict(app_version=APP_VERSION, maintenance_notice=maintenance_notice)
+
+
+def _system_update_status_payload(log_offset=0):
+    """Read durable updater state without trusting paths from the request."""
+    status_path = os.path.join(SYSTEM_UPDATE_STATE_DIR, 'status.json')
+    log_path = os.path.join(SYSTEM_UPDATE_STATE_DIR, 'update.log')
+    status = {'state': 'idle', 'message': '', 'started_at': None,
+              'finished_at': None, 'version': APP_VERSION}
+    try:
+        with open(status_path, 'r', encoding='utf-8') as handle:
+            saved = json.load(handle)
+        if isinstance(saved, dict):
+            status.update({key: saved.get(key) for key in status if key in saved})
+    except (OSError, ValueError, TypeError):
+        pass
+
+    # A reboot or killed updater must not leave the UI permanently locked in
+    # "running". Reading systemd state is unprivileged and uses a fixed unit.
+    if status.get('state') == 'running':
+        try:
+            active = subprocess.run(
+                ['/bin/systemctl', 'is-active', '--quiet', 'eve-web-update.service'],
+                capture_output=True, timeout=3, check=False,
+            ).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            active = None
+        if active is False:
+            status['state'] = 'interrupted'
+            status['message'] = 'The update process stopped before reporting a result'
+
+    try:
+        offset = max(0, int(log_offset or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    log_text = ''
+    next_offset = 0
+    has_more = False
+    try:
+        size = os.path.getsize(log_path)
+        if offset > size:  # A new run truncated the previous log.
+            offset = 0
+        with open(log_path, 'rb') as handle:
+            handle.seek(offset)
+            chunk = handle.read(128 * 1024)
+            next_offset = handle.tell()
+        has_more = next_offset < size
+        log_text = chunk.decode('utf-8', errors='replace')
+        log_text = _ANSI_ESCAPE_RE.sub('', log_text)
+    except OSError:
+        next_offset = 0
+
+    return {
+        'success': True,
+        'available': os.path.isfile(SYSTEM_UPDATE_UNIT_PATH),
+        'current_version': APP_VERSION,
+        'status': status,
+        'log': log_text,
+        'next_offset': next_offset,
+        'has_more': has_more,
+    }
+
+
+@app.route('/api/system-update/status', methods=['GET'])
+@superadmin_required
+def system_update_status():
+    payload = _system_update_status_payload(request.args.get('offset', 0))
+    response = jsonify(payload)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/api/system-update/start', methods=['POST'])
+@superadmin_required
+def system_update_start():
+    data = request.get_json(silent=True) or {}
+    if data.get('confirm') != 'UPDATE':
+        return jsonify({'success': False, 'error': 'Update confirmation is required'}), 400
+    if not os.path.isfile(SYSTEM_UPDATE_UNIT_PATH):
+        return jsonify({
+            'success': False,
+            'error': 'Browser update service is not installed; run one SSH update first.',
+        }), 503
+    current = _system_update_status_payload(0).get('status') or {}
+    if current.get('state') == 'running':
+        return jsonify({'success': False, 'error': 'An update is already running'}), 409
+    try:
+        result = subprocess.run(
+            list(SYSTEM_UPDATE_START_COMMAND), capture_output=True, text=True,
+            timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        app.logger.exception('Could not launch browser update')
+        return jsonify({'success': False, 'error': str(exc)}), 500
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or 'systemd rejected the update').strip()
+        return jsonify({'success': False, 'error': detail[:500]}), 500
+    app.logger.warning(
+        'Browser panel update started by admin_id=%s from %s',
+        session.get('admin_id'), request.remote_addr)
+    return jsonify({'success': True, 'state': 'starting'}), 202
 
 @app.route('/api/check-update', methods=['GET'])
 @login_required

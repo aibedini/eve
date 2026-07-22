@@ -117,8 +117,56 @@
                 <span class="stat-sub" title="Active accounts with limited volume"><span id="stat-limited-clients">0</span> limited accounts</span>
             </div>
         </div>
+        {% if is_superadmin %}
+        <div class="stat-card system-update-card">
+            <div class="stat-icon purple">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/></svg>
+            </div>
+            <div class="stat-info">
+                <span class="stat-label">{{ 'نسخه پنل' if panel_lang == 'fa' else 'Panel version' }}</span>
+                <span class="stat-value" id="system-update-version">v{{ app_version }}</span>
+                <button type="button" class="btn btn-primary system-update-open" onclick="event.stopPropagation(); openSystemUpdateModal()">
+                    {{ 'آپدیت پنل' if panel_lang == 'fa' else 'Update panel' }}
+                </button>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
+
+{% if is_superadmin %}
+<div class="modal-overlay hidden" id="system-update-modal">
+    <div class="modal modal-lg system-update-modal" role="dialog" aria-modal="true" aria-labelledby="system-update-title">
+        <div class="modal-header">
+            <div>
+                <h2 id="system-update-title">{{ 'آپدیت امن پنل' if panel_lang == 'fa' else 'Safe panel update' }}</h2>
+                <p class="system-update-subtitle">{{ 'آپدیت مستقل اجرا می‌شود؛ بسته‌شدن این پنجره آن را متوقف نمی‌کند.' if panel_lang == 'fa' else 'The update runs independently; closing this window does not stop it.' }}</p>
+            </div>
+            <button type="button" class="modal-close" onclick="closeSystemUpdateModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="system-update-state idle" id="system-update-state">
+                <span class="system-update-state-dot"></span>
+                <div><strong id="system-update-state-title">{{ 'آماده آپدیت' if panel_lang == 'fa' else 'Ready to update' }}</strong><small id="system-update-state-detail"></small></div>
+            </div>
+            <div class="system-update-safety">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+                <div>
+                    <strong>{{ 'بازیابی خودکار فعال است' if panel_lang == 'fa' else 'Automatic recovery is enabled' }}</strong>
+                    <span>{{ 'قبل از تغییر فایل‌ها backup ساخته می‌شود. اگر آپدیت، restart یا health-check شکست بخورد، نسخه سالم قبلی خودکار برمی‌گردد. ممکن است هنگام restart چند ثانیه اتصال قطع و دوباره برقرار شود.' if panel_lang == 'fa' else 'A backup is created before files change. If update, restart, or health checks fail, the previous healthy version is restored automatically. The connection may briefly reconnect during restart.' }}</span>
+                </div>
+            </div>
+            <div class="system-update-log-head"><span>{{ 'لاگ زنده' if panel_lang == 'fa' else 'Live log' }}</span><span id="system-update-log-state"></span></div>
+            <pre class="system-update-log" id="system-update-log">{{ 'هنوز آپدیتی شروع نشده است.' if panel_lang == 'fa' else 'No update has started yet.' }}</pre>
+            <div class="pulse-message" id="system-update-message"></div>
+            <div class="form-actions system-update-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeSystemUpdateModal()">{{ 'بستن' if panel_lang == 'fa' else 'Close' }}</button>
+                <button type="button" class="btn btn-primary" id="system-update-start" onclick="startSystemUpdate()">{{ 'شروع آپدیت امن' if panel_lang == 'fa' else 'Start safe update' }}</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <div class="inbounds-section">
     <div class="section-header">
@@ -1215,6 +1263,33 @@
 <script src="{{ url_for('static', filename='jalalidatepicker.min.js') }}"></script>
 
 <style nonce="{{ csp_nonce }}">
+    .system-update-card .stat-info { min-width:0; }
+    .system-update-card .system-update-open { margin-top:8px; padding:6px 10px; width:max-content; font-size:.75rem; }
+    .system-update-modal { width:min(760px, calc(100vw - 28px)); }
+    .system-update-subtitle { margin:4px 0 0; color:var(--text-secondary); font-size:.76rem; font-weight:400; }
+    .system-update-state { display:flex; align-items:center; gap:10px; padding:11px 13px; margin-bottom:12px; border:1px solid var(--border-color); border-radius:10px; background:rgba(148,163,184,.06); }
+    .system-update-state-dot { width:10px; height:10px; flex:0 0 10px; border-radius:50%; background:#94a3b8; }
+    .system-update-state div { display:flex; min-width:0; flex-direction:column; gap:2px; }
+    .system-update-state strong { color:var(--text-primary); font-size:.86rem; }
+    .system-update-state small { color:var(--text-secondary); font-size:.72rem; }
+    .system-update-state.running { border-color:rgba(59,130,246,.3); background:rgba(59,130,246,.07); }
+    .system-update-state.running .system-update-state-dot { background:#60a5fa; box-shadow:0 0 0 5px rgba(59,130,246,.12); animation:updatePulse 1.3s infinite; }
+    .system-update-state.succeeded { border-color:rgba(34,197,94,.3); background:rgba(34,197,94,.07); }
+    .system-update-state.succeeded .system-update-state-dot { background:#22c55e; }
+    .system-update-state.rolled_back,.system-update-state.failed,.system-update-state.interrupted { border-color:rgba(245,158,11,.32); background:rgba(245,158,11,.07); }
+    .system-update-state.rolled_back .system-update-state-dot,.system-update-state.failed .system-update-state-dot,.system-update-state.interrupted .system-update-state-dot { background:#f59e0b; }
+    @keyframes updatePulse { 50% { opacity:.45; transform:scale(.8); } }
+    .system-update-safety { display:flex; align-items:flex-start; gap:10px; padding:11px 13px; margin-bottom:14px; border-radius:10px; color:#a7f3d0; background:rgba(16,185,129,.07); border:1px solid rgba(16,185,129,.2); }
+    .system-update-safety svg { flex:0 0 20px; margin-top:1px; }
+    .system-update-safety div { display:flex; flex-direction:column; gap:3px; }
+    .system-update-safety strong { font-size:.79rem; }
+    .system-update-safety span { color:var(--text-secondary); font-size:.72rem; line-height:1.6; }
+    .system-update-log-head { display:flex; justify-content:space-between; gap:10px; margin-bottom:6px; color:var(--text-secondary); font-size:.72rem; }
+    .system-update-log { box-sizing:border-box; width:100%; height:270px; margin:0; padding:12px; overflow:auto; border:1px solid var(--border-color); border-radius:10px; background:#080e1c; color:#cbd5e1; font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; direction:ltr; text-align:left; white-space:pre-wrap; word-break:break-word; }
+    #system-update-message { min-height:18px; margin-top:8px; color:#fca5a5; font-size:.76rem; }
+    .system-update-actions { margin-top:8px; }
+    @media(max-width:640px) { .system-update-log{height:230px}.system-update-modal .modal-body{padding:14px}.system-update-actions{display:grid;grid-template-columns:1fr 1fr}.system-update-actions .btn{width:100%} }
+
     /* Jalali Datepicker Dark Theme Overrides */
     jdp-container {
         background-color: var(--bg-card) !important;
@@ -8806,6 +8881,143 @@ Connection links
             }
         }
     }
+
+    {% if is_superadmin %}
+    const SYSTEM_UPDATE_TEXT = {
+        ready: {{ ('آماده آپدیت' if panel_lang == 'fa' else 'Ready to update')|tojson }},
+        running: {{ ('آپدیت در حال اجراست' if panel_lang == 'fa' else 'Update in progress')|tojson }},
+        reconnecting: {{ ('پنل در حال restart است؛ در حال اتصال مجدد…' if panel_lang == 'fa' else 'Panel is restarting; reconnecting…')|tojson }},
+        succeeded: {{ ('آپدیت با موفقیت انجام شد' if panel_lang == 'fa' else 'Update completed successfully')|tojson }},
+        rolled_back: {{ ('آپدیت ناموفق بود؛ نسخه قبلی سالم برگشت' if panel_lang == 'fa' else 'Update failed; previous healthy version restored')|tojson }},
+        failed: {{ ('آپدیت و بازیابی خودکار ناموفق بود' if panel_lang == 'fa' else 'Update and automatic recovery failed')|tojson }},
+        interrupted: {{ ('فرایند آپدیت نیمه‌کاره متوقف شد' if panel_lang == 'fa' else 'Update process was interrupted')|tojson }},
+        unavailable: {{ ('برای فعال‌شدن این قابلیت، یک بار از SSH آپدیت کنید.' if panel_lang == 'fa' else 'Run one SSH update to enable this feature.')|tojson }},
+        starting: {{ ('در حال شروع سرویس آپدیت…' if panel_lang == 'fa' else 'Starting update service…')|tojson }},
+        not_started: {{ ('سرویس آپدیت شروع نشد؛ لاگ systemd را بررسی کنید.' if panel_lang == 'fa' else 'Update service did not start; check the systemd log.')|tojson }},
+        start: {{ ('شروع آپدیت امن' if panel_lang == 'fa' else 'Start safe update')|tojson }},
+    };
+    const SYSTEM_UPDATE_IS_FA = {{ (panel_lang == 'fa')|tojson }};
+    let systemUpdateOffset = 0;
+    let systemUpdateTimer = null;
+    let systemUpdateIsRunning = false;
+    let systemUpdateAwaitingStart = false;
+    let systemUpdateStartDeadline = 0;
+
+    function setSystemUpdateState(state, detail) {
+        const box = document.getElementById('system-update-state');
+        const title = document.getElementById('system-update-state-title');
+        const detailEl = document.getElementById('system-update-state-detail');
+        if (!box || !title) return;
+        box.className = `system-update-state ${state || 'idle'}`;
+        title.textContent = SYSTEM_UPDATE_TEXT[state] || SYSTEM_UPDATE_TEXT.ready;
+        if (detailEl) detailEl.textContent = detail || '';
+    }
+
+    function scheduleSystemUpdatePoll(delay = 1500) {
+        if (systemUpdateTimer) clearTimeout(systemUpdateTimer);
+        systemUpdateTimer = setTimeout(() => refreshSystemUpdateStatus(false), delay);
+    }
+
+    async function refreshSystemUpdateStatus(resetLog = false) {
+        const startButton = document.getElementById('system-update-start');
+        const log = document.getElementById('system-update-log');
+        const message = document.getElementById('system-update-message');
+        try {
+            if (resetLog) systemUpdateOffset = 0;
+            const response = await fetch(`/api/system-update/status?offset=${systemUpdateOffset}`, {cache:'no-store'});
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Status request failed');
+            const status = data.status || {};
+            const state = status.state || 'idle';
+            if (systemUpdateAwaitingStart && state !== 'running') {
+                if (Date.now() < systemUpdateStartDeadline) {
+                    systemUpdateIsRunning = true;
+                    setSystemUpdateState('running', SYSTEM_UPDATE_TEXT.starting);
+                    scheduleSystemUpdatePoll(500);
+                    return;
+                }
+                systemUpdateAwaitingStart = false;
+                throw new Error(SYSTEM_UPDATE_TEXT.not_started);
+            }
+            if (state === 'running') systemUpdateAwaitingStart = false;
+            if (resetLog && log) log.textContent = '';
+            if (data.log && log) {
+                log.textContent += data.log;
+                if (log.textContent.length > 500000) {
+                    log.textContent = log.textContent.slice(-500000);
+                }
+                log.scrollTop = log.scrollHeight;
+            }
+            systemUpdateOffset = Number(data.next_offset || 0);
+            systemUpdateIsRunning = state === 'running';
+            setSystemUpdateState(state, SYSTEM_UPDATE_IS_FA ? '' : (status.message || ''));
+            const version = status.version || data.current_version;
+            const versionEl = document.getElementById('system-update-version');
+            if (versionEl && version) versionEl.textContent = `v${version}`;
+            if (startButton) {
+                startButton.disabled = systemUpdateIsRunning || !data.available;
+                startButton.textContent = systemUpdateIsRunning ? SYSTEM_UPDATE_TEXT.running : SYSTEM_UPDATE_TEXT.start;
+            }
+            if (message) message.textContent = data.available ? '' : SYSTEM_UPDATE_TEXT.unavailable;
+            const logState = document.getElementById('system-update-log-state');
+            if (logState) logState.textContent = systemUpdateIsRunning ? SYSTEM_UPDATE_TEXT.running : '';
+            if (data.has_more) scheduleSystemUpdatePoll(50);
+            else if (systemUpdateIsRunning) scheduleSystemUpdatePoll();
+            else if (systemUpdateTimer) { clearTimeout(systemUpdateTimer); systemUpdateTimer = null; }
+        } catch (error) {
+            if (systemUpdateIsRunning) {
+                setSystemUpdateState('running', SYSTEM_UPDATE_TEXT.reconnecting);
+                scheduleSystemUpdatePoll(2000);
+            } else if (message) {
+                message.textContent = error.message || String(error);
+            }
+        }
+    }
+
+    function openSystemUpdateModal() {
+        document.getElementById('system-update-modal')?.classList.remove('hidden');
+        refreshSystemUpdateStatus(true);
+    }
+
+    function closeSystemUpdateModal() {
+        document.getElementById('system-update-modal')?.classList.add('hidden');
+        if (!systemUpdateIsRunning && systemUpdateTimer) {
+            clearTimeout(systemUpdateTimer);
+            systemUpdateTimer = null;
+        }
+    }
+
+    async function startSystemUpdate() {
+        const button = document.getElementById('system-update-start');
+        const message = document.getElementById('system-update-message');
+        if (button) button.disabled = true;
+        if (message) message.textContent = '';
+        setSystemUpdateState('running', SYSTEM_UPDATE_TEXT.starting);
+        try {
+            const response = await fetch('/api/system-update/start', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({confirm:'UPDATE'}),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Update could not start');
+            systemUpdateIsRunning = true;
+            systemUpdateAwaitingStart = true;
+            systemUpdateStartDeadline = Date.now() + 15000;
+            systemUpdateOffset = 0;
+            const log = document.getElementById('system-update-log');
+            if (log) log.textContent = SYSTEM_UPDATE_TEXT.starting + '\n';
+            scheduleSystemUpdatePoll(500);
+        } catch (error) {
+            systemUpdateIsRunning = false;
+            systemUpdateAwaitingStart = false;
+            setSystemUpdateState('failed', error.message || String(error));
+            if (message) message.textContent = error.message || String(error);
+            if (button) button.disabled = false;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => refreshSystemUpdateStatus(false));
+    {% endif %}
 
     function toggleOverview() {
         const stats = document.getElementById('overview-stats');

@@ -1150,7 +1150,7 @@
         let _historyPeriod = 'day';
         const HISTORY_PAGE_SIZE = 10;
         let _historyRows = [];
-        let _historyRenewalLabels = new Set();
+        let _historyRenewalsByLabel = new Map();
         let _historyPage = 0;
         let _historyPages = [];
         let _historyAbortController = null;
@@ -1276,7 +1276,19 @@
 
             const page = _historyPages[_historyPage] || { rows: [], renewals: [], pageInfo: {} };
             _historyRows = page.rows || [];
-            _historyRenewalLabels = new Set((page.renewals || []).map(r => fmtJalali(r.renewed_at, _historyPeriod)));
+            _historyRenewalsByLabel = new Map();
+            (page.renewals || []).forEach(renewal => {
+                const label = fmtJalali(renewal.renewed_at, _historyPeriod);
+                const existing = _historyRenewalsByLabel.get(label);
+                if (!existing) {
+                    _historyRenewalsByLabel.set(label, {...renewal});
+                } else if (existing.is_unlimited_volume || renewal.is_unlimited_volume) {
+                    existing.is_unlimited_volume = true;
+                    existing.volume_bytes = null;
+                } else {
+                    existing.volume_bytes = Number(existing.volume_bytes || 0) + Number(renewal.volume_bytes || 0);
+                }
+            });
             renderHistoryRenewals(page.renewals || []);
             const pageRows = _historyRows;
 
@@ -1290,8 +1302,12 @@
                 const dateLabel = row.is_cumulative
                     ? `<span style="font-size:.72rem;opacity:.6;">${IS_FA?'تا':'Until'}</span> ${dateFmt}`
                     : dateFmt;
-                const renewedTag = _historyRenewalLabels.has(dateFmt)
-                    ? `<div class="font-semibold text-success" style="font-size:.65rem; margin-top:2px;">${IS_FA?'تمدید':'Renewed'}</div>`
+                const renewal = _historyRenewalsByLabel.get(dateFmt);
+                const renewalVolume = renewal
+                    ? (renewal.is_unlimited_volume ? (IS_FA?'نامحدود':'Unlimited') : fmtBytes(renewal.volume_bytes))
+                    : '';
+                const renewedTag = renewal
+                    ? `<div class="font-semibold text-success" style="font-size:.65rem; margin-top:2px;">${IS_FA?'تمدید':'Renewed'} · ${renewalVolume}</div>`
                     : '';
                 return `<tr class="hover:bg-white/5 transition-colors" style="direction:rtl;">
                     <td class="px-3 py-2 text-muted whitespace-nowrap text-right">${dateLabel}${renewedTag}</td>
