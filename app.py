@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.22"
+APP_VERSION = "2.5.23"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -27944,43 +27944,57 @@ def _telegram_bot_attempt(token: str, route_name: str, proxies=None, proxy=None)
             'error_code': transport.get('error_code'), 'stages': stages,
         }
     api_started = time.perf_counter()
-    try:
-        response = _telegram_get_me(token, proxies=proxies, timeout_sec=10)
-        latency = max(0, int((time.perf_counter() - started) * 1000))
-        api_latency = max(0, int((time.perf_counter() - api_started) * 1000))
+    api_attempts = 0
+    while True:
+        api_attempts += 1
         try:
-            body = response.json() if response.content else {}
-        except Exception:
-            body = {}
-        result = body.get('result') if isinstance(body, dict) else None
-        if response.status_code == 200 and isinstance(body, dict) and body.get('ok') and isinstance(result, dict):
-            stages.append({'name': 'telegram_api', 'status': 'passed', 'latency_ms': api_latency})
+            response = _telegram_get_me(token, proxies=proxies, timeout_sec=10)
+            break
+        except Exception as exc:
+            error_code, safe_error = classify_telegram_connection_error(
+                exc, (token, username, password),
+            )
+            if error_code in {'route_outbound_closed', 'telegram_api_timeout'} and api_attempts < 2:
+                # A healthy Shadowsocks route can occasionally lose one upstream
+                # TLS connection. Retry once with requests' fresh one-shot pool.
+                time.sleep(0.25)
+                continue
+            latency = max(0, int((time.perf_counter() - started) * 1000))
+            api_latency = max(0, int((time.perf_counter() - api_started) * 1000))
+            stages.append({'name': 'telegram_api', 'status': 'failed', 'latency_ms': api_latency,
+                           'error_code': error_code, 'message': safe_error})
             return {
-                'success': True, 'route': route_name, 'latency_ms': latency,
-                'bot_user_id': result.get('id'), 'bot_username': result.get('username'),
-                'bot_name': result.get('first_name'), 'stages': stages,
+                'success': False, 'route': route_name,
+                'latency_ms': latency, 'error': safe_error,
+                'error_code': error_code, 'api_attempts': api_attempts, 'stages': stages,
             }
-        description = body.get('description') if isinstance(body, dict) else None
-        safe_error = redact_connection_error(description or f'Telegram returned HTTP {response.status_code}', (token, username, password))
-        stages.append({'name': 'telegram_api', 'status': 'failed', 'latency_ms': api_latency,
-                       'error_code': 'telegram_api_rejected', 'message': safe_error})
+
+    latency = max(0, int((time.perf_counter() - started) * 1000))
+    api_latency = max(0, int((time.perf_counter() - api_started) * 1000))
+    try:
+        body = response.json() if response.content else {}
+    except Exception:
+        body = {}
+    result = body.get('result') if isinstance(body, dict) else None
+    if response.status_code == 200 and isinstance(body, dict) and body.get('ok') and isinstance(result, dict):
+        stages.append({'name': 'telegram_api', 'status': 'passed', 'latency_ms': api_latency})
         return {
-            'success': False, 'route': route_name, 'latency_ms': latency,
-            'error': safe_error, 'error_code': 'telegram_api_rejected', 'stages': stages,
+            'success': True, 'route': route_name, 'latency_ms': latency,
+            'bot_user_id': result.get('id'), 'bot_username': result.get('username'),
+            'bot_name': result.get('first_name'), 'api_attempts': api_attempts, 'stages': stages,
         }
-    except Exception as exc:
-        error_code, safe_error = classify_telegram_connection_error(
-            exc, (token, username, password),
-        )
-        latency = max(0, int((time.perf_counter() - started) * 1000))
-        api_latency = max(0, int((time.perf_counter() - api_started) * 1000))
-        stages.append({'name': 'telegram_api', 'status': 'failed', 'latency_ms': api_latency,
-                       'error_code': error_code, 'message': safe_error})
-        return {
-            'success': False, 'route': route_name,
-            'latency_ms': latency, 'error': safe_error,
-            'error_code': error_code, 'stages': stages,
-        }
+    description = body.get('description') if isinstance(body, dict) else None
+    safe_error = redact_connection_error(
+        description or f'Telegram returned HTTP {response.status_code}',
+        (token, username, password),
+    )
+    stages.append({'name': 'telegram_api', 'status': 'failed', 'latency_ms': api_latency,
+                   'error_code': 'telegram_api_rejected', 'message': safe_error})
+    return {
+        'success': False, 'route': route_name, 'latency_ms': latency,
+        'error': safe_error, 'error_code': 'telegram_api_rejected',
+        'api_attempts': api_attempts, 'stages': stages,
+    }
 
 
 def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_proxy_id=None,
@@ -29985,6 +29999,31 @@ def test_telegram_egress_profile(profile_id):
     profile = TelegramEgressProfile.query.filter_by(id=profile_id, bot_instance_id=bot.id).first()
     if not profile:
         return jsonify({'success': False, 'error': 'Egress profile not found'}), 404
+    if not profile.enabled:
+        return jsonify({'success': False, 'error': 'Enable this managed route before testing it'}), 409
+
+    # The dedicated worker reloads profiles asynchronously. A test immediately
+    # after save/edit must never hit the previous Xray process and report a stale
+    # failure for the new configuration.
+    deadline = time.monotonic() + 12
+    while profile.runtime_status == 'pending' and time.monotonic() < deadline:
+        time.sleep(0.25)
+        db.session.expire_all()
+        profile = db.session.get(TelegramEgressProfile, profile_id)
+        if not profile or profile.bot_instance_id != bot.id:
+            return jsonify({'success': False, 'error': 'Egress profile is no longer available'}), 404
+    if profile.runtime_status != 'running':
+        runtime_error = redact_connection_error(profile.last_error) if profile.last_error else ''
+        message = runtime_error or (
+            'Xray is still preparing this route. Wait a few seconds and test again.'
+            if profile.runtime_status == 'pending'
+            else f'Xray route is not ready ({profile.runtime_status or "unknown"}).'
+        )
+        return jsonify({
+            'success': False, 'error': message,
+            'error_code': 'xray_route_not_ready',
+            'runtime_status': profile.runtime_status,
+        }), 503
     result = _telegram_bot_diagnostic(bot, only_egress_id=profile.id)
     if not result.get('success') and profile.runtime_status == 'runtime_missing':
         result['runtime_hint'] = ('Use Eve menu option [x] to install Xray, then restart '

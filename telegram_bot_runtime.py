@@ -81,6 +81,21 @@ class TelegramBotApi:
             self._route_state["preferred"] = None
         self._route_state["cooldowns"][route.name] = time.monotonic() + 20
 
+    def _post_with_transient_retry(self, route: TelegramRoute, url: str, **kwargs):
+        """Retry one upstream TLS EOF on the same route using a fresh pool."""
+        for attempt in range(2):
+            try:
+                return self._session.post(url, proxies=route.proxies, **kwargs)
+            except requests.RequestException as exc:
+                code, _safe = classify_telegram_connection_error(exc, (self._token,))
+                if code != "route_outbound_closed" or attempt > 0:
+                    raise
+                # Clear a possibly poisoned keep-alive connection before the
+                # single bounded retry. Session.close() keeps the Session usable.
+                self._session.close()
+                time.sleep(0.2)
+        raise RuntimeError("unreachable")
+
     def call(self, method: str, payload: dict[str, Any] | None = None,
              *, long_poll_timeout: int = 0) -> tuple[Any, str]:
         errors: list[str] = []
@@ -90,8 +105,8 @@ class TelegramBotApi:
         for route in self._ordered_routes():
             started = time.perf_counter()
             try:
-                response = self._session.post(
-                    url, json=payload or {}, proxies=route.proxies,
+                response = self._post_with_transient_retry(
+                    route, url, json=payload or {},
                     timeout=(connect_timeout, read_timeout),
                 )
                 try:

@@ -96,7 +96,7 @@ from telegram_bot_worker import (  # noqa: E402
     _service_expiry,
     process_update,
 )
-from telegram_bot_runtime import COPY  # noqa: E402
+from telegram_bot_runtime import COPY, TelegramBotApi, TelegramRoute  # noqa: E402
 
 
 PACKAGES = [
@@ -576,7 +576,50 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             )
         self.assertFalse(result['success'])
         self.assertEqual(result['error_code'], 'route_outbound_closed')
+        self.assertEqual(result['api_attempts'], 2)
         self.assertNotIn('SOCKSHTTPSConnectionPool', result['error'])
+
+    def test_get_me_recovers_from_one_transient_eof(self):
+        class GoodResponse:
+            status_code = 200
+            content = b'{}'
+
+            @staticmethod
+            def json():
+                return {'ok': True, 'result': {'id': 42, 'username': 'eve_test_bot'}}
+
+        transport_ok = {'success': True, 'stages': [
+            {'name': 'telegram_tls', 'status': 'passed', 'latency_ms': 1},
+        ]}
+        failure = requests.exceptions.SSLError(
+            "TLS/SSL connection has been closed (EOF)")
+        with patch('app.probe_telegram_transport', return_value=transport_ok), \
+                patch('app._telegram_get_me', side_effect=[failure, GoodResponse()]), \
+                patch('app.time.sleep'):
+            result = _telegram_bot_attempt(
+                '123456:abcdefghijklmnopqrstuvwxyz', 'xray://test',
+                proxies={'https': 'socks5h://127.0.0.1:12080'},
+            )
+        self.assertTrue(result['success'])
+        self.assertEqual(result['api_attempts'], 2)
+
+    def test_runtime_retries_tls_eof_with_fresh_connection_pool(self):
+        response = MagicMock(status_code=200)
+        response.json.return_value = {'ok': True, 'result': {'id': 42}}
+        failure = requests.exceptions.SSLError(
+            "TLS/SSL connection has been closed (EOF)")
+        api = TelegramBotApi(
+            '123456:abcdefghijklmnopqrstuvwxyz',
+            [TelegramRoute('xray://test', {'https': 'socks5h://127.0.0.1:12080'})],
+        )
+        api._session = MagicMock()
+        api._session.post.side_effect = [failure, response]
+        with patch('telegram_bot_runtime.time.sleep'):
+            result, route = api.call('getMe')
+        self.assertEqual(result['id'], 42)
+        self.assertEqual(route, 'xray://test')
+        self.assertEqual(api._session.post.call_count, 2)
+        api._session.close.assert_called_once_with()
 
     def test_vless_ws_tls_is_rendered_as_loopback_only_xray_config(self):
         uri = ('vless://11111111-1111-1111-1111-111111111111@example.com:443'
@@ -690,6 +733,36 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(profile.config_encrypted, encrypted)
         self.assertNotIn(uri, str(loaded))
         self.assertNotIn('config_encrypted', str(loaded))
+
+    def test_telegram_egress_test_waits_for_pending_worker_reload(self):
+        reviewer = Admin(
+            username='claim-test-egress-pending', role='superadmin',
+            is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        bot = TelegramBotInstance(
+            scope_key='system', display_name='Pending route bot',
+            connection_mode='proxy_only',
+        )
+        db.session.add_all([reviewer, bot])
+        db.session.flush()
+        profile = TelegramEgressProfile(
+            bot_instance_id=bot.id, name='Reloading route',
+            config_encrypted='enc:not-read-during-pending-test',
+            local_port=12080, enabled=True, runtime_status='pending',
+        )
+        db.session.add(profile)
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+        with patch('app.time.monotonic', side_effect=[0, 13]):
+            response = client.post(
+                f'/api/settings/telegram-bots/egress/{profile.id}/test')
+        payload = response.get_json()
+        self.assertFalse(payload['success'])
+        self.assertEqual(payload['error_code'], 'xray_route_not_ready')
+        self.assertEqual(payload['runtime_status'], 'pending')
 
     def test_telegram_egress_candidates_never_return_client_uuid(self):
         reviewer = Admin(
