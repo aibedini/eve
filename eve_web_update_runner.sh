@@ -10,6 +10,7 @@ SERVICE_NAME="eve-manager"
 STATE_DIR="/var/lib/eve-manager/web-update"
 STATUS_FILE="$STATE_DIR/status.json"
 LOG_FILE="$STATE_DIR/update.log"
+HEARTBEAT_FILE="$STATE_DIR/heartbeat"
 BACKUP_FILE="$STATE_DIR/backup-path"
 ROLLBACK_FILE="$STATE_DIR/rolled-back"
 SYSTEM_BACKUP="$STATE_DIR/system-files.tar.gz"
@@ -95,6 +96,18 @@ restore_previous_version() {
 rm -f "$BACKUP_FILE" "$ROLLBACK_FILE" "$SYSTEM_BACKUP"
 write_status "running" "Preparing a recoverable update"
 echo "Eve browser update started at $started_at (current version: ${current_version:-unknown})"
+
+# Liveness marker for the panel backend: a cheap mtime probe that survives
+# even if a later write_status call fails. Stopped via trap on any exit.
+heartbeat_loop() {
+    while :; do
+        touch "$HEARTBEAT_FILE" 2>/dev/null || true
+        sleep 5
+    done
+}
+heartbeat_loop &
+heartbeat_pid=$!
+trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
 # Preserve the known-good service/proxy definitions as well as application files.
 system_files=()

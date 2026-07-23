@@ -8888,6 +8888,7 @@ Connection links
         running: {{ ('آپدیت در حال اجراست' if panel_lang == 'fa' else 'Update in progress')|tojson }},
         reconnecting: {{ ('پنل در حال restart است؛ در حال اتصال مجدد…' if panel_lang == 'fa' else 'Panel is restarting; reconnecting…')|tojson }},
         succeeded: {{ ('آپدیت با موفقیت انجام شد' if panel_lang == 'fa' else 'Update completed successfully')|tojson }},
+        updated_reload: {{ ('پنل به نسخه v{version} آپدیت شد؛ در حال بارگذاری مجدد…' if panel_lang == 'fa' else 'Panel updated to v{version} — reloading…')|tojson }},
         rolled_back: {{ ('آپدیت ناموفق بود؛ نسخه قبلی سالم برگشت' if panel_lang == 'fa' else 'Update failed; previous healthy version restored')|tojson }},
         failed: {{ ('آپدیت و بازیابی خودکار ناموفق بود' if panel_lang == 'fa' else 'Update and automatic recovery failed')|tojson }},
         interrupted: {{ ('فرایند آپدیت نیمه‌کاره متوقف شد' if panel_lang == 'fa' else 'Update process was interrupted')|tojson }},
@@ -8902,6 +8903,8 @@ Connection links
     let systemUpdateIsRunning = false;
     let systemUpdateAwaitingStart = false;
     let systemUpdateStartDeadline = 0;
+    let systemUpdateStartedAt = 0;
+    let systemUpdateReloadPending = false;
 
     function setSystemUpdateState(state, detail) {
         const box = document.getElementById('system-update-state');
@@ -8940,6 +8943,15 @@ Connection links
                 throw new Error(SYSTEM_UPDATE_TEXT.not_started);
             }
             if (state === 'running') systemUpdateAwaitingStart = false;
+            if (state === 'interrupted' && systemUpdateStartedAt
+                    && (Date.now() - systemUpdateStartedAt) < 60000) {
+                // Right after start this can be a stale/racing read; status.json
+                // is durable, so keep polling instead of giving up.
+                systemUpdateIsRunning = true;
+                setSystemUpdateState('running', SYSTEM_UPDATE_TEXT.reconnecting);
+                scheduleSystemUpdatePoll(1500);
+                return;
+            }
             if (resetLog && log) log.textContent = '';
             if (data.log && log) {
                 log.textContent += data.log;
@@ -8954,6 +8966,12 @@ Connection links
             const version = status.version || data.current_version;
             const versionEl = document.getElementById('system-update-version');
             if (versionEl && version) versionEl.textContent = `v${version}`;
+            if (state === 'succeeded' && systemUpdateStartedAt && !systemUpdateReloadPending) {
+                setSystemUpdateState('succeeded',
+                    SYSTEM_UPDATE_TEXT.updated_reload.replace('{version}', version || ''));
+                waitForPanelReload(version);
+                return;
+            }
             if (startButton) {
                 startButton.disabled = systemUpdateIsRunning || !data.available;
                 startButton.textContent = systemUpdateIsRunning ? SYSTEM_UPDATE_TEXT.running : SYSTEM_UPDATE_TEXT.start;
@@ -8972,6 +8990,25 @@ Connection links
                 message.textContent = error.message || String(error);
             }
         }
+    }
+
+    async function waitForPanelReload(targetVersion) {
+        if (systemUpdateReloadPending) return;
+        systemUpdateReloadPending = true;
+        const deadline = Date.now() + 90000;
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            try {
+                const response = await fetch('/healthz', {cache: 'no-store'});
+                if (response.ok) {
+                    const data = await response.json();
+                    if (!targetVersion || data.version === targetVersion) break;
+                }
+            } catch (error) {
+                // Panel is still restarting; keep waiting.
+            }
+        }
+        location.reload();
     }
 
     function openSystemUpdateModal() {
@@ -9003,6 +9040,7 @@ Connection links
             systemUpdateIsRunning = true;
             systemUpdateAwaitingStart = true;
             systemUpdateStartDeadline = Date.now() + 15000;
+            systemUpdateStartedAt = Date.now();
             systemUpdateOffset = 0;
             const log = document.getElementById('system-update-log');
             if (log) log.textContent = SYSTEM_UPDATE_TEXT.starting + '\n';

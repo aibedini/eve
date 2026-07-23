@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.28"
+APP_VERSION = "2.5.30"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -32451,12 +32451,26 @@ def _system_update_status_payload(log_offset=0):
 
     # A reboot or killed updater must not leave the UI permanently locked in
     # "running". Reading systemd state is unprivileged and uses a fixed unit.
+    # The unit is Type=oneshot, so it reports ActiveState=activating for its
+    # entire run; `is-active --quiet` would misread that as dead. Query the
+    # ActiveState value instead and treat every live state as alive.
     if status.get('state') == 'running':
         try:
-            active = subprocess.run(
-                ['/bin/systemctl', 'is-active', '--quiet', 'eve-web-update.service'],
-                capture_output=True, timeout=3, check=False,
-            ).returncode == 0
+            probe = subprocess.run(
+                ['/bin/systemctl', 'show', '--property=ActiveState', '--value',
+                 'eve-web-update.service'],
+                capture_output=True, timeout=3, check=False, text=True,
+            )
+            if probe.returncode == 0:
+                active_state = (probe.stdout or '').strip().lower()
+                if active_state in ('active', 'activating', 'reloading', 'refreshing'):
+                    active = True
+                elif active_state in ('inactive', 'failed', 'deactivating'):
+                    active = False
+                else:
+                    active = None
+            else:
+                active = None
         except (OSError, subprocess.SubprocessError):
             active = None
         if active is False:

@@ -98,29 +98,93 @@ class SystemUpdateApiTest(unittest.TestCase):
             run.call_args.args[0], list(app_module.SYSTEM_UPDATE_START_COMMAND))
         self.assertEqual(run.call_args.kwargs['timeout'], 10)
 
-    def test_stale_running_state_is_reported_as_interrupted(self):
+    def _write_status(self, state, **extra):
+        payload = {'state': state}
+        payload.update(extra)
         (self.state_dir / 'status.json').write_text(
-            json.dumps({'state': 'running', 'message': 'old run'}),
-            encoding='utf-8')
-        inactive = mock.Mock(returncode=3)
-        with mock.patch.object(app_module.subprocess, 'run', return_value=inactive):
+            json.dumps(payload), encoding='utf-8')
+
+    @staticmethod
+    def _systemd_probe(active_state):
+        return mock.Mock(returncode=0, stdout=f'{active_state}\n', stderr='')
+
+    def test_stale_running_state_is_reported_as_interrupted(self):
+        self._write_status('running', message='old run')
+        with mock.patch.object(
+                app_module.subprocess, 'run',
+                return_value=self._systemd_probe('inactive')):
             payload = self.client.get('/api/system-update/status').get_json()
         self.assertEqual(payload['status']['state'], 'interrupted')
         self.assertIn('stopped', payload['status']['message'])
 
+    def test_failed_unit_is_reported_as_interrupted(self):
+        self._write_status('running')
+        with mock.patch.object(
+                app_module.subprocess, 'run',
+                return_value=self._systemd_probe('failed')):
+            payload = self.client.get('/api/system-update/status').get_json()
+        self.assertEqual(payload['status']['state'], 'interrupted')
+
+    def test_activating_oneshot_unit_keeps_running_state(self):
+        # Regression: eve-web-update.service is Type=oneshot, so it reports
+        # ActiveState=activating for its entire run; that must read as alive.
+        self._write_status('running', message='Installing')
+        with mock.patch.object(
+                app_module.subprocess, 'run',
+                return_value=self._systemd_probe('activating')) as run:
+            payload = self.client.get('/api/system-update/status').get_json()
+        self.assertEqual(payload['status']['state'], 'running')
+        run.assert_called_once_with(
+            ['/bin/systemctl', 'show', '--property=ActiveState', '--value',
+             'eve-web-update.service'],
+            capture_output=True, timeout=3, check=False, text=True)
+
+    def test_active_unit_keeps_running_state(self):
+        self._write_status('running')
+        with mock.patch.object(
+                app_module.subprocess, 'run',
+                return_value=self._systemd_probe('active')):
+            payload = self.client.get('/api/system-update/status').get_json()
+        self.assertEqual(payload['status']['state'], 'running')
+
+    def test_systemd_probe_timeout_fails_open(self):
+        self._write_status('running')
+        with mock.patch.object(
+                app_module.subprocess, 'run',
+                side_effect=app_module.subprocess.TimeoutExpired('systemctl', 3)):
+            payload = self.client.get('/api/system-update/status').get_json()
+        self.assertEqual(payload['status']['state'], 'running')
+
+    def test_unparseable_active_state_fails_open(self):
+        self._write_status('running')
+        with mock.patch.object(
+                app_module.subprocess, 'run',
+                return_value=self._systemd_probe('')):
+            payload = self.client.get('/api/system-update/status').get_json()
+        self.assertEqual(payload['status']['state'], 'running')
+
+    def test_terminal_status_skips_systemd_probe(self):
+        for state in ('succeeded', 'failed', 'rolled_back'):
+            self._write_status(state)
+            with mock.patch.object(app_module.subprocess, 'run') as run:
+                payload = self.client.get('/api/system-update/status').get_json()
+            self.assertEqual(payload['status']['state'], state)
+            run.assert_not_called()
+
     def test_running_update_cannot_be_started_twice(self):
-        (self.state_dir / 'status.json').write_text(
-            json.dumps({'state': 'running'}), encoding='utf-8')
-        active = mock.Mock(returncode=0)
-        with mock.patch.object(app_module.subprocess, 'run', return_value=active) as run:
+        self._write_status('running')
+        with mock.patch.object(
+                app_module.subprocess, 'run',
+                return_value=self._systemd_probe('activating')) as run:
             response = self.client.post(
                 '/api/system-update/start', json={'confirm': 'UPDATE'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get('X-Eve-Status'), '409')
         self.assertFalse(response.get_json()['success'])
         run.assert_called_once_with(
-            ['/bin/systemctl', 'is-active', '--quiet', 'eve-web-update.service'],
-            capture_output=True, timeout=3, check=False)
+            ['/bin/systemctl', 'show', '--property=ActiveState', '--value',
+             'eve-web-update.service'],
+            capture_output=True, timeout=3, check=False, text=True)
 
     def test_update_endpoints_and_dashboard_card_are_superadmin_only(self):
         regular_client = app.test_client()

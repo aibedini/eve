@@ -506,20 +506,45 @@
 
                     <div id="telegram-backup-account-fields" style="display:none;">
                         <div class="form-group">
-                            <label for="telegram-backup-account-search">Find Account</label>
-                            <input id="telegram-backup-account-search" class="form-control" type="search" placeholder="Search account, phone, or server…" autocomplete="off" spellcheck="false" oninput="renderTelegramBackupAccounts()">
+                            <label for="telegram-backup-server" id="telegram-backup-server-label">Server</label>
+                            <select id="telegram-backup-server" class="form-select" onchange="onTelegramBackupServerChange()">
+                                <option value="">Choose a server…</option>
+                            </select>
                         </div>
-                        <div class="telegram-backup-account-grid">
-                            <div class="form-group">
-                                <label for="telegram-backup-account">Account</label>
-                                <select id="telegram-backup-account" class="form-select" size="6" onchange="renderTelegramBackupInbounds()"></select>
-                            </div>
-                            <div class="form-group">
-                                <label for="telegram-backup-inbound">Inbound</label>
-                                <select id="telegram-backup-inbound" class="form-select" size="6"></select>
-                            </div>
+                        <div class="telegram-backup-picker-grid">
+                            <section class="telegram-backup-picker-panel" aria-labelledby="telegram-backup-inbound-title">
+                                <div class="telegram-backup-picker-head">
+                                    <span class="telegram-backup-picker-label" id="telegram-backup-inbound-title">Inbounds</span>
+                                    <div class="telegram-backup-picker-tools">
+                                        <span class="telegram-backup-count-label"><span class="telegram-backup-count" id="telegram-backup-inbound-selected-count">0</span> <span id="telegram-backup-inbound-count-label">selected</span></span>
+                                        <span id="telegram-backup-inbound-actions" hidden>
+                                            <button type="button" class="text-btn" id="telegram-backup-inbound-select-all" onclick="telegramBackupSelectAllInbounds()">Select all</button>
+                                            <button type="button" class="text-btn" id="telegram-backup-inbound-clear" onclick="telegramBackupClearInbounds()">Clear</button>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="telegram-backup-choice-box filter-list" id="telegram-backup-inbounds">
+                                    <div class="telegram-backup-picker-empty">Choose a server…</div>
+                                </div>
+                                <div class="telegram-backup-mode-hint" id="telegram-backup-mode-hint"></div>
+                            </section>
+                            <section class="telegram-backup-picker-panel" aria-labelledby="telegram-backup-client-title">
+                                <div class="telegram-backup-picker-head">
+                                    <span class="telegram-backup-picker-label" id="telegram-backup-client-title">Client</span>
+                                    <div class="telegram-backup-picker-tools">
+                                        <span class="telegram-backup-count-label"><span class="telegram-backup-count" id="telegram-backup-client-count">0</span> <span id="telegram-backup-client-count-label">clients</span></span>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="margin-bottom:8px;">
+                                    <input id="telegram-backup-client-search" class="form-control" type="search" placeholder="Search clients…" autocomplete="off" spellcheck="false" disabled oninput="filterTelegramBackupClients()">
+                                </div>
+                                <div class="telegram-backup-choice-box filter-list" id="telegram-backup-clients">
+                                    <div class="telegram-backup-picker-empty">Choose an inbound…</div>
+                                </div>
+                            </section>
                         </div>
-                        <small id="telegram-backup-account-hint" class="text-secondary" aria-live="polite">Loading active accounts…</small>
+                        <div class="telegram-backup-selection-summary" id="telegram-backup-selection-summary" aria-live="polite"></div>
+                        <small id="telegram-backup-account-hint" class="text-secondary" aria-live="polite"></small>
                     </div>
 
                     <div id="telegram-backup-manual-proxy-fields">
@@ -2449,13 +2474,103 @@
         gap: 10px;
     }
 
-    .telegram-backup-account-grid {
+    .telegram-backup-picker-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         gap: 12px;
+        align-items: stretch;
     }
-    .telegram-backup-account-grid .form-group { min-width: 0; }
-    .telegram-backup-account-grid select { min-height: 150px; }
+    .telegram-backup-picker-panel {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        padding: 12px;
+        background: rgba(15, 23, 42, 0.28);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+    }
+    .telegram-backup-picker-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-height: 30px;
+        margin-bottom: 8px;
+    }
+    .telegram-backup-picker-label {
+        color: var(--text-primary);
+        font-size: 0.84rem;
+        font-weight: 650;
+    }
+    .telegram-backup-picker-tools {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+    .telegram-backup-picker-tools .text-btn { padding: 3px 6px; }
+    .telegram-backup-count-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--text-secondary);
+        font-size: 0.7rem;
+        white-space: nowrap;
+    }
+    .telegram-backup-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 22px;
+        height: 22px;
+        padding: 0 7px;
+        border-radius: 999px;
+        background: rgba(99, 102, 241, 0.16);
+        color: #818cf8;
+        font-size: 0.7rem;
+        font-weight: 700;
+    }
+    .telegram-backup-choice-box {
+        height: 190px;
+        overflow: auto;
+        background: var(--bg-dark);
+        border: 1px solid var(--border-color);
+        border-radius: 9px;
+        padding: 8px;
+    }
+    .telegram-backup-choice {
+        display: flex !important;
+        gap: 8px;
+        align-items: center;
+        padding: 7px;
+        border-radius: 7px;
+        font-size: 0.8rem;
+        color: var(--text-primary) !important;
+        margin: 0 !important;
+    }
+    .telegram-backup-choice:hover { background: rgba(99, 102, 241, 0.08); }
+    .telegram-backup-choice input { width: auto; }
+    .telegram-backup-mode-hint {
+        min-height: 30px;
+        color: var(--text-secondary);
+        font-size: 0.72rem;
+        line-height: 1.5;
+        margin-top: 6px;
+    }
+    .telegram-backup-picker-empty {
+        color: var(--text-secondary);
+        font-size: 0.78rem;
+        padding: 14px;
+        text-align: center;
+    }
+    .telegram-backup-selection-summary {
+        margin-top: 10px;
+        color: var(--text-secondary);
+        font-size: 0.8rem;
+        line-height: 1.55;
+    }
+    .telegram-backup-selection-summary strong { color: var(--text-primary); }
     #telegram-backup-account-fields {
         margin-bottom: 14px;
         padding: 14px;
@@ -2506,8 +2621,8 @@
         .telegram-announcement-actions .btn { width: 100%; justify-content: center; }
         .telegram-backup-header-actions { width: 100%; }
         .telegram-backup-header-actions .btn { flex: 1; justify-content: center; }
-        .telegram-backup-account-grid { grid-template-columns: 1fr; }
-        .telegram-backup-account-grid select { min-height: 120px; }
+        .telegram-backup-picker-grid { grid-template-columns: 1fr; }
+        .telegram-backup-choice-box { height: 150px; }
         .telegram-notification-thresholds { grid-template-columns: 1fr; }
         .telegram-campaign-row { align-items: stretch; flex-direction: column; }
         .telegram-campaign-actions .btn { flex: 1; justify-content: center; }
@@ -7031,11 +7146,13 @@
             if (lastRun) lastRun.textContent = data.last_run_jalali || 'Never';
 
             if (data.route_source === 'panel_account') {
-                await loadTelegramEgressCandidates();
                 const managed = data.managed_account || {};
-                const selectedKey = [managed.server_id, managed.inbound_id, managed.client_id]
-                    .map(value => String(value ?? '')).join(':');
-                renderTelegramBackupAccounts(selectedKey);
+                await loadTelegramBackupServers(managed.server_id ?? null);
+                if (managed.server_id) {
+                    await onTelegramBackupServerChange(
+                        managed.inbound_id != null ? [managed.inbound_id] : [],
+                        managed.client_id ?? null);
+                }
             }
             updateTelegramProxyModeUI();
         } catch (e) {
@@ -7058,10 +7175,8 @@
         if (manualFields) manualFields.style.display = routeSource === 'manual_proxy' ? '' : 'none';
         if (accountFields) accountFields.style.display = routeSource === 'panel_account' ? '' : 'none';
         if (routeSource === 'panel_account') {
-            if (!telegramBotEgressCandidates.length) {
-                loadTelegramEgressCandidates().then(() => renderTelegramBackupAccounts());
-            } else {
-                renderTelegramBackupAccounts();
+            if (!telegramBackupServersLoaded) {
+                loadTelegramBackupServers();
             }
             return;
         }
@@ -7134,8 +7249,8 @@
         // Client-side validation when proxy is enabled
         const managedCandidate = routeSource === 'panel_account' ? selectedTelegramBackupCandidate() : null;
         if (routeSource === 'panel_account' && !managedCandidate) {
-            showToast('Choose an account and inbound for the backup route', 'error');
-            document.getElementById('telegram-backup-account').focus();
+            showToast('Choose a server, inbound, and client for the backup route', 'error');
+            document.getElementById('telegram-backup-server').focus();
             return;
         }
         if (routeSource === 'manual_proxy') {
@@ -7245,7 +7360,7 @@
         try {
             const payload = getTelegramBackupPayload();
             if (payload.route_source === 'panel_account' && !payload.client_id) {
-                throw new Error('Choose an account and inbound before testing.');
+                throw new Error('Choose a server, inbound, and client before testing.');
             }
             const res = await fetch('/api/settings/telegram-backup/test', {
                 method: 'POST',
@@ -9151,72 +9266,322 @@ async function loadTelegramAnnouncements(createdAnnouncement = null) {
         }
     }
 
-    function renderTelegramBackupAccounts(selectedCandidateKey = '') {
-        const accountSelect = document.getElementById('telegram-backup-account');
-        const inboundSelect = document.getElementById('telegram-backup-inbound');
-        const hint = document.getElementById('telegram-backup-account-hint');
-        if (!accountSelect || !inboundSelect || !hint) return;
-        const currentAccount = accountSelect.value;
-        const selectedCandidate = telegramBotEgressCandidates.find(
-            item => telegramEgressCandidateKey(item) === selectedCandidateKey);
-        const wantedAccount = selectedCandidate ? telegramEgressAccountKey(selectedCandidate) : currentAccount;
-        const terms = telegramEgressSearchAliases(
-            document.getElementById('telegram-backup-account-search')?.value || '');
-        const accounts = new Map();
-        telegramBotEgressCandidates.forEach(candidate => {
-            const key = telegramEgressAccountKey(candidate);
-            if (!accounts.has(key)) accounts.set(key, []);
-            accounts.get(key).push(candidate);
-        });
-        const matches = [...accounts.entries()].filter(([, candidates]) => {
-            if (!terms.length) return true;
-            const haystack = telegramEgressSearchValue(candidates.map(candidate => [
-                candidate.client_email, candidate.server_name, candidate.inbound_remark,
-            ].join(' ')).join(' '));
-            return terms.every(term => haystack.includes(term));
-        });
-        accountSelect.replaceChildren();
-        matches.sort((a, b) => String(a[1][0].client_email || '').localeCompare(String(b[1][0].client_email || '')))
-            .forEach(([key, candidates]) => {
-                const candidate = candidates[0];
-                const option = document.createElement('option');
-                option.value = key;
-                option.textContent = `${candidate.client_email || 'Unnamed account'} · ${candidate.server_name || `Server ${candidate.server_id}`} · ${candidates.length} inbound${candidates.length === 1 ? '' : 's'}`;
-                accountSelect.appendChild(option);
-            });
-        accountSelect.disabled = !matches.length;
-        if (wantedAccount && matches.some(([key]) => key === wantedAccount)) accountSelect.value = wantedAccount;
-        hint.textContent = matches.length
-            ? `${matches.length} active account${matches.length === 1 ? '' : 's'} available for the backup route.`
-            : 'No compatible active account matched your search.';
-        renderTelegramBackupInbounds(selectedCandidateKey);
-    }
+}
 
-    function renderTelegramBackupInbounds(selectedCandidateKey = '') {
-        const accountSelect = document.getElementById('telegram-backup-account');
-        const inboundSelect = document.getElementById('telegram-backup-inbound');
-        if (!accountSelect || !inboundSelect) return;
-        const current = selectedCandidateKey || inboundSelect.value;
-        const candidates = telegramBotEgressCandidates.filter(
-            candidate => telegramEgressAccountKey(candidate) === accountSelect.value);
-        inboundSelect.replaceChildren();
-        candidates.sort((a, b) => Number(a.inbound_id || 0) - Number(b.inbound_id || 0))
-            .forEach(candidate => {
-                const option = document.createElement('option');
-                option.value = telegramEgressCandidateKey(candidate);
-                option.textContent = `${candidate.inbound_remark || `Inbound ${candidate.inbound_id}`} · ${String(candidate.protocol || '').toUpperCase()} · ${candidate.network || 'tcp'} / ${candidate.security || 'none'}`;
-                inboundSelect.appendChild(option);
-            });
-        inboundSelect.disabled = !candidates.length;
-        if (current && candidates.some(candidate => telegramEgressCandidateKey(candidate) === current)) {
-            inboundSelect.value = current;
-        }
-    }
+// ─── Telegram backup route: server-first panel-account picker ───────────────
+const TG_BACKUP_TEXT = (document.documentElement.lang === 'fa') ? {
+    server: 'سرور',
+    inbounds: 'اینباندها',
+    client: 'کاربر',
+    choose_server: 'یک سرور انتخاب کنید…',
+    no_servers: 'سرور فعالی موجود نیست.',
+    loading: 'در حال بارگذاری…',
+    select_all: 'انتخاب همه',
+    clear: 'پاک کردن',
+    selected_inbounds: 'انتخاب‌شده',
+    clients: 'کاربر',
+    v3_hint: 'پنل نسخه ۳ یا جدیدتر: یک یا چند اینباند انتخاب کنید؛ فقط کاربرانی نمایش داده می‌شوند که در همه آنها حضور دارند.',
+    legacy_hint: 'پنل قدیمی: یک اینباند انتخاب کنید، سپس یکی از کاربران آن را برگزینید.',
+    choose_inbound: 'ابتدا یک اینباند انتخاب کنید…',
+    no_inbounds: 'اینباند فعالی روی این سرور نیست.',
+    no_clients_v3: 'هیچ کاربری در همه اینباند‌های انتخاب‌شده مشترک نیست.',
+    no_clients_legacy: 'کاربری در این اینباند نیست.',
+    search_placeholder: 'جستجوی کاربر…',
+    no_search_results: 'کاربری با این جستجو یافت نشد.',
+    summary_none: 'هنوز حسابی برای مسیر بکاپ انتخاب نشده است.',
+    load_failed: 'بارگذاری ناموفق بود'
+} : {
+    server: 'Server',
+    inbounds: 'Inbounds',
+    client: 'Client',
+    choose_server: 'Choose a server…',
+    no_servers: 'No enabled servers available.',
+    loading: 'Loading…',
+    select_all: 'Select all',
+    clear: 'Clear',
+    selected_inbounds: 'selected',
+    clients: 'clients',
+    v3_hint: 'v3+ panel: select one or more inbounds; only clients attached to all of them are listed.',
+    legacy_hint: 'Legacy panel: select one inbound, then one of its clients.',
+    choose_inbound: 'Choose an inbound first…',
+    no_inbounds: 'No enabled inbounds on this server.',
+    no_clients_v3: 'No client is attached to all selected inbounds.',
+    no_clients_legacy: 'No clients in this inbound.',
+    search_placeholder: 'Search clients…',
+    no_search_results: 'No clients match your search.',
+    summary_none: 'No account selected for the backup route yet.',
+    load_failed: 'Load failed'
+};
 
-    function selectedTelegramBackupCandidate() {
-        const key = document.getElementById('telegram-backup-inbound')?.value || '';
-        return telegramBotEgressCandidates.find(candidate => telegramEgressCandidateKey(candidate) === key) || null;
+let telegramBackupServersLoaded = false;
+let telegramBackupIsV3 = false;
+let telegramBackupInboundRows = [];
+let telegramBackupClientRows = [];
+let telegramBackupClientRequest = 0;
+
+function telegramBackupPickerEls() {
+    return {
+        server: document.getElementById('telegram-backup-server'),
+        inbounds: document.getElementById('telegram-backup-inbounds'),
+        clients: document.getElementById('telegram-backup-clients'),
+        search: document.getElementById('telegram-backup-client-search'),
+        hint: document.getElementById('telegram-backup-account-hint'),
+        summary: document.getElementById('telegram-backup-selection-summary')
+    };
+}
+
+function setTelegramBackupHint(text) {
+    const {hint} = telegramBackupPickerEls();
+    if (hint) hint.textContent = text || '';
+}
+
+function telegramBackupSelectedInboundIds() {
+    const {inbounds} = telegramBackupPickerEls();
+    if (!inbounds) return [];
+    return [...inbounds.querySelectorAll('input:checked')].map(input => Number(input.value));
+}
+
+function updateTelegramBackupSelectionSummary() {
+    const els = telegramBackupPickerEls();
+    if (!els.summary) return;
+    const selectedIds = telegramBackupSelectedInboundIds();
+    const countEl = document.getElementById('telegram-backup-inbound-selected-count');
+    if (countEl) countEl.textContent = String(selectedIds.length);
+    const clientInput = els.clients ? els.clients.querySelector('input:checked') : null;
+    const serverName = els.server && els.server.value
+        ? els.server.options[els.server.selectedIndex].textContent : '';
+    if (clientInput && els.server && els.server.value) {
+        const inboundLabels = [...els.inbounds.querySelectorAll('input:checked')]
+            .map(input => input.dataset.label || input.value);
+        els.summary.innerHTML = `<strong>${escapeHtml(clientInput.dataset.label || clientInput.value)}</strong>` +
+            ` · ${escapeHtml(serverName)} · ${escapeHtml(inboundLabels.join(', '))}`;
+    } else {
+        els.summary.textContent = TG_BACKUP_TEXT.summary_none;
     }
 }
+
+function resetTelegramBackupClients(text) {
+    const els = telegramBackupPickerEls();
+    telegramBackupClientRows = [];
+    telegramBackupClientRequest++;
+    if (els.search) { els.search.value = ''; els.search.disabled = true; }
+    if (els.clients) els.clients.innerHTML = `<div class="telegram-backup-picker-empty">${escapeHtml(text)}</div>`;
+    const countEl = document.getElementById('telegram-backup-client-count');
+    if (countEl) countEl.textContent = '0';
+    updateTelegramBackupSelectionSummary();
+}
+
+function renderTelegramBackupInbounds(preselectedIds = []) {
+    const els = telegramBackupPickerEls();
+    if (!els.inbounds) return;
+    const type = telegramBackupIsV3 ? 'checkbox' : 'radio';
+    const wanted = new Set((preselectedIds || []).map(Number));
+    els.inbounds.innerHTML = telegramBackupInboundRows.length
+        ? telegramBackupInboundRowsMarkup(type, wanted)
+        : `<div class="telegram-backup-picker-empty">${escapeHtml(TG_BACKUP_TEXT.no_inbounds)}</div>`;
+    const actions = document.getElementById('telegram-backup-inbound-actions');
+    if (actions) actions.hidden = !telegramBackupIsV3 || !telegramBackupInboundRows.length;
+    const modeHint = document.getElementById('telegram-backup-mode-hint');
+    if (modeHint) modeHint.textContent = telegramBackupInboundRows.length
+        ? (telegramBackupIsV3 ? TG_BACKUP_TEXT.v3_hint : TG_BACKUP_TEXT.legacy_hint) : '';
+    updateTelegramBackupSelectionSummary();
+}
+
+function telegramBackupInboundRowsMarkup(type, wanted) {
+    return telegramBackupInboundRows.map(row => {
+        const label = row.remark || `inbound-${row.id}`;
+        const meta = `${label} · ${String(row.protocol || '').toUpperCase()}:${row.port || '?'}` +
+            (telegramBackupIsV3 ? '' : ` · ${row.clients} ${TG_BACKUP_TEXT.clients}`);
+        const checked = wanted.has(Number(row.id)) ? ' checked' : '';
+        return `<label class="telegram-backup-choice filter-item"><input type="${type}" name="telegram-backup-inbound-choice" value="${Number(row.id)}" data-label="${escapeHtml(label)}" onchange="onTelegramBackupInboundChange()"${checked}> <span>${escapeHtml(meta)}</span></label>`;
+    }).join('');
+}
+
+async function onTelegramBackupServerChange(preselectedInboundIds = [], preselectedClientId = null) {
+    const els = telegramBackupPickerEls();
+    telegramBackupInboundRows = [];
+    telegramBackupIsV3 = false;
+    if (els.inbounds) els.inbounds.innerHTML = `<div class="telegram-backup-picker-empty">${escapeHtml(TG_BACKUP_TEXT.loading)}</div>`;
+    const actions = document.getElementById('telegram-backup-inbound-actions');
+    if (actions) actions.hidden = true;
+    const modeHint = document.getElementById('telegram-backup-mode-hint');
+    if (modeHint) modeHint.textContent = '';
+    resetTelegramBackupClients(TG_BACKUP_TEXT.choose_inbound);
+    setTelegramBackupHint('');
+    const serverId = els.server ? els.server.value : '';
+    if (!serverId) {
+        if (els.inbounds) els.inbounds.innerHTML = `<div class="telegram-backup-picker-empty">${escapeHtml(TG_BACKUP_TEXT.choose_server)}</div>`;
+        return;
+    }
+    try {
+        const res = await fetch(`/pulse/servers/${encodeURIComponent(serverId)}/inbounds`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || `${TG_BACKUP_TEXT.load_failed} (HTTP ${res.status})`);
+        telegramBackupIsV3 = !!data.is_v3;
+        telegramBackupInboundRows = (data.inbounds || []).filter(row => row.enabled);
+        renderTelegramBackupInbounds(preselectedInboundIds);
+        if (telegramBackupSelectedInboundIds().length) {
+            await loadTelegramBackupClients(preselectedClientId);
+        }
+    } catch (error) {
+        if (els.inbounds) els.inbounds.innerHTML = `<div class="telegram-backup-picker-empty">${escapeHtml(error.message)}</div>`;
+        setTelegramBackupHint(error.message);
+        updateTelegramBackupSelectionSummary();
+    }
+}
+
+function onTelegramBackupInboundChange() {
+    updateTelegramBackupSelectionSummary();
+    loadTelegramBackupClients().catch(() => {});
+}
+
+async function loadTelegramBackupClients(preselectedClientId = null) {
+    const els = telegramBackupPickerEls();
+    const inboundIds = telegramBackupSelectedInboundIds();
+    if (!inboundIds.length || !els.server || !els.server.value) {
+        resetTelegramBackupClients(TG_BACKUP_TEXT.choose_inbound);
+        return;
+    }
+    const requestId = ++telegramBackupClientRequest;
+    if (els.clients) els.clients.innerHTML = `<div class="telegram-backup-picker-empty">${escapeHtml(TG_BACKUP_TEXT.loading)}</div>`;
+    const serverId = els.server.value;
+    const url = telegramBackupIsV3
+        ? `/pulse/servers/${encodeURIComponent(serverId)}/configs?` +
+            inboundIds.map(id => `inbound_id=${encodeURIComponent(id)}`).join('&')
+        : `/pulse/servers/${encodeURIComponent(serverId)}/inbounds/${encodeURIComponent(inboundIds[0])}/configs`;
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (requestId !== telegramBackupClientRequest) return;
+        if (!res.ok || !data.ok) throw new Error(data.error || `${TG_BACKUP_TEXT.load_failed} (HTTP ${res.status})`);
+        telegramBackupClientRows = Array.isArray(data.configs) ? data.configs : [];
+        renderTelegramBackupClients(preselectedClientId);
+    } catch (error) {
+        if (requestId !== telegramBackupClientRequest) return;
+        resetTelegramBackupClients(error.message);
+        setTelegramBackupHint(error.message);
+    }
+}
+
+function renderTelegramBackupClients(preselectedClientId = null) {
+    const els = telegramBackupPickerEls();
+    if (!els.clients) return;
+    const emptyText = telegramBackupIsV3 ? TG_BACKUP_TEXT.no_clients_v3 : TG_BACKUP_TEXT.no_clients_legacy;
+    if (!telegramBackupClientRows.length) {
+        els.clients.innerHTML = `<div class="telegram-backup-picker-empty">${escapeHtml(emptyText)}</div>`;
+        setTelegramBackupHint(emptyText);
+    } else {
+        els.clients.innerHTML = telegramBackupClientRows.map(row => {
+            const checked = preselectedClientId != null && String(row.id) === String(preselectedClientId) ? ' checked' : '';
+            return `<label class="telegram-backup-choice filter-item telegram-backup-client-row" data-search="${escapeHtml(`${row.label} ${row.id}`)}">` +
+                `<input type="radio" name="telegram-backup-client-choice" value="${escapeHtml(String(row.id))}" data-label="${escapeHtml(String(row.label))}" onchange="updateTelegramBackupSelectionSummary()"${checked}> ` +
+                `<span>${escapeHtml(String(row.label))}${row.is_probe ? ' · probe' : ''}</span></label>`;
+        }).join('') + `<div class="telegram-backup-picker-empty telegram-backup-search-empty" hidden>${escapeHtml(TG_BACKUP_TEXT.no_search_results)}</div>`;
+        setTelegramBackupHint('');
+    }
+    if (els.search) {
+        els.search.disabled = !telegramBackupClientRows.length;
+        els.search.placeholder = TG_BACKUP_TEXT.search_placeholder;
+    }
+    const countEl = document.getElementById('telegram-backup-client-count');
+    if (countEl) countEl.textContent = String(telegramBackupClientRows.length);
+    updateTelegramBackupSelectionSummary();
+}
+
+function filterTelegramBackupClients() {
+    const els = telegramBackupPickerEls();
+    if (!els.clients || !els.search) return;
+    const terms = telegramEgressSearchAliases(els.search.value);
+    let visible = 0;
+    els.clients.querySelectorAll('.telegram-backup-client-row').forEach(row => {
+        const haystack = telegramEgressSearchAliases(row.dataset.search).join(' ');
+        const matches = !terms.length || terms.every(term => haystack.includes(term));
+        row.hidden = !matches;
+        if (matches) visible++;
+    });
+    const empty = els.clients.querySelector('.telegram-backup-search-empty');
+    if (empty) empty.hidden = !els.search.value || visible > 0;
+    const countEl = document.getElementById('telegram-backup-client-count');
+    if (countEl) countEl.textContent = String(els.search.value ? visible : telegramBackupClientRows.length);
+}
+
+function telegramBackupSelectAllInbounds() {
+    const els = telegramBackupPickerEls();
+    if (!els.inbounds) return;
+    els.inbounds.querySelectorAll('input').forEach(input => { input.checked = true; });
+    updateTelegramBackupSelectionSummary();
+    loadTelegramBackupClients().catch(() => {});
+}
+
+function telegramBackupClearInbounds() {
+    const els = telegramBackupPickerEls();
+    if (!els.inbounds) return;
+    els.inbounds.querySelectorAll('input').forEach(input => { input.checked = false; });
+    resetTelegramBackupClients(TG_BACKUP_TEXT.choose_inbound);
+}
+
+async function loadTelegramBackupServers(preselectedServerId = null) {
+    const els = telegramBackupPickerEls();
+    if (!els.server) return;
+    try {
+        const res = await fetch('/api/servers/list');
+        const servers = await res.json();
+        if (!res.ok || !Array.isArray(servers)) throw new Error((servers && servers.error) || `${TG_BACKUP_TEXT.load_failed} (HTTP ${res.status})`);
+        telegramBackupServersLoaded = true;
+        els.server.replaceChildren();
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = servers.length ? TG_BACKUP_TEXT.choose_server : TG_BACKUP_TEXT.no_servers;
+        els.server.appendChild(placeholder);
+        servers.forEach(server => {
+            const option = document.createElement('option');
+            option.value = server.id;
+            option.textContent = server.name;
+            els.server.appendChild(option);
+        });
+        els.server.disabled = !servers.length;
+        if (preselectedServerId != null && servers.some(server => Number(server.id) === Number(preselectedServerId))) {
+            els.server.value = String(preselectedServerId);
+        }
+        setTelegramBackupHint(servers.length ? '' : TG_BACKUP_TEXT.no_servers);
+    } catch (error) {
+        els.server.innerHTML = `<option value="">${escapeHtml(error.message)}</option>`;
+        els.server.disabled = true;
+        setTelegramBackupHint(error.message);
+    }
+}
+
+function selectedTelegramBackupCandidate() {
+    const els = telegramBackupPickerEls();
+    if (!els.server || !els.server.value) return null;
+    const inboundIds = telegramBackupSelectedInboundIds();
+    const clientInput = els.clients ? els.clients.querySelector('input:checked') : null;
+    if (!inboundIds.length || !clientInput) return null;
+    return {
+        server_id: Number(els.server.value),
+        inbound_id: inboundIds[0],
+        client_id: clientInput.value
+    };
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    setText('telegram-backup-server-label', TG_BACKUP_TEXT.server);
+    setText('telegram-backup-inbound-title', TG_BACKUP_TEXT.inbounds);
+    setText('telegram-backup-client-title', TG_BACKUP_TEXT.client);
+    setText('telegram-backup-inbound-count-label', TG_BACKUP_TEXT.selected_inbounds);
+    setText('telegram-backup-client-count-label', TG_BACKUP_TEXT.clients);
+    setText('telegram-backup-inbound-select-all', TG_BACKUP_TEXT.select_all);
+    setText('telegram-backup-inbound-clear', TG_BACKUP_TEXT.clear);
+    const els = telegramBackupPickerEls();
+    if (els.search) els.search.placeholder = TG_BACKUP_TEXT.search_placeholder;
+    if (els.inbounds && !telegramBackupInboundRows.length) {
+        els.inbounds.innerHTML = `<div class="telegram-backup-picker-empty">${escapeHtml(TG_BACKUP_TEXT.choose_server)}</div>`;
+    }
+    if (els.clients && !telegramBackupClientRows.length) {
+        els.clients.innerHTML = `<div class="telegram-backup-picker-empty">${escapeHtml(TG_BACKUP_TEXT.choose_inbound)}</div>`;
+    }
+    updateTelegramBackupSelectionSummary();
+});
 </script>
 {% endblock %}
