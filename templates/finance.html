@@ -903,6 +903,10 @@
                 <label>To (Jalali, optional)</label>
                 <input type="text" id="stmt-end" dir="ltr" placeholder="today if empty">
             </div>
+            <div class="filter-field" style="max-width:190px;">
+                <label>Settlement % (optional)</label>
+                <input type="number" id="stmt-percent" dir="ltr" min="0" max="100" step="0.5" placeholder="e.g. 60">
+            </div>
         </div>
         <div class="filter-actions" style="margin-top:10px;gap:8px;">
             <div class="range-chips" style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -911,19 +915,26 @@
                 <button type="button" data-stmt-range="year">This Year</button>
             </div>
             <button type="button" class="btn-apply" id="stmt-run">Generate</button>
-            <button type="button" class="btn-reset" id="stmt-export" disabled>Export CSV</button>
+            <button type="button" class="btn-reset" id="stmt-export" disabled>Export Excel</button>
         </div>
 
         <!-- Summary cards -->
         <div id="stmt-summary" style="display:none;margin-top:16px;">
-            <div id="stmt-period" class="muted-note" style="margin-bottom:10px;"></div>
+            <div id="stmt-period" class="muted-note" style="margin-bottom:6px;"></div>
+            <div id="stmt-pricing" class="muted-note" style="margin-bottom:10px;"></div>
             <div class="stmt-cards">
                 <div class="stmt-card"><span class="stmt-k">✨ Created</span><span class="stmt-v" id="stmt-created">0</span></div>
                 <div class="stmt-card"><span class="stmt-k">🔄 Renewed</span><span class="stmt-v" id="stmt-renewed">0</span></div>
                 <div class="stmt-card"><span class="stmt-k">♻️ Reset</span><span class="stmt-v" id="stmt-reset">0</span></div>
-                <div class="stmt-card stmt-spend"><span class="stmt-k">Should deposit (spent)</span><span class="stmt-v" id="stmt-spent">0 T</span></div>
-                <div class="stmt-card stmt-paid"><span class="stmt-k">Deposited</span><span class="stmt-v" id="stmt-deposited">0 T</span></div>
+                <div class="stmt-card"><span class="stmt-k">📦 Charged GB</span><span class="stmt-v" id="stmt-charged-gb">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">📉 Used GB</span><span class="stmt-v" id="stmt-used-gb">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">⏳ Remaining GB</span><span class="stmt-v" id="stmt-remaining-gb">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">🏷️ Price / GB</span><span class="stmt-v" id="stmt-price-gb">0 T</span></div>
+                <div class="stmt-card"><span class="stmt-k">💸 Usage cost</span><span class="stmt-v" id="stmt-usage-cost">0 T</span></div>
+                <div class="stmt-card stmt-spend"><span class="stmt-k">Should pay (spent)</span><span class="stmt-v" id="stmt-spent">0 T</span></div>
+                <div class="stmt-card stmt-paid"><span class="stmt-k">Revenue (deposited)</span><span class="stmt-v" id="stmt-deposited">0 T</span></div>
                 <div class="stmt-card" id="stmt-balance-card"><span class="stmt-k">Balance</span><span class="stmt-v" id="stmt-balance">0 T</span></div>
+                <div class="stmt-card" id="stmt-percent-card" style="display:none;"><span class="stmt-k" id="stmt-percent-k">Debt</span><span class="stmt-v" id="stmt-percent-debt">0 T</span></div>
             </div>
 
             <div class="stmt-tables">
@@ -934,7 +945,7 @@
                     </thead><tbody id="stmt-by-package"></tbody></table>
                 </div>
                 <div class="stmt-tablewrap">
-                    <h4 class="stmt-h">By server</h4>
+                    <h4 class="stmt-h">By server <small style="font-weight:400;color:var(--text-secondary);">(click a server to load its accounts)</small></h4>
                     <table class="finance-table stmt-table"><thead>
                         <tr><th>Server</th><th>Count</th><th>Spent</th></tr>
                     </thead><tbody id="stmt-by-server"></tbody></table>
@@ -2256,32 +2267,24 @@
             });
         });
 
-        function rowsCsv() {
-            if (!lastData) return '';
-            const head = ['date_jalali', 'type', 'package', 'gift', 'volume_gb', 'days', 'amount', 'client_email', 'server'];
-            const lines = [head.join(',')];
-            (lastData.rows || []).forEach((r) => {
-                const cells = [
-                    r.date_jalali || '', r.type || '', r.pkg || r.package_name || '',
-                    r.is_gift ? 'yes' : '', r.eff_volume_gb ?? r.volume_gb ?? '',
-                    r.eff_days ?? r.days ?? '', r.amount ?? '',
-                    r.client_email || '', (r.server && r.server.name) || ''
-                ].map((c) => `"${String(c).replace(/"/g, '""')}"`);
-                lines.push(cells.join(','));
-            });
-            return lines.join('\n');
+        function stmtParams() {
+            const params = new URLSearchParams();
+            const userSel = $('stmt-user');
+            if (userSel && userSel.value) params.set('user_id', userSel.value);
+            const start = normalizeDigits(($('stmt-start').value || '').trim());
+            const end = normalizeDigits(($('stmt-end').value || '').trim());
+            if (start) params.set('start_date', start);
+            if (end) params.set('end_date', end);
+            const pct = parseFloat(($('stmt-percent') || {}).value || '');
+            if (!isNaN(pct)) params.set('percent', pct);
+            return params;
         }
 
         $('stmt-export').addEventListener('click', () => {
-            const csv = rowsCsv();
-            if (!csv) return;
-            const who = (lastData.summary.reseller.username || 'reseller').replace(/\s+/g, '_');
-            const blob = new Blob(["﻿" + csv], { type: 'text/csv;charset=utf-8;' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `statement_${who}.csv`;
-            a.click();
-            URL.revokeObjectURL(a.href);
+            if (!lastData) return;
+            const params = stmtParams();
+            params.set('_', Date.now());
+            window.location.href = '/api/finance/reseller-statement/export?' + params.toString();
         });
 
         // Build the per-user breakdown for a package from the items the server
@@ -2317,6 +2320,62 @@
             if (caret) caret.textContent = open ? '▸' : '▾';
         });
 
+        // Per-server account drill-down, fetched lazily on first expand and
+        // cached until the next statement run.
+        const srvAccounts = {};
+        function acctRows(list) {
+            if (!list || !list.length) {
+                return '<tr><td colspan="7" style="text-align:center;color:var(--text-secondary);padding:10px;">No accounts on this server.</td></tr>';
+            }
+            const badge = { active: '🟢', disabled: '🔴', deleted: '⚫' };
+            return list.map((a) => `<tr>
+                <td>${badge[a.status] || '⚫'} ${escapeAttr(a.email || '—')}</td>
+                <td>${a.charged_gb}</td>
+                <td>${a.used_gb}</td>
+                <td>${a.remaining_gb}</td>
+                <td>${money(a.spent)}</td>
+                <td>${escapeAttr(a.last_type || '—')}</td>
+                <td>${escapeAttr(a.last_change || '—')}</td></tr>`).join('');
+        }
+
+        $('stmt-by-server').addEventListener('click', async (e) => {
+            const row = e.target.closest('.stmt-srv-row');
+            if (!row) return;
+            const detail = row.nextElementSibling;
+            if (!detail || !detail.classList.contains('stmt-srv-detail')) return;
+            const open = detail.style.display !== 'none';
+            detail.style.display = open ? 'none' : '';
+            const caret = row.querySelector('.stmt-caret');
+            if (caret) caret.textContent = open ? '▸' : '▾';
+            if (open) return;
+            const cell = detail.querySelector('.stmt-srv-cell');
+            const sid = row.getAttribute('data-sid');
+            if (!sid) {
+                cell.innerHTML = '<div style="padding:10px;color:var(--text-secondary);">Unknown server.</div>';
+                return;
+            }
+            if (srvAccounts[sid]) {
+                cell.innerHTML = srvAccounts[sid];
+                return;
+            }
+            cell.innerHTML = '<div style="padding:10px;color:var(--text-secondary);">Loading accounts…</div>';
+            try {
+                const params = stmtParams();
+                params.set('server_id', sid);
+                params.set('_', Date.now());
+                const res = await financeFetch('/api/finance/reseller-statement/accounts?' + params.toString());
+                const acc = await res.json();
+                if (!acc || !acc.success) throw new Error((acc && acc.error) || 'failed');
+                const html = `<table class="stmt-subtable"><thead><tr>
+                        <th>User</th><th>Charged GB</th><th>Used GB</th><th>Remaining</th><th>Spent</th><th>Last change</th><th>Date</th>
+                    </tr></thead><tbody>${acctRows(acc.accounts)}</tbody></table>`;
+                srvAccounts[sid] = html;
+                cell.innerHTML = html;
+            } catch (err) {
+                cell.innerHTML = '<div style="padding:10px;color:#f87171;">Could not load accounts.</div>';
+            }
+        });
+
         function render(data) {
             lastData = data;
             const s = data.summary;
@@ -2326,6 +2385,34 @@
                 + '  ·  ' + (s.reseller.username || '') + ' (' + (s.reseller.role || '') + ')'
                 + '  ·  current credit ' + money(s.reseller.credit);
             $('stmt-period').textContent = period;
+            const t = s.traffic || {};
+            const pz = s.pricing || {};
+            let pzText = 'Pricing: standard rates';
+            if (pz.mode === 'fixed') {
+                const bits = [];
+                if (pz.custom_cost_per_gb != null) bits.push(money(pz.custom_cost_per_gb) + ' / GB');
+                if (pz.custom_cost_per_day != null) bits.push(money(pz.custom_cost_per_day) + ' / day');
+                pzText = 'Pricing: fixed rate (' + bits.join(' + ') + ')';
+            } else if (pz.mode === 'percentage') {
+                pzText = 'Pricing: percentage (' + (pz.discount_percent || 0) + '% discount)';
+            }
+            pzText += '  ·  price basis: ' + (t.price_basis || 'unknown')
+                + '  ·  accounts tracked: ' + (t.accounts_tracked || 0);
+            $('stmt-pricing').textContent = pzText;
+            $('stmt-charged-gb').textContent = t.charged_gb ?? 0;
+            $('stmt-used-gb').textContent = t.used_gb ?? 0;
+            $('stmt-remaining-gb').textContent = t.remaining_gb ?? 0;
+            $('stmt-price-gb').textContent = money(t.price_per_gb);
+            $('stmt-usage-cost').textContent = money(t.usage_cost);
+            const ps = s.percent_settlement;
+            const psCard = $('stmt-percent-card');
+            if (ps) {
+                psCard.style.display = '';
+                $('stmt-percent-k').textContent = 'Debt @ ' + ps.percent + '%';
+                $('stmt-percent-debt').textContent = money(ps.debt);
+            } else {
+                psCard.style.display = 'none';
+            }
             $('stmt-created').textContent = s.created;
             $('stmt-renewed').textContent = s.renewed;
             $('stmt-reset').textContent = s.reset;
@@ -2359,23 +2446,19 @@
 
             const srvBody = $('stmt-by-server');
             srvBody.innerHTML = (data.by_server || []).length
-                ? data.by_server.map((p) => `<tr>
-                    <td>${escapeAttr(p.server)}</td>
+                ? data.by_server.map((p) => `<tr class="stmt-srv-row" data-sid="${p.server_id ?? ''}" title="Click to load accounts" style="cursor:pointer;">
+                    <td><span class="stmt-caret">▸</span> ${escapeAttr(p.server)}</td>
                     <td>${p.count}</td>
-                    <td>${money(p.spent)}</td></tr>`).join('')
+                    <td>${money(p.spent)}</td></tr>
+                    <tr class="stmt-srv-detail" style="display:none;"><td colspan="3" style="padding:0;background:rgba(148,163,184,0.05);"><div class="stmt-srv-cell"></div></td></tr>`).join('')
                 : '<tr><td colspan="3" style="text-align:center;color:var(--text-secondary);">—</td></tr>';
+            Object.keys(srvAccounts).forEach((k) => delete srvAccounts[k]);  // drop stale cache on re-run
 
             $('stmt-export').disabled = !(s.row_count > 0);
         }
 
         async function runStmt() {
-            const params = new URLSearchParams();
-            const userSel = $('stmt-user');
-            if (userSel && userSel.value) params.set('user_id', userSel.value);
-            const start = normalizeDigits(($('stmt-start').value || '').trim());
-            const end = normalizeDigits(($('stmt-end').value || '').trim());
-            if (start) params.set('start_date', start);
-            if (end) params.set('end_date', end);
+            const params = stmtParams();
             params.set('_', Date.now());  // cache-bust: never reuse a stale GET response
             runBtn.disabled = true; runBtn.textContent = 'Loading…';
             try {

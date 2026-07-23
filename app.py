@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.33"
+APP_VERSION = "2.5.34"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -23548,50 +23548,20 @@ def _statement_plan_from_desc(desc):
     return (int(gm.group(1)) if gm else None, int(dm.group(1)) if dm else None)
 
 
-@app.route('/api/finance/reseller-statement', methods=['GET'])
-@login_required
-def reseller_statement():
-    """Per-reseller accounting statement over a Jalali date range: how many
-    accounts they created / renewed / reset, what it cost, broken down by package
-    and server, plus how much they deposited vs should have deposited. Superadmin
-    can pick any reseller; a reseller only ever sees their own figures."""
-    user = db.session.get(Admin, session['admin_id'])
-    if not user:
-        return jsonify({'success': False, 'error': 'User not found'}), 401
+_STATEMENT_SPEND_TYPES = ('purchase', 'renew', 'reset_traffic')
+_STATEMENT_DEPOSIT_TYPES = ('manual_receipt', 'manual_receipt_auto', 'manual_receipt_reversal')
+_STATEMENT_GB = float(1024 ** 3)
 
-    if user.role == 'superadmin' or user.is_superadmin:
-        target_id = request.args.get('user_id', type=int) or user.id
-    else:
-        target_id = user.id  # resellers are locked to their own statement
-    target = db.session.get(Admin, target_id)
-    if not target:
-        return jsonify({'success': False, 'error': 'Reseller not found'}), 404
 
-    start_dt = parse_jalali_date(request.args.get('start_date'), end_of_day=False)
-    end_dt = parse_jalali_date(request.args.get('end_date'), end_of_day=True)
-
-    q = Transaction.query.filter(Transaction.admin_id == target_id)
-    if start_dt:
-        q = q.filter(Transaction.created_at >= start_dt)
-    if end_dt:
-        q = q.filter(Transaction.created_at <= end_dt)
-    rows = q.order_by(Transaction.created_at.desc()).all()
-
-    SPEND_TYPES = ('purchase', 'renew', 'reset_traffic')
-    DEPOSIT_TYPES = ('manual_receipt', 'manual_receipt_auto', 'manual_receipt_reversal')
-
-    # Package name → (volume_gb, days) so legacy rows (no per-row columns) can
-    # still show their plan size, looked up from the Package definition.
-    pkg_lookup = {}
+def _statement_plan_resolver():
+    """Resolve a transaction row's effective (volume_gb, days): prefer the per-row
+    columns, else the Package definition, else parse the legacy description."""
     try:
-        for p in Package.query.all():
-            pkg_lookup[p.name] = (int(p.volume or 0), int(p.days or 0))
+        pkg_lookup = {p.name: (int(p.volume or 0), int(p.days or 0)) for p in Package.query.all()}
     except Exception:
         pkg_lookup = {}
 
-    def _eff_plan(r, pname):
-        """Effective (volume_gb, days) for a row: prefer the per-row columns, else
-        the Package definition, else parse the description. 0 when unknown."""
+    def resolve(r, pname):
         vol, days = r.volume_gb, r.days
         if vol is None or days is None:
             pv = pd = None
@@ -23607,9 +23577,82 @@ def reseller_statement():
                 days = pd
         return int(vol or 0), int(days or 0)
 
+    return resolve
+
+
+def _statement_access_target(user):
+    """Which reseller a statement request targets: a superadmin may pick anyone,
+    a reseller is locked to their own figures."""
+    if user.role == 'superadmin' or user.is_superadmin:
+        target_id = request.args.get('user_id', type=int) or user.id
+    else:
+        target_id = user.id
+    return db.session.get(Admin, target_id)
+
+
+def _statement_date_range():
+    start_dt = parse_jalali_date(request.args.get('start_date'), end_of_day=False)
+    end_dt = parse_jalali_date(request.args.get('end_date'), end_of_day=True)
+    return start_dt, end_dt
+
+
+def _reseller_sub_id_map(target_id, server_id=None):
+    """sub_id (panel client uuid) -> ClientOwnership for every account a reseller
+    owns, optionally narrowed to one server. Canonical reseller -> account map."""
+    q = ClientOwnership.query.filter_by(reseller_id=target_id)
+    if server_id is not None:
+        q = q.filter_by(server_id=server_id)
+    out = {}
+    for o in q.all():
+        sub_id = (o.client_uuid or '').strip()
+        if sub_id:
+            out[sub_id] = o
+    return out
+
+
+def _usage_daily_sums(sub_ids, start_dt, end_dt):
+    """{sub_id: used_bytes} over the range from the UsageDaily rollups. IN-lists
+    are chunked so big resellers stay under SQLite's variable limit."""
+    sub_list = [s for s in sub_ids if s]
+    if not sub_list:
+        return {}
+    from_date = _usage_tehran_date(start_dt) if start_dt else datetime(2000, 1, 1).date()
+    to_date = _usage_tehran_date(end_dt) if end_dt else _usage_tehran_date(datetime.utcnow())
+    totals = {}
+    for i in range(0, len(sub_list), 500):
+        chunk = sub_list[i:i + 500]
+        pairs = (db.session.query(UsageDaily.sub_id,
+                                  db.func.sum(UsageDaily.upload_bytes + UsageDaily.download_bytes))
+                 .filter(UsageDaily.sub_id.in_(chunk),
+                         UsageDaily.usage_date >= from_date,
+                         UsageDaily.usage_date <= to_date)
+                 .group_by(UsageDaily.sub_id).all())
+        for sub_id, total in pairs:
+            if total:
+                totals[sub_id] = int(total)
+    return totals
+
+
+def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
+    """Full statement dataset for one reseller over a naive-UTC range: ledger
+    aggregates, charged-vs-used traffic and its cost, pricing mode, and
+    settlement figures. `pct` (optional) computes a percentage-based debt on the
+    period's spend, priced at what each GB cost when it was bought."""
+    q = Transaction.query.filter(Transaction.admin_id == target.id)
+    if start_dt:
+        q = q.filter(Transaction.created_at >= start_dt)
+    if end_dt:
+        q = q.filter(Transaction.created_at <= end_dt)
+    rows = q.order_by(Transaction.created_at.desc()).all()
+
+    resolve = _statement_plan_resolver()
+
     created = renewed = reset_cnt = 0
     spent = 0
     deposited = 0
+    charged_gb = 0.0
+    paid_volume_gb = 0
+    paid_charge = 0
     by_package = {}
     by_server = {}
     out_rows = []
@@ -23620,9 +23663,18 @@ def reseller_statement():
         row_d = r.to_dict()
         row_d['pkg'] = None
         row_d['is_gift'] = False
-        if t in SPEND_TYPES:
+        row_d['charge'] = 0
+        if t in _STATEMENT_SPEND_TYPES:
             charge = -amt if amt < 0 else 0  # reseller credit usage is stored negative
             spent += charge
+            row_d['charge'] = charge
+            pname = r.package_name or _statement_pkg_from_desc(r.description)
+            eff_vol, eff_days = resolve(r, pname)
+            is_gift = (amt == 0) or ('(Free)' in (r.description or ''))
+            charged_gb += eff_vol
+            if not is_gift and eff_vol > 0:
+                paid_volume_gb += eff_vol
+                paid_charge += charge
             if t == 'purchase':
                 created += 1
             elif t == 'renew':
@@ -23630,9 +23682,7 @@ def reseller_statement():
             else:
                 reset_cnt += 1
             if t in ('purchase', 'renew'):
-                pname = r.package_name or _statement_pkg_from_desc(r.description) or '—'
-                eff_vol, eff_days = _eff_plan(r, pname)
-                is_gift = (amt == 0) or ('(Free)' in (r.description or ''))
+                pname = pname or '—'
                 row_d['pkg'] = pname
                 row_d['eff_volume_gb'] = eff_vol
                 row_d['eff_days'] = eff_days
@@ -23652,13 +23702,39 @@ def reseller_statement():
                     'amount': charge, 'gift': is_gift, 'type': t,
                     'date': format_jalali(r.created_at),
                 })
-            sname = (r.server.name if r.server else None) or '—'
-            sb = by_server.setdefault(sname, {'count': 0, 'spent': 0})
+            skey = (r.server_id or 0, (r.server.name if r.server else None) or '—')
+            sb = by_server.setdefault(skey, {'count': 0, 'spent': 0})
             sb['count'] += 1
             sb['spent'] += charge
-        elif t in DEPOSIT_TYPES:
+        elif t in _STATEMENT_DEPOSIT_TYPES:
             deposited += amt  # deposits positive, reversals negative
+        row_d['date_tehran'] = _usage_tehran_date(r.created_at).isoformat() if r.created_at else None
         out_rows.append(row_d)
+
+    # Charged vs actually-consumed traffic, from the daily usage rollups.
+    sub_map = _reseller_sub_id_map(target.id)
+    usage = _usage_daily_sums(sub_map.keys(), start_dt, end_dt)
+    used_bytes = sum(usage.values())
+    used_gb = round(used_bytes / _STATEMENT_GB, 2)
+    remaining_gb = round(max(charged_gb - used_gb, 0), 2)
+    if paid_volume_gb > 0:
+        # Weighted effective price: what a GB actually cost in this period's charges.
+        price_per_gb = int(round(paid_charge / float(paid_volume_gb)))
+        price_basis = 'period_transactions'
+    elif target.custom_cost_per_gb:
+        price_per_gb = int(target.custom_cost_per_gb)
+        price_basis = 'reseller_fixed_rate'
+    else:
+        price_per_gb = 0
+        price_basis = 'unknown'
+    usage_cost = int(round((used_bytes / _STATEMENT_GB) * price_per_gb)) if price_per_gb else 0
+
+    if target.custom_cost_per_gb or target.custom_cost_per_day:
+        pricing_mode = 'fixed'
+    elif target.discount_percent:
+        pricing_mode = 'percentage'
+    else:
+        pricing_mode = 'standard'
 
     balance = deposited - spent  # negative => under-deposited (debt)
     summary = {
@@ -23670,17 +23746,254 @@ def reseller_statement():
         'row_count': len(rows),
         'start_jalali': format_jalali(start_dt) if start_dt else None,
         'end_jalali': format_jalali(end_dt) if end_dt else None,
+        'revenue': deposited,   # what the reseller paid us in the period
+        'should_pay': spent,    # what the period's charges cost them
+        'traffic': {
+            'charged_gb': round(charged_gb, 2), 'used_gb': used_gb,
+            'remaining_gb': remaining_gb, 'usage_cost': usage_cost,
+            'price_per_gb': price_per_gb, 'price_basis': price_basis,
+            'accounts_tracked': len(sub_map),
+        },
+        'pricing': {
+            'mode': pricing_mode,
+            'discount_percent': target.discount_percent or 0,
+            'custom_cost_per_gb': target.custom_cost_per_gb,
+            'custom_cost_per_day': target.custom_cost_per_day,
+        },
     }
+    if pct is not None:
+        summary['percent_settlement'] = {
+            'percent': pct, 'base': spent,
+            'debt': int(round(spent * pct / 100.0)),
+        }
     by_package_list = sorted(({'package': k, **v} for k, v in by_package.items()),
                              key=lambda x: x['spent'], reverse=True)
-    by_server_list = sorted(({'server': k, **v} for k, v in by_server.items()),
+    by_server_list = sorted(({'server_id': k[0] or None, 'server': k[1], **v}
+                             for k, v in by_server.items()),
                             key=lambda x: x['spent'], reverse=True)
+    return {'summary': summary, 'by_package': by_package_list,
+            'by_server': by_server_list, 'rows': out_rows}
 
-    resp = jsonify({'success': True, 'summary': summary,
-                    'by_package': by_package_list, 'by_server': by_server_list,
-                    'rows': out_rows})
+
+def _reseller_accounts_breakdown(target, start_dt, end_dt, server_id=None):
+    """Per-account statement lines: charged GB/amount in range, used GB in range,
+    remaining, live panel status, and the last change. server_id=None => all
+    servers; the statement UI calls this lazily per server so big resellers
+    stay responsive."""
+    sub_map = _reseller_sub_id_map(target.id, server_id)
+    usage = _usage_daily_sums(sub_map.keys(), start_dt, end_dt)
+    resolve = _statement_plan_resolver()
+
+    # Live status from the panel cache.
+    live = {}
+    for inbound in GLOBAL_SERVER_DATA.get('inbounds') or []:
+        try:
+            sid = int(inbound.get('server_id'))
+        except (TypeError, ValueError):
+            continue
+        if server_id is not None and sid != server_id:
+            continue
+        for client in inbound.get('clients') or []:
+            sub_id = str(client.get('subId') or client.get('id') or '').strip()
+            if sub_id and sub_id in sub_map:
+                live[sub_id] = 'active' if client.get('enable', True) else 'disabled'
+
+    # Charged volume/amount per account from the range's spend rows.
+    q = Transaction.query.filter(Transaction.admin_id == target.id,
+                                 Transaction.type.in_(_STATEMENT_SPEND_TYPES))
+    if server_id is not None:
+        q = q.filter(Transaction.server_id == server_id)
+    if start_dt:
+        q = q.filter(Transaction.created_at >= start_dt)
+    if end_dt:
+        q = q.filter(Transaction.created_at <= end_dt)
+    per_email = {}
+    for r in q.order_by(Transaction.created_at.desc()).all():
+        email = (r.client_email or '').strip().lower()
+        if not email:
+            continue
+        charge = -int(r.amount or 0) if int(r.amount or 0) < 0 else 0
+        pname = r.package_name or _statement_pkg_from_desc(r.description)
+        vol, _days = resolve(r, pname)
+        a = per_email.setdefault((r.server_id or 0, email),
+                                 {'charged_gb': 0, 'spent': 0, 'events': 0,
+                                  'last_type': None, 'last_at': None})
+        a['charged_gb'] += vol
+        a['spent'] += charge
+        a['events'] += 1
+        if a['last_at'] is None:  # rows arrive newest-first
+            a['last_at'] = r.created_at
+            a['last_type'] = r.type
+
+    server_names = {s.id: s.name for s in Server.query.all()}
+    accounts = []
+    for sub_id, o in sub_map.items():
+        agg = per_email.get((o.server_id or 0, (o.client_email or '').strip().lower()))
+        used_gb = round(usage.get(sub_id, 0) / _STATEMENT_GB, 2)
+        charged = agg['charged_gb'] if agg else 0
+        accounts.append({
+            'server_id': o.server_id,
+            'server': server_names.get(o.server_id, '—'),
+            'email': o.client_email,
+            'status': live.get(sub_id, 'deleted'),
+            'charged_gb': charged,
+            'used_gb': used_gb,
+            'remaining_gb': round(max(charged - used_gb, 0), 2),
+            'spent': agg['spent'] if agg else 0,
+            'events': agg['events'] if agg else 0,
+            'last_type': agg['last_type'] if agg else None,
+            'last_change': format_jalali(agg['last_at']) if agg and agg['last_at'] else None,
+        })
+    accounts.sort(key=lambda a: (a['spent'], a['used_gb']), reverse=True)
+    return accounts
+
+
+@app.route('/api/finance/reseller-statement', methods=['GET'])
+@login_required
+def reseller_statement():
+    """Per-reseller accounting statement over a Jalali date range: accounts
+    created / renewed / reset, charged vs used traffic and its cost, pricing
+    mode, optional percentage settlement, and deposited vs should-deposit.
+    Superadmin can pick any reseller; a reseller only ever sees their own figures."""
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 401
+    target = _statement_access_target(user)
+    if not target:
+        return jsonify({'success': False, 'error': 'Reseller not found'}), 404
+    start_dt, end_dt = _statement_date_range()
+    pct = request.args.get('percent', type=float)
+    data = _compute_reseller_statement(target, start_dt, end_dt, pct)
+    resp = jsonify({'success': True, **data})
     resp.headers['Cache-Control'] = 'no-store, max-age=0'
     return resp
+
+
+@app.route('/api/finance/reseller-statement/accounts', methods=['GET'])
+@login_required
+def reseller_statement_accounts():
+    """Lazy per-server account drill-down for the statement: which accounts the
+    reseller has on one server, with charged/used/remaining GB and last change."""
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 401
+    target = _statement_access_target(user)
+    if not target:
+        return jsonify({'success': False, 'error': 'Reseller not found'}), 404
+    server_id = request.args.get('server_id', type=int)
+    start_dt, end_dt = _statement_date_range()
+    accounts = _reseller_accounts_breakdown(target, start_dt, end_dt, server_id=server_id)
+    resp = jsonify({'success': True, 'accounts': accounts})
+    resp.headers['Cache-Control'] = 'no-store, max-age=0'
+    return resp
+
+
+@app.route('/api/finance/reseller-statement/export', methods=['GET'])
+@login_required
+def reseller_statement_export():
+    """Full statement workbook (xlsx): summary, per-day charge feed, per-account
+    usage, and the raw ledger rows for the selected range."""
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 401
+    target = _statement_access_target(user)
+    if not target:
+        return jsonify({'success': False, 'error': 'Reseller not found'}), 404
+    start_dt, end_dt = _statement_date_range()
+    pct = request.args.get('percent', type=float)
+    data = _compute_reseller_statement(target, start_dt, end_dt, pct)
+    accounts = _reseller_accounts_breakdown(target, start_dt, end_dt)
+
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        return jsonify({'success': False, 'error': 'openpyxl is not installed'}), 500
+
+    s = data['summary']
+    traffic = s['traffic']
+    wb = Workbook(write_only=True)
+
+    ws = wb.create_sheet('Summary')
+    ws.append(['Reseller Statement'])
+    ws.append(['Reseller', s['reseller']['username']])
+    ws.append(['Period', '{} → {}'.format(s.get('start_jalali') or '…', s.get('end_jalali') or 'today')])
+    ws.append([])
+    ws.append(['Metric', 'Value'])
+    ws.append(['Accounts created', s['created']])
+    ws.append(['Accounts renewed', s['renewed']])
+    ws.append(['Traffic resets', s['reset']])
+    ws.append(['Charged volume (GB)', traffic['charged_gb']])
+    ws.append(['Used volume (GB)', traffic['used_gb']])
+    ws.append(['Remaining volume (GB)', traffic['remaining_gb']])
+    ws.append(['Effective price per GB (T)', traffic['price_per_gb']])
+    ws.append(['Price basis', traffic['price_basis']])
+    ws.append(['Usage cost (T)', traffic['usage_cost']])
+    ws.append(['Pricing mode', s['pricing']['mode']])
+    ws.append(['Discount percent', s['pricing']['discount_percent']])
+    ws.append(['Should pay (T)', s['should_pay']])
+    ws.append(['Revenue / deposited (T)', s['revenue']])
+    ws.append(['Balance (T)', s['balance']])
+    ps = s.get('percent_settlement')
+    if ps:
+        ws.append(['Debt at {}% (T)'.format(ps['percent']), ps['debt']])
+
+    # Per-day charge feed: which users were topped up each day, and the payable.
+    ws = wb.create_sheet('Daily')
+    ws.append(['Date', 'User', 'Type', 'Package', 'GB', 'Days',
+               'Amount (T)', 'Payable (T)', 'Gift', 'Server'])
+    daily = {}
+    for r in data['rows']:
+        if r.get('type') not in _STATEMENT_SPEND_TYPES:
+            continue
+        dkey = r.get('date_tehran') or (r.get('date') or '')[:10]
+        daily.setdefault(dkey, []).append(r)
+    for dkey in sorted(daily):
+        day_gb = day_amt = day_pay = 0
+        for r in sorted(daily[dkey], key=lambda x: x.get('date') or ''):
+            amt = int(r.get('charge') or 0)
+            payable = int(round(amt * pct / 100.0)) if pct is not None else amt
+            vol = r.get('eff_volume_gb') if r.get('eff_volume_gb') is not None else (r.get('volume_gb') or 0)
+            dys = r.get('eff_days') if r.get('eff_days') is not None else (r.get('days') or 0)
+            day_gb += vol or 0
+            day_amt += amt
+            day_pay += payable
+            ws.append([dkey, r.get('client_email') or '—', r.get('type') or '',
+                       r.get('pkg') or r.get('package_name') or '',
+                       vol or 0, dys or 0, amt, payable,
+                       'yes' if r.get('is_gift') else '',
+                       (r.get('server') or {}).get('name') or ''])
+        ws.append([dkey, '— Daily subtotal —', '', '', day_gb, '', day_amt, day_pay, '', ''])
+
+    ws = wb.create_sheet('Accounts')
+    ws.append(['Server', 'User', 'Status', 'Charged GB', 'Used GB',
+               'Remaining GB', 'Spent (T)', 'Events', 'Last change', 'Last type'])
+    for a in accounts:
+        ws.append([a['server'], a['email'], a['status'], a['charged_gb'], a['used_gb'],
+                   a['remaining_gb'], a['spent'], a['events'],
+                   a['last_change'] or '', a['last_type'] or ''])
+
+    ws = wb.create_sheet('Transactions')
+    ws.append(['Date', 'Type', 'User', 'Package', 'GB', 'Days',
+               'Amount (T)', 'Gift', 'Server', 'Description'])
+    for r in sorted(data['rows'], key=lambda x: x.get('date') or ''):
+        ws.append([r.get('date_jalali') or '', r.get('type') or '',
+                   r.get('client_email') or '',
+                   r.get('pkg') or r.get('package_name') or '',
+                   r.get('eff_volume_gb') if r.get('eff_volume_gb') is not None else (r.get('volume_gb') or ''),
+                   r.get('eff_days') if r.get('eff_days') is not None else (r.get('days') or ''),
+                   int(r.get('amount') or 0), 'yes' if r.get('is_gift') else '',
+                   (r.get('server') or {}).get('name') or '',
+                   r.get('description') or ''])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    who = re.sub(r'\s+', '_', target.username or 'reseller')
+    rng = '{}_{}'.format(start_dt.date().isoformat() if start_dt else 'all',
+                         end_dt.date().isoformat() if end_dt else 'now')
+    return send_file(buf, as_attachment=True,
+                     download_name='statement_{}_{}.xlsx'.format(who, rng),
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
 @app.route('/api/finance/overview', methods=['GET'])
