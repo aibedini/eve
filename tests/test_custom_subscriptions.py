@@ -123,7 +123,7 @@ class CustomSubscriptionTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn(b'Custom Subscriptions', page.data)
 
-    def test_wireguard_output_decodes_keys_and_address_for_legacy_importers(self):
+    def test_wireguard_output_keeps_standard_percent_encoding(self):
         subscription = self._create()
         private_key = 'eAa8ZCl94VvnagSvRF4+/lYUyYWFbhDP316H624bk1I='
         public_key = 'zeYgDsVqwHMaSTIqgn76jdDFG/yJVR5ciyLOlNBVYBg='
@@ -144,20 +144,22 @@ class CustomSubscriptionTests(unittest.TestCase):
             f"/cs/{subscription['token']}?format=raw",
         ).get_data(as_text=True)
         rendered_base = raw.partition('#')[0]
-        self.assertNotIn('%2B', rendered_base.upper())
-        self.assertNotIn('%2F', rendered_base.upper())
-        self.assertNotIn('%3D', rendered_base.upper())
-        self.assertEqual(
-            rendered_base,
-            f'wireguard://{private_key}@tr3.example:51820'
-            f'?publickey={public_key}&address=10.70.1.2/32',
-        )
+        # Public output must stay canonical: decoding values into the URI would
+        # break standard parsers whenever a Base64 key contains '/' or '+'.
+        self.assertEqual(rendered_base, encoded_uri.partition('#')[0])
+        self.assertIn('%2F', rendered_base.upper())
 
-        rendered_private = rendered_base.partition('://')[2].partition('@')[0]
-        rendered_public = (
-            rendered_base.partition('publickey=')[2].partition('&')[0]
-        )
-        for key in (rendered_private, rendered_public):
+        # Eve's own importer (telegram_xray) decodes correctly from the
+        # standard link: keys become valid 32-byte Base64 in the Xray JSON.
+        from telegram_xray import build_xray_config_from_uri
+        config = build_xray_config_from_uri(rendered_base, 12080)
+        outbound = next(o for o in config['outbounds'] if o['protocol'] == 'wireguard')
+        settings = outbound['settings']
+        self.assertEqual(settings['secretKey'], private_key)
+        self.assertEqual(settings['peers'][0]['publicKey'], public_key)
+        self.assertEqual(settings['peers'][0]['endpoint'], 'tr3.example:51820')
+        self.assertEqual(settings['address'], ['10.70.1.2/32'])
+        for key in (settings['secretKey'], settings['peers'][0]['publicKey']):
             try:
                 decoded = base64.b64decode(key, validate=True)
             except binascii.Error as exc:

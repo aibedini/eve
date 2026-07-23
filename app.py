@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.32"
+APP_VERSION = "2.5.33"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -26607,48 +26607,8 @@ def _custom_subscription_remark(row):
     return f'config-{row.id}'
 
 
-WIREGUARD_COMPAT_DECODED_QUERY_FIELDS = {
-    'address', 'ip', 'publickey', 'public_key', 'peerpublickey',
-    'presharedkey', 'preshared_key', 'pre-shared-key', 'psk',
-}
-
-
-def _custom_subscription_wireguard_compat_uri(uri):
-    """Render WireGuard values decoded for legacy importers.
-
-    Modern URL parsers decode query parameters and 3x-ui explicitly decodes the
-    username. Some older subscription importers copy the percent-encoded values
-    directly into Xray's secretKey/publicKey/address fields, which makes valid
-    Base64 keys fail at the first ``%``. Keep the stored URI canonical and apply
-    this compatibility form only to the public subscription output.
-    """
-    base = str(uri or '').partition('#')[0]
-    scheme, separator, remainder = base.partition('://')
-    if not separator or scheme.lower() not in ('wireguard', 'wg'):
-        return base
-
-    authority, query_separator, raw_query = remainder.partition('?')
-    username, at_separator, endpoint = authority.rpartition('@')
-    if at_separator:
-        authority = f'{unquote(username)}@{endpoint}'
-
-    if query_separator:
-        rendered_pairs = []
-        for pair in raw_query.split('&'):
-            key, value_separator, value = pair.partition('=')
-            if value_separator and key.lower() in WIREGUARD_COMPAT_DECODED_QUERY_FIELDS:
-                value = unquote(value)
-            rendered_pairs.append(
-                f'{key}={value}' if value_separator else key
-            )
-        return f'{scheme}://{authority}?{"&".join(rendered_pairs)}'
-    return f'{scheme}://{authority}'
-
-
 def _custom_subscription_render_uri(subscription, row):
     base = str(row.uri or '').partition('#')[0]
-    if urlparse(base).scheme.lower() in ('wireguard', 'wg'):
-        base = _custom_subscription_wireguard_compat_uri(base)
     label = f'{subscription.tag_prefix or ""}{_custom_subscription_remark(row)}'
     return f'{base}#{quote(label, safe="")}'
 
