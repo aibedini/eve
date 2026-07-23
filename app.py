@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.34"
+APP_VERSION = "2.5.35"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -23597,28 +23597,58 @@ def _statement_date_range():
 
 
 def _reseller_sub_id_map(target_id, server_id=None):
-    """sub_id (panel client uuid) -> ClientOwnership for every account a reseller
-    owns, optionally narrowed to one server. Canonical reseller -> account map."""
+    """sub_id -> ClientOwnership for every account a reseller owns, optionally
+    narrowed to one server. UsageDaily is keyed by the panel's subscription id
+    (`subId`), which often differs from the stored client uuid — so the map
+    covers both the stored uuid and the live-resolved subId."""
     q = ClientOwnership.query.filter_by(reseller_id=target_id)
     if server_id is not None:
         q = q.filter_by(server_id=server_id)
+    ownerships = q.all()
     out = {}
-    for o in q.all():
-        sub_id = (o.client_uuid or '').strip()
-        if sub_id:
-            out[sub_id] = o
+    by_uuid = {}
+    by_email = {}
+    for o in ownerships:
+        uuid = (o.client_uuid or '').strip()
+        if uuid:
+            out[uuid] = o
+            by_uuid[uuid.lower()] = o
+        email = (o.client_email or '').strip().lower()
+        if email:
+            by_email.setdefault((o.server_id, email), o)
+    # Resolve the live panel subId for each owned account (subId != uuid on
+    # many panels), so the UsageDaily rollups actually join.
+    for inbound in GLOBAL_SERVER_DATA.get('inbounds') or []:
+        try:
+            sid = int(inbound.get('server_id'))
+        except (TypeError, ValueError):
+            continue
+        if server_id is not None and sid != server_id:
+            continue
+        for client in inbound.get('clients') or []:
+            sub_id = str(client.get('subId') or client.get('id') or '').strip()
+            if not sub_id:
+                continue
+            cid = (client.get('id') or '').strip().lower()
+            email = (client.get('email') or '').strip().lower()
+            owner = by_uuid.get(cid) or by_email.get((sid, email))
+            if owner is not None:
+                out.setdefault(sub_id, owner)
     return out
 
 
 def _usage_daily_sums(sub_ids, start_dt, end_dt):
-    """{sub_id: used_bytes} over the range from the UsageDaily rollups. IN-lists
-    are chunked so big resellers stay under SQLite's variable limit."""
+    """({sub_id: used_bytes}, matched_row_count) over the range from the
+    UsageDaily rollups. IN-lists are chunked so big resellers stay under
+    SQLite's variable limit. Row count tells callers whether snapshots even
+    exist for the range (0 => usage figures are unknowable, not zero)."""
     sub_list = [s for s in sub_ids if s]
     if not sub_list:
-        return {}
+        return {}, 0
     from_date = _usage_tehran_date(start_dt) if start_dt else datetime(2000, 1, 1).date()
     to_date = _usage_tehran_date(end_dt) if end_dt else _usage_tehran_date(datetime.utcnow())
     totals = {}
+    matched = 0
     for i in range(0, len(sub_list), 500):
         chunk = sub_list[i:i + 500]
         pairs = (db.session.query(UsageDaily.sub_id,
@@ -23627,10 +23657,25 @@ def _usage_daily_sums(sub_ids, start_dt, end_dt):
                          UsageDaily.usage_date >= from_date,
                          UsageDaily.usage_date <= to_date)
                  .group_by(UsageDaily.sub_id).all())
+        matched += len(pairs)
         for sub_id, total in pairs:
             if total:
                 totals[sub_id] = int(total)
-    return totals
+    return totals, matched
+
+
+def _usage_first_date(sub_ids):
+    """Earliest UsageDaily date across these subs (None when no snapshots at
+    all) — used to warn that usage before that date is unknowable."""
+    sub_list = [s for s in sub_ids if s]
+    first = None
+    for i in range(0, len(sub_list), 500):
+        chunk = sub_list[i:i + 500]
+        candidate = (db.session.query(db.func.min(UsageDaily.usage_date))
+                     .filter(UsageDaily.sub_id.in_(chunk)).scalar())
+        if candidate and (first is None or candidate < first):
+            first = candidate
+    return first
 
 
 def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
@@ -23713,7 +23758,7 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
 
     # Charged vs actually-consumed traffic, from the daily usage rollups.
     sub_map = _reseller_sub_id_map(target.id)
-    usage = _usage_daily_sums(sub_map.keys(), start_dt, end_dt)
+    usage, usage_rows = _usage_daily_sums(sub_map.keys(), start_dt, end_dt)
     used_bytes = sum(usage.values())
     used_gb = round(used_bytes / _STATEMENT_GB, 2)
     remaining_gb = round(max(charged_gb - used_gb, 0), 2)
@@ -23728,6 +23773,14 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
         price_per_gb = 0
         price_basis = 'unknown'
     usage_cost = int(round((used_bytes / _STATEMENT_GB) * price_per_gb)) if price_per_gb else 0
+
+    # Snapshot coverage: no rollup rows in range means "unknown", not "zero".
+    usage_available = usage_rows > 0 or not sub_map
+    coverage_from_jalali = None
+    if not usage_available:
+        first = _usage_first_date(sub_map.keys())
+        if first:
+            coverage_from_jalali = format_jalali(datetime.combine(first, datetime.min.time()))
 
     if target.custom_cost_per_gb or target.custom_cost_per_day:
         pricing_mode = 'fixed'
@@ -23752,7 +23805,9 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
             'charged_gb': round(charged_gb, 2), 'used_gb': used_gb,
             'remaining_gb': remaining_gb, 'usage_cost': usage_cost,
             'price_per_gb': price_per_gb, 'price_basis': price_basis,
-            'accounts_tracked': len(sub_map),
+            'accounts_tracked': len({o.id for o in sub_map.values()}),
+            'usage_available': usage_available,
+            'coverage_from_jalali': coverage_from_jalali,
         },
         'pricing': {
             'mode': pricing_mode,
@@ -23781,7 +23836,7 @@ def _reseller_accounts_breakdown(target, start_dt, end_dt, server_id=None):
     servers; the statement UI calls this lazily per server so big resellers
     stay responsive."""
     sub_map = _reseller_sub_id_map(target.id, server_id)
-    usage = _usage_daily_sums(sub_map.keys(), start_dt, end_dt)
+    usage, _usage_rows = _usage_daily_sums(sub_map.keys(), start_dt, end_dt)
     resolve = _statement_plan_resolver()
 
     # Live status from the panel cache.
@@ -23826,16 +23881,26 @@ def _reseller_accounts_breakdown(target, start_dt, end_dt, server_id=None):
             a['last_type'] = r.type
 
     server_names = {s.id: s.name for s in Server.query.all()}
-    accounts = []
+    # One ownership can map to several sub_ids (stored uuid + live panel subId);
+    # aggregate per ownership so accounts never appear twice.
+    owner_subs = {}
     for sub_id, o in sub_map.items():
+        entry = owner_subs.setdefault(o.id, {'ownership': o, 'sub_ids': set()})
+        entry['sub_ids'].add(sub_id)
+    accounts = []
+    for entry in owner_subs.values():
+        o = entry['ownership']
+        sub_ids = entry['sub_ids']
         agg = per_email.get((o.server_id or 0, (o.client_email or '').strip().lower()))
-        used_gb = round(usage.get(sub_id, 0) / _STATEMENT_GB, 2)
+        used_bytes = sum(usage.get(s, 0) for s in sub_ids)
+        used_gb = round(used_bytes / _STATEMENT_GB, 2)
         charged = agg['charged_gb'] if agg else 0
+        status = next((live[s] for s in sub_ids if s in live), 'deleted')
         accounts.append({
             'server_id': o.server_id,
             'server': server_names.get(o.server_id, '—'),
             'email': o.client_email,
-            'status': live.get(sub_id, 'deleted'),
+            'status': status,
             'charged_gb': charged,
             'used_gb': used_gb,
             'remaining_gb': round(max(charged - used_gb, 0), 2),
@@ -23933,6 +23998,11 @@ def reseller_statement_export():
     ws.append(['Should pay (T)', s['should_pay']])
     ws.append(['Revenue / deposited (T)', s['revenue']])
     ws.append(['Balance (T)', s['balance']])
+    if not traffic.get('usage_available', True):
+        note = 'No usage snapshots in this period — Used/Remaining GB and Usage cost are understated.'
+        if traffic.get('coverage_from_jalali'):
+            note += ' Earliest snapshot: {}.'.format(traffic['coverage_from_jalali'])
+        ws.append(['⚠ Usage data', note])
     ps = s.get('percent_settlement')
     if ps:
         ws.append(['Debt at {}% (T)'.format(ps['percent']), ps['debt']])

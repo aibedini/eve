@@ -158,6 +158,46 @@ class ResellerStatementTests(unittest.TestCase):
         self.assertEqual(data['summary']['reseller']['id'], self.reseller.id)
         self.assertEqual(data['summary']['spent'], 160_000)
 
+    def test_usage_resolved_via_live_subid(self):
+        """Snapshots are keyed by the panel subId, which differs from the stored
+        client uuid; the live cache must bridge them."""
+        self._login(self.owner.id)
+        usage = UsageDaily.query.first()
+        usage.sub_id = 'sub-9'  # panel subId != stored uuid 'sub-1'
+        db.session.commit()
+
+        import app as app_module
+        app_module.GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': self.server.id, 'remark': 'inb',
+            'clients': [{'id': 'sub-1', 'subId': 'sub-9', 'email': 'u1', 'enable': True}],
+        }]
+        try:
+            data = self._statement(f'user_id={self.reseller.id}')
+            t = data['summary']['traffic']
+            self.assertEqual(t['used_gb'], 10.0)
+            self.assertTrue(t['usage_available'])
+            self.assertEqual(t['accounts_tracked'], 1)
+
+            resp = self.client.get(
+                f'/api/finance/reseller-statement/accounts?user_id={self.reseller.id}'
+                f'&server_id={self.server.id}')
+            accounts = resp.get_json()['accounts']
+            self.assertEqual(len(accounts), 1)  # uuid + subId must not duplicate
+            self.assertEqual(accounts[0]['status'], 'active')
+            self.assertEqual(accounts[0]['used_gb'], 10.0)
+        finally:
+            app_module.GLOBAL_SERVER_DATA['inbounds'] = []
+
+    def test_usage_warning_when_no_snapshots(self):
+        self._login(self.owner.id)
+        UsageDaily.query.delete()
+        db.session.commit()
+        data = self._statement(f'user_id={self.reseller.id}')
+        t = data['summary']['traffic']
+        self.assertFalse(t['usage_available'])
+        self.assertIsNone(t['coverage_from_jalali'])
+        self.assertEqual(t['used_gb'], 0)
+
     def test_export_xlsx(self):
         self._login(self.owner.id)
         resp = self.client.get(

@@ -922,6 +922,7 @@
         <div id="stmt-summary" style="display:none;margin-top:16px;">
             <div id="stmt-period" class="muted-note" style="margin-bottom:6px;"></div>
             <div id="stmt-pricing" class="muted-note" style="margin-bottom:10px;"></div>
+            <div id="stmt-usage-warning" style="display:none;margin-bottom:10px;padding:8px 12px;border:1px solid rgba(251,191,36,.45);border-radius:8px;color:#fbbf24;font-size:13px;"></div>
             <div class="stmt-cards">
                 <div class="stmt-card"><span class="stmt-k">✨ Created</span><span class="stmt-v" id="stmt-created">0</span></div>
                 <div class="stmt-card"><span class="stmt-k">🔄 Renewed</span><span class="stmt-v" id="stmt-renewed">0</span></div>
@@ -2399,6 +2400,15 @@
             pzText += '  ·  price basis: ' + (t.price_basis || 'unknown')
                 + '  ·  accounts tracked: ' + (t.accounts_tracked || 0);
             $('stmt-pricing').textContent = pzText;
+            const uWarn = $('stmt-usage-warning');
+            if (t.usage_available === false) {
+                uWarn.style.display = '';
+                uWarn.textContent = '⚠️ No usage snapshots exist for this period'
+                    + (t.coverage_from_jalali ? ' — earliest snapshot: ' + t.coverage_from_jalali : '')
+                    + '. Used / Remaining GB and Usage cost are understated (shown as 0).';
+            } else {
+                uWarn.style.display = 'none';
+            }
             $('stmt-charged-gb').textContent = t.charged_gb ?? 0;
             $('stmt-used-gb').textContent = t.used_gb ?? 0;
             $('stmt-remaining-gb').textContent = t.remaining_gb ?? 0;
