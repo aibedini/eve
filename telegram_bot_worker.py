@@ -24,6 +24,7 @@ from app import (  # noqa: E402
     BankCard,
     CustomerAccount,
     CustomerTransaction,
+    FAQ,
     GLOBAL_SERVER_DATA,
     OwnershipClaim,
     OwnershipClaimItem,
@@ -71,6 +72,7 @@ from app import (  # noqa: E402
     format_app_datetime,
     get_xui_session,
     load_snapshot_from_redis,
+    normalize_international_phone,
     normalize_iran_mobile,
     parse_allowed_servers,
     renew_client,
@@ -687,6 +689,137 @@ def _send_tutorial_app(api: TelegramBotApi, chat_id: int, language: str, app_id:
     )
 
 
+_FAQ_PLATFORMS = ('android', 'ios', 'windows', 'general')
+
+
+def _faq_device_keyboard(language: str):
+    lang = language if language in COPY else 'fa'
+    copy = _cc(lang)
+    keyboard = []
+    for platform in _FAQ_PLATFORMS:
+        label = copy['faq_device_general'] if platform == 'general' else copy[f'tutorial_device_{platform}']
+        keyboard.append([{'text': label, 'callback_data': f'faq-os:{platform}'}])
+    return {'inline_keyboard': keyboard}
+
+
+def _send_faq_menu(api: TelegramBotApi, chat_id: int, language: str):
+    lang = language if language in COPY else 'fa'
+    if not FAQ.query.filter_by(is_enabled=True).count():
+        api.send_message(chat_id, _cc(lang)['faq_empty'])
+        return
+    api.send_message(
+        chat_id, _cc(lang)['faq_choose_device'],
+        reply_markup=_faq_device_keyboard(lang),
+    )
+
+
+def _faqs_for_platform(platform: str):
+    if platform not in _FAQ_PLATFORMS:
+        return []
+    query = FAQ.query.filter_by(is_enabled=True)
+    if platform == 'general':
+        query = query.filter(FAQ.platform == 'general')
+    else:
+        # The site shows general FAQs on every platform tab; mirror that here.
+        query = query.filter(FAQ.platform.in_((platform, 'general')))
+    return query.order_by(FAQ.id.asc()).all()
+
+
+def _send_faq_list(api: TelegramBotApi, chat_id: int, language: str, platform: str):
+    lang = language if language in COPY else 'fa'
+    copy = _cc(lang)
+    items = _faqs_for_platform(platform)
+    if not items:
+        api.send_message(
+            chat_id, copy['faq_empty'],
+            reply_markup=_faq_device_keyboard(lang),
+        )
+        return
+    keyboard = [[{
+        'text': str(item.title or '')[:60],
+        'callback_data': f'faq-item:{item.id}',
+    }] for item in items]
+    keyboard.append([{'text': copy['faq_back'], 'callback_data': 'faq-menu'}])
+    header = copy['faq_device_general'] if platform == 'general' else copy[f'tutorial_device_{platform}']
+    api.send_message(
+        chat_id, header,
+        reply_markup={'inline_keyboard': keyboard},
+    )
+
+
+_FAQ_TAG_MAP = {'strong': 'b', 'em': 'i', 'strike': 's', 'del': 's'}
+_FAQ_ALLOWED_TAGS = ('b', 'i', 'u', 's', 'code', 'pre')
+
+
+def _faq_html_to_telegram(raw: str) -> str:
+    """Reduce sanitized FAQ HTML to the tag subset Telegram parse_mode=HTML accepts."""
+    text = str(raw or '')
+    text = re.sub(r'(?is)<\s*(script|style)[^>]*>.*?<\s*/\s*\1\s*>', '', text)
+    text = re.sub(r'(?i)<\s*br\s*/?\s*>', '\n', text)
+    text = re.sub(r'(?i)<\s*/\s*(p|div|li|h[1-6])\s*>', '\n', text)
+
+    def _tag(match):
+        closing = bool(match.group(1))
+        name = _FAQ_TAG_MAP.get(match.group(2).lower(), match.group(2).lower())
+        attrs = match.group(3) or ''
+        if name in _FAQ_ALLOWED_TAGS:
+            return f'</{name}>' if closing else f'<{name}>'
+        if name == 'a':
+            if closing:
+                return '</a>'
+            href = re.search(r'''(?i)href\s*=\s*(["'])(.*?)\1''', attrs)
+            if href:
+                url = href.group(2)
+                # Content arrives already HTML-escaped by the site sanitizer, so
+                # keep the href verbatim; only reject quote breakouts.
+                if url.startswith(('http://', 'https://')) and '"' not in url and "'" not in url:
+                    return f'<a href="{url}">'
+        return ''
+
+    text = re.sub(r'(?is)<\s*(/)?\s*([a-z0-9]+)\s*((?:[^<>"]|"[^"]*")*?)\s*/?\s*>', _tag, text)
+    return text.strip()
+
+
+def _send_faq_item(api: TelegramBotApi, chat_id: int, language: str, faq_id: int):
+    lang = language if language in COPY else 'fa'
+    copy = _cc(lang)
+    item = db.session.get(FAQ, faq_id)
+    if not item or not item.is_enabled:
+        api.send_message(
+            chat_id, copy['faq_empty'],
+            reply_markup=_faq_device_keyboard(lang),
+        )
+        return
+    platform = str(item.platform or 'general')
+    if platform not in _FAQ_PLATFORMS:
+        platform = 'general'
+    image_url = str(item.image_url or '').strip()
+    video_url = str(item.video_url or '').strip()
+    image_failed = False
+    if image_url:
+        try:
+            api.send_photo_url(chat_id, image_url, caption=str(item.title or '')[:1024])
+        except Exception:
+            image_failed = True
+    lines = [f'<b>{html.escape(str(item.title or ""))}</b>']
+    body = _faq_html_to_telegram(item.content)
+    if body:
+        lines.extend(['', body])
+    text = '\n'.join(lines)
+    if len(text) > 4096:
+        text = text[:4090].rstrip() + '…'
+    keyboard = []
+    if image_url and image_failed:
+        keyboard.append([{'text': copy['faq_view_image'], 'url': image_url}])
+    if video_url:
+        keyboard.append([{'text': copy['faq_watch_video'], 'url': video_url}])
+    keyboard.append([{'text': copy['faq_back'], 'callback_data': f'faq-os:{platform}'}])
+    api.send_message(
+        chat_id, text, parse_mode='HTML',
+        reply_markup={'inline_keyboard': keyboard},
+    )
+
+
 def _service_status(client: dict | None, language: str) -> str:
     if not client:
         return f"⚪ {_cc(language)['status_unknown']}"
@@ -712,8 +845,58 @@ def _service_keyboard(ownership: ServiceOwnership, language: str):
             {"text": _cc(language)["renew_button"], "callback_data": f"service-renew:{ownership.id}"},
             {"text": _cc(language)["support_button"], "callback_data": f"service-support:{ownership.id}"},
         ],
+        [
+            {"text": _cc(language)["menu_tutorial"], "callback_data": "tutorial-devices"},
+            {"text": _cc(language)["menu_faq"], "callback_data": "faq-menu"},
+        ],
         [{"text": _cc(language)["back_services_button"], "callback_data": "service-list"}],
     ]}
+
+
+def _service_delivery_keyboard(ownership_id: int, language: str):
+    """Keyboard attached to purchase/renewal/trial delivery cards.
+
+    Matches the service-details card (fresh services always have a live client,
+    so the link-rotate row is included unconditionally).
+    """
+    return {"inline_keyboard": [
+        [{"text": _cc(language)["get_link_button"], "callback_data": f"service-link:{ownership_id}"}],
+        [{"text": _cc(language)["service_rotate"], "callback_data": f"service-rotate:{ownership_id}"}],
+        [
+            {"text": _cc(language)["renew_button"], "callback_data": f"service-renew:{ownership_id}"},
+            {"text": _cc(language)["support_button"], "callback_data": f"service-support:{ownership_id}"},
+        ],
+        [
+            {"text": _cc(language)["menu_tutorial"], "callback_data": "tutorial-devices"},
+            {"text": _cc(language)["menu_faq"], "callback_data": "faq-menu"},
+        ],
+        [{"text": _cc(language)["back_services_button"], "callback_data": "service-list"}],
+    ]}
+
+
+def _send_service_delivery(api: TelegramBotApi, chat_id: int, language: str,
+                           ownership_id: int, template_text: str, link: str):
+    """Deliver a completed service as a QR card with the service keyboard.
+
+    The completion template becomes the QR photo caption when it fits the
+    1024-char caption limit; longer templates go to a follow-up text message
+    (photo keeps the raw link as its caption) so nothing is truncated
+    mid-template. Without a link, only the text + keyboard is sent.
+    """
+    lang = language if language in COPY else 'fa'
+    keyboard = _service_delivery_keyboard(ownership_id, lang)
+    link = str(link or '').strip()
+    text = str(template_text or '').strip()
+    if not link:
+        if text:
+            api.send_message(chat_id, text, reply_markup=keyboard)
+        return
+    if text and len(text) <= 1024:
+        _send_link_with_qr(api, chat_id, link, caption=text, reply_markup=keyboard)
+        return
+    _send_link_with_qr(api, chat_id, link, caption=link, reply_markup=keyboard)
+    if text:
+        api.send_message(chat_id, text, reply_markup=keyboard)
 
 
 def _send_service_details(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
@@ -1059,10 +1242,12 @@ def _format_bank_card(card: BankCard) -> str:
     return '\n'.join(lines)
 
 
-def _send_link_with_qr(api: TelegramBotApi, chat_id: int, link: str, caption: str = ''):
+def _send_link_with_qr(api: TelegramBotApi, chat_id: int, link: str, caption: str = '',
+                       reply_markup=None):
     """Deliver a connection link as a QR photo (caption carries the copyable link).
 
     Any QR/upload failure falls back to a plain text message with the link.
+    An optional inline keyboard rides along on both paths.
     """
     link = str(link or '').strip()
     if not link:
@@ -1079,12 +1264,15 @@ def _send_link_with_qr(api: TelegramBotApi, chat_id: int, link: str, caption: st
         img = qr.make_image(fill_color='black', back_color='white')
         buffer = _io.BytesIO()
         img.save(buffer, format='PNG')
+        upload_kwargs = {}
+        if reply_markup is not None:
+            upload_kwargs['reply_markup'] = reply_markup
         api.send_upload(
             chat_id, buffer.getvalue(), 'connection-link.png', 'image/png',
-            as_photo=True, caption=text[:1024],
+            as_photo=True, caption=text[:1024], **upload_kwargs,
         )
     except Exception:
-        api.send_message(chat_id, text)
+        api.send_message(chat_id, text, reply_markup=reply_markup)
 
 
 def _purchase_card_accessible(card: BankCard, bot: TelegramBotInstance, owner_id=None) -> bool:
@@ -2468,28 +2656,40 @@ def _deliver_or_request_membership(api: TelegramBotApi, bot: TelegramBotInstance
     client = result.get('client') if isinstance(result.get('client'), dict) else {}
     delivery_link = str(client.get('dashboard_link') or client.get('dash_sub_url')
                         or client.get('sub_link') or '').strip()
-    if not delivery_link and account_name:
+    try:
+        ownership_id = int(result.get('ownership_id') or 0) or None
+    except (TypeError, ValueError):
+        ownership_id = None
+    ownership = None
+    if (not delivery_link or ownership_id is None) and account_name:
         ownership = next((row for row in ServiceOwnership.query.filter_by(
             customer_id=request_row.customer_id, server_id=request_row.server_id,
             revoked_at=None,
         ).all() if str(row.client_email_snapshot or '').strip().lower() == account_name.lower()), None)
         if ownership:
-            live_client, _inbound_id = _cached_owned_service_location(ownership)
-            delivery_link = str((live_client or {}).get('dashboard_link')
-                                or (live_client or {}).get('dash_sub_url')
-                                or (live_client or {}).get('sub_link') or '').strip()
-    if delivery_link:
-        _send_link_with_qr(api, chat_id, delivery_link)
-    api.send_message(
-        chat_id,
-        _cc(language)['purchase_completed'].format(
-            account_name=account_name, delivery_link=delivery_link,
-        ).rstrip(),
-        reply_markup={'inline_keyboard': [[{
-            'text': _cc(language)['menu_orders'],
-            'callback_data': f'purchase-order:{request_row.id}',
-        }]]},
-    )
+            ownership_id = ownership_id or ownership.id
+            if not delivery_link:
+                live_client, _inbound_id = _cached_owned_service_location(ownership)
+                delivery_link = str((live_client or {}).get('dashboard_link')
+                                    or (live_client or {}).get('dash_sub_url')
+                                    or (live_client or {}).get('sub_link') or '').strip()
+    completion_text = _cc(language)['purchase_completed'].format(
+        account_name=account_name, delivery_link=delivery_link,
+    ).rstrip()
+    if ownership_id:
+        _send_service_delivery(
+            api, chat_id, language, ownership_id, completion_text, delivery_link,
+        )
+    else:
+        if delivery_link:
+            _send_link_with_qr(api, chat_id, delivery_link)
+        api.send_message(
+            chat_id, completion_text,
+            reply_markup={'inline_keyboard': [[{
+                'text': _cc(language)['menu_orders'],
+                'callback_data': f'purchase-order:{request_row.id}',
+            }]]},
+        )
     return True
 
 
@@ -2737,15 +2937,36 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
         if language not in COPY:
             language = 'fa'
         if request_row.status == 'completed':
-            text = _cc(language)['request_completed']
+            delivered = False
+            if request_row.request_type == 'renewal':
+                ownership = request_row.ownership
+                if ownership:
+                    live_client, _inbound_id = _cached_owned_service_location(ownership)
+                    delivery_link = str(
+                        (live_client or {}).get('dashboard_link')
+                        or (live_client or {}).get('dash_sub_url')
+                        or (live_client or {}).get('sub_link') or '').strip()
+                    account_name = str(
+                        (live_client or {}).get('email')
+                        or ownership.client_email_snapshot or '').strip()
+                    completion_text = _cc(language)['renewal_completed'].format(
+                        account_name=account_name, delivery_link=delivery_link,
+                    ).rstrip()
+                    _send_service_delivery(
+                        api, identity.telegram_chat_id, language,
+                        ownership.id, completion_text, delivery_link,
+                    )
+                    delivered = True
+            if not delivered:
+                api.send_message(identity.telegram_chat_id, _cc(language)['request_completed'])
         elif refunded_amount:
             text = _cc(language)['request_rejected_refund'].format(
                 amount=f"{refunded_amount:,}",
                 balance=f"{int(customer.credit or 0):,}",
             )
+            api.send_message(identity.telegram_chat_id, text)
         else:
-            text = _cc(language)['request_rejected']
-        api.send_message(identity.telegram_chat_id, text)
+            api.send_message(identity.telegram_chat_id, _cc(language)['request_rejected'])
     return True
 
 
@@ -3128,22 +3349,27 @@ def _start_trial(api: TelegramBotApi, bot: TelegramBotInstance, chat_id: int,
         api.send_message(chat_id, _cc(language)['trial_failed'])
         return
     request_row.status = 'completed'
+    trial_ownership_id = (result or {}).get('ownership_id') if isinstance(result, dict) else None
     db.session.add(TelegramTrialGrant(
         bot_instance_id=bot.id,
         telegram_user_id=user_id,
         phone_normalized=phone,
         customer_id=identity.customer_id,
         package_id=package.id,
-        ownership_id=(result or {}).get('ownership_id') if isinstance(result, dict) else None,
+        ownership_id=trial_ownership_id,
         kind='trial',
     ))
     _log_audit('telegram.trial_grant', request_row, actor='customer',
                meta={'telegram_user_id': user_id, 'phone_normalized': phone})
     db.session.commit()
-    api.send_message(
-        chat_id,
-        _cc(language)['trial_success'].format(link=_grant_delivery_link(result)),
-    )
+    trial_link = _grant_delivery_link(result)
+    trial_text = _cc(language)['trial_success'].format(link=trial_link)
+    if trial_ownership_id:
+        _send_service_delivery(
+            api, chat_id, language, trial_ownership_id, trial_text.rstrip(), trial_link,
+        )
+    else:
+        api.send_message(chat_id, trial_text)
     _notify_grant_admins(api, request_row, 'trial')
 
 
@@ -3906,6 +4132,24 @@ def _handle_callback(api: TelegramBotApi, bot: TelegramBotInstance, callback: di
         api.answer_callback(callback_id)
         _send_tutorial_app(api, chat_id, language, app_id)
         return
+    if data == 'faq-menu':
+        api.answer_callback(callback_id)
+        _send_faq_menu(api, chat_id, language)
+        return
+    if data.startswith('faq-os:'):
+        platform = data.partition(':')[2]
+        api.answer_callback(callback_id)
+        _send_faq_list(api, chat_id, language, platform)
+        return
+    if data.startswith('faq-item:'):
+        try:
+            faq_id = int(data.partition(':')[2])
+        except (TypeError, ValueError):
+            api.answer_callback(callback_id)
+            return
+        api.answer_callback(callback_id)
+        _send_faq_item(api, chat_id, language, faq_id)
+        return
     if data == 'service-list':
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()
         api.answer_callback(callback_id)
@@ -4292,9 +4536,13 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     if int(contact.get("user_id") or 0) != user_id:
         api.send_message(chat_id, _cc(language)["phone_mismatch"])
         return
+    allow_international = bool(getattr(bot, 'phone_allow_international', False))
     phone = normalize_iran_mobile(contact.get("phone_number"))
+    if not phone and allow_international:
+        phone = normalize_international_phone(contact.get("phone_number"))
     if not phone:
-        api.send_message(chat_id, _cc(language)["phone_invalid"])
+        copy_key = "phone_invalid_intl" if allow_international else "phone_invalid"
+        api.send_message(chat_id, _cc(language)[copy_key])
         return
 
     identity = _identity(sender, chat_id)
@@ -4332,7 +4580,7 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
             sender.get("first_name"), sender.get("last_name"),
         ]))[:120] or None
     identity.customer_id = customer.id
-    identity.set_verified_phone(phone)
+    identity.set_verified_phone(phone, allow_international=allow_international)
     _qualify_referral(user_id)
     state.step = "verified"
     db.session.flush()
@@ -4341,7 +4589,10 @@ def _handle_contact(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
         reply_markup={"remove_keyboard": True},
     )
     _send_main_menu(api, bot, chat_id, language)
-    claim = discover_phone_ownership_claim(identity)
+    # Ownership discovery matches client emails against Iranian mobiles only;
+    # skip it silently for international numbers (it would raise otherwise).
+    claim = discover_phone_ownership_claim(identity) if normalize_iran_mobile(
+        identity.phone_normalized) else None
     _send_claim_candidates(api, chat_id, language, claim)
 
 
@@ -5027,6 +5278,9 @@ def _handle_message(api: TelegramBotApi, bot: TelegramBotInstance, message: dict
     elif menu_key == "menu_tutorial":
         state.step = 'verified'
         _send_tutorial_devices(api, chat_id, state.language)
+    elif menu_key == "menu_faq":
+        state.step = 'verified'
+        _send_faq_menu(api, chat_id, state.language)
     elif menu_key == "menu_add_service":
         state.step = 'verified'
         identity = TelegramIdentity.query.filter_by(telegram_user_id=user_id).first()

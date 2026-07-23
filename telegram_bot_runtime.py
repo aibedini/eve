@@ -203,6 +203,19 @@ class TelegramBotApi:
             **extra,
         })
 
+    def send_photo_url(self, chat_id: int, url: str, caption: str = '',
+                       reply_markup=None):
+        """Send a photo referenced by a public URL (JSON sendPhoto)."""
+        payload = {
+            "chat_id": int(chat_id),
+            "photo": str(url),
+        }
+        if caption:
+            payload["caption"] = str(caption)[:1024]
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        return self.call("sendPhoto", payload)
+
     def send_document(self, chat_id: int, file_id: str, **extra):
         return self.call("sendDocument", {
             "chat_id": int(chat_id),
@@ -211,7 +224,8 @@ class TelegramBotApi:
         })
 
     def send_upload(self, chat_id: int, content: bytes, filename: str,
-                    content_type: str, *, as_photo: bool = False, caption: str = ''):
+                    content_type: str, *, as_photo: bool = False, caption: str = '',
+                    reply_markup=None):
         """Upload a trusted in-memory operator attachment through route failover."""
         if not content:
             raise TelegramApiError("Attachment is empty", retryable=False)
@@ -224,6 +238,8 @@ class TelegramBotApi:
                 data = {"chat_id": int(chat_id)}
                 if caption:
                     data["caption"] = str(caption)[:1024]
+                if reply_markup:
+                    data["reply_markup"] = json.dumps(reply_markup)
                 response = self._session.post(
                     url,
                     data=data,
@@ -315,6 +331,7 @@ COPY = {
         "share_phone": "برای شناسایی حساب‌ها، شماره موبایل خودتان را با دکمه زیر ارسال کنید.",
         "share_button": "📱 ارسال شماره من",
         "phone_invalid": "این شماره معتبر نیست. لطفاً شماره ایران خودتان را با دکمه ارسال کنید.",
+        "phone_invalid_intl": "این شماره معتبر نیست. لطفاً شماره موبایل خودتان را با دکمه ارسال کنید.",
         "phone_mismatch": "برای امنیت، فقط شماره‌ای پذیرفته می‌شود که Telegram آن را متعلق به خود شما اعلام کند.",
         "phone_conflict": "این حساب قبلاً به مشتری دیگری متصل شده است. برای ادامه، مدیر باید آن را بررسی کند.",
         "verified": "✅ شماره شما تأیید شد. در مرحله بعد سرویس‌هایتان را با هم پیدا و متصل می‌کنیم.",
@@ -339,6 +356,7 @@ COPY = {
         "menu_invite": "🎁 لینک دعوت من",
         "menu_wallet": "💰 کیف پول",
         "menu_tutorial": "🎓 آموزش اتصال",
+        "menu_faq": "❓ سوالات متداول",
         "tutorial_choose_device": "نوع دستگاه خود را انتخاب کنید:",
         "tutorial_choose_app": "برنامه موردنظر را انتخاب کنید. برنامه پیشنهادی با ⭐ مشخص شده است:",
         "tutorial_no_apps": "برای این دستگاه فعلاً برنامه‌ای در سایت تعریف نشده است.",
@@ -353,6 +371,12 @@ COPY = {
         "tutorial_device_android": "🤖 اندروید",
         "tutorial_device_ios": " آیفون (iOS)",
         "tutorial_device_windows": "🪟 ویندوز",
+        "faq_choose_device": "برای دیدن سوالات متداول، نوع دستگاه خود را انتخاب کنید:",
+        "faq_empty": "فعلاً سوال متداولی ثبت نشده است.",
+        "faq_device_general": "🌐 عمومی",
+        "faq_back": "⬅️ بازگشت",
+        "faq_view_image": "🖼 مشاهده تصویر",
+        "faq_watch_video": "🎬 ویدیو",
         "wallet_balance": "موجودی کیف پول شما: <b>{balance}</b> تومان",
         "wallet_topup_button": "➕ افزایش اعتبار",
         "wallet_history_button": "📜 تاریخچه",
@@ -471,6 +495,7 @@ COPY = {
         "purchase_account_name_taken": "این نام روی سرور انتخاب‌شده وجود دارد. نام دیگری ارسال کنید.",
         "purchase_approved": "✅ پرداخت سفارش شما تأیید شد، اما ساخت خودکار سرویس هنوز کامل نشده است. مدیر دوباره تلاش می‌کند و نتیجه را همین‌جا می‌فرستد.",
         "purchase_completed": "✅ پرداخت تأیید و سرویس شما ساخته شد.\nنام اکانت: {account_name}\n{delivery_link}",
+        "renewal_completed": "✅ سرویس شما تمدید شد.\nنام اکانت: {account_name}\n{delivery_link}",
         "purchase_rejected": "❌ پرداخت سفارش شما تأیید نشد. برای بررسی بیشتر با پشتیبانی تماس بگیرید.",
         "purchase_orders_empty": "هنوز سفارشی ثبت نکرده‌اید.",
         "purchase_orders_list": "سفارش‌های اخیر شما:",
@@ -493,6 +518,7 @@ COPY = {
         "share_phone": "To identify your accounts, share your own phone number using the button below.",
         "share_button": "📱 Share my number",
         "phone_invalid": "That number is not valid. Please share your Iranian mobile number using the button.",
+        "phone_invalid_intl": "That number is not valid. Please share your own mobile number using the button.",
         "phone_mismatch": "For security, only a phone number Telegram confirms belongs to you is accepted.",
         "phone_conflict": "This Telegram account is already linked to another customer. An admin must review it.",
         "verified": "✅ Your phone is verified. Next, we will find and link your services together.",
@@ -517,6 +543,7 @@ COPY = {
         "menu_invite": "🎁 My invite link",
         "menu_wallet": "💰 Wallet",
         "menu_tutorial": "🎓 Connection guide",
+        "menu_faq": "❓ FAQ",
         "tutorial_choose_device": "Choose your device type:",
         "tutorial_choose_app": "Choose an app. The recommended app is marked with ⭐:",
         "tutorial_no_apps": "No app is currently configured on the website for this device.",
@@ -531,6 +558,12 @@ COPY = {
         "tutorial_device_android": "🤖 Android",
         "tutorial_device_ios": " iPhone (iOS)",
         "tutorial_device_windows": "🪟 Windows",
+        "faq_choose_device": "Pick your device type to browse FAQs:",
+        "faq_empty": "No FAQs are available yet.",
+        "faq_device_general": "🌐 General",
+        "faq_back": "⬅️ Back",
+        "faq_view_image": "🖼 View image",
+        "faq_watch_video": "🎬 Watch video",
         "wallet_balance": "Your wallet balance: <b>{balance}</b> Toman",
         "wallet_topup_button": "➕ Top up",
         "wallet_history_button": "📜 History",
@@ -649,6 +682,7 @@ COPY = {
         "purchase_account_name_taken": "That name already exists on the selected server. Send another name.",
         "purchase_approved": "✅ Your payment was approved, but automatic provisioning has not completed yet. An admin will retry and update you here.",
         "purchase_completed": "✅ Payment approved and your service was created.\nAccount: {account_name}\n{delivery_link}",
+        "renewal_completed": "✅ Your service was renewed.\nAccount: {account_name}\n{delivery_link}",
         "purchase_rejected": "❌ Your payment was not approved. Contact support for more details.",
         "purchase_orders_empty": "You have not placed any orders yet.",
         "purchase_orders_list": "Your recent orders:",
@@ -706,6 +740,7 @@ HIDEABLE_MENU_KEYS = (
     "menu_invite",
     "menu_wallet",
     "menu_tutorial",
+    "menu_faq",
     "menu_trial",
     "share_button",
 )
@@ -807,7 +842,7 @@ def main_menu_keyboard(language: str, show_trial: bool = False,
     for keys in (
         ("menu_services", "menu_buy_service"),
         ("menu_orders", "menu_wallet"),
-        ("menu_tutorial",),
+        ("menu_tutorial", "menu_faq"),
         ("menu_add_service", "menu_support_requests"),
         ("menu_invite", "menu_language"),
     ):

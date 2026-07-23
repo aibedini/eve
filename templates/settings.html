@@ -719,6 +719,14 @@
                     </div>
                 </section>
 
+                <section class="panel-card tgb-section">
+                    <div class="panel-card-header"><div class="header-content"><h2>Phone Verification</h2><p>Which phone numbers the bot accepts during contact verification.</p></div></div>
+                    <div class="tgb-form-grid">
+                        <div class="tgb-toggle-label"><label for="tgb-phone-allow-intl">Accept non-Iranian phone numbers</label><label class="toggle-switch" aria-label="Accept non-Iranian phone numbers"><input id="tgb-phone-allow-intl" type="checkbox"><span class="slider"></span></label></div>
+                        <div class="tgb-form-span text-secondary">When off, only Iranian mobile numbers are accepted. When on, other countries' numbers are accepted too; Iranian numbers are still stored in the standard 98 format.</div>
+                    </div>
+                </section>
+
                 <section class="panel-card tgb-section" aria-labelledby="tgb-copy-title">
                     <div class="panel-card-header">
                         <div class="header-content">
@@ -4879,6 +4887,7 @@
             document.getElementById('tgb-connection-mode').value = bot.connection_mode || 'proxy_first';
             document.getElementById('tgb-membership-start').checked = !!bot.require_membership_on_start;
             document.getElementById('tgb-membership-delivery').checked = !!bot.require_membership_on_delivery;
+            document.getElementById('tgb-phone-allow-intl').checked = !!bot.phone_allow_international;
             telegramRequiredChannels = Array.isArray(bot.required_channels) ? bot.required_channels : [];
             renderTelegramRequiredChannels();
             const startStats = data.start_stats || {};
@@ -5120,6 +5129,7 @@
             required_channels: requiredChannels,
             require_membership_on_start: document.getElementById('tgb-membership-start').checked,
             require_membership_on_delivery: document.getElementById('tgb-membership-delivery').checked,
+            phone_allow_international: document.getElementById('tgb-phone-allow-intl').checked,
             support_group_enabled: supportGroupEnabled,
             support_group_chat_id: supportGroupChatId || null,
             support_group_topics: document.getElementById('tgb-support-group-topics').checked,

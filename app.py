@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.30"
+APP_VERSION = "2.5.32"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -7895,6 +7895,32 @@ def normalize_iran_mobile(value: str | None) -> str:
     return ''
 
 
+def normalize_international_phone(value: str | None) -> str:
+    """Return a non-Iranian phone number as bare digits (E.164 without '+').
+
+    Accepts Persian/Arabic digits, an optional leading '+' or '00' prefix, and
+    common separators. Requires 8-15 digits total; returns an empty string
+    otherwise. Callers must try ``normalize_iran_mobile`` first so Iranian
+    numbers keep their canonical ``989xxxxxxxxx`` form.
+    """
+    if not value:
+        return ''
+    digits = re.sub(r'\D', '', _normalize_ascii_digits(value))
+    if digits.startswith('00'):
+        digits = digits[2:]
+    if not 8 <= len(digits) <= 15:
+        return ''
+    return digits
+
+
+def _normalize_contact_phone(value: str | None, allow_international: bool = False) -> str:
+    """Canonicalize a contact phone, Iranian first, international when allowed."""
+    canonical = normalize_iran_mobile(value)
+    if canonical or not allow_international:
+        return canonical
+    return normalize_international_phone(value)
+
+
 def _extract_iran_mobile_from_text(value: str | None, *extra_sources: str | None) -> str:
     """Extract first valid Iranian mobile from value, then extra_sources in order.
 
@@ -8324,7 +8350,7 @@ class CustomerAccount(db.Model):
     __tablename__ = 'customer_accounts'
     id = db.Column(db.Integer, primary_key=True)
     display_name = db.Column(db.String(120), nullable=True)
-    primary_phone = db.Column(db.String(12), nullable=True, unique=True, index=True)
+    primary_phone = db.Column(db.String(20), nullable=True, unique=True, index=True)
     phone_verified_at = db.Column(db.DateTime, nullable=True)
     status = db.Column(db.String(24), nullable=False, default='active', index=True)
     risk_level = db.Column(db.String(24), nullable=False, default='standard', index=True)
@@ -8333,10 +8359,11 @@ class CustomerAccount(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    def set_primary_phone(self, raw_phone: str | None, *, verified=False):
-        canonical = normalize_iran_mobile(raw_phone)
+    def set_primary_phone(self, raw_phone: str | None, *, verified=False,
+                          allow_international: bool = False):
+        canonical = _normalize_contact_phone(raw_phone, allow_international)
         if not canonical:
-            raise ValueError('A valid Iranian mobile number is required')
+            raise ValueError('A valid mobile phone number is required')
         self.primary_phone = canonical
         if verified:
             self.phone_verified_at = datetime.utcnow()
@@ -8432,7 +8459,7 @@ class TelegramIdentity(db.Model):
     username = db.Column(db.String(64), nullable=True)
     first_name = db.Column(db.String(128), nullable=True)
     last_name = db.Column(db.String(128), nullable=True)
-    phone_normalized = db.Column(db.String(12), nullable=True, index=True)
+    phone_normalized = db.Column(db.String(20), nullable=True, index=True)
     phone_verified_at = db.Column(db.DateTime, nullable=True)
     status = db.Column(db.String(24), nullable=False, default='active', index=True)
     last_seen_at = db.Column(db.DateTime, nullable=True)
@@ -8441,10 +8468,10 @@ class TelegramIdentity(db.Model):
 
     customer = db.relationship('CustomerAccount', backref=db.backref('telegram_identities', lazy=True))
 
-    def set_verified_phone(self, raw_phone: str | None):
-        canonical = normalize_iran_mobile(raw_phone)
+    def set_verified_phone(self, raw_phone: str | None, *, allow_international: bool = False):
+        canonical = _normalize_contact_phone(raw_phone, allow_international)
         if not canonical:
-            raise ValueError('A valid Iranian mobile number is required')
+            raise ValueError('A valid mobile phone number is required')
         self.phone_normalized = canonical
         self.phone_verified_at = datetime.utcnow()
         return canonical
@@ -8461,7 +8488,7 @@ class OwnershipClaim(db.Model):
     requested_reseller_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True, index=True)
     status = db.Column(db.String(32), nullable=False, default='pending', index=True)
     claim_method = db.Column(db.String(32), nullable=False, default='admin_review')
-    verified_phone = db.Column(db.String(12), nullable=False, index=True)
+    verified_phone = db.Column(db.String(20), nullable=False, index=True)
     reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=True)
     reviewed_at = db.Column(db.DateTime, nullable=True)
     rejection_reason = db.Column(db.Text, nullable=True)
@@ -8750,6 +8777,7 @@ class TelegramBotInstance(db.Model):
     required_channels_json = db.Column(db.Text, nullable=False, default='[]')
     require_membership_on_start = db.Column(db.Boolean, nullable=False, default=False)
     require_membership_on_delivery = db.Column(db.Boolean, nullable=False, default=False)
+    phone_allow_international = db.Column(db.Boolean, nullable=False, default=False)
     last_test_status = db.Column(db.String(24), nullable=True)
     last_test_route = db.Column(db.String(120), nullable=True)
     last_test_latency_ms = db.Column(db.Integer, nullable=True)
@@ -8799,6 +8827,7 @@ class TelegramBotInstance(db.Model):
             'required_channels': self.required_channels(),
             'require_membership_on_start': bool(self.require_membership_on_start),
             'require_membership_on_delivery': bool(self.require_membership_on_delivery),
+            'phone_allow_international': bool(self.phone_allow_international),
             'last_test_status': self.last_test_status,
             'last_test_route': self.last_test_route,
             'last_test_latency_ms': self.last_test_latency_ms,
@@ -9295,7 +9324,7 @@ class TelegramTrialGrant(db.Model):
         nullable=False, index=True,
     )
     telegram_user_id = db.Column(db.BigInteger, nullable=False, index=True)
-    phone_normalized = db.Column(db.String(12), nullable=False, default='', index=True)
+    phone_normalized = db.Column(db.String(20), nullable=False, default='', index=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer_accounts.id'), nullable=True)
     package_id = db.Column(db.Integer, db.ForeignKey('packages.id'), nullable=True)
     ownership_id = db.Column(db.Integer, db.ForeignKey('service_ownerships.id'), nullable=True)
@@ -10677,6 +10706,24 @@ with app.app_context():
     except Exception as e:
         print(f"Migration error (system_configs.value TEXT): {e}")
 
+    # Widen phone columns for international numbers (up to 15 E.164 digits).
+    # PostgreSQL only; on SQLite VARCHAR length is not enforced (type affinity),
+    # so this is a documented no-op there.
+    try:
+        if db.engine.dialect.name == 'postgresql':
+            with db.engine.connect() as conn:
+                for _table, _column in (
+                        ('telegram_identities', 'phone_normalized'),
+                        ('customer_accounts', 'primary_phone'),
+                        ('telegram_trial_grants', 'phone_normalized'),
+                        ('ownership_claims', 'verified_phone')):
+                    conn.execute(text(
+                        f'ALTER TABLE {_table} ALTER COLUMN {_column} TYPE VARCHAR(20)'))
+                conn.commit()
+            print("Ensured phone columns are VARCHAR(20)")
+    except Exception as e:
+        print(f"Migration error (phone columns VARCHAR(20)): {e}")
+
     # Ensure announcements.targets exists (SQLite old DBs)
     try:
         inspector = inspect(db.engine)
@@ -10739,6 +10786,7 @@ with app.app_context():
         ('required_channels_json', "TEXT DEFAULT '[]'"),
         ('require_membership_on_start', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
         ('require_membership_on_delivery', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
+        ('phone_allow_international', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
     ])
 
     # Ensure telegram_purchase_policies supports trial and emergency access
@@ -26559,8 +26607,48 @@ def _custom_subscription_remark(row):
     return f'config-{row.id}'
 
 
+WIREGUARD_COMPAT_DECODED_QUERY_FIELDS = {
+    'address', 'ip', 'publickey', 'public_key', 'peerpublickey',
+    'presharedkey', 'preshared_key', 'pre-shared-key', 'psk',
+}
+
+
+def _custom_subscription_wireguard_compat_uri(uri):
+    """Render WireGuard values decoded for legacy importers.
+
+    Modern URL parsers decode query parameters and 3x-ui explicitly decodes the
+    username. Some older subscription importers copy the percent-encoded values
+    directly into Xray's secretKey/publicKey/address fields, which makes valid
+    Base64 keys fail at the first ``%``. Keep the stored URI canonical and apply
+    this compatibility form only to the public subscription output.
+    """
+    base = str(uri or '').partition('#')[0]
+    scheme, separator, remainder = base.partition('://')
+    if not separator or scheme.lower() not in ('wireguard', 'wg'):
+        return base
+
+    authority, query_separator, raw_query = remainder.partition('?')
+    username, at_separator, endpoint = authority.rpartition('@')
+    if at_separator:
+        authority = f'{unquote(username)}@{endpoint}'
+
+    if query_separator:
+        rendered_pairs = []
+        for pair in raw_query.split('&'):
+            key, value_separator, value = pair.partition('=')
+            if value_separator and key.lower() in WIREGUARD_COMPAT_DECODED_QUERY_FIELDS:
+                value = unquote(value)
+            rendered_pairs.append(
+                f'{key}={value}' if value_separator else key
+            )
+        return f'{scheme}://{authority}?{"&".join(rendered_pairs)}'
+    return f'{scheme}://{authority}'
+
+
 def _custom_subscription_render_uri(subscription, row):
     base = str(row.uri or '').partition('#')[0]
+    if urlparse(base).scheme.lower() in ('wireguard', 'wg'):
+        base = _custom_subscription_wireguard_compat_uri(base)
     label = f'{subscription.tag_prefix or ""}{_custom_subscription_remark(row)}'
     return f'{base}#{quote(label, safe="")}'
 
@@ -30189,6 +30277,8 @@ def _save_telegram_bot_settings(bot: TelegramBotInstance, data: dict):
     bot.required_channels_json = json.dumps(cleaned_channels, ensure_ascii=False, separators=(',', ':'))
     bot.require_membership_on_start = require_start
     bot.require_membership_on_delivery = require_delivery
+    bot.phone_allow_international = bool(data.get(
+        'phone_allow_international', bot.phone_allow_international))
     copy_overrides = data.get('copy_overrides')
     if copy_overrides is not None:
         if not isinstance(copy_overrides, dict):

@@ -1471,7 +1471,10 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             execute_renewal.assert_called_once_with(renewal, reviewer)
             self.assertEqual(renewal.status, 'completed')
             self.assertEqual(renewal.reviewed_by_admin_id, reviewer.id)
-            self.assertEqual(api.messages[-1]['text'], COPY['fa']['request_completed'])
+            self.assertEqual(
+                api.messages[-1]['text'],
+                COPY['fa']['renewal_completed'].format(
+                    account_name='g276-09125551231', delivery_link='').rstrip())
 
             process_update(api, bot, {'update_id': 17, 'callback_query': {
                 'id': 'renew-package-after-complete',

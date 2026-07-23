@@ -1,4 +1,5 @@
 import base64
+import binascii
 import os
 import tempfile
 import unittest
@@ -121,6 +122,47 @@ class CustomSubscriptionTests(unittest.TestCase):
         page = self.client.get('/custom-subscriptions')
         self.assertEqual(page.status_code, 200)
         self.assertIn(b'Custom Subscriptions', page.data)
+
+    def test_wireguard_output_decodes_keys_and_address_for_legacy_importers(self):
+        subscription = self._create()
+        private_key = 'eAa8ZCl94VvnagSvRF4+/lYUyYWFbhDP316H624bk1I='
+        public_key = 'zeYgDsVqwHMaSTIqgn76jdDFG/yJVR5ciyLOlNBVYBg='
+        encoded_uri = (
+            'wireguard://'
+            'eAa8ZCl94VvnagSvRF4%2B%2FlYUyYWFbhDP316H624bk1I%3D'
+            '@tr3.example:51820'
+            '?publickey=zeYgDsVqwHMaSTIqgn76jdDFG%2FyJVR5ciyLOlNBVYBg%3D'
+            '&address=10.70.1.2%2F32#TR3'
+        )
+        created = self.client.post(
+            f"/api/custom-subscriptions/{subscription['id']}/configs",
+            json={'configs': encoded_uri},
+        )
+        self.assertEqual(created.status_code, 201, created.get_json())
+
+        raw = self.client.get(
+            f"/cs/{subscription['token']}?format=raw",
+        ).get_data(as_text=True)
+        rendered_base = raw.partition('#')[0]
+        self.assertNotIn('%2B', rendered_base.upper())
+        self.assertNotIn('%2F', rendered_base.upper())
+        self.assertNotIn('%3D', rendered_base.upper())
+        self.assertEqual(
+            rendered_base,
+            f'wireguard://{private_key}@tr3.example:51820'
+            f'?publickey={public_key}&address=10.70.1.2/32',
+        )
+
+        rendered_private = rendered_base.partition('://')[2].partition('@')[0]
+        rendered_public = (
+            rendered_base.partition('publickey=')[2].partition('&')[0]
+        )
+        for key in (rendered_private, rendered_public):
+            try:
+                decoded = base64.b64decode(key, validate=True)
+            except binascii.Error as exc:
+                self.fail(f'WireGuard key is not valid Base64: {exc}')
+            self.assertEqual(len(decoded), 32)
 
 
 if __name__ == '__main__':
