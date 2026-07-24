@@ -33,6 +33,8 @@ The project is being modularized out of the `app.py` monolith into the `panel/` 
 - `panel/extensions.py` — `db` and `limiter`, constructed unbound and bound in `app.py` via `init_app`. Import `db` from here, never from `app`.
 - `panel/core/` — app-independent helpers (`redis_client.py`, `phone.py`).
 - `panel/models/` — all SQLAlchemy models, split by domain (`core.py`, `finance.py`, `telegram.py`, `ops.py`); `panel/models/__init__.py` re-exports every name.
+- `panel/services/` — extracted services (`ownership.py`, `billing.py`, `subscription.py`, `backup.py`). `backup.py` owns the DB backup/restore, full-migration bundle, and Telegram-backup pipeline; its `TELEGRAM_BACKUP_TMP_DIR` is bound via `init_backup_tmp_dir(app)` called from `app.py` right after the re-export import.
+- `panel/adapters/` — external panel adapters (`xui.py`: 3x-ui/X-UI session auth, v3 client API, inbound/status fetchers; owns `XUI_SESSION_CACHE`/`XUI_CAPABILITY_CACHE`).
 - `app.py` re-exports all extracted symbols, so existing `from app import X` callers (workers, tests) keep working. Do not break this surface until the cleanup phase.
 - Dependency direction is one-way: `panel.core` ← `panel.models` ← (later) services ← routes. Code inside `panel/` must never import `app` at module level; use deferred in-function imports (see `panel/models/_helpers.py`) for unavoidable reverse dependencies.
 - Tests may monkeypatch `app.<name>`; a function that tests patch must stay in `app.py` (or keep its lookup in `app`'s namespace) until tests are updated in the cleanup phase.

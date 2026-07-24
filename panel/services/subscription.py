@@ -1,0 +1,337 @@
+"""Subscription rendering cluster (extracted from app.py).
+
+Share-link generation per client/inbound, full subscription config
+aggregation, and inbound client lookup.
+"""
+import base64
+import json
+from urllib.parse import quote, urlencode, urlparse
+
+from panel.adapters.xui import (
+    _v3_get,
+    fetch_inbounds,
+    get_xui_session,
+    server_is_v3,
+)
+
+
+def generate_client_link(client, inbound, server_host):
+    """Generate share links for client-capable inbound protocols."""
+
+    from app import app  # deferred: Flask instance lives in app.py (circular at module level)
+
+    def _as_json(obj, default=None):
+        if default is None:
+            default = {}
+        if isinstance(obj, dict):
+            return obj
+        if isinstance(obj, str):
+            try:
+                return json.loads(obj)
+            except Exception:
+                return default
+        return default
+
+    def _parse_host(server_host, inbound_port):
+        host_value = server_host or ''
+        if host_value and not host_value.startswith(('http://', 'https://')):
+            host_value = f"http://{host_value}"
+        parsed = urlparse(host_value)
+        host = parsed.hostname or parsed.path or ''
+        port_val = inbound_port or parsed.port
+        return host, port_val
+
+    def _extract_stream_parts(stream_settings):
+        network = (stream_settings.get('network') or 'tcp').lower()
+        security = (stream_settings.get('security') or 'none').lower()
+
+        ws = stream_settings.get('wsSettings') or {}
+        grpc = stream_settings.get('grpcSettings') or {}
+        tcp = stream_settings.get('tcpSettings') or {}
+        h2 = stream_settings.get('httpSettings') or {}
+
+        path = ws.get('path') or h2.get('path') or ''
+        host_header = (ws.get('headers') or {}).get('Host') or (ws.get('headers') or {}).get('host') or ''
+        if not host_header:
+            host_header = h2.get('host') or ''
+
+        service_name = grpc.get('serviceName') or grpc.get('service_name') or ''
+        mode = grpc.get('multiMode') and 'multi' or 'gun'
+
+        header = (tcp.get('header') or {})
+        header_type = header.get('type') or ''
+        if header_type == 'http':
+            hosts = header.get('request', {}).get('headers', {}).get('Host') or []
+            host_header = ','.join(hosts) if isinstance(hosts, list) else hosts
+
+        tls_settings = stream_settings.get('tlsSettings') or {}
+        reality_settings = stream_settings.get('realitySettings') or {}
+        sni = tls_settings.get('serverName') or (reality_settings.get('serverNames') or [None])[0]
+        alpn_list = tls_settings.get('alpn') or []
+        alpn = ','.join(alpn_list) if isinstance(alpn_list, list) else alpn_list
+
+        fp = reality_settings.get('fingerprint') or stream_settings.get('fingerprint')
+        pbk = reality_settings.get('publicKey')
+        sid = reality_settings.get('shortId') or reality_settings.get('shortIds') or ''
+
+        return {
+            "network": network,
+            "security": security,
+            "path": path,
+            "host_header": host_header,
+            "service_name": service_name,
+            "grpc_mode": mode,
+            "header_type": header_type,
+            "sni": sni,
+            "alpn": alpn,
+            "fp": fp,
+            "pbk": pbk,
+            "sid": sid,
+        }
+
+    try:
+        protocol = (inbound.get('protocol') or '').lower()
+        settings = _as_json(inbound.get('settings'))
+        stream_settings = _as_json(inbound.get('streamSettings'))
+        if not stream_settings:
+            stream_settings = {
+                'network': inbound.get('network') or 'tcp',
+                'security': inbound.get('security') or 'none',
+            }
+        stream = _extract_stream_parts(stream_settings)
+        raw_client = _as_json(client.get('raw_client'))
+
+        def _client_value(*keys):
+            for key in keys:
+                value = client.get(key)
+                if value not in (None, ''):
+                    return value
+                value = raw_client.get(key)
+                if value not in (None, ''):
+                    return value
+            return ''
+
+        host, port = _parse_host(server_host, inbound.get('port'))
+        remark = quote(_client_value('email') or inbound.get('remark') or 'client')
+        uuid = _client_value('id', 'uuid', 'password')
+        flow = _client_value('flow') or settings.get('flow') or ''
+
+        if protocol == 'vless':
+            query = {
+                "encryption": "none",
+                "type": stream["network"],
+                "security": None if stream["security"] == 'none' else stream["security"],
+                "sni": stream["sni"],
+                "alpn": stream["alpn"],
+                "fp": stream["fp"],
+                "pbk": stream["pbk"],
+                "sid": stream["sid"],
+                "flow": flow or None,
+            }
+            if stream["network"] == 'ws':
+                query.update({"path": stream["path"], "host": stream["host_header"]})
+            elif stream["network"] == 'grpc':
+                query.update({"type": "grpc", "serviceName": stream["service_name"], "mode": stream["grpc_mode"]})
+            elif stream["network"] == 'tcp' and stream["header_type"] == 'http':
+                query.update({"type": "http", "host": stream["host_header"]})
+
+            q = {k: v for k, v in query.items() if v not in (None, '', [])}
+            return f"vless://{uuid}@{host}:{port}?{urlencode(q)}#{remark}"
+
+        if protocol == 'vmess':
+            aid = _client_value('alterId', 'aid') or 0
+            vmess_obj = {
+                "v": "2",
+                "ps": _client_value('email') or inbound.get('remark') or host,
+                "add": host,
+                "port": str(port),
+                "id": uuid,
+                "aid": str(aid),
+                "scy": "auto",
+                "net": stream["network"],
+                "type": stream["header_type"] or "none",
+                "host": stream["host_header"],
+                "path": stream["path"] if stream["network"] == 'ws' else '',
+                "tls": "" if stream["security"] == 'none' else stream["security"],
+                "sni": stream["sni"] or "",
+                "alpn": stream["alpn"] or "",
+                "fp": stream["fp"] or "",
+                "pbk": stream["pbk"] or "",
+                "sid": stream["sid"] or "",
+                "serviceName": stream["service_name"] if stream["network"] == 'grpc' else "",
+            }
+            payload = base64.b64encode(json.dumps(vmess_obj, ensure_ascii=False).encode()).decode()
+            return f"vmess://{payload}"
+
+        if protocol == 'trojan':
+            password = _client_value('password') or uuid
+            query = {
+                "type": stream["network"],
+                "security": None if stream["security"] == 'none' else stream["security"],
+                "sni": stream["sni"],
+                "alpn": stream["alpn"],
+                "host": stream["host_header"],
+            }
+            if stream["network"] == 'ws':
+                query.update({"path": stream["path"]})
+            elif stream["network"] == 'grpc':
+                query.update({"serviceName": stream["service_name"], "mode": stream["grpc_mode"]})
+            q = {k: v for k, v in query.items() if v not in (None, '', [])}
+            q_str = f"?{urlencode(q)}" if q else ''
+            return f"trojan://{password}@{host}:{port}{q_str}#{remark}"
+
+        if protocol == 'shadowsocks':
+            method = settings.get('method') or _client_value('method')
+            password = _client_value('password') or uuid
+            if method and password:
+                userinfo = base64.b64encode(f"{method}:{password}".encode()).decode()
+                query = {}
+                if stream["network"] == 'ws':
+                    plugin = f"v2ray-plugin;path={stream['path'] or '/'};host={stream['host_header'] or host}"
+                    if stream["security"] != 'none':
+                        plugin += ";tls"
+                    query["plugin"] = plugin
+                elif stream["network"] == 'grpc':
+                    plugin = f"grpc;serviceName={stream['service_name']}"
+                    query["plugin"] = plugin
+                q = f"?{urlencode(query)}" if query else ''
+                return f"ss://{userinfo}@{host}:{port}{q}#{remark}"
+            return None
+
+        if protocol == 'wireguard':
+            private_key = _client_value('privateKey', 'password')
+            if not private_key:
+                return None
+            server_public_key = settings.get('publicKey') or settings.get('pubKey') or ''
+            if not server_public_key and settings.get('secretKey'):
+                try:
+                    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+                    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+                    raw_secret = str(settings['secretKey']).strip()
+                    raw_secret += '=' * (-len(raw_secret) % 4)
+                    secret_bytes = base64.b64decode(raw_secret)
+                    public_bytes = X25519PrivateKey.from_private_bytes(secret_bytes).public_key().public_bytes(
+                        Encoding.Raw, PublicFormat.Raw)
+                    server_public_key = base64.b64encode(public_bytes).decode()
+                except Exception:
+                    server_public_key = ''
+
+            allowed_ips = client.get('allowedIPs') or []
+            if isinstance(allowed_ips, str):
+                allowed_ips = [part.strip() for part in allowed_ips.split(',') if part.strip()]
+            params = {
+                'publickey': server_public_key,
+                'address': allowed_ips[0] if allowed_ips else '',
+                'mtu': settings.get('mtu') or '',
+                'dns': settings.get('dns') or '',
+                'presharedkey': _client_value('preSharedKey') or '',
+                'keepalive': _client_value('keepAlive') or '',
+            }
+            query = urlencode({k: str(v) for k, v in params.items() if v not in ('', None, 0)})
+            suffix = f"?{query}" if query else ''
+            return f"wireguard://{quote(str(private_key), safe='')}@{host}:{port}{suffix}#{remark}"
+
+        if protocol == 'mtproto':
+            secret = _client_value('secret', 'Secret')
+            if not secret:
+                return None
+            params = {
+                'server': host,
+                'port': port,
+                'secret': secret,
+                'adtag': _client_value('adTag', 'AdTag') or None,
+            }
+            query = urlencode({k: str(v) for k, v in params.items() if v not in ('', None)})
+            return f"tg://proxy?{query}"
+
+        return None
+    except Exception as exc:
+        app.logger.debug(f"Link gen failed: {exc}")
+        return None
+
+def build_subscription_configs(server, sub_id, fallback_client=None, fallback_inbound=None):
+    """Return ALL protocol config links for a subscription id.
+
+    On 3x-ui v3 a single subId is attached to MULTIPLE inbounds; the panel's
+    own /sub server aggregates them into one subscription. When we can't proxy
+    that separate sub server (wrong/unreachable sub_port, v3.3.1 changes), we
+    must reproduce the full set ourselves instead of emitting only the first
+    inbound — otherwise client apps load fewer inbounds than the panel does.
+
+    Strategy (most authoritative first; each falls through on failure):
+      1) v3 API  GET /panel/api/clients/subLinks/{subId} — full link set, via
+         the main panel API port (reliable; independent of the sub server).
+      2) Live fetch_inbounds → generate_client_link for EVERY inbound whose
+         clients contain this subId (or a matching uuid when subId is empty).
+      3) Last resort: single (fallback_client, fallback_inbound) link.
+    """
+    from app import app, _json_field  # deferred: live in app.py (circular at module level)
+
+    sub_id = str(sub_id or '').strip()
+
+    session_obj = None
+    try:
+        session_obj, _login_err = get_xui_session(server)
+    except Exception:
+        session_obj = None
+
+    # 1) v3 authoritative endpoint — covers all attached inbounds at once.
+    if session_obj and sub_id and server_is_v3(server, session_obj):
+        try:
+            ok, j, _e = _v3_get(server, session_obj, f"/panel/api/clients/subLinks/{quote(sub_id)}")
+            if ok and isinstance(j, dict):
+                obj = j.get('obj')
+                links = []
+                if isinstance(obj, list):
+                    for it in obj:
+                        if isinstance(it, str) and '://' in it:
+                            links.append(it.strip())
+                        elif isinstance(it, dict):
+                            u = (it.get('link') or it.get('url') or '').strip()
+                            if '://' in u:
+                                links.append(u)
+                if links:
+                    return links
+        except Exception as e:
+            app.logger.debug(f"v3 subLinks fetch failed for sub {sub_id}: {e}")
+
+    # 2) Aggregate generate_client_link across every inbound holding this subId.
+    if session_obj:
+        try:
+            inbounds, ferr, _t = fetch_inbounds(session_obj, server.host, server.panel_type)
+            if not ferr and inbounds:
+                links = []
+                seen = set()
+                for inb in inbounds:
+                    settings = _json_field(inb.get('settings'), {})
+                    for cli in settings.get('clients', []):
+                        c_sub = str(cli.get('subId') or '').strip()
+                        c_uuid = str(cli.get('id') or '').strip()
+                        if sub_id and (sub_id == c_sub or (not c_sub and sub_id == c_uuid)):
+                            link = generate_client_link(cli, inb, server.host)
+                            if link and link not in seen:
+                                seen.add(link)
+                                links.append(link)
+                if links:
+                    return links
+        except Exception as e:
+            app.logger.debug(f"Multi-inbound link aggregation failed for sub {sub_id}: {e}")
+
+    # 3) Last resort: the single inbound we already matched in the route.
+    if fallback_client and fallback_inbound:
+        link = generate_client_link(fallback_client, fallback_inbound, server.host)
+        if link:
+            return [link]
+    return []
+
+def find_client(inbounds, inbound_id, email):
+    from app import _json_field  # deferred: lives in app.py (circular at module level)
+    for inbound in inbounds:
+        if inbound.get('id') != inbound_id:
+            continue
+        settings = _json_field(inbound.get('settings'), {})
+        for client in settings.get('clients', []):
+            if client.get('email') == email:
+                return client, inbound
+    return None, None
+

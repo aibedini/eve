@@ -11,6 +11,7 @@ from collections import defaultdict
 
 __all__ = [
     'GLOBAL_SERVER_DATA',
+    'GLOBAL_REFRESH_LOCK',
     'REDIS_URL',
     'REDIS_SNAPSHOT_KEY',
     'REDIS_SNAPSHOT_MANIFEST_KEY',
@@ -37,6 +38,10 @@ GLOBAL_SERVER_DATA = {
     'servers_status': [],
     'is_updating': False
 }
+
+# Serializes all writes to GLOBAL_SERVER_DATA (fetch pipeline, ownership
+# enrichment, snapshot publish). Moved here from app.py; identity is shared.
+GLOBAL_REFRESH_LOCK = threading.Lock()
 
 REDIS_URL = (os.environ.get('REDIS_URL') or '').strip()
 REDIS_SNAPSHOT_KEY = 'eve:server_data_snapshot'
