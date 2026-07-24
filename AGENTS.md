@@ -25,3 +25,14 @@ This project maintains a knowledge graph under `graphify-out/`, including god no
 - Use `graphify-out/wiki/index.md` for broad navigation when it exists.
 - Read `graphify-out/GRAPH_REPORT.md` only for broad architecture reviews or when query, path, and explain results are insufficient.
 - After modifying code, run `graphify update .` to refresh the graph. This update is AST-only and has no API cost.
+
+## Modular Structure (`panel/` package)
+
+The project is being modularized out of the `app.py` monolith into the `panel/` package (phase 1 done: extensions, redis/phone helpers, all models).
+
+- `panel/extensions.py` — `db` and `limiter`, constructed unbound and bound in `app.py` via `init_app`. Import `db` from here, never from `app`.
+- `panel/core/` — app-independent helpers (`redis_client.py`, `phone.py`).
+- `panel/models/` — all SQLAlchemy models, split by domain (`core.py`, `finance.py`, `telegram.py`, `ops.py`); `panel/models/__init__.py` re-exports every name.
+- `app.py` re-exports all extracted symbols, so existing `from app import X` callers (workers, tests) keep working. Do not break this surface until the cleanup phase.
+- Dependency direction is one-way: `panel.core` ← `panel.models` ← (later) services ← routes. Code inside `panel/` must never import `app` at module level; use deferred in-function imports (see `panel/models/_helpers.py`) for unavoidable reverse dependencies.
+- Tests may monkeypatch `app.<name>`; a function that tests patch must stay in `app.py` (or keep its lookup in `app`'s namespace) until tests are updated in the cleanup phase.
