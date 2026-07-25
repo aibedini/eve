@@ -6,6 +6,7 @@ import shutil
 import sys
 
 os.environ['DISABLE_BACKGROUND_THREADS'] = 'true'
+os.environ['EVE_SKIP_IMPORT_MIGRATIONS'] = '1'  # maintenance owns the migration run
 
 from app import (  # noqa: E402
     APP_VERSION,
@@ -15,6 +16,7 @@ from app import (  # noqa: E402
     _legacy_usage_table_name,
     _migrate_legacy_usage_snapshots,
 )
+from panel.migrate import run_migrations  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 
@@ -55,7 +57,7 @@ def main():
     args = parser.parse_args()
 
     with app.app_context():
-        db.create_all()
+        run_migrations()
         if args.command in ('plan', 'status'):
             print(json.dumps(maintenance_plan(), ensure_ascii=False, indent=2))
             return 0

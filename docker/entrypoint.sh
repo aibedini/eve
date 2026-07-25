@@ -49,16 +49,14 @@ if [ -n "${DATABASE_URL:-}" ] && echo "$DATABASE_URL" | grep -qi '^postgresql'; 
     done
 fi
 
+# Single-process, file-locked schema migration (replaces init_db.py + migrations.py).
+# Runs before any web/background process starts; those processes then skip the
+# import-time migration path via EVE_SKIP_IMPORT_MIGRATIONS=1.
+python -m panel.migrate
+export EVE_SKIP_IMPORT_MIGRATIONS=1
+
 if [ "$EVE_PROCESS_ROLE" = "background" ]; then
     exec python background_worker.py
-fi
-
-if [ -f init_db.py ]; then
-    python init_db.py
-fi
-
-if [ -f migrations.py ]; then
-    python migrations.py
 fi
 
 unset DISABLE_BACKGROUND_THREADS
