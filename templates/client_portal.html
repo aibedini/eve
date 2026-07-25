@@ -152,7 +152,7 @@
                 </svg>
                 {{ user.mobile }}
             </span>
-            <a href="{{ url_for('client_logout') }}" class="btn-logout">{{ 'خروج' if panel_lang == 'fa' else 'Log out' }}</a>
+            <a href="{{ url_for('auth.client_logout') }}" class="btn-logout">{{ 'خروج' if panel_lang == 'fa' else 'Log out' }}</a>
         </div>
     </nav>
 
@@ -222,7 +222,7 @@
 
         <!-- Actions -->
         <div class="actions">
-            <a href="{{ url_for('client_change_password') }}" class="action-btn">
+            <a href="{{ url_for('auth.client_change_password') }}" class="action-btn">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
