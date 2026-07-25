@@ -190,7 +190,19 @@ The dashboard is available at `http://localhost:5000`.
 
 ```
 .
-├── app.py                  # Primary Flask app (routes, billing, automations, APIs)
+├── app.py                  # Thin Flask app core: config, security, shared helpers, blueprint registration
+├── panel/                  # Modular application package
+│   ├── extensions.py       # db (SQLAlchemy) + limiter, bound via init_app
+│   ├── core/               # App-independent helpers (redis cache, phone normalization)
+│   ├── models/             # All SQLAlchemy models, split by domain (core/finance/telegram/ops)
+│   ├── adapters/           # External systems (xui.py — 3x-ui panel API client)
+│   ├── services/           # Business logic (billing, subscription, ownership, backup)
+│   ├── routes/             # 25 Flask blueprints by domain (auth, pages, clients, finance, telegram, ...)
+│   ├── jobs/               # Background work: refresh pipeline, messaging workers, schedulers/watchdogs
+│   └── migrate.py          # Single, file-locked schema migration runner
+├── alembic/                # Alembic migrations (baseline adopts existing DBs; new changes = new revisions)
+├── maintenance.py          # Post-update maintenance runner (systemd eve-maintenance.service)
+├── telegram_bot_worker.py  # Interactive Telegram bot process
 ├── setup.sh                # One-line installer for Ubuntu/Debian
 ├── requirements.txt        # Runtime Python dependencies
 ├── pyproject.toml          # Python project metadata

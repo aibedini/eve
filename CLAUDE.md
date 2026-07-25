@@ -24,3 +24,7 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## Modular structure
+
+The code lives in the `panel/` package (models, services, adapters, routes as blueprints, jobs, migrate); `app.py` is the thin app core plus a compatibility re-export surface. Schema changes go through Alembic revisions (`alembic/`); migrations run via the single file-locked `panel.migrate` runner. See `AGENTS.md` → "Modular Structure" for the full conventions (dependency direction, deferred imports, blueprint endpoints).
