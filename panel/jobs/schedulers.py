@@ -72,7 +72,7 @@ BACKGROUND_THREADS_STARTED = False
 
 def _run_snapshot_with_progress():
     """Background thread: fetch servers one-by-one with progress, then snapshot."""
-    from app import _get_panel_ui_lang, app, get_server_password, process_inbounds  # deferred: app-level helper, avoids circular import
+    from app import _get_panel_ui_lang, app, fetch_worker, get_server_password, process_inbounds  # deferred: app-level helper, avoids circular import
     global _SNAPSHOT_PROGRESS
     is_fa = False
     try:
@@ -272,7 +272,7 @@ def snapshot_reader_worker():
 
 def fetch_and_update_global_data(force: bool = False, server_ids=None):
     """یک بار داده‌ها را از سرورها واکشی و در RAM به‌روزرسانی می‌کند."""
-    from app import _utc_iso_now, app, get_server_password, process_inbounds  # deferred: app-level helper, avoids circular import
+    from app import _utc_iso_now, app, fetch_worker, get_server_password, process_inbounds  # deferred: app-level helper, avoids circular import
     try:
         GLOBAL_SERVER_DATA['is_updating'] = True
 
@@ -644,10 +644,15 @@ def _health_check_db():
             return False, error_msg
 
 
+def _project_root():
+    """Repo/app root (panel/jobs/ -> panel/ -> root)."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 def _health_check_static_files():
     """Ensure critical static files exist on disk."""
     from app import _add_health_log  # deferred: app-level helper, avoids circular import
-    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+    static_dir = os.path.join(_project_root(), 'static')
     missing = []
     for fname in _CRITICAL_STATIC_FILES:
         fpath = os.path.join(static_dir, fname)
@@ -665,7 +670,7 @@ def _health_check_disk():
     """Warn if disk usage is above 90%."""
     from app import _add_health_log  # deferred: app-level helper, avoids circular import
     try:
-        usage = shutil.disk_usage(os.path.dirname(os.path.abspath(__file__)))
+        usage = shutil.disk_usage(_project_root())
         pct = (usage.used / usage.total) * 100
         if pct > 95:
             _add_health_log('critical', 'disk',

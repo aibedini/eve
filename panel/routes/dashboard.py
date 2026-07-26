@@ -100,6 +100,7 @@ def api_refresh():
     # === حالت ریسلر ===
     # The reseller path filters/annotates per-user, so it works on a private copy.
     data = copy.deepcopy(GLOBAL_SERVER_DATA)
+    t_after_copy = time.perf_counter() if debug_timing else None
 
     # 1. دریافت دسترسی‌های سرور و اینباند
     allowed_map, assignments = get_reseller_access_maps(user)

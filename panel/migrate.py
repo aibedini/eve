@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from sqlalchemy import inspect, text
 
 from panel.extensions import db
-from panel.models import Admin, PanelAPI, SubAppConfig, SystemConfig
+from panel.models import Admin, PanelAPI, SubAppConfig, SystemConfig, SystemSetting
 
 MIGRATION_LOCK_PATH = os.path.join(tempfile.gettempdir(), 'eve_schema_migrate.lock')
 ALEMBIC_INI = os.path.join(
@@ -385,6 +385,7 @@ def _legacy_column_catchup():
 
     # Auto-detect SSL paths at startup if DB is empty (handles case where setup.sh ran but Flask hadn't started)
     try:
+        from app import _autodetect_ssl_paths  # deferred: app-level helper, avoids circular import
         _c = db.session.get(SystemSetting, 'ssl_cert_path')
         _k = db.session.get(SystemSetting, 'ssl_key_path')
         if not (_c and _c.value) and not (_k and _k.value):
