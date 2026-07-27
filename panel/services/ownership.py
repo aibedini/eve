@@ -134,7 +134,23 @@ def discover_phone_ownership_claim(identity: TelegramIdentity):
             for client in (inbound.get('clients') or []):
                 email = str(client.get('email') or '').strip()
                 client_uuid = str(client.get('id') or '').strip()
-                if not email or not client_uuid or normalize_iran_mobile(email) != phone:
+                if not email or not client_uuid:
+                    continue
+                # Match the verified phone against the client name/email AND the
+                # comment field — resellers store the subscriber's mobile in
+                # either place and in any format (+98…, 09…, 0098…, spaced or
+                # dashed, Persian/Arabic digits); normalize_iran_mobile
+                # canonicalizes both sides before comparison.
+                match_source = None
+                if normalize_iran_mobile(email) == phone:
+                    match_source = 'verified_phone_in_client_name'
+                else:
+                    _raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else {}
+                    for _cand in (client.get('comment'), _raw.get('comment')):
+                        if _cand and normalize_iran_mobile(str(_cand)) == phone:
+                            match_source = 'verified_phone_in_client_comment'
+                            break
+                if not match_source:
                     continue
                 key = (server_id, client_uuid)
                 if key in seen:
@@ -145,7 +161,7 @@ def discover_phone_ownership_claim(identity: TelegramIdentity):
                 ).first()
                 if ownership and ownership.is_active and ownership.customer_id == identity.customer_id:
                     continue
-                matches.append((server_id, client_uuid, email, ownership))
+                matches.append((server_id, client_uuid, email, ownership, match_source))
 
     if not matches:
         return None
@@ -160,7 +176,7 @@ def discover_phone_ownership_claim(identity: TelegramIdentity):
         db.session.add(claim)
         db.session.flush()
     existing_keys = {(item.server_id, item.client_uuid) for item in claim.items}
-    for server_id, client_uuid, email, ownership in matches:
+    for server_id, client_uuid, email, ownership, match_source in matches:
         if (server_id, client_uuid) in existing_keys:
             continue
         db.session.add(OwnershipClaimItem(
@@ -168,8 +184,8 @@ def discover_phone_ownership_claim(identity: TelegramIdentity):
             server_id=server_id,
             client_uuid=client_uuid,
             client_email_snapshot=email[:255],
-            match_reason='verified_phone_in_client_name',
-            match_score=100,
+            match_reason=match_source,
+            match_score=100 if match_source == 'verified_phone_in_client_name' else 95,
             status='conflict' if ownership and ownership.is_active else 'pending',
             conflict_owner_id=(ownership.customer_id if ownership and ownership.is_active else None),
         ))

@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.43"
+APP_VERSION = "2.5.44"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -3745,6 +3745,8 @@ def _telegram_purchase_packages_payload(bot: TelegramBotInstance = None):
     rows = []
     for package in packages:
         if getattr(package, 'is_trial', False):
+            continue
+        if not getattr(package, 'show_on_create', True):
             continue
         scope = str(package.scope or 'global').lower()
         if scope != 'global':

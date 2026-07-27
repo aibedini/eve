@@ -5137,7 +5137,7 @@
         if (!container) return;
         container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">Loading packages...</div>';
         try {
-            const res = await fetch(`/api/packages?_=${Date.now()}`, { cache: 'no-store' });
+            const res = await fetch(`/api/packages?purpose=create&_=${Date.now()}`, { cache: 'no-store' });
             const pkgs = await res.json();
             
             if (!Array.isArray(pkgs) || pkgs.length === 0) {
@@ -5212,7 +5212,7 @@
         if (!container) return;
         container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">Loading packages...</div>';
         try {
-            const res = await fetch(`/api/packages?_=${Date.now()}`, { cache: 'no-store' });
+            const res = await fetch(`/api/packages?purpose=renew&_=${Date.now()}`, { cache: 'no-store' });
             const pkgs = await res.json();
             if (!Array.isArray(pkgs) || pkgs.length === 0) {
                 container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 15px; color: var(--text-secondary);">No packages defined.</div>';

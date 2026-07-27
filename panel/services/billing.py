@@ -82,6 +82,8 @@ def _build_sub_page_packages(owner) -> list[dict]:
 
     out = []
     for p in pkgs:
+        if not getattr(p, 'show_on_renew', True):
+            continue
         scope = p.scope or 'global'
         if is_reseller:
             if p.created_by == owner.id:

@@ -17,6 +17,7 @@ bp = Blueprint('packages', __name__)
 def get_packages():
     import json as _j
     user = db.session.get(Admin, session['admin_id'])
+    purpose = (request.args.get('purpose') or '').strip().lower()
     packages = Package.query.filter_by(enabled=True).order_by(Package.display_order, Package.id).all()
 
     # Build creator username lookup
@@ -28,6 +29,10 @@ def get_packages():
 
     result = []
     for p in packages:
+        if purpose == 'create' and not getattr(p, 'show_on_create', True):
+            continue
+        if purpose == 'renew' and not getattr(p, 'show_on_renew', True):
+            continue
         scope = p.scope or 'global'
         # Resellers only see global or packages explicitly assigned to them
         if user.role == 'reseller':
@@ -75,6 +80,8 @@ def create_package():
         created_by=session.get('admin_id'),
         show_on_sub=bool(data.get('show_on_sub', False)),
         is_trial=bool(data.get('is_trial', False)),
+        show_on_create=bool(data.get('show_on_create', True)),
+        show_on_renew=bool(data.get('show_on_renew', True)),
         created_at=datetime.utcnow(),
     )
     db.session.add(package)
@@ -104,6 +111,10 @@ def update_package(package_id):
         package.show_on_sub = bool(data['show_on_sub'])
     if 'is_trial' in data:
         package.is_trial = bool(data['is_trial'])
+    if 'show_on_create' in data:
+        package.show_on_create = bool(data['show_on_create'])
+    if 'show_on_renew' in data:
+        package.show_on_renew = bool(data['show_on_renew'])
     if 'assigned_reseller_ids' in data or 'reseller_ids' in data:
         import json as _j
         reseller_ids = data.get('assigned_reseller_ids', data.get('reseller_ids', []))
@@ -170,6 +181,8 @@ def reseller_list_packages():
             'price': int(p.price if is_own else calculate_reseller_price(user, package=p) or 0),
             'is_own': is_own,
             'sub_shown': bool(p.show_on_sub) if is_own else (p.id in shown),
+            'show_on_create': bool(getattr(p, 'show_on_create', True)),
+            'show_on_renew': bool(getattr(p, 'show_on_renew', True)),
         })
     resp = make_response(jsonify({'success': True, 'items': items}))
     resp.headers['Cache-Control'] = 'no-store'
@@ -204,6 +217,8 @@ def reseller_create_package():
         enabled=True, scope='personal', assigned_reseller_ids='[]',
         created_by=user.id, show_on_sub=bool(data.get('show_on_sub', False)),
         is_trial=bool(data.get('is_trial', False)),
+        show_on_create=bool(data.get('show_on_create', True)),
+        show_on_renew=bool(data.get('show_on_renew', True)),
         created_at=datetime.utcnow(),
     )
     db.session.add(pkg)
@@ -247,6 +262,10 @@ def reseller_update_package(package_id):
         pkg.is_trial = bool(data['is_trial'])
     if 'show_on_sub' in data:
         pkg.show_on_sub = bool(data['show_on_sub'])
+    if 'show_on_create' in data:
+        pkg.show_on_create = bool(data['show_on_create'])
+    if 'show_on_renew' in data:
+        pkg.show_on_renew = bool(data['show_on_renew'])
     pkg.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({'success': True})

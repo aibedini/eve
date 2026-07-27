@@ -59,6 +59,20 @@
                 </div>
                 <span>{{ 'نمایش در صفحه اشتراک مشتری' if panel_lang == 'fa' else 'Show on customer subscription page' }}</span>
             </label>
+            <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:4px;">
+                <div class="toggle-switch">
+                    <input type="checkbox" id="my-pkg-show-on-create" checked>
+                    <span class="slider"></span>
+                </div>
+                <span>{{ 'نمایش هنگام ساخت اشتراک' if panel_lang == 'fa' else 'Show on Create' }}</span>
+            </label>
+            <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:4px;">
+                <div class="toggle-switch">
+                    <input type="checkbox" id="my-pkg-show-on-renew" checked>
+                    <span class="slider"></span>
+                </div>
+                <span>{{ 'نمایش هنگام تمدید' if panel_lang == 'fa' else 'Show on Renew' }}</span>
+            </label>
             <div class="form-actions">
                 <button class="btn btn-secondary" type="button" onclick="closeMyPkgModal()">Cancel</button>
                 <button class="btn btn-primary" id="my-pkg-save-btn" type="button" onclick="saveMyPkg()">Save</button>
@@ -212,6 +226,8 @@
         document.getElementById('my-pkg-vol').value = pkg ? Number(pkg.volume).toLocaleString() : '';
         document.getElementById('my-pkg-price').value = pkg ? Number(pkg.price).toLocaleString() : '';
         document.getElementById('my-pkg-show-on-sub').checked = pkg ? !!pkg.sub_shown : false;
+        document.getElementById('my-pkg-show-on-create').checked = pkg ? (pkg.show_on_create !== false) : true;
+        document.getElementById('my-pkg-show-on-renew').checked = pkg ? (pkg.show_on_renew !== false) : true;
         _myMinPrice = null;
         document.getElementById('my-pkg-price-hint').style.display = 'none';
         document.getElementById('my-pkg-price-warn').style.display = 'none';
@@ -262,7 +278,9 @@
             showToast(myPkgT(`Price cannot be below ${Number(_myMinPrice).toLocaleString()} Toman`, `قیمت نباید کمتر از ${Number(_myMinPrice).toLocaleString()} تومان باشد`), 'error');
             return;
         }
-        const body = { name, days, volume, price, show_on_sub: document.getElementById('my-pkg-show-on-sub').checked };
+        const body = { name, days, volume, price, show_on_sub: document.getElementById('my-pkg-show-on-sub').checked,
+            show_on_create: document.getElementById('my-pkg-show-on-create').checked,
+            show_on_renew: document.getElementById('my-pkg-show-on-renew').checked };
         try {
             const url = id ? `/api/my-packages/${id}` : '/api/my-packages';
             const method = id ? 'PUT' : 'POST';

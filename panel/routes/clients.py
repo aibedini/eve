@@ -1070,26 +1070,44 @@ def _fire_renew_postcheck(server_id: int, inbound_id: int, email: str,
                     )
                     return
 
-                # The primary update always sends enable=True.  Keep the old
-                # safety net, but run its possible second slow panel update off
-                # the request path.
-                if observed.get('enable') is False:
+                # The primary update always sends enable=True.  Keep the safety
+                # net, but re-assert AND re-check until the panel actually
+                # reports the client enabled — v3 nodes can lag, and a renewed
+                # account must never be left suspended (manual disable or the
+                # panel's own expiry/volume auto-disable alike).
+                for _reenable_attempt in range(3):
+                    if observed.get('enable') is not False:
+                        break
                     snapshot['enable'] = True
-                    if server_is_v3(server):
-                        reenabled, _response, reenable_error = v3_update_client(
-                            server, session_obj, lookup_email, snapshot,
+                    if not server_is_v3(server):
+                        break
+                    reenabled, _response, reenable_error = v3_update_client(
+                        server, session_obj, lookup_email, snapshot,
+                    )
+                    if not reenabled:
+                        app.logger.error(
+                            f"Renew post-check could not re-enable {lookup_email}: "
+                            f"{reenable_error}"
                         )
-                        if reenabled:
-                            observed['enable'] = True
-                            app.logger.warning(
-                                f"Renew post-check re-asserted enable for {lookup_email} "
-                                f"(panel had it disabled)"
-                            )
-                        else:
-                            app.logger.error(
-                                f"Renew post-check could not re-enable {lookup_email}: "
-                                f"{reenable_error}"
-                            )
+                        break
+                    app.logger.warning(
+                        f"Renew post-check re-asserted enable for {lookup_email} "
+                        f"(panel had it disabled)"
+                    )
+                    time.sleep(1)
+                    _inbounds_re, _fetch_err_re, _ = fetch_inbounds(
+                        session_obj, server.host, server.panel_type,
+                    )
+                    if _fetch_err_re or not _inbounds_re:
+                        continue
+                    _recheck, _ = find_client(_inbounds_re, inbound_id, lookup_email)
+                    if _recheck:
+                        observed = _recheck
+                if observed.get('enable') is False:
+                    app.logger.error(
+                        f"Renew post-check: {lookup_email} still disabled after "
+                        f"re-assert attempts"
+                    )
 
                 patch_cached_client(
                     server_id, lookup_email,
@@ -1491,8 +1509,14 @@ def renew_client(server_id, inbound_id, email):
             if current_expiry_int < 0:
                 new_expiry = current_expiry_int - (days_to_add * 86400000)
             elif current_expiry_int > 0:
-                # Add days in milliseconds (avoids DST/timezone edge cases)
-                new_expiry = int(current_expiry_int) + int(days_to_add * 86400000)
+                # Add days in milliseconds (avoids DST/timezone edge cases).
+                # An already-expired timestamp must NOT be extended in the past:
+                # the panel's own watchdog would disable the client again within
+                # a minute. Base the extension on "now" so the renewed account
+                # actually goes (and stays) active.
+                now_ms = int(time.time() * 1000)
+                base_expiry = current_expiry_int if current_expiry_int > now_ms else now_ms
+                new_expiry = base_expiry + int(days_to_add * 86400000)
             else:
                 new_expiry = int(time.time() * 1000) + int(days_to_add * 86400000)
         
@@ -1679,6 +1703,7 @@ def renew_client(server_id, inbound_id, email):
                     "expected": {
                         "expiryTime": new_expiry,
                         "totalGB": new_volume,
+                        "enable": True,
                     },
                     "observed": {
                         "expiryTime": None,
@@ -1728,6 +1753,12 @@ def renew_client(server_id, inbound_id, email):
                             except Exception:
                                 verify["observed"]["totalGB"] = None
 
+                            # Record enable up-front — before the best-effort
+                            # service-state block below — so the re-enable safety
+                            # net always sees the panel's actual value even when
+                            # the state computation fails.
+                            verify["observed"]["enable"] = bool(v_client.get('enable', True))
+
                             # Compute service state for immediate UI update
                             try:
                                 v_up = 0
@@ -1763,26 +1794,52 @@ def renew_client(server_id, inbound_id, email):
 
                             ok_exp = (verify["observed"]["expiryTime"] == int(new_expiry or 0))
                             ok_vol = (verify["observed"]["totalGB"] == int(new_volume or 0))
-                            verify["ok"] = bool(ok_exp and ok_vol)
+                            ok_enable = (verify["observed"].get("enable") is not False)
+                            verify["ok"] = bool(ok_exp and ok_vol and ok_enable)
                 except Exception as exc:
                     verify["ok"] = False
                     verify["error"] = str(exc)
 
                 # Safety net: renew always pushes enable=True, but if the panel
-                # read-back shows the client STILL disabled, re-assert it once so a
-                # renewed account is never left suspended (whatever caused it).
-                try:
-                    if verify.get("observed", {}).get("enable") is False:
-                        target_client["enable"] = True
-                        if _is_v3:
-                            v3_update_client(server, session_obj, email, target_client)
-                        else:
-                            session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
-                        verify["observed"]["enable"] = True
-                        verify["re_enabled"] = True
-                        app.logger.warning(f"Renew re-asserted enable for {email} (panel had it disabled)")
-                except Exception:
-                    pass
+                # read-back shows the client STILL disabled (manual disable or
+                # the panel's own expiry/volume auto-disable), re-assert AND
+                # re-check until it sticks — a renewed account must never be
+                # left suspended.
+                if verify.get("observed", {}).get("enable") is False:
+                    for _reenable_attempt in range(3):
+                        try:
+                            target_client["enable"] = True
+                            if _is_v3:
+                                v3_update_client(server, session_obj, email, target_client)
+                            else:
+                                session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
+                            time.sleep(1)
+                            r_inbounds, r_err, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                            if r_err or not r_inbounds:
+                                continue
+                            r_client, _r_ib = find_client(r_inbounds, inbound_id, email)
+                            if not r_client and _is_v3:
+                                _rc = _v3_sanitize_email(email)
+                                if _rc and _rc != email:
+                                    r_client, _r_ib = find_client(r_inbounds, inbound_id, _rc)
+                                    if r_client:
+                                        email = _rc
+                            if r_client and r_client.get('enable', True):
+                                verify["observed"]["enable"] = True
+                                verify["re_enabled"] = True
+                                ok_exp = (verify["observed"]["expiryTime"] == int(new_expiry or 0))
+                                ok_vol = (verify["observed"]["totalGB"] == int(new_volume or 0))
+                                verify["ok"] = bool(ok_exp and ok_vol)
+                                app.logger.warning(
+                                    f"Renew re-asserted enable for {email} (panel had it disabled)")
+                                break
+                        except Exception:
+                            continue
+                    if verify["observed"].get("enable") is False:
+                        verify["ok"] = False
+                        verify["error"] = "enable_reassert_failed"
+                        app.logger.error(
+                            f"Renew could not re-enable {email} after 3 attempts")
 
                 if defer_inline_verify:
                     verify = {
@@ -1792,6 +1849,7 @@ def renew_client(server_id, inbound_id, email):
                         "expected": {
                             "expiryTime": new_expiry,
                             "totalGB": new_volume,
+                            "enable": True,
                         },
                         # These values were accepted by the update endpoint and
                         # let the UI patch immediately. The background post-check

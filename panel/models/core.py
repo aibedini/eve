@@ -238,6 +238,8 @@ class Package(db.Model):
     display_order = db.Column(db.Integer, default=0)
     show_on_sub = db.Column(db.Boolean, default=False)  # show this package on customer subscription page
     is_trial = db.Column(db.Boolean, nullable=False, default=False)  # free trial package, bot policy-gated
+    show_on_create = db.Column(db.Boolean, nullable=False, default=True)  # show on creation surfaces (panel add-client, bot purchase)
+    show_on_renew = db.Column(db.Boolean, nullable=False, default=True)  # show on renewal surfaces (panel renew, bot renewal, sub page)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=True)
 
@@ -261,6 +263,8 @@ class Package(db.Model):
             'display_order': self.display_order or 0,
             'show_on_sub': bool(self.show_on_sub),
             'is_trial': bool(self.is_trial),
+            'show_on_create': bool(self.show_on_create if self.show_on_create is not None else True),
+            'show_on_renew': bool(self.show_on_renew if self.show_on_renew is not None else True),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

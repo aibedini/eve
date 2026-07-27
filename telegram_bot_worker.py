@@ -963,6 +963,8 @@ def _available_packages(ownership: ServiceOwnership):
     for package in packages:
         if getattr(package, 'is_trial', False):
             continue
+        if not getattr(package, 'show_on_renew', True):
+            continue
         scope = str(package.scope or 'global').lower()
         if scope == 'global':
             visible.append(package)
@@ -1144,6 +1146,8 @@ def _purchase_packages(bot: TelegramBotInstance, owner_id=None):
     visible = []
     for package in packages:
         if getattr(package, 'is_trial', False):
+            continue
+        if not getattr(package, 'show_on_create', True):
             continue
         scope = str(package.scope or 'global').lower()
         if scope == 'global':
