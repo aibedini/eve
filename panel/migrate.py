@@ -399,7 +399,11 @@ def _legacy_column_catchup():
         print(f"[startup] SSL auto-detect error: {_ssl_e}")
 
     # Ensure packages table has extended columns (scope, assigned_reseller_ids, etc.)
-    # TIMESTAMP works in both PostgreSQL and SQLite; DATETIME is SQLite-only
+    # TIMESTAMP works in both PostgreSQL and SQLite; DATETIME is SQLite-only.
+    # NOTE: show_on_create/show_on_renew are intentionally NOT here — they are
+    # owned by Alembic revision a3f9c2d71e84. Adding them in this runtime
+    # catch-up as well makes `upgrade head` fail with DuplicateColumn on any
+    # database already stamped at the baseline.
     _ts_type = 'TIMESTAMP' if db.engine.dialect.name == 'postgresql' else 'DATETIME'
     _migrate_add_columns('packages', [
         ('scope', "VARCHAR(20) DEFAULT 'global'"),
@@ -408,8 +412,6 @@ def _legacy_column_catchup():
         ('display_order', 'INTEGER DEFAULT 0'),
         ('show_on_sub', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
         ('is_trial', 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'),
-        ('show_on_create', 'BOOLEAN DEFAULT TRUE' if _is_pg else 'BOOLEAN DEFAULT 1'),
-        ('show_on_renew', 'BOOLEAN DEFAULT TRUE' if _is_pg else 'BOOLEAN DEFAULT 1'),
         ('created_at', _ts_type),
         ('updated_at', _ts_type),
     ])
