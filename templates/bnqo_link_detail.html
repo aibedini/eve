@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+{% set bnqo_copy = {
+'en': {
+  'title': 'Link detail', 'back': 'All links', 'diagnose': 'Diagnose', 'diagnose_queued': 'Diagnose jobs queued.',
+  'dir_ab': 'A → B', 'dir_ba': 'B → A', 'last_data': 'Last data', 'never': 'Never',
+  'range_1h': '1h', 'range_6h': '6h', 'range_24h': '24h', 'range_7d': '7d',
+  'chart_loss': 'Loss %', 'chart_rtt': 'RTT p95 (ms)', 'chart_jitter': 'Jitter (ms)',
+  'no_data': 'No data for this range yet.',
+  'services': 'Service targets', 'services_help': 'Targets from the link profile, probed from each side.',
+  'svc_name': 'Name', 'svc_host': 'Host', 'svc_port': 'Port', 'svc_tls': 'TLS', 'svc_interval': 'Interval (s)', 'svc_state': 'State',
+  'no_services': 'This link has no service targets.',
+  'routes': 'Routes (latest MTR)', 'routes_help': 'Run Diagnose to enqueue a fresh traceroute for both directions.',
+  'route_hash': 'Route hash', 'route_changed': 'route changed', 'route_updated': 'Updated',
+  'hop': 'Hop', 'hop_address': 'Address', 'hop_loss': 'Loss %', 'hop_rtt': 'RTT avg (ms)',
+  'no_route': 'No route data yet.',
+  'incidents': 'Incidents for this link', 'incidents_help': 'Newest first. Evidence is collapsible.',
+  'kind': 'Kind', 'direction': 'Direction', 'status': 'Status', 'opened': 'Opened', 'resolved': 'Resolved',
+  'evidence': 'Evidence', 'ack': 'Ack', 'resolve': 'Resolve', 'no_incidents': 'No incidents for this link.',
+  'updated': 'Updated.', 'request_error': 'The request failed.', 'loading': 'Loading…',
+  'link_missing': 'This link was not found.'
+},
+'fa': {
+  'title': 'جزئیات لینک', 'back': 'همه لینک‌ها', 'diagnose': 'تشخیص', 'diagnose_queued': 'کارهای تشخیص در صف قرار گرفت.',
+  'dir_ab': 'الف → ب', 'dir_ba': 'ب → الف', 'last_data': 'آخرین داده', 'never': 'هرگز',
+  'range_1h': '۱ساعت', 'range_6h': '۶ساعت', 'range_24h': '۲۴ساعت', 'range_7d': '۷روز',
+  'chart_loss': 'افت ٪', 'chart_rtt': 'RTT p95 (ms)', 'chart_jitter': 'جیتر (ms)',
+  'no_data': 'برای این بازه هنوز داده‌ای نیست.',
+  'services': 'مقصدهای سرویس', 'services_help': 'مقصدها از پروفایل لینک؛ از هر دو سمت پروب می‌شوند.',
+  'svc_name': 'نام', 'svc_host': 'میزبان', 'svc_port': 'پورت', 'svc_tls': 'TLS', 'svc_interval': 'بازه (ثانیه)', 'svc_state': 'وضعیت',
+  'no_services': 'این لینک مقصد سرویسی ندارد.',
+  'routes': 'مسیرها (آخرین MTR)', 'routes_help': 'برای تریس‌مسیر تازه در هر دو جهت، تشخیص را اجرا کنید.',
+  'route_hash': 'هش مسیر', 'route_changed': 'مسیر عوض شد', 'route_updated': 'به‌روز شد',
+  'hop': 'هاپ', 'hop_address': 'آدرس', 'hop_loss': 'افت ٪', 'hop_rtt': 'میانگین RTT (ms)',
+  'no_route': 'هنوز داده مسیری نیست.',
+  'incidents': 'رویدادهای این لینک', 'incidents_help': 'جدیدترین اول. شواهد جمع‌شونده است.',
+  'kind': 'نوع', 'direction': 'جهت', 'status': 'وضعیت', 'opened': 'باز شده', 'resolved': 'حل شده',
+  'evidence': 'شواهد', 'ack': 'تأیید', 'resolve': 'حل‌شده', 'no_incidents': 'رویدادی برای این لینک نیست.',
+  'updated': 'به‌روز شد.', 'request_error': 'انجام درخواست ناموفق بود.', 'loading': 'در حال دریافت…',
+  'link_missing': 'این لینک پیدا نشد.'
+}} %}
+{% set t = bnqo_copy[panel_lang] if panel_lang in bnqo_copy else bnqo_copy['en'] %}
+{% block title %}{{ t.title }}{% endblock %}
+{% block page_title %}{{ t.title }}{% endblock %}
+
+{% block header_actions %}
+<a class="btn btn-secondary" href="{{ url_for('bnqo.bnqo_links_page') }}" style="text-decoration:none">← {{ t.back }}</a>
+<button type="button" class="btn btn-primary" id="bnqo-diagnose">{{ t.diagnose }}</button>
+{% endblock %}
+
+{% block content %}
+<style nonce="{{ csp_nonce }}">
+.bnqo-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:16px;padding:20px;margin-bottom:20px}
+.bnqo-card h3{margin:0 0 5px;font-size:1.02rem}
+.bnqo-help{color:var(--text-secondary);font-size:.78rem;margin:0 0 16px;line-height:1.65}
+.bnqo-badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;font-size:.7rem;font-weight:700;white-space:nowrap}
+.bnqo-badge.ok{background:rgba(34,197,94,.16);color:#4ade80}
+.bnqo-badge.warn{background:rgba(245,158,11,.16);color:#fbbf24}
+.bnqo-badge.bad{background:rgba(239,68,68,.16);color:#f87171}
+.bnqo-badge.orange{background:rgba(249,115,22,.16);color:#fb923c}
+.bnqo-badge.muted{background:rgba(100,116,139,.22);color:#94a3b8}
+.bnqo-badge.purple{background:rgba(168,85,247,.16);color:#c084fc}
+.bnqo-badge.grey{background:rgba(148,163,184,.14);color:#94a3b8}
+.bnqo-role{background:rgba(99,102,241,.16);color:#818cf8}
+.bnqo-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.bnqo-head h2{margin:0;font-size:1.15rem}
+.bnqo-head .bnqo-muted{color:var(--text-secondary);font-size:.8rem}
+.bnqo-dir-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px}
+.bnqo-dir-box{background:rgba(15,23,42,.28);border:1px solid var(--border-color);border-radius:12px;padding:12px 14px}
+.bnqo-dir-box .bnqo-dir-title{font-size:.78rem;color:var(--text-secondary);margin-bottom:6px}
+.bnqo-range{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-dark)}
+.bnqo-range button{min-height:28px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--text-secondary);font:inherit;font-size:.76rem;font-weight:600;cursor:pointer}
+.bnqo-range button.active{background:var(--primary);color:#fff}
+.bnqo-chart-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.bnqo-chart-card-head h3{margin:0}
+.bnqo-chart{position:relative;height:220px;margin-bottom:18px}
+.bnqo-chart:last-child{margin-bottom:0}
+.bnqo-chart-label{font-size:.78rem;color:var(--text-secondary);margin-bottom:6px}
+.bnqo-empty{color:var(--text-secondary);font-size:.8rem;padding:16px;text-align:center}
+.bnqo-table-wrap{overflow-x:auto}
+.bnqo-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.bnqo-table th{text-align:start;color:var(--text-secondary);font-weight:600;font-size:.72rem;padding:8px 10px;border-bottom:1px solid var(--border-color);white-space:nowrap}
+.bnqo-table td{padding:8px 10px;border-bottom:1px solid var(--border-color);vertical-align:middle}
+.bnqo-routes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.bnqo-route-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.74rem;color:var(--text-secondary);margin-bottom:8px}
+.bnqo-route-meta code{direction:ltr;background:var(--bg-dark);border:1px solid var(--border-color);border-radius:6px;padding:1px 7px;font-size:.72rem}
+.bnqo-flash{animation:bnqo-flash 1s ease-in-out 3}
+@keyframes bnqo-flash{0%,100%{background:transparent}50%{background:rgba(245,158,11,.22)}}
+.bnqo-evidence summary{cursor:pointer;color:var(--text-secondary);font-size:.74rem}
+.bnqo-evidence pre{background:var(--bg-dark);border:1px solid var(--border-color);border-radius:8px;padding:10px;font-size:.72rem;max-height:220px;overflow:auto;direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-word}
+.bnqo-actions{display:flex;gap:6px;flex-wrap:wrap}
+.bnqo-actions .btn{font-size:.72rem;padding:5px 10px}
+</style>
+
+<section class="bnqo-card" id="bnqo-link-header">
+  <div class="bnqo-head">
+    <h2 id="bnqo-link-name">{{ t.loading }}</h2>
+    <span id="bnqo-link-status"></span>
+    <span class="bnqo-muted" id="bnqo-link-last-data"></span>
+  </div>
+  <div class="bnqo-dir-grid">
+    <div class="bnqo-dir-box"><div class="bnqo-dir-title" id="bnqo-dir-a-label">{{ t.dir_ab }}</div><div id="bnqo-dir-a-status"></div></div>
+    <div class="bnqo-dir-box"><div class="bnqo-dir-title" id="bnqo-dir-b-label">{{ t.dir_ba }}</div><div id="bnqo-dir-b-status"></div></div>
+  </div>
+</section>
+
+<section class="bnqo-card">
+  <div class="bnqo-chart-card-head">
+    <h3>{{ t.chart_loss }} · {{ t.chart_rtt }} · {{ t.chart_jitter }}</h3>
+    <div class="bnqo-range" id="bnqo-range" role="group">
+      <button type="button" data-hours="1">{{ t.range_1h }}</button>
+      <button type="button" data-hours="6" class="active">{{ t.range_6h }}</button>
+      <button type="button" data-hours="24">{{ t.range_24h }}</button>
+      <button type="button" data-hours="168">{{ t.range_7d }}</button>
+    </div>
+  </div>
+  <div class="bnqo-chart"><div class="bnqo-chart-label">{{ t.chart_loss }}</div><canvas id="bnqo-chart-loss"></canvas></div>
+  <div class="bnqo-chart"><div class="bnqo-chart-label">{{ t.chart_rtt }}</div><canvas id="bnqo-chart-rtt"></canvas></div>
+  <div class="bnqo-chart"><div class="bnqo-chart-label">{{ t.chart_jitter }}</div><canvas id="bnqo-chart-jitter"></canvas></div>
+</section>
+
+<section class="bnqo-card">
+  <h3>{{ t.services }}</h3>
+  <p class="bnqo-help">{{ t.services_help }}</p>
+  <div id="bnqo-services"></div>
+</section>
+
+<section class="bnqo-card">
+  <h3>{{ t.routes }}</h3>
+  <p class="bnqo-help">{{ t.routes_help }}</p>
+  <div class="bnqo-routes-grid" id="bnqo-routes"></div>
+</section>
+
+<section class="bnqo-card">
+  <h3>{{ t.incidents }}</h3>
+  <p class="bnqo-help">{{ t.incidents_help }}</p>
+  <div id="bnqo-incidents"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}">
+(function(){'use strict';
+const T={{ t|tojson }};
+const LINK_ID={{ link_id|tojson }};
+const esc=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const rel=v=>v?(window.EveDate?EveDate.relative(v):v):T.never;
+const STATUS_CLASS={'healthy':'ok','degraded':'warn','critical':'bad','unreachable':'bad','control-plane-unavailable':'bad','probe-blocked':'orange','service-failed':'orange','agent-unhealthy':'muted','telemetry-delayed':'muted','clock-unsynchronized':'purple','unknown':'grey','maintenance':'grey'};
+function statusBadge(status){const s=String(status||'unknown');return '<span class="bnqo-badge '+(STATUS_CLASS[s]||'grey')+'">'+esc(s)+'</span>'}
+function apiFetch(url,options){options=options||{};options.headers=Object.assign({'X-Requested-With':'XMLHttpRequest'},options.headers||{});return fetch(url,options).then(async r=>{let d=null;try{d=await r.json()}catch(_){ }if(!r.ok){let msg=T.request_error+' ('+r.status+')';if(d&&d.error)msg=(typeof d.error==='object'?(d.error.message||d.error.code):d.error)||msg;throw new Error(msg)}return d})}
+function toast(msg,ok){if(window.showToast)showToast(msg,ok?'success':'error');else alert(msg)}
+function detail(link){let d=link.status_detail;if(typeof d==='string'){try{d=JSON.parse(d)}catch(_){d=null}}return(d&&typeof d==='object')?d:{}}
+function dirStatus(det,dir){let v=det[dir];if(v&&typeof v==='object')v=v.status||v.state;return v?String(v):'unknown'}
+
+let link=null, hours=6;
+const DIRECTIONS=['a_to_b','b_to_a'];
+const DIR_COLORS={'a_to_b':'#6366f1','b_to_a':'#f59e0b'};
+
+// ---- header ----
+function renderHeader(){
+  const nameEl=document.getElementById('bnqo-link-name');
+  if(!link){nameEl.textContent=T.link_missing;return}
+  const a=link.agent_a||{}, b=link.agent_b||{};
+  nameEl.textContent=link.name||('#'+LINK_ID);
+  document.getElementById('bnqo-link-status').innerHTML=statusBadge(link.status);
+  document.getElementById('bnqo-link-last-data').textContent=T.last_data+': '+rel(link.last_data_at);
+  document.getElementById('bnqo-dir-a-label').textContent=(a.name||'A')+' ('+(a.role||'?')+') → '+(b.name||'B');
+  document.getElementById('bnqo-dir-b-label').textContent=(b.name||'B')+' ('+(b.role||'?')+') → '+(a.name||'A');
+  const det=detail(link);
+  document.getElementById('bnqo-dir-a-status').innerHTML=statusBadge(dirStatus(det,'a_to_b'));
+  document.getElementById('bnqo-dir-b-status').innerHTML=statusBadge(dirStatus(det,'b_to_a'));
+}
+function refreshLink(){return apiFetch('/api/bnqo/links').then(d=>{
+  link=(d.links||[]).find(l=>String(l.id)===String(LINK_ID))||null;
+  renderHeader(); renderServices();
+}).catch(()=>{})}
+
+// ---- charts ----
+function tickFmt(v){const d=new Date(v);if(hours<=24&&window.EveDate)return EveDate.formatTime(d);if(window.EveDate)return EveDate.format(d);return d.toLocaleString()}
+function makeChart(canvasId,unit){
+  return new Chart(document.getElementById(canvasId),{type:'line',
+    data:{datasets:DIRECTIONS.map(dir=>({label:dir==='a_to_b'?T.dir_ab:T.dir_ba,
+      borderColor:DIR_COLORS[dir],backgroundColor:DIR_COLORS[dir],data:[],spanGaps:false,pointRadius:0,borderWidth:1.5,tension:.2}))},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      interaction:{mode:'nearest',intersect:false},
+      scales:{
+        x:{type:'linear',ticks:{callback:tickFmt,color:'#94a3b8',maxTicksLimit:8},grid:{color:'rgba(148,163,184,.1)'}},
+        y:{beginAtZero:true,title:{display:true,text:unit,color:'#94a3b8'},ticks:{color:'#94a3b8'},grid:{color:'rgba(148,163,184,.1)'}}},
+      plugins:{legend:{display:true,labels:{color:'#94a3b8',boxWidth:12}}}}});
+}
+const charts={loss:makeChart('bnqo-chart-loss','%'),rtt:makeChart('bnqo-chart-rtt','ms'),jitter:makeChart('bnqo-chart-jitter','ms')};
+function refreshCharts(){
+  const jobs=[];
+  Object.keys(charts).forEach(metric=>{
+    DIRECTIONS.forEach((dir,idx)=>{
+      jobs.push(apiFetch('/api/bnqo/links/'+encodeURIComponent(LINK_ID)+'/series?metric='+metric+'&direction='+dir+'&hours='+hours)
+        .then(d=>{
+          const pts=(d.points||[]).map(p=>({x:Date.parse(p.t),y:p.value})).filter(p=>!isNaN(p.x));
+          charts[metric].data.datasets[idx].data=pts;
+        }).catch(()=>{}));
+    });
+  });
+  return Promise.all(jobs).then(()=>{Object.values(charts).forEach(c=>c.update('none'))});
+}
+document.getElementById('bnqo-range').addEventListener('click',e=>{
+  const btn=e.target.closest('button[data-hours]');if(!btn)return;
+  hours=Number(btn.dataset.hours)||6;
+  document.querySelectorAll('#bnqo-range button').forEach(b=>b.classList.toggle('active',b===btn));
+  refreshCharts();
+});
+
+// ---- service targets ----
+function renderServices(){
+  const box=document.getElementById('bnqo-services');
+  if(!link){box.innerHTML='<div class="bnqo-empty">'+esc(T.link_missing)+'</div>';return}
+  const profile=link.profile||{};
+  const targets=Array.isArray(profile.service_targets)?profile.service_targets:[];
+  if(!targets.length){box.innerHTML='<div class="bnqo-empty">'+esc(T.no_services)+'</div>';return}
+  const det=detail(link);
+  const svcFailed=DIRECTIONS.some(dir=>dirStatus(det,dir)==='service-failed');
+  box.innerHTML='<div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr><th>'+esc(T.svc_name)+'</th><th>'+esc(T.svc_host)+'</th><th>'+esc(T.svc_port)+'</th><th>'+esc(T.svc_tls)+'</th><th>'+esc(T.svc_interval)+'</th><th>'+esc(T.svc_state)+'</th></tr></thead><tbody>'
+    +targets.map(s=>'<tr><td>'+esc(s.name||'—')+'</td><td dir="ltr">'+esc(s.host||'—')+'</td><td dir="ltr">'+esc(s.port==null?'—':s.port)+'</td><td>'+(s.tls?'✓':'—')+'</td><td dir="ltr">'+esc(s.interval_sec==null?'—':s.interval_sec)+'</td><td>'+(svcFailed?statusBadge('service-failed'):statusBadge(link.status==='healthy'?'healthy':'unknown'))+'</td></tr>').join('')
+    +'</tbody></table></div>';
+}
+
+// ---- routes ----
+const prevHashes={};
+function renderRoutes(routes){
+  const box=document.getElementById('bnqo-routes');
+  const byDir={};
+  (routes||[]).forEach(r=>{byDir[r.direction]=r});
+  box.innerHTML=DIRECTIONS.map(dir=>{
+    const r=byDir[dir];
+    const title='<strong>'+esc(dir==='a_to_b'?T.dir_ab:T.dir_ba)+'</strong>';
+    if(!r)return '<div class="bnqo-dir-box"><div class="bnqo-dir-title">'+title+'</div><div class="bnqo-empty">'+esc(T.no_route)+'</div></div>';
+    const hash=String(r.route_hash||'');
+    const changed=prevHashes[dir]&&prevHashes[dir]!==hash;
+    prevHashes[dir]=hash;
+    const hops=Array.isArray(r.hops)?r.hops:[];
+    return '<div class="bnqo-dir-box'+(changed?' bnqo-flash':'')+'">'
+      +'<div class="bnqo-dir-title">'+title+'</div>'
+      +'<div class="bnqo-route-meta">'+esc(T.route_hash)+': <code>'+esc(hash||'—')+'</code>'
+      +(changed?'<span class="bnqo-badge warn">'+esc(T.route_changed)+'</span>':'')
+      +(r.created_at?'<span>'+esc(T.route_updated)+': '+esc(rel(r.created_at))+'</span>':'')+'</div>'
+      +'<div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr><th>'+esc(T.hop)+'</th><th>'+esc(T.hop_address)+'</th><th>'+esc(T.hop_loss)+'</th><th>'+esc(T.hop_rtt)+'</th></tr></thead><tbody>'
+      +(hops.length?hops.map(h=>'<tr><td>'+esc(h.hop)+'</td><td dir="ltr">'+esc(h.address||'*')+'</td><td dir="ltr">'+esc(h.loss_pct==null?'—':h.loss_pct)+'</td><td dir="ltr">'+esc(h.rtt_avg_ms==null?'—':h.rtt_avg_ms)+'</td></tr>').join(''):'<tr><td colspan="4" class="bnqo-empty">'+esc(T.no_route)+'</td></tr>')
+      +'</tbody></table></div></div>';
+  }).join('');
+}
+function refreshRoutes(){return apiFetch('/api/bnqo/links/'+encodeURIComponent(LINK_ID)+'/routes').then(d=>renderRoutes(d.routes||[])).catch(()=>{})}
+
+// ---- incidents ----
+function renderIncidents(items){
+  const box=document.getElementById('bnqo-incidents');
+  const mine=(items||[]).filter(i=>String(i.link_id)===String(LINK_ID));
+  if(!mine.length){box.innerHTML='<div class="bnqo-empty">'+esc(T.no_incidents)+'</div>';return}
+  box.innerHTML=mine.map(i=>{
+    let ev='';try{ev=JSON.stringify(typeof i.evidence==='string'?JSON.parse(i.evidence):i.evidence,null,2)}catch(_){ev=String(i.evidence||'')}
+    return '<div class="bnqo-dir-box" style="margin-bottom:10px"><div class="bnqo-head" style="gap:8px">'
+      +'<span class="bnqo-badge warn">'+esc(i.kind||'—')+'</span>'
+      +'<span dir="ltr" class="bnqo-muted">'+esc(i.direction||'—')+'</span>'
+      +statusBadge(i.status==='resolved'?'healthy':(i.status==='acknowledged'?'unknown':'critical'))
+      +'<span class="bnqo-muted">'+esc(T.opened)+': '+esc(rel(i.opened_at))+(i.resolved_at?' · '+esc(T.resolved)+': '+esc(rel(i.resolved_at)):'')+'</span>'
+      +'<span class="bnqo-actions" style="margin-inline-start:auto">'
+      +(i.status==='open'?'<button type="button" class="btn btn-secondary bnqo-ack" data-id="'+esc(i.id)+'">'+esc(T.ack)+'</button>':'')
+      +(i.status!=='resolved'?'<button type="button" class="btn btn-secondary bnqo-resolve" data-id="'+esc(i.id)+'">'+esc(T.resolve)+'</button>':'')
+      +'</span></div>'
+      +(ev?'<details class="bnqo-evidence" style="margin-top:8px"><summary>'+esc(T.evidence)+'</summary><pre>'+esc(ev)+'</pre></details>':'')
+      +'</div>';
+  }).join('');
+}
+function refreshIncidents(){return apiFetch('/api/bnqo/incidents').then(d=>renderIncidents(d.incidents||[])).catch(()=>{})}
+document.getElementById('bnqo-incidents').addEventListener('click',e=>{
+  const ack=e.target.closest('.bnqo-ack'), res=e.target.closest('.bnqo-resolve');
+  const btn=ack||res; if(!btn)return;
+  btn.disabled=true;
+  apiFetch('/api/bnqo/incidents/'+btn.dataset.id+(ack?'/ack':'/resolve'),{method:'POST'}).then(()=>{toast(T.updated,true);refreshIncidents()}).catch(x=>{toast(x.message,false);btn.disabled=false});
+});
+
+// ---- diagnose ----
+document.getElementById('bnqo-diagnose').addEventListener('click',function(){
+  this.disabled=true;
+  apiFetch('/api/bnqo/links/'+encodeURIComponent(LINK_ID)+'/diagnose',{method:'POST'})
+    .then(()=>{toast(T.diagnose_queued,true);setTimeout(refreshRoutes,8000)})
+    .catch(x=>toast(x.message,false)).finally(()=>{this.disabled=false});
+});
+
+function refreshAll(){refreshLink();refreshRoutes();refreshIncidents();refreshCharts()}
+refreshAll();
+setInterval(refreshAll,5000);
+})();</script>{% endblock %}

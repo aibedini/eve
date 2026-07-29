@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.45"
+APP_VERSION = "2.5.46"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2548,6 +2548,7 @@ from panel.routes.system import bp as system_bp
 from panel.routes.telegram import bp as telegram_bp
 from panel.routes.usage import bp as usage_bp
 from panel.routes.backups import bp as backups_bp
+from panel.routes.bnqo import bp as bnqo_bp
 from panel.routes.content import bp as content_bp
 from panel.routes.files import bp as files_bp
 from panel.routes.messaging import bp as messaging_bp
@@ -2558,6 +2559,7 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(pages_bp)
 app.register_blueprint(system_bp)
 app.register_blueprint(pulse_bp)
+app.register_blueprint(bnqo_bp)
 app.register_blueprint(royalty_bp)
 app.register_blueprint(merger_bp)
 app.register_blueprint(monitor_bp)

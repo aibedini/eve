@@ -2,6 +2,16 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.5.46] - 2026-07-29
+
+### Added
+- BNQO (Bidirectional Network Quality Observatory) Phase 1, integrated into eve: continuous bidirectional link-quality monitoring between Iran, outside, and relay servers. Rust `bnqo-agent` (workspace under `bnqo/`) probes each link in both directions with authenticated BNQO-UDP packets (XChaCha20-Poly1305, per-direction HKDF keys, replay window, no amplification) and also runs ICMP cycles, TCP/TLS service-target probes, host metrics, and MTR diagnostics; results spool to a local crash-safe WAL and upload idempotently with strictly-increasing sequence numbers.
+- Control plane inside eve: one-time enrollment tokens → per-agent Ed25519 identity; every agent request is signature-verified with a ±300 s replay window; configs and typed jobs (RUN_MTR etc., no remote shell) are CP-signed with anti-rollback config versioning. New models (`bnqo_agents`, `bnqo_links`, `bnqo_measurements`, `bnqo_service_probes`, `bnqo_routes(_hops)`, `bnqo_incidents`, `bnqo_rollups_hourly`, `bnqo_jobs`, `bnqo_enroll_tokens`) via Alembic revision `b7e2c9a41d05`.
+- Status engine (15 s background tick): 12-state per-link status with per-direction detail — no data is never reported as healthy — thresholds per RFP (warning loss ≥1% over 3 windows / RTT p95 > baseline+50%; critical loss ≥5% / complete loss / micro-outages), incident open/auto-resolve with evidence, route-change detection from MTR route hashes, auto diagnostic MTR on critical incidents (15 min cooldown), Telegram alerts, and raw→hourly rollup retention after 14 days.
+- UI: new "Links" section (`/pulse/links` + per-link detail) with per-direction loss/RTT/jitter charts (vendored Chart.js), service-target states, route timeline with change highlighting, incident ack/resolve, agent management, and one-time install-command enrollment; linked from the Pulse page and the sidebar.
+- CLI: `eve` → `[n] BNQO — Network Link Monitor` — install agent over SSH (key or sshpass), print the manual one-time install command, agent status, SSH uninstall, binary info; idempotent installer `static/app-files/bnqo/install.sh` deploying a hardened `bnqo-agent.service` (unprivileged user, CAP_NET_RAW only).
+- Tests: 69 Rust tests (`cargo test --workspace`) and 22 Python tests (`tests/test_bnqo_web.py`); design + contract docs under `docs/bnqo/` (architecture, 10 ADRs, threat model, security controls, protocol, data model, API, SLO, test strategy, implementation plan, integration profile).
+
 ## [2.5.1] - 2026-07-18
 
 ### Fixed

@@ -1,0 +1,25 @@
+[package]
+name = "bnqo-measure"
+description = "BNQO measurement math and probers (window stats, ICMP, TCP/TLS, host metrics)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bnqo-proto.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+webpki-roots = "0.26"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+socket2.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

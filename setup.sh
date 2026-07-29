@@ -3345,6 +3345,314 @@ pulse_menu() {
 }
 
 # ──────────────────────────────────────────────────────────────
+# BNQO — network link monitor (agent installer over SSH)
+#
+# Enroll tokens are minted in the web UI (/pulse/links → "New enroll token")
+# because token creation requires a logged-in session; the CLI deliberately
+# has no auth bypass into the Flask app. See docs/bnqo/EVE_API_CONTRACT.md.
+# ──────────────────────────────────────────────────────────────
+
+BNQO_INSTALLER_LOCAL=""
+BNQO_SSH_PASS=""
+
+bnqo_find_installer() {
+    # Sets BNQO_INSTALLER_LOCAL; returns 1 if install.sh is not on disk.
+    BNQO_INSTALLER_LOCAL=""
+    local candidate
+    for candidate in \
+        "${APP_DIR}/static/app-files/bnqo/install.sh" \
+        "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/static/app-files/bnqo/install.sh"; do
+        if [ -f "$candidate" ]; then
+            BNQO_INSTALLER_LOCAL="$candidate"
+            return 0
+        fi
+    done
+    print_error "static/app-files/bnqo/install.sh not found (looked in ${APP_DIR} and the script directory)."
+    print_warning "Run an Eve update first (menu option [2])."
+    return 1
+}
+
+bnqo_detect_eve_origin() {
+    # Best-effort panel origin on stdout (scheme://domain); rc 1 if unknown.
+    local domain="" scheme="http"
+    if [ -r /etc/eve-manager/domain ]; then
+        domain=$(tr -d '\r\n' < /etc/eve-manager/domain)
+    fi
+    if [ -z "$domain" ] && [ -f "/etc/nginx/sites-available/${SERVICE_NAME}" ]; then
+        domain=$(grep "server_name" "/etc/nginx/sites-available/${SERVICE_NAME}" | head -n 1 | awk '{print $2}' | tr -d ';')
+    fi
+    [ -n "$domain" ] || return 1
+    if [ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ] \
+        || grep -q "ssl_certificate" "/etc/nginx/sites-available/${SERVICE_NAME}" 2>/dev/null; then
+        scheme="https"
+    fi
+    printf '%s://%s' "$scheme" "$domain"
+}
+
+bnqo_prompt_eve_origin() {
+    # Sets BNQO_EVE_ORIGIN; returns 1 if empty.
+    BNQO_EVE_ORIGIN=""
+    local detected="" input=""
+    detected=$(bnqo_detect_eve_origin || true)
+    if [ -n "$detected" ]; then
+        read -rp "  Panel origin [${detected}]: " input
+        BNQO_EVE_ORIGIN="${input:-$detected}"
+    else
+        read -rp "  Panel origin (e.g. https://panel.example.com): " BNQO_EVE_ORIGIN
+    fi
+    BNQO_EVE_ORIGIN="${BNQO_EVE_ORIGIN%/}"
+    if [ -z "$BNQO_EVE_ORIGIN" ]; then
+        print_error "Panel origin is required."
+        return 1
+    fi
+    return 0
+}
+
+bnqo_prompt_enroll_token() {
+    # Sets BNQO_ENROLL_TOKEN_IN; returns 1 if empty.
+    BNQO_ENROLL_TOKEN_IN=""
+    echo -e "  ${DIM}Enroll tokens are single-use and are created in the web UI:${NC}"
+    echo -e "  ${DIM}  /pulse/links → \"New enroll token\" (pick the role, copy the token).${NC}"
+    read -rp "  Enroll token: " BNQO_ENROLL_TOKEN_IN
+    if [ -z "$BNQO_ENROLL_TOKEN_IN" ]; then
+        print_error "Enroll token is required (generate one in the web UI first)."
+        return 1
+    fi
+    return 0
+}
+
+bnqo_ssh_auth() {
+    # $1=user@host $2=port — probe key auth, else offer sshpass password.
+    # Sets BNQO_SSH_PASS (empty = key auth). Returns 1 when no auth works.
+    BNQO_SSH_PASS=""
+    local target="$1" port="$2"
+    if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -p "$port" "$target" true 2>/dev/null; then
+        print_success "SSH key authentication works."
+        return 0
+    fi
+    if command -v sshpass >/dev/null 2>&1; then
+        local pass=""
+        read -rsp "  No SSH key access. Password for ${target}: " pass
+        echo
+        if [ -n "$pass" ] && SSHPASS="$pass" sshpass -e ssh -o StrictHostKeyChecking=accept-new -o NumberOfPasswordPrompts=1 -o ConnectTimeout=10 -p "$port" "$target" true 2>/dev/null; then
+            BNQO_SSH_PASS="$pass"
+            print_success "Password authentication works."
+            return 0
+        fi
+        print_error "Password authentication failed."
+        return 1
+    fi
+    print_error "No SSH key access to ${target} and 'sshpass' is not installed."
+    echo -e "  ${DIM}Set up key auth, then retry:${NC}"
+    echo -e "  ${DIM}  ssh-keygen -t ed25519   (if you have no key yet)${NC}"
+    echo -e "  ${DIM}  ssh-copy-id -p ${port} ${target}${NC}"
+    return 1
+}
+
+bnqo_ssh_run() {
+    # $1=user@host $2=port $3=remote command string
+    local target="$1" port="$2" rcmd="$3"
+    if [ -n "$BNQO_SSH_PASS" ]; then
+        SSHPASS="$BNQO_SSH_PASS" sshpass -e ssh -o StrictHostKeyChecking=accept-new -o NumberOfPasswordPrompts=1 -p "$port" "$target" "$rcmd"
+    else
+        ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "$target" "$rcmd"
+    fi
+}
+
+bnqo_scp_push() {
+    # $1=local file $2=user@host $3=port $4=remote path
+    local src="$1" target="$2" port="$3" dst="$4"
+    if [ -n "$BNQO_SSH_PASS" ]; then
+        SSHPASS="$BNQO_SSH_PASS" sshpass -e scp -o StrictHostKeyChecking=accept-new -o NumberOfPasswordPrompts=1 -P "$port" "$src" "${target}:${dst}"
+    else
+        scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -P "$port" "$src" "${target}:${dst}"
+    fi
+}
+
+bnqo_ssh_prompt_target() {
+    # Sets BNQO_TARGET / BNQO_TARGET_USER / BNQO_TARGET_PORT; returns 1 if invalid.
+    BNQO_TARGET=""; BNQO_TARGET_USER="root"; BNQO_TARGET_PORT="22"
+    local host=""
+    read -rp "  Target host (IP or hostname): " host
+    if [ -z "$host" ]; then
+        print_error "Target host is required."
+        return 1
+    fi
+    read -rp "  SSH user [root]: " BNQO_TARGET_USER
+    BNQO_TARGET_USER="${BNQO_TARGET_USER:-root}"
+    read -rp "  SSH port [22]: " BNQO_TARGET_PORT
+    BNQO_TARGET_PORT="${BNQO_TARGET_PORT:-22}"
+    BNQO_TARGET="${BNQO_TARGET_USER}@${host}"
+    return 0
+}
+
+bnqo_remote_sudo_prefix() {
+    # root needs no sudo; other users do.
+    if [ "$BNQO_TARGET_USER" = "root" ]; then
+        printf ''
+    else
+        printf 'sudo '
+    fi
+}
+
+bnqo_install_remote() {
+    print_header "BNQO — Install Agent over SSH"
+    bnqo_find_installer || return 0
+    bnqo_ssh_prompt_target || return 0
+    bnqo_ssh_auth "$BNQO_TARGET" "$BNQO_TARGET_PORT" || return 0
+
+    local remote_host=""
+    remote_host=$(bnqo_ssh_run "$BNQO_TARGET" "$BNQO_TARGET_PORT" "hostname -s" 2>/dev/null || true)
+
+    local role="" agent_name=""
+    read -rp "  Agent role [iran/outside/relay] (default outside): " role
+    role="${role:-outside}"
+    case "$role" in
+        iran|outside|relay) ;;
+        *) print_error "Role must be one of: iran, outside, relay."; return 0 ;;
+    esac
+    if [ -n "$remote_host" ]; then
+        read -rp "  Agent name [${remote_host}]: " agent_name
+        agent_name="${agent_name:-$remote_host}"
+    else
+        read -rp "  Agent name: " agent_name
+    fi
+    if [ -z "$agent_name" ]; then
+        print_error "Agent name is required."
+        return 0
+    fi
+    bnqo_prompt_eve_origin || return 0
+    bnqo_prompt_enroll_token || return 0
+
+    print_warning "Uploading installer to ${BNQO_TARGET}:/tmp/bnqo-install.sh ..."
+    if ! bnqo_scp_push "$BNQO_INSTALLER_LOCAL" "$BNQO_TARGET" "$BNQO_TARGET_PORT" "/tmp/bnqo-install.sh"; then
+        print_error "scp failed — check SSH access."
+        return 0
+    fi
+
+    local remote_cmd
+    remote_cmd="$(bnqo_remote_sudo_prefix)env BNQO_EVE_URL=$(printf '%q' "$BNQO_EVE_ORIGIN") BNQO_ENROLL_TOKEN=$(printf '%q' "$BNQO_ENROLL_TOKEN_IN") BNQO_ROLE=$(printf '%q' "$role") BNQO_AGENT_NAME=$(printf '%q' "$agent_name") bash /tmp/bnqo-install.sh"
+    echo
+    print_warning "Running installer on ${BNQO_TARGET} (output below)..."
+    echo
+    if bnqo_ssh_run "$BNQO_TARGET" "$BNQO_TARGET_PORT" "$remote_cmd"; then
+        echo
+        print_success "BNQO agent installed on ${BNQO_TARGET} (name: ${agent_name}, role: ${role})."
+        echo -e "  ${DIM}It should appear shortly in the web UI at ${BNQO_EVE_ORIGIN}/pulse/links${NC}"
+    else
+        echo
+        print_error "Remote install failed — see the output above."
+        print_warning "Re-run with a fresh enroll token (tokens are single-use)."
+    fi
+}
+
+bnqo_show_install_command() {
+    print_header "BNQO — Manual Install Command"
+    local origin=""
+    origin=$(bnqo_detect_eve_origin || true)
+    [ -n "$origin" ] || origin="https://YOUR-EVE-PANEL"
+    echo -e "  ${DIM}For servers without SSH access: mint an enroll token in the web UI${NC}"
+    echo -e "  ${DIM}(/pulse/links → \"New enroll token\"), then run this ON the target server:${NC}"
+    echo
+    echo "  curl -fsSL ${origin}/static/app-files/bnqo/install.sh -o /tmp/bnqo-install.sh && sudo BNQO_EVE_URL=${origin} BNQO_ENROLL_TOKEN=<TOKEN> bash /tmp/bnqo-install.sh"
+    echo
+    echo -e "  ${DIM}Replace <TOKEN> with the one-time token. Optional env: BNQO_ROLE=iran|outside|relay,${NC}"
+    echo -e "  ${DIM}BNQO_AGENT_NAME=<name>, BNQO_PORT=44818. Uninstall: sudo UNINSTALL=1 bash /tmp/bnqo-install.sh${NC}"
+}
+
+bnqo_agent_status() {
+    print_header "BNQO — Agent Status"
+    local db_url="" db_url_lc=""
+    if [ -f "$ENV_FILE" ]; then
+        db_url=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)
+    fi
+    db_url_lc=$(printf '%s' "$db_url" | tr '[:upper:]' '[:lower:]')
+    if [ -n "$db_url_lc" ] && [[ "$db_url_lc" != sqlite:* ]]; then
+        print_warning "Panel database is not SQLite — agent status lives in the web UI (/pulse/links)."
+        return 0
+    fi
+    local db="${APP_DIR}/instance/servers.db"
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        print_error "sqlite3 CLI not installed — use the web UI (/pulse/links) instead."
+        return 0
+    fi
+    if [ ! -f "$db" ]; then
+        print_error "SQLite DB not found: ${db}"
+        return 0
+    fi
+    if ! sqlite3 -header -column "$db" \
+        "SELECT id, name, role, address, port, enabled, last_seen_at FROM bnqo_agents ORDER BY id;" 2>/dev/null; then
+        print_warning "No bnqo_agents table yet (BNQO is not enabled on this install) — use the web UI (/pulse/links)."
+    fi
+}
+
+bnqo_uninstall_remote() {
+    print_header "BNQO — Uninstall Agent over SSH"
+    bnqo_find_installer || return 0
+    bnqo_ssh_prompt_target || return 0
+    read -rp "  Remove agent, config and 'bnqo' user on ${BNQO_TARGET}? (type YES): " confirm
+    if [ "$confirm" != "YES" ]; then
+        print_warning "Cancelled."
+        return 0
+    fi
+    bnqo_ssh_auth "$BNQO_TARGET" "$BNQO_TARGET_PORT" || return 0
+    print_warning "Uploading installer to ${BNQO_TARGET}:/tmp/bnqo-install.sh ..."
+    if ! bnqo_scp_push "$BNQO_INSTALLER_LOCAL" "$BNQO_TARGET" "$BNQO_TARGET_PORT" "/tmp/bnqo-install.sh"; then
+        print_error "scp failed — check SSH access."
+        return 0
+    fi
+    if bnqo_ssh_run "$BNQO_TARGET" "$BNQO_TARGET_PORT" "$(bnqo_remote_sudo_prefix)env UNINSTALL=1 bash /tmp/bnqo-install.sh"; then
+        echo
+        print_success "BNQO agent removed from ${BNQO_TARGET}."
+        print_warning "Also revoke the agent in the web UI (/pulse/links) so it stops showing there."
+    else
+        echo
+        print_error "Remote uninstall failed — see the output above."
+    fi
+}
+
+bnqo_binary_info() {
+    print_header "BNQO — Agent Binary"
+    local bin="${APP_DIR}/static/app-files/bnqo/bnqo-agent"
+    if [ -f "$bin" ]; then
+        print_success "Binary present: ${bin}"
+        echo -e "  Size   : $(du -h "$bin" | awk '{print $1}')"
+        if command -v sha256sum >/dev/null 2>&1; then
+            echo -e "  SHA256 : $(sha256sum "$bin" | awk '{print $1}')"
+        fi
+        echo -e "  ${DIM}Served to agents at: <panel-origin>/static/app-files/bnqo/bnqo-agent${NC}"
+    else
+        print_warning "Agent binary not built yet: ${bin}"
+        echo -e "  ${DIM}Build it from the bnqo/ Rust workspace and copy the static binary there.${NC}"
+        echo -e "  ${DIM}See docs/bnqo/EVE_INTEGRATION.md for the build step.${NC}"
+    fi
+}
+
+bnqo_menu() {
+    require_root
+    while true; do
+        print_header "BNQO — Network Link Monitor"
+        echo -e "   ${MAGENTA}[1]${NC}  Install agent on a remote server (SSH)"
+        echo -e "   ${MAGENTA}[2]${NC}  Show manual one-time install command"
+        echo -e "   ${MAGENTA}[3]${NC}  Agent status"
+        echo -e "   ${MAGENTA}[4]${NC}  Uninstall agent over SSH"
+        echo -e "   ${MAGENTA}[5]${NC}  Agent binary info / build pointer"
+        echo -e "   ${DIM}[0]${NC}  Back"
+        echo
+        read -rp "  Select option: " nchoice
+        case "$nchoice" in
+            1) bnqo_install_remote ;;
+            2) bnqo_show_install_command ;;
+            3) bnqo_agent_status ;;
+            4) bnqo_uninstall_remote ;;
+            5) bnqo_binary_info ;;
+            0|b|B|q|Q) return 0 ;;
+            *) print_error "Invalid option: $nchoice" ;;
+        esac
+    done
+}
+
+# ──────────────────────────────────────────────────────────────
 # Main interactive menu (loops until quit)
 # ──────────────────────────────────────────────────────────────
 
@@ -3374,6 +3682,7 @@ show_menu() {
         echo
         echo -e "  ${BOLD}Monitoring${NC}"
         echo -e "   ${MAGENTA}[p]${NC}  Pulse — Config Health Monitor"
+        echo -e "   ${MAGENTA}[n]${NC}  BNQO — Network Link Monitor"
         echo
         echo -e "  ${BOLD}System${NC}"
         echo -e "   ${DIM}[s]${NC}  Update this Script (Online — GitHub)"
@@ -3478,6 +3787,9 @@ show_menu() {
                 ;;
             p|P)
                 pulse_menu
+                ;;
+            n|N)
+                bnqo_menu
                 ;;
             s|S)
                 update_self

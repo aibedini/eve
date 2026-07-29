@@ -1762,6 +1762,16 @@ def ensure_background_threads_started():
     else:
         print("[Singleton] pulse_scheduler already owned by another worker, skipping.")
 
+    # Singleton: BNQO link status/detection engine + retention rollup.
+    if _claim_singleton('bnqo_scheduler'):
+        try:
+            from panel.jobs.bnqo import bnqo_scheduler_worker  # deferred: keeps module import light
+            threading.Thread(target=bnqo_scheduler_worker, daemon=True).start()
+        except Exception as e:
+            print(f"Failed to start bnqo scheduler thread: {e}")
+    else:
+        print("[Singleton] bnqo_scheduler already owned by another worker, skipping.")
+
 if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
     # Start threads on module import (works under gunicorn as well)
     ensure_background_threads_started()

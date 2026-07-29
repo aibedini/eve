@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% set bnqo_copy = {
+'en': {
+  'title': 'Network Links', 'back_to_pulse': 'Pulse',
+  'agents': 'Agents', 'agents_help': 'Probe agents enrolled with this panel. The install command is shown only once.',
+  'new_token': 'New enroll token', 'name': 'Name', 'role': 'Role', 'address': 'Address',
+  'enabled_col': 'Enabled', 'version': 'Version', 'last_seen': 'Last seen', 'last_ip': 'Last IP',
+  'actions': 'Actions', 'revoke': 'Revoke', 'confirm_revoke': 'Revoke this agent? It will be disabled immediately.',
+  'enabled': 'Enabled', 'disabled': 'Disabled', 'never': 'Never',
+  'token_title': 'Install command', 'token_warning': 'This command is shown only once. Store it somewhere safe before closing.',
+  'copy': 'Copy', 'copied': 'Copied.', 'close': 'Close', 'create': 'Create',
+  'token_role': 'Agent role', 'token_ttl': 'Token TTL (minutes)',
+  'links': 'Links', 'links_help': 'Bidirectional monitoring between an Iran-side and an outside agent. Click a row for details.',
+  'create_link': 'Create link', 'link_col': 'Link', 'endpoints': 'A ⇄ B',
+  'dir_ab': 'A → B', 'dir_ba': 'B → A', 'status': 'Status', 'last_data': 'Last data',
+  'diagnose': 'Diagnose', 'enable': 'Enable', 'disable': 'Disable', 'delete': 'Delete',
+  'confirm_delete': 'Delete this link and its history?',
+  'empty_links': 'No links yet. Create one to start monitoring.', 'empty_agents': 'No agents enrolled yet.',
+  'link_name': 'Link name', 'agent_a': 'Agent A (e.g. Iran)', 'agent_b': 'Agent B (e.g. outside)',
+  'profile': 'Profile (JSON, optional)', 'profile_help': 'Leave the default or edit; invalid JSON is rejected.',
+  'invalid_json': 'The profile is not valid JSON.', 'same_agent': 'Agents A and B must be different.',
+  'created': 'Link created.', 'diagnose_queued': 'Diagnose jobs queued.', 'updated': 'Updated.', 'deleted': 'Deleted.', 'revoked': 'Agent revoked.',
+  'incidents': 'Open incidents', 'incidents_help': 'Unresolved incidents across all links.',
+  'kind': 'Kind', 'link': 'Link', 'direction': 'Direction', 'age': 'Age', 'evidence': 'Evidence',
+  'ack': 'Ack', 'resolve': 'Resolve', 'no_incidents': 'No open incidents.',
+  'request_error': 'The request failed.', 'loading': 'Loading…'
+},
+'fa': {
+  'title': 'لینک‌های شبکه', 'back_to_pulse': 'Pulse',
+  'agents': 'ایجنت‌ها', 'agents_help': 'ایجنت‌های پروب ثبت‌شده در این پنل. دستور نصب فقط یک‌بار نمایش داده می‌شود.',
+  'new_token': 'توکن ثبت‌نام جدید', 'name': 'نام', 'role': 'نقش', 'address': 'آدرس',
+  'enabled_col': 'فعال', 'version': 'نسخه', 'last_seen': 'آخرین اتصال', 'last_ip': 'آخرین IP',
+  'actions': 'عملیات', 'revoke': 'لغو', 'confirm_revoke': 'این ایجنت لغو شود؟ بلافاصله غیرفعال می‌شود.',
+  'enabled': 'فعال', 'disabled': 'غیرفعال', 'never': 'هرگز',
+  'token_title': 'دستور نصب', 'token_warning': 'این دستور فقط یک‌بار نمایش داده می‌شود؛ قبل از بستن آن را ذخیره کنید.',
+  'copy': 'کپی', 'copied': 'کپی شد.', 'close': 'بستن', 'create': 'ساخت',
+  'token_role': 'نقش ایجنت', 'token_ttl': 'اعتبار توکن (دقیقه)',
+  'links': 'لینک‌ها', 'links_help': 'پایش دوطرفه بین ایجنت ایران و خارج. برای جزئیات روی ردیف کلیک کنید.',
+  'create_link': 'ساخت لینک', 'link_col': 'لینک', 'endpoints': 'الف ⇄ ب',
+  'dir_ab': 'الف → ب', 'dir_ba': 'ب → الف', 'status': 'وضعیت', 'last_data': 'آخرین داده',
+  'diagnose': 'تشخیص', 'enable': 'فعال‌سازی', 'disable': 'غیرفعال', 'delete': 'حذف',
+  'confirm_delete': 'این لینک و تاریخچه‌اش حذف شود؟',
+  'empty_links': 'هنوز لینکی نیست؛ برای شروع یکی بسازید.', 'empty_agents': 'هنوز ایجنتی ثبت نشده است.',
+  'link_name': 'نام لینک', 'agent_a': 'ایجنت الف (مثلاً ایران)', 'agent_b': 'ایجنت ب (مثلاً خارج)',
+  'profile': 'پروفایل (JSON، اختیاری)', 'profile_help': 'پیش‌فرض را نگه دارید یا ویرایش کنید؛ JSON نامعتبر رد می‌شود.',
+  'invalid_json': 'پروفایل JSON معتبر نیست.', 'same_agent': 'ایجنت الف و ب باید متفاوت باشند.',
+  'created': 'لینک ساخته شد.', 'diagnose_queued': 'کارهای تشخیص در صف قرار گرفت.', 'updated': 'به‌روز شد.', 'deleted': 'حذف شد.', 'revoked': 'ایجنت لغو شد.',
+  'incidents': 'رویدادهای باز', 'incidents_help': 'رویدادهای حل‌نشده در همه لینک‌ها.',
+  'kind': 'نوع', 'link': 'لینک', 'direction': 'جهت', 'age': 'قدمت', 'evidence': 'شواهد',
+  'ack': 'تأیید', 'resolve': 'حل‌شده', 'no_incidents': 'رویداد بازی نیست.',
+  'request_error': 'انجام درخواست ناموفق بود.', 'loading': 'در حال دریافت…'
+}} %}
+{% set t = bnqo_copy[panel_lang] if panel_lang in bnqo_copy else bnqo_copy['en'] %}
+{% block title %}{{ t.title }}{% endblock %}
+{% block page_title %}{{ t.title }}{% endblock %}
+
+{% block header_actions %}
+<a class="btn btn-secondary" href="{{ url_for('pages.pulse_page') }}" style="text-decoration:none">← {{ t.back_to_pulse }}</a>
+<button type="button" class="btn btn-primary" id="bnqo-open-create">{{ t.create_link }}</button>
+{% endblock %}
+
+{% block content %}
+<style nonce="{{ csp_nonce }}">
+.bnqo-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:16px;padding:20px;margin-bottom:20px}
+.bnqo-card h3{margin:0 0 5px;font-size:1.02rem}
+.bnqo-help{color:var(--text-secondary);font-size:.78rem;margin:0 0 16px;line-height:1.65}
+.bnqo-table-wrap{overflow-x:auto}
+.bnqo-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.bnqo-table th{text-align:start;color:var(--text-secondary);font-weight:600;font-size:.72rem;padding:8px 10px;border-bottom:1px solid var(--border-color);white-space:nowrap}
+.bnqo-table td{padding:9px 10px;border-bottom:1px solid var(--border-color);vertical-align:middle}
+.bnqo-table tbody tr.bnqo-link-row{cursor:pointer}
+.bnqo-table tbody tr.bnqo-link-row:hover{background:rgba(99,102,241,.07)}
+.bnqo-empty{color:var(--text-secondary);font-size:.8rem;padding:16px;text-align:center}
+.bnqo-badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;font-size:.7rem;font-weight:700;white-space:nowrap}
+.bnqo-badge.ok{background:rgba(34,197,94,.16);color:#4ade80}
+.bnqo-badge.warn{background:rgba(245,158,11,.16);color:#fbbf24}
+.bnqo-badge.bad{background:rgba(239,68,68,.16);color:#f87171}
+.bnqo-badge.orange{background:rgba(249,115,22,.16);color:#fb923c}
+.bnqo-badge.muted{background:rgba(100,116,139,.22);color:#94a3b8}
+.bnqo-badge.purple{background:rgba(168,85,247,.16);color:#c084fc}
+.bnqo-badge.grey{background:rgba(148,163,184,.14);color:#94a3b8}
+.bnqo-role{background:rgba(99,102,241,.16);color:#818cf8}
+.bnqo-dir-chips{display:flex;flex-direction:column;gap:4px}
+.bnqo-actions{display:flex;gap:6px;flex-wrap:wrap}
+.bnqo-actions .btn{font-size:.72rem;padding:5px 10px}
+.bnqo-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:5px}
+.bnqo-card-head h3{margin:0}
+.bnqo-modal{position:fixed;inset:0;z-index:1200;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,.6);padding:18px}
+.bnqo-modal.open{display:flex}
+.bnqo-modal-box{background:var(--bg-card);border:1px solid var(--border-color);border-radius:16px;padding:22px;width:100%;max-width:560px;max-height:90vh;overflow:auto}
+.bnqo-modal-box h3{margin:0 0 14px;font-size:1rem}
+.bnqo-field{margin-bottom:13px}
+.bnqo-field label{display:block;color:var(--text-secondary);font-size:.78rem;margin-bottom:6px}
+.bnqo-field select,.bnqo-field input,.bnqo-field textarea{width:100%;box-sizing:border-box;background:var(--bg-dark);border:1px solid var(--border-color);border-radius:9px;color:var(--text-primary);padding:9px 11px;font:inherit;font-size:.84rem}
+.bnqo-field textarea{min-height:120px;resize:vertical;font-family:monospace;font-size:.76rem;direction:ltr;text-align:left}
+.bnqo-modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+.bnqo-token-warning{margin:0 0 12px;padding:10px 12px;border:1px solid rgba(245,158,11,.45);border-radius:10px;background:rgba(245,158,11,.12);color:var(--text-primary);font-size:.78rem;line-height:1.6}
+.bnqo-install-cmd{width:100%;box-sizing:border-box;min-height:110px;background:var(--bg-dark);border:1px solid var(--border-color);border-radius:9px;color:var(--text-primary);padding:10px;font-family:monospace;font-size:.74rem;direction:ltr;text-align:left;resize:vertical}
+.bnqo-evidence{max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary);font-size:.74rem}
+</style>
+
+<section class="bnqo-card">
+  <div class="bnqo-card-head"><h3>{{ t.agents }}</h3><button type="button" class="btn btn-secondary" id="bnqo-open-token">{{ t.new_token }}</button></div>
+  <p class="bnqo-help">{{ t.agents_help }}</p>
+  <div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr>
+    <th>{{ t.name }}</th><th>{{ t.role }}</th><th>{{ t.address }}</th><th>{{ t.enabled_col }}</th><th>{{ t.version }}</th><th>{{ t.last_seen }}</th><th>{{ t.last_ip }}</th><th>{{ t.actions }}</th>
+  </tr></thead><tbody id="bnqo-agents-body"><tr><td colspan="8" class="bnqo-empty">{{ t.loading }}</td></tr></tbody></table></div>
+</section>
+
+<section class="bnqo-card">
+  <div class="bnqo-card-head"><h3>{{ t.links }}</h3></div>
+  <p class="bnqo-help">{{ t.links_help }}</p>
+  <div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr>
+    <th>{{ t.link_col }}</th><th>{{ t.endpoints }}</th><th>{{ t.dir_ab }}</th><th>{{ t.dir_ba }}</th><th>{{ t.status }}</th><th>{{ t.last_data }}</th><th>{{ t.actions }}</th>
+  </tr></thead><tbody id="bnqo-links-body"><tr><td colspan="7" class="bnqo-empty">{{ t.loading }}</td></tr></tbody></table></div>
+</section>
+
+<section class="bnqo-card">
+  <div class="bnqo-card-head"><h3>{{ t.incidents }}</h3></div>
+  <p class="bnqo-help">{{ t.incidents_help }}</p>
+  <div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr>
+    <th>{{ t.kind }}</th><th>{{ t.link }}</th><th>{{ t.direction }}</th><th>{{ t.age }}</th><th>{{ t.evidence }}</th><th>{{ t.actions }}</th>
+  </tr></thead><tbody id="bnqo-incidents-body"><tr><td colspan="6" class="bnqo-empty">{{ t.loading }}</td></tr></tbody></table></div>
+</section>
+
+<div class="bnqo-modal" id="bnqo-token-modal" role="dialog" aria-modal="true">
+  <div class="bnqo-modal-box">
+    <div id="bnqo-token-form">
+      <h3>{{ t.new_token }}</h3>
+      <div class="bnqo-field"><label for="bnqo-token-role">{{ t.token_role }}</label>
+        <select id="bnqo-token-role"><option value="iran">iran</option><option value="outside" selected>outside</option><option value="relay">relay</option></select></div>
+      <div class="bnqo-field"><label for="bnqo-token-ttl">{{ t.token_ttl }}</label>
+        <input id="bnqo-token-ttl" type="number" value="30" min="5" max="1440"></div>
+      <div class="bnqo-modal-actions">
+        <button type="button" class="btn btn-secondary bnqo-modal-close">{{ t.close }}</button>
+        <button type="button" class="btn btn-primary" id="bnqo-token-create">{{ t.create }}</button>
+      </div>
+    </div>
+    <div id="bnqo-token-result" hidden>
+      <h3>{{ t.token_title }}</h3>
+      <p class="bnqo-token-warning">⚠️ {{ t.token_warning }}</p>
+      <textarea id="bnqo-install-command" class="bnqo-install-cmd" readonly rows="5"></textarea>
+      <div class="bnqo-modal-actions">
+        <button type="button" class="btn btn-secondary bnqo-modal-close">{{ t.close }}</button>
+        <button type="button" class="btn btn-primary" id="bnqo-copy-command">{{ t.copy }}</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="bnqo-modal" id="bnqo-create-modal" role="dialog" aria-modal="true">
+  <div class="bnqo-modal-box">
+    <h3>{{ t.create_link }}</h3>
+    <div class="bnqo-field"><label for="bnqo-link-name">{{ t.link_name }}</label><input id="bnqo-link-name" maxlength="120" dir="ltr" placeholder="IR-DE"></div>
+    <div class="bnqo-field"><label for="bnqo-agent-a">{{ t.agent_a }}</label><select id="bnqo-agent-a"></select></div>
+    <div class="bnqo-field"><label for="bnqo-agent-b">{{ t.agent_b }}</label><select id="bnqo-agent-b"></select></div>
+    <div class="bnqo-field"><label for="bnqo-link-profile">{{ t.profile }}</label>
+      <textarea id="bnqo-link-profile" spellcheck="false"></textarea>
+      <p class="bnqo-help" style="margin:6px 0 0">{{ t.profile_help }}</p></div>
+    <div class="bnqo-modal-actions">
+      <button type="button" class="btn btn-secondary bnqo-modal-close">{{ t.close }}</button>
+      <button type="button" class="btn btn-primary" id="bnqo-link-create">{{ t.create }}</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}<script nonce="{{ csp_nonce }}">
+(function(){'use strict';
+const T={{ t|tojson }};
+const esc=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const rel=v=>v?(window.EveDate?EveDate.relative(v):v):T.never;
+const STATUS_CLASS={'healthy':'ok','degraded':'warn','critical':'bad','unreachable':'bad','control-plane-unavailable':'bad','probe-blocked':'orange','service-failed':'orange','agent-unhealthy':'muted','telemetry-delayed':'muted','clock-unsynchronized':'purple','unknown':'grey','maintenance':'grey'};
+function statusBadge(status){const s=String(status||'unknown');return '<span class="bnqo-badge '+(STATUS_CLASS[s]||'grey')+'">'+esc(s)+'</span>'}
+function apiFetch(url,options){options=options||{};options.headers=Object.assign({'X-Requested-With':'XMLHttpRequest'},options.headers||{});return fetch(url,options).then(async r=>{let d=null;try{d=await r.json()}catch(_){ }if(!r.ok){let msg=T.request_error+' ('+r.status+')';if(d&&d.error)msg=(typeof d.error==='object'?(d.error.message||d.error.code):d.error)||msg;throw new Error(msg)}return d})}
+function jsonOptions(method,body){return{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}}
+function toast(msg,ok){if(window.showToast)showToast(msg,ok?'success':'error');else alert(msg)}
+function detail(link){let d=link.status_detail;if(typeof d==='string'){try{d=JSON.parse(d)}catch(_){d=null}}return(d&&typeof d==='object')?d:{}}
+function dirStatus(det,dir){let v=det[dir];if(v&&typeof v==='object')v=v.status||v.state;return v?String(v):'unknown'}
+
+let agents=[], links=[];
+const agentsBody=document.getElementById('bnqo-agents-body'), linksBody=document.getElementById('bnqo-links-body'), incidentsBody=document.getElementById('bnqo-incidents-body');
+
+function renderAgents(){
+  if(!agents.length){agentsBody.innerHTML='<tr><td colspan="8" class="bnqo-empty">'+esc(T.empty_agents)+'</td></tr>';return}
+  agentsBody.innerHTML=agents.map(a=>'<tr><td><strong dir="ltr">'+esc(a.name)+'</strong></td>'
+    +'<td><span class="bnqo-badge bnqo-role">'+esc(a.role||'—')+'</span></td>'
+    +'<td dir="ltr">'+esc(a.address||'—')+(a.port?':'+esc(a.port):'')+'</td>'
+    +'<td>'+(a.enabled?'<span class="bnqo-badge ok">'+esc(T.enabled)+'</span>':'<span class="bnqo-badge grey">'+esc(T.disabled)+'</span>')+'</td>'
+    +'<td dir="ltr">'+esc(a.version||'—')+'</td>'
+    +'<td>'+esc(rel(a.last_seen_at))+'</td>'
+    +'<td dir="ltr">'+esc(a.last_ip||'—')+'</td>'
+    +'<td><div class="bnqo-actions"><button type="button" class="btn btn-secondary bnqo-revoke" data-id="'+esc(a.id)+'">'+esc(T.revoke)+'</button></div></td></tr>').join('');
+}
+function renderLinks(){
+  if(!links.length){linksBody.innerHTML='<tr><td colspan="7" class="bnqo-empty">'+esc(T.empty_links)+'</td></tr>';return}
+  linksBody.innerHTML=links.map(l=>{const det=detail(l);
+    const a=l.agent_a||{}, b=l.agent_b||{};
+    return '<tr class="bnqo-link-row" data-id="'+esc(l.id)+'"><td><strong>'+esc(l.name)+'</strong>'+(l.enabled?'':' <span class="bnqo-badge grey">'+esc(T.disabled)+'</span>')+'</td>'
+    +'<td>'+esc(a.name||'—')+' <span class="bnqo-badge bnqo-role">'+esc(a.role||'?')+'</span> ⇄ '+esc(b.name||'—')+' <span class="bnqo-badge bnqo-role">'+esc(b.role||'?')+'</span></td>'
+    +'<td>'+statusBadge(dirStatus(det,'a_to_b'))+'</td>'
+    +'<td>'+statusBadge(dirStatus(det,'b_to_a'))+'</td>'
+    +'<td>'+statusBadge(l.status)+'</td>'
+    +'<td>'+esc(rel(l.last_data_at))+'</td>'
+    +'<td><div class="bnqo-actions">'
+    +'<button type="button" class="btn btn-secondary bnqo-diagnose" data-id="'+esc(l.id)+'">'+esc(T.diagnose)+'</button>'
+    +'<button type="button" class="btn btn-secondary bnqo-toggle" data-id="'+esc(l.id)+'" data-enabled="'+(l.enabled?'1':'0')+'">'+esc(l.enabled?T.disable:T.enable)+'</button>'
+    +'<button type="button" class="btn btn-secondary bnqo-delete" data-id="'+esc(l.id)+'">'+esc(T.delete)+'</button>'
+    +'</div></td></tr>'}).join('');
+}
+function renderIncidents(items){
+  if(!items.length){incidentsBody.innerHTML='<tr><td colspan="6" class="bnqo-empty">'+esc(T.no_incidents)+'</td></tr>';return}
+  incidentsBody.innerHTML=items.map(i=>{
+    let ev='';try{ev=typeof i.evidence==='string'?i.evidence:JSON.stringify(i.evidence)}catch(_){ev=String(i.evidence||'')}
+    return '<tr><td><span class="bnqo-badge warn">'+esc(i.kind||'—')+'</span></td>'
+    +'<td>'+esc(i.link_name||('#'+(i.link_id||'?')))+'</td>'
+    +'<td dir="ltr">'+esc(i.direction||'—')+'</td>'
+    +'<td>'+esc(rel(i.opened_at))+'</td>'
+    +'<td><div class="bnqo-evidence" title="'+esc(ev)+'" dir="ltr">'+esc(ev||'—')+'</div></td>'
+    +'<td><div class="bnqo-actions">'
+    +(i.status==='open'?'<button type="button" class="btn btn-secondary bnqo-ack" data-id="'+esc(i.id)+'">'+esc(T.ack)+'</button>':'')
+    +'<button type="button" class="btn btn-secondary bnqo-resolve" data-id="'+esc(i.id)+'">'+esc(T.resolve)+'</button>'
+    +'</div></td></tr>'}).join('');
+}
+
+function refreshAgents(){return apiFetch('/api/bnqo/agents').then(d=>{agents=d.agents||[];renderAgents()}).catch(()=>{})}
+function refreshLinks(){return apiFetch('/api/bnqo/links').then(d=>{links=d.links||[];renderLinks()}).catch(()=>{})}
+function refreshIncidents(){return apiFetch('/api/bnqo/incidents?status=open').then(d=>renderIncidents(d.incidents||[])).catch(()=>{})}
+function refreshAll(){refreshAgents();refreshLinks();refreshIncidents()}
+
+linksBody.addEventListener('click',e=>{
+  const row=e.target.closest('.bnqo-link-row'); if(!row)return;
+  const id=row.dataset.id;
+  const diag=e.target.closest('.bnqo-diagnose'), tog=e.target.closest('.bnqo-toggle'), del=e.target.closest('.bnqo-delete');
+  if(diag){diag.disabled=true;apiFetch('/api/bnqo/links/'+id+'/diagnose',{method:'POST'}).then(()=>toast(T.diagnose_queued,true)).catch(x=>toast(x.message,false)).finally(()=>{diag.disabled=false});return}
+  if(tog){tog.disabled=true;apiFetch('/api/bnqo/links/'+id,jsonOptions('PATCH',{enabled:tog.dataset.enabled!=='1'})).then(()=>{toast(T.updated,true);refreshLinks()}).catch(x=>toast(x.message,false)).finally(()=>{tog.disabled=false});return}
+  if(del){if(!confirm(T.confirm_delete))return;del.disabled=true;apiFetch('/api/bnqo/links/'+id,{method:'DELETE'}).then(()=>{toast(T.deleted,true);refreshLinks()}).catch(x=>{toast(x.message,false);del.disabled=false});return}
+  location.href='/pulse/links/'+encodeURIComponent(id);
+});
+agentsBody.addEventListener('click',e=>{
+  const btn=e.target.closest('.bnqo-revoke'); if(!btn)return;
+  if(!confirm(T.confirm_revoke))return;
+  btn.disabled=true;
+  apiFetch('/api/bnqo/agents/'+btn.dataset.id+'/revoke',{method:'POST'}).then(()=>{toast(T.revoked,true);refreshAgents()}).catch(x=>{toast(x.message,false);btn.disabled=false});
+});
+incidentsBody.addEventListener('click',e=>{
+  const ack=e.target.closest('.bnqo-ack'), res=e.target.closest('.bnqo-resolve');
+  const btn=ack||res; if(!btn)return;
+  btn.disabled=true;
+  apiFetch('/api/bnqo/incidents/'+btn.dataset.id+(ack?'/ack':'/resolve'),{method:'POST'}).then(()=>{toast(T.updated,true);refreshIncidents()}).catch(x=>{toast(x.message,false);btn.disabled=false});
+});
+
+// ---- modals ----
+function openModal(id){document.getElementById(id).classList.add('open')}
+function closeModals(){document.querySelectorAll('.bnqo-modal').forEach(m=>m.classList.remove('open'))}
+document.querySelectorAll('.bnqo-modal-close').forEach(b=>b.addEventListener('click',closeModals));
+document.querySelectorAll('.bnqo-modal').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)closeModals()}));
+
+document.getElementById('bnqo-open-token').addEventListener('click',()=>{
+  document.getElementById('bnqo-token-form').hidden=false;
+  document.getElementById('bnqo-token-result').hidden=true;
+  openModal('bnqo-token-modal');
+});
+document.getElementById('bnqo-token-create').addEventListener('click',function(){
+  this.disabled=true;
+  apiFetch('/api/bnqo/enroll-tokens',jsonOptions('POST',{role:document.getElementById('bnqo-token-role').value,ttl_minutes:Number(document.getElementById('bnqo-token-ttl').value)||30}))
+  .then(d=>{
+    document.getElementById('bnqo-token-form').hidden=true;
+    document.getElementById('bnqo-token-result').hidden=false;
+    document.getElementById('bnqo-install-command').value=d.install_command||d.token||'';
+  }).catch(x=>toast(x.message,false)).finally(()=>{this.disabled=false});
+});
+document.getElementById('bnqo-copy-command').addEventListener('click',function(){
+  const box=document.getElementById('bnqo-install-command');
+  const done=()=>toast(T.copied,true);
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(box.value).then(done).catch(()=>{box.select();document.execCommand('copy');done()})}
+  else{box.select();document.execCommand('copy');done()}
+});
+
+const DEFAULT_PROFILE={
+  interval_ms:200, packet_size:256, window_sec:30,
+  icmp_enabled:true, icmp_count:5, icmp_interval_sec:30,
+  service_targets:[{name:'panel', host:'example.com', port:443, tls:true, interval_sec:30}]
+};
+function fillAgentSelects(){
+  const opts=agents.map(a=>'<option value="'+esc(a.id)+'">'+esc(a.name)+' ('+esc(a.role||'?')+')</option>').join('');
+  const selA=document.getElementById('bnqo-agent-a'), selB=document.getElementById('bnqo-agent-b');
+  selA.innerHTML=opts; selB.innerHTML=opts;
+  if(agents.length>1)selB.selectedIndex=1;
+}
+document.getElementById('bnqo-open-create').addEventListener('click',()=>{
+  document.getElementById('bnqo-link-profile').value=JSON.stringify(DEFAULT_PROFILE,null,2);
+  fillAgentSelects();
+  openModal('bnqo-create-modal');
+});
+document.getElementById('bnqo-link-create').addEventListener('click',function(){
+  const name=document.getElementById('bnqo-link-name').value.trim();
+  const aId=Number(document.getElementById('bnqo-agent-a').value), bId=Number(document.getElementById('bnqo-agent-b').value);
+  if(aId===bId){toast(T.same_agent,false);return}
+  const profileText=document.getElementById('bnqo-link-profile').value.trim();
+  const body={name:name,agent_a_id:aId,agent_b_id:bId};
+  if(profileText){try{body.profile=JSON.parse(profileText)}catch(_){toast(T.invalid_json,false);return}}
+  this.disabled=true;
+  apiFetch('/api/bnqo/links',jsonOptions('POST',body)).then(d=>{
+    toast(T.created,true);closeModals();refreshLinks();
+    const id=d&&(d.link&&d.link.id||d.id); if(id)location.href='/pulse/links/'+encodeURIComponent(id);
+  }).catch(x=>toast(x.message,false)).finally(()=>{this.disabled=false});
+});
+
+refreshAll();
+setInterval(refreshAll,5000);
+})();</script>{% endblock %}

@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = ["crates/bnqo-proto", "crates/bnqo-measure", "crates/bnqo-agent"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+
+# Pure-Rust dependency set only. No crate in this tree may pull in a C
+# dependency (no openssl, no native-tls, no ring-with-asm C builds, no zstd C
+# library) so the agent builds cleanly for x86_64-unknown-linux-musl.
+[workspace.dependencies]
+bnqo-proto = { path = "crates/bnqo-proto" }
+bnqo-measure = { path = "crates/bnqo-measure" }
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "fs", "io-util", "sync", "signal", "process"] }
+chacha20poly1305 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "charset"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+socket2 = { version = "0.5", features = ["all"] }
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+base64 = "0.22"
+hex = "0.4"
+crc32c = "0.6"
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "1"
+tempfile = "3"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

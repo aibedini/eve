@@ -467,3 +467,373 @@ class PendingSms(db.Model):
     server_id = db.Column(db.Integer, default=0)
     server_name = db.Column(db.String(255))
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+# ---------------------------------------------------------------------------
+# BNQO models – bidirectional network-quality monitoring control plane.
+# Wire contract: docs/bnqo/EVE_API_CONTRACT.md (Phase 1, normative).
+# ---------------------------------------------------------------------------
+BNQO_AGENT_ROLES = ('iran', 'outside', 'relay')
+BNQO_DIRECTIONS = ('a_to_b', 'b_to_a')
+BNQO_CLOCK_QUALITIES = ('good', 'low', 'invalid', 'unknown')
+
+BNQO_DEFAULT_PROFILE = {
+    'interval_ms': 200,
+    'packet_size': 256,
+    'window_sec': 30,
+    'icmp_enabled': True,
+    'icmp_count': 5,
+    'icmp_interval_sec': 30,
+    'service_targets': [],
+}
+
+
+class BnqoAgent(db.Model):
+    """A host running bnqo-agent, enrolled via a one-time enroll token.
+
+    Authenticates to the agent API with a random bearer token plus an Ed25519
+    request signature (contract §1). ``last_seq`` is the idempotency watermark
+    for report batches.
+    """
+    __tablename__ = 'bnqo_agents'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    name = db.Column(db.String(64), unique=True, nullable=False)
+    role = db.Column(db.String(16), nullable=False, default='outside')  # iran / outside / relay
+    address = db.Column(db.String(64), nullable=True)
+    port = db.Column(db.Integer, nullable=True)
+    token = db.Column(db.String(64), nullable=False)
+    pubkey = db.Column(db.String(64), nullable=False)                    # base64 raw 32-byte Ed25519
+    enabled = db.Column(db.Boolean, default=True)
+    version = db.Column(db.String(32), nullable=True)
+    last_seen_at = db.Column(db.DateTime, nullable=True)
+    last_ip = db.Column(db.String(64), nullable=True)
+    config_version = db.Column(db.Integer, default=0)
+    last_seq = db.Column(db.Integer, default=0)                          # report idempotency watermark
+    host_json = db.Column(db.Text, nullable=True)                        # latest host-metrics snapshot
+
+    def host(self):
+        try:
+            return json.loads(self.host_json) if self.host_json else {}
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'role': self.role,
+            'address': self.address,
+            'port': self.port,
+            'enabled': bool(self.enabled),
+            'version': self.version,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'last_seen_at': self.last_seen_at.isoformat() + 'Z' if self.last_seen_at else None,
+            'last_ip': self.last_ip,
+            'config_version': self.config_version or 0,
+        }
+
+
+class BnqoEnrollToken(db.Model):
+    """One-time agent enrollment token (contract §2.1)."""
+    __tablename__ = 'bnqo_enroll_tokens'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    token = db.Column(db.String(64), unique=True, nullable=False)
+    role = db.Column(db.String(16), nullable=False, default='outside')
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at = db.Column(db.DateTime, nullable=True)
+    used_by_agent_id = db.Column(db.Integer, nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'token': self.token,
+            'role': self.role,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'expires_at': self.expires_at.isoformat() + 'Z' if self.expires_at else None,
+            'used_at': self.used_at.isoformat() + 'Z' if self.used_at else None,
+            'used_by_agent_id': self.used_by_agent_id,
+        }
+
+
+class BnqoLink(db.Model):
+    """A monitored path between two agents (A ↔ B). Directions in all
+    measurements are from the link's A→B perspective (contract §2.2)."""
+    __tablename__ = 'bnqo_links'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    name = db.Column(db.String(100), nullable=False)
+    agent_a_id = db.Column(db.Integer, db.ForeignKey('bnqo_agents.id'), nullable=False)
+    agent_b_id = db.Column(db.Integer, db.ForeignKey('bnqo_agents.id'), nullable=False)
+    profile_json = db.Column(db.Text, nullable=True)                     # null → server defaults
+    status = db.Column(db.String(32), default='unknown')
+    status_json = db.Column(db.Text, nullable=True)                      # per-direction detail/evidence
+    enabled = db.Column(db.Boolean, default=True)
+    last_data_at = db.Column(db.DateTime, nullable=True)
+
+    agent_a = db.relationship('BnqoAgent', foreign_keys=[agent_a_id], lazy=True)
+    agent_b = db.relationship('BnqoAgent', foreign_keys=[agent_b_id], lazy=True)
+
+    def profile(self):
+        merged = dict(BNQO_DEFAULT_PROFILE)
+        try:
+            stored = json.loads(self.profile_json) if self.profile_json else {}
+        except Exception:
+            stored = {}
+        if isinstance(stored, dict):
+            merged.update(stored)
+        return merged
+
+    def status_detail(self):
+        try:
+            return json.loads(self.status_json) if self.status_json else {}
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        def _agent_brief(agent):
+            if agent is None:
+                return None
+            return {'id': agent.id, 'name': agent.name, 'role': agent.role}
+        return {
+            'id': self.id,
+            'name': self.name,
+            'agent_a': _agent_brief(self.agent_a),
+            'agent_b': _agent_brief(self.agent_b),
+            'enabled': bool(self.enabled),
+            'status': self.status or 'unknown',
+            'status_detail': self.status_detail(),
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'last_data_at': self.last_data_at.isoformat() + 'Z' if self.last_data_at else None,
+        }
+
+
+class BnqoMeasurement(db.Model):
+    """One measurement window per link+direction (contract §2.4).
+
+    ``source`` distinguishes the secure-UDP engine windows ('udp') from ICMP
+    summary rows ('icmp'); the status engine needs the split for the
+    probe-blocked rule (UDP dead but ICMP alive).
+    """
+    __tablename__ = 'bnqo_measurements'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    link_id = db.Column(db.Integer, db.ForeignKey('bnqo_links.id'), nullable=False, index=True)
+    direction = db.Column(db.String(8), nullable=False)                  # a_to_b / b_to_a
+    source = db.Column(db.String(8), nullable=False, default='udp')      # udp / icmp
+    window_start = db.Column(db.DateTime, nullable=False)
+    window_end = db.Column(db.DateTime, nullable=False)
+    sent = db.Column(db.Integer, default=0)
+    received = db.Column(db.Integer, default=0)
+    loss_pct = db.Column(db.Float, default=0.0)
+    rtt_min_ms = db.Column(db.Float, nullable=True)
+    rtt_avg_ms = db.Column(db.Float, nullable=True)
+    rtt_p95_ms = db.Column(db.Float, nullable=True)
+    rtt_max_ms = db.Column(db.Float, nullable=True)
+    owd_ms = db.Column(db.Float, nullable=True)
+    clock_quality = db.Column(db.String(16), nullable=True)
+    jitter_ms = db.Column(db.Float, nullable=True)
+    reordered = db.Column(db.Integer, default=0)
+    duplicated = db.Column(db.Integer, default=0)
+    corrupted = db.Column(db.Integer, default=0)
+    burst_max = db.Column(db.Integer, default=0)
+
+    __table_args__ = (
+        db.Index('ix_bnqo_measurements_link_window', 'link_id', 'window_start'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'link_id': self.link_id,
+            'direction': self.direction,
+            'source': self.source,
+            'window_start': self.window_start.isoformat() + 'Z' if self.window_start else None,
+            'window_end': self.window_end.isoformat() + 'Z' if self.window_end else None,
+            'sent': self.sent,
+            'received': self.received,
+            'loss_pct': self.loss_pct,
+            'rtt_min_ms': self.rtt_min_ms,
+            'rtt_avg_ms': self.rtt_avg_ms,
+            'rtt_p95_ms': self.rtt_p95_ms,
+            'rtt_max_ms': self.rtt_max_ms,
+            'owd_ms': self.owd_ms,
+            'clock_quality': self.clock_quality,
+            'jitter_ms': self.jitter_ms,
+            'reordered': self.reordered,
+            'duplicated': self.duplicated,
+            'corrupted': self.corrupted,
+            'burst_max': self.burst_max,
+        }
+
+
+class BnqoServiceProbe(db.Model):
+    """One TCP/TLS/HTTP service-target probe result (contract §2.4)."""
+    __tablename__ = 'bnqo_service_probes'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    link_id = db.Column(db.Integer, db.ForeignKey('bnqo_links.id'), nullable=False, index=True)
+    target_name = db.Column(db.String(64), nullable=False)
+    ok = db.Column(db.Boolean, default=False)
+    tcp_ms = db.Column(db.Float, nullable=True)
+    tls_ms = db.Column(db.Float, nullable=True)
+    http_status = db.Column(db.Integer, nullable=True)
+    error_class = db.Column(db.String(64), nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'link_id': self.link_id,
+            'target_name': self.target_name,
+            'ok': bool(self.ok),
+            'tcp_ms': self.tcp_ms,
+            'tls_ms': self.tls_ms,
+            'http_status': self.http_status,
+            'error_class': self.error_class,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+        }
+
+
+class BnqoRoute(db.Model):
+    """One MTR run for a link+direction; hops in BnqoRouteHop."""
+    __tablename__ = 'bnqo_routes'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    link_id = db.Column(db.Integer, db.ForeignKey('bnqo_links.id'), nullable=False, index=True)
+    direction = db.Column(db.String(8), nullable=False)
+    route_hash = db.Column(db.String(16), nullable=True, index=True)
+    destination_reached = db.Column(db.Boolean, default=False)
+    job_id = db.Column(db.String(64), nullable=True)
+
+    hops = db.relationship('BnqoRouteHop', backref='route',
+                           cascade='all, delete-orphan', lazy=True,
+                           order_by='BnqoRouteHop.hop_number')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'link_id': self.link_id,
+            'direction': self.direction,
+            'route_hash': self.route_hash,
+            'destination_reached': bool(self.destination_reached),
+            'job_id': self.job_id,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'hops': [hop.to_dict() for hop in self.hops],
+        }
+
+
+class BnqoRouteHop(db.Model):
+    __tablename__ = 'bnqo_route_hops'
+    id = db.Column(db.Integer, primary_key=True)
+    route_id = db.Column(db.Integer, db.ForeignKey('bnqo_routes.id'), nullable=False, index=True)
+    hop_number = db.Column(db.Integer, nullable=False)
+    address = db.Column(db.String(64), nullable=True)
+    loss_pct = db.Column(db.Float, nullable=True)
+    rtt_avg_ms = db.Column(db.Float, nullable=True)
+
+    def to_dict(self):
+        return {
+            'hop': self.hop_number,
+            'address': self.address,
+            'loss_pct': self.loss_pct,
+            'rtt_avg_ms': self.rtt_avg_ms,
+        }
+
+
+class BnqoIncident(db.Model):
+    """Detection-engine incident with evidence (contract §5, RFP §9)."""
+    __tablename__ = 'bnqo_incidents'
+    id = db.Column(db.Integer, primary_key=True)
+    link_id = db.Column(db.Integer, db.ForeignKey('bnqo_links.id'), nullable=False, index=True)
+    direction = db.Column(db.String(8), nullable=True)                   # null = link-level
+    kind = db.Column(db.String(48), nullable=False)
+    status = db.Column(db.String(16), default='open')                    # open / ack / resolved
+    evidence_json = db.Column(db.Text, nullable=True)
+    opened_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    resolved_at = db.Column(db.DateTime, nullable=True)
+
+    def evidence(self):
+        try:
+            return json.loads(self.evidence_json) if self.evidence_json else {}
+        except Exception:
+            return {}
+
+    def to_dict(self, link_name=None):
+        return {
+            'id': self.id,
+            'link_id': self.link_id,
+            'link_name': link_name,
+            'direction': self.direction,
+            'kind': self.kind,
+            'status': self.status or 'open',
+            'evidence': self.evidence(),
+            'opened_at': self.opened_at.isoformat() + 'Z' if self.opened_at else None,
+            'resolved_at': self.resolved_at.isoformat() + 'Z' if self.resolved_at else None,
+        }
+
+
+class BnqoRollup(db.Model):
+    """Hourly aggregate of raw measurements past the raw-retention window."""
+    __tablename__ = 'bnqo_rollups_hourly'
+    id = db.Column(db.Integer, primary_key=True)
+    link_id = db.Column(db.Integer, db.ForeignKey('bnqo_links.id'), nullable=False, index=True)
+    direction = db.Column(db.String(8), nullable=False)
+    hour = db.Column(db.DateTime, nullable=False, index=True)
+    samples = db.Column(db.Integer, default=0)
+    loss_avg = db.Column(db.Float, nullable=True)
+    rtt_p95 = db.Column(db.Float, nullable=True)
+    jitter_avg = db.Column(db.Float, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('link_id', 'direction', 'hour', name='uq_bnqo_rollup_link_dir_hour'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'link_id': self.link_id,
+            'direction': self.direction,
+            'hour': self.hour.isoformat() + 'Z' if self.hour else None,
+            'samples': self.samples,
+            'loss_avg': self.loss_avg,
+            'rtt_p95': self.rtt_p95,
+            'jitter_avg': self.jitter_avg,
+        }
+
+
+class BnqoJob(db.Model):
+    """Typed, signed remote job for one agent (contract §2.3, RFP §12)."""
+    __tablename__ = 'bnqo_jobs'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    job_id = db.Column(db.String(40), unique=True, nullable=False)
+    agent_id = db.Column(db.Integer, db.ForeignKey('bnqo_agents.id'), nullable=False, index=True)
+    type = db.Column(db.String(32), nullable=False)
+    params_json = db.Column(db.Text, nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    config_version = db.Column(db.Integer, default=0)
+    status = db.Column(db.String(16), default='pending')                 # pending / acked / failed
+    error_class = db.Column(db.String(64), nullable=True)
+    result_received_at = db.Column(db.DateTime, nullable=True)
+
+    def params(self):
+        try:
+            return json.loads(self.params_json) if self.params_json else {}
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'job_id': self.job_id,
+            'agent_id': self.agent_id,
+            'type': self.type,
+            'params': self.params(),
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'expires_at': self.expires_at.isoformat() + 'Z' if self.expires_at else None,
+            'config_version': self.config_version or 0,
+            'status': self.status or 'pending',
+            'error_class': self.error_class,
+            'result_received_at': self.result_received_at.isoformat() + 'Z' if self.result_received_at else None,
+        }
