@@ -267,8 +267,8 @@ def build_subscription_configs(
     inbound — otherwise client apps load fewer inbounds than the panel does.
 
     Strategy (most authoritative first; each falls through on failure):
-      1) Inbounds already fetched live for this HTTP request.
-      2) v3 API GET /panel/api/clients/subLinks/{subId}.
+      1) v3 API GET /panel/api/clients/subLinks/{subId}.
+      2) Inbounds already fetched live for this HTTP request.
       3) A fresh fetch_inbounds when this helper is used outside the route.
       4) Last resort: single (fallback_client, fallback_inbound) link.
     """
@@ -291,14 +291,6 @@ def build_subscription_configs(
                         links.append(link)
         return links
 
-    # The route passes the exact inbound response it just fetched. Prefer it
-    # over every other endpoint so rotated credentials cannot be replaced by a
-    # lagging subscription payload.
-    if live_inbounds is not None:
-        links = _links_from_inbounds(live_inbounds)
-        if links:
-            return links
-
     session_obj = live_session
     if session_obj is None:
         try:
@@ -306,7 +298,8 @@ def build_subscription_configs(
         except Exception:
             session_obj = None
 
-    # 2) v3 endpoint — covers all attached inbounds at once.
+    # 1) The v3 main-panel API is live like fetch_inbounds, but unlike the
+    # generic generator it preserves each inbound's public host and remark.
     if session_obj and sub_id and server_is_v3(server, session_obj):
         try:
             ok, j, _e = _v3_get(server, session_obj, f"/panel/api/clients/subLinks/{quote(sub_id)}")
@@ -325,6 +318,13 @@ def build_subscription_configs(
                     return links
         except Exception as e:
             app.logger.debug(f"v3 subLinks fetch failed for sub {sub_id}: {e}")
+
+    # 2) The route passes the exact inbound response it just fetched. This is
+    # the live fallback for legacy panels and v3 installations without subLinks.
+    if live_inbounds is not None:
+        links = _links_from_inbounds(live_inbounds)
+        if links:
+            return links
 
     # 3) Aggregate generate_client_link across a fresh inbound response.
     if session_obj:

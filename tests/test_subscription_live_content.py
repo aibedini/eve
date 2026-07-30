@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from urllib.parse import quote
 from unittest import mock
 
 
@@ -21,6 +22,15 @@ SUB_ID = 'live-subscription-token'
 STALE_PASSWORD = 'stale-shadow-password'
 LIVE_PASSWORD = 'current-shadow-password'
 METHOD = 'chacha20-ietf-poly1305'
+
+
+def _authoritative_link():
+    userinfo = base64.b64encode(f'{METHOD}:{LIVE_PASSWORD}'.encode()).decode()
+    remark = quote('navid-🇩🇪 Germany')
+    return (
+        f'ss://{userinfo}@edge-germany.example:15001'
+        f'?security=none&type=tcp#{remark}'
+    )
 
 
 def _shadowsocks_inbound(password):
@@ -96,7 +106,7 @@ class LiveSubscriptionContentTests(unittest.TestCase):
             username='u',
             password='p',
             sub_path='/sub/',
-            panel_type='legacy',
+            panel_type='v3',
         )
         db.session.add_all([self.admin, self.server])
         db.session.commit()
@@ -135,16 +145,20 @@ class LiveSubscriptionContentTests(unittest.TestCase):
                 'panel.routes.subscription_pages.persist_detected_panel_type',
             ),
             mock.patch(
+                'panel.services.subscription.server_is_v3',
+                return_value=True,
+            ),
+            mock.patch(
                 'panel.services.subscription._v3_get',
                 return_value=(True, {
-                    'obj': [f'ss://stale@panel.example:8388#{STALE_PASSWORD}'],
+                    'obj': [_authoritative_link()],
                 }, None),
             ),
         )
 
     def test_public_subscription_uses_live_shadowsocks_password(self):
         patches = self._live_patches(([_shadowsocks_inbound(LIVE_PASSWORD)], None, 'legacy'))
-        with patches[0], patches[1] as fetch, patches[2], patches[3] as v3_get:
+        with patches[0], patches[1] as fetch, patches[2], patches[3], patches[4] as v3_get:
             response = self.client.get(
                 f'/s/{self.server.id}/{SUB_ID}',
                 headers={'User-Agent': 'v2rayng', 'Accept': '*/*'},
@@ -157,13 +171,15 @@ class LiveSubscriptionContentTests(unittest.TestCase):
             f'{METHOD}:{LIVE_PASSWORD}',
         )
         self.assertNotIn(STALE_PASSWORD, payload)
+        self.assertIn('edge-germany.example:15001', payload)
+        self.assertIn(quote('navid-🇩🇪 Germany'), payload)
         self.assertEqual(fetch.call_count, 1)
-        v3_get.assert_not_called()
+        v3_get.assert_called_once()
         self.assertIn('no-store', response.headers.get('Cache-Control', ''))
 
     def test_live_fetch_failure_never_falls_back_to_stale_content(self):
         patches = self._live_patches(([], 'panel unavailable', 'legacy'))
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
             response = self.client.get(
                 f'/s/{self.server.id}/{SUB_ID}',
                 headers={'User-Agent': 'v2rayng', 'Accept': '*/*'},
@@ -174,7 +190,7 @@ class LiveSubscriptionContentTests(unittest.TestCase):
 
     def test_direct_link_api_is_built_from_the_same_live_read(self):
         patches = self._live_patches(([_shadowsocks_inbound(LIVE_PASSWORD)], None, 'legacy'))
-        with patches[0], patches[1] as fetch, patches[2], patches[3]:
+        with patches[0], patches[1] as fetch, patches[2], patches[3], patches[4] as v3_get:
             response = self.client.get(
                 f'/api/client/direct-link/{self.server.id}/{SUB_ID}',
             )
@@ -186,4 +202,6 @@ class LiveSubscriptionContentTests(unittest.TestCase):
             _decode_ss_credentials(payload['configs'][0]),
             f'{METHOD}:{LIVE_PASSWORD}',
         )
+        self.assertEqual(payload['configs'][0], _authoritative_link())
         self.assertEqual(fetch.call_count, 1)
+        v3_get.assert_called_once()

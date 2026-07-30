@@ -227,7 +227,15 @@ def _v3_get(server, session_obj, path):
     base, webpath = extract_base_and_webpath(server.host)
     url = f"{base}{webpath}{path}"
     try:
-        resp = session_obj.get(url, verify=False, timeout=(3, 20))
+        resp = session_obj.get(
+            url,
+            headers={
+                'Cache-Control': 'no-store, no-cache, max-age=0',
+                'Pragma': 'no-cache',
+            },
+            verify=False,
+            timeout=(3, 20),
+        )
     except Exception as e:
         return False, None, str(e)
     j, err = _safe_response_json(resp)
