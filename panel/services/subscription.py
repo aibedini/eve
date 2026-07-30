@@ -249,7 +249,15 @@ def generate_client_link(client, inbound, server_host):
         app.logger.debug(f"Link gen failed: {exc}")
         return None
 
-def build_subscription_configs(server, sub_id, fallback_client=None, fallback_inbound=None):
+def build_subscription_configs(
+    server,
+    sub_id,
+    fallback_client=None,
+    fallback_inbound=None,
+    *,
+    live_session=None,
+    live_inbounds=None,
+):
     """Return ALL protocol config links for a subscription id.
 
     On 3x-ui v3 a single subId is attached to MULTIPLE inbounds; the panel's
@@ -259,23 +267,46 @@ def build_subscription_configs(server, sub_id, fallback_client=None, fallback_in
     inbound — otherwise client apps load fewer inbounds than the panel does.
 
     Strategy (most authoritative first; each falls through on failure):
-      1) v3 API  GET /panel/api/clients/subLinks/{subId} — full link set, via
-         the main panel API port (reliable; independent of the sub server).
-      2) Live fetch_inbounds → generate_client_link for EVERY inbound whose
-         clients contain this subId (or a matching uuid when subId is empty).
-      3) Last resort: single (fallback_client, fallback_inbound) link.
+      1) Inbounds already fetched live for this HTTP request.
+      2) v3 API GET /panel/api/clients/subLinks/{subId}.
+      3) A fresh fetch_inbounds when this helper is used outside the route.
+      4) Last resort: single (fallback_client, fallback_inbound) link.
     """
     from app import app, _json_field  # deferred: live in app.py (circular at module level)
 
     sub_id = str(sub_id or '').strip()
 
-    session_obj = None
-    try:
-        session_obj, _login_err = get_xui_session(server)
-    except Exception:
-        session_obj = None
+    def _links_from_inbounds(inbounds):
+        links = []
+        seen = set()
+        for inb in inbounds or []:
+            settings = _json_field(inb.get('settings'), {})
+            for cli in settings.get('clients', []):
+                c_sub = str(cli.get('subId') or '').strip()
+                c_uuid = str(cli.get('id') or '').strip()
+                if sub_id and (sub_id == c_sub or (not c_sub and sub_id == c_uuid)):
+                    link = generate_client_link(cli, inb, server.host)
+                    if link and link not in seen:
+                        seen.add(link)
+                        links.append(link)
+        return links
 
-    # 1) v3 authoritative endpoint — covers all attached inbounds at once.
+    # The route passes the exact inbound response it just fetched. Prefer it
+    # over every other endpoint so rotated credentials cannot be replaced by a
+    # lagging subscription payload.
+    if live_inbounds is not None:
+        links = _links_from_inbounds(live_inbounds)
+        if links:
+            return links
+
+    session_obj = live_session
+    if session_obj is None:
+        try:
+            session_obj, _login_err = get_xui_session(server)
+        except Exception:
+            session_obj = None
+
+    # 2) v3 endpoint — covers all attached inbounds at once.
     if session_obj and sub_id and server_is_v3(server, session_obj):
         try:
             ok, j, _e = _v3_get(server, session_obj, f"/panel/api/clients/subLinks/{quote(sub_id)}")
@@ -295,29 +326,23 @@ def build_subscription_configs(server, sub_id, fallback_client=None, fallback_in
         except Exception as e:
             app.logger.debug(f"v3 subLinks fetch failed for sub {sub_id}: {e}")
 
-    # 2) Aggregate generate_client_link across every inbound holding this subId.
+    # 3) Aggregate generate_client_link across a fresh inbound response.
     if session_obj:
         try:
-            inbounds, ferr, _t = fetch_inbounds(session_obj, server.host, server.panel_type)
+            if live_inbounds is None:
+                inbounds, ferr, _t = fetch_inbounds(
+                    session_obj, server.host, server.panel_type,
+                )
+            else:
+                inbounds, ferr = live_inbounds, None
             if not ferr and inbounds:
-                links = []
-                seen = set()
-                for inb in inbounds:
-                    settings = _json_field(inb.get('settings'), {})
-                    for cli in settings.get('clients', []):
-                        c_sub = str(cli.get('subId') or '').strip()
-                        c_uuid = str(cli.get('id') or '').strip()
-                        if sub_id and (sub_id == c_sub or (not c_sub and sub_id == c_uuid)):
-                            link = generate_client_link(cli, inb, server.host)
-                            if link and link not in seen:
-                                seen.add(link)
-                                links.append(link)
+                links = _links_from_inbounds(inbounds)
                 if links:
                     return links
         except Exception as e:
             app.logger.debug(f"Multi-inbound link aggregation failed for sub {sub_id}: {e}")
 
-    # 3) Last resort: the single inbound we already matched in the route.
+    # 4) Last resort: the single inbound we already matched in the route.
     if fallback_client and fallback_inbound:
         link = generate_client_link(fallback_client, fallback_inbound, server.host)
         if link:
@@ -334,4 +359,3 @@ def find_client(inbounds, inbound_id, email):
             if client.get('email') == email:
                 return client, inbound
     return None, None
-
