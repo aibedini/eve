@@ -249,6 +249,59 @@ def generate_client_link(client, inbound, server_host):
         app.logger.debug(f"Link gen failed: {exc}")
         return None
 
+
+def fetch_authoritative_subscription_configs(
+    server,
+    sub_id,
+    *,
+    session_obj=None,
+    timeout=(3, 8),
+):
+    """Fetch exact live links from the v3 main-panel API.
+
+    This endpoint preserves public hosts, remarks and protocol-specific query
+    fields. It is intentionally independent of the separately hosted /sub
+    endpoint, whose response can lag behind credential changes.
+    """
+    normalized_sub_id = str(sub_id or '').strip()
+    if not normalized_sub_id:
+        return []
+
+    if session_obj is None:
+        try:
+            session_obj, login_error = get_xui_session(server)
+        except Exception:
+            return []
+        if login_error or not session_obj:
+            return []
+
+    try:
+        ok, payload, _error = _v3_get(
+            server,
+            session_obj,
+            f"/panel/api/clients/subLinks/{quote(normalized_sub_id)}",
+            timeout=timeout,
+        )
+    except Exception:
+        return []
+    if not ok or not isinstance(payload, dict):
+        return []
+
+    obj = payload.get('obj')
+    links = []
+    if isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, str):
+                link = item.strip()
+            elif isinstance(item, dict):
+                link = str(item.get('link') or item.get('url') or '').strip()
+            else:
+                link = ''
+            if '://' in link:
+                links.append(link)
+    return links
+
+
 def build_subscription_configs(
     server,
     sub_id,
@@ -301,23 +354,13 @@ def build_subscription_configs(
     # 1) The v3 main-panel API is live like fetch_inbounds, but unlike the
     # generic generator it preserves each inbound's public host and remark.
     if session_obj and sub_id and server_is_v3(server, session_obj):
-        try:
-            ok, j, _e = _v3_get(server, session_obj, f"/panel/api/clients/subLinks/{quote(sub_id)}")
-            if ok and isinstance(j, dict):
-                obj = j.get('obj')
-                links = []
-                if isinstance(obj, list):
-                    for it in obj:
-                        if isinstance(it, str) and '://' in it:
-                            links.append(it.strip())
-                        elif isinstance(it, dict):
-                            u = (it.get('link') or it.get('url') or '').strip()
-                            if '://' in u:
-                                links.append(u)
-                if links:
-                    return links
-        except Exception as e:
-            app.logger.debug(f"v3 subLinks fetch failed for sub {sub_id}: {e}")
+        links = fetch_authoritative_subscription_configs(
+            server,
+            sub_id,
+            session_obj=session_obj,
+        )
+        if links:
+            return links
 
     # 2) The route passes the exact inbound response it just fetched. This is
     # the live fallback for legacy panels and v3 installations without subLinks.

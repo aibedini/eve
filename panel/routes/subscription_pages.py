@@ -22,7 +22,10 @@ from panel.services.backup import _parse_int
 from panel.services.billing import (
     _build_sub_page_packages, _build_subscription_package_recommendation,
 )
-from panel.services.subscription import build_subscription_configs
+from panel.services.subscription import (
+    build_subscription_configs,
+    fetch_authoritative_subscription_configs,
+)
 
 bp = Blueprint('subscription_pages', __name__)
 
@@ -379,6 +382,34 @@ def client_subscription(server_id, sub_id):
     if any(c in normalized_sub_id for c in ('/', '\\', '?', '#', '@', ':', '..')):
         app.logger.warning(f"Potential SSRF/Traversal attempt with sub_id: {normalized_sub_id}")
         return "Invalid subscription ID", 400
+
+    # v2rayNG has a hard 15-second HTTP timeout and only needs a Base64 list of
+    # parseable URIs. Avoid the slower usage/status fetch and the synthetic
+    # status node for this client; one live v3 API read is authoritative.
+    request_user_agent = (request.headers.get('User-Agent') or '').lower()
+    if 'v2rayng' in request_user_agent:
+        fast_session, fast_login_error = get_xui_session(server)
+        if not fast_login_error and fast_session:
+            fast_configs = fetch_authoritative_subscription_configs(
+                server,
+                normalized_sub_id,
+                session_obj=fast_session,
+            )
+            if fast_configs:
+                fast_blob = '\n'.join(fast_configs)
+                encoded_fast_blob = base64.b64encode(
+                    fast_blob.encode('utf-8')
+                ).decode('ascii')
+                profile_title = base64.b64encode(
+                    server.name.encode('utf-8')
+                ).decode('ascii')
+                return encoded_fast_blob, 200, {
+                    'Content-Type': 'text/plain; charset=utf-8',
+                    'Profile-Title': f'base64:{profile_title}',
+                    'Profile-Update-Interval': '24',
+                    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+                    'Pragma': 'no-cache',
+                }
 
     live_session, live_inbounds, target_client, target_inbound, live_error = (
         _fetch_live_subscription_context(server, normalized_sub_id)

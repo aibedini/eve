@@ -222,7 +222,7 @@ def _v3_sanitize_email(email: str) -> str:
     return (email or '').replace(' ', '')
 
 
-def _v3_get(server, session_obj, path):
+def _v3_get(server, session_obj, path, *, timeout=(3, 20)):
     """GET a v3 /panel/api/* path. Returns (ok: bool, json|None, error|None)."""
     base, webpath = extract_base_and_webpath(server.host)
     url = f"{base}{webpath}{path}"
@@ -234,7 +234,7 @@ def _v3_get(server, session_obj, path):
                 'Pragma': 'no-cache',
             },
             verify=False,
-            timeout=(3, 20),
+            timeout=timeout,
         )
     except Exception as e:
         return False, None, str(e)

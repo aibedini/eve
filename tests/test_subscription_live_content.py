@@ -173,8 +173,12 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         self.assertNotIn(STALE_PASSWORD, payload)
         self.assertIn('edge-germany.example:15001', payload)
         self.assertIn(quote('navid-🇩🇪 Germany'), payload)
-        self.assertEqual(fetch.call_count, 1)
+        self.assertNotIn('vmess://', payload)
+        self.assertEqual(len(payload.splitlines()), 1)
+        self.assertEqual(fetch.call_count, 0)
         v3_get.assert_called_once()
+        self.assertEqual(v3_get.call_args.kwargs['timeout'], (3, 8))
+        self.assertNotIn('Subscription-Userinfo', response.headers)
         self.assertIn('no-store', response.headers.get('Cache-Control', ''))
 
     def test_live_fetch_failure_never_falls_back_to_stale_content(self):
@@ -182,7 +186,7 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             response = self.client.get(
                 f'/s/{self.server.id}/{SUB_ID}',
-                headers={'User-Agent': 'v2rayng', 'Accept': '*/*'},
+                headers={'User-Agent': 'clash', 'Accept': '*/*'},
             )
 
         self.assertEqual(response.status_code, 502)
