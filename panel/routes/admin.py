@@ -1,5 +1,6 @@
 """Admin, server, and reseller management API routes (extracted from app.py)."""
 import io
+import json
 import re
 from datetime import datetime
 
@@ -282,6 +283,135 @@ def get_servers():
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'
     return resp
+
+
+def _server_subscription_inbounds(server):
+    """Return minimal inbound metadata from the snapshot, with a live fallback."""
+    from app import GLOBAL_SERVER_DATA, fetch_inbounds, get_xui_session
+
+    rows = []
+    for inbound in GLOBAL_SERVER_DATA.get('inbounds') or []:
+        try:
+            if int(inbound.get('server_id') or 0) == int(server.id):
+                rows.append(inbound)
+        except (TypeError, ValueError):
+            continue
+
+    if not rows:
+        session_obj, login_error = get_xui_session(server)
+        if login_error or not session_obj:
+            return [], login_error or 'Panel authentication failed'
+        rows, fetch_error, _detected_type = fetch_inbounds(
+            session_obj,
+            server.host,
+            server.panel_type,
+        )
+        if fetch_error:
+            return [], fetch_error
+
+    payload = []
+    seen = set()
+    for inbound in rows or []:
+        try:
+            inbound_id = int(inbound.get('id'))
+        except (TypeError, ValueError):
+            continue
+        if inbound_id <= 0 or inbound_id in seen:
+            continue
+        seen.add(inbound_id)
+        payload.append({
+            'id': inbound_id,
+            'remark': str(inbound.get('remark') or '').strip(),
+            'protocol': str(inbound.get('protocol') or '').strip(),
+            'port': inbound.get('port'),
+            'enable': bool(inbound.get('enable', True)),
+        })
+    return payload, None
+
+
+@bp.route('/api/servers/<int:server_id>/subscription-order', methods=['GET'])
+@user_management_required
+def get_server_subscription_order(server_id):
+    from panel.services.subscription import get_subscription_inbound_order
+
+    server = Server.query.get_or_404(server_id)
+    inbounds, error = _server_subscription_inbounds(server)
+    if error:
+        return jsonify({
+            'success': False,
+            'error': f'Unable to load server inbounds: {error}',
+        }), 502
+
+    saved_order = get_subscription_inbound_order(server)
+    inbound_ids = {row['id'] for row in inbounds}
+    normalized_order = [value for value in saved_order if value in inbound_ids]
+    normalized_order.extend(
+        row['id'] for row in inbounds if row['id'] not in normalized_order
+    )
+    rank = {inbound_id: index for index, inbound_id in enumerate(normalized_order)}
+    inbounds.sort(key=lambda row: rank.get(row['id'], len(rank)))
+    return jsonify({
+        'success': True,
+        'server': {'id': server.id, 'name': server.name},
+        'inbounds': inbounds,
+        'inbound_ids': normalized_order,
+    })
+
+
+@bp.route('/api/servers/<int:server_id>/subscription-order', methods=['PUT'])
+@user_management_required
+def update_server_subscription_order(server_id):
+    server = Server.query.get_or_404(server_id)
+    data = request.get_json(silent=True) or {}
+    raw_order = data.get('inbound_ids')
+    if not isinstance(raw_order, list):
+        return jsonify({
+            'success': False,
+            'error': 'inbound_ids must be a list',
+        }), 400
+
+    requested = []
+    seen = set()
+    for value in raw_order:
+        try:
+            inbound_id = int(value)
+        except (TypeError, ValueError):
+            return jsonify({
+                'success': False,
+                'error': 'Every inbound id must be an integer',
+            }), 400
+        if inbound_id <= 0 or inbound_id in seen:
+            continue
+        seen.add(inbound_id)
+        requested.append(inbound_id)
+
+    inbounds, error = _server_subscription_inbounds(server)
+    if error:
+        return jsonify({
+            'success': False,
+            'error': f'Unable to validate server inbounds: {error}',
+        }), 502
+    known_ids = {row['id'] for row in inbounds}
+    unknown_ids = [value for value in requested if value not in known_ids]
+    if unknown_ids:
+        return jsonify({
+            'success': False,
+            'error': 'The inbound list changed; reload the sorter and try again',
+        }), 409
+
+    normalized_order = [value for value in requested if value in known_ids]
+    normalized_order.extend(
+        row['id'] for row in inbounds if row['id'] not in normalized_order
+    )
+    server.subscription_inbound_order = json.dumps(
+        normalized_order,
+        separators=(',', ':'),
+    )
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'inbound_ids': normalized_order,
+    })
 
 @bp.route('/api/servers', methods=['POST'])
 @login_required
@@ -734,4 +864,3 @@ def update_config():
             db.session.add(SystemConfig(key=key, value=str(value)))
     db.session.commit()
     return jsonify({'success': True})
-

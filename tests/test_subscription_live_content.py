@@ -91,6 +91,7 @@ class LiveSubscriptionContentTests(unittest.TestCase):
             pass
 
     def setUp(self):
+        db.session.remove()
         subscription_service.SUBSCRIPTION_PROFILE_CACHE.clear()
         Admin.query.delete()
         Server.query.delete()
@@ -260,3 +261,89 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         decoded = json.loads(base64.b64decode(result.removeprefix('vmess://')))
         self.assertEqual(decoded['ps'], 'Germany-shadow-user')
         self.assertEqual(decoded['id'], vmess['id'])
+
+    def test_subscription_sort_skips_unassigned_priority_and_keeps_user_links_ordered(self):
+        self.server.subscription_inbound_order = json.dumps([99, 7, 42])
+        db.session.commit()
+        inbounds = [
+            {'id': 42, 'server_id': self.server.id, 'protocol': 'shadowsocks', 'port': 15001, 'remark': 'Germany'},
+            {'id': 7, 'server_id': self.server.id, 'protocol': 'vless', 'port': 443, 'remark': 'Turkey'},
+            {'id': 99, 'server_id': self.server.id, 'protocol': 'trojan', 'port': 8443, 'remark': 'USA'},
+        ]
+        # This client is only present on inbounds 7 and 42. Inbound 99 has the
+        # highest configured priority but must not create a link for the user.
+        links = [
+            _authoritative_link(),
+            'vless://00000000-1111-2222-3333-444444444444@edge.example:443?type=tcp#Turkey',
+        ]
+
+        result = subscription_service.sort_subscription_configs(
+            links,
+            self.server,
+            inbounds=inbounds,
+        )
+
+        self.assertTrue(result[0].startswith('vless://'))
+        self.assertTrue(result[1].startswith('ss://'))
+        self.assertEqual(len(result), 2)
+
+    def test_server_subscription_order_api_persists_normalized_inbound_ids(self):
+        GLOBAL_SERVER_DATA['inbounds'] = [
+            {'id': 42, 'server_id': self.server.id, 'protocol': 'shadowsocks', 'port': 15001, 'remark': 'Germany', 'enable': True},
+            {'id': 7, 'server_id': self.server.id, 'protocol': 'vless', 'port': 443, 'remark': 'Turkey', 'enable': True},
+            {'id': 99, 'server_id': self.server.id, 'protocol': 'trojan', 'port': 8443, 'remark': 'USA', 'enable': False},
+        ]
+
+        response = self.client.put(
+            f'/api/servers/{self.server.id}/subscription-order',
+            json={'inbound_ids': [99, 7, 42]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['inbound_ids'], [99, 7, 42])
+
+        db.session.refresh(self.server)
+        self.assertEqual(json.loads(self.server.subscription_inbound_order), [99, 7, 42])
+
+        response = self.client.get(
+            f'/api/servers/{self.server.id}/subscription-order',
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['inbound_ids'], [99, 7, 42])
+        self.assertEqual([row['id'] for row in payload['inbounds']], [99, 7, 42])
+
+    def test_subscription_sort_uses_subid_membership_when_public_ports_differ(self):
+        self.server.subscription_inbound_order = json.dumps([7, 42])
+        db.session.commit()
+        inbounds = [
+            {
+                'id': 42,
+                'server_id': self.server.id,
+                'protocol': 'shadowsocks',
+                'port': 15001,
+                'remark': '',
+                'clients': [{'subId': SUB_ID, 'email': 'shadow-user'}],
+            },
+            {
+                'id': 7,
+                'server_id': self.server.id,
+                'protocol': 'vless',
+                'port': 443,
+                'remark': '',
+                'clients': [{'subId': SUB_ID, 'email': 'shadow-user'}],
+            },
+        ]
+        links = [
+            'ss://YWVzLTI1Ni1nY206cGFzcw==@public.example:20001#Custom-A',
+            'vless://00000000-1111-2222-3333-444444444444@public.example:2443?type=tcp#Custom-B',
+        ]
+
+        result = subscription_service.sort_subscription_configs(
+            links,
+            self.server,
+            inbounds=inbounds,
+            sub_id=SUB_ID,
+        )
+
+        self.assertTrue(result[0].startswith('vless://'))
+        self.assertTrue(result[1].startswith('ss://'))

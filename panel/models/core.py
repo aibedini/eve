@@ -81,6 +81,9 @@ class Server(db.Model):
     sub_path = db.Column(db.String(50), default='/sub/')
     json_path = db.Column(db.String(50), default='/json/')
     sub_port = db.Column(db.Integer, nullable=True)
+    # JSON array of inbound ids in the preferred subscription display order.
+    # Unknown/new inbounds are appended after the configured priorities.
+    subscription_inbound_order = db.Column(db.Text, nullable=False, default='[]')
     # Optional 3x-ui v3+ API token (Bearer). When absent, capability-detected v3
     # panels use cookie login + CSRF with the same /panel/api/clients/* endpoints.
     api_token = db.Column(db.String(255), nullable=True)
@@ -98,6 +101,7 @@ class Server(db.Model):
             'sub_path': self.sub_path,
             'json_path': self.json_path,
             'sub_port': self.sub_port,
+            'subscription_inbound_order': self.subscription_inbound_order or '[]',
             'has_api_token': bool((self.api_token or '').strip()),
             'supports_v3_clients': bool(_server_is_v3(self)),
             'created_at': self.created_at.isoformat() if self.created_at else None

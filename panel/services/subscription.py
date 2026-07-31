@@ -7,7 +7,7 @@ import base64
 import json
 import threading
 import time
-from urllib.parse import quote, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlsplit
 
 from panel.adapters.xui import (
     _v3_get,
@@ -164,6 +164,167 @@ def ensure_subscription_identity(configs, client_email):
                 link = f"{base}#{quote(remark, safe='')}"
         decorated.append(link)
     return decorated
+
+
+def get_subscription_inbound_order(server):
+    """Parse the persisted inbound-id priority list, ignoring invalid entries."""
+    raw = getattr(server, 'subscription_inbound_order', None) or '[]'
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = []
+    if not isinstance(raw, list):
+        return []
+    result = []
+    seen = set()
+    for value in raw:
+        try:
+            inbound_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if inbound_id > 0 and inbound_id not in seen:
+            seen.add(inbound_id)
+            result.append(inbound_id)
+    return result
+
+
+def ordered_subscription_inbounds(server, inbounds):
+    """Order inbound rows while keeping unconfigured/new rows stable at the end."""
+    order = get_subscription_inbound_order(server)
+    if not order:
+        return list(inbounds or [])
+    rank = {inbound_id: index for index, inbound_id in enumerate(order)}
+
+    def _key(item_with_index):
+        index, inbound = item_with_index
+        try:
+            inbound_id = int(inbound.get('id') or 0)
+        except (TypeError, ValueError):
+            inbound_id = 0
+        return rank.get(inbound_id, len(rank) + index), index
+
+    return [item for _, item in sorted(enumerate(inbounds or []), key=_key)]
+
+
+def _subscription_link_signature(link):
+    """Return protocol, port and display remark without exposing credentials."""
+    raw = str(link or '').strip()
+    if raw.startswith('vmess://'):
+        try:
+            encoded = raw[len('vmess://'):]
+            padded = encoded + ('=' * (-len(encoded) % 4))
+            obj = json.loads(base64.b64decode(padded).decode('utf-8'))
+            return 'vmess', str(obj.get('port') or ''), str(obj.get('ps') or '')
+        except Exception:
+            return 'vmess', '', ''
+
+    try:
+        parsed = urlsplit(raw)
+        protocol = (parsed.scheme or '').lower()
+        protocol = {
+            'ss': 'shadowsocks',
+            'hy2': 'hysteria2',
+            'hysteria': 'hysteria2',
+            'tg': 'mtproto',
+        }.get(protocol, protocol)
+        if protocol == 'mtproto':
+            port = (parse_qs(parsed.query).get('port') or [''])[0]
+        else:
+            try:
+                port = str(parsed.port or '')
+            except ValueError:
+                port = ''
+        return protocol, port, unquote(parsed.fragment or '').strip()
+    except Exception:
+        return '', '', ''
+
+
+def sort_subscription_configs(configs, server, *, inbounds=None, sub_id=None):
+    """Sort live configs by the server's inbound priority without caching content."""
+    links = [str(item).strip() for item in configs or [] if item]
+    order = get_subscription_inbound_order(server)
+    if len(links) < 2 or not order:
+        return links
+
+    if inbounds is None:
+        server_id = int(getattr(server, 'id', 0) or 0)
+        inbounds = []
+        for inbound in GLOBAL_SERVER_DATA.get('inbounds') or []:
+            try:
+                if int(inbound.get('server_id') or 0) == server_id:
+                    inbounds.append(inbound)
+            except (TypeError, ValueError):
+                continue
+
+    inbound_by_id = {}
+    for inbound in inbounds or []:
+        try:
+            inbound_by_id[int(inbound.get('id') or 0)] = inbound
+        except (TypeError, ValueError):
+            continue
+
+    normalized_sub_id = str(sub_id or '').strip()
+    if normalized_sub_id:
+        eligible_ids = []
+        for inbound in inbounds or []:
+            clients = inbound.get('clients')
+            if not isinstance(clients, list):
+                settings = inbound.get('settings') or {}
+                if isinstance(settings, str):
+                    try:
+                        settings = json.loads(settings)
+                    except (TypeError, ValueError):
+                        settings = {}
+                clients = settings.get('clients') if isinstance(settings, dict) else []
+            if any(
+                str(client.get('subId') or '').strip() == normalized_sub_id
+                for client in (clients or [])
+            ):
+                try:
+                    eligible_ids.append(int(inbound.get('id') or 0))
+                except (TypeError, ValueError):
+                    eligible_ids.append(0)
+        # 3x-ui emits subLinks in inbound traversal order. When the counts
+        # match, this positional association is more reliable than URI ports
+        # because public-host rules may replace the inbound's visible port.
+        if len(eligible_ids) == len(links):
+            rank = {inbound_id: index for index, inbound_id in enumerate(order)}
+            paired = list(zip(links, eligible_ids, range(len(links))))
+            paired.sort(key=lambda item: (
+                rank.get(item[1], len(rank) + item[2]),
+                item[2],
+            ))
+            return [item[0] for item in paired]
+
+    signature_rank = {}
+    remark_ranks = []
+    for rank, inbound_id in enumerate(order):
+        inbound = inbound_by_id.get(inbound_id)
+        if not inbound:
+            continue
+        protocol = str(inbound.get('protocol') or '').strip().lower()
+        port = str(inbound.get('port') or '').strip()
+        if protocol and port:
+            signature_rank.setdefault((protocol, port), rank)
+        remark = str(inbound.get('remark') or '').strip().casefold()
+        if remark:
+            remark_ranks.append((len(remark), remark, rank))
+    remark_ranks.sort(reverse=True)
+
+    def _key(item_with_index):
+        index, link = item_with_index
+        protocol, port, remark = _subscription_link_signature(link)
+        rank = signature_rank.get((protocol, port))
+        if rank is None and remark:
+            folded = remark.casefold()
+            for _length, inbound_remark, candidate_rank in remark_ranks:
+                if inbound_remark in folded:
+                    rank = candidate_rank
+                    break
+        return (rank if rank is not None else len(order) + index), index
+
+    return [link for _, link in sorted(enumerate(links), key=_key)]
 
 
 def generate_client_link(client, inbound, server_host):
@@ -483,7 +644,7 @@ def build_subscription_configs(
     def _links_from_inbounds(inbounds):
         links = []
         seen = set()
-        for inb in inbounds or []:
+        for inb in ordered_subscription_inbounds(server, inbounds):
             settings = _json_field(inb.get('settings'), {})
             for cli in settings.get('clients', []):
                 c_sub = str(cli.get('subId') or '').strip()
@@ -511,7 +672,12 @@ def build_subscription_configs(
             session_obj=session_obj,
         )
         if links:
-            return links
+            return sort_subscription_configs(
+                links,
+                server,
+                inbounds=(live_inbounds if live_inbounds is not None else None),
+                sub_id=sub_id,
+            )
 
     # 2) The route passes the exact inbound response it just fetched. This is
     # the live fallback for legacy panels and v3 installations without subLinks.

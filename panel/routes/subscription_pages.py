@@ -29,6 +29,7 @@ from panel.services.subscription import (
     fetch_authoritative_subscription_configs,
     fetch_subscription_profile_metadata,
     find_subscription_client_email,
+    sort_subscription_configs,
 )
 
 bp = Blueprint('subscription_pages', __name__)
@@ -401,6 +402,11 @@ def client_subscription(server_id, sub_id):
                 session_obj=fast_session,
             )
             if fast_configs:
+                fast_configs = sort_subscription_configs(
+                    fast_configs,
+                    server,
+                    sub_id=normalized_sub_id,
+                )
                 fast_email = find_subscription_client_email(
                     server,
                     normalized_sub_id,

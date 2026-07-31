@@ -90,6 +90,29 @@
         </div>
     </div>
 </div>
+
+<div class="modal-overlay hidden" id="subscription-order-modal">
+    <div class="modal modal-lg">
+        <div class="modal-header">
+            <div>
+                <h2>Subscription Inbound Priority</h2>
+                <p id="subscription-order-server-name" class="subscription-order-subtitle"></p>
+            </div>
+            <button class="modal-close" onclick="closeSubscriptionOrderModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="subscription-order-help">
+                Drag the inbounds or use the arrow buttons. A customer only sees
+                inbounds assigned to them, in the priority defined here.
+            </p>
+            <div id="subscription-order-list" class="subscription-order-list"></div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="closeSubscriptionOrderModal()">Cancel</button>
+                <button class="btn btn-primary" id="save-subscription-order" onclick="saveSubscriptionOrder()">Save Priority</button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -97,6 +120,8 @@
     const IS_SUPERADMIN = {{ 'true' if is_superadmin else 'false' }};
     const USER_ROLE = "{{ role }}";
     let servers = [];
+    let subscriptionOrderServerId = null;
+    let subscriptionOrderItems = [];
     
     document.addEventListener('DOMContentLoaded', loadServers);
     
@@ -148,6 +173,7 @@
             </svg>
         `;
         const BACKUP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+        const SORT_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="16" y2="6"/><line x1="4" y1="12" x2="12" y2="12"/><line x1="4" y1="18" x2="8" y2="18"/><polyline points="18 15 21 18 18 21"/><line x1="21" y1="18" x2="21" y2="5"/></svg>`;
 
         function createBadge(text, className) {
             const el = document.createElement('span');
@@ -255,6 +281,14 @@
             actions.appendChild(testBtn);
 
             if (USER_ROLE !== 'reseller') {
+                const sortBtn = document.createElement('button');
+                sortBtn.type = 'button';
+                sortBtn.className = 'action-btn';
+                sortBtn.title = 'Subscription inbound priority';
+                sortBtn.innerHTML = SORT_ICON_SVG;
+                sortBtn.addEventListener('click', () => openSubscriptionOrderModal(server));
+                actions.appendChild(sortBtn);
+
                 const backupBtn = document.createElement('button');
                 backupBtn.type = 'button';
                 backupBtn.className = 'action-btn';
@@ -295,6 +329,161 @@
         servers.forEach((server) => {
             container.appendChild(createServerCard(server));
         });
+    }
+
+    async function openSubscriptionOrderModal(server) {
+        subscriptionOrderServerId = server.id;
+        subscriptionOrderItems = [];
+        document.getElementById('subscription-order-server-name').textContent = server.name || '';
+        const list = document.getElementById('subscription-order-list');
+        list.textContent = '';
+        const loading = document.createElement('p');
+        loading.className = 'no-data';
+        loading.textContent = 'Loading inbounds...';
+        list.appendChild(loading);
+        document.getElementById('subscription-order-modal').classList.remove('hidden');
+
+        try {
+            const response = await fetch(
+                `/api/servers/${server.id}/subscription-order`,
+                { cache: 'no-store' }
+            );
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || 'Unable to load inbound priority');
+            }
+            subscriptionOrderItems = Array.isArray(result.inbounds) ? result.inbounds : [];
+            renderSubscriptionOrder();
+        } catch (error) {
+            list.textContent = '';
+            const message = document.createElement('p');
+            message.className = 'no-data';
+            message.textContent = error.message || 'Unable to load inbounds';
+            list.appendChild(message);
+            showToast(message.textContent, 'error');
+        }
+    }
+
+    function closeSubscriptionOrderModal() {
+        document.getElementById('subscription-order-modal').classList.add('hidden');
+        subscriptionOrderServerId = null;
+        subscriptionOrderItems = [];
+    }
+
+    function moveSubscriptionInbound(index, delta) {
+        const nextIndex = index + delta;
+        if (nextIndex < 0 || nextIndex >= subscriptionOrderItems.length) return;
+        const [item] = subscriptionOrderItems.splice(index, 1);
+        subscriptionOrderItems.splice(nextIndex, 0, item);
+        renderSubscriptionOrder();
+    }
+
+    function renderSubscriptionOrder() {
+        const list = document.getElementById('subscription-order-list');
+        list.textContent = '';
+        if (!subscriptionOrderItems.length) {
+            const empty = document.createElement('p');
+            empty.className = 'no-data';
+            empty.textContent = 'No inbounds found on this server.';
+            list.appendChild(empty);
+            return;
+        }
+
+        subscriptionOrderItems.forEach((inbound, index) => {
+            const row = document.createElement('div');
+            row.className = 'subscription-order-item';
+            row.draggable = true;
+            row.dataset.inboundId = String(inbound.id);
+
+            const priority = document.createElement('span');
+            priority.className = 'subscription-order-priority';
+            priority.textContent = String(index + 1);
+
+            const handle = document.createElement('span');
+            handle.className = 'subscription-order-handle';
+            handle.textContent = '⋮⋮';
+            handle.title = 'Drag to reorder';
+
+            const info = document.createElement('div');
+            info.className = 'subscription-order-info';
+            const title = document.createElement('strong');
+            title.textContent = inbound.remark || `Inbound #${inbound.id}`;
+            const meta = document.createElement('span');
+            meta.textContent = `${inbound.protocol || 'unknown'} · port ${inbound.port || '-'} · ID ${inbound.id}`;
+            info.appendChild(title);
+            info.appendChild(meta);
+
+            const controls = document.createElement('div');
+            controls.className = 'subscription-order-controls';
+            const up = document.createElement('button');
+            up.type = 'button';
+            up.className = 'action-btn';
+            up.title = 'Move up';
+            up.textContent = '↑';
+            up.disabled = index === 0;
+            up.addEventListener('click', () => moveSubscriptionInbound(index, -1));
+            const down = document.createElement('button');
+            down.type = 'button';
+            down.className = 'action-btn';
+            down.title = 'Move down';
+            down.textContent = '↓';
+            down.disabled = index === subscriptionOrderItems.length - 1;
+            down.addEventListener('click', () => moveSubscriptionInbound(index, 1));
+            controls.appendChild(up);
+            controls.appendChild(down);
+
+            row.appendChild(priority);
+            row.appendChild(handle);
+            row.appendChild(info);
+            row.appendChild(controls);
+
+            row.addEventListener('dragstart', (event) => {
+                row.classList.add('dragging');
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', String(inbound.id));
+            });
+            row.addEventListener('dragend', () => row.classList.remove('dragging'));
+            row.addEventListener('dragover', (event) => event.preventDefault());
+            row.addEventListener('drop', (event) => {
+                event.preventDefault();
+                const draggedId = Number(event.dataTransfer.getData('text/plain'));
+                const fromIndex = subscriptionOrderItems.findIndex(item => item.id === draggedId);
+                const targetIndex = subscriptionOrderItems.findIndex(item => item.id === inbound.id);
+                if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return;
+                const [dragged] = subscriptionOrderItems.splice(fromIndex, 1);
+                subscriptionOrderItems.splice(targetIndex, 0, dragged);
+                renderSubscriptionOrder();
+            });
+            list.appendChild(row);
+        });
+    }
+
+    async function saveSubscriptionOrder() {
+        if (!subscriptionOrderServerId) return;
+        const button = document.getElementById('save-subscription-order');
+        button.disabled = true;
+        try {
+            const response = await fetch(
+                `/api/servers/${subscriptionOrderServerId}/subscription-order`,
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        inbound_ids: subscriptionOrderItems.map(item => item.id)
+                    })
+                }
+            );
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || 'Unable to save inbound priority');
+            }
+            showToast('Subscription priority saved', 'success');
+            closeSubscriptionOrderModal();
+        } catch (error) {
+            showToast(error.message || 'Unable to save inbound priority', 'error');
+        } finally {
+            button.disabled = false;
+        }
     }
     
     function openAddServerModal() {
