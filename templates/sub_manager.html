@@ -791,6 +791,43 @@
     }
     .btn-browse:hover { border-color: var(--primary); color: var(--primary); background: rgba(99,102,241,.08); }
 
+    .app-action-editor {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+    .app-action-row {
+        display: grid;
+        grid-template-columns: minmax(140px, .7fr) minmax(240px, 1.6fr) 130px auto;
+        gap: 8px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        background: rgba(255,255,255,.025);
+    }
+    .app-action-row .link-input-row { min-width: 0; }
+    .app-action-controls { display: flex; gap: 5px; }
+    .app-action-control {
+        width: 34px;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--text-secondary);
+        cursor: pointer;
+    }
+    .app-action-control:hover { color: var(--primary); border-color: var(--primary); }
+    .app-action-control.danger:hover { color: #ef4444; border-color: #ef4444; }
+    @media (max-width: 900px) {
+        .app-action-row { grid-template-columns: 1fr; }
+        .app-action-controls { justify-content: flex-end; }
+    }
+
     /* ── File Manager ── */
     .fm-filter {
         padding: 4px 14px;
@@ -996,31 +1033,14 @@
                 </div>
             </div>
 
-            <h4 style="color: #fbbf24; margin-bottom: 10px;">Links</h4>
-            <div class="form-group">
-                <label>Direct Download Link</label>
-                <div class="link-input-row">
-                    <input type="text" id="edit-download" class="form-input">
-                    <button type="button" class="btn-browse" onclick="openFilePicker('edit-download', ['android','windows','macos','linux','archive'])">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        Browse
-                    </button>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+                <div>
+                    <h4 style="color:#fbbf24;margin:0 0 3px;">Action Buttons</h4>
+                    <small style="color:var(--text-secondary);">Add any number of titled links. Their order here is their order on the subscription page.</small>
                 </div>
+                <button type="button" class="btn btn-secondary" onclick="addAppActionButton()">+ Add Button</button>
             </div>
-            <div class="form-group">
-                <label>Store Link (Google Play / App Store)</label>
-                <input type="text" id="edit-store" class="form-input" placeholder="https://play.google.com/...">
-            </div>
-            <div class="form-group">
-                <label>Video Tutorial Link</label>
-                <div class="link-input-row">
-                    <input type="text" id="edit-video" class="form-input">
-                    <button type="button" class="btn-browse" onclick="openFilePicker('edit-video', ['video'])">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        Browse
-                    </button>
-                </div>
-            </div>
+            <div id="edit-action-buttons" class="app-action-editor"></div>
             <div class="form-group">
                 <label>App Icon URL</label>
                 <div class="link-input-row">
@@ -1526,6 +1546,82 @@
         document.getElementById('edit-app-modal').classList.add('hidden');
     }
 
+    const APP_ACTION_PALETTES = [
+        ['primary', 'Theme / Indigo'],
+        ['blue', 'Blue'],
+        ['green', 'Green'],
+        ['cyan', 'Cyan'],
+        ['amber', 'Amber'],
+        ['red', 'Red'],
+        ['purple', 'Purple'],
+        ['slate', 'Slate']
+    ];
+    let _appActionSequence = 0;
+
+    function addAppActionButton(button = {}) {
+        const container = document.getElementById('edit-action-buttons');
+        const row = document.createElement('div');
+        const inputId = `edit-action-url-${++_appActionSequence}`;
+        row.className = 'app-action-row';
+        row.innerHTML = `
+            <input type="text" class="form-input app-action-title" maxlength="100" placeholder="Button title (e.g. v2rayNG ARM64)">
+            <div class="link-input-row">
+                <input type="text" id="${inputId}" class="form-input app-action-url" placeholder="https://... or select an uploaded file">
+                <button type="button" class="btn-browse" title="Browse uploaded files">Browse</button>
+            </div>
+            <select class="form-input app-action-palette" aria-label="Button color"></select>
+            <div class="app-action-controls">
+                <button type="button" class="app-action-control app-action-up" title="Move up">↑</button>
+                <button type="button" class="app-action-control app-action-down" title="Move down">↓</button>
+                <button type="button" class="app-action-control danger app-action-remove" title="Remove">×</button>
+            </div>`;
+
+        const palette = APP_ACTION_PALETTES.some(item => item[0] === button.palette)
+            ? button.palette : 'primary';
+        const paletteSelect = row.querySelector('.app-action-palette');
+        APP_ACTION_PALETTES.forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            paletteSelect.appendChild(option);
+        });
+        row.querySelector('.app-action-title').value = button.title || '';
+        row.querySelector('.app-action-url').value = button.url || '';
+        paletteSelect.value = palette;
+        row.querySelector('.btn-browse').addEventListener('click', () => openFilePicker(inputId));
+        row.querySelector('.app-action-up').addEventListener('click', () => {
+            if (row.previousElementSibling) container.insertBefore(row, row.previousElementSibling);
+        });
+        row.querySelector('.app-action-down').addEventListener('click', () => {
+            if (row.nextElementSibling) container.insertBefore(row.nextElementSibling, row);
+        });
+        row.querySelector('.app-action-remove').addEventListener('click', () => row.remove());
+        container.appendChild(row);
+    }
+
+    function setAppActionButtons(buttons) {
+        document.getElementById('edit-action-buttons').innerHTML = '';
+        const items = Array.isArray(buttons) ? buttons : [];
+        items.forEach(button => addAppActionButton(button));
+        if (!items.length) addAppActionButton();
+    }
+
+    function collectAppActionButtons() {
+        const buttons = [];
+        document.querySelectorAll('#edit-action-buttons .app-action-row').forEach((row, index) => {
+            const title = row.querySelector('.app-action-title').value.trim();
+            const url = row.querySelector('.app-action-url').value.trim();
+            if (!title && !url) return;
+            if (!title || !url) throw new Error(`Button ${index + 1} needs both a title and a URL`);
+            buttons.push({
+                title,
+                url,
+                palette: row.querySelector('.app-action-palette').value
+            });
+        });
+        return buttons;
+    }
+
     function openAddModal() {
         document.getElementById('edit-app-id').value = '';
         document.getElementById('modal-title').textContent = 'Add New App';
@@ -1537,9 +1633,7 @@
         document.getElementById('edit-desc-fa').value = '';
         document.getElementById('edit-title-en').value = '';
         document.getElementById('edit-desc-en').value = '';
-        document.getElementById('edit-download').value = '';
-        document.getElementById('edit-store').value = '';
-        document.getElementById('edit-video').value = '';
+        setAppActionButtons([]);
         document.getElementById('edit-icon-url').value = '';
         document.getElementById('edit-recommended').checked = false;
 
@@ -1558,9 +1652,7 @@
         document.getElementById('edit-desc-fa').value = app.description_fa || '';
         document.getElementById('edit-title-en').value = app.title_en || '';
         document.getElementById('edit-desc-en').value = app.description_en || '';
-        document.getElementById('edit-download').value = app.download_link || '';
-        document.getElementById('edit-store').value = app.store_link || '';
-        document.getElementById('edit-video').value = app.tutorial_link || '';
+        setAppActionButtons(app.action_buttons || []);
         document.getElementById('edit-icon-url').value = app.icon_url || '';
         document.getElementById('edit-recommended').checked = app.is_recommended || false;
 
@@ -1569,6 +1661,13 @@
 
     async function saveApp() {
         const id = document.getElementById('edit-app-id').value;
+        let actionButtons;
+        try {
+            actionButtons = collectAppActionButtons();
+        } catch (error) {
+            showToast(error.message, 'error');
+            return;
+        }
         const data = {
             os_type: document.getElementById('edit-os-type').value,
             name: document.getElementById('edit-app-name').value,
@@ -1577,9 +1676,7 @@
             description_fa: document.getElementById('edit-desc-fa').value,
             title_en: document.getElementById('edit-title-en').value,
             description_en: document.getElementById('edit-desc-en').value,
-            download_link: document.getElementById('edit-download').value,
-            store_link: document.getElementById('edit-store').value,
-            tutorial_link: document.getElementById('edit-video').value,
+            action_buttons: actionButtons,
             icon_url: document.getElementById('edit-icon-url').value,
             is_recommended: document.getElementById('edit-recommended').checked
         };

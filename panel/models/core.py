@@ -121,11 +121,48 @@ class SubAppConfig(db.Model):
     download_link = db.Column(db.String(500))
     store_link = db.Column(db.String(500))
     tutorial_link = db.Column(db.String(500))
+    action_buttons = db.Column(db.Text, nullable=True)
     icon_url = db.Column(db.String(500))
     is_recommended = db.Column(db.Boolean, default=False)
     display_order = db.Column(db.Integer, default=0)
 
     def to_dict(self):
+        buttons = None
+        if self.action_buttons is not None:
+            try:
+                parsed_buttons = json.loads(self.action_buttons)
+                if isinstance(parsed_buttons, list):
+                    buttons = parsed_buttons
+            except (TypeError, ValueError, json.JSONDecodeError):
+                buttons = None
+
+        # Existing installations keep their three legacy actions until the app
+        # is saved once with the new button editor.  ``[]`` intentionally means
+        # that the administrator wants no actions for this app.
+        if buttons is None:
+            buttons = []
+            if self.download_link:
+                buttons.append({
+                    'title': 'Download',
+                    'url': self.download_link,
+                    'palette': 'primary',
+                    'label_key': 'download',
+                })
+            if self.store_link:
+                buttons.append({
+                    'title': 'Store',
+                    'url': self.store_link,
+                    'palette': 'green',
+                    'label_key': 'store',
+                })
+            if self.tutorial_link:
+                buttons.append({
+                    'title': 'Tutorial',
+                    'url': self.tutorial_link,
+                    'palette': 'purple',
+                    'label_key': 'tutorial',
+                })
+
         return {
             'id': self.id,
             'app_code': self.app_code,
@@ -139,6 +176,7 @@ class SubAppConfig(db.Model):
             'download_link': self.download_link,
             'store_link': self.store_link,
             'tutorial_link': self.tutorial_link,
+            'action_buttons': buttons,
             'icon_url': self.icon_url,
             'is_recommended': self.is_recommended or False,
             'display_order': self.display_order or 0,

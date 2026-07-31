@@ -1,6 +1,7 @@
 """Sub-apps, FAQs, announcements, and online-chat scripts API routes (extracted from app.py)."""
 import json
 import uuid
+from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request, session
 
@@ -12,6 +13,50 @@ from panel.routes.common import user_management_required
 
 
 bp = Blueprint('content', __name__)
+
+
+SUB_APP_BUTTON_PALETTES = {
+    'primary', 'blue', 'green', 'cyan', 'amber', 'red', 'purple', 'slate',
+}
+
+
+def _is_safe_sub_app_url(value):
+    """Allow web URLs and panel-hosted files, never executable URL schemes."""
+    url = str(value or '').strip()
+    if not url or any(ord(char) < 32 for char in url):
+        return False
+    if url.startswith('/'):
+        return not url.startswith('//') and '\\' not in url
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in {'http', 'https'} and bool(parsed.netloc)
+
+
+def _normalize_sub_app_buttons(raw_buttons):
+    if raw_buttons is None:
+        return None
+    if not isinstance(raw_buttons, list):
+        raise ValueError('Action buttons must be a list')
+
+    normalized = []
+    for index, raw_button in enumerate(raw_buttons, start=1):
+        if not isinstance(raw_button, dict):
+            raise ValueError(f'Button {index} is invalid')
+        title = str(raw_button.get('title') or '').strip()
+        url = str(raw_button.get('url') or '').strip()
+        palette = str(raw_button.get('palette') or 'primary').strip().lower()
+        if not title:
+            raise ValueError(f'Button {index} title is required')
+        if len(title) > 100:
+            raise ValueError(f'Button {index} title is too long')
+        if len(url) > 2000 or not _is_safe_sub_app_url(url):
+            raise ValueError(f'Button {index} URL must be a valid HTTP(S) or panel file URL')
+        if palette not in SUB_APP_BUTTON_PALETTES:
+            raise ValueError(f'Button {index} palette is invalid')
+        normalized.append({'title': title, 'url': url, 'palette': palette})
+    return normalized
 
 
 # Allowed HTML tags and attributes for FAQ content (XSS Prevention)
@@ -63,6 +108,10 @@ def create_sub_app():
     # Sanitize descriptions to prevent XSS
     desc_fa = sanitize_html(data.get('description_fa', ''))
     desc_en = sanitize_html(data.get('description_en', ''))
+    try:
+        action_buttons = _normalize_sub_app_buttons(data.get('action_buttons'))
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
 
     new_app = SubAppConfig(
         app_code=app_code,
@@ -76,6 +125,8 @@ def create_sub_app():
         download_link=data.get('download_link'),
         store_link=data.get('store_link'),
         tutorial_link=data.get('tutorial_link'),
+        action_buttons=(json.dumps(action_buttons, ensure_ascii=False)
+                        if action_buttons is not None else None),
         icon_url=data.get('icon_url'),
         is_recommended=data.get('is_recommended', False)
     )
@@ -122,6 +173,15 @@ def update_sub_app(app_id):
     if 'download_link' in data: app_config.download_link = data['download_link']
     if 'store_link' in data: app_config.store_link = data['store_link']
     if 'tutorial_link' in data: app_config.tutorial_link = data['tutorial_link']
+    if 'action_buttons' in data:
+        try:
+            action_buttons = _normalize_sub_app_buttons(data['action_buttons'])
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        app_config.action_buttons = (
+            json.dumps(action_buttons, ensure_ascii=False)
+            if action_buttons is not None else None
+        )
     if 'icon_url' in data: app_config.icon_url = data['icon_url']
     if 'is_recommended' in data: app_config.is_recommended = data['is_recommended']
     if 'display_order' in data:
