@@ -16,6 +16,7 @@ os.environ['EVE_SKIP_IMPORT_MIGRATIONS'] = '1'
 
 import app as app_module  # noqa: E402
 from app import Admin, GLOBAL_SERVER_DATA, Server, app, db  # noqa: E402
+from panel.services import subscription as subscription_service  # noqa: E402
 
 
 SUB_ID = 'live-subscription-token'
@@ -90,6 +91,7 @@ class LiveSubscriptionContentTests(unittest.TestCase):
             pass
 
     def setUp(self):
+        subscription_service.SUBSCRIPTION_PROFILE_CACHE.clear()
         Admin.query.delete()
         Server.query.delete()
         db.session.commit()
@@ -206,6 +208,55 @@ class LiveSubscriptionContentTests(unittest.TestCase):
             _decode_ss_credentials(payload['configs'][0]),
             f'{METHOD}:{LIVE_PASSWORD}',
         )
-        self.assertEqual(payload['configs'][0], _authoritative_link())
+        self.assertTrue(payload['configs'][0].endswith('-shadow-user'))
         self.assertEqual(fetch.call_count, 1)
         v3_get.assert_called_once()
+
+    def test_profile_title_combines_panel_title_and_eve_server_name(self):
+        patches = self._live_patches(([_shadowsocks_inbound(LIVE_PASSWORD)], None, 'legacy'))
+        settings_payload = {
+            'success': True,
+            'obj': {'subTitle': 'VPN Mahna', 'subUpdates': 6},
+        }
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            mock.patch(
+                'panel.services.subscription._v3_post',
+                return_value=(True, settings_payload, None),
+            ),
+        ):
+            response = self.client.get(
+                f'/s/{self.server.id}/{SUB_ID}',
+                headers={'User-Agent': 'v2rayNG/1.10.27', 'Accept': '*/*'},
+            )
+
+        encoded_title = response.headers['Profile-Title'].removeprefix('base64:')
+        title = base64.b64decode(encoded_title).decode('utf-8')
+        self.assertEqual(title, 'VPN Mahna\nLive Shadowsocks')
+        self.assertEqual(response.headers['Profile-Update-Interval'], '6')
+        self.assertIn('no-store', response.headers['Cache-Control'])
+
+    def test_vmess_identity_is_added_inside_ps_without_changing_credentials(self):
+        vmess = {
+            'v': '2',
+            'ps': 'Germany',
+            'add': 'edge.example',
+            'port': '443',
+            'id': '00000000-1111-2222-3333-444444444444',
+            'net': 'tcp',
+        }
+        link = 'vmess://' + base64.b64encode(
+            json.dumps(vmess).encode('utf-8')
+        ).decode('ascii')
+
+        result = subscription_service.ensure_subscription_identity(
+            [link],
+            'shadow-user',
+        )[0]
+        decoded = json.loads(base64.b64decode(result.removeprefix('vmess://')))
+        self.assertEqual(decoded['ps'], 'Germany-shadow-user')
+        self.assertEqual(decoded['id'], vmess['id'])

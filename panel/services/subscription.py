@@ -5,14 +5,165 @@ aggregation, and inbound client lookup.
 """
 import base64
 import json
-from urllib.parse import quote, urlencode, urlparse
+import threading
+import time
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 from panel.adapters.xui import (
     _v3_get,
+    _v3_post,
     fetch_inbounds,
     get_xui_session,
     server_is_v3,
 )
+from panel.core.redis_client import GLOBAL_SERVER_DATA
+
+
+SUBSCRIPTION_PROFILE_CACHE = {}
+SUBSCRIPTION_PROFILE_CACHE_TTL = 600
+_SUBSCRIPTION_PROFILE_CACHE_LOCK = threading.Lock()
+
+
+def fetch_subscription_profile_metadata(
+    server,
+    *,
+    session_obj,
+    timeout=(1.5, 2),
+):
+    """Return cacheable visual metadata from the panel, never subscription content."""
+    server_id = int(getattr(server, 'id', 0) or 0)
+    now = time.monotonic()
+    with _SUBSCRIPTION_PROFILE_CACHE_LOCK:
+        cached = SUBSCRIPTION_PROFILE_CACHE.get(server_id)
+        if cached and now < float(cached.get('expiry') or 0):
+            return dict(cached.get('value') or {})
+
+    metadata = {}
+    try:
+        ok, payload, _error = _v3_post(
+            server,
+            session_obj,
+            "/panel/api/setting/all",
+            {},
+            timeout=timeout,
+        )
+        obj = payload.get('obj') if ok and isinstance(payload, dict) else None
+        if isinstance(obj, dict):
+            metadata = {
+                'sub_title': str(obj.get('subTitle') or '').strip(),
+                'update_interval': str(obj.get('subUpdates') or '24').strip() or '24',
+            }
+    except Exception:
+        metadata = {}
+
+    if metadata:
+        with _SUBSCRIPTION_PROFILE_CACHE_LOCK:
+            SUBSCRIPTION_PROFILE_CACHE[server_id] = {
+                'value': dict(metadata),
+                'expiry': now + SUBSCRIPTION_PROFILE_CACHE_TTL,
+            }
+        return metadata
+
+    # A temporary settings failure must not discard previously learned visual
+    # metadata. Subscription credentials/configs are never stored in this cache.
+    return dict((cached or {}).get('value') or {})
+
+
+def build_subscription_profile_title(panel_title, server_name):
+    """Put Eve's server name on a second line under the panel profile title."""
+    panel_title = str(panel_title or '').strip()
+    server_name = str(server_name or '').strip()
+    if panel_title and server_name and panel_title.casefold() != server_name.casefold():
+        return f"{panel_title}\n{server_name}"
+    return panel_title or server_name
+
+
+def find_subscription_client_email(server, sub_id, *, session_obj=None):
+    """Resolve display identity without ever taking credentials from the snapshot."""
+    normalized_sub_id = str(sub_id or '').strip()
+    server_id = int(getattr(server, 'id', 0) or 0)
+    for inbound in GLOBAL_SERVER_DATA.get('inbounds') or []:
+        try:
+            if int(inbound.get('server_id') or 0) != server_id:
+                continue
+        except (TypeError, ValueError):
+            continue
+        clients = inbound.get('clients')
+        if not isinstance(clients, list):
+            settings = inbound.get('settings') or {}
+            if isinstance(settings, str):
+                try:
+                    settings = json.loads(settings)
+                except (TypeError, ValueError):
+                    settings = {}
+            clients = settings.get('clients') if isinstance(settings, dict) else []
+        for client in clients or []:
+            if str(client.get('subId') or '').strip() == normalized_sub_id:
+                email = str(client.get('email') or '').strip()
+                if email:
+                    return email
+
+    # 3x-ui v3.6 exposes a small paged client record that can search by subId.
+    # This is only identity metadata; links and credentials still come from the
+    # authoritative live subLinks endpoint on every request.
+    if session_obj and normalized_sub_id:
+        path = "/panel/api/clients/list/paged?" + urlencode({
+            'page': 1,
+            'pageSize': 5,
+            'search': normalized_sub_id,
+        })
+        try:
+            ok, payload, _error = _v3_get(
+                server,
+                session_obj,
+                path,
+                timeout=(1.5, 2),
+            )
+            obj = payload.get('obj') if ok and isinstance(payload, dict) else None
+            items = obj.get('items') if isinstance(obj, dict) else []
+            for item in items or []:
+                if str(item.get('subId') or '').strip() == normalized_sub_id:
+                    email = str(item.get('email') or '').strip()
+                    if email:
+                        return email
+        except Exception:
+            pass
+    return ''
+
+
+def ensure_subscription_identity(configs, client_email):
+    """Ensure the client's email is visible in every config remark."""
+    email = str(client_email or '').strip()
+    if not email:
+        return [str(item) for item in configs or [] if item]
+
+    decorated = []
+    for raw_link in configs or []:
+        link = str(raw_link or '').strip()
+        if not link:
+            continue
+        if link.startswith('vmess://'):
+            try:
+                encoded = link[len('vmess://'):]
+                padded = encoded + ('=' * (-len(encoded) % 4))
+                obj = json.loads(base64.b64decode(padded).decode('utf-8'))
+                remark = str(obj.get('ps') or '').strip()
+                if email.casefold() not in remark.casefold():
+                    obj['ps'] = f"{remark}-{email}" if remark else email
+                    encoded = base64.b64encode(
+                        json.dumps(obj, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+                    ).decode('ascii')
+                    link = f"vmess://{encoded}"
+            except Exception:
+                pass
+        elif '://' in link:
+            base, separator, fragment = link.partition('#')
+            remark = unquote(fragment).strip() if separator else ''
+            if email.casefold() not in remark.casefold():
+                remark = f"{remark}-{email}" if remark else email
+                link = f"{base}#{quote(remark, safe='')}"
+        decorated.append(link)
+    return decorated
 
 
 def generate_client_link(client, inbound, server_host):

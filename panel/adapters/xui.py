@@ -176,13 +176,17 @@ def server_is_v3(server, session_obj=None, *, force_probe=False) -> bool:
 #   - reset  : POST /clients/resetTraffic/{email}
 #   - add    : POST /clients/add             body = {client, inboundIds}
 
-def _v3_post(server, session_obj, path, json_body=None):
+def _v3_post(server, session_obj, path, json_body=None, *, timeout=(3, 20)):
     """POST to a v3 /panel/api/* path. Returns (ok: bool, json|None, error|None)."""
     base, webpath = extract_base_and_webpath(server.host)
     url = f"{base}{webpath}{path}"
     try:
-        resp = session_obj.post(url, json=(json_body if json_body is not None else {}),
-                                verify=False, timeout=(3, 20))
+        resp = session_obj.post(
+            url,
+            json=(json_body if json_body is not None else {}),
+            verify=False,
+            timeout=timeout,
+        )
     except Exception as e:
         return False, None, str(e)
     j, err = _safe_response_json(resp)

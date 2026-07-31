@@ -23,8 +23,12 @@ from panel.services.billing import (
     _build_sub_page_packages, _build_subscription_package_recommendation,
 )
 from panel.services.subscription import (
+    build_subscription_profile_title,
     build_subscription_configs,
+    ensure_subscription_identity,
     fetch_authoritative_subscription_configs,
+    fetch_subscription_profile_metadata,
+    find_subscription_client_email,
 )
 
 bp = Blueprint('subscription_pages', __name__)
@@ -158,6 +162,7 @@ def get_client_direct_link(server_id, sub_id):
         live_session=live_session,
         live_inbounds=live_inbounds,
     )
+    configs = ensure_subscription_identity(configs, resolved_client_email)
     return jsonify({
         "success": True,
         "configs": configs,
@@ -396,17 +401,34 @@ def client_subscription(server_id, sub_id):
                 session_obj=fast_session,
             )
             if fast_configs:
+                fast_email = find_subscription_client_email(
+                    server,
+                    normalized_sub_id,
+                    session_obj=fast_session,
+                )
+                fast_configs = ensure_subscription_identity(
+                    fast_configs,
+                    fast_email,
+                )
+                profile_metadata = fetch_subscription_profile_metadata(
+                    server,
+                    session_obj=fast_session,
+                )
                 fast_blob = '\n'.join(fast_configs)
                 encoded_fast_blob = base64.b64encode(
                     fast_blob.encode('utf-8')
                 ).decode('ascii')
+                profile_title_raw = build_subscription_profile_title(
+                    profile_metadata.get('sub_title'),
+                    server.name,
+                )
                 profile_title = base64.b64encode(
-                    server.name.encode('utf-8')
+                    profile_title_raw.encode('utf-8')
                 ).decode('ascii')
                 return encoded_fast_blob, 200, {
                     'Content-Type': 'text/plain; charset=utf-8',
                     'Profile-Title': f'base64:{profile_title}',
-                    'Profile-Update-Interval': '24',
+                    'Profile-Update-Interval': profile_metadata.get('update_interval', '24'),
                     'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
                     'Pragma': 'no-cache',
                 }
@@ -493,13 +515,22 @@ def client_subscription(server_id, sub_id):
         expiry_time_sec = int(_time.time()) + 315360000  # 10 years in the future
     
     user_info_header = f"upload={up}; download={down}; total={total_limit}; expire={expiry_time_sec}"
-    _profile_title_raw = f"{server.name} - {client_email}"
+    profile_metadata = fetch_subscription_profile_metadata(
+        server,
+        session_obj=live_session,
+    )
+    _profile_title_raw = build_subscription_profile_title(
+        profile_metadata.get('sub_title'),
+        server.name,
+    )
     _profile_title_b64 = base64.b64encode(_profile_title_raw.encode('utf-8')).decode('utf-8')
     fallback_headers = {
         'Subscription-Userinfo': user_info_header,
-        'Profile-Update-Interval': '24',
+        'Profile-Update-Interval': profile_metadata.get('update_interval', '24'),
         'Content-Type': 'text/plain; charset=utf-8',
-        'Profile-Title': f"base64:{_profile_title_b64}"
+        'Profile-Title': f"base64:{_profile_title_b64}",
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
     }
 
     # Prepare User-Agent check
@@ -550,6 +581,7 @@ def client_subscription(server_id, sub_id):
         live_session=live_session,
         live_inbounds=live_inbounds,
     )
+    configs = ensure_subscription_identity(configs, client_email)
 
     subscription_entries = [entry for entry in configs if entry]
     # Append the live status config as the last entry (client-app payload only;
