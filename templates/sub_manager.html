@@ -841,6 +841,46 @@
         transition: all .15s;
     }
     .fm-filter.active, .fm-filter:hover { border-color: var(--primary); color: var(--primary); background: rgba(99,102,241,.1); }
+    .fm-search-wrap {
+        position: relative;
+        flex: 1 1 230px;
+        min-width: 200px;
+        max-width: 360px;
+        margin-left: auto;
+    }
+    .fm-search-wrap svg {
+        position: absolute;
+        left: 11px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-secondary);
+        pointer-events: none;
+    }
+    .fm-search {
+        width: 100%;
+        height: 36px;
+        padding: 0 34px 0 34px;
+        border: 1px solid var(--border-color);
+        border-radius: 9px;
+        background: var(--bg-dark);
+        color: var(--text-primary);
+        outline: none;
+    }
+    .fm-search:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(99,102,241,.12); }
+    .fm-search-clear {
+        position: absolute;
+        right: 7px;
+        top: 50%;
+        transform: translateY(-50%);
+        border: 0;
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        padding: 4px 7px;
+        font-size: 17px;
+        line-height: 1;
+    }
+    .fm-search-clear:hover { color: var(--text-primary); }
 
     .fm-card {
         background: var(--bg-dark);
@@ -1137,13 +1177,18 @@
             <button class="fm-filter" data-cat="video" onclick="setFmFilter('video',this)">Video</button>
             <button class="fm-filter" data-cat="archive" onclick="setFmFilter('archive',this)">Archive</button>
             <button class="fm-filter" data-cat="image" onclick="setFmFilter('image',this)">Image</button>
+            <div class="fm-search-wrap">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="fm-search" class="fm-search" placeholder="Search files..." autocomplete="off" oninput="setFmSearch(this.value)">
+                <button type="button" class="fm-search-clear" title="Clear search" onclick="clearFmSearch()">&times;</button>
+            </div>
         </div>
 
         <!-- File grid -->
         <div id="fm-grid" style="flex:1;overflow-y:auto;padding:14px 20px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;min-height:200px;">
             <div id="fm-empty" style="grid-column:1/-1;text-align:center;color:var(--text-secondary);padding:40px 0;display:none;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4;margin-bottom:10px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                <p style="margin:0;">No files yet. Upload one above.</p>
+                <p id="fm-empty-text" style="margin:0;">No files yet. Upload one above.</p>
             </div>
         </div>
     </div>
@@ -3132,6 +3177,7 @@
         let _targetInputId   = null;
         let _allowedCats     = null;
         let _currentFilter   = 'all';
+        let _searchQuery     = '';
         let _allFiles        = [];
         let _uploading       = false;
 
@@ -3166,15 +3212,21 @@
             const existing = grid.querySelectorAll('.fm-card');
             existing.forEach(c => c.remove());
 
-            // Visibility: only apply category tab filter.
-            // _allowedCats restricts SELECTION only — files are always visible so the
-            // user can see and delete them regardless of which Browse context opened this.
+            // Category and filename search affect visibility. _allowedCats only
+            // restricts selection, so files remain available for inspection/deletion.
             const visible = _allFiles.filter(f => {
                 if (_currentFilter !== 'all' && f.category !== _currentFilter) return false;
+                if (_searchQuery && !String(f.name || '').toLocaleLowerCase().includes(_searchQuery)) return false;
                 return true;
             });
 
             if (visible.length === 0) {
+                const emptyText = document.getElementById('fm-empty-text');
+                if (emptyText) {
+                    emptyText.textContent = _searchQuery
+                        ? 'No files match your search.'
+                        : (_currentFilter !== 'all' ? 'No files in this category.' : 'No files yet. Upload one above.');
+                }
                 empty.style.display = 'block';
                 return;
             }
@@ -3427,6 +3479,9 @@
             _targetInputId = targetInputId || null;
             _allowedCats   = allowedCategories || null;
             _currentFilter = (_allowedCats && _allowedCats.length === 1) ? _allowedCats[0] : 'all';
+            _searchQuery = '';
+            const searchInput = document.getElementById('fm-search');
+            if (searchInput) searchInput.value = '';
 
             /* sync filter tab UI */
             document.querySelectorAll('.fm-filter').forEach(btn => {
@@ -3447,6 +3502,21 @@
             _currentFilter = cat;
             document.querySelectorAll('.fm-filter').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
+            renderGrid();
+        };
+
+        window.setFmSearch = function (value) {
+            _searchQuery = String(value || '').trim().toLocaleLowerCase();
+            renderGrid();
+        };
+
+        window.clearFmSearch = function () {
+            const input = document.getElementById('fm-search');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            _searchQuery = '';
             renderGrid();
         };
 

@@ -46,7 +46,10 @@
             function parse(value) {
                 if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : new Date(value.getTime());
                 if (typeof value === 'number') {
-                    const numericDate = new Date(value);
+                    // Accept both Unix seconds (filesystem/API timestamps) and
+                    // JavaScript milliseconds (X-UI expiry timestamps).
+                    const timestamp = Math.abs(value) < 1000000000000 ? value * 1000 : value;
+                    const numericDate = new Date(timestamp);
                     return Number.isNaN(numericDate.getTime()) ? null : numericDate;
                 }
                 if (typeof value !== 'string' || !value.trim()) return null;

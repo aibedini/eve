@@ -8963,13 +8963,17 @@ Connection links
             systemUpdateOffset = Number(data.next_offset || 0);
             systemUpdateIsRunning = state === 'running';
             setSystemUpdateState(state, SYSTEM_UPDATE_IS_FA ? '' : (status.message || ''));
-            const version = status.version || data.current_version;
+            // The card describes the code currently serving this page. Updater
+            // status.json may contain an older completed run, so never use its
+            // version to overwrite APP_VERSION supplied by the live process.
+            const currentVersion = data.current_version;
+            const completedVersion = status.version || currentVersion;
             const versionEl = document.getElementById('system-update-version');
-            if (versionEl && version) versionEl.textContent = `v${version}`;
+            if (versionEl && currentVersion) versionEl.textContent = `v${currentVersion}`;
             if (state === 'succeeded' && systemUpdateStartedAt && !systemUpdateReloadPending) {
                 setSystemUpdateState('succeeded',
-                    SYSTEM_UPDATE_TEXT.updated_reload.replace('{version}', version || ''));
-                waitForPanelReload(version);
+                    SYSTEM_UPDATE_TEXT.updated_reload.replace('{version}', completedVersion || ''));
+                waitForPanelReload(completedVersion);
                 return;
             }
             if (startButton) {

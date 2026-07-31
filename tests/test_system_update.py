@@ -86,6 +86,8 @@ class SystemUpdateApiTest(unittest.TestCase):
         self.assertEqual(payload['next_offset'], len(
             (self.state_dir / 'update.log').read_bytes()))
         self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertEqual(payload['current_version'], app_module.APP_VERSION)
+        self.assertEqual(payload['status']['version'], '2.5.20')
 
     def test_start_uses_only_the_fixed_systemd_command(self):
         completed = mock.Mock(returncode=0, stdout='', stderr='')
@@ -201,6 +203,8 @@ class SystemUpdateApiTest(unittest.TestCase):
         self.assertIn('id="system-update-version"', super_html)
         self.assertIn('id="system-update-log"', super_html)
         self.assertIn("body: JSON.stringify({confirm:'UPDATE'})", super_html)
+        self.assertIn('const currentVersion = data.current_version;', super_html)
+        self.assertIn('versionEl.textContent = `v${currentVersion}`;', super_html)
 
     def test_xray_status_reports_installed_version_without_exposing_path(self):
         version = mock.Mock(returncode=0, stdout='Xray 25.7.26 (Eve)\n', stderr='')
