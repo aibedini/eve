@@ -1370,6 +1370,22 @@
                 <textarea id="announcement-message" style="display:none;"></textarea>
             </div>
 
+            <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:10px;">
+                <div>
+                    <h4 style="color:#fbbf24;margin:0 0 3px;">Action Buttons</h4>
+                    <small style="color:var(--text-secondary);">Add titled links and arrange them exactly as they should appear below the announcement.</small>
+                </div>
+                <button type="button" class="btn btn-secondary" onclick="addAnnouncementActionButton()">+ Add Button</button>
+            </div>
+            <div id="announcement-action-buttons" class="app-action-editor"></div>
+            <div class="form-group" style="max-width:260px;">
+                <label>Button grid</label>
+                <select id="announcement-button-columns" class="form-input">
+                    <option value="1">Single column (full width)</option>
+                    <option value="2">Two columns</option>
+                </select>
+            </div>
+
             <div style="display:flex; gap: 12px;">
                 <div class="form-group" style="flex:1;">
                     <label>Start</label>
@@ -2275,6 +2291,68 @@
         if (wrap) wrap.style.display = (cb && cb.checked) ? 'block' : 'none';
     }
 
+    function addAnnouncementActionButton(button = {}) {
+        const container = document.getElementById('announcement-action-buttons');
+        const row = document.createElement('div');
+        const inputId = `announcement-action-url-${++_appActionSequence}`;
+        row.className = 'app-action-row';
+        row.innerHTML = `
+            <input type="text" class="form-input app-action-title" maxlength="100" placeholder="Button title">
+            <div class="link-input-row">
+                <input type="text" id="${inputId}" class="form-input app-action-url" placeholder="https://... or select an uploaded file">
+                <button type="button" class="btn-browse" title="Browse uploaded files">Browse</button>
+            </div>
+            <select class="form-input app-action-palette" aria-label="Button color"></select>
+            <div class="app-action-controls">
+                <button type="button" class="app-action-control app-action-up" title="Move up">↑</button>
+                <button type="button" class="app-action-control app-action-down" title="Move down">↓</button>
+                <button type="button" class="app-action-control danger app-action-remove" title="Remove">×</button>
+            </div>`;
+
+        const palette = APP_ACTION_PALETTES.some(item => item[0] === button.palette)
+            ? button.palette : 'primary';
+        const paletteSelect = row.querySelector('.app-action-palette');
+        APP_ACTION_PALETTES.forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            paletteSelect.appendChild(option);
+        });
+        row.querySelector('.app-action-title').value = button.title || '';
+        row.querySelector('.app-action-url').value = button.url || '';
+        paletteSelect.value = palette;
+        row.querySelector('.btn-browse').addEventListener('click', () => openFilePicker(inputId));
+        row.querySelector('.app-action-up').addEventListener('click', () => {
+            if (row.previousElementSibling) container.insertBefore(row, row.previousElementSibling);
+        });
+        row.querySelector('.app-action-down').addEventListener('click', () => {
+            if (row.nextElementSibling) container.insertBefore(row.nextElementSibling, row);
+        });
+        row.querySelector('.app-action-remove').addEventListener('click', () => row.remove());
+        container.appendChild(row);
+    }
+
+    function setAnnouncementActionButtons(buttons) {
+        document.getElementById('announcement-action-buttons').innerHTML = '';
+        (Array.isArray(buttons) ? buttons : []).forEach(button => addAnnouncementActionButton(button));
+    }
+
+    function collectAnnouncementActionButtons() {
+        const buttons = [];
+        document.querySelectorAll('#announcement-action-buttons .app-action-row').forEach((row, index) => {
+            const title = row.querySelector('.app-action-title').value.trim();
+            const url = row.querySelector('.app-action-url').value.trim();
+            if (!title && !url) return;
+            if (!title || !url) throw new Error(`Button ${index + 1} needs both a title and a URL`);
+            buttons.push({
+                title,
+                url,
+                palette: row.querySelector('.app-action-palette').value
+            });
+        });
+        return buttons;
+    }
+
     async function openAddAnnouncementModal() {
         document.getElementById('announcement-id').value = '';
         document.getElementById('announcement-modal-title').textContent = 'Add Announcement';
@@ -2285,6 +2363,8 @@
         if (popEl) popEl.checked = false;
         const btEl = document.getElementById('announcement-button-text');
         if (btEl) btEl.value = '';
+        setAnnouncementActionButtons([]);
+        document.getElementById('announcement-button-columns').value = '1';
         ann_togglePopupOptions(popEl);
 
         // Default: all targets
@@ -2316,6 +2396,8 @@
         if (popEl) popEl.checked = !!a.is_popup;
         const btEl = document.getElementById('announcement-button-text');
         if (btEl) btEl.value = a.button_text || '';
+        setAnnouncementActionButtons(a.action_buttons || []);
+        document.getElementById('announcement-button-columns').value = String(a.button_columns === 2 ? 2 : 1);
         ann_togglePopupOptions(popEl);
 
         const hidden = document.getElementById('announcement-targets');
@@ -2502,6 +2584,13 @@
         const startAtJalali = (document.getElementById('announcement-start').value || '').trim();
         const endAtJalali = (document.getElementById('announcement-end').value || '').trim();
         const targets = (document.getElementById('announcement-targets').value || '').trim() || '*';
+        let actionButtons;
+        try {
+            actionButtons = collectAnnouncementActionButtons();
+        } catch (error) {
+            showToast(error.message, 'error');
+            return;
+        }
 
         if (!message) {
             showToast('Message is required', 'error');
@@ -2520,6 +2609,8 @@
             hide_from_resellers: document.getElementById('announcement-hide-resellers')?.checked || false,
             is_popup: document.getElementById('announcement-is-popup')?.checked || false,
             button_text: (document.getElementById('announcement-button-text')?.value || '').trim(),
+            action_buttons: actionButtons,
+            button_columns: Number(document.getElementById('announcement-button-columns')?.value) === 2 ? 2 : 1,
         };
 
         try {

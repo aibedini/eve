@@ -491,6 +491,8 @@ class Announcement(db.Model):
     hide_from_resellers = db.Column(db.Boolean, default=False)  # when True, not shown on reseller-owned accounts' sub pages
     is_popup = db.Column(db.Boolean, default=False)  # when True, shown as a modal popup when the sub page opens
     button_text = db.Column(db.String(120))          # popup dismiss-button label (optional)
+    action_buttons = db.Column(db.Text, nullable=True)  # JSON list of titled links
+    button_columns = db.Column(db.Integer, nullable=False, default=1)
 
     servers = db.relationship('Server', secondary=announcement_servers, lazy='subquery')
 
@@ -511,6 +513,15 @@ class Announcement(db.Model):
         except Exception:
             is_active = False
 
+        action_buttons = []
+        if self.action_buttons:
+            try:
+                parsed_buttons = json.loads(self.action_buttons)
+                if isinstance(parsed_buttons, list):
+                    action_buttons = parsed_buttons
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+
         return {
             'id': self.id,
             'message': self.message,
@@ -529,6 +540,8 @@ class Announcement(db.Model):
             'hide_from_resellers': bool(self.hide_from_resellers),
             'is_popup': bool(self.is_popup),
             'button_text': self.button_text or '',
+            'action_buttons': action_buttons,
+            'button_columns': 2 if self.button_columns == 2 else 1,
         }
 
 

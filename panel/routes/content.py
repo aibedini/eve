@@ -378,6 +378,17 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
     if start_at > end_at:
         return None, 'Start datetime must be before End datetime'
 
+    try:
+        action_buttons = _normalize_sub_app_buttons(data.get('action_buttons', [])) or []
+    except ValueError as exc:
+        return None, str(exc)
+    try:
+        button_columns = int(data.get('button_columns', 1))
+    except (TypeError, ValueError):
+        button_columns = 1
+    if button_columns not in (1, 2):
+        return None, 'Button grid must have one or two columns'
+
     def _parse_int_or_none(val):
         if val is None:
             return None
@@ -498,6 +509,8 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
         'start_at': start_at,
         'end_at': end_at,
         'server_ids': derived_server_ids,
+        'action_buttons': action_buttons,
+        'button_columns': button_columns,
     }
     return payload, None
 
@@ -535,6 +548,8 @@ def create_announcement():
         hide_from_resellers=bool(data.get('hide_from_resellers', False)),
         is_popup=bool(data.get('is_popup', False)),
         button_text=(str(data.get('button_text') or '').strip()[:120] or None),
+        action_buttons=json.dumps(payload['action_buttons'], ensure_ascii=False),
+        button_columns=payload['button_columns'],
     )
 
     if not payload['all_servers']:
@@ -585,6 +600,8 @@ def update_announcement(announcement_id):
         ann.is_popup = bool(data['is_popup'])
     if 'button_text' in data:
         ann.button_text = (str(data.get('button_text') or '').strip()[:120] or None)
+    ann.action_buttons = json.dumps(payload['action_buttons'], ensure_ascii=False)
+    ann.button_columns = payload['button_columns']
 
     if ann.all_servers:
         ann.servers = []
