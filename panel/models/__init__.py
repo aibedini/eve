@@ -16,6 +16,7 @@ from panel.models.core import (
     RenewTemplate,
     announcement_servers,
     Announcement,
+    AnnouncementDelivery,
     OnlineChatScript,
     BackupConfig,
     SystemSetting,

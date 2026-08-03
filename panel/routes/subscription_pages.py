@@ -900,7 +900,11 @@ def client_subscription(server_id, sub_id):
                 return False
 
         now_utc = datetime.utcnow()
-        q = Announcement.query.filter(Announcement.start_at <= now_utc, Announcement.end_at >= now_utc)
+        q = Announcement.query.filter(
+            Announcement.channel == 'subscription',
+            Announcement.start_at <= now_utc,
+            Announcement.end_at >= now_utc,
+        )
         q = q.order_by(Announcement.created_at.desc())
         active = q.all()
         announcements_payload = [

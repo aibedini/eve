@@ -14,10 +14,13 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 import app as app_module  # noqa: E402
 import panel.routes.clients as clients_module  # noqa: E402
+import panel.routes.packages as packages_module  # noqa: E402
 from app import (  # noqa: E402
     GLOBAL_SERVER_DATA,
     Admin,
     Server,
+    SystemConfig,
+    Transaction,
     app,
     db,
 )
@@ -84,6 +87,7 @@ class RenewEnableTests(unittest.TestCase):
         cls.ctx.pop()
 
     def setUp(self):
+        Transaction.query.delete()
         Server.query.delete()
         Admin.query.delete()
         db.session.commit()
@@ -177,6 +181,40 @@ class RenewEnableTests(unittest.TestCase):
         self.assertTrue(resp.get_json()['success'])
         sent = self.v3_update.call_args[0][3]
         self.assertEqual(sent['expiryTime'], -35 * DAY_MS)
+
+    def test_fractional_days_and_volume_are_preserved(self):
+        future = int(time.time() * 1000) + 2 * DAY_MS
+        raw = _raw_client(email='fractional', expiry=future, total=5 * GB, enable=True)
+        self._seed_cache(raw)
+
+        resp = self._renew(email='fractional', mode='custom', days=0.5,
+                           volume=0.5, free=True)
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertTrue(resp.get_json()['success'])
+
+        sent = self.v3_update.call_args[0][3]
+        self.assertEqual(sent['expiryTime'], future + (DAY_MS // 2))
+        self.assertEqual(sent['totalGB'], 5 * GB + (GB // 2))
+
+        transaction = Transaction.query.filter_by(
+            client_email='fractional', type='renew'
+        ).order_by(Transaction.id.desc()).first()
+        self.assertIsNotNone(transaction)
+        self.assertEqual(transaction.days, 0.5)
+        self.assertEqual(transaction.volume_gb, 0.5)
+
+    def test_fractional_units_are_included_in_minimum_price(self):
+        db.session.merge(SystemConfig(key='cost_per_gb', value='1000'))
+        db.session.merge(SystemConfig(key='cost_per_day', value='2000'))
+        db.session.commit()
+
+        with mock.patch.object(packages_module, '_get_applicable_price_tier',
+                               return_value=None):
+            price, _cpg, _cpd, _tier = packages_module._calculate_minimum_price(
+                0.5, 0.5
+            )
+
+        self.assertEqual(price, 1500)
 
     def test_inline_verify_reasserts_enable_until_panel_confirms(self):
         future = int(time.time() * 1000) + 5 * DAY_MS

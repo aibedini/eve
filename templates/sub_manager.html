@@ -1446,6 +1446,17 @@
             <input type="hidden" id="announcement-id">
 
             <div class="form-group">
+                <label>Announcement type</label>
+                <select id="announcement-channel" class="form-input" onchange="annOnChannelChange()">
+                    <option value="subscription">Subscription page</option>
+                    <option value="sms">SMS campaign</option>
+                    <option value="whatsapp">WhatsApp campaign</option>
+                    <option value="telegram">Telegram campaign</option>
+                </select>
+                <small style="color:var(--text-secondary);">Outbound campaigns are saved as drafts. Sending starts only after your confirmation.</small>
+            </div>
+
+            <div class="form-group" id="announcement-rich-message-wrap">
                 <label>Message</label>
                 <div id="ann-quill-container" style="border-radius:8px;overflow:hidden;border:1px solid var(--border-color);">
                     <div id="ann-quill-editor" style="min-height:120px;direction:rtl;"></div>
@@ -1453,6 +1464,14 @@
                 <textarea id="announcement-message" style="display:none;"></textarea>
             </div>
 
+            <div class="form-group" id="announcement-outbound-message-wrap" style="display:none;">
+                <label>Personalized message</label>
+                <textarea id="announcement-outbound-message" class="form-input" rows="8" dir="rtl" maxlength="8000" oninput="annUpdateMessageCounter()" placeholder="Write the message and insert customer variables below..."></textarea>
+                <div id="announcement-variable-chips" style="display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;"></div>
+                <div id="announcement-message-counter" style="font-size:.8rem;color:var(--text-secondary);margin-top:8px;"></div>
+            </div>
+
+            <div id="announcement-subscription-options">
             <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:10px;">
                 <div>
                     <h4 style="color:#fbbf24;margin:0 0 3px;">Action Buttons</h4>
@@ -1479,6 +1498,27 @@
                     <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="announcement-end" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="form-input" placeholder="{{ '1405/04/23 18:30' if app_calendar == 'jalali' else '2026-07-14 18:30' }}">
                 </div>
             </div>
+            </div>
+
+            <div id="announcement-delivery-options" style="display:none;">
+                <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;">
+                    <div class="form-group">
+                        <label>Delivery schedule</label>
+                        <select id="announcement-delivery-mode" class="form-input" onchange="annOnDeliveryModeChange()">
+                            <option value="all">Send to everyone</option>
+                            <option value="daily">Send to a daily batch</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="announcement-daily-limit-wrap" style="display:none;">
+                        <label>Recipients per day</label>
+                        <input id="announcement-daily-limit" type="number" class="form-input" min="1" max="100000" value="100">
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+                    <button type="button" class="btn btn-secondary" onclick="previewAnnouncementRecipients()">Count recipients</button>
+                    <span id="announcement-recipient-preview" style="font-size:.86rem;color:var(--text-secondary);">Select targets, then count unique recipients.</span>
+                </div>
+            </div>
 
             <div class="form-group">
                 <label>Targets (Servers + Inbounds)</label>
@@ -1502,6 +1542,7 @@
                 <small style="color: var(--text-secondary);">Target rules match reseller access selector: per-server inbounds or "Select All".</small>
             </div>
 
+            <div id="announcement-subscription-toggles">
             <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:4px; margin-bottom:0;">
                 <div class="toggle-switch">
                     <input type="checkbox" id="announcement-hide-resellers">
@@ -1528,6 +1569,7 @@
                 <label>Popup button text</label>
                 <input type="text" id="announcement-button-text" class="form-input" placeholder="{{ 'مثلاً متوجه شدم' if panel_lang == 'fa' else 'e.g. Got it' }}" maxlength="120">
                 <small style="color: var(--text-secondary);">Label of the button that closes the popup. Leave empty for a default.</small>
+            </div>
             </div>
 
             <div class="form-actions">
@@ -1990,6 +2032,11 @@
 
     // Announcements Logic
     let announcements = [];
+    const ANNOUNCEMENT_VARIABLES = [
+        ['email', 'Email / account'], ['account_name', 'Account name'], ['remaining_time', 'Remaining time'],
+        ['remaining_volume', 'Remaining volume'], ['dashboard_link', 'Dashboard link'],
+        ['sub_link', 'Subscription link'], ['server_name', 'Server name']
+    ];
 
     // Announcement Targets (reseller-style selector)
     let annAllServers = [];
@@ -2041,13 +2088,23 @@
         }
 
         container.innerHTML = announcements.map(a => {
-            const isActive = isAnnouncementActive(a);
+            const channel = a.channel || 'subscription';
+            const isSubscription = channel === 'subscription';
+            const isActive = isSubscription ? isAnnouncementActive(a) : ['queued', 'sending'].includes(a.status);
             const serversLabel = a.all_servers ? 'All servers' : ((a.server_names && a.server_names.length) ? a.server_names.join(', ') : 'No servers selected');
             const createdBy = a.created_by || 'unknown';
             const createdAt = a.created_at ? EveDate.format(a.created_at) : (a.created_at_jalali || '');
-            const windowLabel = (a.start_at && a.end_at)
+            const windowLabel = isSubscription && (a.start_at && a.end_at)
                 ? `${EveDate.format(a.start_at)} → ${EveDate.format(a.end_at)}`
-                : ((a.start_at_jalali && a.end_at_jalali) ? `${a.start_at_jalali} → ${a.end_at_jalali}` : '');
+                : '';
+            const typeLabel = {subscription:'Subscription', sms:'SMS', whatsapp:'WhatsApp', telegram:'Telegram'}[channel] || channel;
+            const statusLabel = isSubscription ? (isActive ? 'Active' : 'Inactive') : (a.status || 'draft');
+            const progress = isSubscription ? '' : `Total ${a.total_count || 0} · Sent ${a.sent_count || 0} · Failed ${a.failed_count || 0} · Skipped ${a.skipped_count || 0}`;
+            const campaignActions = isSubscription ? '' : (
+                a.status === 'draft' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'send')" title="Start sending">▶</button>`
+                : ['queued','sending'].includes(a.status) ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'pause')" title="Pause">Ⅱ</button>`
+                : a.status === 'paused' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'resume')" title="Resume">▶</button>` : ''
+            );
 
             return `
                 <div class="server-card">
@@ -2056,26 +2113,29 @@
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v11a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V4z"/><path d="M8 22h8"/><path d="M12 15v-3"/><path d="M12 6h.01"/></svg>
                         </div>
                         <div class="server-title">
-                            <h3>Announcement</h3>
+                            <h3>${escapeHtml(typeLabel)} announcement</h3>
                             <p class="server-url" style="direction: rtl; text-align: right; margin-top: 2px;">${escapeHtml(a.message).slice(0, 120)}${(a.message || '').length > 120 ? '…' : ''}</p>
                         </div>
                     </div>
 
                     <div class="server-badges" style="flex-wrap: wrap;">
-                        <span class="badge ${isActive ? 'active' : 'inactive'}">${isActive ? 'Active' : 'Inactive'}</span>
+                        <span class="badge ${isActive ? 'active' : 'inactive'}">${escapeHtml(statusLabel)}</span>
                         <span class="badge" style="background: rgba(99, 102, 241, 0.12); color: var(--primary); border: 1px solid rgba(99, 102, 241, 0.2);">${escapeHtml(serversLabel)}</span>
-                        ${a.hide_from_resellers ? '<span class="badge" style="background:rgba(251,191,36,0.12); color:#fbbf24; border:1px solid rgba(251,191,36,0.3);">🔒 Hidden from resellers</span>' : ''}
+                        ${isSubscription && a.hide_from_resellers ? '<span class="badge" style="background:rgba(251,191,36,0.12); color:#fbbf24; border:1px solid rgba(251,191,36,0.3);">🔒 Hidden from resellers</span>' : ''}
+                        ${!isSubscription && a.delivery_mode === 'daily' ? `<span class="badge">${Number(a.daily_limit || 0)} recipients/day</span>` : ''}
                     </div>
 
                     <div style="margin-top: 10px; color: var(--text-secondary); font-size: 0.8rem;">
                         <div>${escapeHtml(windowLabel)}</div>
+                        ${progress ? `<div style="margin-top:4px;">${escapeHtml(progress)}</div>` : ''}
                         <div style="margin-top: 4px;">Created: ${escapeHtml(createdAt)} • By: ${escapeHtml(createdBy)}</div>
                     </div>
 
                     <div class="server-actions">
-                        <button class="action-btn" onclick="openEditAnnouncementModal(${a.id})" title="Edit">
+                        ${campaignActions}
+                        ${(!isSubscription && a.status !== 'draft') ? '' : `<button class="action-btn" onclick="openEditAnnouncementModal(${a.id})" title="Edit">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                        </button>
+                        </button>`}
                         <button class="action-btn danger" onclick="deleteAnnouncement(${a.id})" title="Delete">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
@@ -2450,6 +2510,104 @@
         document.getElementById('announcement-modal').classList.add('hidden');
     }
 
+    function annOnDeliveryModeChange() {
+        const daily = document.getElementById('announcement-delivery-mode')?.value === 'daily';
+        const wrap = document.getElementById('announcement-daily-limit-wrap');
+        if (wrap) wrap.style.display = daily ? 'block' : 'none';
+    }
+
+    function annInsertVariable(name) {
+        const textarea = document.getElementById('announcement-outbound-message');
+        if (!textarea) return;
+        const token = `{${name}}`;
+        const start = textarea.selectionStart ?? textarea.value.length;
+        const end = textarea.selectionEnd ?? start;
+        textarea.value = textarea.value.slice(0, start) + token + textarea.value.slice(end);
+        textarea.focus();
+        textarea.setSelectionRange(start + token.length, start + token.length);
+        annUpdateMessageCounter();
+    }
+
+    function annSmsMetrics(text) {
+        const value = String(text || '');
+        const basic = new Set(Array.from("@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\\\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"));
+        const extended = new Set(Array.from("\f^{}\\\\[~]|€"));
+        const chars = Array.from(value);
+        const gsm = chars.every(char => basic.has(char) || extended.has(char));
+        const single = gsm ? 160 : 70;
+        const concat = gsm ? 153 : 67;
+        const units = gsm ? chars.reduce((total, char) => total + (extended.has(char) ? 2 : 1), 0) : value.length;
+        const segments = units <= single ? (units ? 1 : 0) : Math.ceil(units / concat);
+        return {length: chars.length, units, segments, encoding: gsm ? 'GSM-7' : 'Unicode'};
+    }
+
+    function annUpdateMessageCounter() {
+        const channel = document.getElementById('announcement-channel')?.value || 'subscription';
+        const text = document.getElementById('announcement-outbound-message')?.value || '';
+        const counter = document.getElementById('announcement-message-counter');
+        if (!counter) return;
+        if (channel === 'sms') {
+            const metric = annSmsMetrics(text);
+            counter.textContent = `${metric.length} characters · ${metric.units} units · ${metric.segments} SMS segment${metric.segments === 1 ? '' : 's'} · ${metric.encoding}`;
+        } else {
+            counter.textContent = `${Array.from(text).length} / ${channel === 'telegram' ? 4096 : 8000} characters`;
+        }
+    }
+
+    function annOnChannelChange() {
+        const channel = document.getElementById('announcement-channel')?.value || 'subscription';
+        const outbound = channel !== 'subscription';
+        document.getElementById('announcement-rich-message-wrap').style.display = outbound ? 'none' : 'block';
+        document.getElementById('announcement-outbound-message-wrap').style.display = outbound ? 'block' : 'none';
+        document.getElementById('announcement-subscription-options').style.display = outbound ? 'none' : 'block';
+        document.getElementById('announcement-subscription-toggles').style.display = outbound ? 'none' : 'block';
+        document.getElementById('announcement-delivery-options').style.display = outbound ? 'block' : 'none';
+        const chips = document.getElementById('announcement-variable-chips');
+        if (chips) chips.innerHTML = ANNOUNCEMENT_VARIABLES.map(([name, label]) =>
+            `<button type="button" class="btn btn-secondary" style="padding:5px 9px;font-size:.76rem;" onclick="annInsertVariable('${name}')">${escapeHtml(label)} <code>{${name}}</code></button>`
+        ).join('');
+        const textarea = document.getElementById('announcement-outbound-message');
+        if (textarea) textarea.maxLength = channel === 'telegram' ? 4096 : 8000;
+        annOnDeliveryModeChange();
+        annUpdateMessageCounter();
+        const preview = document.getElementById('announcement-recipient-preview');
+        if (preview) preview.textContent = 'Select targets, then count unique recipients.';
+    }
+
+    async function previewAnnouncementRecipients() {
+        const channel = document.getElementById('announcement-channel')?.value || 'subscription';
+        const message = document.getElementById('announcement-outbound-message')?.value || '';
+        const targets = document.getElementById('announcement-targets')?.value || '*';
+        const label = document.getElementById('announcement-recipient-preview');
+        if (label) label.textContent = 'Counting recipients…';
+        try {
+            const response = await fetch('/api/announcements/preview', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({channel, message, targets})
+            });
+            const data = await response.json();
+            if (!data.success) throw new Error(data.error || 'Preview failed');
+            const sms = data.sms ? ` · about ${data.sms.estimated_total_segments || 0} total SMS segments (${data.sms.min_segments_per_recipient || 0}–${data.sms.max_segments_per_recipient || 0} per recipient)` : '';
+            if (label) label.textContent = `${data.unique} unique recipients from ${data.clients} clients · ${data.duplicates} duplicates removed · ${data.missing_contact} without destination · ${data.opted_out} opted out · ${data.blocked_by_policy || 0} blocked by channel policy${sms}`;
+        } catch (error) {
+            if (label) label.textContent = error.message;
+            showToast(error.message, 'error');
+        }
+    }
+
+    async function mutateAnnouncementCampaign(id, action) {
+        if (action === 'send' && !confirm('Start sending this campaign to its unique recipients?')) return;
+        try {
+            const response = await fetch(`/api/announcements/${id}/${action}`, {method:'POST'});
+            const data = await response.json();
+            if (!data.success) throw new Error(data.error || 'Campaign action failed');
+            showToast(`Campaign ${action} accepted`);
+            loadAnnouncements();
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }
+
     function ann_togglePopupOptions(cb) {
         const wrap = document.getElementById('announcement-button-text-wrap');
         if (wrap) wrap.style.display = (cb && cb.checked) ? 'block' : 'none';
@@ -2525,7 +2683,12 @@
     async function openAddAnnouncementModal() {
         document.getElementById('announcement-id').value = '';
         document.getElementById('announcement-modal-title').textContent = 'Add Announcement';
+        document.getElementById('announcement-channel').value = 'subscription';
+        document.getElementById('announcement-channel').disabled = false;
         annSetContent('');
+        document.getElementById('announcement-outbound-message').value = '';
+        document.getElementById('announcement-delivery-mode').value = 'all';
+        document.getElementById('announcement-daily-limit').value = '100';
         const hrEl = document.getElementById('announcement-hide-resellers');
         if (hrEl) hrEl.checked = false;
         const popEl = document.getElementById('announcement-is-popup');
@@ -2544,6 +2707,7 @@
         await ann_loadServers();
         await ann_loadInbounds();
         ann_applyAllowedServers('*');
+        annOnChannelChange();
         initAnnouncementShamsiPicker();
 
         document.getElementById('announcement-modal').classList.remove('hidden');
@@ -2555,7 +2719,13 @@
 
         document.getElementById('announcement-id').value = String(a.id);
         document.getElementById('announcement-modal-title').textContent = 'Edit Announcement';
-        annSetContent(a.message || '');
+        const channel = a.channel || 'subscription';
+        document.getElementById('announcement-channel').value = channel;
+        document.getElementById('announcement-channel').disabled = true;
+        annSetContent(channel === 'subscription' ? (a.message || '') : '');
+        document.getElementById('announcement-outbound-message').value = channel === 'subscription' ? '' : (a.message || '');
+        document.getElementById('announcement-delivery-mode').value = a.delivery_mode || 'all';
+        document.getElementById('announcement-daily-limit').value = String(a.daily_limit || 100);
 
         document.getElementById('announcement-start').value = EveDate.formatInput(a.start_at);
         document.getElementById('announcement-end').value = EveDate.formatInput(a.end_at);
@@ -2577,6 +2747,7 @@
         await ann_loadServers();
         await ann_loadInbounds();
         ann_syncSelectionsToUi();
+        annOnChannelChange();
         console.log('[ann-edit] after sync: checked servers=',
             document.querySelectorAll('.ann-server-checkbox:checked').length,
             'checked inbounds=', document.querySelectorAll('.ann-inbound-checkbox:checked').length);
@@ -2749,13 +2920,15 @@
 
     async function saveAnnouncement() {
         const id = (document.getElementById('announcement-id').value || '').trim();
-        const message = annGetContent().trim();
+        const channel = document.getElementById('announcement-channel')?.value || 'subscription';
+        const isSubscription = channel === 'subscription';
+        const message = (isSubscription ? annGetContent() : document.getElementById('announcement-outbound-message')?.value || '').trim();
         const startAtJalali = (document.getElementById('announcement-start').value || '').trim();
         const endAtJalali = (document.getElementById('announcement-end').value || '').trim();
         const targets = (document.getElementById('announcement-targets').value || '').trim() || '*';
-        let actionButtons;
+        let actionButtons = [];
         try {
-            actionButtons = collectAnnouncementActionButtons();
+            if (isSubscription) actionButtons = collectAnnouncementActionButtons();
         } catch (error) {
             showToast(error.message, 'error');
             return;
@@ -2765,21 +2938,31 @@
             showToast('Message is required', 'error');
             return;
         }
-        if (!startAtJalali || !endAtJalali) {
+        if (isSubscription && (!startAtJalali || !endAtJalali)) {
             showToast('Start/End are required', 'error');
+            return;
+        }
+
+        const deliveryMode = document.getElementById('announcement-delivery-mode')?.value || 'all';
+        const dailyLimit = Number(document.getElementById('announcement-daily-limit')?.value || 0);
+        if (!isSubscription && deliveryMode === 'daily' && (!Number.isInteger(dailyLimit) || dailyLimit < 1)) {
+            showToast('Enter a valid daily recipient limit', 'error');
             return;
         }
 
         const body = {
             message,
-            start_at_jalali: startAtJalali,
-            end_at_jalali: endAtJalali,
+            channel,
+            start_at_jalali: isSubscription ? startAtJalali : '',
+            end_at_jalali: isSubscription ? endAtJalali : '',
             targets,
-            hide_from_resellers: document.getElementById('announcement-hide-resellers')?.checked || false,
-            is_popup: document.getElementById('announcement-is-popup')?.checked || false,
-            button_text: (document.getElementById('announcement-button-text')?.value || '').trim(),
+            hide_from_resellers: isSubscription && (document.getElementById('announcement-hide-resellers')?.checked || false),
+            is_popup: isSubscription && (document.getElementById('announcement-is-popup')?.checked || false),
+            button_text: isSubscription ? (document.getElementById('announcement-button-text')?.value || '').trim() : '',
             action_buttons: actionButtons,
             button_columns: Number(document.getElementById('announcement-button-columns')?.value) === 2 ? 2 : 1,
+            delivery_mode: isSubscription ? 'all' : deliveryMode,
+            daily_limit: isSubscription || deliveryMode === 'all' ? null : dailyLimit,
         };
 
         try {

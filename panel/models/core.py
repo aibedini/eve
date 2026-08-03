@@ -518,6 +518,16 @@ class Announcement(db.Model):
     button_text = db.Column(db.String(120))          # popup dismiss-button label (optional)
     action_buttons = db.Column(db.Text, nullable=True)  # JSON list of titled links
     button_columns = db.Column(db.Integer, nullable=False, default=1)
+    channel = db.Column(db.String(24), nullable=False, default='subscription', index=True)
+    delivery_mode = db.Column(db.String(24), nullable=False, default='all')
+    daily_limit = db.Column(db.Integer, nullable=True)
+    status = db.Column(db.String(24), nullable=False, default='draft', index=True)
+    total_count = db.Column(db.Integer, nullable=False, default=0)
+    sent_count = db.Column(db.Integer, nullable=False, default=0)
+    failed_count = db.Column(db.Integer, nullable=False, default=0)
+    skipped_count = db.Column(db.Integer, nullable=False, default=0)
+    started_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
 
     servers = db.relationship('Server', secondary=announcement_servers, lazy='subquery')
 
@@ -567,7 +577,52 @@ class Announcement(db.Model):
             'button_text': self.button_text or '',
             'action_buttons': action_buttons,
             'button_columns': 2 if self.button_columns == 2 else 1,
+            'channel': self.channel or 'subscription',
+            'delivery_mode': self.delivery_mode or 'all',
+            'daily_limit': int(self.daily_limit or 0),
+            'status': self.status or 'draft',
+            'total_count': int(self.total_count or 0),
+            'sent_count': int(self.sent_count or 0),
+            'failed_count': int(self.failed_count or 0),
+            'skipped_count': int(self.skipped_count or 0),
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
         }
+
+
+class AnnouncementDelivery(db.Model):
+    """Durable, idempotent outbound delivery for an Announcement campaign."""
+    __tablename__ = 'announcement_deliveries'
+    __table_args__ = (db.UniqueConstraint(
+        'announcement_id', 'recipient_key', name='uq_announcement_delivery_recipient'),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    announcement_id = db.Column(db.Integer, db.ForeignKey(
+        'announcements.id', ondelete='CASCADE'), nullable=False, index=True)
+    recipient_key = db.Column(db.String(160), nullable=False)
+    recipient = db.Column(db.String(160), nullable=False)
+    email = db.Column(db.String(255), nullable=True)
+    server_id = db.Column(db.Integer, nullable=True)
+    inbound_id = db.Column(db.Integer, nullable=True)
+    bot_instance_id = db.Column(db.Integer, db.ForeignKey('telegram_bot_instances.id'), nullable=True)
+    context_json = db.Column(db.Text, nullable=False, default='{}')
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    last_error = db.Column(db.String(500), nullable=True)
+    next_attempt_at = db.Column(db.DateTime, nullable=True, index=True)
+    processed_at = db.Column(db.DateTime, nullable=True, index=True)
+    sent_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    announcement = db.relationship('Announcement', backref=db.backref(
+        'deliveries', lazy=True, cascade='all, delete-orphan'))
+
+    def context(self):
+        try:
+            value = json.loads(self.context_json or '{}')
+        except (TypeError, ValueError):
+            value = {}
+        return value if isinstance(value, dict) else {}
 
 
 class OnlineChatScript(db.Model):

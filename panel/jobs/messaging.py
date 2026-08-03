@@ -31,6 +31,8 @@ from panel.core.redis_client import (
 from panel.extensions import db
 from panel.models import (
     Admin,
+    Announcement,
+    AnnouncementDelivery,
     ClientOwnership,
     MonitorMessageLog,
     NotificationTemplate,
@@ -1027,6 +1029,7 @@ def telegram_announcement_worker():
         try:
             with app.app_context():
                 processed = _run_telegram_announcement_batch()
+                processed += _run_announcement_campaign_batch()
         except Exception as exc:
             processed = 0
             try:
@@ -1035,6 +1038,337 @@ def telegram_announcement_worker():
             except Exception:
                 pass
         time.sleep(1 if processed else 10)
+
+
+def _announcement_target_rules(raw):
+    if raw in (None, '', '*'):
+        return '*'
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        value = []
+    rules = {}
+    for item in value if isinstance(value, list) else []:
+        try:
+            sid = int((item or {}).get('server_id'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        inbounds = (item or {}).get('inbounds', '*')
+        if inbounds == '*':
+            rules[sid] = '*'
+        elif isinstance(inbounds, list):
+            rules[sid] = {int(v) for v in inbounds if str(v).lstrip('-').isdigit()}
+    return rules
+
+
+def _announcement_target_allows(rules, server_id, inbound_id):
+    if rules == '*':
+        return True
+    try:
+        sid, iid = int(server_id), int(inbound_id)
+    except (TypeError, ValueError):
+        return False
+    allowed = rules.get(sid)
+    return allowed == '*' or (isinstance(allowed, set) and iid in allowed)
+
+
+def _announcement_client_context(client, inbound):
+    from app import format_remaining_days  # deferred: compatibility helper
+    email = str(client.get('email') or '').strip()
+    sid = inbound.get('server_id')
+    iid = inbound.get('id') or inbound.get('inbound_id')
+    expiry_ts = int(client.get('expiryTimestamp') or 0)
+    expiry = format_remaining_days(expiry_ts)
+    sub_id = client.get('subId') or client.get('id') or ''
+    dash = str(client.get('dash_sub_url') or '').strip()
+    base = _public_base_url()
+    if dash and not dash.startswith('http') and base:
+        dash = base + (dash if dash.startswith('/') else f'/{dash}')
+    elif not dash and base and sub_id and sid is not None:
+        dash = f'{base}/s/{sid}/{sub_id}'
+    return {
+        'email': email, 'account_name': email, 'service_name': email, 'user': email,
+        'remaining_time': expiry.get('text') or '-',
+        'remaining_volume': client.get('remaining_formatted') or '-',
+        'dashboard_link': dash, 'sub_link': str(client.get('sub_url') or dash),
+        'server_name': inbound.get('server_name') or '',
+        'server_id': sid, 'inbound_id': iid,
+        'comment': client.get('comment') or '',
+    }
+
+
+def _announcement_campaign_recipients(channel, targets='*'):
+    """Resolve a server/inbound audience and deduplicate by actual destination."""
+    from app import _telegram_announcement_recipients  # deferred: app helper
+    channel = str(channel or '').strip().lower()
+    if channel not in ('sms', 'whatsapp', 'telegram'):
+        raise ValueError('Outbound channel must be SMS, WhatsApp, or Telegram')
+    try:
+        load_snapshot_from_redis()
+    except Exception:
+        pass
+    rules = _announcement_target_rules(targets)
+    accounts = []
+    seen_accounts = set()
+    stats = {
+        'clients': 0, 'unique': 0, 'duplicates': 0, 'missing_contact': 0,
+        'opted_out': 0, 'blocked_by_policy': 0,
+    }
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        sid = inbound.get('server_id')
+        iid = inbound.get('id') or inbound.get('inbound_id')
+        if not _announcement_target_allows(rules, sid, iid):
+            continue
+        for client in (inbound.get('clients') or []):
+            email = str(client.get('email') or '').strip()
+            try:
+                key = (int(sid), email.lower())
+            except (TypeError, ValueError):
+                continue
+            if not email or key in seen_accounts:
+                continue
+            seen_accounts.add(key)
+            stats['clients'] += 1
+            accounts.append((client, inbound, _announcement_client_context(client, inbound)))
+
+    recipients = []
+    seen_destinations = set()
+    if channel in ('sms', 'whatsapp'):
+        for client, inbound, context in accounts:
+            comment = context.get('comment') or ''
+            if (channel == 'sms' and _account_has_reseller_owner(context.get('server_id'), context.get('email'))) or (
+                    channel == 'whatsapp' and not _whatsapp_automation_allowed_for_account(
+                        context.get('server_id'), context.get('email'))):
+                stats['blocked_by_policy'] += 1
+                continue
+            if (channel == 'sms' and _sms_comment_opted_out(comment)) or (
+                    channel == 'whatsapp' and _comment_opted_out(comment, 'nopm')):
+                stats['opted_out'] += 1
+                continue
+            phone = _extract_iran_mobile_from_text(context.get('email'), comment)
+            if not phone:
+                stats['missing_contact'] += 1
+                continue
+            if phone in seen_destinations:
+                stats['duplicates'] += 1
+                continue
+            seen_destinations.add(phone)
+            recipients.append({
+                'recipient_key': f'{channel}:{phone}', 'recipient': phone,
+                'email': context.get('email'), 'server_id': context.get('server_id'),
+                'inbound_id': context.get('inbound_id'), 'context': context,
+            })
+    else:
+        contexts_by_customer = {}
+        if accounts:
+            keys = {(int(ctx['server_id']), str(ctx['email']).lower()): ctx for _, _, ctx in accounts}
+            server_ids = sorted({key[0] for key in keys})
+            ownerships = ServiceOwnership.query.filter(
+                ServiceOwnership.server_id.in_(server_ids),
+                ServiceOwnership.revoked_at.is_(None),
+            ).all()
+            for ownership in ownerships:
+                key = (int(ownership.server_id), str(ownership.client_email_snapshot or '').lower())
+                if key in keys and ownership.customer_id not in contexts_by_customer:
+                    contexts_by_customer[int(ownership.customer_id)] = keys[key]
+        tg_filters = {'bot_scope': 'all', 'linked_only': True, 'server_ids': []}
+        for item in _telegram_announcement_recipients(tg_filters):
+            customer_id = item.get('customer_id')
+            context = contexts_by_customer.get(int(customer_id)) if customer_id else None
+            if not context:
+                continue
+            user_key = int(item['telegram_user_id'])
+            if user_key in seen_destinations:
+                stats['duplicates'] += 1
+                continue
+            seen_destinations.add(user_key)
+            bot_id, chat_id = int(item['bot_instance_id']), int(item['chat_id'])
+            recipients.append({
+                'recipient_key': f'telegram:{user_key}',
+                'recipient': str(chat_id), 'bot_instance_id': bot_id,
+                'email': context.get('email'), 'server_id': context.get('server_id'),
+                'inbound_id': context.get('inbound_id'), 'context': context,
+            })
+        stats['missing_contact'] = max(0, len(contexts_by_customer) - len(recipients))
+    stats['unique'] = len(recipients)
+    return recipients, stats
+
+
+def _queue_announcement_campaign(announcement):
+    if announcement.channel == 'subscription':
+        raise ValueError('Subscription announcements do not use the message queue')
+    if announcement.status not in ('draft', 'paused'):
+        raise ValueError('Only draft or paused campaigns can be queued')
+    if announcement.channel == 'sms':
+        cfg = _get_sms_runtime_settings()
+        if not cfg.get('enabled') or not cfg.get('base_url') or not cfg.get('api_key'):
+            raise ValueError('SMS automation and its GMweb gateway must be enabled first')
+    elif announcement.channel == 'whatsapp':
+        cfg = _get_whatsapp_runtime_settings()
+        if not cfg.get('enabled') or not cfg.get('gateway_url'):
+            raise ValueError('WhatsApp messaging must be enabled and connected first')
+    if announcement.status == 'draft':
+        recipients, _ = _announcement_campaign_recipients(announcement.channel, announcement.targets)
+        for item in recipients:
+            context = item.pop('context')
+            db.session.add(AnnouncementDelivery(
+                announcement_id=announcement.id,
+                context_json=json.dumps(context, ensure_ascii=False), **item,
+            ))
+        announcement.total_count = len(recipients)
+    announcement.status = 'queued'
+    announcement.started_at = announcement.started_at or datetime.utcnow()
+    announcement.finished_at = datetime.utcnow() if not announcement.total_count else None
+    if not announcement.total_count:
+        announcement.status = 'completed'
+
+
+def _announcement_campaign_day_bounds():
+    now_utc = datetime.now(timezone.utc)
+    try:
+        tehran_zone = ZoneInfo('Asia/Tehran') if ZoneInfo is not None else timezone(timedelta(hours=3, minutes=30))
+    except Exception:
+        tehran_zone = timezone(timedelta(hours=3, minutes=30))
+    tehran = now_utc.astimezone(tehran_zone)
+    start_local = tehran.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_utc = start_local.astimezone(timezone.utc)
+    return start_utc.replace(tzinfo=None), (start_utc + timedelta(days=1)).replace(tzinfo=None)
+
+
+def _run_announcement_campaign_batch(batch_size=25):
+    """Process outbound announcement campaigns while honoring channel and campaign caps."""
+    from app import _render_text_template, _telegram_bot_api_client
+    now = datetime.utcnow()
+    campaigns = Announcement.query.filter(
+        Announcement.channel.in_(('sms', 'whatsapp', 'telegram')),
+        Announcement.status.in_(('queued', 'sending')),
+    ).order_by(Announcement.id.asc()).limit(5).all()
+    processed = 0
+    api_by_bot = {}
+    for campaign in campaigns:
+        campaign.status = 'sending'
+        available = max(1, batch_size - processed)
+        if campaign.delivery_mode == 'daily':
+            day_start, day_end = _announcement_campaign_day_bounds()
+            used_today = AnnouncementDelivery.query.filter(
+                AnnouncementDelivery.announcement_id == campaign.id,
+                AnnouncementDelivery.processed_at >= day_start,
+                AnnouncementDelivery.processed_at < day_end,
+            ).count()
+            available = min(available, max(0, int(campaign.daily_limit or 1) - used_today))
+            if available <= 0:
+                campaign.status = 'queued'
+                db.session.commit()
+                continue
+        deliveries = AnnouncementDelivery.query.filter(
+            AnnouncementDelivery.announcement_id == campaign.id,
+            AnnouncementDelivery.status.in_(('pending', 'retry')),
+            db.or_(AnnouncementDelivery.next_attempt_at.is_(None), AnnouncementDelivery.next_attempt_at <= now),
+        ).order_by(AnnouncementDelivery.id.asc()).limit(available).all()
+        for delivery in deliveries:
+            context = delivery.context()
+            message = _render_text_template(campaign.message, context).strip()
+            delivery.attempts = int(delivery.attempts or 0) + 1
+            if not message:
+                delivery.status = 'failed'
+                delivery.last_error = 'rendered_message_empty'
+                delivery.processed_at = datetime.utcnow()
+                processed += 1
+                continue
+            try:
+                if campaign.channel == 'sms':
+                    if _sms_account_opted_out(delivery.server_id, delivery.email or '', context.get('comment', ''), refresh_shared=True):
+                        delivery.status, delivery.last_error = 'skipped', 'opted_out'
+                    else:
+                        sms_cfg = _get_sms_runtime_settings()
+                        if _sms_in_quiet_hours(sms_cfg):
+                            delivery.status, delivery.next_attempt_at = 'retry', datetime.utcnow() + timedelta(minutes=30)
+                            delivery.last_error = 'quiet_hours'
+                            continue
+                        pace = float(sms_cfg.get('send_pace_seconds') or 0)
+                        if pace > 0 and SMS_LAST_SEND_TS[0] > 0:
+                            gap = pace - (time.time() - SMS_LAST_SEND_TS[0])
+                            if gap > 0:
+                                delivery.status = 'retry'
+                                delivery.next_attempt_at = datetime.utcnow() + timedelta(seconds=max(1, math.ceil(gap)))
+                                delivery.last_error = 'pace_gated'
+                                continue
+                        segment_info = _sms_segment_info(message)
+                        slot_ok, slot_reason = _sms_take_send_slot(
+                            delivery.recipient, sms_cfg, segment_info['sms_segments'])
+                        if not slot_ok:
+                            delivery.status = 'retry'
+                            delivery.next_attempt_at = datetime.utcnow() + timedelta(
+                                minutes=30 if slot_reason == 'daily_limit_reached' else 5)
+                            delivery.last_error = slot_reason
+                            continue
+                        result = _send_sms_via_gmweb(
+                            delivery.recipient, message, cfg=sms_cfg,
+                            idempotency_key=f'announcement-{campaign.id}-{delivery.id}',
+                        )
+                        SMS_LAST_SEND_TS[0] = time.time()
+                        reason = result.get('reason') or ''
+                        if result.get('sent'):
+                            delivery.status, delivery.sent_at, delivery.last_error = 'sent', datetime.utcnow(), None
+                        elif reason in ('daily_limit_reached', 'recipient_rate_limited'):
+                            delivery.status, delivery.next_attempt_at = 'retry', datetime.utcnow() + timedelta(minutes=5)
+                            delivery.last_error = reason
+                        else:
+                            delivery.status, delivery.last_error = 'failed', reason or 'send_failed'
+                        _sms_log_row(
+                            f'announcement-{campaign.id}', (delivery.email or '').lower(),
+                            delivery.server_id, context.get('server_name'), 'announcement',
+                            delivery.recipient, _sms_accepted_status(result) if result.get('sent') else 'failed',
+                            None if result.get('sent') else delivery.last_error, result,
+                        )
+                elif campaign.channel == 'whatsapp':
+                    if _comment_opted_out(context.get('comment'), 'nopm'):
+                        delivery.status, delivery.last_error = 'skipped', 'opted_out'
+                    else:
+                        result = _send_whatsapp_message('announcement', delivery.recipient, message)
+                        reason = result.get('reason') or ''
+                        if result.get('sent'):
+                            delivery.status, delivery.sent_at, delivery.last_error = 'sent', datetime.utcnow(), None
+                        elif reason in ('daily_limit_reached', 'pace_gated', 'recipient_rate_limited'):
+                            delivery.status, delivery.next_attempt_at = 'retry', datetime.utcnow() + timedelta(minutes=5)
+                            delivery.last_error = reason
+                        else:
+                            delivery.status, delivery.last_error = 'failed', reason or 'send_failed'
+                else:
+                    bot = db.session.get(TelegramBotInstance, delivery.bot_instance_id)
+                    if not bot or not bot.enabled or bot.archived_at is not None:
+                        delivery.status, delivery.last_error = 'failed', 'Bot is unavailable'
+                    else:
+                        api = api_by_bot.get(bot.id)
+                        if api is None:
+                            api = _telegram_bot_api_client(bot)
+                            api_by_bot[bot.id] = api
+                        api.send_message(int(delivery.recipient), message, disable_web_page_preview=True)
+                        delivery.status, delivery.sent_at, delivery.last_error = 'sent', datetime.utcnow(), None
+            except Exception as exc:
+                delivery.last_error = str(redact_connection_error(exc))[:500]
+                if delivery.attempts >= 5:
+                    delivery.status = 'failed'
+                else:
+                    delivery.status = 'retry'
+                    delivery.next_attempt_at = datetime.utcnow() + timedelta(minutes=5)
+            if delivery.status in ('sent', 'failed', 'skipped'):
+                delivery.processed_at = datetime.utcnow()
+            processed += 1
+            if processed >= batch_size:
+                break
+        counts = dict(db.session.query(
+            AnnouncementDelivery.status, db.func.count(AnnouncementDelivery.id),
+        ).filter_by(announcement_id=campaign.id).group_by(AnnouncementDelivery.status).all())
+        campaign.sent_count = int(counts.get('sent', 0))
+        campaign.failed_count = int(counts.get('failed', 0))
+        campaign.skipped_count = int(counts.get('skipped', 0))
+        if not any(counts.get(value, 0) for value in ('pending', 'retry')):
+            campaign.status, campaign.finished_at = 'completed', datetime.utcnow()
+        db.session.commit()
+        if processed >= batch_size:
+            break
+    return processed
 
 
 # ─────────────────────────────────────────────────────────────────────────────

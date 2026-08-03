@@ -2,6 +2,7 @@
 import json
 import re
 import uuid
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request, session
@@ -427,9 +428,16 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
     if not data:
         return None, 'No data provided'
 
+    channel = str(data.get('channel') or 'subscription').strip().lower()
+    if channel not in ('subscription', 'sms', 'whatsapp', 'telegram'):
+        return None, 'Announcement type is invalid'
     message = (data.get('message') or '').strip()
     if not message:
         return None, 'Message is required'
+    if channel == 'telegram' and len(message) > 4096:
+        return None, 'Telegram messages cannot exceed 4096 characters'
+    if channel in ('sms', 'whatsapp') and len(message) > 8000:
+        return None, 'Message cannot exceed 8000 characters'
 
     start_at_iso_raw = (data.get('start_at') or '').strip()
     end_at_iso_raw = (data.get('end_at') or '').strip()
@@ -443,13 +451,16 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
     if not end_at and end_at_jalali_raw:
         end_at = parse_jalali_date(end_at_jalali_raw)
 
+    if channel != 'subscription' and (not start_at or not end_at):
+        start_at = datetime.utcnow()
+        end_at = start_at + timedelta(days=3650)
     if not start_at or not end_at:
         return None, 'Start and End datetime are required'
     if start_at > end_at:
         return None, 'Start datetime must be before End datetime'
 
     try:
-        action_buttons = _normalize_sub_app_buttons(data.get('action_buttons', [])) or []
+        action_buttons = (_normalize_sub_app_buttons(data.get('action_buttons', [])) or []) if channel == 'subscription' else []
     except ValueError as exc:
         return None, str(exc)
     try:
@@ -458,6 +469,15 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
         button_columns = 1
     if button_columns not in (1, 2):
         return None, 'Button grid must have one or two columns'
+    delivery_mode = str(data.get('delivery_mode') or 'all').strip().lower()
+    if delivery_mode not in ('all', 'daily'):
+        return None, 'Delivery mode must be all at once or daily'
+    try:
+        daily_limit = int(data.get('daily_limit') or 0)
+    except (TypeError, ValueError):
+        daily_limit = 0
+    if channel != 'subscription' and delivery_mode == 'daily' and not 1 <= daily_limit <= 100000:
+        return None, 'Daily recipient limit must be between 1 and 100000'
 
     def _parse_int_or_none(val):
         if val is None:
@@ -581,6 +601,9 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
         'server_ids': derived_server_ids,
         'action_buttons': action_buttons,
         'button_columns': button_columns,
+        'channel': channel,
+        'delivery_mode': delivery_mode,
+        'daily_limit': daily_limit if delivery_mode == 'daily' else None,
     }
     return payload, None
 
@@ -608,8 +631,10 @@ def create_announcement():
     _ANN_STYLES = ['color','background-color','font-size','text-align','direction',
                    'max-width','width','height','border-radius','padding','margin',
                    'display','text-decoration','font-weight']
+    safe_message = (sanitize_html(payload['message'], tags=_ANN_TAGS, attributes=_ANN_ATTRS, styles=_ANN_STYLES)
+                    if payload['channel'] == 'subscription' else payload['message'])
     ann = Announcement(
-        message=sanitize_html(payload['message'], tags=_ANN_TAGS, attributes=_ANN_ATTRS, styles=_ANN_STYLES),
+        message=safe_message,
         all_servers=payload['all_servers'],
         targets=payload['targets'],
         start_at=payload['start_at'],
@@ -620,6 +645,10 @@ def create_announcement():
         button_text=(str(data.get('button_text') or '').strip()[:120] or None),
         action_buttons=json.dumps(payload['action_buttons'], ensure_ascii=False),
         button_columns=payload['button_columns'],
+        channel=payload['channel'],
+        delivery_mode=payload['delivery_mode'],
+        daily_limit=payload['daily_limit'],
+        status='published' if payload['channel'] == 'subscription' else 'draft',
     )
 
     if not payload['all_servers']:
@@ -646,6 +675,13 @@ def update_announcement(announcement_id):
         return jsonify({'success': False, 'error': 'Announcement not found'}), 404
 
     data = request.get_json() or {}
+    existing_channel = ann.channel or 'subscription'
+    requested_channel = str(data.get('channel') or existing_channel).strip().lower()
+    if requested_channel != existing_channel:
+        return jsonify({'success': False, 'error': 'Announcement type cannot be changed after creation'}), 409
+    if existing_channel != 'subscription' and ann.status != 'draft':
+        return jsonify({'success': False, 'error': 'Only draft campaigns can be edited'}), 409
+    data['channel'] = existing_channel
     payload, err = _parse_announcement_payload(data)
     if err:
         return jsonify({'success': False, 'error': err}), 400
@@ -659,7 +695,11 @@ def update_announcement(announcement_id):
     _ANN_STYLES = ['color','background-color','font-size','text-align','direction',
                    'max-width','width','height','border-radius','padding','margin',
                    'display','text-decoration','font-weight']
-    ann.message = sanitize_html(payload['message'], tags=_ANN_TAGS, attributes=_ANN_ATTRS, styles=_ANN_STYLES)
+    ann.message = (sanitize_html(payload['message'], tags=_ANN_TAGS, attributes=_ANN_ATTRS, styles=_ANN_STYLES)
+                   if payload['channel'] == 'subscription' else payload['message'])
+    ann.channel = payload['channel']
+    ann.delivery_mode = payload['delivery_mode']
+    ann.daily_limit = payload['daily_limit']
     ann.all_servers = payload['all_servers']
     ann.targets = payload['targets']
     ann.start_at = payload['start_at']
@@ -687,6 +727,59 @@ def update_announcement(announcement_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@bp.route('/api/announcements/preview', methods=['POST'])
+@user_management_required
+def preview_announcement_campaign():
+    from panel.jobs.messaging import _announcement_campaign_recipients, _sms_segment_info
+    from app import _render_text_template
+    data = request.get_json(silent=True) or {}
+    channel = str(data.get('channel') or '').strip().lower()
+    if channel not in ('sms', 'whatsapp', 'telegram'):
+        return jsonify({'success': False, 'error': 'Select an outbound announcement type'}), 400
+    try:
+        recipients, stats = _announcement_campaign_recipients(channel, data.get('targets') or '*')
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    result = {'success': True, **stats}
+    if channel == 'sms':
+        template = str(data.get('message') or '')
+        segment_counts = [
+            int(_sms_segment_info(_render_text_template(template, item.get('context') or {})).get('sms_segments') or 0)
+            for item in recipients
+        ]
+        result['sms'] = {
+            **_sms_segment_info(template),
+            'estimated_total_segments': sum(segment_counts),
+            'min_segments_per_recipient': min(segment_counts) if segment_counts else 0,
+            'max_segments_per_recipient': max(segment_counts) if segment_counts else 0,
+        }
+    return jsonify(result)
+
+
+@bp.route('/api/announcements/<int:announcement_id>/<action>', methods=['POST'])
+@user_management_required
+def mutate_announcement_campaign(announcement_id, action):
+    from panel.jobs.messaging import _queue_announcement_campaign
+    ann = db.session.get(Announcement, announcement_id)
+    if not ann or (ann.channel or 'subscription') == 'subscription':
+        return jsonify({'success': False, 'error': 'Campaign not found'}), 404
+    try:
+        if action in ('send', 'resume'):
+            _queue_announcement_campaign(ann)
+        elif action == 'pause' and ann.status in ('queued', 'sending'):
+            ann.status = 'paused'
+        elif action == 'cancel' and ann.status not in ('completed', 'cancelled'):
+            ann.status = 'cancelled'
+            ann.finished_at = datetime.utcnow()
+        else:
+            raise ValueError('Action is not valid for the current campaign status')
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 409
+    return jsonify({'success': True, 'announcement': ann.to_dict()})
+
+
 @bp.route('/api/announcements/<int:announcement_id>', methods=['DELETE'])
 @user_management_required
 def delete_announcement(announcement_id):
@@ -694,6 +787,8 @@ def delete_announcement(announcement_id):
     ann = db.session.get(Announcement, announcement_id)
     if not ann:
         return jsonify({'success': False, 'error': 'Announcement not found'}), 404
+    if (ann.channel or 'subscription') != 'subscription' and ann.status in ('queued', 'sending'):
+        return jsonify({'success': False, 'error': 'Pause or cancel the campaign before deleting it'}), 409
 
     try:
         db.session.delete(ann)

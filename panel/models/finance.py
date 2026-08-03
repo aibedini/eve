@@ -149,8 +149,8 @@ class Transaction(db.Model):
     # Reseller-statement breakdown: what plan this purchase/renew was for. Filled
     # for purchase/renew rows; null for deposits/reset/audit rows.
     package_name = db.Column(db.String(120), nullable=True)  # package name, or 'Custom'
-    volume_gb = db.Column(db.Integer, nullable=True)         # GB (0 = unlimited)
-    days = db.Column(db.Integer, nullable=True)              # days (0 = unlimited)
+    volume_gb = db.Column(db.Float, nullable=True)           # GB (0 = unlimited; decimals supported)
+    days = db.Column(db.Float, nullable=True)                # days (0 = unlimited; decimals supported)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     server = db.relationship('Server', backref='transactions', lazy=True)

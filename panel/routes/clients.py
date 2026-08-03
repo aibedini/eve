@@ -3,6 +3,7 @@ import base64
 import copy
 import io
 import json
+import math
 import re
 import secrets
 import string
@@ -1225,6 +1226,14 @@ def renew_client(server_id, inbound_id, email):
     description = ""
     pkg_name = None
 
+    def _fractional_renew_value(value, field_name):
+        number = float(value or 0)
+        if not math.isfinite(number):
+            raise ValueError(f'{field_name} must be a finite number')
+        # Keep the existing clean labels/audit values for whole numbers while
+        # preserving actual fractions such as 0.5.
+        return int(number) if number.is_integer() else number
+
     try:
         if mode == 'package':
             pkg_id = data.get('package_id')
@@ -1240,7 +1249,7 @@ def renew_client(server_id, inbound_id, email):
             if days_to_add < 0:
                 return _finish({"success": False, "error": "Package is misconfigured (negative days)"}, 400)
         else:
-            days_to_add = int(data.get('days', 0))
+            days_to_add = _fractional_renew_value(data.get('days', 0), 'days')
             raw_volume = data.get('volume', None)
             if raw_volume is None:
                 volume_provided = False
@@ -1250,7 +1259,7 @@ def renew_client(server_id, inbound_id, email):
                 volume_gb_to_add = 0
             else:
                 volume_provided = True
-                volume_gb_to_add = int(raw_volume)
+                volume_gb_to_add = _fractional_renew_value(raw_volume, 'volume')
             if volume_gb_to_add < 0:
                 volume_gb_to_add = 0
             if days_to_add < 0:
@@ -1491,12 +1500,16 @@ def renew_client(server_id, inbound_id, email):
             rounded_gb = int(gb_float + 0.5) if gb_float > 0 else 0
             remaining_gb_before = max(1, rounded_gb) if remaining_bytes > 0 else 0
         
+        # Panels store expiry in integer milliseconds. Convert only after applying
+        # the fractional-day value so e.g. 0.5 days remains exactly 12 hours.
+        duration_ms = int(round(days_to_add * 86400000))
+
         # Calculate new expiry
         if days_to_add == 0:
             # 0 days = unlimited expiry
             new_expiry = 0
         elif start_after_first_use:
-            new_expiry = -1 * (days_to_add * 86400000)
+            new_expiry = -duration_ms
         else:
             current_expiry = target_client.get('expiryTime', 0)
             # If the client is not started yet (negative expiry), keep it not-started
@@ -1507,7 +1520,7 @@ def renew_client(server_id, inbound_id, email):
                 current_expiry_int = 0
 
             if current_expiry_int < 0:
-                new_expiry = current_expiry_int - (days_to_add * 86400000)
+                new_expiry = current_expiry_int - duration_ms
             elif current_expiry_int > 0:
                 # Add days in milliseconds (avoids DST/timezone edge cases).
                 # An already-expired timestamp must NOT be extended in the past:
@@ -1516,9 +1529,9 @@ def renew_client(server_id, inbound_id, email):
                 # actually goes (and stays) active.
                 now_ms = int(time.time() * 1000)
                 base_expiry = current_expiry_int if current_expiry_int > now_ms else now_ms
-                new_expiry = base_expiry + int(days_to_add * 86400000)
+                new_expiry = base_expiry + duration_ms
             else:
-                new_expiry = int(time.time() * 1000) + int(days_to_add * 86400000)
+                new_expiry = int(time.time() * 1000) + duration_ms
         
         # Update volume
         current_volume = current_total_bytes
@@ -1532,7 +1545,7 @@ def renew_client(server_id, inbound_id, email):
             else:
                 # 0 = unlimited, >0 = set exact cap
                 if volume_gb_to_add > 0:
-                    new_volume = volume_gb_to_add * 1024 * 1024 * 1024
+                    new_volume = int(round(volume_gb_to_add * 1024 * 1024 * 1024))
                 else:
                     new_volume = 0  # unlimited
         else:
@@ -1548,7 +1561,7 @@ def renew_client(server_id, inbound_id, email):
                 if current_volume == 0:
                     new_volume = 0
                 else:
-                    new_volume = current_volume + (volume_gb_to_add * 1024 * 1024 * 1024)
+                    new_volume = current_volume + int(round(volume_gb_to_add * 1024 * 1024 * 1024))
             else:
                 new_volume = current_volume
         
@@ -1878,7 +1891,7 @@ def renew_client(server_id, inbound_id, email):
                     msg_days = days_to_add
                     days_label = f"{msg_days} Days"
                 else:
-                    msg_days = int(remaining_days_before) + int(days_to_add)
+                    msg_days = int(remaining_days_before) + days_to_add
                     days_label = f"{msg_days} Days"
 
                 if not volume_provided:
@@ -1893,14 +1906,14 @@ def renew_client(server_id, inbound_id, email):
                     msg_volume = '♾️'
                     volume_label = "♾️"
                 elif reset_traffic:
-                    msg_volume = int(volume_gb_to_add)
+                    msg_volume = volume_gb_to_add
                     volume_label = f"{msg_volume}GB"
                 else:
                     if not has_limited_volume:
                         msg_volume = '♾️'
                         volume_label = "♾️"
                     else:
-                        msg_volume = int(remaining_gb_before) + int(volume_gb_to_add)
+                        msg_volume = int(remaining_gb_before) + volume_gb_to_add
                         volume_label = f"{(remaining_gb_before_exact + float(volume_gb_to_add)):.2f}GB"
 
                 # `{date}` should represent the new expiry, not "now".
@@ -3042,4 +3055,3 @@ def add_client(server_id, inbound_id):
     except Exception as e:
         app.logger.error(f"Add client error (server_id={server_id}, inbound_id={inbound_id}): {e}")
         return jsonify({"success": False, "error": str(e)})
-

@@ -355,7 +355,7 @@ def assign_package_to_resellers(package_id):
 def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None):
     """Return the best matching PriceTier or None (falls back to SystemConfig defaults)."""
     volume_gb = float(volume_gb or 0)
-    days = int(days or 0)
+    days = float(days or 0)
 
     # Collect candidates: reseller-specific + global, ordered by priority desc, reseller first
     tiers = (PriceTier.query
@@ -387,7 +387,7 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
 def _calculate_minimum_price(volume_gb, days, reseller_id=None, server_id=None):
     """Returns (min_price, effective_cost_per_gb, effective_cost_per_day)."""
     volume_gb = float(volume_gb or 0)
-    days = int(days or 0)
+    days = float(days or 0)
 
     tier = _get_applicable_price_tier(volume_gb, days, reseller_id=reseller_id, server_id=server_id)
 
@@ -441,7 +441,7 @@ def _tier_assigned_reseller_ids(tier):
 def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None):
     """Return the best matching active dynamic pricing tier."""
     volume_gb = float(volume_gb or 0)
-    days = int(days or 0)
+    days = float(days or 0)
     try:
         reseller_id = int(reseller_id) if reseller_id not in (None, '', 0, '0') else None
     except Exception:
@@ -480,7 +480,7 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
 def _calculate_minimum_price(volume_gb, days, reseller_id=None, server_id=None, user=None):
     """Returns (price, cost_per_gb, cost_per_day, matched_tier)."""
     volume_gb = float(volume_gb or 0)
-    days = int(days or 0)
+    days = float(days or 0)
     tier = _get_applicable_price_tier(volume_gb, days, reseller_id=reseller_id, server_id=server_id)
 
     if tier:
@@ -525,7 +525,7 @@ def package_min_price():
 
     try:
         volume_gb = float(request.args.get('volume_gb', 0) or 0)
-        days = int(request.args.get('days', 0) or 0)
+        days = float(request.args.get('days', 0) or 0)
         server_id = request.args.get('server_id')
         server_id = int(server_id) if server_id else None
     except Exception:
