@@ -95,6 +95,30 @@
         :is(.app-action-button,.announcement-action-button)[data-palette="slate"]:hover { background:rgba(100,116,139,.30);border-color:rgba(203,213,225,.62); }
         .announcement-actions { display:grid; gap:8px; margin-top:12px; }
         .announcement-action-button { width:100%; box-sizing:border-box; min-height:42px; overflow-wrap:anywhere; }
+        .app-action-button .ph, .announcement-action-button .ph { font-size:1.12em; line-height:1; flex-shrink:0; }
+        .qr-open-btn {
+            border: 1px solid rgba(99,102,241,.38);
+            background: rgba(99,102,241,.12);
+            color: #c7d2fe;
+        }
+        .qr-open-btn:hover { background: rgba(99,102,241,.22); color: #fff; border-color: rgba(129,140,248,.72); }
+        .qr-modal-overlay {
+            position: fixed; inset: 0; z-index: 10000; display: none;
+            align-items: center; justify-content: center; padding: 16px;
+            background: rgba(0,0,0,.72);
+        }
+        .qr-modal-overlay.open { display: flex; }
+        .qr-modal-box {
+            width: min(92vw, 380px); background: #0f172a;
+            border: 1px solid rgba(255,255,255,.12); border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,.5); padding: 20px;
+        }
+        #qr-code-box {
+            background: #fff; border-radius: 14px; padding: 14px;
+            display: flex; justify-content: center; align-items: center; min-height: 260px;
+        }
+        #qr-code-box canvas, #qr-code-box img { width: 240px !important; height: 240px !important; }
+        .qr-value-preview { direction:ltr; text-align:left; max-height:70px; overflow:auto; }
         /* Renewal package cards (minimal square, like app selection) */
         .pkg-renew-grid {
             display: grid;
@@ -431,6 +455,12 @@
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     {{ 'کپی' if is_fa else 'COPY' }}
                 </button>
+                <button type="button" onclick="showQrCode(document.getElementById('backupConfig{{ loop.index }}').value)"
+                        class="qr-open-btn px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap flex-shrink-0">
+                    <i class="ph ph-qr-code" aria-hidden="true"></i>
+                    QR
+                </button>
+                <input type="hidden" id="backupConfig{{ loop.index }}" value="{{ bc.config_url }}">
             </div>
         </div>
         {% endfor %}
@@ -575,6 +605,10 @@
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     {{ 'کپی' if is_fa else 'COPY' }}
                 </button>
+                <button type="button" onclick="showQrCode(document.getElementById('subLink').value)" class="qr-open-btn px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 whitespace-nowrap">
+                    <i class="ph ph-qr-code" aria-hidden="true"></i>
+                    QR
+                </button>
                 <input type="hidden" id="subLink" value="{{ client.subscription_url }}">
             </div>
 
@@ -714,6 +748,12 @@
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                             {{ 'کپی' if is_fa else 'COPY' }}
                         </button>
+                        <button type="button" onclick="showQrCode(document.getElementById('manualConfig{{ loop.index }}').value)"
+                                class="qr-open-btn px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap">
+                            <i class="ph ph-qr-code" aria-hidden="true"></i>
+                            QR
+                        </button>
+                        <input type="hidden" id="manualConfig{{ loop.index }}" value="{{ config }}">
                     </div>
                     {% endfor %}
                 </div>
@@ -752,6 +792,17 @@
                     {{ 'ارسال با پیامک' if is_fa else 'Send via SMS' }}
                 </button>
             </div>
+        </div>
+    </div>
+
+    <div id="qr-modal" class="qr-modal-overlay" onclick="if(event.target===this) closeQrCode()">
+        <div class="qr-modal-box" style="direction: {{ 'rtl' if is_fa else 'ltr' }};">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;">
+                <h3 id="qr-modal-title" style="color:#fff;font-weight:700;font-size:15px;margin:0;">QR Code</h3>
+                <button type="button" onclick="closeQrCode()" style="color:rgba(148,163,184,.9);background:none;border:none;font-size:24px;line-height:1;cursor:pointer;padding:0;">&times;</button>
+            </div>
+            <div id="qr-code-box"></div>
+            <div id="qr-value-preview" class="qr-value-preview text-xs text-muted font-mono mt-3 break-all"></div>
         </div>
     </div>
 
@@ -810,6 +861,7 @@
         </button>
     </nav>
 
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='qrcode.min.js') }}"></script>
     <script nonce="{{ csp_nonce }}">
         const apps = {{ apps|tojson }};
         const faqs = {{ faqs|tojson }};
@@ -1058,6 +1110,43 @@
             }).catch(() => {
                 alert(I18N.copyFailed);
             });
+        }
+
+        function showQrCode(value) {
+            const text = String(value || '').trim();
+            if (!text) return;
+            const modal = document.getElementById('qr-modal');
+            const box = document.getElementById('qr-code-box');
+            const titleEl = document.getElementById('qr-modal-title');
+            const preview = document.getElementById('qr-value-preview');
+            if (!modal || !box || !titleEl || !preview) return;
+            titleEl.textContent = 'QR Code';
+            preview.textContent = text;
+            box.innerHTML = '';
+            if (typeof QRCode === 'undefined') {
+                box.innerHTML = '<div style="color:#0f172a;font-weight:700;text-align:center;">QR generator unavailable</div>';
+            } else {
+                try {
+                    new QRCode(box, {
+                        text,
+                        width: 240,
+                        height: 240,
+                        colorDark: '#020617',
+                        colorLight: '#ffffff',
+                        correctLevel: QRCode.CorrectLevel.L
+                    });
+                } catch (error) {
+                    box.innerHTML = '<div style="color:#0f172a;font-weight:700;text-align:center;line-height:1.6;">This config is too long for a QR code.</div>';
+                }
+            }
+            modal.classList.add('open');
+        }
+
+        function closeQrCode() {
+            const modal = document.getElementById('qr-modal');
+            const box = document.getElementById('qr-code-box');
+            if (modal) modal.classList.remove('open');
+            if (box) box.innerHTML = '';
         }
 
         function showToast() {
