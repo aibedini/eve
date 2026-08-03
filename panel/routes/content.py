@@ -9,8 +9,17 @@ from flask import Blueprint, jsonify, request, session
 from panel.extensions import db
 from panel.models import (
     Admin, Announcement, FAQ, OnlineChatScript, Server, SubAppConfig,
+    SystemConfig,
 )
 from panel.routes.common import user_management_required
+from panel.services.subscription import (
+    DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
+    DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA,
+    SUBSCRIPTION_STATISTICS_ENABLED_KEY,
+    SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY,
+    SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY,
+    validate_subscription_statistics_template,
+)
 
 
 bp = Blueprint('content', __name__)
@@ -253,6 +262,48 @@ def delete_sub_app(app_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bp.route('/api/subscription-statistics', methods=['PUT'])
+@user_management_required
+def update_subscription_statistics():
+    """Save the configurable, connectable statistics subscription entry."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    try:
+        template_fa = validate_subscription_statistics_template(
+            data.get('template_fa', DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA)
+        )
+        template_en = validate_subscription_statistics_template(
+            data.get('template_en', DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN)
+        )
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    enabled_raw = data.get('enabled', True)
+    enabled = (
+        enabled_raw if isinstance(enabled_raw, bool)
+        else str(enabled_raw or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    )
+    settings = {
+        SUBSCRIPTION_STATISTICS_ENABLED_KEY: 'true' if enabled else 'false',
+        SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY: template_fa,
+        SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY: template_en,
+    }
+    try:
+        for key, value in settings.items():
+            row = db.session.get(SystemConfig, key)
+            if row:
+                row.value = value
+            else:
+                db.session.add(SystemConfig(key=key, value=value))
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 # FAQ APIs

@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from unittest import mock
 
 
@@ -15,7 +15,8 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 os.environ['EVE_SKIP_IMPORT_MIGRATIONS'] = '1'
 
 import app as app_module  # noqa: E402
-from app import Admin, GLOBAL_SERVER_DATA, Server, app, db  # noqa: E402
+from app import Admin, GLOBAL_SERVER_DATA, Server, SystemConfig, app, db  # noqa: E402
+from panel.routes.subscription_pages import _build_subscription_statistics_values  # noqa: E402
 from panel.services import subscription as subscription_service  # noqa: E402
 
 
@@ -95,6 +96,7 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         subscription_service.SUBSCRIPTION_PROFILE_CACHE.clear()
         Admin.query.delete()
         Server.query.delete()
+        SystemConfig.query.delete()
         db.session.commit()
 
         self.admin = Admin(
@@ -177,11 +179,19 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         self.assertIn('edge-germany.example:15001', payload)
         self.assertIn(quote('navid-🇩🇪 Germany'), payload)
         self.assertNotIn('vmess://', payload)
-        self.assertEqual(len(payload.splitlines()), 1)
-        self.assertEqual(fetch.call_count, 0)
+        lines = payload.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(line.startswith('ss://') for line in lines))
+        self.assertTrue(all(
+            base64.b64decode(line[len('ss://'):].split('@', 1)[0]).decode('utf-8')
+            == f'{METHOD}:{LIVE_PASSWORD}'
+            for line in lines
+        ))
+        self.assertIn('No%20renewal%20needed', lines[-1])
+        self.assertEqual(fetch.call_count, 1)
         v3_get.assert_called_once()
         self.assertEqual(v3_get.call_args.kwargs['timeout'], (3, 8))
-        self.assertNotIn('Subscription-Userinfo', response.headers)
+        self.assertIn('Subscription-Userinfo', response.headers)
         self.assertIn('no-store', response.headers.get('Cache-Control', ''))
 
     def test_live_fetch_failure_never_falls_back_to_stale_content(self):
@@ -261,6 +271,111 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         decoded = json.loads(base64.b64decode(result.removeprefix('vmess://')))
         self.assertEqual(decoded['ps'], 'Germany-shadow-user')
         self.assertEqual(decoded['id'], vmess['id'])
+
+    def test_statistics_config_clones_real_vmess_credentials(self):
+        vmess = {
+            'v': '2',
+            'ps': 'Germany',
+            'add': 'edge.example',
+            'port': '443',
+            'id': '00000000-1111-2222-3333-444444444444',
+            'net': 'ws',
+            'path': '/socket',
+            'tls': 'tls',
+        }
+        link = 'vmess://' + base64.b64encode(
+            json.dumps(vmess).encode('utf-8')
+        ).decode('ascii')
+
+        cloned = subscription_service.clone_subscription_config_with_name(
+            [link], 'Account is active',
+        )
+        decoded = json.loads(base64.b64decode(cloned.removeprefix('vmess://')))
+        self.assertEqual(decoded['ps'], 'Account is active')
+        self.assertEqual(decoded['id'], vmess['id'])
+        self.assertEqual(decoded['add'], vmess['add'])
+        self.assertEqual(decoded['path'], vmess['path'])
+
+    def test_statistics_values_describe_start_after_first_connection(self):
+        values = _build_subscription_statistics_values(
+            {'key': 'active', 'label': 'Active', 'emoji': '✅'},
+            {'type': 'start_after_use', 'days': 31, 'text': 'Not started (31 days)'},
+            20 * 1024 ** 3,
+            30 * 1024 ** 3,
+            10 * 1024 ** 3,
+            'shadow-user',
+            'en',
+        )
+        self.assertEqual(values['days'], '31 days')
+        self.assertEqual(values['expiry_type'], 'After first connection')
+        self.assertEqual(values['volume'], '20 GB remaining')
+        self.assertEqual(values['renewal'], 'No renewal needed')
+
+    def test_custom_statistics_template_is_app_only_and_can_be_disabled(self):
+        saved = self.client.put('/api/subscription-statistics', json={
+            'enabled': True,
+            'template_fa': 'وضعیت {status}',
+            'template_en': 'ACCOUNT {email} | {expiry_type}',
+        })
+        self.assertEqual(saved.status_code, 200, saved.get_json())
+
+        patches = self._live_patches(([_shadowsocks_inbound(LIVE_PASSWORD)], None, 'legacy'))
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            response = self.client.get(
+                f'/s/{self.server.id}/{SUB_ID}',
+                headers={'User-Agent': 'v2rayng', 'Accept': '*/*'},
+            )
+        lines = _decode_subscription_body(response).splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn('ACCOUNT shadow-user | Unlimited', unquote(lines[-1]))
+        self.assertEqual(
+            base64.b64decode(lines[-1][len('ss://'):].split('@', 1)[0]).decode(),
+            f'{METHOD}:{LIVE_PASSWORD}',
+        )
+
+        patches = self._live_patches(([_shadowsocks_inbound(LIVE_PASSWORD)], None, 'legacy'))
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            html_response = self.client.get(
+                f'/s/{self.server.id}/{SUB_ID}?view=1',
+                headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html'},
+            )
+        self.assertEqual(html_response.status_code, 200)
+        self.assertNotIn('ACCOUNT shadow-user', html_response.get_data(as_text=True))
+
+        disabled = self.client.put('/api/subscription-statistics', json={
+            'enabled': False,
+            'template_fa': 'وضعیت {status}',
+            'template_en': 'ACCOUNT {email}',
+        })
+        self.assertEqual(disabled.status_code, 200, disabled.get_json())
+        patches = self._live_patches(([_shadowsocks_inbound(LIVE_PASSWORD)], None, 'legacy'))
+        with patches[0], patches[1] as fetch, patches[2], patches[3], patches[4]:
+            response = self.client.get(
+                f'/s/{self.server.id}/{SUB_ID}',
+                headers={'User-Agent': 'v2rayng', 'Accept': '*/*'},
+            )
+        self.assertEqual(len(_decode_subscription_body(response).splitlines()), 1)
+        self.assertEqual(fetch.call_count, 0)
+
+    def test_statistics_template_rejects_unknown_variables(self):
+        response = self.client.put('/api/subscription-statistics', json={
+            'enabled': True,
+            'template_fa': '{unknown}',
+            'template_en': '{status}',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get('X-Eve-Status'), '400')
+        self.assertFalse(response.get_json()['success'])
+        self.assertIn('Unknown statistics variable', response.get_json()['error'])
+
+    def test_sub_manager_renders_statistics_editor(self):
+        response = self.client.get('/sub-manager')
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('id="tab-statistics"', html)
+        self.assertIn('id="statistics-template-fa"', html)
+        self.assertIn('saveSubscriptionStatistics()', html)
+        self.assertIn('remaining_volume', html)
 
     def test_subscription_sort_skips_unassigned_priority_and_keeps_user_links_ordered(self):
         self.server.subscription_inbound_order = json.dumps([99, 7, 42])

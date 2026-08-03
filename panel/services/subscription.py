@@ -5,6 +5,7 @@ aggregation, and inbound client lookup.
 """
 import base64
 import json
+import re
 import threading
 import time
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlsplit
@@ -17,6 +18,94 @@ from panel.adapters.xui import (
     server_is_v3,
 )
 from panel.core.redis_client import GLOBAL_SERVER_DATA
+
+
+SUBSCRIPTION_STATISTICS_ENABLED_KEY = 'subscription_statistics_enabled'
+SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY = 'subscription_statistics_template_fa'
+SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY = 'subscription_statistics_template_en'
+DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA = (
+    '{emoji} {status} | {renewal} | {expiry} | {volume} | انتخاب نکنید'
+)
+DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN = (
+    '{emoji} {status} | {renewal} | {expiry} | {volume} | Do not select'
+)
+SUBSCRIPTION_STATISTICS_PLACEHOLDERS = {
+    'emoji', 'status', 'renewal', 'days', 'volume', 'remaining_volume',
+    'total_volume', 'used_volume', 'expiry', 'expiry_type', 'email',
+}
+_SUBSCRIPTION_STATISTICS_PLACEHOLDER_RE = re.compile(r'\{([a-z_]+)\}')
+_CLONEABLE_SUBSCRIPTION_SCHEMES = {
+    'vless', 'trojan', 'ss', 'socks', 'http', 'https', 'hysteria',
+    'hysteria2', 'hy2', 'tuic', 'wireguard', 'wg', 'anytls', 'ssh',
+}
+
+
+def validate_subscription_statistics_template(value):
+    """Normalize a status-name template and reject unsupported variables."""
+    template = str(value or '').strip()
+    if not template:
+        raise ValueError('Statistics template cannot be empty')
+    if len(template) > 500:
+        raise ValueError('Statistics template cannot exceed 500 characters')
+    if any(char in template for char in ('\r', '\n', '\x00')):
+        raise ValueError('Statistics template must be a single line')
+    unknown = sorted(
+        set(_SUBSCRIPTION_STATISTICS_PLACEHOLDER_RE.findall(template))
+        - SUBSCRIPTION_STATISTICS_PLACEHOLDERS
+    )
+    if unknown:
+        raise ValueError(f"Unknown statistics variable: {{{unknown[0]}}}")
+    return template
+
+
+def render_subscription_statistics_name(template, values):
+    """Render only the documented placeholders; literal text stays untouched."""
+    normalized = validate_subscription_statistics_template(template)
+    rendered = _SUBSCRIPTION_STATISTICS_PLACEHOLDER_RE.sub(
+        lambda match: str((values or {}).get(match.group(1), '')),
+        normalized,
+    )
+    return re.sub(r'\s+', ' ', rendered).strip()[:500]
+
+
+def clone_subscription_config_with_name(configs, display_name):
+    """Clone the first usable user config and change only its display remark.
+
+    Credentials, host, transport and every connection parameter remain exactly
+    the same. The resulting statistics entry is therefore still connectable.
+    """
+    name = re.sub(r'[\r\n\x00]+', ' ', str(display_name or '')).strip()[:500]
+    if not name:
+        return None
+
+    for raw_link in configs or []:
+        link = str(raw_link or '').strip()
+        if not link:
+            continue
+        if link.startswith('vmess://'):
+            try:
+                encoded = link[len('vmess://'):]
+                padded = encoded + ('=' * (-len(encoded) % 4))
+                obj = json.loads(base64.b64decode(padded, altchars=b'-_').decode('utf-8'))
+                if not isinstance(obj, dict):
+                    continue
+                obj['ps'] = name
+                payload = base64.b64encode(
+                    json.dumps(obj, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+                ).decode('ascii')
+                return f'vmess://{payload}'
+            except Exception:
+                continue
+
+        try:
+            scheme = (urlsplit(link).scheme or '').lower()
+        except ValueError:
+            continue
+        if scheme not in _CLONEABLE_SUBSCRIPTION_SCHEMES:
+            continue
+        base = link.partition('#')[0]
+        return f"{base}#{quote(name, safe='')}"
+    return None
 
 
 SUBSCRIPTION_PROFILE_CACHE = {}

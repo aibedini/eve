@@ -10,6 +10,13 @@ from panel.models import (
 )
 from panel.routes.common import login_required, user_management_required
 from panel.services.billing import calculate_reseller_price, get_config
+from panel.services.subscription import (
+    DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
+    DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA,
+    SUBSCRIPTION_STATISTICS_ENABLED_KEY,
+    SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY,
+    SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY,
+)
 
 bp = Blueprint('pages', __name__)
 
@@ -285,6 +292,16 @@ def sub_manager_page():
     
     _support_cfg = _get_system_configs_batch(['support_telegram', 'support_whatsapp', 'support_sms', 'channel_telegram', 'channel_whatsapp'])
     whatsapp_cfg = _get_whatsapp_runtime_settings()
+    statistics_rows = _get_system_configs_batch([
+        SUBSCRIPTION_STATISTICS_ENABLED_KEY,
+        SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY,
+        SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY,
+    ])
+    statistics_enabled_raw = statistics_rows.get(SUBSCRIPTION_STATISTICS_ENABLED_KEY)
+    statistics_enabled = (
+        True if statistics_enabled_raw is None
+        else str(statistics_enabled_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+    )
     
     return render_template('sub_manager.html',
                          admin_username=session.get('admin_username'),
@@ -313,6 +330,15 @@ def sub_manager_page():
                          whatsapp_session_id=whatsapp_cfg.get('session_id', ''),
                          whatsapp_template_renew=whatsapp_cfg.get('template_renew', DEFAULT_WHATSAPP_TEMPLATE_RENEW),
                          whatsapp_template_welcome=whatsapp_cfg.get('template_welcome', DEFAULT_WHATSAPP_TEMPLATE_WELCOME),
+                         statistics_enabled=statistics_enabled,
+                         statistics_template_fa=(
+                             statistics_rows.get(SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY)
+                             or DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA
+                         ),
+                         statistics_template_en=(
+                             statistics_rows.get(SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY)
+                             or DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN
+                         ),
                          whatsapp_template_pre_expiry=whatsapp_cfg.get('template_pre_expiry', DEFAULT_WHATSAPP_TEMPLATE_PRE_EXPIRY),
                          whatsapp_warmup_enabled=whatsapp_cfg.get('warmup_enabled', False),
                          whatsapp_warmup_start_date=whatsapp_cfg.get('warmup_start_date', ''),

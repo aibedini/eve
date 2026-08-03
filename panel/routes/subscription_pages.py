@@ -23,12 +23,19 @@ from panel.services.billing import (
     _build_sub_page_packages, _build_subscription_package_recommendation,
 )
 from panel.services.subscription import (
+    DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
+    DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA,
+    SUBSCRIPTION_STATISTICS_ENABLED_KEY,
+    SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY,
+    SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY,
     build_subscription_profile_title,
     build_subscription_configs,
+    clone_subscription_config_with_name,
     ensure_subscription_identity,
     fetch_authoritative_subscription_configs,
     fetch_subscription_profile_metadata,
     find_subscription_client_email,
+    render_subscription_statistics_name,
     sort_subscription_configs,
 )
 
@@ -312,64 +319,93 @@ def sub_usage_history(server_id, sub_id):
     )
 
 
-def _fa_digits(value) -> str:
-    """Convert ASCII digits in `value` to Persian digits."""
-    return str(value).translate(str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹'))
+def _subscription_statistics_settings():
+    rows = SystemConfig.query.filter(SystemConfig.key.in_([
+        SUBSCRIPTION_STATISTICS_ENABLED_KEY,
+        SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY,
+        SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY,
+    ])).all()
+    values = {row.key: row.value for row in rows}
+    enabled_raw = values.get(SUBSCRIPTION_STATISTICS_ENABLED_KEY)
+    enabled = (
+        True if enabled_raw is None
+        else str(enabled_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+    )
+    return {
+        'enabled': enabled,
+        'template_fa': (
+            values.get(SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY)
+            or DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA
+        ),
+        'template_en': (
+            values.get(SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY)
+            or DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN
+        ),
+    }
 
 
-def _build_status_config_line(state: dict, expiry_info: dict, remaining_bytes, total_limit: int, lang: str = 'fa') -> str | None:
-    """Return a single non-routable vmess:// 'status' config.
+def _format_statistics_bytes(value):
+    if value is None:
+        return ''
+    size = max(int(value or 0), 0)
+    gb = size / (1024 ** 3)
+    if gb >= 1024:
+        return f"{gb / 1024:.2f}".rstrip('0').rstrip('.') + ' TB'
+    return f"{gb:.2f}".rstrip('0').rstrip('.') + ' GB'
 
-    Its display name (the vmess `ps` field) summarizes the customer's service
-    state, remaining days and remaining volume. It is appended as the LAST entry
-    of a subscription so customers can read their status from inside their VPN
-    app (each config shows by name in the server list) without ever opening the
-    subscription page. It points at 127.0.0.1:1 and never carries traffic.
-    Recomputed on every request, so it always reflects the latest status.
-    """
-    from app import _normalize_ui_lang, app  # deferred: app-level helper, avoids circular import
-    try:
-        fa = _normalize_ui_lang(lang, default='en') == 'fa'
-        key = (state or {}).get('key') or 'active'
-        emoji = (state or {}).get('emoji') or ''
-        label = (state or {}).get('label') or ('فعال' if fa else 'Active')
 
-        parts = [f"{emoji} {label}".strip()]
+def _build_subscription_statistics_values(
+    state, expiry_info, remaining_bytes, total_limit, total_used, client_email, lang,
+):
+    fa = str(lang or '').strip().lower() == 'fa'
+    state_key = str((state or {}).get('key') or 'active')
+    if state_key in {'expired', 'volume_ended', 'inactive'}:
+        renewal = 'نیاز به تمدید' if fa else 'Renewal required'
+    elif state_key in {'expiring_soon', 'volume_low'}:
+        renewal = 'به‌زودی نیاز به تمدید' if fa else 'Renewal needed soon'
+    else:
+        renewal = 'نیاز به تمدید ندارد' if fa else 'No renewal needed'
 
-        if key in ('expired', 'volume_ended', 'inactive'):
-            # Terminal states: the label already says it; add a renew nudge.
-            parts.append('لطفا تمدید کنید' if fa else 'Please renew')
-        else:
-            etype = str((expiry_info or {}).get('type') or '').lower()
-            days = (expiry_info or {}).get('days')
-            if etype in ('unlimited', 'start_after_use'):
-                parts.append('زمان نامحدود' if fa else 'Unlimited time')
-            elif isinstance(days, (int, float)) and days > 0:
-                d = int(days)
-                parts.append(f"{_fa_digits(d)} روز مانده" if fa else f"{d} days left")
+    expiry_type_key = str((expiry_info or {}).get('type') or 'normal').lower()
+    expiry_types = {
+        'unlimited': ('نامحدود' if fa else 'Unlimited'),
+        'start_after_use': ('بعد از اولین اتصال' if fa else 'After first connection'),
+        'expired': ('منقضی شده' if fa else 'Expired'),
+    }
+    expiry_type = expiry_types.get(
+        expiry_type_key, 'تاریخ ثابت' if fa else 'Fixed date',
+    )
+    raw_days = (expiry_info or {}).get('days')
+    if isinstance(raw_days, (int, float)) and raw_days >= 0:
+        days = f"{int(raw_days)} روز" if fa else f"{int(raw_days)} days"
+    else:
+        days = 'نامحدود' if fa else 'Unlimited'
 
-            if total_limit and total_limit > 0:
-                gb = max(int(remaining_bytes or 0), 0) / (1024 ** 3)
-                gb_str = f"{gb:.1f}".rstrip('0').rstrip('.')
-                parts.append(f"{_fa_digits(gb_str)} گیگ مانده" if fa else f"{gb_str} GB left")
-            else:
-                parts.append('حجم نامحدود' if fa else 'Unlimited data')
+    if total_limit and total_limit > 0:
+        remaining_value = _format_statistics_bytes(remaining_bytes)
+        volume = (
+            f"{remaining_value} باقی‌مانده" if fa
+            else f"{remaining_value} remaining"
+        )
+        total_volume = _format_statistics_bytes(total_limit)
+    else:
+        remaining_value = 'نامحدود' if fa else 'Unlimited'
+        total_volume = remaining_value
+        volume = 'حجم نامحدود' if fa else 'Unlimited data'
 
-        # Make clear this entry is informational only — it must not be connected to.
-        parts.append('🚫 انتخاب نکنید' if fa else '🚫 Do not select')
-
-        name = ' | '.join(p for p in parts if p)
-        vmess_obj = {
-            "v": "2", "ps": name, "add": "127.0.0.1", "port": "1",
-            "id": "00000000-0000-0000-0000-000000000000", "aid": "0",
-            "scy": "auto", "net": "tcp", "type": "none",
-            "host": "", "path": "", "tls": "",
-        }
-        payload = base64.b64encode(json.dumps(vmess_obj, ensure_ascii=False).encode()).decode()
-        return f"vmess://{payload}"
-    except Exception:
-        app.logger.exception("status config build failed")
-        return None
+    return {
+        'emoji': str((state or {}).get('emoji') or ''),
+        'status': str((state or {}).get('label') or ('فعال' if fa else 'Active')),
+        'renewal': renewal,
+        'days': days,
+        'volume': volume,
+        'remaining_volume': remaining_value,
+        'total_volume': total_volume,
+        'used_volume': _format_statistics_bytes(total_used),
+        'expiry': str((expiry_info or {}).get('text') or ''),
+        'expiry_type': expiry_type,
+        'email': str(client_email or ''),
+    }
 
 
 @bp.route('/s/<int:server_id>/<sub_id>')
@@ -389,11 +425,13 @@ def client_subscription(server_id, sub_id):
         app.logger.warning(f"Potential SSRF/Traversal attempt with sub_id: {normalized_sub_id}")
         return "Invalid subscription ID", 400
 
-    # v2rayNG has a hard 15-second HTTP timeout and only needs a Base64 list of
-    # parseable URIs. Avoid the slower usage/status fetch and the synthetic
-    # status node for this client; one live v3 API read is authoritative.
+    statistics_settings = _subscription_statistics_settings()
+
+    # When statistics are disabled, v2rayNG can use the fast authoritative
+    # config-only path. An enabled statistics entry needs live usage/expiry
+    # values, so it intentionally continues through the full live read below.
     request_user_agent = (request.headers.get('User-Agent') or '').lower()
-    if 'v2rayng' in request_user_agent:
+    if 'v2rayng' in request_user_agent and not statistics_settings['enabled']:
         fast_session, fast_login_error = get_xui_session(server)
         if not fast_login_error and fast_session:
             fast_configs = fetch_authoritative_subscription_configs(
@@ -590,11 +628,34 @@ def client_subscription(server_id, sub_id):
     configs = ensure_subscription_identity(configs, client_email)
 
     subscription_entries = [entry for entry in configs if entry]
-    # Append the live status config as the last entry (client-app payload only;
-    # the HTML view uses `configs`, which we keep clean).
-    _status_line = _build_status_config_line(subscription_state, expiry_info, remaining, total_limit, page_lang)
-    if _status_line:
-        subscription_entries.append(_status_line)
+    # The statistics entry exists only in the client-app payload. It clones a
+    # real config belonging to this user, so an accidental selection still
+    # connects. The HTML page's manual config list continues to use `configs`.
+    if statistics_settings['enabled']:
+        try:
+            statistics_values = _build_subscription_statistics_values(
+                subscription_state,
+                expiry_info,
+                remaining,
+                total_limit,
+                total_used,
+                client_email,
+                page_lang,
+            )
+            template = (
+                statistics_settings['template_fa'] if page_lang == 'fa'
+                else statistics_settings['template_en']
+            )
+            statistics_name = render_subscription_statistics_name(
+                template, statistics_values,
+            )
+            statistics_line = clone_subscription_config_with_name(
+                subscription_entries, statistics_name,
+            )
+            if statistics_line:
+                subscription_entries.append(statistics_line)
+        except Exception:
+            app.logger.exception('connectable statistics config build failed')
     # Do NOT fall back to sub_url — returning a URL as a "config" causes
     # "Subscription does not contain valid configurations" in every V2Ray client.
     subscription_blob = '\n'.join(subscription_entries)
