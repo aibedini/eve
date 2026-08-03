@@ -1,5 +1,6 @@
 """Sub-apps, FAQs, announcements, and online-chat scripts API routes (extracted from app.py)."""
 import json
+import re
 import uuid
 from urllib.parse import urlsplit
 
@@ -18,6 +19,20 @@ bp = Blueprint('content', __name__)
 SUB_APP_BUTTON_PALETTES = {
     'primary', 'blue', 'green', 'cyan', 'amber', 'red', 'purple', 'slate',
 }
+PHOSPHOR_ICON_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
+
+
+def _normalize_phosphor_icon(value):
+    icon = str(value or '').strip().lower()
+    if icon.startswith('ph-'):
+        icon = icon[3:]
+    icon = icon.replace('_', '-').replace(' ', '-')
+    icon = re.sub(r'-+', '-', icon).strip('-')
+    if not icon:
+        return ''
+    if not PHOSPHOR_ICON_RE.fullmatch(icon):
+        raise ValueError('Icon name must be a Phosphor icon name like download-simple')
+    return icon
 
 
 def _is_safe_sub_app_url(value):
@@ -47,6 +62,7 @@ def _normalize_sub_app_buttons(raw_buttons):
         title = str(raw_button.get('title') or '').strip()
         url = str(raw_button.get('url') or '').strip()
         palette = str(raw_button.get('palette') or 'primary').strip().lower()
+        icon = _normalize_phosphor_icon(raw_button.get('icon'))
         if not title:
             raise ValueError(f'Button {index} title is required')
         if len(title) > 100:
@@ -55,7 +71,10 @@ def _normalize_sub_app_buttons(raw_buttons):
             raise ValueError(f'Button {index} URL must be a valid HTTP(S) or panel file URL')
         if palette not in SUB_APP_BUTTON_PALETTES:
             raise ValueError(f'Button {index} palette is invalid')
-        normalized.append({'title': title, 'url': url, 'palette': palette})
+        button = {'title': title, 'url': url, 'palette': palette}
+        if icon:
+            button['icon'] = icon
+        normalized.append(button)
     return normalized
 
 

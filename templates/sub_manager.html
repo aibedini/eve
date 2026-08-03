@@ -799,7 +799,7 @@
     }
     .app-action-row {
         display: grid;
-        grid-template-columns: minmax(140px, .7fr) minmax(240px, 1.6fr) 130px auto;
+        grid-template-columns: minmax(140px, .7fr) minmax(240px, 1.5fr) minmax(150px, .8fr) 130px auto;
         gap: 8px;
         align-items: center;
         padding: 10px;
@@ -1015,6 +1015,24 @@
         pointer-events: none;
     }
 </style>
+
+<datalist id="phosphor-icon-suggestions">
+    <option value="download-simple">
+    <option value="cloud-arrow-down">
+    <option value="app-window">
+    <option value="telegram-logo">
+    <option value="whatsapp-logo">
+    <option value="link">
+    <option value="book-open">
+    <option value="play-circle">
+    <option value="android-logo">
+    <option value="apple-logo">
+    <option value="windows-logo">
+    <option value="megaphone">
+    <option value="info">
+    <option value="warning">
+    <option value="chat-circle">
+</datalist>
 
 <div class="modal-overlay hidden" id="edit-app-modal">
     <div class="modal modal-lg">
@@ -1631,6 +1649,7 @@
                 <input type="text" id="${inputId}" class="form-input app-action-url" placeholder="https://... or select an uploaded file">
                 <button type="button" class="btn-browse" title="Browse uploaded files">Browse</button>
             </div>
+            <input type="text" class="form-input app-action-icon" maxlength="64" list="phosphor-icon-suggestions" placeholder="Icon e.g. download-simple">
             <select class="form-input app-action-palette" aria-label="Button color"></select>
             <div class="app-action-controls">
                 <button type="button" class="app-action-control app-action-up" title="Move up">↑</button>
@@ -1649,6 +1668,7 @@
         });
         row.querySelector('.app-action-title').value = button.title || '';
         row.querySelector('.app-action-url').value = button.url || '';
+        row.querySelector('.app-action-icon').value = button.icon || '';
         paletteSelect.value = palette;
         row.querySelector('.btn-browse').addEventListener('click', () => openFilePicker(inputId));
         row.querySelector('.app-action-up').addEventListener('click', () => {
@@ -1673,13 +1693,16 @@
         document.querySelectorAll('#edit-action-buttons .app-action-row').forEach((row, index) => {
             const title = row.querySelector('.app-action-title').value.trim();
             const url = row.querySelector('.app-action-url').value.trim();
-            if (!title && !url) return;
+            const icon = row.querySelector('.app-action-icon').value.trim();
+            if (!title && !url && !icon) return;
             if (!title || !url) throw new Error(`Button ${index + 1} needs both a title and a URL`);
-            buttons.push({
+            const button = {
                 title,
                 url,
                 palette: row.querySelector('.app-action-palette').value
-            });
+            };
+            if (icon) button.icon = icon;
+            buttons.push(button);
         });
         return buttons;
     }
@@ -2303,6 +2326,7 @@
                 <input type="text" id="${inputId}" class="form-input app-action-url" placeholder="https://... or select an uploaded file">
                 <button type="button" class="btn-browse" title="Browse uploaded files">Browse</button>
             </div>
+            <input type="text" class="form-input app-action-icon" maxlength="64" list="phosphor-icon-suggestions" placeholder="Icon e.g. download-simple">
             <select class="form-input app-action-palette" aria-label="Button color"></select>
             <div class="app-action-controls">
                 <button type="button" class="app-action-control app-action-up" title="Move up">↑</button>
@@ -2321,6 +2345,7 @@
         });
         row.querySelector('.app-action-title').value = button.title || '';
         row.querySelector('.app-action-url').value = button.url || '';
+        row.querySelector('.app-action-icon').value = button.icon || '';
         paletteSelect.value = palette;
         row.querySelector('.btn-browse').addEventListener('click', () => openFilePicker(inputId));
         row.querySelector('.app-action-up').addEventListener('click', () => {
@@ -2343,13 +2368,16 @@
         document.querySelectorAll('#announcement-action-buttons .app-action-row').forEach((row, index) => {
             const title = row.querySelector('.app-action-title').value.trim();
             const url = row.querySelector('.app-action-url').value.trim();
-            if (!title && !url) return;
+            const icon = row.querySelector('.app-action-icon').value.trim();
+            if (!title && !url && !icon) return;
             if (!title || !url) throw new Error(`Button ${index + 1} needs both a title and a URL`);
-            buttons.push({
+            const button = {
                 title,
                 url,
                 palette: row.querySelector('.app-action-palette').value
-            });
+            };
+            if (icon) button.icon = icon;
+            buttons.push(button);
         });
         return buttons;
     }

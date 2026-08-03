@@ -14,7 +14,7 @@ class AnnouncementActionButtonTests(unittest.TestCase):
             'end_at': '2026-08-03T10:00:00',
             'targets': '*',
             'action_buttons': [
-                {'title': 'Status', 'url': 'https://status.example.com', 'palette': 'green'},
+                {'title': 'Status', 'url': 'https://status.example.com', 'palette': 'green', 'icon': 'activity'},
                 {'title': 'Support', 'url': '/support', 'palette': 'blue'},
             ],
             'button_columns': 2,
@@ -29,6 +29,16 @@ class AnnouncementActionButtonTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(payload['button_columns'], 2)
         self.assertEqual([item['title'] for item in payload['action_buttons']], ['Status', 'Support'])
+        self.assertEqual(payload['action_buttons'][0]['icon'], 'activity')
+
+    @patch('app.parse_iso_datetime', side_effect=lambda value: __import__('datetime').datetime.fromisoformat(value))
+    def test_payload_rejects_invalid_button_icon(self, _parse):
+        payload, error = _parse_announcement_payload(self._payload(action_buttons=[{
+            'title': 'Bad icon', 'url': 'https://example.com', 'palette': 'red', 'icon': '<script>',
+        }]))
+
+        self.assertIsNone(payload)
+        self.assertIn('Icon name', error)
 
     @patch('app.parse_iso_datetime', side_effect=lambda value: __import__('datetime').datetime.fromisoformat(value))
     def test_payload_rejects_unsafe_button_url(self, _parse):
@@ -47,7 +57,7 @@ class AnnouncementActionButtonTests(unittest.TestCase):
         self.assertIn('one or two columns', error)
 
     def test_model_serializes_buttons_and_defaults_legacy_grid_to_one_column(self):
-        buttons = [{'title': 'Docs', 'url': 'https://example.com/docs', 'palette': 'purple'}]
+        buttons = [{'title': 'Docs', 'url': 'https://example.com/docs', 'palette': 'purple', 'icon': 'book-open'}]
         announcement = Announcement(
             message='Hello',
             action_buttons=json.dumps(buttons),

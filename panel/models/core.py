@@ -1,11 +1,36 @@
 """Core shared models (extracted from app.py)."""
 import json
+import re
 from datetime import datetime
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from panel.extensions import db
 from panel.models._helpers import _format_jalali, _parse_allowed_servers, _server_is_v3  # noqa: F401
+
+
+_PHOSPHOR_ICON_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
+
+
+def _clean_action_button_icons(buttons):
+    if not isinstance(buttons, list):
+        return []
+    cleaned = []
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+        item = dict(button)
+        icon = str(item.get('icon') or '').strip().lower()
+        if icon.startswith('ph-'):
+            icon = icon[3:]
+        icon = re.sub(r'-+', '-', icon.replace('_', '-').replace(' ', '-')).strip('-')
+        if icon and _PHOSPHOR_ICON_RE.fullmatch(icon):
+            item['icon'] = icon
+        else:
+            item.pop('icon', None)
+        cleaned.append(item)
+    return cleaned
+
 
 class Admin(db.Model):
     __tablename__ = 'admins'
@@ -132,7 +157,7 @@ class SubAppConfig(db.Model):
             try:
                 parsed_buttons = json.loads(self.action_buttons)
                 if isinstance(parsed_buttons, list):
-                    buttons = parsed_buttons
+                    buttons = _clean_action_button_icons(parsed_buttons)
             except (TypeError, ValueError, json.JSONDecodeError):
                 buttons = None
 
@@ -518,7 +543,7 @@ class Announcement(db.Model):
             try:
                 parsed_buttons = json.loads(self.action_buttons)
                 if isinstance(parsed_buttons, list):
-                    action_buttons = parsed_buttons
+                    action_buttons = _clean_action_button_icons(parsed_buttons)
             except (TypeError, ValueError, json.JSONDecodeError):
                 pass
 

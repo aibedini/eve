@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.generated.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='phosphor/phosphor-regular.css') }}">
     <style nonce="{{ csp_nonce }}">
         body { background-color: #0B1121; color: #e2e8f0; }
         .glass-effect {
@@ -310,7 +311,7 @@
                     {% if a.action_buttons %}
                     <div class="announcement-actions" style="grid-template-columns:repeat({{ 2 if a.button_columns == 2 else 1 }},minmax(0,1fr));">
                         {% for button in a.action_buttons %}
-                        <a href="{{ button.url }}" target="_blank" rel="noopener noreferrer" class="announcement-action-button" data-palette="{{ button.palette or 'primary' }}">{{ button.title }}</a>
+                        <a href="{{ button.url }}" target="_blank" rel="noopener noreferrer" class="announcement-action-button" data-palette="{{ button.palette or 'primary' }}">{% if button.icon %}<i class="ph ph-{{ button.icon }}" aria-hidden="true"></i>{% endif %}<span>{{ button.title }}</span></a>
                         {% endfor %}
                     </div>
                     {% endif %}
@@ -960,9 +961,11 @@
                     const palette = allowedPalettes.has(action.palette) ? action.palette : 'primary';
                     let title = action.title || '';
                     let icon = linkIcon;
+                    const customIcon = (action.icon || '').trim();
                     if (action.label_key === 'download') { title = I18N.download; icon = downloadIcon; }
                     if (action.label_key === 'store') { title = storeLabel; icon = storeIcon; }
                     if (action.label_key === 'tutorial') { title = I18N.tutorial; icon = tutorialIcon; }
+                    if (customIcon) icon = `<i class="ph ph-${customIcon}" aria-hidden="true"></i>`;
                     return `<a href="${escapeSubscriptionHtml(action.url)}" target="_blank" rel="noopener noreferrer" class="app-action-button" data-palette="${palette}">${icon}<span>${escapeSubscriptionHtml(title)}</span></a>`;
                 }).join('');
 
@@ -1466,7 +1469,7 @@
                 {% if popup_ann.action_buttons %}
                 <div class="announcement-actions" style="grid-template-columns:repeat({{ 2 if popup_ann.button_columns == 2 else 1 }},minmax(0,1fr));">
                     {% for button in popup_ann.action_buttons %}
-                    <a href="{{ button.url }}" target="_blank" rel="noopener noreferrer" class="announcement-action-button" data-palette="{{ button.palette or 'primary' }}">{{ button.title }}</a>
+                    <a href="{{ button.url }}" target="_blank" rel="noopener noreferrer" class="announcement-action-button" data-palette="{{ button.palette or 'primary' }}">{% if button.icon %}<i class="ph ph-{{ button.icon }}" aria-hidden="true"></i>{% endif %}<span>{{ button.title }}</span></a>
                     {% endfor %}
                 </div>
                 {% endif %}

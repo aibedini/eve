@@ -12,6 +12,7 @@ class SubAppActionButtonTests(unittest.TestCase):
                 'title': f'v2rayNG build {index}',
                 'url': f'https://downloads.example/v2rayng-{index}.apk',
                 'palette': 'green' if index % 2 else 'blue',
+                'icon': 'download-simple' if index == 1 else '',
             }
             for index in range(1, 16)
         ]
@@ -20,8 +21,28 @@ class SubAppActionButtonTests(unittest.TestCase):
 
         self.assertEqual(len(normalized), 15)
         self.assertEqual(normalized[0]['title'], 'v2rayNG build 1')
+        self.assertEqual(normalized[0]['icon'], 'download-simple')
         self.assertEqual(normalized[-1]['title'], 'v2rayNG build 15')
         self.assertEqual(normalized[1]['palette'], 'blue')
+
+    def test_normalizer_accepts_phosphor_icon_names(self):
+        button = _normalize_sub_app_buttons([{
+            'title': 'Telegram',
+            'url': 'https://t.me/example',
+            'palette': 'blue',
+            'icon': 'ph-telegram-logo',
+        }])[0]
+
+        self.assertEqual(button['icon'], 'telegram-logo')
+
+    def test_normalizer_rejects_invalid_icon_names(self):
+        with self.assertRaises(ValueError):
+            _normalize_sub_app_buttons([{
+                'title': 'Bad icon',
+                'url': 'https://example.com',
+                'palette': 'red',
+                'icon': 'x\" onclick=\"alert(1)',
+            }])
 
     def test_normalizer_allows_panel_files(self):
         self.assertEqual(
@@ -70,6 +91,7 @@ class SubAppActionButtonTests(unittest.TestCase):
             'title': 'ARM64 version',
             'url': 'https://downloads.example/arm64.apk',
             'palette': 'cyan',
+            'icon': 'download-simple',
         }]
         app_config = SubAppConfig(
             app_code='custom-actions',
