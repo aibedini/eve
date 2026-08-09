@@ -4,11 +4,15 @@ Share-link generation per client/inbound, full subscription config
 aggregation, and inbound client lookup.
 """
 import base64
+from datetime import datetime, timezone
+import ipaddress
 import json
 import re
 import threading
 import time
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlsplit
+
+import requests
 
 from panel.adapters.xui import (
     _v3_get,
@@ -111,6 +115,138 @@ def clone_subscription_config_with_name(configs, display_name):
 SUBSCRIPTION_PROFILE_CACHE = {}
 SUBSCRIPTION_PROFILE_CACHE_TTL = 600
 _SUBSCRIPTION_PROFILE_CACHE_LOCK = threading.Lock()
+
+SUBSCRIPTION_IP_OPERATOR_CACHE = {}
+SUBSCRIPTION_IP_OPERATOR_CACHE_TTL = 86400
+_SUBSCRIPTION_IP_OPERATOR_CACHE_LOCK = threading.Lock()
+
+
+def _subscription_ip_timestamp(value):
+    """Return a comparable timestamp for the v3 client-IP response."""
+    if value in (None, ''):
+        return None
+    try:
+        numeric = float(value)
+        if numeric > 10_000_000_000:
+            numeric /= 1000
+        return numeric
+    except (TypeError, ValueError):
+        pass
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except ValueError:
+        return None
+
+
+def _lookup_subscription_ip_operator(ip_value):
+    """Resolve an IP's ISP best-effort, with a long cache and strict timeout."""
+    try:
+        normalized_ip = str(ipaddress.ip_address(str(ip_value or '').strip()))
+        if not ipaddress.ip_address(normalized_ip).is_global:
+            return ''
+    except ValueError:
+        return ''
+
+    now = time.monotonic()
+    with _SUBSCRIPTION_IP_OPERATOR_CACHE_LOCK:
+        cached = SUBSCRIPTION_IP_OPERATOR_CACHE.get(normalized_ip)
+        if cached and now < float(cached.get('expiry') or 0):
+            return str(cached.get('value') or '')
+
+    operator = ''
+    try:
+        response = requests.get(
+            f"https://ipwho.is/{normalized_ip}",
+            params={'fields': 'success,connection.isp,connection.org'},
+            headers={'Accept': 'application/json'},
+            timeout=(1, 1.5),
+        )
+        if response.status_code == 200:
+            payload = response.json()
+            connection = payload.get('connection') if isinstance(payload, dict) else None
+            if payload.get('success') is not False and isinstance(connection, dict):
+                operator = str(connection.get('isp') or connection.get('org') or '').strip()[:120]
+    except Exception:
+        operator = ''
+
+    with _SUBSCRIPTION_IP_OPERATOR_CACHE_LOCK:
+        if len(SUBSCRIPTION_IP_OPERATOR_CACHE) >= 2048:
+            oldest_key = min(
+                SUBSCRIPTION_IP_OPERATOR_CACHE,
+                key=lambda key: SUBSCRIPTION_IP_OPERATOR_CACHE[key].get('expiry', 0),
+            )
+            SUBSCRIPTION_IP_OPERATOR_CACHE.pop(oldest_key, None)
+        SUBSCRIPTION_IP_OPERATOR_CACHE[normalized_ip] = {
+            'value': operator,
+            'expiry': now + SUBSCRIPTION_IP_OPERATOR_CACHE_TTL,
+        }
+    return operator
+
+
+def fetch_subscription_last_connection(server, client_email, *, session_obj):
+    """Return the newest v3-recorded client IP and its best-effort ISP name."""
+    email = str(client_email or '').strip()
+    if not email or not session_obj or not server_is_v3(server, session_obj):
+        return {'ip': '', 'operator': ''}
+
+    try:
+        ok, payload, _error = _v3_post(
+            server,
+            session_obj,
+            f"/panel/api/clients/ips/{quote(email, safe='')}",
+            {},
+            timeout=(1.5, 2),
+        )
+    except Exception:
+        return {'ip': '', 'operator': ''}
+    if not ok or not isinstance(payload, dict):
+        return {'ip': '', 'operator': ''}
+
+    items = payload.get('obj')
+    if isinstance(items, dict):
+        items = items.get('ips') or items.get('items') or []
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except (TypeError, ValueError):
+            items = [items]
+    if not isinstance(items, list):
+        return {'ip': '', 'operator': ''}
+
+    candidates = []
+    for position, item in enumerate(items):
+        if isinstance(item, str):
+            ip_value = item
+            timestamp = None
+        elif isinstance(item, dict):
+            ip_value = item.get('ip') or item.get('address')
+            timestamp = _subscription_ip_timestamp(
+                item.get('time') or item.get('timestamp') or item.get('lastSeen')
+                or item.get('last_seen')
+            )
+        else:
+            continue
+        try:
+            normalized_ip = str(ipaddress.ip_address(str(ip_value or '').strip()))
+        except ValueError:
+            continue
+        candidates.append((timestamp, position, normalized_ip))
+
+    if not candidates:
+        return {'ip': '', 'operator': ''}
+    timed = [item for item in candidates if item[0] is not None]
+    newest = max(timed, key=lambda item: (item[0], item[1])) if timed else candidates[-1]
+    last_ip = newest[2]
+    return {
+        'ip': last_ip,
+        'operator': _lookup_subscription_ip_operator(last_ip),
+    }
 
 
 def fetch_subscription_profile_metadata(

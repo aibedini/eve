@@ -33,6 +33,7 @@ from panel.services.subscription import (
     clone_subscription_config_with_name,
     ensure_subscription_identity,
     fetch_authoritative_subscription_configs,
+    fetch_subscription_last_connection,
     fetch_subscription_profile_metadata,
     find_subscription_client_email,
     render_subscription_statistics_name,
@@ -666,8 +667,16 @@ def client_subscription(server_id, sub_id):
         headers['Content-Type'] = 'text/plain; charset=utf-8'
         return encoded_blob, 200, headers
 
+    last_connection = fetch_subscription_last_connection(
+        server,
+        client_email,
+        session_obj=live_session,
+    )
+
     client_payload = {
         "email": client_email,
+        "last_ip": last_connection.get('ip', ''),
+        "last_ip_operator": last_connection.get('operator', ''),
         "is_active": target_client.get('enable', True),
         "service_state": subscription_state.get('key', 'active'),
         "service_state_label": subscription_state.get('label', ('فعاله' if page_lang == 'fa' else 'Active')),

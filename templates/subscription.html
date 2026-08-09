@@ -310,6 +310,16 @@
             </div>
 
             <h1 class="text-lg font-semibold text-white tracking-wide" style="word-break: break-all;">{{ client.email }}</h1>
+            {% if client.last_ip %}
+            <div class="mt-1 text-xs font-normal text-slate-400" dir="ltr">
+                <span>{{ 'آخرین اتصال' if is_fa else 'Last connection' }}:</span>
+                <span class="font-mono text-slate-300">{{ client.last_ip }}</span>
+                {% if client.last_ip_operator %}
+                <span aria-hidden="true">&middot;</span>
+                <span>{{ client.last_ip_operator }}</span>
+                {% endif %}
+            </div>
+            {% endif %}
 
             {% if state_tag in ('expired', 'ended', 'inactive') %}
             <div class="mt-3 px-4 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-semibold"

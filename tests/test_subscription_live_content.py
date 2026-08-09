@@ -94,6 +94,7 @@ class LiveSubscriptionContentTests(unittest.TestCase):
     def setUp(self):
         db.session.remove()
         subscription_service.SUBSCRIPTION_PROFILE_CACHE.clear()
+        subscription_service.SUBSCRIPTION_IP_OPERATOR_CACHE.clear()
         Admin.query.delete()
         Server.query.delete()
         SystemConfig.query.delete()
@@ -250,6 +251,68 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         self.assertEqual(title, 'VPN Mahna\nLive Shadowsocks')
         self.assertEqual(response.headers['Profile-Update-Interval'], '6')
         self.assertIn('no-store', response.headers['Cache-Control'])
+
+    def test_v3_last_connection_uses_newest_ip_and_resolves_operator(self):
+        panel_payload = {
+            'success': True,
+            'obj': [
+                {'ip': '5.160.10.20', 'time': '2026-08-08 10:00:00'},
+                {'ip': '2.188.20.30', 'time': '2026-08-09 11:30:00'},
+            ],
+        }
+        operator_response = mock.Mock(
+            status_code=200,
+        )
+        operator_response.json.return_value = {
+            'success': True,
+            'connection': {'isp': 'Iran Telecommunication Company'},
+        }
+
+        with (
+            mock.patch.object(subscription_service, 'server_is_v3', return_value=True),
+            mock.patch.object(
+                subscription_service,
+                '_v3_post',
+                return_value=(True, panel_payload, None),
+            ) as v3_post,
+            mock.patch.object(
+                subscription_service.requests,
+                'get',
+                return_value=operator_response,
+            ) as operator_get,
+        ):
+            result = subscription_service.fetch_subscription_last_connection(
+                self.server,
+                'shadow-user',
+                session_obj=object(),
+            )
+
+        self.assertEqual(result, {
+            'ip': '2.188.20.30',
+            'operator': 'Iran Telecommunication Company',
+        })
+        self.assertIn('/panel/api/clients/ips/shadow-user', v3_post.call_args.args[2])
+        self.assertIn('2.188.20.30', operator_get.call_args.args[0])
+
+    def test_subscription_page_shows_last_ip_below_username(self):
+        patches = self._live_patches(([_shadowsocks_inbound(LIVE_PASSWORD)], None, 'legacy'))
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            mock.patch(
+                'panel.routes.subscription_pages.fetch_subscription_last_connection',
+                return_value={'ip': '2.188.20.30', 'operator': 'MCI'},
+            ),
+        ):
+            response = self.client.get(
+                f'/s/{self.server.id}/{SUB_ID}?view=1',
+                headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html'},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('2.188.20.30', html)
+        self.assertIn('MCI', html)
+        self.assertIn('Last connection', html)
 
     def test_vmess_identity_is_added_inside_ps_without_changing_credentials(self):
         vmess = {
