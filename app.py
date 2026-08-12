@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.62"
+APP_VERSION = "2.5.63"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2268,9 +2268,11 @@ from panel.adapters.xui import (  # noqa: F401
 )
 
 from panel.services.subscription import (  # noqa: F401
+    build_public_subscription_url,
     build_subscription_configs,
     find_client,
     generate_client_link,
+    get_public_base_url,
 )
 
 def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, app_base_url=None, online_index=None):
@@ -2299,12 +2301,12 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
     _s_path = (server.sub_path or '').strip('/')
     _j_path = (server.json_path or '').strip('/')
     if app_base_url:
-        _app_base = app_base_url
+        _app_base = get_public_base_url(app_base_url)
     else:
         try:
-            _app_base = request.url_root.rstrip('/')
+            _app_base = get_public_base_url(request.url_root)
         except RuntimeError:
-            _app_base = ""  # background thread (no request context)
+            _app_base = get_public_base_url()  # background worker
     _is_sanaei = (server.panel_type == 'sanaei')
     _server_id = server.id
     # On v3 the same client (by email) is mirrored across several inbounds.
@@ -2367,7 +2369,9 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                     final_id = sub_id if sub_id else client.get('id')
                     sub_url = f"{_base_sub}/{_s_path}/{final_id}"
                     json_url = f"{_base_sub}/{_j_path}/{final_id}"
-                    dash_sub_url = f"{_app_base}/s/{_server_id}/{final_id}"
+                    dash_sub_url = build_public_subscription_url(
+                        _server_id, final_id, _app_base,
+                    )
 
                 _stat = stats_by_email.get(email)
                 client_up = _stat.get('up', 0) if _stat else 0

@@ -423,14 +423,8 @@ def _whatsapp_render_bot_template(event_name: str, vars_dict: dict, runtime_cfg:
 def _public_base_url() -> str:
     """Absolute base URL of the panel, derived from the configured domain.
     Used to build dashboard links from background workers (no request context)."""
-    from app import PANEL_DOMAIN_SETTING_KEY, _is_ip_address  # deferred: app-level helper, avoids circular import
-    domain = (_get_system_setting_value(PANEL_DOMAIN_SETTING_KEY, '') or '').strip().rstrip('/')
-    if not domain:
-        return ''
-    if domain.startswith('http://') or domain.startswith('https://'):
-        return domain
-    proto = 'http' if _is_ip_address(domain) else 'https'
-    return f"{proto}://{domain}"
+    from panel.services.subscription import get_public_base_url
+    return get_public_base_url()
 
 
 def _whatsapp_blocked_account_keys() -> set:

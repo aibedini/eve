@@ -2089,7 +2089,7 @@ def rotate_client(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
         GLOBAL_REFRESH_LOCK, GLOBAL_SERVER_DATA, _add_client_to_inbound, _has_client_access,
         _json_field, _push_full_inbound, _recompute_cached_client, add_cached_client, app,
-        fetch_inbounds, get_xui_session, invalidate_ownership_cache,
+        build_public_subscription_url, fetch_inbounds, get_xui_session, invalidate_ownership_cache,
         persist_detected_panel_type, server_is_v3, v3_add_client, v3_update_client,
     )
     user = db.session.get(Admin, session['admin_id'])
@@ -2369,11 +2369,9 @@ def rotate_client(server_id):
         base_sub = f"{parsed_host.scheme}://{parsed_host.hostname}{port_str}"
         final_id = new_sub_id or new_client_uuid
         sub_url = f"{base_sub}/{(server.sub_path or '').strip('/')}/{final_id}"
-        try:
-            app_base = request.url_root.rstrip('/')
-        except Exception:
-            app_base = ''
-        dash_sub_url = f"{app_base}/s/{server.id}/{final_id}"
+        dash_sub_url = build_public_subscription_url(
+            server.id, final_id, request.url_root,
+        )
 
         remaining_gb = None
         if current_total_bytes > 0:
@@ -2612,7 +2610,7 @@ def add_client(server_id, inbound_id):
         _account_info_channel_links, _calculate_minimum_price, _cancel_stale_account_sms,
         _fire_automation_sms, _json_field, _render_text_template, _reseller_can_create_free,
         _safe_response_json, _ss_password, _user_can_afford, add_cached_client, app,
-        build_panel_url, calculate_reseller_price, collect_endpoint_templates,
+        build_panel_url, build_public_subscription_url, calculate_reseller_price, collect_endpoint_templates,
         ensure_reseller_allowed_for_assignment, generate_client_link, get_reseller_access_maps,
         get_xui_session, invalidate_ownership_cache, is_inbound_accessible,
         is_server_accessible, log_transaction, server_is_v3, v3_add_client,
@@ -2757,11 +2755,9 @@ def add_client(server_id, inbound_id):
             base_sub = f"{parsed_host.scheme}://{parsed_host.hostname}{port_str}"
             final_id = client_sub_id or client_uuid
             sub_url = f"{base_sub}/{(server.sub_path or '').strip('/')}/{final_id}"
-            try:
-                app_base = request.url_root.rstrip('/')
-            except Exception:
-                app_base = ''
-            dash_sub_url = f"{app_base}/s/{server.id}/{final_id}"
+            dash_sub_url = build_public_subscription_url(
+                server.id, final_id, request.url_root,
+            )
 
             # Protocol label = distinct protocols across the assigned inbounds
             _protos = []

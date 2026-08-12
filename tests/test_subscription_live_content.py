@@ -195,6 +195,53 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         self.assertIn('Subscription-Userinfo', response.headers)
         self.assertIn('no-store', response.headers.get('Cache-Control', ''))
 
+    def test_dash_sub_uses_configured_tls_domain_instead_of_request_ip(self):
+        inbound = _shadowsocks_inbound(LIVE_PASSWORD)
+        with (
+            app.test_request_context(
+                '/dashboard', base_url='https://31.14.123.145',
+            ),
+            mock.patch.object(
+                app_module, '_get_or_create_system_setting',
+                return_value='http://eve.rooteam.ir',
+            ),
+            mock.patch.object(app_module, 'server_is_v3', return_value=False),
+        ):
+            processed, _stats = app_module.process_inbounds(
+                [inbound], self.server, self.admin,
+            )
+
+        dash_url = processed[0]['clients'][0]['dash_sub_url']
+        self.assertEqual(
+            dash_url,
+            f'https://eve.rooteam.ir/s/{self.server.id}/{SUB_ID}',
+        )
+        self.assertNotIn('31.14.123.145', dash_url)
+
+    def test_public_subscription_page_exposes_canonical_domain(self):
+        patches = self._live_patches(([_shadowsocks_inbound(LIVE_PASSWORD)], None, 'legacy'))
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            mock.patch.object(
+                app_module, '_get_or_create_system_setting',
+                return_value='eve.rooteam.ir',
+            ),
+        ):
+            response = self.client.get(
+                f'/s/{self.server.id}/{SUB_ID}?view=1',
+                base_url='https://31.14.123.145',
+                headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html'},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn(
+            f'https://eve.rooteam.ir/s/{self.server.id}/{SUB_ID}', body,
+        )
+        self.assertNotIn(
+            f'https://31.14.123.145/s/{self.server.id}/{SUB_ID}', body,
+        )
+
     def test_live_fetch_failure_never_falls_back_to_stale_content(self):
         patches = self._live_patches(([], 'panel unavailable', 'legacy'))
         with patches[0], patches[1], patches[2], patches[3], patches[4]:

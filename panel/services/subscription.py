@@ -44,6 +44,60 @@ _CLONEABLE_SUBSCRIPTION_SCHEMES = {
 }
 
 
+def get_public_base_url(fallback_url=''):
+    """Return the canonical externally valid panel origin.
+
+    Subscription clients validate TLS independently from browsers. Prefer the
+    configured panel domain so links are never tied to an origin IP whose TLS
+    certificate was issued for the domain. Public DNS names use HTTPS because
+    current v2rayNG releases reject insecure HTTP subscriptions by default.
+    """
+    configured = ''
+    try:
+        from app import PANEL_DOMAIN_SETTING_KEY, _get_or_create_system_setting
+        configured = str(
+            _get_or_create_system_setting(PANEL_DOMAIN_SETTING_KEY, '') or ''
+        ).strip()
+    except Exception:
+        configured = ''
+
+    candidate = configured or str(fallback_url or '').strip()
+    if not candidate:
+        return ''
+    if '://' not in candidate:
+        candidate = f"https://{candidate}"
+
+    try:
+        parsed = urlsplit(candidate)
+        hostname = parsed.hostname or ''
+        if not hostname:
+            return ''
+        is_ip = False
+        try:
+            ipaddress.ip_address(hostname.strip('[]'))
+            is_ip = True
+        except ValueError:
+            pass
+
+        scheme = (parsed.scheme or 'https').lower()
+        # A configured public hostname is the certificate identity. Do not let
+        # an old explicit http:// value keep producing URLs rejected by v2rayNG.
+        if configured and not is_ip:
+            scheme = 'https'
+        netloc = parsed.netloc
+        return f"{scheme}://{netloc}".rstrip('/')
+    except Exception:
+        return candidate.rstrip('/')
+
+
+def build_public_subscription_url(server_id, sub_id, fallback_url=''):
+    """Build one canonical DASH SUB URL for UI, APIs, and workers."""
+    base = get_public_base_url(fallback_url)
+    if not base:
+        return ''
+    return f"{base}/s/{int(server_id)}/{quote(str(sub_id or '').strip(), safe='')}"
+
+
 def validate_subscription_statistics_template(value):
     """Normalize a status-name template and reject unsupported variables."""
     template = str(value or '').strip()

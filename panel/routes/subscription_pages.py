@@ -28,6 +28,7 @@ from panel.services.subscription import (
     SUBSCRIPTION_STATISTICS_ENABLED_KEY,
     SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY,
     SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY,
+    build_public_subscription_url,
     build_subscription_profile_title,
     build_subscription_configs,
     clone_subscription_config_with_name,
@@ -689,7 +690,9 @@ def client_subscription(server_id, sub_id):
         "expiry_days": expiry_info.get('days', 0),
         "expiry_type": expiry_info.get('type', 'normal'),
         "remaining": format_bytes(remaining) if remaining is not None else None,
-        "subscription_url": f"{request.base_url}",
+        "subscription_url": build_public_subscription_url(
+            server.id, normalized_sub_id, request.url_root,
+        ) or request.base_url,
         "configs": configs,
         "server_name": server.name
     }
