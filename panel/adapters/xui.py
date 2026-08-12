@@ -393,6 +393,42 @@ def v3_update_client(server, session_obj, email, client: dict):
                     _v3_client_payload(client))
 
 
+def v3_enable_client(server, session_obj, email, client: dict):
+    """Force a v3 client active across panel versions.
+
+    Newer panels expose ``bulkEnable``, which also synchronizes the running
+    Xray state. Older v3 panels do not have that endpoint, so fall back to the
+    traditional full-client update with ``enable=True``.
+    """
+    enabled_client = dict(client or {})
+    enabled_client['enable'] = True
+    email = _v3_fix_spaced_email(
+        server, session_obj, email, client_obj=enabled_client,
+    )
+    ok, result, error = _v3_post(
+        server, session_obj, "/panel/api/clients/bulkEnable",
+        {"emails": [email]},
+    )
+    if ok:
+        return ok, result, error
+
+    unavailable = str(error or '').strip().lower()
+    if (
+        unavailable in {'http 404', 'http 405'}
+        or 'status 404' in unavailable
+        or 'status 405' in unavailable
+        or 'not found' in unavailable
+        or 'method not allowed' in unavailable
+        or 'unsupported' in unavailable
+    ):
+        return _v3_post(
+            server, session_obj,
+            f"/panel/api/clients/update/{quote(email, safe='')}",
+            _v3_client_payload(enabled_client),
+        )
+    return ok, result, error
+
+
 def v3_delete_client(server, session_obj, email, keep_traffic=False):
     email = _v3_fix_spaced_email(server, session_obj, email)
     path = f"/panel/api/clients/del/{quote(email, safe='')}"

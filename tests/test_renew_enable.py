@@ -13,6 +13,7 @@ os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 import app as app_module  # noqa: E402
+import panel.adapters.xui as xui_adapter  # noqa: E402
 import panel.routes.clients as clients_module  # noqa: E402
 import panel.routes.packages as packages_module  # noqa: E402
 from app import (  # noqa: E402
@@ -70,6 +71,55 @@ def _panel_inbounds(raw, server_id):
     return [{'id': 1, 'settings': json.dumps({'clients': [raw]})}]
 
 
+class V3EnableAdapterTests(unittest.TestCase):
+    def test_uses_bulk_enable_when_supported(self):
+        server = mock.Mock()
+        session_obj = mock.Mock()
+        client = _raw_client(enable=False)
+        with (
+            mock.patch.object(xui_adapter, '_v3_fix_spaced_email', return_value='bob'),
+            mock.patch.object(
+                xui_adapter, '_v3_post', return_value=(True, {'success': True}, None),
+            ) as post,
+        ):
+            ok, _result, error = xui_adapter.v3_enable_client(
+                server, session_obj, 'bob', client,
+            )
+
+        self.assertTrue(ok)
+        self.assertIsNone(error)
+        post.assert_called_once_with(
+            server, session_obj, '/panel/api/clients/bulkEnable',
+            {'emails': ['bob']},
+        )
+
+    def test_falls_back_to_update_when_bulk_enable_is_unavailable(self):
+        server = mock.Mock()
+        session_obj = mock.Mock()
+        client = _raw_client(enable=False)
+        with (
+            mock.patch.object(xui_adapter, '_v3_fix_spaced_email', return_value='bob'),
+            mock.patch.object(
+                xui_adapter, '_v3_post',
+                side_effect=[
+                    (False, None, 'Non-JSON response (status 404, content-type text/html)'),
+                    (True, {'success': True}, None),
+                ],
+            ) as post,
+        ):
+            ok, _result, error = xui_adapter.v3_enable_client(
+                server, session_obj, 'bob', client,
+            )
+
+        self.assertTrue(ok)
+        self.assertIsNone(error)
+        self.assertEqual(post.call_count, 2)
+        fallback_path = post.call_args_list[1].args[2]
+        fallback_payload = post.call_args_list[1].args[3]
+        self.assertEqual(fallback_path, '/panel/api/clients/update/bob')
+        self.assertTrue(fallback_payload['enable'])
+
+
 class RenewEnableTests(unittest.TestCase):
     """Renewal must always re-enable the client (manual or panel auto-disable)
     and must not extend an already-expired timestamp in the past."""
@@ -113,12 +163,14 @@ class RenewEnableTests(unittest.TestCase):
 
         self.session_obj = mock.Mock()
         self.v3_update = mock.Mock(return_value=(True, {}, None))
+        self.v3_enable = mock.Mock(return_value=(True, {}, None))
         self.postcheck = mock.Mock()
         self._patches = [
             mock.patch.object(app_module, 'get_xui_session',
                               return_value=(self.session_obj, None)),
             mock.patch.object(app_module, 'server_is_v3', return_value=True),
             mock.patch.object(app_module, 'v3_update_client', self.v3_update),
+            mock.patch.object(app_module, 'v3_enable_client', self.v3_enable),
             mock.patch.object(app_module, 'v3_reset_client',
                               return_value=(True, {}, None)),
             mock.patch.object(app_module, '_fire_automation_sms'),
@@ -162,6 +214,8 @@ class RenewEnableTests(unittest.TestCase):
         self.assertEqual(self.v3_update.call_count, 1)
         _srv, _sess, _email, sent = self.v3_update.call_args[0]
         self.assertTrue(sent['enable'])
+        self.v3_enable.assert_called_once()
+        self.assertEqual(self.v3_enable.call_args[0][2], 'bob')
         expected = int(time.time() * 1000) + 30 * DAY_MS
         self.assertLess(abs(sent['expiryTime'] - expected), 120000)
         self.assertEqual(sent['totalGB'], 15 * GB)
@@ -238,9 +292,10 @@ class RenewEnableTests(unittest.TestCase):
         payload = resp.get_json()
         self.assertTrue(payload['success'], payload)
 
-        # Initial update + one re-assert after the read-back showed disabled.
-        self.assertEqual(self.v3_update.call_count, 2)
-        sent = self.v3_update.call_args[0][3]
+        # Explicit enable once immediately and once more after disabled read-back.
+        self.assertEqual(self.v3_update.call_count, 1)
+        self.assertEqual(self.v3_enable.call_count, 2)
+        sent = self.v3_enable.call_args[0][3]
         self.assertTrue(sent['enable'])
         verify = payload.get('verify') or {}
         self.assertTrue(verify.get('re_enabled'))

@@ -1020,7 +1020,7 @@ def _fire_renew_postcheck(server_id: int, inbound_id: int, email: str,
     """
     from app import (  # deferred: app-level helper, avoids circular import
         _v3_sanitize_email, app, fetch_inbounds, find_client, get_xui_session,
-        patch_cached_client, server_is_v3, v3_update_client,
+        patch_cached_client, server_is_v3, v3_enable_client,
     )
     snapshot = copy.deepcopy(client_snapshot or {})
 
@@ -1082,7 +1082,7 @@ def _fire_renew_postcheck(server_id: int, inbound_id: int, email: str,
                     snapshot['enable'] = True
                     if not server_is_v3(server):
                         break
-                    reenabled, _response, reenable_error = v3_update_client(
+                    reenabled, _response, reenable_error = v3_enable_client(
                         server, session_obj, lookup_email, snapshot,
                     )
                     if not reenabled:
@@ -1161,8 +1161,8 @@ def renew_client(server_id, inbound_id, email):
         _whatsapp_automation_allowed_for_account, _whatsapp_render_bot_template, app,
         build_panel_url, calculate_reseller_price, collect_endpoint_templates, fetch_inbounds,
         find_client, format_jalali, format_remaining_days, get_xui_session, log_transaction,
-        patch_cached_client, persist_detected_panel_type, server_is_v3, v3_reset_client,
-        v3_update_client,
+        patch_cached_client, persist_detected_panel_type, server_is_v3, v3_enable_client,
+        v3_reset_client, v3_update_client,
     )
     t0 = time.perf_counter()
     renewal_trace_id = secrets.token_hex(4)
@@ -1621,6 +1621,12 @@ def renew_client(server_id, inbound_id, email):
                 # message must use the clean email — otherwise find_client returns
                 # client_not_found and the message shows the old spaced email.
                 email = _v3_sanitize_email(email)
+                enabled, _er, enable_error = v3_enable_client(
+                    server, session_obj, email, target_client,
+                )
+                if not enabled:
+                    errors.append(f"v3 enable: {enable_error}")
+                    break
                 resp = _SyntheticOK()
             elif _is_shadowsocks_no_id:
                 # Shadowsocks clients have no UUID — use full inbound update instead.
@@ -1823,7 +1829,7 @@ def renew_client(server_id, inbound_id, email):
                         try:
                             target_client["enable"] = True
                             if _is_v3:
-                                v3_update_client(server, session_obj, email, target_client)
+                                v3_enable_client(server, session_obj, email, target_client)
                             else:
                                 session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
                             time.sleep(1)
@@ -2391,10 +2397,11 @@ def rotate_client(server_id):
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew/verify', methods=['POST'])
 @login_required
 def verify_renew_client(server_id, inbound_id, email):
-    """Re-check a client's expiry/volume on the panel after a renew.
+    """Re-check a client's expiry, volume, and active state after a renew.
 
     Expected values are optional:
-      {"expected_expiryTime": <ms>, "expected_totalGB": <bytes>}
+      {"expected_expiryTime": <ms>, "expected_totalGB": <bytes>,
+       "expected_enable": true}
     """
     from app import (  # deferred: app-level helper, avoids circular import
         _has_client_access, _v3_sanitize_email, fetch_inbounds, find_client, get_xui_session,
@@ -2426,6 +2433,7 @@ def verify_renew_client(server_id, inbound_id, email):
 
     expected_expiry = data.get('expected_expiryTime', None)
     expected_total = data.get('expected_totalGB', None)
+    expected_enable = data.get('expected_enable', True)
     awaiting_result = bool(data.get('awaiting_result', False))
     try:
         expected_expiry = None if expected_expiry is None else int(expected_expiry)
@@ -2435,6 +2443,10 @@ def verify_renew_client(server_id, inbound_id, email):
         expected_total = None if expected_total is None else int(expected_total)
     except Exception:
         expected_total = None
+    if isinstance(expected_enable, str):
+        expected_enable = expected_enable.strip().lower() not in {'0', 'false', 'no', 'off'}
+    else:
+        expected_enable = bool(expected_enable)
 
     # Access control for resellers
     if user.role == 'reseller':
@@ -2451,8 +2463,12 @@ def verify_renew_client(server_id, inbound_id, email):
         'attempted': True,
         'ok': None,
         'error': None,
-        'expected': {'expiryTime': expected_expiry, 'totalGB': expected_total},
-        'observed': {'expiryTime': None, 'totalGB': None},
+        'expected': {
+            'expiryTime': expected_expiry,
+            'totalGB': expected_total,
+            'enable': expected_enable,
+        },
+        'observed': {'expiryTime': None, 'totalGB': None, 'enable': None},
     }
 
     renew_lock_key = f"renew:lock:{server_id}:{(email or '').strip().lower()}"
@@ -2489,6 +2505,7 @@ def verify_renew_client(server_id, inbound_id, email):
             verify['observed']['totalGB'] = int(v_client.get('totalGB') or 0)
         except Exception:
             verify['observed']['totalGB'] = None
+        verify['observed']['enable'] = bool(v_client.get('enable', True))
 
         completed_result = _load_renew_result(renew_lock_key)
         completed_verify = (completed_result or {}).get('verify') or {}
@@ -2500,22 +2517,29 @@ def verify_renew_client(server_id, inbound_id, email):
         if awaiting_result:
             cached_expiry = completed_expected.get('expiryTime')
             cached_total = completed_expected.get('totalGB')
+            cached_enable = bool(completed_expected.get('enable', True))
             if not completed_result or (cached_expiry is None and cached_total is None):
                 verify['ok'] = False
                 verify['error'] = 'renew_still_in_progress'
             else:
                 ok_exp = cached_expiry is None or verify['observed']['expiryTime'] == int(cached_expiry)
                 ok_vol = cached_total is None or verify['observed']['totalGB'] == int(cached_total)
-                verify['expected'] = {'expiryTime': cached_expiry, 'totalGB': cached_total}
-                verify['ok'] = bool(ok_exp and ok_vol)
+                ok_enable = verify['observed']['enable'] is cached_enable
+                verify['expected'] = {
+                    'expiryTime': cached_expiry,
+                    'totalGB': cached_total,
+                    'enable': cached_enable,
+                }
+                verify['ok'] = bool(ok_exp and ok_vol and ok_enable)
                 if not verify['ok']:
                     verify['error'] = 'renew_result_not_applied_yet'
         elif expected_expiry is None and expected_total is None:
-            verify['ok'] = True
+            verify['ok'] = verify['observed']['enable'] is expected_enable
         else:
             ok_exp = True if expected_expiry is None else (verify['observed']['expiryTime'] == expected_expiry)
             ok_vol = True if expected_total is None else (verify['observed']['totalGB'] == expected_total)
-            verify['ok'] = bool(ok_exp and ok_vol)
+            ok_enable = verify['observed']['enable'] is expected_enable
+            verify['ok'] = bool(ok_exp and ok_vol and ok_enable)
 
         payload = {'success': True, 'verify': verify,
                    'timing': {'login_ms': login_ms, 'verify_fetch_ms': verify_fetch_ms}}

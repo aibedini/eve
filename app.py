@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.61"
+APP_VERSION = "2.5.62"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2262,6 +2262,7 @@ from panel.adapters.xui import (  # noqa: F401
     v3_attach_client,
     v3_delete_client,
     v3_detach_client,
+    v3_enable_client,
     v3_reset_client,
     v3_update_client,
 )
