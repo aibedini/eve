@@ -249,12 +249,11 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
                                                live_usage: dict | None = None) -> dict | None:
     """Build an explainable, uncertainty-aware 31-day usage recommendation.
 
-    The latest renewal cycle is preferred when it contains enough evidence. If
-    that cycle is new/sparse, the model falls back to all usage from the last 31
-    days. Account state never gates eligibility: active, ending, ended and
-    expired accounts are treated identically. Only a truly usage-free 31-day
-    window produces no recommendation. ``live_usage`` is the request-time
-    counter from the panel and closes the blind spot between hourly rollups.
+    Daily deltas from the last 31 days are the authoritative rate evidence.
+    Renewal/reset events are intentionally not used as a divisor because panel
+    versions can reset only one counter (or switch the canonical inbound),
+    producing a false short cycle. ``live_usage`` only closes the gap after the
+    latest collector state; it never replaces already-accounted daily deltas.
     """
     if not packages:
         return None
@@ -262,11 +261,6 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
     now = datetime.utcnow()
     cutoff = now - timedelta(days=31)
     try:
-        latest_renewal = (RenewalEvent.query
-                          .filter_by(server_id=int(server_id), sub_id=str(sub_id))
-                          .filter(RenewalEvent.renewed_at >= cutoff)
-                          .order_by(RenewalEvent.renewed_at.desc())
-                          .first())
         rows_31d = (UsageDaily.query
                     .filter_by(server_id=int(server_id), sub_id=str(sub_id))
                     .filter(UsageDaily.last_observed_at >= cutoff)
@@ -279,7 +273,7 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
         # the background worker can repair history independently.
         from app import app  # deferred: Flask instance lives in app.py (circular at module level)
         app.logger.warning('Recommendation history unavailable; using live counter: %s', exc)
-        latest_renewal, rows_31d, state = None, [], None
+        rows_31d, state = [], None
 
     live_usage = live_usage or _live_subscription_usage(server_id, sub_id)
     try:
@@ -303,11 +297,6 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
                 active_rows.append(usage_row)
         return total, samples, active_rows
 
-    cycle_anchor = max(cutoff, latest_renewal.renewed_at) if latest_renewal else None
-    cycle_rows = ([row for row in rows_31d
-                   if (row.last_observed_at or datetime.min) >= cycle_anchor]
-                  if cycle_anchor else [])
-    cycle_total, cycle_samples, cycle_active = _evidence(cycle_rows)
     full_total, full_samples, full_active = _evidence(rows_31d)
 
     # Infer a cycle anchor even when the hourly collector first sees an account
@@ -336,67 +325,43 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
     except (TypeError, ValueError, OverflowError, OSError):
         inferred_live_start = None
 
-    # A mature current cycle gives the cleanest daily rate. A sparse/new cycle
-    # is not a reason to hide the recommendation: use the complete 31-day view.
-    cycle_is_reliable = bool(
-        cycle_active and cycle_samples >= 2 and cycle_total >= 100 * 1024 * 1024
-    )
-    if cycle_anchor and (cycle_is_reliable or live_total > 0):
-        rows = cycle_rows
-        # The panel's current counter is the complete current-cycle total. It
-        # repairs the collector's intentional zero delta on a first observation.
-        total_bytes = max(cycle_total, live_total)
-        total_samples, meaningful_rows = cycle_samples, cycle_active
-        anchor = cycle_anchor
-        source = 'current_cycle'
-    else:
+    # The collector state is the exact overlap boundary between compact daily
+    # deltas and the request-time counter. Add only traffic observed since that
+    # state. When the counter decreased, a reset occurred after the last sample
+    # and the new counter itself is the untracked increment.
+    live_increment = 0
+    if live_total > 0 and state is not None:
+        state_total = max(0, int(state.total_bytes or 0))
+        live_increment = (live_total - state_total
+                          if live_total >= state_total else live_total)
+
+    if full_total > 0:
         rows = rows_31d
-        if latest_renewal and live_total > 0:
-            # Preserve previous-cycle rollups while filling only the unobserved
-            # part of the current counter; never double-count tracked bytes.
-            total_bytes = full_total + max(0, live_total - cycle_total)
-        else:
-            # Without a known reset boundary overlap is unknowable. max() is a
-            # safe lower bound and is preferable to hiding the recommendation.
-            total_bytes = max(full_total, live_total)
+        total_bytes = full_total + max(0, live_increment)
         total_samples, meaningful_rows = full_samples, full_active
-        anchor = cutoff
         source = 'last_31_days'
+    else:
+        # Before the first rollup exists there is no overlap boundary. Preserve
+        # the conservative live-only fallback instead of hiding a recommendation.
+        rows = []
+        total_bytes = live_total
+        total_samples, meaningful_rows = 0, []
+        source = 'live_counter'
 
     # Any real traffic is enough to calculate a recommendation. Zero usage is
     # the only intentional no-recommendation outcome.
     if total_bytes <= 0:
         return None
 
-    if source == 'current_cycle' and live_total > 0:
-        # The live counter covers the whole reset cycle, not merely the period
-        # after the first rollup sample.
-        first_at = max(anchor, inferred_live_start or anchor)
-        last_active_at = max(
-            meaningful_rows[-1].last_observed_at if meaningful_rows else first_at,
-            live_observed_at,
-        )
-    elif meaningful_rows:
-        first_at = max(anchor, meaningful_rows[0].first_observed_at or anchor)
-        last_active_at = meaningful_rows[-1].last_observed_at or first_at
+    if rows:
+        # Daily buckets are calendar evidence. Inclusive span is stable across
+        # partial first/last days and naturally includes zero-use days/gaps.
+        usage_dates = sorted({row.usage_date for row in rows})
+        basis_days = min(31.0, max(1.0, float((usage_dates[-1] - usage_dates[0]).days + 1)))
     else:
-        first_at = max(anchor, inferred_live_start or anchor)
-        last_active_at = live_observed_at
-
-    # If the live counter contains bytes not represented by rollups, it is the
-    # newest evidence even for an ended account (for example, a 10 GB package
-    # exhausted between two hourly samples).
-    has_untracked_live_usage = live_total > cycle_total
-    if terminal and not has_untracked_live_usage:
-        end_at = last_active_at
-    else:
-        observed_at = (state.observed_at if state and state.observed_at
-                       else (rows[-1].last_observed_at if rows else live_observed_at))
-        end_at = max(last_active_at, min(observed_at or live_observed_at or now, now))
-
-    # A one-day floor prevents a partial first day from projecting an absurd
-    # monthly amount while preserving the requested "used it in 3 days" signal.
-    basis_days = min(31.0, max(1.0, (end_at - first_at).total_seconds() / 86400.0))
+        anchor = max(cutoff, inferred_live_start or cutoff)
+        end_at = min(live_observed_at or now, now)
+        basis_days = min(31.0, max(1.0, (end_at - anchor).total_seconds() / 86400.0))
     average_daily_gb = (total_bytes / float(1024 ** 3)) / basis_days
     if average_daily_gb <= 0:
         return None
@@ -421,7 +386,7 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
     selected_volume = int(selected.get('volume') or 0)
     capacity_limited = bool(selected_volume > 0 and selected_volume + 0.01 < projected_31d_gb)
     return {
-        'model_version': 'usage-fit-v3',
+        'model_version': 'usage-fit-v4',
         'package_id': int(selected.get('id')),
         'package_name': str(selected.get('name') or ''),
         'package_volume': int(selected.get('volume') or 0),
@@ -440,7 +405,7 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
         'confidence': confidence,
         'safety_margin_percent': int(round(safety_margin * 100)),
         'source': source,
-        'fast_cycle': bool(source == 'current_cycle' and terminal and basis_days <= 7),
+        'fast_cycle': bool(source == 'live_counter' and terminal and basis_days <= 7),
         'capacity_limited': capacity_limited,
         'capacity_shortfall_gb': round(max(0.0, projected_31d_gb - selected_volume), 1) if capacity_limited else 0,
     }
@@ -595,4 +560,3 @@ def inject_wallet_credit():
         "panel_lang": panel_lang,
         "panel_dir": ('rtl' if panel_lang == 'fa' else 'ltr'),
     }
-

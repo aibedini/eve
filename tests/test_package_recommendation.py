@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 import requests
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from sqlalchemy.exc import IntegrityError
 from cryptography.fernet import Fernet
@@ -54,6 +54,8 @@ from app import (  # noqa: E402
     SmsSendLog,
     SystemConfig,
     SystemSetting,
+    UsageCounterState,
+    UsageDaily,
     GENERAL_CALENDAR_SETTING_KEY,
     GENERAL_TIMEZONE_SETTING_KEY,
     app,
@@ -2175,7 +2177,97 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         )
         self.assertIsNotNone(recommendation)
         self.assertEqual(recommendation['package_id'], 1)
-        self.assertEqual(recommendation['model_version'], 'usage-fit-v3')
+        self.assertEqual(recommendation['model_version'], 'usage-fit-v4')
+
+    def test_daily_history_is_not_divided_by_a_false_short_renewal_cycle(self):
+        server = Server(
+            name='Recommendation Daily Evidence',
+            host='https://recommendation-daily.test', username='u', password='p',
+        )
+        db.session.add(server)
+        db.session.flush()
+        now = datetime.utcnow()
+        daily_gb = [1.35, 1.57, 2.18, 1.89, 1.73, 2.21, 1.40, 3.12, 1.43, 2.31]
+        total_bytes = sum(int(value * 1024 ** 3) for value in daily_gb)
+        rows = []
+        for offset, value in enumerate(daily_gb):
+            observed = now - timedelta(days=9 - offset)
+            used = int(value * 1024 ** 3)
+            rows.append(UsageDaily(
+                server_id=server.id, sub_id='screenshot-account',
+                usage_date=date.today() - timedelta(days=9 - offset),
+                upload_bytes=0, download_bytes=used,
+                opening_upload_bytes=0, opening_download_bytes=0,
+                closing_upload_bytes=0, closing_download_bytes=used,
+                sample_count=2, first_observed_at=observed,
+                last_observed_at=observed,
+            ))
+        db.session.add_all(rows + [
+            RenewalEvent(
+                server_id=server.id, sub_id='screenshot-account',
+                renewed_at=now - timedelta(days=4),
+            ),
+            UsageCounterState(
+                server_id=server.id, sub_id='screenshot-account',
+                upload_bytes=0, download_bytes=total_bytes,
+                total_bytes=total_bytes, observed_at=now,
+            ),
+        ])
+        db.session.commit()
+
+        recommendation = _build_subscription_package_recommendation(
+            server.id, 'screenshot-account', PACKAGES,
+            live_usage={'total_bytes': total_bytes, 'observed_at': now},
+        )
+
+        self.assertIsNotNone(recommendation)
+        self.assertEqual(recommendation['model_version'], 'usage-fit-v4')
+        self.assertEqual(recommendation['source'], 'last_31_days')
+        self.assertEqual(recommendation['basis_days'], 10.0)
+        self.assertAlmostEqual(recommendation['average_daily_gb'], 1.92, places=2)
+        self.assertAlmostEqual(recommendation['projected_31d_gb'], 59.5, places=1)
+
+    def test_daily_history_endpoint_pages_to_older_rows(self):
+        server = Server(
+            name='History Pagination', host='https://history-pagination.test',
+            username='u', password='p',
+        )
+        db.session.add(server)
+        db.session.flush()
+        now = datetime.utcnow()
+        for offset in range(12):
+            observed = now - timedelta(days=offset)
+            db.session.add(UsageDaily(
+                server_id=server.id, sub_id='history-account',
+                usage_date=date.today() - timedelta(days=offset),
+                upload_bytes=0, download_bytes=1024,
+                opening_upload_bytes=0, opening_download_bytes=0,
+                closing_upload_bytes=0, closing_download_bytes=1024,
+                sample_count=1, first_observed_at=observed,
+                last_observed_at=observed,
+            ))
+        db.session.commit()
+
+        client = app.test_client()
+        first = client.get(f'/sub/history/{server.id}/history-account?period=day&limit=5')
+        self.assertEqual(first.status_code, 200)
+        first_data = first.get_json()
+        self.assertEqual(len(first_data['history']), 5)
+        self.assertTrue(first_data['page_info']['has_more'])
+        self.assertFalse(first_data['page_info']['has_previous'])
+        cursor = first_data['page_info']['end_cursor']
+
+        second = client.get(
+            f'/sub/history/{server.id}/history-account?period=day&limit=5&cursor={cursor}'
+        )
+        self.assertEqual(second.status_code, 200)
+        second_data = second.get_json()
+        self.assertEqual(len(second_data['history']), 5)
+        self.assertTrue(second_data['page_info']['has_previous'])
+        self.assertNotEqual(
+            first_data['history'][-1]['period_key'],
+            second_data['history'][0]['period_key'],
+        )
 
     def test_high_live_usage_is_visible_and_truthfully_labeled(self):
         recommendation = _build_subscription_package_recommendation(
@@ -2225,7 +2317,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertIsNone(recommendation)
 
     def test_live_fallback_survives_rollup_schema_failure(self):
-        with patch.object(RenewalEvent.query_class, 'filter_by', side_effect=RuntimeError('migration pending')):
+        with patch.object(UsageDaily.query_class, 'filter_by', side_effect=RuntimeError('migration pending')):
             recommendation = _build_subscription_package_recommendation(
                 999999,
                 'schema-recovery-account',

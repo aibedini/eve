@@ -685,7 +685,7 @@
                     </table>
                 </div>
                 <p id="history-empty" class="hidden text-center text-muted py-6 text-xs">{{ 'هنوز داده‌ای ثبت نشده. اولین snapshot چند دقیقه بعد از راه‌اندازی سرور ثبت می‌شود.' if is_fa else 'No history yet. First snapshot is taken a few minutes after server startup.' }}</p>
-                <div id="history-pagination" class="hidden items-center justify-center gap-2 mt-3 text-xs" style="display:none;"></div>
+                <div id="history-pagination" class="items-center justify-center gap-2 mt-3 text-xs" style="display:none;"></div>
             </div>
         </div>
 
@@ -1406,7 +1406,7 @@
             if (!append && tbody) tbody.innerHTML = '';
             if (!append && renewalContainer) renewalContainer.classList.add('hidden');
             const pagerEl = document.getElementById('history-pagination');
-            if (!append && pagerEl) { pagerEl.style.display = 'none'; pagerEl.innerHTML = ''; }
+            if (!append && pagerEl) { pagerEl.classList.remove('hidden'); pagerEl.style.display = 'none'; pagerEl.innerHTML = ''; }
 
             try {
                 const params = new URLSearchParams({ period: _historyPeriod, limit: String(HISTORY_PAGE_SIZE) });
@@ -1498,11 +1498,12 @@
             if (!pager) return;
             const hasOlder = !!page.pageInfo?.has_more;
             const hasNewer = _historyPage > 0;
-            if (!hasOlder && !hasNewer) {
+            if (pageRows.length === 0) {
                 pager.style.display = 'none';
                 pager.innerHTML = '';
                 return;
             }
+            pager.classList.remove('hidden');
             pager.style.cssText = 'display:flex; align-items:center; justify-content:center; gap:10px; margin-top:12px; font-size:.75rem;';
             const prevOff = !hasNewer;
             const nextOff = !hasOlder;

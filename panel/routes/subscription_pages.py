@@ -283,6 +283,7 @@ def _subscription_rollup_history(server_id: int, sub_id: str, period: str,
         'snapshot_count': len(rows),
         'page_info': {
             'has_more': has_more,
+            'has_previous': bool(cursor),
             'end_cursor': end_cursor,
             'page_size': page_size,
         },
