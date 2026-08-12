@@ -17,14 +17,20 @@ The project uses the `2.x.y` version scheme. `APP_VERSION` in `app.py` is the si
 - Warn the user before required maintenance that it may take time and that the panel may be slower or briefly unavailable.
 - Before creating an update backup, prune stale `${APP_DIR}.bak.*` directories. Retain at most two backups afterward.
 
-## Codebase Knowledge Graph
+## Codebase Memory (mandatory graph-first workflow)
 
-This project maintains a knowledge graph under `graphify-out/`, including god nodes, community structure, and cross-file relationships.
+This repository uses `codebase-memory-mcp` v0.10+ as its primary code-intelligence layer for every coding task, regardless of the model or agent (Codex, Claude, Gemini, Qwen, Kimi, DeepSeek through an MCP-capable client, Copilot, Cursor, Cline, Windsurf, OpenCode, and similar tools). Read `docs/AI_CODEBASE_MEMORY.md` for the complete shared contract.
 
-- When `graphify-out/graph.json` exists, begin codebase questions with `graphify query "<question>"`. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts.
-- Use `graphify-out/wiki/index.md` for broad navigation when it exists.
-- Read `graphify-out/GRAPH_REPORT.md` only for broad architecture reviews or when query, path, and explain results are insufficient.
-- After modifying code, run `graphify update .` to refresh the graph. This update is AST-only and has no API cost.
+- At the start of a coding task or after context compaction, call `list_projects`, then `index_status` for this repository. If the project is absent or stale, call `index_repository` before structural exploration.
+- Use graph tools before filesystem search: `search_graph` for symbols/routes, `trace_path` for callers/callees/data flow, `get_code_snippet` for exact source, `query_graph` for multi-hop questions, `get_architecture` for broad structure, and `search_code` for graph-augmented text search.
+- Before editing a symbol, inspect its exact source and trace material inbound/outbound impact. Do not infer a complete impact surface from a filename search.
+- Use `check_index_coverage` for every material source path relied upon. If coverage is partial, stale, skipped, or unknown, inspect only the reported gaps with targeted source reads or `rg`.
+- Raw `rg`, globbing, and file reads are fallbacks for string literals, error messages, configuration/non-code files, generated/vendor assets, or verified graph coverage gaps. They are not the default discovery workflow.
+- After code changes, run `detect_changes` to review affected symbols and risk, run the relevant tests, then refresh the graph with `index_repository` when the watcher has not already brought the index current.
+- For negative or exhaustive claims (dead code, no callers, full impact), paginate all relevant graph results and state any remaining coverage limitation.
+- If the MCP frontend is unavailable, use CLI mode rather than abandoning the graph: `codebase-memory-mcp cli <tool> '<json-args>'`.
+- When delegating, pass the project name, index generation/freshness, qualified symbols, traces, coverage findings, and unresolved questions to the child agent.
+- `graphify-out/` is legacy reference material only. Do not run Graphify for routine work unless Codebase Memory is unavailable and the fallback is explicitly noted.
 
 ## Modular Structure (`panel/` package)
 

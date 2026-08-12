@@ -1,0 +1,6 @@
+---
+description: Mandatory graph-first code intelligence for this repository
+alwaysApply: true
+---
+
+Follow `AGENTS.md` and `docs/AI_CODEBASE_MEMORY.md`. Use `codebase-memory-mcp` before grep, globbing, or broad file reads for all code discovery, tracing, coverage, and impact analysis.

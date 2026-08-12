@@ -1,0 +1,1 @@
+Follow `AGENTS.md` and `docs/AI_CODEBASE_MEMORY.md`. For every coding task, use `codebase-memory-mcp` first for symbol discovery, call/data-flow tracing, exact snippets, coverage checks, and change impact. Use raw grep or broad file reads only for the documented fallback cases.

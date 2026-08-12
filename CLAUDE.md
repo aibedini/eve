@@ -15,15 +15,9 @@ Version scheme: `2.x.y` (single source of truth: `APP_VERSION` in `app.py`).
 - Show a warning before required maintenance: it may take time and the panel can be slower or briefly unavailable.
 - Prune stale `${APP_DIR}.bak.*` directories before creating the next update backup, and retain at most two afterward.
 
-## graphify
+## Codebase Memory
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+The mandatory repository-wide code-intelligence policy is in `AGENTS.md` and `docs/AI_CODEBASE_MEMORY.md`. For every coding task, use `codebase-memory-mcp` v0.10+ first: verify/index the project, discover and trace through graph tools, check coverage before relying on results, and run `detect_changes` after edits. Use raw grep/read only for non-code content, literals, or verified coverage gaps. `graphify-out/` is legacy fallback material, not the routine workflow.
 
 ## Modular structure
 
