@@ -116,7 +116,9 @@ for path in \
     /etc/systemd/system/eve-manager-background.service \
     /etc/systemd/system/eve-manager-telegram-egress.service \
     /etc/systemd/system/eve-manager-telegram-bot.service \
+    /etc/eve-manager/domain \
     /etc/nginx/sites-available/eve-manager \
+    /etc/ssl/eve-manager \
     /usr/local/bin/eve; do
     [ -e "$path" ] && system_files+=("$path")
 done

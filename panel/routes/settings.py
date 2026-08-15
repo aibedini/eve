@@ -1,5 +1,6 @@
 """Subscription-page, general, SSL, session, and health-log settings API routes (extracted from app.py)."""
 import os
+import re
 import subprocess
 from datetime import timedelta
 
@@ -16,6 +17,8 @@ from panel.services.backup import _parse_int, _set_system_setting_value
 
 
 bp = Blueprint('settings', __name__)
+
+PERSISTED_DOMAIN_PATH = '/etc/eve-manager/domain'
 
 
 def _nginx_conf_path() -> str:
@@ -47,6 +50,11 @@ def _build_nginx_config(domain: str, app_port: str, cert_path: str = '', key_pat
         proxy_send_timeout 600s;
         proxy_request_buffering off;
     }}"""
+    backup_block = """
+    location /protected-backups/ {
+        internal;
+        alias /opt/eve-xui-manager/instance/backups/;
+    }"""
 
     if cert_path and key_path:
         return f"""server {{
@@ -62,37 +70,70 @@ server {{
     ssl_certificate_key {key_path};
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
-    client_max_body_size 512m;
+    client_max_body_size 2048m;
 {sse_block}
 {proxy_block}
+{backup_block}
 }}
 """
     else:
         return f"""server {{
     listen 80;
     server_name {domain};
-    client_max_body_size 512m;
+    client_max_body_size 2048m;
 {sse_block}
 {proxy_block}
+{backup_block}
 }}
 """
 
 
 def _apply_nginx_config(domain: str, cert_path: str = '', key_path: str = '') -> tuple[bool, str]:
-    """Write nginx config and reload. Returns (ok, error_message)."""
+    """Write nginx config, reload it, and persist the canonical domain."""
+    if not re.fullmatch(r'[A-Za-z0-9.-]+', domain or '') or domain.startswith(('.', '-')):
+        return False, 'Invalid panel domain or IP address'
     app_port = os.environ.get('API_PORT', '5000')
     config = _build_nginx_config(domain, app_port, cert_path, key_path)
     conf_path = _nginx_conf_path()
 
-    cmds = [
-        (['sudo', 'tee', conf_path], config),
-        (['sudo', 'nginx', '-t'], None),
-        (['sudo', 'systemctl', 'reload', 'nginx'], None),
-    ]
-    for cmd, stdin in cmds:
-        r = subprocess.run(cmd, input=stdin, text=True, capture_output=True, timeout=15)
-        if r.returncode != 0:
-            return False, f'{" ".join(cmd[:2])} failed: {r.stderr.strip()}'
+    previous_config = None
+    try:
+        with open(conf_path, 'r', errors='ignore') as config_file:
+            previous_config = config_file.read()
+    except OSError:
+        pass
+
+    def run(cmd, stdin=None):
+        try:
+            return subprocess.run(
+                cmd, input=stdin, text=True, capture_output=True, timeout=15)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return subprocess.CompletedProcess(cmd, 1, stdout='', stderr=str(exc))
+
+    def restore_previous():
+        if previous_config is None:
+            return
+        run(['sudo', 'tee', conf_path], previous_config)
+        run(['sudo', 'nginx', '-t'])
+        run(['sudo', 'systemctl', 'reload', 'nginx'])
+
+    write_result = run(['sudo', 'tee', conf_path], config)
+    if write_result.returncode != 0:
+        return False, f'sudo tee failed: {write_result.stderr.strip()}'
+
+    test_result = run(['sudo', 'nginx', '-t'])
+    if test_result.returncode != 0:
+        restore_previous()
+        return False, f'sudo nginx failed: {test_result.stderr.strip()}'
+
+    reload_result = run(['sudo', 'systemctl', 'reload', 'nginx'])
+    if reload_result.returncode != 0:
+        restore_previous()
+        return False, f'sudo systemctl failed: {reload_result.stderr.strip()}'
+
+    persist_result = run(['sudo', 'tee', PERSISTED_DOMAIN_PATH], domain)
+    if persist_result.returncode != 0:
+        return False, f'sudo tee failed: {persist_result.stderr.strip()}'
     return True, ''
 
 
@@ -862,9 +903,6 @@ def _io_BytesIO(data):
 @login_required
 def ssl_apply():
     """Write HTTPS nginx config and reload nginx."""
-    from app import app  # deferred: app-level helper, avoids circular import
-    import re as _re
-
     cert = db.session.get(SystemSetting, 'ssl_cert_path')
     key  = db.session.get(SystemSetting, 'ssl_key_path')
     cert_path = (cert.value if cert else '').strip()
@@ -878,118 +916,37 @@ def ssl_apply():
     if not os.path.isfile(key_path):
         return jsonify({'success': False, 'error': f'Private key not found: {key_path}'}), 400
 
-    # Detect domain from existing nginx config
-    domain = ''
-    nginx_conf_path = '/etc/nginx/sites-available/eve-manager'
-    try:
-        with open(nginx_conf_path, 'r', errors='ignore') as _f:
-            _m = _re.search(r'server_name\s+([^;]+);', _f.read())
-            if _m:
-                domain = _m.group(1).strip().split()[0]
-    except Exception:
-        pass
-
+    # Prefer the request and database setting over nginx. Older updaters could
+    # temporarily rewrite nginx to the server IP even though the canonical
+    # hostname remained correctly stored in the database.
+    data = request.get_json(silent=True) or {}
+    domain = (data.get('domain') or '').strip()
     if not domain:
-        data = request.get_json(silent=True) or {}
-        domain = data.get('domain', '').strip()
+        panel_domain = db.session.get(SystemSetting, 'panel_domain')
+        domain = (panel_domain.value if panel_domain else '').strip()
+    if not domain:
+        try:
+            with open(PERSISTED_DOMAIN_PATH, 'r', errors='ignore') as domain_file:
+                domain = domain_file.read().strip()
+        except Exception:
+            pass
+
+    nginx_conf_path = '/etc/nginx/sites-available/eve-manager'
+    if not domain:
+        try:
+            with open(nginx_conf_path, 'r', errors='ignore') as nginx_file:
+                match = re.search(r'server_name\s+([^;]+);', nginx_file.read())
+                if match:
+                    domain = match.group(1).strip().split()[0]
+        except Exception:
+            pass
     if not domain:
         return jsonify({'success': False, 'error': 'Cannot detect domain. Pass {"domain":"your.domain"} in request body.'}), 400
 
-    app_port = os.environ.get('API_PORT', '5000')
-
-    nginx_config = f"""server {{
-    listen 80;
-    server_name {domain};
-    return 301 https://$host$request_uri;
-}}
-
-server {{
-    listen 443 ssl;
-    server_name {domain};
-
-    ssl_certificate     {cert_path};
-    ssl_certificate_key {key_path};
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-
-    client_max_body_size 512m;
-
-    location ~* /stream$ {{
-        proxy_pass http://127.0.0.1:{app_port};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_http_version 1.1;
-        proxy_set_header Connection '';
-    }}
-
-    location / {{
-        proxy_pass http://127.0.0.1:{app_port};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_request_buffering off;
-    }}
-}}
-"""
-
-    SUDO_FIX_CMD = (
-        "sudo bash -c '"
-        "mkdir -p /etc/ssl/eve-manager && "
-        "chown evemgr:evemgr /etc/ssl/eve-manager && "
-        "chmod 700 /etc/ssl/eve-manager && "
-        "cat > /etc/sudoers.d/eve-ssl <<EOF\n"
-        "evemgr ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/live/*/fullchain.pem\n"
-        "evemgr ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/live/*/privkey.pem\n"
-        "evemgr ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/archive/*/fullchain*.pem\n"
-        "evemgr ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/archive/*/privkey*.pem\n"
-        "evemgr ALL=(root) NOPASSWD: /bin/systemctl reload nginx\n"
-        "evemgr ALL=(root) NOPASSWD: /usr/sbin/nginx -t\n"
-        "evemgr ALL=(root) NOPASSWD: /usr/bin/tee /etc/nginx/sites-available/eve-manager\n"
-        "evemgr ALL=(root) NOPASSWD: /bin/tee /etc/nginx/sites-available/eve-manager\n"
-        "EOF\n"
-        "chmod 440 /etc/sudoers.d/eve-ssl'"
-    )
-
-    # Write config via sudo tee (evemgr needs sudo tee permission — added in setup.sh)
-    try:
-        result = subprocess.run(
-            ['sudo', 'tee', nginx_conf_path],
-            input=nginx_config, text=True,
-            capture_output=True, timeout=10,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            is_sudo_perm = 'password' in stderr.lower() or 'terminal' in stderr.lower()
-            if is_sudo_perm:
-                return jsonify({
-                    'success': False,
-                    'error': f'Could not write nginx config: {stderr}',
-                    'fix_command': SUDO_FIX_CMD,
-                }), 500
-            return jsonify({'success': False,
-                            'error': f'Could not write nginx config: {stderr}'}), 500
-    except Exception as e:
-        return jsonify({'success': False, 'error': f'Failed to write nginx config: {e}'}), 500
-
-    # Test nginx config
-    test = subprocess.run(['sudo', 'nginx', '-t'], capture_output=True, text=True, timeout=10)
-    if test.returncode != 0:
-        return jsonify({'success': False,
-                        'error': f'nginx config test failed:\n{test.stderr.strip()}'}), 500
-
-    # Reload nginx
-    reload_r = subprocess.run(['sudo', 'systemctl', 'reload', 'nginx'],
-                              capture_output=True, text=True, timeout=15)
-    if reload_r.returncode != 0:
-        return jsonify({'success': False,
-                        'error': f'nginx reload failed: {reload_r.stderr.strip()}'}), 500
+    # Apply and persist through the shared transactional nginx helper.
+    ok, error = _apply_nginx_config(domain, cert_path, key_path)
+    if not ok:
+        return jsonify({'success': False, 'error': error}), 500
 
     return jsonify({
         'success': True,

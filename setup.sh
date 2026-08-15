@@ -1474,15 +1474,42 @@ start_maintenance_service() {
 
 setup_nginx() {
     print_header "Step 10: Nginx configuration (with Gzip)"
-    
-    # Ensure domain exists to prevent errors during update
+
+    # Resolve the canonical hostname before rewriting nginx. Older releases
+    # could leave the server IP in the durable file even when a real TLS
+    # certificate and DNS hostname were configured from the Settings page.
+    # Prefer an existing hostname, then recover one from nginx/certificates;
+    # retain the IP only when no hostname evidence exists.
     if [ -z "$DOMAIN" ]; then
         if [ -r /etc/eve-manager/domain ]; then
             DOMAIN=$(tr -d '\r\n' < /etc/eve-manager/domain)
         fi
         if [ -f "/etc/nginx/sites-available/${SERVICE_NAME}" ]; then
-            # Try to read domain from previous config
-            [ -n "$DOMAIN" ] || DOMAIN=$(grep "server_name" /etc/nginx/sites-available/${SERVICE_NAME} | head -n 1 | awk '{print $2}' | tr -d ';')
+            local NGINX_DOMAIN
+            NGINX_DOMAIN=$(grep "server_name" /etc/nginx/sites-available/${SERVICE_NAME} | head -n 1 | awk '{print $2}' | tr -d ';')
+            if [ -z "$DOMAIN" ] || [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                if [ -n "$NGINX_DOMAIN" ] && ! [[ "$NGINX_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    DOMAIN="$NGINX_DOMAIN"
+                fi
+            fi
+        fi
+        if [ -z "$DOMAIN" ] || [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            local CERT_DOMAIN=""
+            local CERT_CANDIDATE
+            for CERT_CANDIDATE in \
+                "${SELF_SIGNED_SSL_DIR}/fullchain.pem" \
+                /etc/letsencrypt/live/*/fullchain.pem; do
+                [ -f "$CERT_CANDIDATE" ] || continue
+                CERT_DOMAIN=$(openssl x509 -in "$CERT_CANDIDATE" -noout -ext subjectAltName 2>/dev/null \
+                    | sed -n 's/.*DNS:\([^, ]*\).*/\1/p' | head -n 1)
+                [ -n "$CERT_DOMAIN" ] || CERT_DOMAIN=$(openssl x509 -in "$CERT_CANDIDATE" -noout -subject 2>/dev/null \
+                    | sed -n 's/.*CN[[:space:]]*=[[:space:]]*\([^,\/]*\).*/\1/p' | head -n 1)
+                if [ -n "$CERT_DOMAIN" ] && ! [[ "$CERT_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    DOMAIN="$CERT_DOMAIN"
+                    print_warning "Recovered panel domain from installed TLS certificate: $DOMAIN"
+                    break
+                fi
+            done
         fi
         [[ "$DOMAIN" == --* ]] && DOMAIN=""
         # If still empty, ask
@@ -1499,11 +1526,27 @@ setup_nginx() {
     rm -f /etc/nginx/sites-enabled/default
     SSL_FULLCHAIN="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
     SSL_PRIVKEY="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+    if [ ! -f "$SSL_FULLCHAIN" ] || [ ! -f "$SSL_PRIVKEY" ]; then
+        SSL_FULLCHAIN="${SELF_SIGNED_SSL_DIR}/fullchain.pem"
+        SSL_PRIVKEY="${SELF_SIGNED_SSL_DIR}/privkey.pem"
+    fi
+    local SSL_AUX_CONFIG=""
+    if [ -f /etc/letsencrypt/options-ssl-nginx.conf ] && [ -f /etc/letsencrypt/ssl-dhparams.pem ]; then
+        SSL_AUX_CONFIG="include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;"
+    fi
     SELF_SIGNED_CERT="${SELF_SIGNED_SSL_DIR}/cert.pem"
     SELF_SIGNED_KEY="${SELF_SIGNED_SSL_DIR}/privkey.pem"
 
+    local NGINX_CONF="/etc/nginx/sites-available/${SERVICE_NAME}"
+    local NGINX_BACKUP=""
+    if [ -f "$NGINX_CONF" ]; then
+        NGINX_BACKUP=$(mktemp /tmp/eve-nginx-backup-XXXXXX)
+        cp -a "$NGINX_CONF" "$NGINX_BACKUP"
+    fi
+
     if [ -f "$SSL_FULLCHAIN" ] && [ -f "$SSL_PRIVKEY" ]; then
-        # --- Let's Encrypt SSL ---
+        # --- Let's Encrypt or panel-managed SSL ---
         cat > /etc/nginx/sites-available/${SERVICE_NAME} <<EOF
 server {
     listen 80;
@@ -1549,8 +1592,7 @@ server {
 
     ssl_certificate ${SSL_FULLCHAIN};
     ssl_certificate_key ${SSL_PRIVKEY};
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    ${SSL_AUX_CONFIG}
 
     # --- Gzip Compression Settings ---
     gzip on;
@@ -1810,8 +1852,49 @@ server {
 EOF
     fi
     ln -sf /etc/nginx/sites-available/${SERVICE_NAME} /etc/nginx/sites-enabled/
-    nginx -t && systemctl restart nginx
+    if ! nginx -t; then
+        print_error "Nginx validation failed; restoring the previous configuration"
+        if [ -n "$NGINX_BACKUP" ] && [ -f "$NGINX_BACKUP" ]; then
+            cp -a "$NGINX_BACKUP" "$NGINX_CONF"
+        else
+            rm -f "$NGINX_CONF"
+        fi
+        rm -f "$NGINX_BACKUP"
+        nginx -t || true
+        return 1
+    fi
+    if ! systemctl reload nginx; then
+        print_error "Nginx reload failed; restoring the previous configuration"
+        if [ -n "$NGINX_BACKUP" ] && [ -f "$NGINX_BACKUP" ]; then
+            cp -a "$NGINX_BACKUP" "$NGINX_CONF"
+            nginx -t && systemctl reload nginx || true
+        fi
+        rm -f "$NGINX_BACKUP"
+        return 1
+    fi
+    rm -f "$NGINX_BACKUP"
     print_success "Nginx configured with Gzip enabled"
+}
+
+verify_panel_proxy() {
+    local NGINX_CONF="/etc/nginx/sites-available/${SERVICE_NAME}"
+    nginx -t || return 1
+    if grep -qE '^[[:space:]]*listen[[:space:]]+443([[:space:];]|$)' "$NGINX_CONF" 2>/dev/null; then
+        local ACTIVE_CERT
+        ACTIVE_CERT=$(awk '/^[[:space:]]*ssl_certificate[[:space:]]+/ && $1 == "ssl_certificate" {gsub(/;/, "", $2); print $2; exit}' "$NGINX_CONF")
+        [ -n "$ACTIVE_CERT" ] && openssl x509 -in "$ACTIVE_CERT" -noout -checkend 0 >/dev/null 2>&1 || return 1
+        if [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            openssl x509 -in "$ACTIVE_CERT" -noout -checkip "$DOMAIN" >/dev/null 2>&1 || return 1
+        else
+            openssl x509 -in "$ACTIVE_CERT" -noout -checkhost "$DOMAIN" >/dev/null 2>&1 || return 1
+        fi
+        curl --fail --silent --show-error --insecure --max-time 10 \
+            --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/healthz" >/dev/null
+    else
+        curl --fail --silent --show-error --max-time 10 \
+            -H "Host: ${DOMAIN}" "http://127.0.0.1/healthz" >/dev/null
+    fi
+    print_success "Domain/SSL proxy check passed for ${DOMAIN}"
 }
 
 setup_certbot_ssl() {
@@ -2436,6 +2519,10 @@ do_online_update() {
     setup_systemd false
     setup_nginx
     patch_nginx_backup_location
+    verify_panel_proxy || {
+        print_error "Domain/SSL proxy validation failed after update"
+        return 1
+    }
     show_maintenance_preflight
     restart_eve_runtime_services
     start_maintenance_service preflight-shown
@@ -2804,6 +2891,7 @@ ${APP_USER} ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/archive/*/privkey*.pe
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl reload nginx
 ${APP_USER} ALL=(root) NOPASSWD: /usr/sbin/nginx -t
 ${APP_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/nginx/sites-available/${SERVICE_NAME}
+${APP_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/eve-manager/domain
 EOF
     chmod 440 "$SUDOERS_FILE"
     print_success "Sudoers entry created: /etc/sudoers.d/eve-ssl"

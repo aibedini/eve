@@ -15,6 +15,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 import app as app_module  # noqa: E402
 from app import Admin, app, db  # noqa: E402
+from panel.routes import settings as settings_routes  # noqa: E402
 
 
 class SystemUpdateApiTest(unittest.TestCase):
@@ -250,6 +251,59 @@ class RenewalHistoryMarkupTest(unittest.TestCase):
             encoding='utf-8')
         self.assertIn('let _historyRenewalsByLabel = new Map()', template)
         self.assertIn("${IS_FA?'تمدید':'Renewed'} · ${renewalVolume}", template)
+
+
+class DomainSslUpdatePersistenceTest(unittest.TestCase):
+    def test_nginx_builder_preserves_large_backup_route(self):
+        config = settings_routes._build_nginx_config(
+            'panel.example.com', '5000', '/cert.pem', '/key.pem')
+        self.assertIn('listen 443 ssl;', config)
+        self.assertIn('client_max_body_size 2048m;', config)
+        self.assertIn('location /protected-backups/', config)
+
+    def test_nginx_apply_persists_domain_after_successful_reload(self):
+        completed = mock.Mock(returncode=0, stdout='', stderr='')
+        with mock.patch.object(
+                settings_routes.subprocess, 'run', return_value=completed) as run:
+            ok, error = settings_routes._apply_nginx_config(
+                'panel.example.com', '/cert.pem', '/key.pem')
+        self.assertTrue(ok, error)
+        self.assertEqual(run.call_count, 4)
+        self.assertEqual(
+            run.call_args_list[-1].args[0],
+            ['sudo', 'tee', settings_routes.PERSISTED_DOMAIN_PATH],
+        )
+        self.assertEqual(run.call_args_list[-1].kwargs['input'], 'panel.example.com')
+
+    def test_nginx_apply_rejects_directive_injection(self):
+        with mock.patch.object(settings_routes.subprocess, 'run') as run:
+            ok, error = settings_routes._apply_nginx_config(
+                'panel.example.com; return 444')
+        self.assertFalse(ok)
+        self.assertIn('Invalid', error)
+        run.assert_not_called()
+
+    def test_nginx_apply_restores_previous_config_on_validation_failure(self):
+        success = mock.Mock(returncode=0, stdout='', stderr='')
+        failure = mock.Mock(returncode=1, stdout='', stderr='bad nginx config')
+        with mock.patch('builtins.open', mock.mock_open(read_data='old config')), \
+                mock.patch.object(
+                    settings_routes.subprocess, 'run',
+                    side_effect=[success, failure, success, success, success]) as run:
+            ok, error = settings_routes._apply_nginx_config('panel.example.com')
+        self.assertFalse(ok)
+        self.assertIn('bad nginx config', error)
+        self.assertEqual(run.call_count, 5)
+        self.assertEqual(run.call_args_list[2].kwargs['input'], 'old config')
+
+    def test_update_runner_backs_up_domain_and_ssl_material(self):
+        root = Path(__file__).parents[1]
+        runner = (root / 'eve_web_update_runner.sh').read_text(encoding='utf-8')
+        setup = (root / 'setup.sh').read_text(encoding='utf-8')
+        self.assertIn('/etc/eve-manager/domain', runner)
+        self.assertIn('/etc/ssl/eve-manager', runner)
+        self.assertIn('verify_panel_proxy', setup)
+        self.assertIn('Recovered panel domain from installed TLS certificate', setup)
 
 
 if __name__ == '__main__':
