@@ -11,10 +11,14 @@ os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 os.environ['EVE_SKIP_IMPORT_MIGRATIONS'] = '1'
 
-from app import Admin, Announcement, AnnouncementDelivery, Server, SmsSendLog, app, db  # noqa: E402
+from app import (  # noqa: E402
+    Admin, Announcement, AnnouncementDelivery, ClientOwnership, Server, SmsSendLog,
+    app, db,
+)
 from panel.core.redis_client import GLOBAL_SERVER_DATA  # noqa: E402
 from panel.jobs.messaging import (  # noqa: E402
     _announcement_campaign_recipients,
+    _estimate_sms_campaign_duration,
     _queue_announcement_campaign,
     _run_announcement_campaign_batch,
 )
@@ -65,6 +69,7 @@ class AnnouncementCampaignTests(unittest.TestCase):
         AnnouncementDelivery.query.delete()
         Announcement.query.delete()
         SmsSendLog.query.delete()
+        ClientOwnership.query.delete()
         Server.query.delete()
         Admin.query.delete()
         db.session.commit()
@@ -92,7 +97,19 @@ class AnnouncementCampaignTests(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertIn('id="announcement-channel"', html)
         self.assertIn('id="announcement-recipient-preview"', html)
+        self.assertIn('id="announcement-owner-filters"', html)
+        self.assertIn('id="announcement-status-filters"', html)
         self.assertIn("['remaining_volume', 'Remaining volume']", html)
+
+    def test_sms_eta_uses_daily_segment_cap_and_send_pace(self):
+        estimate = _estimate_sms_campaign_duration(
+            450, 450, cfg={
+                'daily_limit': 200, 'send_pace_seconds': 3,
+                'quiet_enabled': False,
+            })
+        self.assertEqual(200, estimate['recipients_per_day'])
+        self.assertEqual('SMS daily segment limit', estimate['bottleneck'])
+        self.assertGreater(estimate['seconds'], 2 * 86400)
 
     @mock.patch('panel.jobs.messaging.load_snapshot_from_redis')
     def test_sms_preview_deduplicates_numbers_and_honors_opt_out(self, load_snapshot):
@@ -118,6 +135,71 @@ class AnnouncementCampaignTests(unittest.TestCase):
         self.assertTrue(data['success'])
         self.assertEqual(1, data['unique'])
         self.assertEqual(1, data['sms']['estimated_total_segments'])
+        self.assertGreater(data['eta']['seconds'], 0)
+
+    @mock.patch('panel.jobs.messaging.load_snapshot_from_redis')
+    def test_sms_audience_filters_owner_and_multiselect_state(self, load_snapshot):
+        reseller = Admin(username='reseller-owner', role='reseller', enabled=True)
+        reseller.set_password('StrongPassword123!')
+        db.session.add(reseller)
+        db.session.flush()
+        db.session.add(ClientOwnership(
+            reseller_id=reseller.id, server_id=self.server.id, inbound_id=11,
+            client_email='first',
+        ))
+        db.session.commit()
+        GLOBAL_SERVER_DATA['inbounds'][0]['clients'][0]['service_state'] = 'expired'
+        GLOBAL_SERVER_DATA['inbounds'][0]['clients'][1]['service_state'] = 'volume_low'
+
+        recipients, stats = _announcement_campaign_recipients(
+            'sms', '*', ['reseller'], ['expired'])
+
+        self.assertEqual(['first'], [row['email'] for row in recipients])
+        self.assertGreaterEqual(stats['owner_filtered'], 1)
+        self.assertEqual('reseller', recipients[0]['context']['owner_type'])
+
+    @mock.patch('panel.jobs.messaging.load_snapshot_from_redis')
+    def test_edit_running_campaign_keeps_sent_rows_and_adds_only_new_recipient(self, load_snapshot):
+        row = Announcement(
+            message='Old {account_name}', channel='sms', targets='*', all_servers=True,
+            start_at=datetime.utcnow(), end_at=datetime.utcnow() + timedelta(days=1),
+            delivery_mode='all', status='completed', total_count=1, sent_count=1,
+            created_by='campaign-admin',
+        )
+        db.session.add(row)
+        db.session.flush()
+        db.session.add(AnnouncementDelivery(
+            announcement_id=row.id, recipient_key='sms:+989121234567',
+            recipient='+989121234567', email='first', server_id=self.server.id,
+            inbound_id=11, context_json='{"account_name":"first"}', status='sent',
+            sent_at=datetime.utcnow(), processed_at=datetime.utcnow(),
+        ))
+        GLOBAL_SERVER_DATA['inbounds'][0]['clients'].append({
+            'email': 'new-user', 'comment': '09123334455', 'expiryTimestamp': 0,
+            'remaining_formatted': '6 GB', 'service_state': 'active', 'subId': 'sub-new',
+        })
+        db.session.commit()
+
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = self.admin.id
+            session_data['role'] = 'superadmin'
+            session_data['is_superadmin'] = True
+        response = client.put(f'/api/announcements/{row.id}', json={
+            'channel': 'sms', 'message': 'Edited {account_name}', 'targets': '*',
+            'delivery_mode': 'all',
+            'audience_owner_types': ['system', 'unowned'],
+            'audience_statuses': ['other'],
+        })
+
+        self.assertEqual(200, response.status_code)
+        db.session.refresh(row)
+        deliveries = AnnouncementDelivery.query.filter_by(announcement_id=row.id).all()
+        self.assertEqual(2, len(deliveries))
+        self.assertEqual(1, sum(delivery.status == 'sent' for delivery in deliveries))
+        self.assertEqual(1, sum(delivery.status == 'pending' for delivery in deliveries))
+        self.assertEqual('queued', row.status)
+        self.assertEqual('Edited {account_name}', row.message)
 
     @mock.patch('panel.jobs.messaging.load_snapshot_from_redis')
     @mock.patch('panel.jobs.messaging._get_sms_runtime_settings')

@@ -521,6 +521,11 @@ class Announcement(db.Model):
     channel = db.Column(db.String(24), nullable=False, default='subscription', index=True)
     delivery_mode = db.Column(db.String(24), nullable=False, default='all')
     daily_limit = db.Column(db.Integer, nullable=True)
+    audience_owner_types = db.Column(
+        db.Text, nullable=False, default='["system","unowned"]')
+    audience_statuses = db.Column(
+        db.Text, nullable=False,
+        default='["other","expired","volume_ended","expiring_soon","volume_low"]')
     status = db.Column(db.String(24), nullable=False, default='draft', index=True)
     total_count = db.Column(db.Integer, nullable=False, default=0)
     sent_count = db.Column(db.Integer, nullable=False, default=0)
@@ -557,6 +562,20 @@ class Announcement(db.Model):
             except (TypeError, ValueError, json.JSONDecodeError):
                 pass
 
+        def _audience_list(raw, default):
+            try:
+                value = json.loads(raw or '')
+            except (TypeError, ValueError, json.JSONDecodeError):
+                value = default
+            return value if isinstance(value, list) and value else list(default)
+
+        total_count = int(self.total_count or 0)
+        sent_count = int(self.sent_count or 0)
+        failed_count = int(self.failed_count or 0)
+        skipped_count = int(self.skipped_count or 0)
+        processed_count = min(total_count, sent_count + failed_count + skipped_count)
+        remaining_count = max(0, total_count - processed_count)
+
         return {
             'id': self.id,
             'message': self.message,
@@ -580,11 +599,19 @@ class Announcement(db.Model):
             'channel': self.channel or 'subscription',
             'delivery_mode': self.delivery_mode or 'all',
             'daily_limit': int(self.daily_limit or 0),
+            'audience_owner_types': _audience_list(
+                self.audience_owner_types, ['system', 'unowned']),
+            'audience_statuses': _audience_list(self.audience_statuses, [
+                'other', 'expired', 'volume_ended', 'expiring_soon', 'volume_low',
+            ]),
             'status': self.status or 'draft',
-            'total_count': int(self.total_count or 0),
-            'sent_count': int(self.sent_count or 0),
-            'failed_count': int(self.failed_count or 0),
-            'skipped_count': int(self.skipped_count or 0),
+            'total_count': total_count,
+            'sent_count': sent_count,
+            'failed_count': failed_count,
+            'skipped_count': skipped_count,
+            'processed_count': processed_count,
+            'remaining_count': remaining_count,
+            'progress_percent': round((processed_count / total_count) * 100, 1) if total_count else 0,
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
         }
@@ -606,6 +633,7 @@ class AnnouncementDelivery(db.Model):
     inbound_id = db.Column(db.Integer, nullable=True)
     bot_instance_id = db.Column(db.Integer, db.ForeignKey('telegram_bot_instances.id'), nullable=True)
     context_json = db.Column(db.Text, nullable=False, default='{}')
+    segment_count = db.Column(db.Integer, nullable=False, default=1)
     status = db.Column(db.String(24), nullable=False, default='pending', index=True)
     attempts = db.Column(db.Integer, nullable=False, default=0)
     last_error = db.Column(db.String(500), nullable=True)

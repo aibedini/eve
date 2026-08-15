@@ -3380,6 +3380,98 @@ select optgroup {
     border-color: rgba(100, 116, 139, 0.4);
 }
 
+.ann-audience-panel {
+    display: grid;
+    gap: 0.85rem;
+    margin: 0 0 1rem;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+}
+
+.ann-filter-section {
+    display: grid;
+    gap: 0.65rem;
+}
+
+.ann-filter-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.ann-filter-heading small {
+    color: var(--text-secondary);
+}
+
+.ann-filter-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.ann-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.25rem;
+    padding: 0.45rem 0.7rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.55rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 180ms ease, background 180ms ease, color 180ms ease;
+}
+
+.ann-filter-chip:has(input:checked) {
+    border-color: color-mix(in srgb, var(--primary) 60%, var(--border-color));
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    color: var(--text-primary);
+}
+
+.ann-filter-chip:focus-within {
+    outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+    outline-offset: 2px;
+}
+
+.ann-edit-progress,
+.campaign-progress-panel {
+    padding: 0.8rem;
+    border-radius: 0.65rem;
+    background: color-mix(in srgb, var(--bg-tertiary) 85%, transparent);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.campaign-progress-track {
+    height: 0.42rem;
+    margin: 0.6rem 0;
+    overflow: hidden;
+    border-radius: 0.2rem;
+    background: color-mix(in srgb, var(--border-color) 75%, transparent);
+}
+
+.campaign-progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: var(--primary);
+    transition: width 240ms ease;
+}
+
+.campaign-progress-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+    font-size: 0.78rem;
+}
+
+@media (max-width: 640px) {
+    .ann-filter-heading { align-items: flex-start; flex-direction: column; }
+    .campaign-progress-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .subscription-order-subtitle {
     color: var(--text-secondary);
     font-size: 0.8rem;

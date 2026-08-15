@@ -1091,7 +1091,76 @@ def _announcement_client_context(client, inbound):
     }
 
 
-def _announcement_campaign_recipients(channel, targets='*'):
+ANNOUNCEMENT_OWNER_TYPES = ('system', 'reseller', 'unowned')
+ANNOUNCEMENT_STATUS_GROUPS = (
+    'other', 'expired', 'volume_ended', 'expiring_soon', 'volume_low',
+)
+
+
+def _announcement_filter_values(raw, allowed, default):
+    if raw in (None, ''):
+        return set(default)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = [part.strip() for part in raw.split(',')]
+    values = {str(value or '').strip().lower() for value in (raw if isinstance(raw, list) else [raw])}
+    return {value for value in values if value in allowed} or set(default)
+
+
+def _announcement_account_owner_types(accounts):
+    """Classify accounts without an ownership query per recipient.
+
+    Reseller ownership wins when legacy data contains both a reseller and a
+    system owner, preserving the previous safe default that excluded resellers.
+    """
+    account_keys = {
+        (int(context['server_id']), str(context.get('email') or '').lower())
+        for _, _, context in accounts if context.get('server_id') is not None
+    }
+    if not account_keys:
+        return {}
+    server_ids = sorted({key[0] for key in account_keys})
+    roles_by_key = {}
+    rows = (db.session.query(
+        ClientOwnership.server_id, ClientOwnership.client_email, Admin.role,
+    ).join(Admin, Admin.id == ClientOwnership.reseller_id)
+      .filter(ClientOwnership.server_id.in_(server_ids)).all())
+    for server_id, email, role in rows:
+        key = (int(server_id), str(email or '').strip().lower())
+        if key in account_keys:
+            roles_by_key.setdefault(key, set()).add(str(role or '').strip().lower())
+    result = {}
+    for key in account_keys:
+        roles = roles_by_key.get(key, set())
+        result[key] = 'reseller' if 'reseller' in roles else ('system' if roles else 'unowned')
+    return result
+
+
+def _announcement_client_status_group(client):
+    state = str(client.get('service_state') or '').strip().lower()
+    if state in ANNOUNCEMENT_STATUS_GROUPS[1:]:
+        return state
+    volume_status = str(client.get('volume_status') or '').strip().lower()
+    if volume_status in ('suspended', 'ended', 'volume_ended'):
+        return 'volume_ended'
+    if volume_status in ('low', 'volume_low'):
+        return 'volume_low'
+    expiry_type = str(client.get('expiryType') or '').strip().lower()
+    if expiry_type == 'expired':
+        return 'expired'
+    try:
+        expiry_ts = int(client.get('expiryTimestamp') or 0)
+    except (TypeError, ValueError):
+        expiry_ts = 0
+    if expiry_ts > 0 and expiry_ts <= int(time.time() * 1000):
+        return 'expired'
+    return 'other'
+
+
+def _announcement_campaign_recipients(
+        channel, targets='*', owner_types=None, statuses=None):
     """Resolve a server/inbound audience and deduplicate by actual destination."""
     from app import _telegram_announcement_recipients  # deferred: app helper
     channel = str(channel or '').strip().lower()
@@ -1106,7 +1175,8 @@ def _announcement_campaign_recipients(channel, targets='*'):
     seen_accounts = set()
     stats = {
         'clients': 0, 'unique': 0, 'duplicates': 0, 'missing_contact': 0,
-        'opted_out': 0, 'blocked_by_policy': 0,
+        'opted_out': 0, 'blocked_by_policy': 0, 'owner_filtered': 0,
+        'status_filtered': 0,
     }
     for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
         sid = inbound.get('server_id')
@@ -1128,11 +1198,29 @@ def _announcement_campaign_recipients(channel, targets='*'):
     recipients = []
     seen_destinations = set()
     if channel in ('sms', 'whatsapp'):
+        selected_owners = _announcement_filter_values(
+            owner_types, ANNOUNCEMENT_OWNER_TYPES, ('system', 'unowned'))
+        selected_statuses = _announcement_filter_values(
+            statuses, ANNOUNCEMENT_STATUS_GROUPS, ANNOUNCEMENT_STATUS_GROUPS)
+        owners_by_account = _announcement_account_owner_types(accounts) if channel == 'sms' else {}
         for client, inbound, context in accounts:
             comment = context.get('comment') or ''
-            if (channel == 'sms' and _account_has_reseller_owner(context.get('server_id'), context.get('email'))) or (
-                    channel == 'whatsapp' and not _whatsapp_automation_allowed_for_account(
-                        context.get('server_id'), context.get('email'))):
+            if channel == 'sms':
+                account_key = (int(context['server_id']), str(context.get('email') or '').lower())
+                owner_type = owners_by_account.get(account_key, 'unowned')
+                context['owner_type'] = owner_type
+                if owner_type not in selected_owners:
+                    stats['owner_filtered'] += 1
+                    if owner_type == 'reseller':
+                        stats['blocked_by_policy'] += 1
+                    continue
+                status_group = _announcement_client_status_group(client)
+                context['service_state'] = status_group
+                if status_group not in selected_statuses:
+                    stats['status_filtered'] += 1
+                    continue
+            elif not _whatsapp_automation_allowed_for_account(
+                    context.get('server_id'), context.get('email')):
                 stats['blocked_by_policy'] += 1
                 continue
             if (channel == 'sms' and _sms_comment_opted_out(comment)) or (
@@ -1188,6 +1276,139 @@ def _announcement_campaign_recipients(channel, targets='*'):
     return recipients, stats
 
 
+def _announcement_delivery_segment_count(channel, message, context):
+    if channel != 'sms':
+        return 1
+    from app import _render_text_template  # deferred compatibility helper
+    rendered = _render_text_template(message or '', context or {})
+    return max(1, int(_sms_segment_info(rendered).get('sms_segments') or 1))
+
+
+def _recount_announcement_campaign(announcement):
+    counts = dict(db.session.query(
+        AnnouncementDelivery.status, db.func.count(AnnouncementDelivery.id),
+    ).filter_by(announcement_id=announcement.id).group_by(AnnouncementDelivery.status).all())
+    announcement.total_count = int(sum(counts.values()))
+    announcement.sent_count = int(counts.get('sent', 0))
+    announcement.failed_count = int(counts.get('failed', 0))
+    announcement.skipped_count = int(counts.get('skipped', 0))
+    return counts
+
+
+def _reconcile_announcement_campaign_deliveries(announcement):
+    """Apply edited targeting to unsent rows while never recreating sent rows."""
+    recipients, stats = _announcement_campaign_recipients(
+        announcement.channel, announcement.targets,
+        announcement.audience_owner_types, announcement.audience_statuses,
+    )
+    candidates = {item['recipient_key']: item for item in recipients}
+    existing = AnnouncementDelivery.query.filter_by(announcement_id=announcement.id).all()
+    existing_by_key = {delivery.recipient_key: delivery for delivery in existing}
+    now = datetime.utcnow()
+
+    for delivery in existing:
+        item = candidates.get(delivery.recipient_key)
+        can_reconcile = delivery.status in ('pending', 'retry') or (
+            delivery.status == 'skipped' and delivery.last_error == 'audience_changed')
+        if not can_reconcile:
+            continue
+        if item is None:
+            delivery.status = 'skipped'
+            delivery.last_error = 'audience_changed'
+            delivery.processed_at = now
+            delivery.next_attempt_at = None
+            continue
+        context = item['context']
+        delivery.recipient = item['recipient']
+        delivery.email = item.get('email')
+        delivery.server_id = item.get('server_id')
+        delivery.inbound_id = item.get('inbound_id')
+        delivery.bot_instance_id = item.get('bot_instance_id')
+        delivery.context_json = json.dumps(context, ensure_ascii=False)
+        delivery.segment_count = _announcement_delivery_segment_count(
+            announcement.channel, announcement.message, context)
+        if delivery.status == 'skipped':
+            delivery.status = 'pending'
+            delivery.last_error = None
+            delivery.processed_at = None
+        candidates.pop(delivery.recipient_key, None)
+
+    for recipient_key, item in candidates.items():
+        # Terminal rows, especially sent rows, are intentionally never revived.
+        if recipient_key in existing_by_key:
+            continue
+        context = item.pop('context')
+        db.session.add(AnnouncementDelivery(
+            announcement_id=announcement.id,
+            context_json=json.dumps(context, ensure_ascii=False),
+            segment_count=_announcement_delivery_segment_count(
+                announcement.channel, announcement.message, context),
+            **item,
+        ))
+    db.session.flush()
+    return _recount_announcement_campaign(announcement), stats
+
+
+def _estimate_sms_campaign_duration(
+        recipient_count, estimated_segments, delivery_mode='all', daily_limit=None, cfg=None):
+    """Return a conservative ETA based on current SMS pace, caps and quiet hours."""
+    count = max(0, int(recipient_count or 0))
+    segments = max(0, int(estimated_segments or 0))
+    if count <= 0:
+        return {'seconds': 0, 'label': '0 minutes', 'recipients_per_day': 0,
+                'bottleneck': 'none'}
+    cfg = cfg or _get_sms_runtime_settings()
+    avg_segments = max(1.0, segments / count) if segments else 1.0
+    global_daily_segments = max(1, int(cfg.get('daily_limit') or 1))
+    by_segments = max(1, int(global_daily_segments // avg_segments))
+    pace = max(0.0, float(cfg.get('send_pace_seconds') or 0))
+    active_seconds = 86400
+    if cfg.get('quiet_enabled'):
+        start, end = int(cfg.get('quiet_start') or 0), int(cfg.get('quiet_end') or 0)
+        quiet_hours = (end - start) % 24
+        active_seconds = max(3600, 86400 - quiet_hours * 3600)
+    by_pace = max(1, int(active_seconds // max(pace, 0.01)))
+    capacities = {'SMS daily segment limit': by_segments, 'send pace': by_pace}
+    if delivery_mode == 'daily' and int(daily_limit or 0) > 0:
+        capacities['campaign daily limit'] = int(daily_limit)
+    bottleneck, per_day = min(capacities.items(), key=lambda item: item[1])
+    full_days = (count - 1) // per_day
+    last_day_count = count - (full_days * per_day)
+    seconds = int(full_days * 86400 + max(1, math.ceil(last_day_count * max(pace, 0.01))))
+    if seconds < 3600:
+        label = f'about {max(1, math.ceil(seconds / 60))} minutes'
+    elif seconds < 86400:
+        label = f'about {math.ceil(seconds / 3600)} hours'
+    else:
+        label = f'about {math.ceil(seconds / 86400)} days'
+    return {
+        'seconds': seconds, 'label': label, 'recipients_per_day': per_day,
+        'bottleneck': bottleneck, 'average_segments': round(avg_segments, 2),
+    }
+
+
+def _announcement_campaign_eta(announcement):
+    if announcement.channel != 'sms' or announcement.status == 'draft':
+        return None
+    remaining_count = max(0, int(announcement.total_count or 0) - int(announcement.sent_count or 0)
+                          - int(announcement.failed_count or 0) - int(announcement.skipped_count or 0))
+    remaining_segments = int(db.session.query(
+        db.func.coalesce(db.func.sum(AnnouncementDelivery.segment_count), 0)
+    ).filter(
+        AnnouncementDelivery.announcement_id == announcement.id,
+        AnnouncementDelivery.status.in_(('pending', 'retry')),
+    ).scalar() or 0)
+    estimate = _estimate_sms_campaign_duration(
+        remaining_count, remaining_segments, announcement.delivery_mode,
+        announcement.daily_limit,
+    )
+    estimate['remaining_segments'] = remaining_segments
+    if estimate['seconds']:
+        estimate['estimated_finish_at'] = (
+            datetime.utcnow() + timedelta(seconds=estimate['seconds'])).isoformat()
+    return estimate
+
+
 def _queue_announcement_campaign(announcement):
     if announcement.channel == 'subscription':
         raise ValueError('Subscription announcements do not use the message queue')
@@ -1202,12 +1423,17 @@ def _queue_announcement_campaign(announcement):
         if not cfg.get('enabled') or not cfg.get('gateway_url'):
             raise ValueError('WhatsApp messaging must be enabled and connected first')
     if announcement.status == 'draft':
-        recipients, _ = _announcement_campaign_recipients(announcement.channel, announcement.targets)
+        recipients, _ = _announcement_campaign_recipients(
+            announcement.channel, announcement.targets,
+            announcement.audience_owner_types, announcement.audience_statuses)
         for item in recipients:
             context = item.pop('context')
             db.session.add(AnnouncementDelivery(
                 announcement_id=announcement.id,
-                context_json=json.dumps(context, ensure_ascii=False), **item,
+                context_json=json.dumps(context, ensure_ascii=False),
+                segment_count=_announcement_delivery_segment_count(
+                    announcement.channel, announcement.message, context),
+                **item,
             ))
         announcement.total_count = len(recipients)
     announcement.status = 'queued'
@@ -1288,6 +1514,8 @@ def _run_announcement_campaign_batch(batch_size=25):
                                 delivery.last_error = 'pace_gated'
                                 continue
                         segment_info = _sms_segment_info(message)
+                        delivery.segment_count = max(
+                            1, int(segment_info.get('sms_segments') or 1))
                         slot_ok, slot_reason = _sms_take_send_slot(
                             delivery.recipient, sms_cfg, segment_info['sms_segments'])
                         if not slot_ok:
@@ -1351,12 +1579,7 @@ def _run_announcement_campaign_batch(batch_size=25):
             processed += 1
             if processed >= batch_size:
                 break
-        counts = dict(db.session.query(
-            AnnouncementDelivery.status, db.func.count(AnnouncementDelivery.id),
-        ).filter_by(announcement_id=campaign.id).group_by(AnnouncementDelivery.status).all())
-        campaign.sent_count = int(counts.get('sent', 0))
-        campaign.failed_count = int(counts.get('failed', 0))
-        campaign.skipped_count = int(counts.get('skipped', 0))
+        counts = _recount_announcement_campaign(campaign)
         if not any(counts.get(value, 0) for value in ('pending', 'retry')):
             campaign.status, campaign.finished_at = 'completed', datetime.utcnow()
         db.session.commit()

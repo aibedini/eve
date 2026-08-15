@@ -1514,10 +1514,37 @@
                         <input id="announcement-daily-limit" type="number" class="form-input" min="1" max="100000" value="100">
                     </div>
                 </div>
+                <div id="announcement-sms-audience-options" class="ann-audience-panel">
+                    <div class="ann-filter-section">
+                        <div class="ann-filter-heading">
+                            <strong>Account owner</strong>
+                            <small>Select every owner group that should receive this SMS.</small>
+                        </div>
+                        <div class="ann-filter-grid" id="announcement-owner-filters">
+                            <label class="ann-filter-chip"><input type="checkbox" value="system" checked><span>System / admin / superadmin</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="unowned" checked><span>No owner</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="reseller"><span>Reseller-owned users</span></label>
+                        </div>
+                    </div>
+                    <div class="ann-filter-section">
+                        <div class="ann-filter-heading">
+                            <strong>Subscription state</strong>
+                            <small>Multi-select the account states included in this campaign.</small>
+                        </div>
+                        <div class="ann-filter-grid" id="announcement-status-filters">
+                            <label class="ann-filter-chip"><input type="checkbox" value="other" checked><span>Active / other</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="expired" checked><span>Time expired</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="volume_ended" checked><span>Volume ended</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="expiring_soon" checked><span>Time expiring soon</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="volume_low" checked><span>Volume running low</span></label>
+                        </div>
+                    </div>
+                </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
                     <button type="button" class="btn btn-secondary" onclick="previewAnnouncementRecipients()">Count recipients</button>
                     <span id="announcement-recipient-preview" style="font-size:.86rem;color:var(--text-secondary);">Select targets, then count unique recipients.</span>
                 </div>
+                <div id="announcement-edit-progress" class="ann-edit-progress" hidden></div>
             </div>
 
             <div class="form-group">
@@ -2032,11 +2059,51 @@
 
     // Announcements Logic
     let announcements = [];
+    let announcementRefreshTimer = null;
     const ANNOUNCEMENT_VARIABLES = [
         ['email', 'Email / account'], ['account_name', 'Account name'], ['remaining_time', 'Remaining time'],
         ['remaining_volume', 'Remaining volume'], ['dashboard_link', 'Dashboard link'],
         ['sub_link', 'Subscription link'], ['server_name', 'Server name']
     ];
+    const ANNOUNCEMENT_OWNER_LABELS = {
+        system: 'System/admin/superadmin', unowned: 'No owner', reseller: 'Reseller-owned'
+    };
+    const ANNOUNCEMENT_STATUS_LABELS = {
+        other: 'Active/other', expired: 'Time expired', volume_ended: 'Volume ended',
+        expiring_soon: 'Time expiring soon', volume_low: 'Volume running low'
+    };
+
+    function annCheckedValues(containerId) {
+        return Array.from(document.querySelectorAll(`#${containerId} input[type="checkbox"]:checked`))
+            .map(input => input.value);
+    }
+
+    function annSetCheckedValues(containerId, values, defaults) {
+        const selected = new Set(Array.isArray(values) && values.length ? values : defaults);
+        document.querySelectorAll(`#${containerId} input[type="checkbox"]`).forEach(input => {
+            input.checked = selected.has(input.value);
+        });
+    }
+
+    function announcementProgressMarkup(a) {
+        const total = Number(a.total_count || 0);
+        const sent = Number(a.sent_count || 0);
+        const failed = Number(a.failed_count || 0);
+        const skipped = Number(a.skipped_count || 0);
+        const remaining = Number.isFinite(Number(a.remaining_count))
+            ? Number(a.remaining_count) : Math.max(0, total - sent - failed - skipped);
+        const percent = total ? Math.min(100, ((sent + failed + skipped) / total) * 100) : 0;
+        const eta = a.eta && remaining > 0 ? `${a.eta.label} remaining` : (remaining ? 'ETA unavailable' : 'Finished');
+        return `<div class="campaign-progress-panel">
+            <div style="display:flex;justify-content:space-between;gap:.75rem;"><strong>${percent.toFixed(1)}% processed</strong><span>${escapeHtml(eta)}</span></div>
+            <div class="campaign-progress-track"><div class="campaign-progress-fill" style="width:${percent.toFixed(1)}%"></div></div>
+            <div class="campaign-progress-stats">
+                <span>Total <strong>${total}</strong></span><span>Sent <strong>${sent}</strong></span>
+                <span>Errors <strong>${failed}</strong></span><span>Remaining <strong>${remaining}</strong></span>
+            </div>
+            ${skipped ? `<div style="margin-top:.45rem;font-size:.76rem;">Skipped: ${skipped}</div>` : ''}
+        </div>`;
+    }
 
     // Announcement Targets (reseller-style selector)
     let annAllServers = [];
@@ -2073,6 +2140,13 @@
             const _annData = await response.json();
             announcements = Array.isArray(_annData) ? _annData : (_annData.announcements || []);
             renderAnnouncements();
+            if (!announcementRefreshTimer) {
+                announcementRefreshTimer = window.setInterval(() => {
+                    if (document.getElementById('tab-announcements')?.classList.contains('active')) {
+                        loadAnnouncements();
+                    }
+                }, 5000);
+            }
         } catch (e) {
             showToast('Error loading announcements', 'error');
         }
@@ -2099,7 +2173,9 @@
                 : '';
             const typeLabel = {subscription:'Subscription', sms:'SMS', whatsapp:'WhatsApp', telegram:'Telegram'}[channel] || channel;
             const statusLabel = isSubscription ? (isActive ? 'Active' : 'Inactive') : (a.status || 'draft');
-            const progress = isSubscription ? '' : `Total ${a.total_count || 0} · Sent ${a.sent_count || 0} · Failed ${a.failed_count || 0} · Skipped ${a.skipped_count || 0}`;
+            const progress = isSubscription ? '' : announcementProgressMarkup(a);
+            const ownerLabel = (a.audience_owner_types || []).map(value => ANNOUNCEMENT_OWNER_LABELS[value] || value).join(', ');
+            const stateLabel = (a.audience_statuses || []).map(value => ANNOUNCEMENT_STATUS_LABELS[value] || value).join(', ');
             const campaignActions = isSubscription ? '' : (
                 a.status === 'draft' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'send')" title="Start sending">▶</button>`
                 : ['queued','sending'].includes(a.status) ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'pause')" title="Pause">Ⅱ</button>`
@@ -2123,17 +2199,19 @@
                         <span class="badge" style="background: rgba(99, 102, 241, 0.12); color: var(--primary); border: 1px solid rgba(99, 102, 241, 0.2);">${escapeHtml(serversLabel)}</span>
                         ${isSubscription && a.hide_from_resellers ? '<span class="badge" style="background:rgba(251,191,36,0.12); color:#fbbf24; border:1px solid rgba(251,191,36,0.3);">🔒 Hidden from resellers</span>' : ''}
                         ${!isSubscription && a.delivery_mode === 'daily' ? `<span class="badge">${Number(a.daily_limit || 0)} recipients/day</span>` : ''}
+                        ${channel === 'sms' && ownerLabel ? `<span class="badge">Owners: ${escapeHtml(ownerLabel)}</span>` : ''}
+                        ${channel === 'sms' && stateLabel ? `<span class="badge">States: ${escapeHtml(stateLabel)}</span>` : ''}
                     </div>
 
                     <div style="margin-top: 10px; color: var(--text-secondary); font-size: 0.8rem;">
                         <div>${escapeHtml(windowLabel)}</div>
-                        ${progress ? `<div style="margin-top:4px;">${escapeHtml(progress)}</div>` : ''}
+                        ${progress ? `<div style="margin-top:8px;">${progress}</div>` : ''}
                         <div style="margin-top: 4px;">Created: ${escapeHtml(createdAt)} • By: ${escapeHtml(createdBy)}</div>
                     </div>
 
                     <div class="server-actions">
                         ${campaignActions}
-                        ${(!isSubscription && a.status !== 'draft') ? '' : `<button class="action-btn" onclick="openEditAnnouncementModal(${a.id})" title="Edit">
+                        ${(a.status === 'cancelled' || (!isSubscription && channel !== 'sms' && a.status !== 'draft')) ? '' : `<button class="action-btn" onclick="openEditAnnouncementModal(${a.id})" title="Edit">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                         </button>`}
                         <button class="action-btn danger" onclick="deleteAnnouncement(${a.id})" title="Delete">
@@ -2562,6 +2640,8 @@
         document.getElementById('announcement-subscription-options').style.display = outbound ? 'none' : 'block';
         document.getElementById('announcement-subscription-toggles').style.display = outbound ? 'none' : 'block';
         document.getElementById('announcement-delivery-options').style.display = outbound ? 'block' : 'none';
+        const smsAudience = document.getElementById('announcement-sms-audience-options');
+        if (smsAudience) smsAudience.style.display = channel === 'sms' ? 'grid' : 'none';
         const chips = document.getElementById('announcement-variable-chips');
         if (chips) chips.innerHTML = ANNOUNCEMENT_VARIABLES.map(([name, label]) =>
             `<button type="button" class="btn btn-secondary" style="padding:5px 9px;font-size:.76rem;" onclick="annInsertVariable('${name}')">${escapeHtml(label)} <code>{${name}}</code></button>`
@@ -2578,17 +2658,25 @@
         const channel = document.getElementById('announcement-channel')?.value || 'subscription';
         const message = document.getElementById('announcement-outbound-message')?.value || '';
         const targets = document.getElementById('announcement-targets')?.value || '*';
+        const deliveryMode = document.getElementById('announcement-delivery-mode')?.value || 'all';
+        const dailyLimit = Number(document.getElementById('announcement-daily-limit')?.value || 0);
+        const audienceOwnerTypes = annCheckedValues('announcement-owner-filters');
+        const audienceStatuses = annCheckedValues('announcement-status-filters');
         const label = document.getElementById('announcement-recipient-preview');
         if (label) label.textContent = 'Counting recipients…';
         try {
             const response = await fetch('/api/announcements/preview', {
                 method:'POST', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({channel, message, targets})
+                body:JSON.stringify({
+                    channel, message, targets, delivery_mode: deliveryMode, daily_limit: dailyLimit,
+                    audience_owner_types: audienceOwnerTypes, audience_statuses: audienceStatuses
+                })
             });
             const data = await response.json();
             if (!data.success) throw new Error(data.error || 'Preview failed');
             const sms = data.sms ? ` · about ${data.sms.estimated_total_segments || 0} total SMS segments (${data.sms.min_segments_per_recipient || 0}–${data.sms.max_segments_per_recipient || 0} per recipient)` : '';
-            if (label) label.textContent = `${data.unique} unique recipients from ${data.clients} clients · ${data.duplicates} duplicates removed · ${data.missing_contact} without destination · ${data.opted_out} opted out · ${data.blocked_by_policy || 0} blocked by channel policy${sms}`;
+            const eta = data.eta ? ` · ETA ${data.eta.label} (${data.eta.bottleneck})` : '';
+            if (label) label.textContent = `${data.unique} unique recipients from ${data.clients} clients · ${data.duplicates} duplicates removed · ${data.missing_contact} without destination · ${data.opted_out} opted out · ${data.owner_filtered || 0} excluded by owner · ${data.status_filtered || 0} excluded by state${sms}${eta}`;
         } catch (error) {
             if (label) label.textContent = error.message;
             showToast(error.message, 'error');
@@ -2689,6 +2777,10 @@
         document.getElementById('announcement-outbound-message').value = '';
         document.getElementById('announcement-delivery-mode').value = 'all';
         document.getElementById('announcement-daily-limit').value = '100';
+        annSetCheckedValues('announcement-owner-filters', null, ['system', 'unowned']);
+        annSetCheckedValues('announcement-status-filters', null, Object.keys(ANNOUNCEMENT_STATUS_LABELS));
+        const progress = document.getElementById('announcement-edit-progress');
+        if (progress) { progress.hidden = true; progress.innerHTML = ''; }
         const hrEl = document.getElementById('announcement-hide-resellers');
         if (hrEl) hrEl.checked = false;
         const popEl = document.getElementById('announcement-is-popup');
@@ -2726,6 +2818,13 @@
         document.getElementById('announcement-outbound-message').value = channel === 'subscription' ? '' : (a.message || '');
         document.getElementById('announcement-delivery-mode').value = a.delivery_mode || 'all';
         document.getElementById('announcement-daily-limit').value = String(a.daily_limit || 100);
+        annSetCheckedValues('announcement-owner-filters', a.audience_owner_types, ['system', 'unowned']);
+        annSetCheckedValues('announcement-status-filters', a.audience_statuses, Object.keys(ANNOUNCEMENT_STATUS_LABELS));
+        const progress = document.getElementById('announcement-edit-progress');
+        if (progress) {
+            progress.hidden = channel === 'subscription' || a.status === 'draft';
+            progress.innerHTML = progress.hidden ? '' : `<div style="margin-bottom:.65rem;">Changes apply only to recipients that have not been sent yet. Sent recipients are never added again.</div>${announcementProgressMarkup(a)}`;
+        }
 
         document.getElementById('announcement-start').value = EveDate.formatInput(a.start_at);
         document.getElementById('announcement-end').value = EveDate.formatInput(a.end_at);
@@ -2742,15 +2841,10 @@
         const hidden = document.getElementById('announcement-targets');
         const _targetsVal = (a.targets || (a.all_servers ? '*' : '[]'));
         if (hidden) hidden.value = _targetsVal;
-        console.log('[ann-edit] id=', a.id, 'targets=', JSON.stringify(_targetsVal), 'all_servers=', a.all_servers);
-
         await ann_loadServers();
         await ann_loadInbounds();
         ann_syncSelectionsToUi();
         annOnChannelChange();
-        console.log('[ann-edit] after sync: checked servers=',
-            document.querySelectorAll('.ann-server-checkbox:checked').length,
-            'checked inbounds=', document.querySelectorAll('.ann-inbound-checkbox:checked').length);
         initAnnouncementShamsiPicker();
 
         document.getElementById('announcement-modal').classList.remove('hidden');
@@ -2949,6 +3043,14 @@
             showToast('Enter a valid daily recipient limit', 'error');
             return;
         }
+        if (channel === 'sms' && !annCheckedValues('announcement-owner-filters').length) {
+            showToast('Select at least one account owner group', 'error');
+            return;
+        }
+        if (channel === 'sms' && !annCheckedValues('announcement-status-filters').length) {
+            showToast('Select at least one subscription state', 'error');
+            return;
+        }
 
         const body = {
             message,
@@ -2963,6 +3065,8 @@
             button_columns: Number(document.getElementById('announcement-button-columns')?.value) === 2 ? 2 : 1,
             delivery_mode: isSubscription ? 'all' : deliveryMode,
             daily_limit: isSubscription || deliveryMode === 'all' ? null : dailyLimit,
+            audience_owner_types: isSubscription ? ['system', 'reseller', 'unowned'] : annCheckedValues('announcement-owner-filters'),
+            audience_statuses: isSubscription ? Object.keys(ANNOUNCEMENT_STATUS_LABELS) : annCheckedValues('announcement-status-filters'),
         };
 
         try {

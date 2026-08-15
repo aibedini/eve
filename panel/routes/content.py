@@ -414,9 +414,14 @@ def delete_faq(faq_id):
 @bp.route('/api/announcements', methods=['GET'])
 @user_management_required
 def get_announcements():
-    from app import app  # deferred: app-level helper, avoids circular import
+    from panel.jobs.messaging import _announcement_campaign_eta
     items = Announcement.query.order_by(Announcement.created_at.desc()).all()
-    resp = jsonify([a.to_dict() for a in items])
+    payload = []
+    for announcement in items:
+        item = announcement.to_dict()
+        item['eta'] = _announcement_campaign_eta(announcement)
+        payload.append(item)
+    resp = jsonify(payload)
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     return resp
 
@@ -478,6 +483,38 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
         daily_limit = 0
     if channel != 'subscription' and delivery_mode == 'daily' and not 1 <= daily_limit <= 100000:
         return None, 'Daily recipient limit must be between 1 and 100000'
+
+    def _normalize_audience_list(raw, allowed, default, label):
+        if raw in (None, ''):
+            return list(default), None
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = [part.strip() for part in raw.split(',')]
+        values = raw if isinstance(raw, list) else [raw]
+        normalized = []
+        for value in values:
+            value = str(value or '').strip().lower()
+            if value in allowed and value not in normalized:
+                normalized.append(value)
+        if not normalized:
+            return None, f'Select at least one {label}'
+        return normalized, None
+
+    owner_default = ('system', 'unowned') if channel == 'sms' else ('system', 'reseller', 'unowned')
+    audience_owner_types, audience_error = _normalize_audience_list(
+        data.get('audience_owner_types'), ('system', 'reseller', 'unowned'),
+        owner_default, 'owner type')
+    if audience_error:
+        return None, audience_error
+    audience_statuses, audience_error = _normalize_audience_list(
+        data.get('audience_statuses'),
+        ('other', 'expired', 'volume_ended', 'expiring_soon', 'volume_low'),
+        ('other', 'expired', 'volume_ended', 'expiring_soon', 'volume_low'),
+        'service state')
+    if audience_error:
+        return None, audience_error
 
     def _parse_int_or_none(val):
         if val is None:
@@ -604,6 +641,8 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
         'channel': channel,
         'delivery_mode': delivery_mode,
         'daily_limit': daily_limit if delivery_mode == 'daily' else None,
+        'audience_owner_types': audience_owner_types,
+        'audience_statuses': audience_statuses,
     }
     return payload, None
 
@@ -648,6 +687,8 @@ def create_announcement():
         channel=payload['channel'],
         delivery_mode=payload['delivery_mode'],
         daily_limit=payload['daily_limit'],
+        audience_owner_types=json.dumps(payload['audience_owner_types']),
+        audience_statuses=json.dumps(payload['audience_statuses']),
         status='published' if payload['channel'] == 'subscription' else 'draft',
     )
 
@@ -679,12 +720,20 @@ def update_announcement(announcement_id):
     requested_channel = str(data.get('channel') or existing_channel).strip().lower()
     if requested_channel != existing_channel:
         return jsonify({'success': False, 'error': 'Announcement type cannot be changed after creation'}), 409
-    if existing_channel != 'subscription' and ann.status != 'draft':
+    if existing_channel != 'subscription' and ann.status == 'cancelled':
+        return jsonify({'success': False, 'error': 'Cancelled campaigns cannot be edited'}), 409
+    if existing_channel not in ('subscription', 'sms') and ann.status != 'draft':
         return jsonify({'success': False, 'error': 'Only draft campaigns can be edited'}), 409
     data['channel'] = existing_channel
     payload, err = _parse_announcement_payload(data)
     if err:
         return jsonify({'success': False, 'error': err}), 400
+
+    previous_status = ann.status or 'draft'
+    if existing_channel == 'sms' and previous_status in ('queued', 'sending'):
+        # Stop the worker from claiming another row while targeting is reconciled.
+        ann.status = 'paused'
+        db.session.commit()
 
     _ANN_TAGS = ['b','strong','i','em','u','br','p','div','span','ul','ol','li',
                  'a','img','video','source']
@@ -700,6 +749,8 @@ def update_announcement(announcement_id):
     ann.channel = payload['channel']
     ann.delivery_mode = payload['delivery_mode']
     ann.daily_limit = payload['daily_limit']
+    ann.audience_owner_types = json.dumps(payload['audience_owner_types'])
+    ann.audience_statuses = json.dumps(payload['audience_statuses'])
     ann.all_servers = payload['all_servers']
     ann.targets = payload['targets']
     ann.start_at = payload['start_at']
@@ -719,6 +770,16 @@ def update_announcement(announcement_id):
         servers = Server.query.filter(Server.id.in_(payload['server_ids'])).all() if payload['server_ids'] else []
         ann.servers = servers
 
+    if existing_channel == 'sms' and previous_status != 'draft':
+        from panel.jobs.messaging import _reconcile_announcement_campaign_deliveries
+        counts, _ = _reconcile_announcement_campaign_deliveries(ann)
+        has_remaining = any(counts.get(value, 0) for value in ('pending', 'retry'))
+        if previous_status == 'paused':
+            ann.status = 'paused' if has_remaining else 'completed'
+        else:
+            ann.status = 'queued' if has_remaining else 'completed'
+        ann.finished_at = None if has_remaining else (ann.finished_at or datetime.utcnow())
+
     try:
         db.session.commit()
         return jsonify({'success': True, 'announcement': ann.to_dict()})
@@ -730,14 +791,19 @@ def update_announcement(announcement_id):
 @bp.route('/api/announcements/preview', methods=['POST'])
 @user_management_required
 def preview_announcement_campaign():
-    from panel.jobs.messaging import _announcement_campaign_recipients, _sms_segment_info
+    from panel.jobs.messaging import (
+        _announcement_campaign_recipients, _estimate_sms_campaign_duration,
+        _sms_segment_info,
+    )
     from app import _render_text_template
     data = request.get_json(silent=True) or {}
     channel = str(data.get('channel') or '').strip().lower()
     if channel not in ('sms', 'whatsapp', 'telegram'):
         return jsonify({'success': False, 'error': 'Select an outbound announcement type'}), 400
     try:
-        recipients, stats = _announcement_campaign_recipients(channel, data.get('targets') or '*')
+        recipients, stats = _announcement_campaign_recipients(
+            channel, data.get('targets') or '*', data.get('audience_owner_types'),
+            data.get('audience_statuses'))
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
     result = {'success': True, **stats}
@@ -753,6 +819,9 @@ def preview_announcement_campaign():
             'min_segments_per_recipient': min(segment_counts) if segment_counts else 0,
             'max_segments_per_recipient': max(segment_counts) if segment_counts else 0,
         }
+        result['eta'] = _estimate_sms_campaign_duration(
+            len(recipients), sum(segment_counts),
+            str(data.get('delivery_mode') or 'all'), data.get('daily_limit'))
     return jsonify(result)
 
 
