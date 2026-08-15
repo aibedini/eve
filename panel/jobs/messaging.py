@@ -1492,6 +1492,7 @@ def _run_announcement_campaign_batch(batch_size=25):
             if not message:
                 delivery.status = 'failed'
                 delivery.last_error = 'rendered_message_empty'
+                delivery.last_error_source = 'panel'
                 delivery.processed_at = datetime.utcnow()
                 processed += 1
                 continue
@@ -1526,17 +1527,31 @@ def _run_announcement_campaign_batch(batch_size=25):
                             continue
                         result = _send_sms_via_gmweb(
                             delivery.recipient, message, cfg=sms_cfg,
-                            idempotency_key=f'announcement-{campaign.id}-{delivery.id}',
+                            idempotency_key=(
+                                f'announcement-{campaign.id}-{delivery.id}'
+                                f'-r{int(delivery.resend_count or 0)}'
+                            ),
                         )
                         SMS_LAST_SEND_TS[0] = time.time()
                         reason = result.get('reason') or ''
+                        delivery.gateway_request_id = (
+                            str(result.get('request_id'))[:128]
+                            if result.get('request_id') else None)
+                        delivery.gateway_state = (
+                            str(result.get('status'))[:32]
+                            if result.get('status') else None)
+                        delivery.gateway_stage = None
                         if result.get('sent'):
                             delivery.status, delivery.sent_at, delivery.last_error = 'sent', datetime.utcnow(), None
+                            delivery.last_error_source = None
                         elif reason in ('daily_limit_reached', 'recipient_rate_limited'):
                             delivery.status, delivery.next_attempt_at = 'retry', datetime.utcnow() + timedelta(minutes=5)
                             delivery.last_error = reason
+                            delivery.last_error_source = 'panel'
                         else:
                             delivery.status, delivery.last_error = 'failed', reason or 'send_failed'
+                            delivery.last_error_source = (
+                                'gmweb' if result.get('status_code') is not None else 'panel')
                         _sms_log_row(
                             f'announcement-{campaign.id}', (delivery.email or '').lower(),
                             delivery.server_id, context.get('server_name'), 'announcement',
@@ -1560,6 +1575,7 @@ def _run_announcement_campaign_batch(batch_size=25):
                     bot = db.session.get(TelegramBotInstance, delivery.bot_instance_id)
                     if not bot or not bot.enabled or bot.archived_at is not None:
                         delivery.status, delivery.last_error = 'failed', 'Bot is unavailable'
+                        delivery.last_error_source = 'panel'
                     else:
                         api = api_by_bot.get(bot.id)
                         if api is None:
@@ -1569,6 +1585,7 @@ def _run_announcement_campaign_batch(batch_size=25):
                         delivery.status, delivery.sent_at, delivery.last_error = 'sent', datetime.utcnow(), None
             except Exception as exc:
                 delivery.last_error = str(redact_connection_error(exc))[:500]
+                delivery.last_error_source = 'panel'
                 if delivery.attempts >= 5:
                     delivery.status = 'failed'
                 else:
@@ -2080,6 +2097,17 @@ def _sms_gmweb_error_reason(resp) -> str:
     if rate_bits:
         parts.append(", ".join(rate_bits))
 
+    extra = {
+        key: value for key, value in body.items()
+        if key not in {'error', 'message', 'reason', 'limits', 'used'}
+    }
+    if extra:
+        try:
+            parts.append('response=' + json.dumps(
+                extra, ensure_ascii=False, separators=(',', ':')))
+        except (TypeError, ValueError):
+            parts.append('response=' + str(extra))
+
     retry_after = None
     try:
         retry_after = resp.headers.get('retry-after') or resp.headers.get('Retry-After')
@@ -2088,7 +2116,7 @@ def _sms_gmweb_error_reason(resp) -> str:
     if retry_after:
         parts.append(f"retry_after={retry_after}s")
 
-    return f"{fallback}: {'; '.join(parts)}" if parts else fallback
+    return (f"{fallback}: {'; '.join(parts)}" if parts else fallback)[:500]
 
 
 def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: str | None = None,
@@ -3168,6 +3196,7 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
         return 0
 
     changed = 0
+    affected_campaign_ids = set()
     headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
     timeout = int(cfg.get('timeout_seconds') or 15)
     for row in rows:
@@ -3207,8 +3236,33 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                        row.successful, row.reason, row.gateway_job_id)
             if current != previous:
                 changed += 1
+
+            delivery = AnnouncementDelivery.query.filter_by(
+                gateway_request_id=row.request_id).first()
+            if delivery:
+                affected_campaign_ids.add(delivery.announcement_id)
+                delivery.gateway_state = row.gateway_state or row.status
+                delivery.gateway_stage = row.stage
+                if row.terminal and row.successful is False:
+                    delivery.status = 'failed'
+                    delivery.last_error = (
+                        row.reason or row.gateway_state or row.stage or 'gmweb_delivery_failed'
+                    )[:500]
+                    delivery.last_error_source = 'gmweb'
+                    delivery.processed_at = datetime.utcnow()
+                    delivery.sent_at = None
+                    delivery.next_attempt_at = None
+                elif row.terminal and row.successful:
+                    delivery.status = 'sent'
+                    delivery.last_error = None
+                    delivery.last_error_source = None
+                    delivery.processed_at = delivery.processed_at or datetime.utcnow()
         except Exception as exc:
             app.logger.debug(f'[sms-status] poll failed request_id={row.request_id}: {exc}')
+    for campaign_id in affected_campaign_ids:
+        campaign = db.session.get(Announcement, campaign_id)
+        if campaign:
+            _recount_announcement_campaign(campaign)
     try:
         db.session.commit()
     except Exception:

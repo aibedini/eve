@@ -1607,6 +1607,30 @@
     </div>
 </div>
 
+<div class="modal-overlay hidden" id="announcement-failures-modal">
+    <div class="modal" style="max-width: 920px;">
+        <div class="modal-header">
+            <h2 id="announcement-failures-title">Failed SMS deliveries</h2>
+            <button class="modal-close" onclick="closeAnnouncementFailuresModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="ann-failure-toolbar">
+                <label class="ann-failure-select-all">
+                    <input type="checkbox" id="announcement-failures-select-all" onchange="toggleAllAnnouncementFailures(this.checked)">
+                    <span>Select all shown</span>
+                </label>
+                <span id="announcement-failures-summary" class="ann-failure-summary"></span>
+            </div>
+            <div id="announcement-failures-list" class="ann-failure-list"></div>
+            <div class="form-actions ann-failure-actions">
+                <button class="btn btn-secondary" onclick="closeAnnouncementFailuresModal()">Close</button>
+                <button class="btn btn-secondary" id="announcement-resend-selected" onclick="resendSelectedAnnouncementFailures()" disabled>Resend selected</button>
+                <button class="btn btn-primary" id="announcement-resend-all" onclick="resendAllAnnouncementFailures()">Resend all failed</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="modal-overlay hidden" id="online-chat-modal">
     <div class="modal" style="max-width: 760px;">
         <div class="modal-header">
@@ -2102,7 +2126,109 @@
                 <span>Errors <strong>${failed}</strong></span><span>Remaining <strong>${remaining}</strong></span>
             </div>
             ${skipped ? `<div style="margin-top:.45rem;font-size:.76rem;">Skipped: ${skipped}</div>` : ''}
+            ${failed && (a.channel || '') === 'sms' ? `<button type="button" class="btn btn-secondary ann-view-failures" onclick="openAnnouncementFailuresModal(${a.id})">View ${failed} failed ${failed === 1 ? 'delivery' : 'deliveries'}</button>` : ''}
         </div>`;
+    }
+
+    let announcementFailureCampaignId = null;
+    let announcementFailureTotal = 0;
+
+    function closeAnnouncementFailuresModal() {
+        document.getElementById('announcement-failures-modal')?.classList.add('hidden');
+        announcementFailureCampaignId = null;
+    }
+
+    function updateAnnouncementFailureSelection() {
+        const boxes = Array.from(document.querySelectorAll('.announcement-failure-check'));
+        const selected = boxes.filter(box => box.checked).length;
+        const selectAll = document.getElementById('announcement-failures-select-all');
+        if (selectAll) {
+            selectAll.checked = boxes.length > 0 && selected === boxes.length;
+            selectAll.indeterminate = selected > 0 && selected < boxes.length;
+        }
+        const button = document.getElementById('announcement-resend-selected');
+        if (button) {
+            button.disabled = selected === 0;
+            button.textContent = selected ? `Resend selected (${selected})` : 'Resend selected';
+        }
+    }
+
+    function toggleAllAnnouncementFailures(checked) {
+        document.querySelectorAll('.announcement-failure-check').forEach(box => { box.checked = checked; });
+        updateAnnouncementFailureSelection();
+    }
+
+    async function openAnnouncementFailuresModal(id) {
+        announcementFailureCampaignId = Number(id);
+        const modal = document.getElementById('announcement-failures-modal');
+        const list = document.getElementById('announcement-failures-list');
+        const summary = document.getElementById('announcement-failures-summary');
+        modal?.classList.remove('hidden');
+        if (list) list.innerHTML = '<div class="ann-failure-empty">Loading failed deliveries...</div>';
+        if (summary) summary.textContent = '';
+        try {
+            const response = await fetch(`/api/announcements/${id}/failures?per_page=200`, {cache:'no-store'});
+            const data = await response.json();
+            if (!data.success) throw new Error(data.error || 'Failed deliveries could not be loaded');
+            announcementFailureTotal = Number(data.total || 0);
+            if (summary) summary.textContent = `${announcementFailureTotal} failed ${announcementFailureTotal === 1 ? 'delivery' : 'deliveries'}`;
+            const rows = Array.isArray(data.failures) ? data.failures : [];
+            if (list) list.innerHTML = rows.length ? rows.map(item => {
+                const source = item.source === 'gmweb' ? 'Gmweb' : 'Panel';
+                const failedAt = item.failed_at ? EveDate.format(item.failed_at) : '';
+                const gatewayMeta = [item.gateway_state, item.gateway_stage, item.gateway_request_id]
+                    .filter(Boolean).map(value => escapeHtml(value)).join(' | ');
+                return `<div class="ann-failure-row">
+                    <label class="ann-failure-check-wrap"><input class="announcement-failure-check" type="checkbox" value="${item.id}" onchange="updateAnnouncementFailureSelection()"></label>
+                    <div class="ann-failure-recipient">
+                        <strong>${escapeHtml(item.recipient || 'Unknown recipient')}</strong>
+                        <span>${escapeHtml(item.account_name || item.email || '')}${item.server_name ? ` | ${escapeHtml(item.server_name)}` : ''}</span>
+                        ${failedAt ? `<small>${escapeHtml(failedAt)}</small>` : ''}
+                    </div>
+                    <div class="ann-failure-reason">
+                        <span class="ann-failure-source ${item.source === 'gmweb' ? 'gmweb' : 'panel'}">${source}</span>
+                        <strong>${escapeHtml(item.reason || 'send_failed')}</strong>
+                        ${gatewayMeta ? `<small>${gatewayMeta}</small>` : ''}
+                    </div>
+                    <button type="button" class="btn btn-secondary ann-failure-single" onclick="resendAnnouncementFailures([${item.id}])">Resend</button>
+                </div>`;
+            }).join('') : '<div class="ann-failure-empty">No failed deliveries remain.</div>';
+            document.getElementById('announcement-resend-all').disabled = announcementFailureTotal === 0;
+            updateAnnouncementFailureSelection();
+        } catch (error) {
+            if (list) list.innerHTML = `<div class="ann-failure-empty error">${escapeHtml(error.message)}</div>`;
+            showToast(error.message, 'error');
+        }
+    }
+
+    async function resendAnnouncementFailures(deliveryIds = null) {
+        const campaignId = announcementFailureCampaignId;
+        if (!campaignId) return;
+        const countLabel = deliveryIds ? `${deliveryIds.length} selected` : `all ${announcementFailureTotal}`;
+        if (!confirm(`Resend ${countLabel} failed SMS deliveries?`)) return;
+        try {
+            const response = await fetch(`/api/announcements/${campaignId}/failures/resend`, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify(deliveryIds ? {delivery_ids: deliveryIds} : {})
+            });
+            const data = await response.json();
+            if (!data.success) throw new Error(data.error || 'Resend request failed');
+            showToast(`${data.resent_count} failed ${data.resent_count === 1 ? 'delivery' : 'deliveries'} queued for resend`);
+            await loadAnnouncements();
+            await openAnnouncementFailuresModal(campaignId);
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }
+
+    function resendSelectedAnnouncementFailures() {
+        const ids = Array.from(document.querySelectorAll('.announcement-failure-check:checked'))
+            .map(box => Number(box.value)).filter(Number.isFinite);
+        if (ids.length) resendAnnouncementFailures(ids);
+    }
+
+    function resendAllAnnouncementFailures() {
+        resendAnnouncementFailures(null);
     }
 
     // Announcement Targets (reseller-style selector)

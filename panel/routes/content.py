@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, request, session
 
 from panel.extensions import db
 from panel.models import (
-    Admin, Announcement, FAQ, OnlineChatScript, Server, SubAppConfig,
+    Admin, Announcement, AnnouncementDelivery, FAQ, OnlineChatScript, Server, SubAppConfig,
     SystemConfig,
 )
 from panel.routes.common import user_management_required
@@ -847,6 +847,118 @@ def mutate_announcement_campaign(announcement_id, action):
         db.session.rollback()
         return jsonify({'success': False, 'error': str(exc)}), 409
     return jsonify({'success': True, 'announcement': ann.to_dict()})
+
+
+@bp.route('/api/announcements/<int:announcement_id>/failures', methods=['GET'])
+@user_management_required
+def announcement_campaign_failures(announcement_id):
+    ann = db.session.get(Announcement, announcement_id)
+    if not ann or (ann.channel or 'subscription') != 'sms':
+        return jsonify({'success': False, 'error': 'SMS campaign not found'}), 404
+
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        per_page = max(1, min(200, int(request.args.get('per_page', 100))))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Invalid pagination values'}), 400
+
+    query = AnnouncementDelivery.query.filter_by(
+        announcement_id=ann.id, status='failed')
+    total = query.count()
+    rows = query.order_by(
+        AnnouncementDelivery.processed_at.desc(),
+        AnnouncementDelivery.id.desc(),
+    ).offset((page - 1) * per_page).limit(per_page).all()
+    failures = []
+    for delivery in rows:
+        context = delivery.context()
+        failures.append({
+            'id': delivery.id,
+            'recipient': delivery.recipient,
+            'email': delivery.email or '',
+            'account_name': context.get('account_name') or delivery.email or '',
+            'server_id': delivery.server_id,
+            'server_name': context.get('server_name') or '',
+            'reason': delivery.last_error or 'send_failed',
+            'source': delivery.last_error_source or (
+                'gmweb' if delivery.gateway_request_id else 'panel'),
+            'attempts': int(delivery.attempts or 0),
+            'resend_count': int(delivery.resend_count or 0),
+            'gateway_request_id': delivery.gateway_request_id,
+            'gateway_state': delivery.gateway_state,
+            'gateway_stage': delivery.gateway_stage,
+            'failed_at': (
+                delivery.processed_at.isoformat() + 'Z'
+                if delivery.processed_at else None),
+        })
+    return jsonify({
+        'success': True,
+        'failures': failures,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'has_more': page * per_page < total,
+    })
+
+
+@bp.route('/api/announcements/<int:announcement_id>/failures/resend', methods=['POST'])
+@user_management_required
+def resend_announcement_campaign_failures(announcement_id):
+    from panel.jobs.messaging import _recount_announcement_campaign
+
+    ann = db.session.get(Announcement, announcement_id)
+    if not ann or (ann.channel or 'subscription') != 'sms':
+        return jsonify({'success': False, 'error': 'SMS campaign not found'}), 404
+    if ann.status == 'cancelled':
+        return jsonify({'success': False, 'error': 'Cancelled campaigns cannot be resent'}), 409
+
+    data = request.get_json(silent=True) or {}
+    raw_ids = data.get('delivery_ids')
+    delivery_ids = None
+    if raw_ids is not None:
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return jsonify({'success': False, 'error': 'Select at least one failed delivery'}), 400
+        try:
+            delivery_ids = sorted({int(value) for value in raw_ids if int(value) > 0})
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Invalid delivery selection'}), 400
+        if not delivery_ids:
+            return jsonify({'success': False, 'error': 'Select at least one failed delivery'}), 400
+
+    query = AnnouncementDelivery.query.filter_by(
+        announcement_id=ann.id, status='failed')
+    if delivery_ids is not None:
+        query = query.filter(AnnouncementDelivery.id.in_(delivery_ids))
+    deliveries = query.all()
+    if not deliveries:
+        return jsonify({'success': False, 'error': 'No failed deliveries matched'}), 409
+
+    for delivery in deliveries:
+        delivery.status = 'retry'
+        delivery.attempts = 0
+        delivery.resend_count = int(delivery.resend_count or 0) + 1
+        delivery.last_error = None
+        delivery.last_error_source = None
+        delivery.gateway_request_id = None
+        delivery.gateway_state = None
+        delivery.gateway_stage = None
+        delivery.next_attempt_at = None
+        delivery.processed_at = None
+        delivery.sent_at = None
+
+    _recount_announcement_campaign(ann)
+    ann.status = 'queued'
+    ann.finished_at = None
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+    return jsonify({
+        'success': True,
+        'resent_count': len(deliveries),
+        'announcement': ann.to_dict(),
+    })
 
 
 @bp.route('/api/announcements/<int:announcement_id>', methods=['DELETE'])
