@@ -2701,12 +2701,15 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     jid = job_id or uuid.uuid4().hex
     cooldown_hours = cfg.get('cooldown_hours') or {}
 
-    # Match Monitor's visible set: same thresholds and same long-expired hiding.
+    # Reuse Monitor templates and its long-expired fallback, but classify reminder
+    # candidates with the SMS-specific thresholds exposed in Settings. Keep direct
+    # lookups here so a configured zero remains meaningful (0 days = expiry day
+    # only; 0 GB = disable the low-volume reminder while still detecting ended).
     mon = _get_monitor_settings()
     mfilters = mon.get('filters', {}) if isinstance(mon, dict) else {}
     mtemplates = mon.get('templates', {}) if isinstance(mon, dict) else {}
-    warning_days = int(mfilters.get('warning_days', 3) or 3)
-    warning_gb = float(mfilters.get('warning_gb', 2.0) or 2.0)
+    warning_days = int(cfg.get('depletion_expiry_days', 3))
+    warning_gb = float(cfg.get('depletion_volume_gb', 2.0))
     hide_days = int(mfilters.get('hide_days', 7) or 7)
     # SMS-specific cap on how long-expired an account may be and still get messaged
     # (stops a scan from suddenly texting people who expired years ago). 0 ⇒ fall

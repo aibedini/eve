@@ -2527,6 +2527,57 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         send.assert_not_called()
         get.assert_called()
 
+    def test_sms_scan_uses_sms_specific_reminder_thresholds(self):
+        previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': 91,
+            'server_name': 'SMS Threshold Test',
+            'clients': [{
+                'email': 'threshold-09120000000',
+                'enable': True,
+                'totalGB': 20 * 1024 ** 3,
+                'up': 1 * 1024 ** 3,
+                'down': 0,
+                'remaining_bytes': 19 * 1024 ** 3,
+                'expiryTimestamp': int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp() * 1000),
+            }],
+        }]
+        sms_cfg = {
+            'enabled': True,
+            'base_url': 'https://gmweb.test',
+            'api_key': 'gmw_secret',
+            'depletion_expiry_days': 0,
+            'depletion_volume_gb': 0.0,
+            'cooldown_hours': {},
+            'expired_max_age_days': 30,
+            'ended_max_age_days': 0,
+            'skip_unlimited': False,
+        }
+        monitor_cfg = {
+            'filters': {'warning_days': 12, 'warning_gb': 12.0, 'hide_days': 7},
+            'templates': {},
+        }
+
+        try:
+            with patch('panel.jobs.messaging._get_sms_runtime_settings', return_value=sms_cfg), \
+                    patch('panel.jobs.messaging._sms_gateway_ready', return_value=(True, None, 200)), \
+                    patch('panel.jobs.messaging._sms_scan_snapshot', return_value={'state': 'idle'}), \
+                    patch('panel.jobs.messaging._account_has_reseller_owner', return_value=False), \
+                    patch('panel.jobs.messaging._classify_monitor_status', return_value=None) as classify, \
+                    patch('app._get_monitor_settings', return_value=monitor_cfg):
+                result = _run_sms_depletion_scan(
+                    job_id='sms-threshold-test',
+                    triggered_by='manual',
+                    states=['near_expiry', 'low_volume'],
+                )
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
+
+        self.assertEqual(result['candidates'], 0)
+        classify.assert_called_once()
+        self.assertEqual(classify.call_args.kwargs['warning_days'], 0)
+        self.assertEqual(classify.call_args.kwargs['warning_gb'], 0.0)
+
     def test_sms_gateway_429_keeps_rate_limit_details(self):
         class FakeResponse:
             status_code = 429
