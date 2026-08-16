@@ -1540,10 +1540,23 @@
                         </div>
                     </div>
                 </div>
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-                    <button type="button" class="btn btn-secondary" onclick="previewAnnouncementRecipients()">Count recipients</button>
-                    <span id="announcement-recipient-preview" style="font-size:.86rem;color:var(--text-secondary);">Select targets, then count unique recipients.</span>
-                </div>
+                <section class="ann-recipient-preview-shell" aria-labelledby="ann-recipient-preview-title">
+                    <div class="ann-recipient-preview-actions">
+                        <div>
+                            <strong id="ann-recipient-preview-title">Recipient estimate</strong>
+                            <small>Preview exactly who will receive this campaign before sending.</small>
+                        </div>
+                        <button id="announcement-count-recipients" type="button" class="btn btn-secondary" onclick="previewAnnouncementRecipients()">
+                            Count recipients
+                        </button>
+                    </div>
+                    <div id="announcement-recipient-preview" class="ann-recipient-preview is-empty" role="status" aria-live="polite">
+                        <div class="ann-preview-empty">
+                            <span class="ann-preview-empty-icon" aria-hidden="true">👥</span>
+                            <div><strong>No estimate yet</strong><small>Select targets and count recipients to see a full breakdown.</small></div>
+                        </div>
+                    </div>
+                </section>
                 <div id="announcement-edit-progress" class="ann-edit-progress" hidden></div>
             </div>
 
@@ -2776,8 +2789,104 @@
         if (textarea) textarea.maxLength = channel === 'telegram' ? 4096 : 8000;
         annOnDeliveryModeChange();
         annUpdateMessageCounter();
-        const preview = document.getElementById('announcement-recipient-preview');
-        if (preview) preview.textContent = 'Select targets, then count unique recipients.';
+        annRenderRecipientPreviewEmpty();
+    }
+
+    function annFormatCount(value) {
+        return new Intl.NumberFormat('en-US').format(Math.max(0, Number(value) || 0));
+    }
+
+    function annRecipientPreviewElement() {
+        return document.getElementById('announcement-recipient-preview');
+    }
+
+    function annRenderRecipientPreviewEmpty() {
+        const preview = annRecipientPreviewElement();
+        if (!preview) return;
+        preview.className = 'ann-recipient-preview is-empty';
+        preview.innerHTML = `
+            <div class="ann-preview-empty">
+                <span class="ann-preview-empty-icon" aria-hidden="true">👥</span>
+                <div><strong>No estimate yet</strong><small>Select targets and count recipients to see a full breakdown.</small></div>
+            </div>`;
+    }
+
+    function annRenderRecipientPreviewLoading() {
+        const preview = annRecipientPreviewElement();
+        if (!preview) return;
+        preview.className = 'ann-recipient-preview is-loading';
+        preview.innerHTML = `
+            <div class="ann-preview-loading-head"><span></span><span></span></div>
+            <div class="ann-preview-loading-grid"><span></span><span></span></div>
+            <div class="ann-preview-loading-table"><span></span><span></span><span></span></div>`;
+    }
+
+    function annRenderRecipientPreviewError(message) {
+        const preview = annRecipientPreviewElement();
+        if (!preview) return;
+        preview.className = 'ann-recipient-preview is-error';
+        preview.innerHTML = `
+            <div class="ann-preview-empty">
+                <span class="ann-preview-empty-icon" aria-hidden="true">⚠️</span>
+                <div><strong>Could not count recipients</strong><small>${escapeHtml(message || 'Preview failed')}</small></div>
+            </div>`;
+    }
+
+    function annRenderRecipientPreview(data) {
+        const preview = annRecipientPreviewElement();
+        if (!preview) return;
+        const unique = Math.max(0, Number(data.unique) || 0);
+        const clients = Math.max(0, Number(data.clients) || 0);
+        const breakdown = [
+            ['🔁', 'Duplicates removed', data.duplicates],
+            ['📵', 'Without destination', data.missing_contact],
+            ['🔕', 'Opted out', data.opted_out],
+            ['👤', 'Excluded by owner', data.owner_filtered],
+            ['🎯', 'Excluded by state', data.status_filtered],
+        ];
+        const excluded = breakdown.reduce((total, item) => total + Math.max(0, Number(item[2]) || 0), 0);
+        const selectedPercent = clients ? Math.min(100, (unique / clients) * 100) : 0;
+        const smsCard = data.sms ? `
+            <article class="ann-preview-delivery-card">
+                <span class="ann-preview-delivery-icon" aria-hidden="true">💬</span>
+                <div><small>SMS segments</small><strong>${annFormatCount(data.sms.estimated_total_segments)}</strong><span>${annFormatCount(data.sms.min_segments_per_recipient)}–${annFormatCount(data.sms.max_segments_per_recipient)} per recipient</span></div>
+            </article>` : '';
+        const etaCard = data.eta ? `
+            <article class="ann-preview-delivery-card">
+                <span class="ann-preview-delivery-icon" aria-hidden="true">⏱️</span>
+                <div><small>Estimated duration</small><strong>${escapeHtml(data.eta.label || '—')}</strong><span>${escapeHtml(data.eta.bottleneck || 'Current sending settings')}</span></div>
+            </article>` : '';
+        const deliveryCards = smsCard || etaCard ? `
+            <div class="ann-preview-delivery ${(smsCard && etaCard) ? '' : 'is-single'}">${smsCard}${etaCard}</div>` : '';
+        const rows = breakdown.map(([icon, label, value]) => `
+            <tr>
+                <td><span aria-hidden="true">${icon}</span>${label}</td>
+                <td>${annFormatCount(value)}</td>
+            </tr>`).join('');
+
+        preview.className = 'ann-recipient-preview is-ready';
+        preview.innerHTML = `
+            <header class="ann-preview-hero">
+                <div class="ann-preview-hero-icon" aria-hidden="true">✅</div>
+                <div class="ann-preview-hero-copy">
+                    <small>Audience ready</small>
+                    <strong><span>${annFormatCount(unique)}</span> unique recipients</strong>
+                    <p>Selected from ${annFormatCount(clients)} matched clients</p>
+                </div>
+                <div class="ann-preview-rate"><strong>${selectedPercent.toFixed(1)}%</strong><span>will receive</span></div>
+            </header>
+            <progress class="ann-preview-ratio" max="100" value="${selectedPercent.toFixed(2)}" aria-label="${selectedPercent.toFixed(1)} percent of matched clients will receive this campaign"></progress>
+            ${deliveryCards}
+            <section class="ann-preview-breakdown">
+                <div class="ann-preview-breakdown-heading">
+                    <div><span aria-hidden="true">🚫</span><strong>Excluded or cleaned up</strong></div>
+                    <span>${annFormatCount(excluded)} total</span>
+                </div>
+                <table class="ann-preview-table">
+                    <tbody>${rows}</tbody>
+                </table>
+            </section>
+            <footer class="ann-preview-note"><span aria-hidden="true">ℹ️</span>Calculated from the current targets, owner groups, subscription states, and sending limits.</footer>`;
     }
 
     async function previewAnnouncementRecipients() {
@@ -2788,8 +2897,9 @@
         const dailyLimit = Number(document.getElementById('announcement-daily-limit')?.value || 0);
         const audienceOwnerTypes = annCheckedValues('announcement-owner-filters');
         const audienceStatuses = annCheckedValues('announcement-status-filters');
-        const label = document.getElementById('announcement-recipient-preview');
-        if (label) label.textContent = 'Counting recipients…';
+        const countButton = document.getElementById('announcement-count-recipients');
+        if (countButton) countButton.disabled = true;
+        annRenderRecipientPreviewLoading();
         try {
             const response = await fetch('/api/announcements/preview', {
                 method:'POST', headers:{'Content-Type':'application/json'},
@@ -2800,12 +2910,12 @@
             });
             const data = await response.json();
             if (!data.success) throw new Error(data.error || 'Preview failed');
-            const sms = data.sms ? ` · about ${data.sms.estimated_total_segments || 0} total SMS segments (${data.sms.min_segments_per_recipient || 0}–${data.sms.max_segments_per_recipient || 0} per recipient)` : '';
-            const eta = data.eta ? ` · ETA ${data.eta.label} (${data.eta.bottleneck})` : '';
-            if (label) label.textContent = `${data.unique} unique recipients from ${data.clients} clients · ${data.duplicates} duplicates removed · ${data.missing_contact} without destination · ${data.opted_out} opted out · ${data.owner_filtered || 0} excluded by owner · ${data.status_filtered || 0} excluded by state${sms}${eta}`;
+            annRenderRecipientPreview(data);
         } catch (error) {
-            if (label) label.textContent = error.message;
+            annRenderRecipientPreviewError(error.message);
             showToast(error.message, 'error');
+        } finally {
+            if (countButton) countButton.disabled = false;
         }
     }
 
