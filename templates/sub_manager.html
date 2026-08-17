@@ -2145,6 +2145,7 @@
 
     let announcementFailureCampaignId = null;
     let announcementFailureTotal = 0;
+    let announcementFailureResendableTotal = 0;
 
     function closeAnnouncementFailuresModal() {
         document.getElementById('announcement-failures-modal')?.classList.add('hidden');
@@ -2184,15 +2185,20 @@
             const data = await response.json();
             if (!data.success) throw new Error(data.error || 'Failed deliveries could not be loaded');
             announcementFailureTotal = Number(data.total || 0);
-            if (summary) summary.textContent = `${announcementFailureTotal} failed ${announcementFailureTotal === 1 ? 'delivery' : 'deliveries'}`;
+            announcementFailureResendableTotal = Number(data.resendable_total || 0);
+            if (summary) summary.textContent = `${announcementFailureTotal} delivery ${announcementFailureTotal === 1 ? 'issue' : 'issues'}`;
             const rows = Array.isArray(data.failures) ? data.failures : [];
             if (list) list.innerHTML = rows.length ? rows.map(item => {
                 const source = item.source === 'gmweb' ? 'Gmweb' : 'Panel';
                 const failedAt = item.failed_at ? EveDate.format(item.failed_at) : '';
-                const gatewayMeta = [item.gateway_state, item.gateway_stage, item.gateway_request_id]
+                const priority = item.gateway_priority
+                    ? `${item.gateway_priority}${item.gateway_priority_level ? ` L${item.gateway_priority_level}` : ''}` : '';
+                const gatewayMeta = [priority, item.gateway_state, item.gateway_stage,
+                    item.gateway_verification_status, item.gateway_request_id]
                     .filter(Boolean).map(value => escapeHtml(value)).join(' | ');
+                const manualReview = item.status === 'manual_review' || item.can_resend === false;
                 return `<div class="ann-failure-row">
-                    <label class="ann-failure-check-wrap"><input class="announcement-failure-check" type="checkbox" value="${item.id}" onchange="updateAnnouncementFailureSelection()"></label>
+                    <label class="ann-failure-check-wrap"><input class="announcement-failure-check" type="checkbox" value="${item.id}" onchange="updateAnnouncementFailureSelection()" ${manualReview ? 'disabled' : ''}></label>
                     <div class="ann-failure-recipient">
                         <strong>${escapeHtml(item.recipient || 'Unknown recipient')}</strong>
                         <span>${escapeHtml(item.account_name || item.email || '')}${item.server_name ? ` | ${escapeHtml(item.server_name)}` : ''}</span>
@@ -2200,13 +2206,15 @@
                     </div>
                     <div class="ann-failure-reason">
                         <span class="ann-failure-source ${item.source === 'gmweb' ? 'gmweb' : 'panel'}">${source}</span>
-                        <strong>${escapeHtml(item.reason || 'send_failed')}</strong>
+                        <strong>${manualReview ? 'Manual review required — automatic resend blocked' : escapeHtml(item.reason || 'send_failed')}</strong>
                         ${gatewayMeta ? `<small>${gatewayMeta}</small>` : ''}
                     </div>
-                    <button type="button" class="btn btn-secondary ann-failure-single" onclick="resendAnnouncementFailures([${item.id}])">Resend</button>
+                    ${manualReview
+                        ? '<button type="button" class="btn btn-secondary ann-failure-single" disabled>Unverified</button>'
+                        : `<button type="button" class="btn btn-secondary ann-failure-single" onclick="resendAnnouncementFailures([${item.id}])">Resend</button>`}
                 </div>`;
             }).join('') : '<div class="ann-failure-empty">No failed deliveries remain.</div>';
-            document.getElementById('announcement-resend-all').disabled = announcementFailureTotal === 0;
+            document.getElementById('announcement-resend-all').disabled = announcementFailureResendableTotal === 0;
             updateAnnouncementFailureSelection();
         } catch (error) {
             if (list) list.innerHTML = `<div class="ann-failure-empty error">${escapeHtml(error.message)}</div>`;
@@ -2217,7 +2225,7 @@
     async function resendAnnouncementFailures(deliveryIds = null) {
         const campaignId = announcementFailureCampaignId;
         if (!campaignId) return;
-        const countLabel = deliveryIds ? `${deliveryIds.length} selected` : `all ${announcementFailureTotal}`;
+        const countLabel = deliveryIds ? `${deliveryIds.length} selected` : `all ${announcementFailureResendableTotal}`;
         if (!confirm(`Resend ${countLabel} failed SMS deliveries?`)) return;
         try {
             const response = await fetch(`/api/announcements/${campaignId}/failures/resend`, {
@@ -2809,6 +2817,12 @@
                 <span class="ann-preview-empty-icon" aria-hidden="true">👥</span>
                 <div><strong>No estimate yet</strong><small>Select targets and count recipients to see a full breakdown.</small></div>
             </div>`;
+        annSetRecipientEstimateButton(false);
+    }
+
+    function annSetRecipientEstimateButton(hasEstimate) {
+        const button = document.getElementById('announcement-count-recipients');
+        if (button) button.textContent = hasEstimate ? 'Re-estimate' : 'Count recipients';
     }
 
     function annRenderRecipientPreviewLoading() {
@@ -2887,6 +2901,7 @@
                 </table>
             </section>
             <footer class="ann-preview-note"><span aria-hidden="true">ℹ️</span>Calculated from the current targets, owner groups, subscription states, and sending limits.</footer>`;
+        annSetRecipientEstimateButton(true);
     }
 
     async function previewAnnouncementRecipients() {
@@ -3081,6 +3096,9 @@
         await ann_loadInbounds();
         ann_syncSelectionsToUi();
         annOnChannelChange();
+        if (channel !== 'subscription' && a.recipient_estimate) {
+            annRenderRecipientPreview(a.recipient_estimate);
+        }
         initAnnouncementShamsiPicker();
 
         document.getElementById('announcement-modal').classList.remove('hidden');

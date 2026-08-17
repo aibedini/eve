@@ -415,6 +415,17 @@ class SmsSendLog(db.Model):
     successful = db.Column(db.Boolean)
     gateway_current_at = db.Column(db.String(64))
     gateway_sent_at = db.Column(db.String(64))
+    priority = db.Column(db.String(24))
+    priority_level = db.Column(db.Integer)
+    queue_position = db.Column(db.Integer)
+    last_http_status = db.Column(db.Integer)
+    submitted_once = db.Column(db.Boolean)
+    verification_status = db.Column(db.String(64))
+    verification_attempts = db.Column(db.Integer)
+    requested_to = db.Column(db.String(32))
+    sent_to = db.Column(db.String(32))
+    recipient_evidence = db.Column(db.Text)
+    conversation_url = db.Column(db.Text)
     segment_count = db.Column(db.Integer)
     message_encoding = db.Column(db.String(16))
     unit_count = db.Column(db.Integer)
@@ -423,6 +434,17 @@ class SmsSendLog(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     def to_dict(self):
+        def _masked_mobile(value):
+            digits = ''.join(ch for ch in str(value or '') if ch.isdigit())
+            return f'{digits[:4]}***{digits[-3:]}' if len(digits) >= 7 else str(value or '')
+
+        evidence = None
+        if self.recipient_evidence:
+            try:
+                parsed = json.loads(self.recipient_evidence)
+                evidence = parsed if isinstance(parsed, dict) else None
+            except (TypeError, ValueError):
+                pass
         return {
             'id': self.id,
             'email': self.email,
@@ -441,6 +463,17 @@ class SmsSendLog(db.Model):
             'successful': self.successful,
             'gateway_current_at': self.gateway_current_at,
             'gateway_sent_at': self.gateway_sent_at,
+            'priority': self.priority,
+            'priority_level': self.priority_level,
+            'queue_position': self.queue_position,
+            'last_http_status': self.last_http_status,
+            'submitted_once': self.submitted_once,
+            'verification_status': self.verification_status,
+            'verification_attempts': self.verification_attempts,
+            'requested_to': _masked_mobile(self.requested_to),
+            'sent_to': _masked_mobile(self.sent_to),
+            'recipient_evidence': evidence,
+            'conversation_url': self.conversation_url,
             'segment_count': self.segment_count,
             'message_encoding': self.message_encoding,
             'unit_count': self.unit_count,

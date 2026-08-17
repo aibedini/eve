@@ -692,6 +692,15 @@ def create_announcement():
         status='published' if payload['channel'] == 'subscription' else 'draft',
     )
 
+    if payload['channel'] != 'subscription':
+        from panel.jobs.messaging import _announcement_campaign_estimate
+        estimate = _announcement_campaign_estimate(
+            payload['channel'], safe_message, payload['targets'],
+            payload['audience_owner_types'], payload['audience_statuses'],
+            payload['delivery_mode'], payload['daily_limit'])
+        ann.recipient_estimate = json.dumps(estimate, ensure_ascii=False)
+        ann.recipient_estimated_at = datetime.utcnow()
+
     if not payload['all_servers']:
         servers = Server.query.filter(Server.id.in_(payload['server_ids'])).all() if payload['server_ids'] else []
         ann.servers = servers
@@ -764,6 +773,15 @@ def update_announcement(announcement_id):
     ann.action_buttons = json.dumps(payload['action_buttons'], ensure_ascii=False)
     ann.button_columns = payload['button_columns']
 
+    if payload['channel'] != 'subscription':
+        from panel.jobs.messaging import _announcement_campaign_estimate
+        estimate = _announcement_campaign_estimate(
+            payload['channel'], ann.message, payload['targets'],
+            payload['audience_owner_types'], payload['audience_statuses'],
+            payload['delivery_mode'], payload['daily_limit'])
+        ann.recipient_estimate = json.dumps(estimate, ensure_ascii=False)
+        ann.recipient_estimated_at = datetime.utcnow()
+
     if ann.all_servers:
         ann.servers = []
     else:
@@ -791,38 +809,19 @@ def update_announcement(announcement_id):
 @bp.route('/api/announcements/preview', methods=['POST'])
 @user_management_required
 def preview_announcement_campaign():
-    from panel.jobs.messaging import (
-        _announcement_campaign_recipients, _estimate_sms_campaign_duration,
-        _sms_segment_info,
-    )
-    from app import _render_text_template
+    from panel.jobs.messaging import _announcement_campaign_estimate
     data = request.get_json(silent=True) or {}
     channel = str(data.get('channel') or '').strip().lower()
     if channel not in ('sms', 'whatsapp', 'telegram'):
         return jsonify({'success': False, 'error': 'Select an outbound announcement type'}), 400
     try:
-        recipients, stats = _announcement_campaign_recipients(
-            channel, data.get('targets') or '*', data.get('audience_owner_types'),
-            data.get('audience_statuses'))
+        result = _announcement_campaign_estimate(
+            channel, data.get('message') or '', data.get('targets') or '*',
+            data.get('audience_owner_types'), data.get('audience_statuses'),
+            str(data.get('delivery_mode') or 'all'), data.get('daily_limit'))
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
-    result = {'success': True, **stats}
-    if channel == 'sms':
-        template = str(data.get('message') or '')
-        segment_counts = [
-            int(_sms_segment_info(_render_text_template(template, item.get('context') or {})).get('sms_segments') or 0)
-            for item in recipients
-        ]
-        result['sms'] = {
-            **_sms_segment_info(template),
-            'estimated_total_segments': sum(segment_counts),
-            'min_segments_per_recipient': min(segment_counts) if segment_counts else 0,
-            'max_segments_per_recipient': max(segment_counts) if segment_counts else 0,
-        }
-        result['eta'] = _estimate_sms_campaign_duration(
-            len(recipients), sum(segment_counts),
-            str(data.get('delivery_mode') or 'all'), data.get('daily_limit'))
-    return jsonify(result)
+    return jsonify({'success': True, **result})
 
 
 @bp.route('/api/announcements/<int:announcement_id>/<action>', methods=['POST'])
@@ -862,9 +861,13 @@ def announcement_campaign_failures(announcement_id):
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': 'Invalid pagination values'}), 400
 
-    query = AnnouncementDelivery.query.filter_by(
-        announcement_id=ann.id, status='failed')
+    query = AnnouncementDelivery.query.filter(
+        AnnouncementDelivery.announcement_id == ann.id,
+        AnnouncementDelivery.status.in_(('failed', 'manual_review')),
+    )
     total = query.count()
+    resendable_total = AnnouncementDelivery.query.filter_by(
+        announcement_id=ann.id, status='failed').count()
     rows = query.order_by(
         AnnouncementDelivery.processed_at.desc(),
         AnnouncementDelivery.id.desc(),
@@ -880,6 +883,8 @@ def announcement_campaign_failures(announcement_id):
             'server_id': delivery.server_id,
             'server_name': context.get('server_name') or '',
             'reason': delivery.last_error or 'send_failed',
+            'status': delivery.status,
+            'can_resend': delivery.status == 'failed',
             'source': delivery.last_error_source or (
                 'gmweb' if delivery.gateway_request_id else 'panel'),
             'attempts': int(delivery.attempts or 0),
@@ -887,6 +892,11 @@ def announcement_campaign_failures(announcement_id):
             'gateway_request_id': delivery.gateway_request_id,
             'gateway_state': delivery.gateway_state,
             'gateway_stage': delivery.gateway_stage,
+            'gateway_priority': delivery.gateway_priority,
+            'gateway_priority_level': delivery.gateway_priority_level,
+            'gateway_submitted_once': delivery.gateway_submitted_once,
+            'gateway_verification_status': delivery.gateway_verification_status,
+            'gateway_sent_to': delivery.gateway_sent_to,
             'failed_at': (
                 delivery.processed_at.isoformat() + 'Z'
                 if delivery.processed_at else None),
@@ -895,6 +905,7 @@ def announcement_campaign_failures(announcement_id):
         'success': True,
         'failures': failures,
         'total': total,
+        'resendable_total': resendable_total,
         'page': page,
         'per_page': per_page,
         'has_more': page * per_page < total,
@@ -928,6 +939,16 @@ def resend_announcement_campaign_failures(announcement_id):
     query = AnnouncementDelivery.query.filter_by(
         announcement_id=ann.id, status='failed')
     if delivery_ids is not None:
+        manual_review_count = AnnouncementDelivery.query.filter(
+            AnnouncementDelivery.announcement_id == ann.id,
+            AnnouncementDelivery.id.in_(delivery_ids),
+            AnnouncementDelivery.status == 'manual_review',
+        ).count()
+        if manual_review_count:
+            return jsonify({
+                'success': False,
+                'error': 'Unverified deliveries require manual review and cannot be resent',
+            }), 409
         query = query.filter(AnnouncementDelivery.id.in_(delivery_ids))
     deliveries = query.all()
     if not deliveries:

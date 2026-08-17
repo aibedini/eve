@@ -1140,6 +1140,11 @@ def _announcement_account_owner_types(accounts):
 
 def _announcement_client_status_group(client):
     state = str(client.get('service_state') or '').strip().lower()
+    # ``inactive`` is intentionally not an audience option. A manually
+    # disabled account must never fall through to the selectable ``other``
+    # bucket (shown as "Active / other" in the campaign form).
+    if state == 'inactive':
+        return 'inactive'
     if state in ANNOUNCEMENT_STATUS_GROUPS[1:]:
         return state
     volume_status = str(client.get('volume_status') or '').strip().lower()
@@ -1290,7 +1295,8 @@ def _recount_announcement_campaign(announcement):
     ).filter_by(announcement_id=announcement.id).group_by(AnnouncementDelivery.status).all())
     announcement.total_count = int(sum(counts.values()))
     announcement.sent_count = int(counts.get('sent', 0))
-    announcement.failed_count = int(counts.get('failed', 0))
+    announcement.failed_count = int(
+        counts.get('failed', 0) + counts.get('manual_review', 0))
     announcement.skipped_count = int(counts.get('skipped', 0))
     return counts
 
@@ -1409,6 +1415,35 @@ def _announcement_campaign_eta(announcement):
     return estimate
 
 
+def _announcement_campaign_estimate(
+        channel, message, targets='*', owner_types=None, statuses=None,
+        delivery_mode='all', daily_limit=None):
+    """Build the canonical recipient estimate returned by the API and saved on drafts."""
+    from app import _render_text_template  # deferred: compatibility helper
+
+    recipients, stats = _announcement_campaign_recipients(
+        channel, targets, owner_types, statuses)
+    result = {**stats}
+    if str(channel or '').strip().lower() == 'sms':
+        template = str(message or '')
+        segment_counts = [
+            int(_sms_segment_info(
+                _render_text_template(template, item.get('context') or {})
+            ).get('sms_segments') or 0)
+            for item in recipients
+        ]
+        total_segments = sum(segment_counts)
+        result['sms'] = {
+            **_sms_segment_info(template),
+            'estimated_total_segments': total_segments,
+            'min_segments_per_recipient': min(segment_counts) if segment_counts else 0,
+            'max_segments_per_recipient': max(segment_counts) if segment_counts else 0,
+        }
+        result['eta'] = _estimate_sms_campaign_duration(
+            len(recipients), total_segments, delivery_mode, daily_limit)
+    return result
+
+
 def _queue_announcement_campaign(announcement):
     if announcement.channel == 'subscription':
         raise ValueError('Subscription announcements do not use the message queue')
@@ -1465,9 +1500,28 @@ def _run_announcement_campaign_batch(batch_size=25):
     ).order_by(Announcement.id.asc()).limit(5).all()
     processed = 0
     api_by_bot = {}
+    sms_capacity = None
     for campaign in campaigns:
-        campaign.status = 'sending'
         available = max(1, batch_size - processed)
+        if campaign.channel == 'sms':
+            if sms_capacity is None:
+                sms_capacity = _get_gmweb_send_capacity(_get_sms_runtime_settings())
+            if not sms_capacity.get('ok'):
+                campaign.status = 'queued'
+                db.session.commit()
+                continue
+            capacity_data = sms_capacity.get('announcement') or {}
+            available = min(
+                available,
+                int(capacity_data.get('available') or 0),
+                int(capacity_data.get('recommended_batch_size') or 1),
+                50,
+            )
+            if available <= 0:
+                campaign.status = 'queued'
+                db.session.commit()
+                continue
+        campaign.status = 'sending'
         if campaign.delivery_mode == 'daily':
             day_start, day_end = _announcement_campaign_day_bounds()
             used_today = AnnouncementDelivery.query.filter(
@@ -1485,8 +1539,44 @@ def _run_announcement_campaign_batch(batch_size=25):
             AnnouncementDelivery.status.in_(('pending', 'retry')),
             db.or_(AnnouncementDelivery.next_attempt_at.is_(None), AnnouncementDelivery.next_attempt_at <= now),
         ).order_by(AnnouncementDelivery.id.asc()).limit(available).all()
+        current_sms_clients = {}
+        selected_sms_statuses = None
+        if campaign.channel == 'sms':
+            try:
+                load_snapshot_from_redis()
+            except Exception:
+                pass
+            selected_sms_statuses = _announcement_filter_values(
+                campaign.audience_statuses, ANNOUNCEMENT_STATUS_GROUPS,
+                ANNOUNCEMENT_STATUS_GROUPS)
+            for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                try:
+                    server_id = int(inbound.get('server_id'))
+                except (TypeError, ValueError):
+                    continue
+                for client in (inbound.get('clients') or []):
+                    email = str(client.get('email') or '').strip().lower()
+                    if email:
+                        current_sms_clients[(server_id, email)] = client
         for delivery in deliveries:
             context = delivery.context()
+            current_client = None
+            if selected_sms_statuses is not None:
+                try:
+                    current_client = current_sms_clients.get((
+                        int(delivery.server_id), str(delivery.email or '').strip().lower()))
+                except (TypeError, ValueError):
+                    current_client = None
+            if (current_client is not None
+                    and _announcement_client_status_group(current_client)
+                    not in selected_sms_statuses):
+                delivery.status = 'skipped'
+                delivery.last_error = 'audience_changed'
+                delivery.last_error_source = 'panel'
+                delivery.processed_at = datetime.utcnow()
+                delivery.next_attempt_at = None
+                processed += 1
+                continue
             message = _render_text_template(campaign.message, context).strip()
             delivery.attempts = int(delivery.attempts or 0) + 1
             if not message:
@@ -1527,6 +1617,7 @@ def _run_announcement_campaign_batch(batch_size=25):
                             continue
                         result = _send_sms_via_gmweb(
                             delivery.recipient, message, cfg=sms_cfg,
+                            priority=_gmweb_sms_priority('announcement'),
                             idempotency_key=(
                                 f'announcement-{campaign.id}-{delivery.id}'
                                 f'-r{int(delivery.resend_count or 0)}'
@@ -1540,14 +1631,48 @@ def _run_announcement_campaign_batch(batch_size=25):
                         delivery.gateway_state = (
                             str(result.get('status'))[:32]
                             if result.get('status') else None)
-                        delivery.gateway_stage = None
-                        if result.get('sent'):
+                        delivery.gateway_stage = (
+                            str(result.get('verification_status'))[:64]
+                            if result.get('verification_status') else None)
+                        delivery.gateway_priority = (
+                            str(result.get('priority'))[:24]
+                            if result.get('priority') else 'announcement')
+                        delivery.gateway_priority_level = int(
+                            result.get('priority_level') or 10)
+                        delivery.gateway_submitted_once = result.get('submitted_once')
+                        delivery.gateway_verification_status = (
+                            str(result.get('verification_status'))[:64]
+                            if result.get('verification_status') else None)
+                        delivery.gateway_sent_to = (
+                            str(result.get('sent_to'))[:32]
+                            if result.get('sent_to') else None)
+                        if result.get('manual_review'):
+                            delivery.status = 'manual_review'
+                            delivery.sent_at = None
+                            delivery.last_error = 'unverified_manual_review'
+                            delivery.last_error_source = 'gmweb'
+                            delivery.processed_at = datetime.utcnow()
+                            delivery.next_attempt_at = None
+                        elif result.get('accepted') and result.get('request_id') and not result.get('terminal'):
+                            delivery.status = 'queued'
+                            delivery.sent_at = None
+                            delivery.last_error = None
+                            delivery.last_error_source = None
+                            delivery.processed_at = None
+                            capacity_data['available'] = max(
+                                0, int(capacity_data.get('available') or 0) - 1)
+                        elif result.get('sent'):
                             delivery.status, delivery.sent_at, delivery.last_error = 'sent', datetime.utcnow(), None
                             delivery.last_error_source = None
-                        elif reason in ('daily_limit_reached', 'recipient_rate_limited'):
-                            delivery.status, delivery.next_attempt_at = 'retry', datetime.utcnow() + timedelta(minutes=5)
+                        elif (result.get('status_code') == 429
+                              or reason in ('daily_limit_reached', 'recipient_rate_limited')):
+                            retry_after = int(result.get('retry_after_seconds') or 60)
+                            delivery.status = 'retry'
+                            delivery.next_attempt_at = datetime.utcnow() + timedelta(seconds=retry_after)
                             delivery.last_error = reason
-                            delivery.last_error_source = 'panel'
+                            delivery.last_error_source = (
+                                'gmweb' if result.get('status_code') == 429 else 'panel')
+                            _sms_refund_daily_segments(delivery.segment_count)
                         else:
                             delivery.status, delivery.last_error = 'failed', reason or 'send_failed'
                             delivery.last_error_source = (
@@ -1555,9 +1680,15 @@ def _run_announcement_campaign_batch(batch_size=25):
                         _sms_log_row(
                             f'announcement-{campaign.id}', (delivery.email or '').lower(),
                             delivery.server_id, context.get('server_name'), 'announcement',
-                            delivery.recipient, _sms_accepted_status(result) if result.get('sent') else 'failed',
-                            None if result.get('sent') else delivery.last_error, result,
+                            delivery.recipient,
+                            ('manual_review' if result.get('manual_review') else
+                             _sms_accepted_status(result) if result.get('sent') else 'failed'),
+                            (None if result.get('sent') else delivery.last_error), result,
                         )
+                        if result.get('error_code') == 'announcement_queue_full':
+                            campaign.status = 'queued'
+                            db.session.commit()
+                            return processed + 1
                 elif campaign.channel == 'whatsapp':
                     if _comment_opted_out(context.get('comment'), 'nopm'):
                         delivery.status, delivery.last_error = 'skipped', 'opted_out'
@@ -1597,7 +1728,7 @@ def _run_announcement_campaign_batch(batch_size=25):
             if processed >= batch_size:
                 break
         counts = _recount_announcement_campaign(campaign)
-        if not any(counts.get(value, 0) for value in ('pending', 'retry')):
+        if not any(counts.get(value, 0) for value in ('pending', 'retry', 'queued', 'active')):
             campaign.status, campaign.finished_at = 'completed', datetime.utcnow()
         db.session.commit()
         if processed >= batch_size:
@@ -2119,21 +2250,91 @@ def _sms_gmweb_error_reason(resp) -> str:
     return (f"{fallback}: {'; '.join(parts)}" if parts else fallback)[:500]
 
 
+GMWEB_SMS_PRIORITY_LEVELS = {
+    'critical': 1,
+    'expired': 3,
+    'expiring': 6,
+    'announcement': 10,
+}
+
+
+def _gmweb_sms_priority(message_kind: str) -> str:
+    """Map every Eve SMS kind to one canonical GMweb 0.3.30 priority lane."""
+    kind = str(message_kind or '').strip().lower().replace('-', '_')
+    if kind in ('purchase', 'created', 'create', 'renew', 'renewal', 'test'):
+        return 'critical'
+    if kind in ('expired', 'ended', 'time_expired', 'volume_expired'):
+        return 'expired'
+    if kind in ('near_expiry', 'low_volume', 'time_expiring', 'volume_expiring'):
+        return 'expiring'
+    if kind in ('announcement', 'royalty'):
+        return 'announcement'
+    raise ValueError(f'unmapped_sms_message_kind:{kind or "empty"}')
+
+
+def _get_gmweb_send_capacity(cfg: dict | None = None) -> dict:
+    """Read GMweb lane occupancy and the currently free announcement capacity."""
+    cfg = cfg or _get_sms_runtime_settings()
+    out = {
+        'ok': False, 'status_code': None, 'reason': None,
+        'priorities': {}, 'announcement': {},
+    }
+    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    api_key = (cfg.get('api_key') or '').strip()
+    if not base or not api_key:
+        out['reason'] = 'gateway_not_configured'
+        return out
+    try:
+        resp = requests.get(
+            f'{base}/send/capacity',
+            headers={'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'},
+            timeout=min(int(cfg.get('timeout_seconds') or 15), 5),
+        )
+        out['status_code'] = resp.status_code
+        if resp.status_code != 200:
+            out['reason'] = _sms_gmweb_error_reason(resp)
+            return out
+        body = resp.json() if resp.content else {}
+        if not isinstance(body, dict) or not isinstance(body.get('announcement'), dict):
+            out['reason'] = 'invalid_capacity_response'
+            return out
+        announcement = body['announcement']
+        out['priorities'] = {
+            name: max(0, int((body.get('priorities') or {}).get(name) or 0))
+            for name in GMWEB_SMS_PRIORITY_LEVELS
+        }
+        out['announcement'] = {
+            'limit': max(0, int(announcement.get('limit') or 0)),
+            'pending': max(0, int(announcement.get('pending') or 0)),
+            'available': max(0, int(announcement.get('available') or 0)),
+            'recommended_batch_size': max(
+                1, int(announcement.get('recommendedBatchSize') or 1)),
+        }
+        out['ok'] = True
+    except Exception as exc:
+        out['reason'] = f'gateway_capacity_failed: {exc}'
+    return out
+
+
 def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: str | None = None,
                         idempotency_key: str | None = None) -> dict:
     """POST a single SMS to the GMweb-API gateway. The gateway queues it and
     returns 200/202 with a stable requestId. Delivery is tracked separately by
     the SMS status worker; legacy gateways without requestId remain supported.
 
-    priority='high' tells the gateway to jump the queue (transactional create/renew
-    confirmations go out next, ahead of a running bulk reminder campaign). Omit for
-    normal FIFO (the bulk scan). idempotency_key, when reused across a retry of the
-    SAME logical message, makes the gateway dedupe so a network blip can't double-send."""
+    ``priority`` must be one of Eve's four canonical lanes. ``idempotency_key``,
+    when reused across a retry of the SAME logical message, lets GMweb return the
+    original request safely after a lost response."""
     cfg = cfg or _get_sms_runtime_settings()
     out = {
         'sent': False, 'reason': None, 'status_code': None,
         'request_id': None, 'job_id': None, 'status_url': None,
-        'status': None,
+        'status': None, 'accepted': False, 'terminal': None, 'successful': None,
+        'manual_review': False, 'error_code': None, 'retry_after_seconds': None,
+        'priority': None, 'priority_level': None, 'queue_position': None,
+        'submitted_once': None, 'verification_status': None,
+        'verification_attempts': None, 'requested_to': None, 'sent_to': None,
+        'recipient_evidence': None, 'conversation_url': None,
         **_sms_segment_info(text),
     }
     base = (cfg.get('base_url') or '').strip().rstrip('/')
@@ -2141,9 +2342,13 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     if not base or not api_key:
         out['reason'] = 'gateway_not_configured'
         return out
-    payload = {'to': to, 'text': text}
-    if priority:
-        payload['priority'] = priority
+    canonical_priority = str(priority or '').strip().lower()
+    if canonical_priority not in GMWEB_SMS_PRIORITY_LEVELS:
+        out['reason'] = f'invalid_sms_priority:{canonical_priority or "missing"}'
+        return out
+    out['priority'] = canonical_priority
+    out['priority_level'] = GMWEB_SMS_PRIORITY_LEVELS[canonical_priority]
+    payload = {'to': to, 'text': text, 'priority': canonical_priority}
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     if idempotency_key:
         # HTTP headers must be latin-1. Emails can contain emoji (e.g. 📶plus300…)
@@ -2152,31 +2357,79 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
         # transform (same input → same key) keeps retry de-duplication intact.
         safe_key = str(idempotency_key).encode('latin-1', 'ignore').decode('latin-1') or 'k'
         headers['Idempotency-Key'] = safe_key
-    try:
-        resp = requests.post(
-            f"{base}/send",
-            json=payload,
-            headers=headers,
-            timeout=int(cfg.get('timeout_seconds') or 15),
-        )
-        out['status_code'] = resp.status_code
-        if resp.status_code in (200, 202):
-            out['sent'] = True
+    for network_attempt in range(2 if idempotency_key else 1):
+        try:
+            resp = requests.post(
+                f"{base}/send",
+                json=payload,
+                headers=headers,
+                timeout=int(cfg.get('timeout_seconds') or 15),
+            )
+            out['status_code'] = resp.status_code
             try:
                 body = resp.json() if resp.content else {}
             except (TypeError, ValueError):
                 body = {}
             if isinstance(body, dict):
+                response_data = dict(body)
+                if isinstance(body.get('result'), dict):
+                    response_data.update(body['result'])
                 out['request_id'] = body.get('requestId')
                 out['job_id'] = str(body.get('jobId')) if body.get('jobId') is not None else None
                 out['status_url'] = body.get('statusUrl')
                 out['status'] = body.get('status')
-            if out['request_id'] and not out['status_url']:
-                out['status_url'] = f"/send/status/{out['request_id']}"
-        else:
-            out['reason'] = _sms_gmweb_error_reason(resp)
-    except Exception as e:
-        out['reason'] = str(e)
+                out['error_code'] = body.get('error')
+                out['priority'] = body.get('priority') or out['priority']
+                out['priority_level'] = body.get('priorityLevel') or out['priority_level']
+                out['queue_position'] = body.get('queuePosition')
+                out['submitted_once'] = response_data.get('submittedOnce')
+                out['verification_status'] = response_data.get('verificationStatus')
+                out['verification_attempts'] = response_data.get('verificationAttempts')
+                out['requested_to'] = response_data.get('requestedTo') or to
+                out['sent_to'] = response_data.get('sentTo')
+                out['recipient_evidence'] = response_data.get('recipientEvidence')
+                out['conversation_url'] = response_data.get('conversationUrl')
+                if response_data.get('terminal') is not None:
+                    out['terminal'] = bool(response_data.get('terminal'))
+                if response_data.get('successful') is not None:
+                    out['successful'] = bool(response_data.get('successful'))
+                retry_after = body.get('retryAfterSeconds')
+                if retry_after is not None:
+                    try:
+                        out['retry_after_seconds'] = max(1, int(retry_after))
+                    except (TypeError, ValueError):
+                        pass
+            status = str(out.get('status') or '').strip().lower()
+            if status in ('sent', 'completed'):
+                out['terminal'], out['successful'] = True, True
+            elif status in ('unverified', 'failed', 'cancelled'):
+                out['terminal'], out['successful'] = True, False
+            out['manual_review'] = (
+                status == 'unverified'
+                or out.get('verification_status') == 'manual_review_required'
+            )
+            if resp.status_code in (200, 202):
+                out['accepted'] = bool(
+                    out.get('request_id') or out.get('job_id')
+                    or status in ('sent', 'completed', 'duplicate_suppressed'))
+                out['sent'] = bool(out['accepted'] and not out['manual_review']
+                                   and status not in ('failed', 'cancelled'))
+                if out['request_id'] and not out['status_url']:
+                    out['status_url'] = f"/send/status/{out['request_id']}"
+            else:
+                out['reason'] = _sms_gmweb_error_reason(resp)
+                if out.get('retry_after_seconds') is None:
+                    try:
+                        raw_retry = resp.headers.get('Retry-After')
+                        out['retry_after_seconds'] = max(1, int(raw_retry)) if raw_retry else None
+                    except (TypeError, ValueError):
+                        pass
+            return out
+        except Exception as exc:
+            out['reason'] = f'gateway_error: {exc}'
+            if network_attempt == 0 and idempotency_key:
+                continue
+            return out
     return out
 
 
@@ -2384,9 +2637,27 @@ def _cancel_stale_account_sms(server_id, email: str, *, reason: str) -> dict:
 
 def _sms_accepted_status(send_result: dict) -> str:
     """A new gateway acceptance is queued; old gateways had no status API."""
+    if send_result.get('manual_review'):
+        return 'manual_review'
+    if send_result.get('terminal') and send_result.get('successful'):
+        return 'sent'
     if send_result.get('request_id'):
-        return str(send_result.get('status') or 'queued')[:16]
+        status = str(send_result.get('status') or 'queued').strip().lower()
+        return ('queued' if status == 'deferred' else status)[:16]
     return 'sent'
+
+
+def _sms_has_manual_review(email: str, server_id, state: str) -> bool:
+    """Never auto-resend a logical SMS whose prior GMweb result was unverified."""
+    try:
+        return SmsSendLog.query.filter_by(
+            email=str(email or '').strip().lower(),
+            server_id=int(server_id or 0),
+            state=str(state or '').strip().lower(),
+            status='manual_review',
+        ).first() is not None
+    except Exception:
+        return False
 
 
 def _sms_should_send(event_name: str, server_id, email: str, cfg: dict | None = None) -> tuple[bool, str | None]:
@@ -2447,6 +2718,9 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 if not recipient:
                     _log('', 'skipped', 'no_recipient')
                     return
+                if _sms_has_manual_review(email_l, sid_norm, event_name):
+                    _log(recipient, 'skipped', 'manual_review_pending')
+                    return
                 # Dedup: v3.4 node panels can take 10-18s to apply a client update,
                 # so a slow/timed-out request gets retried by the operator while the
                 # first renew already succeeded — which used to text the customer
@@ -2488,13 +2762,17 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 if not slot_ok:
                     _log(recipient, 'skipped', slot_reason, segment_info)
                     return
-                # Transactional create/renew: high priority so the customer who just
+                # Transactional create/renew: CRITICAL so the customer who just
                 # paid gets their confirmation next, ahead of any running bulk scan.
                 # Stable idempotency key per fire so a network-retry can't double-send.
                 idem = f"tx-{event_name}-{sid_norm}-{email_l}-{int(time.time())}"
-                res = _send_sms_via_gmweb(recipient, text, cfg, priority='high', idempotency_key=idem)
+                res = _send_sms_via_gmweb(
+                    recipient, text, cfg,
+                    priority=_gmweb_sms_priority(event_name), idempotency_key=idem)
                 if res.get('sent'):
                     _log(recipient, _sms_accepted_status(res), None, res)
+                elif res.get('manual_review'):
+                    _log(recipient, 'manual_review', 'unverified_manual_review', res)
                 else:
                     _sms_refund_daily_segments(segments)
                     _log(recipient, 'failed', res.get('reason'), res)
@@ -2859,6 +3137,10 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             continue
 
         event = f'sms_{state}'
+        if _sms_has_manual_review(email_l, sid_norm, state):
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                         'skipped', 'manual_review_pending')
+            continue
         # Per-state cooldown in hours, shared across SMS + WhatsApp (event-agnostic).
         cd_hours = int(cooldown_hours.get(state, 24) or 24)
         if _recent_bot_message_within(email_l, sid_norm, cd_hours):
@@ -2910,18 +3192,23 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         # Same idempotency key for the send and its 429-retry so the retry can't
         # double-send. Scoped to this scan run (jid) so a later scan re-sends fresh.
         scan_idem = f"scan-{jid}-{state}-{sid_norm}-{email_l}"
-        res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
+        gmweb_priority = _gmweb_sms_priority(state)
+        res = _send_sms_via_gmweb(
+            recipient, text_msg, cfg, priority=gmweb_priority,
+            idempotency_key=scan_idem)
         # Gateway rate-limited: back off once and retry. If still limited, stop the
         # whole run rather than hammering it with the rest of the batch (the next
         # scheduled scan resumes where this left off).
         if (not res.get('sent')) and res.get('status_code') == 429:
-            time.sleep(5)
+            time.sleep(min(60, max(1, int(res.get('retry_after_seconds') or 60))))
             if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
                 _sms_refund_daily_segments(segments)
                 _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
                              'skipped', 'opted_out_recheck', segment_info)
                 continue
-            res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
+            res = _send_sms_via_gmweb(
+                recipient, text_msg, cfg, priority=gmweb_priority,
+                idempotency_key=scan_idem)
             if (not res.get('sent')) and res.get('status_code') == 429:
                 _sms_refund_daily_segments(segments)
                 SMS_LAST_SEND_TS[0] = time.time()
@@ -2946,6 +3233,10 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 SMS_SCAN_JOB['per_state'] = ps
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
                          _sms_accepted_status(res), None, res)
+        elif res.get('manual_review'):
+            _sms_scan_inc('failed')
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                         'manual_review', 'unverified_manual_review', res)
         else:
             _sms_refund_daily_segments(segments)
             _sms_scan_inc('failed')
@@ -3059,6 +3350,10 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
             _sms_scan_inc('skipped_cooldown')
             _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'skipped', 'cooldown')
             continue
+        if _sms_has_manual_review(email_l, sid_norm, 'royalty'):
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
+                         'skipped', 'manual_review_pending')
+            continue
 
         text_msg = _render_text_template(content, tpl_vars)
         if not (text_msg or '').strip():
@@ -3091,15 +3386,19 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
             continue
 
         scan_idem = f"royalty-{jid}-{sid_norm}-{email_l}"
-        res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
+        res = _send_sms_via_gmweb(
+            recipient, text_msg, cfg, priority=_gmweb_sms_priority('royalty'),
+            idempotency_key=scan_idem)
         if (not res.get('sent')) and res.get('status_code') == 429:
-            time.sleep(5)
+            time.sleep(min(60, max(1, int(res.get('retry_after_seconds') or 60))))
             if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
                 _sms_refund_daily_segments(segments)
                 _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
                              'skipped', 'opted_out_recheck', segment_info)
                 continue
-            res = _send_sms_via_gmweb(recipient, text_msg, cfg, idempotency_key=scan_idem)
+            res = _send_sms_via_gmweb(
+                recipient, text_msg, cfg, priority=_gmweb_sms_priority('royalty'),
+                idempotency_key=scan_idem)
             if (not res.get('sent')) and res.get('status_code') == 429:
                 _sms_refund_daily_segments(segments)
                 SMS_LAST_SEND_TS[0] = time.time()
@@ -3124,6 +3423,10 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
                 SMS_SCAN_JOB['per_state'] = ps
             _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
                          _sms_accepted_status(res), None, res)
+        elif res.get('manual_review'):
+            _sms_scan_inc('failed')
+            _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient,
+                         'manual_review', 'unverified_manual_review', res)
         else:
             _sms_refund_daily_segments(segments)
             _sms_scan_inc('failed')
@@ -3148,7 +3451,35 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
                             if gateway_result.get('job_id') else None),
             status_url=(str(gateway_result.get('status_url'))[:512]
                         if gateway_result.get('status_url') else None),
-            terminal=(False if gateway_result.get('request_id') else None),
+            gateway_state=(str(gateway_result.get('status'))[:32]
+                           if gateway_result.get('status') else None),
+            terminal=(bool(gateway_result.get('terminal'))
+                      if gateway_result.get('terminal') is not None
+                      else False if gateway_result.get('request_id') else None),
+            successful=(bool(gateway_result.get('successful'))
+                        if gateway_result.get('successful') is not None else None),
+            priority=(str(gateway_result.get('priority'))[:24]
+                      if gateway_result.get('priority') else None),
+            priority_level=(int(gateway_result.get('priority_level'))
+                            if gateway_result.get('priority_level') is not None else None),
+            queue_position=(int(gateway_result.get('queue_position'))
+                            if gateway_result.get('queue_position') is not None else None),
+            last_http_status=(int(gateway_result.get('status_code'))
+                              if gateway_result.get('status_code') is not None else None),
+            submitted_once=(bool(gateway_result.get('submitted_once'))
+                            if gateway_result.get('submitted_once') is not None else None),
+            verification_status=(str(gateway_result.get('verification_status'))[:64]
+                                 if gateway_result.get('verification_status') else None),
+            verification_attempts=(int(gateway_result.get('verification_attempts'))
+                                   if gateway_result.get('verification_attempts') is not None else None),
+            requested_to=(str(gateway_result.get('requested_to'))[:32]
+                          if gateway_result.get('requested_to') else str(recipient or '')[:32]),
+            sent_to=(str(gateway_result.get('sent_to'))[:32]
+                     if gateway_result.get('sent_to') else None),
+            recipient_evidence=(json.dumps(gateway_result.get('recipient_evidence'), ensure_ascii=False)
+                                if isinstance(gateway_result.get('recipient_evidence'), dict) else None),
+            conversation_url=(str(gateway_result.get('conversation_url'))[:2000]
+                              if gateway_result.get('conversation_url') else None),
             segment_count=(int(gateway_result.get('sms_segments'))
                            if gateway_result.get('sms_segments') is not None else None),
             message_encoding=(str(gateway_result.get('sms_encoding'))[:16]
@@ -3212,9 +3543,19 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 continue
 
             previous = (row.status, row.gateway_state, row.stage, row.terminal,
-                        row.successful, row.reason, row.gateway_job_id)
-            if data.get('status'):
-                row.status = str(data['status'])[:16]
+                        row.successful, row.reason, row.gateway_job_id,
+                        row.priority, row.priority_level, row.verification_status,
+                        row.verification_attempts, row.submitted_once, row.sent_to)
+            gateway_status = str(data.get('status') or '').strip().lower()
+            gateway_state = str(data.get('state') or '').strip().lower()
+            verification_status = str(data.get('verificationStatus') or '').strip()
+            manual_review = (
+                gateway_status == 'unverified'
+                or gateway_state == 'unverified'
+                or verification_status == 'manual_review_required'
+            )
+            if gateway_status:
+                row.status = 'manual_review' if manual_review else gateway_status[:16]
             if data.get('state') is not None:
                 row.gateway_state = str(data['state'])[:32]
             row.stage = str(data['stage'])[:64] if data.get('stage') is not None else None
@@ -3224,19 +3565,44 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 row.terminal = bool(data['terminal'])
             if data.get('successful') is not None:
                 row.successful = bool(data['successful'])
+            if data.get('priority') is not None:
+                row.priority = str(data['priority'])[:24]
+            if data.get('priorityLevel') is not None:
+                row.priority_level = int(data['priorityLevel'])
+            if data.get('submittedOnce') is not None:
+                row.submitted_once = bool(data['submittedOnce'])
+            if verification_status:
+                row.verification_status = verification_status[:64]
+            if data.get('verificationAttempts') is not None:
+                row.verification_attempts = int(data['verificationAttempts'])
+            if data.get('requestedTo') is not None:
+                row.requested_to = str(data['requestedTo'])[:32]
+            if data.get('sentTo') is not None:
+                row.sent_to = str(data['sentTo'])[:32]
+            if isinstance(data.get('recipientEvidence'), dict):
+                row.recipient_evidence = json.dumps(
+                    data['recipientEvidence'], ensure_ascii=False)
+            if data.get('conversationUrl') is not None:
+                row.conversation_url = str(data['conversationUrl'])[:2000]
             if data.get('currentAt') is not None:
                 row.gateway_current_at = str(data['currentAt'])[:64]
             if data.get('sentAt') is not None:
                 row.gateway_sent_at = str(data['sentAt'])[:64]
             failed_reason = data.get('failedReason')
-            if failed_reason:
+            if manual_review:
+                row.reason = 'unverified_manual_review'
+                row.terminal = True
+                row.successful = False
+            elif failed_reason:
                 row.reason = str(failed_reason)[:255]
             elif row.terminal and row.successful:
                 row.reason = None
             row.updated_at = datetime.utcnow()
 
             current = (row.status, row.gateway_state, row.stage, row.terminal,
-                       row.successful, row.reason, row.gateway_job_id)
+                       row.successful, row.reason, row.gateway_job_id,
+                       row.priority, row.priority_level, row.verification_status,
+                       row.verification_attempts, row.submitted_once, row.sent_to)
             if current != previous:
                 changed += 1
 
@@ -3246,7 +3612,28 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 affected_campaign_ids.add(delivery.announcement_id)
                 delivery.gateway_state = row.gateway_state or row.status
                 delivery.gateway_stage = row.stage
-                if row.terminal and row.successful is False:
+                delivery.gateway_priority = row.priority
+                delivery.gateway_priority_level = row.priority_level
+                delivery.gateway_submitted_once = row.submitted_once
+                delivery.gateway_verification_status = row.verification_status
+                delivery.gateway_sent_to = row.sent_to
+                if manual_review:
+                    delivery.status = 'manual_review'
+                    delivery.last_error = 'unverified_manual_review'
+                    delivery.last_error_source = 'gmweb'
+                    delivery.processed_at = datetime.utcnow()
+                    delivery.sent_at = None
+                    delivery.next_attempt_at = None
+                elif row.terminal and row.status == 'suppressed':
+                    delivery.status = 'skipped'
+                    delivery.last_error = 'duplicate_suppressed'
+                    delivery.last_error_source = 'gmweb'
+                    delivery.processed_at = datetime.utcnow()
+                    delivery.sent_at = None
+                    delivery.next_attempt_at = None
+                elif row.terminal and (
+                        row.successful is False
+                        or row.status in ('failed', 'cancelled')):
                     delivery.status = 'failed'
                     delivery.last_error = (
                         row.reason or row.gateway_state or row.stage or 'gmweb_delivery_failed'
@@ -3255,17 +3642,25 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                     delivery.processed_at = datetime.utcnow()
                     delivery.sent_at = None
                     delivery.next_attempt_at = None
-                elif row.terminal and row.successful:
+                elif row.terminal and (
+                        row.successful or row.status in ('sent', 'completed')):
                     delivery.status = 'sent'
                     delivery.last_error = None
                     delivery.last_error_source = None
                     delivery.processed_at = delivery.processed_at or datetime.utcnow()
+                elif not row.terminal and row.status in ('queued', 'active'):
+                    delivery.status = row.status
+                    delivery.processed_at = None
         except Exception as exc:
             app.logger.debug(f'[sms-status] poll failed request_id={row.request_id}: {exc}')
     for campaign_id in affected_campaign_ids:
         campaign = db.session.get(Announcement, campaign_id)
         if campaign:
-            _recount_announcement_campaign(campaign)
+            counts = _recount_announcement_campaign(campaign)
+            if not any(counts.get(value, 0) for value in (
+                    'pending', 'retry', 'queued', 'active')):
+                campaign.status = 'completed'
+                campaign.finished_at = campaign.finished_at or datetime.utcnow()
     try:
         db.session.commit()
     except Exception:
@@ -3292,7 +3687,9 @@ def sms_status_worker():
                 app.logger.warning(f'[sms-status] worker error: {exc}')
             except Exception:
                 pass
-        time.sleep(2 if pending else 5)
+        # GMweb 0.3.30 recommends durable polling as the source of truth. SSE may
+        # accelerate UI updates later, but a 10s poll avoids hammering the gateway.
+        time.sleep(10 if pending else 30)
 
 
 def _flush_pending_sms(force: bool = False) -> int:
@@ -3336,10 +3733,14 @@ def _flush_pending_sms(force: bool = False) -> int:
             if gap > 0:
                 time.sleep(min(gap, 60))
         flush_idem = f"flush-{r.id}"
-        res = _send_sms_via_gmweb(r.recipient, r.text, cfg, priority='high', idempotency_key=flush_idem)
+        res = _send_sms_via_gmweb(
+            r.recipient, r.text, cfg,
+            priority=_gmweb_sms_priority(r.event_name), idempotency_key=flush_idem)
         if (not res.get('sent')) and res.get('status_code') == 429:
-            time.sleep(5)
-            res = _send_sms_via_gmweb(r.recipient, r.text, cfg, priority='high', idempotency_key=flush_idem)
+            time.sleep(min(60, max(1, int(res.get('retry_after_seconds') or 60))))
+            res = _send_sms_via_gmweb(
+                r.recipient, r.text, cfg,
+                priority=_gmweb_sms_priority(r.event_name), idempotency_key=flush_idem)
         SMS_LAST_SEND_TS[0] = time.time()
         if (not res.get('sent')) and res.get('status_code') == 429:
             _sms_refund_daily_segments(segments)
@@ -3349,6 +3750,9 @@ def _flush_pending_sms(force: bool = False) -> int:
                 _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name,
                              r.recipient, _sms_accepted_status(res), None, res)
                 sent += 1
+            elif res.get('manual_review'):
+                _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name,
+                             r.recipient, 'manual_review', 'unverified_manual_review', res)
             else:
                 _sms_refund_daily_segments(segments)
                 _sms_log_row(None, r.email, r.server_id, r.server_name, r.event_name,

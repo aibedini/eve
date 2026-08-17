@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.69"
+APP_VERSION = "2.5.71"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -482,12 +482,16 @@ from panel.jobs.messaging import (  # noqa: F401
     _clear_message_cooldown,
     _sms_take_send_slot,
     _sms_gmweb_error_reason,
+    GMWEB_SMS_PRIORITY_LEVELS,
+    _gmweb_sms_priority,
+    _get_gmweb_send_capacity,
     _send_sms_via_gmweb,
     _cancel_sms_via_gmweb,
     STALE_ACCOUNT_SMS_STATES,
     _cancel_pending_sms_for_account,
     _cancel_stale_account_sms,
     _sms_accepted_status,
+    _sms_has_manual_review,
     _sms_should_send,
     _get_sms_template_content,
     _fire_automation_sms,

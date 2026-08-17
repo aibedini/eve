@@ -526,6 +526,8 @@ class Announcement(db.Model):
     audience_statuses = db.Column(
         db.Text, nullable=False,
         default='["other","expired","volume_ended","expiring_soon","volume_low"]')
+    recipient_estimate = db.Column(db.Text, nullable=True)
+    recipient_estimated_at = db.Column(db.DateTime, nullable=True)
     status = db.Column(db.String(24), nullable=False, default='draft', index=True)
     total_count = db.Column(db.Integer, nullable=False, default=0)
     sent_count = db.Column(db.Integer, nullable=False, default=0)
@@ -569,6 +571,15 @@ class Announcement(db.Model):
                 value = default
             return value if isinstance(value, list) and value else list(default)
 
+        recipient_estimate = None
+        if self.recipient_estimate:
+            try:
+                parsed_estimate = json.loads(self.recipient_estimate)
+                if isinstance(parsed_estimate, dict):
+                    recipient_estimate = parsed_estimate
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+
         total_count = int(self.total_count or 0)
         sent_count = int(self.sent_count or 0)
         failed_count = int(self.failed_count or 0)
@@ -604,6 +615,10 @@ class Announcement(db.Model):
             'audience_statuses': _audience_list(self.audience_statuses, [
                 'other', 'expired', 'volume_ended', 'expiring_soon', 'volume_low',
             ]),
+            'recipient_estimate': recipient_estimate,
+            'recipient_estimated_at': (
+                self.recipient_estimated_at.isoformat()
+                if self.recipient_estimated_at else None),
             'status': self.status or 'draft',
             'total_count': total_count,
             'sent_count': sent_count,
@@ -642,6 +657,11 @@ class AnnouncementDelivery(db.Model):
     gateway_request_id = db.Column(db.String(128), nullable=True, index=True)
     gateway_state = db.Column(db.String(32), nullable=True)
     gateway_stage = db.Column(db.String(64), nullable=True)
+    gateway_priority = db.Column(db.String(24), nullable=True)
+    gateway_priority_level = db.Column(db.Integer, nullable=True)
+    gateway_submitted_once = db.Column(db.Boolean, nullable=True)
+    gateway_verification_status = db.Column(db.String(64), nullable=True)
+    gateway_sent_to = db.Column(db.String(32), nullable=True)
     next_attempt_at = db.Column(db.DateTime, nullable=True, index=True)
     processed_at = db.Column(db.DateTime, nullable=True, index=True)
     sent_at = db.Column(db.DateTime, nullable=True)

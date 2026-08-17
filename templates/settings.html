@@ -1698,6 +1698,7 @@
                         <div id="sms-scan-counts" class="text-secondary" style="font-size:0.82rem;display:flex;gap:14px;flex-wrap:wrap;"></div>
                     </div>
 
+                    <div id="sms-gmweb-capacity" class="text-secondary" style="font-size:.78rem;margin-bottom:8px;" aria-live="polite">GMweb capacity: loading…</div>
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
                         <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
                             <small class="text-secondary">Recent sends</small>
@@ -6065,6 +6066,7 @@
     async function loadSmsLogs() {
         const body = document.getElementById('sms-logs-body');
         if (!body) return;
+        loadSmsCapacity();
         try {
             const offset = smsLogPage * SMS_LOG_PAGE_SIZE;
             // cache-bust + no-store so the browser never serves a stale log.
@@ -6083,7 +6085,8 @@
                 sent: '#22c55e', completed: '#22c55e', failed: '#ef4444',
                 cancelled: '#94a3b8',
                 skipped: '#f59e0b', queued: '#38bdf8', waiting: '#38bdf8',
-                processing: '#a78bfa', sending: '#a78bfa', delayed: '#f59e0b'
+                processing: '#a78bfa', sending: '#a78bfa', active: '#a78bfa',
+                delayed: '#f59e0b', manual_review: '#f97316', unverified: '#f97316'
             };
             body.innerHTML = logs.map(row => {
                 const when = formatJalaliTehran(row.created_at);
@@ -6091,10 +6094,14 @@
                 const taskParts = [row.status || ''];
                 if (row.gateway_state && row.gateway_state !== row.status) taskParts.push(row.gateway_state);
                 if (row.stage) taskParts.push(row.stage);
+                if (row.verification_status) taskParts.push(row.verification_status);
                 let statusTxt = taskParts.filter(Boolean).join(' · ');
                 if (row.reason) statusTxt += ` (${row.reason})`;
+                const priorityTxt = row.priority
+                    ? `${row.priority}${row.priority_level ? ` L${row.priority_level}` : ''}${row.queue_position ? ` #${row.queue_position}` : ''}`
+                    : '';
                 const taskRef = row.request_id
-                    ? `<div style="font-size:10px;color:var(--text-secondary,#94a3b8);margin-top:2px;">${escapeHtml(row.request_id)}${row.gateway_job_id ? ` / job ${escapeHtml(row.gateway_job_id)}` : ''}</div>`
+                    ? `<div style="font-size:10px;color:var(--text-secondary,#94a3b8);margin-top:2px;">${escapeHtml(priorityTxt)}${priorityTxt ? ' · ' : ''}${escapeHtml(row.request_id)}${row.gateway_job_id ? ` / job ${escapeHtml(row.gateway_job_id)}` : ''}${row.sent_to ? ` · verified ${escapeHtml(row.sent_to)}` : ''}</div>`
                     : '';
                 const segmentText = row.segment_count
                     ? `${Number(row.segment_count)} × ${escapeHtml(row.message_encoding || 'SMS')}`
@@ -6112,6 +6119,23 @@
             _renderSmsLogPager();
         } catch (e) {
             body.innerHTML = '<tr><td colspan="7" class="text-secondary" style="padding:12px;text-align:center;">Could not load log.</td></tr>';
+        }
+    }
+
+    async function loadSmsCapacity() {
+        const el = document.getElementById('sms-gmweb-capacity');
+        if (!el) return;
+        try {
+            const response = await fetch(`/api/sms/capacity?_=${Date.now()}`, {cache:'no-store'});
+            const data = await response.json();
+            if (!data.success) throw new Error(data.reason || 'unavailable');
+            const ann = data.announcement || {};
+            const lanes = data.priorities || {};
+            el.textContent = `GMweb queues — critical ${Number(lanes.critical || 0)}, expired ${Number(lanes.expired || 0)}, expiring ${Number(lanes.expiring || 0)}, announcement ${Number(lanes.announcement || 0)} · announcement capacity ${Number(ann.available || 0)}/${Number(ann.limit || 0)} free`;
+            el.style.color = Number(ann.available || 0) > 0 ? 'var(--text-secondary)' : '#f59e0b';
+        } catch (error) {
+            el.textContent = `GMweb capacity unavailable: ${error.message}`;
+            el.style.color = '#f59e0b';
         }
     }
 

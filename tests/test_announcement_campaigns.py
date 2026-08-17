@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -167,6 +168,74 @@ class AnnouncementCampaignTests(unittest.TestCase):
         self.assertEqual('reseller', recipients[0]['context']['owner_type'])
 
     @mock.patch('panel.jobs.messaging.load_snapshot_from_redis')
+    def test_inactive_account_is_not_treated_as_active_other(self, load_snapshot):
+        GLOBAL_SERVER_DATA['inbounds'][0]['clients'][0]['service_state'] = 'inactive'
+
+        recipients, stats = _announcement_campaign_recipients(
+            'sms', '*', ['system', 'unowned'], ['other'])
+
+        self.assertNotIn('first', [row['email'] for row in recipients])
+        self.assertGreaterEqual(stats['status_filtered'], 1)
+
+    @mock.patch('panel.jobs.messaging.load_snapshot_from_redis')
+    def test_saved_campaign_persists_recipient_estimate(self, load_snapshot):
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = self.admin.id
+            session_data['role'] = 'superadmin'
+            session_data['is_superadmin'] = True
+
+        response = client.post('/api/announcements', json={
+            'channel': 'sms', 'message': 'Hello {account_name}', 'targets': '*',
+            'delivery_mode': 'all',
+            'audience_owner_types': ['system', 'unowned'],
+            'audience_statuses': ['other'],
+        })
+
+        self.assertEqual(200, response.status_code)
+        data = response.get_json()['announcement']
+        self.assertEqual(1, data['recipient_estimate']['unique'])
+        self.assertIsNotNone(data['recipient_estimated_at'])
+        self.assertIn('estimated_total_segments', data['recipient_estimate']['sms'])
+
+        db.session.expire_all()
+        saved = db.session.get(Announcement, data['id'])
+        self.assertEqual(1, json.loads(saved.recipient_estimate)['unique'])
+
+    @mock.patch('panel.jobs.messaging._send_sms_via_gmweb')
+    @mock.patch('panel.jobs.messaging.load_snapshot_from_redis')
+    def test_queued_inactive_account_is_skipped_before_send(self, load_snapshot, send_sms):
+        GLOBAL_SERVER_DATA['inbounds'][0]['clients'][0]['service_state'] = 'inactive'
+        row = Announcement(
+            message='Hello', channel='sms', targets='*', all_servers=True,
+            start_at=datetime.utcnow(), end_at=datetime.utcnow() + timedelta(days=1),
+            delivery_mode='all', status='queued', total_count=1,
+            audience_owner_types='["system","unowned"]',
+            audience_statuses='["other"]', created_by='campaign-admin',
+        )
+        db.session.add(row)
+        db.session.flush()
+        delivery = AnnouncementDelivery(
+            announcement_id=row.id, recipient_key='sms:+989121234567',
+            recipient='+989121234567', email='first', server_id=self.server.id,
+            inbound_id=11, context_json='{"account_name":"first"}', status='pending',
+        )
+        db.session.add(delivery)
+        db.session.commit()
+
+        with mock.patch('panel.jobs.messaging._get_gmweb_send_capacity', return_value={
+                'ok': True,
+                'announcement': {'available': 10, 'recommended_batch_size': 10},
+        }):
+            processed = _run_announcement_campaign_batch(batch_size=1)
+
+        db.session.refresh(delivery)
+        self.assertEqual(1, processed)
+        self.assertEqual('skipped', delivery.status)
+        self.assertEqual('audience_changed', delivery.last_error)
+        send_sms.assert_not_called()
+
+    @mock.patch('panel.jobs.messaging.load_snapshot_from_redis')
     def test_edit_running_campaign_keeps_sent_rows_and_adds_only_new_recipient(self, load_snapshot):
         row = Announcement(
             message='Old {account_name}', channel='sms', targets='*', all_servers=True,
@@ -232,7 +301,9 @@ class AnnouncementCampaignTests(unittest.TestCase):
     @mock.patch('panel.jobs.messaging._send_sms_via_gmweb')
     def test_worker_renders_personal_variables_and_finishes(self, send_sms, runtime, quiet, opted_out):
         send_sms.return_value = {
-            'sent': True, 'reason': None, 'request_id': 'request-1', 'status': 'queued',
+            'sent': True, 'accepted': True, 'terminal': False,
+            'reason': None, 'request_id': 'request-1', 'status': 'queued',
+            'priority': 'announcement', 'priority_level': 10,
         }
         row = Announcement(
             message='Hello {account_name} on {server_name}', channel='sms', targets='*', all_servers=True,
@@ -248,13 +319,19 @@ class AnnouncementCampaignTests(unittest.TestCase):
         ))
         db.session.commit()
 
-        self.assertEqual(1, _run_announcement_campaign_batch())
+        with mock.patch('panel.jobs.messaging._get_gmweb_send_capacity', return_value={
+                'ok': True,
+                'announcement': {'available': 10, 'recommended_batch_size': 10},
+        }):
+            self.assertEqual(1, _run_announcement_campaign_batch())
         db.session.refresh(row)
-        self.assertEqual('completed', row.status)
-        self.assertEqual(1, row.sent_count)
+        self.assertEqual('sending', row.status)
+        self.assertEqual(0, row.sent_count)
         self.assertEqual('Hello first on Campaign server', send_sms.call_args.args[1])
         delivery = AnnouncementDelivery.query.filter_by(announcement_id=row.id).one()
         self.assertEqual('request-1', delivery.gateway_request_id)
+        self.assertEqual('queued', delivery.status)
+        self.assertEqual('announcement', send_sms.call_args.kwargs['priority'])
         self.assertTrue(send_sms.call_args.kwargs['idempotency_key'].endswith('-r0'))
 
     def test_failed_report_and_selected_resend_preserve_sent_rows(self):
@@ -375,6 +452,115 @@ class AnnouncementCampaignTests(unittest.TestCase):
         self.assertEqual(1, row.failed_count)
         self.assertEqual(0, row.sent_count)
 
+    def test_unverified_is_terminal_manual_review_and_cannot_be_resent(self):
+        row = Announcement(
+            message='Review', channel='sms', targets='*', all_servers=True,
+            start_at=datetime.utcnow(), end_at=datetime.utcnow() + timedelta(days=1),
+            delivery_mode='all', status='sending', total_count=1,
+            created_by='campaign-admin',
+        )
+        db.session.add(row)
+        db.session.flush()
+        delivery = AnnouncementDelivery(
+            announcement_id=row.id, recipient_key='sms:+989121111111',
+            recipient='+989121111111', email='review-user', server_id=self.server.id,
+            inbound_id=11, context_json='{}', status='queued', attempts=1,
+            gateway_request_id='send_unverified', gateway_state='queued',
+        )
+        log = SmsSendLog(
+            email='review-user', server_id=self.server.id, server_name=self.server.name,
+            state='announcement', recipient='9891***111', status='queued',
+            request_id='send_unverified', terminal=False,
+        )
+        db.session.add_all([delivery, log])
+        db.session.commit()
+
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {
+            'requestId': 'send_unverified', 'jobId': '99',
+            'status': 'unverified', 'state': 'unverified',
+            'terminal': True, 'successful': False,
+            'priority': 'announcement', 'priorityLevel': 10,
+            'stage': 'unverified_manual_review', 'submittedOnce': True,
+            'verificationStatus': 'manual_review_required',
+            'verificationAttempts': 3,
+            'requestedTo': '+989121111111', 'sentTo': '+989121111111',
+            'recipientEvidence': {'source': 'outgoing_bubble'},
+        }
+        with mock.patch('panel.jobs.messaging._get_sms_runtime_settings', return_value={
+                'base_url': 'https://sms.test', 'api_key': 'secret', 'timeout_seconds': 5,
+        }), mock.patch('panel.jobs.messaging.requests.get', return_value=response):
+            self.assertEqual(1, _refresh_pending_sms_statuses())
+
+        db.session.refresh(delivery)
+        db.session.refresh(log)
+        db.session.refresh(row)
+        self.assertEqual('manual_review', delivery.status)
+        self.assertEqual('unverified_manual_review', delivery.last_error)
+        self.assertEqual('manual_review', log.status)
+        self.assertTrue(log.submitted_once)
+        self.assertEqual('manual_review_required', log.verification_status)
+        self.assertEqual('announcement', log.priority)
+        self.assertEqual('completed', row.status)
+
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = self.admin.id
+            session_data['role'] = 'superadmin'
+            session_data['is_superadmin'] = True
+        failures = client.get(f'/api/announcements/{row.id}/failures').get_json()
+        self.assertFalse(failures['failures'][0]['can_resend'])
+        resend = client.post(
+            f'/api/announcements/{row.id}/failures/resend',
+            json={'delivery_ids': [delivery.id]},
+        )
+        self.assertEqual(200, resend.status_code)
+        self.assertEqual('409', resend.headers.get('X-Eve-Status'))
+        self.assertFalse(resend.get_json()['success'])
+
+    @mock.patch('panel.jobs.messaging._sms_account_opted_out', return_value=False)
+    @mock.patch('panel.jobs.messaging._sms_in_quiet_hours', return_value=False)
+    @mock.patch('panel.jobs.messaging._get_sms_runtime_settings', return_value={'enabled': True})
+    @mock.patch('panel.jobs.messaging._send_sms_via_gmweb')
+    def test_announcement_queue_full_releases_delivery_for_retry(
+            self, send_sms, runtime, quiet, opted_out):
+        send_sms.return_value = {
+            'sent': False, 'accepted': False, 'status_code': 429,
+            'error_code': 'announcement_queue_full',
+            'reason': 'http_429: announcement_queue_full',
+            'retry_after_seconds': 60, 'priority': 'announcement',
+            'priority_level': 10,
+        }
+        row = Announcement(
+            message='Bulk', channel='sms', targets='*', all_servers=True,
+            start_at=datetime.utcnow(), end_at=datetime.utcnow() + timedelta(days=1),
+            delivery_mode='all', status='queued', total_count=1,
+            created_by='campaign-admin',
+        )
+        db.session.add(row)
+        db.session.flush()
+        delivery = AnnouncementDelivery(
+            announcement_id=row.id, recipient_key='sms:+989122222222',
+            recipient='+989122222222', email='queue-user', server_id=self.server.id,
+            inbound_id=11, context_json='{}', status='pending',
+        )
+        db.session.add(delivery)
+        db.session.commit()
+
+        with mock.patch('panel.jobs.messaging._get_gmweb_send_capacity', return_value={
+                'ok': True,
+                'announcement': {'available': 1, 'recommended_batch_size': 50},
+        }):
+            self.assertEqual(1, _run_announcement_campaign_batch())
+
+        db.session.refresh(delivery)
+        db.session.refresh(row)
+        self.assertEqual('retry', delivery.status)
+        self.assertEqual('queued', row.status)
+        self.assertEqual('gmweb', delivery.last_error_source)
+        self.assertIsNotNone(delivery.next_attempt_at)
+        self.assertEqual('announcement', send_sms.call_args.kwargs['priority'])
+
     @mock.patch('panel.jobs.messaging._sms_account_opted_out', return_value=False)
     @mock.patch('panel.jobs.messaging._sms_in_quiet_hours', return_value=False)
     @mock.patch('panel.jobs.messaging._get_sms_runtime_settings', return_value={'enabled': True})
@@ -396,11 +582,17 @@ class AnnouncementCampaignTests(unittest.TestCase):
             ))
         db.session.commit()
 
-        self.assertEqual(1, _run_announcement_campaign_batch(batch_size=25))
+        capacity = {
+            'ok': True,
+            'announcement': {'available': 10, 'recommended_batch_size': 10},
+        }
+        with mock.patch('panel.jobs.messaging._get_gmweb_send_capacity', return_value=capacity):
+            self.assertEqual(1, _run_announcement_campaign_batch(batch_size=25))
         self.assertEqual(1, send_sms.call_count)
         self.assertEqual(1, AnnouncementDelivery.query.filter_by(
             announcement_id=row.id, status='pending').count())
-        self.assertEqual(0, _run_announcement_campaign_batch(batch_size=25))
+        with mock.patch('panel.jobs.messaging._get_gmweb_send_capacity', return_value=capacity):
+            self.assertEqual(0, _run_announcement_campaign_batch(batch_size=25))
         db.session.refresh(row)
         self.assertEqual('queued', row.status)
 

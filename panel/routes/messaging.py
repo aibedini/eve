@@ -105,7 +105,7 @@ def _promote_delayed_high_sms(cfg: dict | None = None) -> dict:
             f"{base}/queue/promote-high",
             json={
                 'all': True,
-                'priority': 'high',
+                'priority': 'critical',
                 'states': ['delayed'],
                 'releaseDelayed': True,
                 'position': 'front',
@@ -249,7 +249,7 @@ def sms_test_send():
                      0, 'Eve', 'test', recipient, 'skipped', slot_reason, segment_info)
         return jsonify({'success': False, 'recipient': recipient,
                         'error': 'Daily SMS segment limit reached.'}), 429
-    res = _send_sms_via_gmweb(recipient, text, cfg, priority='high',
+    res = _send_sms_via_gmweb(recipient, text, cfg, priority='critical',
                               idempotency_key=f"test-{int(time.time())}")
     if res.get('sent'):
         _sms_log_row(None, (getattr(user, 'username', None) or 'test').strip().lower(),
@@ -260,6 +260,17 @@ def sms_test_send():
                         'request_id': res.get('request_id'), 'job_id': res.get('job_id'),
                         'status': _sms_accepted_status(res),
                         'message': f'{message} for {recipient} ({src_label}).'})
+    if res.get('manual_review'):
+        _sms_log_row(None, (getattr(user, 'username', None) or 'test').strip().lower(),
+                     0, 'Eve', 'test', recipient, 'manual_review',
+                     'unverified_manual_review', res)
+        return jsonify({
+            'success': False,
+            'manual_review': True,
+            'recipient': recipient,
+            'request_id': res.get('request_id'),
+            'error': 'GMweb submitted the test once but could not verify it. Do not resend automatically; review Google Messages.',
+        }), 409
     _sms_refund_daily_segments(segments)
     _sms_log_row(None, (getattr(user, 'username', None) or 'test').strip().lower(),
                  0, 'Eve', 'test', recipient, 'failed', res.get('reason'), res)
@@ -451,7 +462,8 @@ def sms_logs():
     status_filter = (request.args.get('status') or '').strip().lower()
     state_filter = (request.args.get('state') or '').strip().lower()
     q = SmsSendLog.query
-    if status_filter in ('sent', 'failed', 'skipped', 'cancelled'):
+    if status_filter in ('queued', 'active', 'sent', 'failed', 'skipped',
+                         'cancelled', 'manual_review'):
         q = q.filter(SmsSendLog.status == status_filter)
     if state_filter in ('near_expiry', 'low_volume', 'expired', 'ended'):
         q = q.filter(SmsSendLog.state == state_filter)
@@ -463,6 +475,17 @@ def sms_logs():
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'
     return resp
+
+
+@bp.route('/api/sms/capacity', methods=['GET'])
+@superadmin_required
+def sms_capacity():
+    """Expose the authenticated GMweb 0.3.30 lane/capacity snapshot to Settings."""
+    from panel.jobs.messaging import _get_gmweb_send_capacity
+
+    result = _get_gmweb_send_capacity()
+    code = 200 if result.get('ok') else 502
+    return jsonify({'success': bool(result.get('ok')), **result}), code
 
 
 @bp.route('/api/whatsapp/test-connection', methods=['POST'])

@@ -66,6 +66,8 @@ from app import (  # noqa: E402
     _cancel_sms_via_gmweb,
     _cancel_stale_account_sms,
     _run_sms_depletion_scan,
+    _get_gmweb_send_capacity,
+    _gmweb_sms_priority,
     _send_sms_via_gmweb,
     _sms_db_segment_stats_today,
     _sms_db_segments_used_today,
@@ -2601,6 +2603,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                     'api_key': 'gmw_secret',
                     'timeout_seconds': 7,
                 },
+                priority='expiring',
             )
 
         self.assertFalse(result['sent'])
@@ -2609,6 +2612,66 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertIn('per_minute_limit', result['reason'])
         self.assertIn('minute 10/10', result['reason'])
         self.assertIn('retry_after=60s', result['reason'])
+
+    def test_gmweb_priority_mapping_uses_canonical_lanes(self):
+        self.assertEqual('critical', _gmweb_sms_priority('renew'))
+        self.assertEqual('expired', _gmweb_sms_priority('ended'))
+        self.assertEqual('expiring', _gmweb_sms_priority('low_volume'))
+        self.assertEqual('announcement', _gmweb_sms_priority('announcement'))
+        self.assertEqual('announcement', _gmweb_sms_priority('royalty'))
+        with self.assertRaisesRegex(ValueError, 'unmapped_sms_message_kind'):
+            _gmweb_sms_priority('unknown-kind')
+
+    def test_gmweb_send_persists_priority_queue_metadata(self):
+        class FakeResponse:
+            status_code = 202
+            content = b'{}'
+            headers = {}
+
+            def json(self):
+                return {
+                    'ok': True, 'requestId': 'send_1', 'jobId': '42',
+                    'status': 'queued', 'priority': 'expired',
+                    'priorityLevel': 3, 'queuePosition': 7,
+                }
+
+        with patch('app.requests.post', return_value=FakeResponse()) as post:
+            result = _send_sms_via_gmweb(
+                '+989120000000', 'expired', {
+                    'base_url': 'https://gmweb.test', 'api_key': 'gmw_secret',
+                    'timeout_seconds': 7,
+                }, priority='expired', idempotency_key='eve:expired:1:v1')
+
+        self.assertTrue(result['accepted'])
+        self.assertFalse(bool(result['terminal']))
+        self.assertEqual('expired', result['priority'])
+        self.assertEqual(3, result['priority_level'])
+        self.assertEqual(7, result['queue_position'])
+        self.assertEqual('expired', post.call_args.kwargs['json']['priority'])
+
+    def test_gmweb_capacity_normalizes_announcement_window(self):
+        class FakeResponse:
+            status_code = 200
+            content = b'{}'
+
+            def json(self):
+                return {
+                    'priorities': {'critical': 2, 'expired': 3, 'expiring': 4,
+                                   'announcement': 143},
+                    'announcement': {'limit': 200, 'pending': 143, 'available': 57,
+                                     'recommendedBatchSize': 50},
+                }
+
+        with patch('panel.jobs.messaging.requests.get', return_value=FakeResponse()):
+            result = _get_gmweb_send_capacity({
+                'base_url': 'https://gmweb.test', 'api_key': 'gmw_secret',
+                'timeout_seconds': 7,
+            })
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(57, result['announcement']['available'])
+        self.assertEqual(50, result['announcement']['recommended_batch_size'])
+        self.assertEqual(143, result['priorities']['announcement'])
 
     def test_sms_daily_limit_counts_completed_segments_only(self):
         db.session.add_all([
