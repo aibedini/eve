@@ -1356,7 +1356,8 @@ def _reconcile_announcement_campaign_deliveries(announcement):
 
 
 def _estimate_sms_campaign_duration(
-        recipient_count, estimated_segments, delivery_mode='all', daily_limit=None, cfg=None):
+        recipient_count, estimated_segments, delivery_mode='all', daily_limit=None, cfg=None,
+        announcement_daily_limit=None):
     """Return a conservative ETA based on current SMS pace, caps and quiet hours."""
     count = max(0, int(recipient_count or 0))
     segments = max(0, int(estimated_segments or 0))
@@ -1365,7 +1366,10 @@ def _estimate_sms_campaign_duration(
                 'bottleneck': 'none'}
     cfg = cfg or _get_sms_runtime_settings()
     avg_segments = max(1.0, segments / count) if segments else 1.0
-    global_daily_segments = max(1, int(cfg.get('daily_limit') or 1))
+    if announcement_daily_limit is not None:
+        global_daily_segments = max(1, int(announcement_daily_limit))
+    else:
+        global_daily_segments = max(1, int(cfg.get('daily_limit') or 1))
     by_segments = max(1, int(global_daily_segments // avg_segments))
     pace = max(0.0, float(cfg.get('send_pace_seconds') or 0))
     active_seconds = 86400
@@ -1404,9 +1408,12 @@ def _announcement_campaign_eta(announcement):
         AnnouncementDelivery.announcement_id == announcement.id,
         AnnouncementDelivery.status.in_(('pending', 'retry')),
     ).scalar() or 0)
+    sms_cfg = _get_sms_runtime_settings()
+    ann_daily_limit = int(sms_cfg.get('announcement_daily_limit') or 500)
     estimate = _estimate_sms_campaign_duration(
         remaining_count, remaining_segments, announcement.delivery_mode,
-        announcement.daily_limit,
+        announcement.daily_limit, cfg=sms_cfg,
+        announcement_daily_limit=ann_daily_limit,
     )
     estimate['remaining_segments'] = remaining_segments
     if estimate['seconds']:
@@ -1439,8 +1446,11 @@ def _announcement_campaign_estimate(
             'min_segments_per_recipient': min(segment_counts) if segment_counts else 0,
             'max_segments_per_recipient': max(segment_counts) if segment_counts else 0,
         }
+        sms_cfg = _get_sms_runtime_settings()
+        ann_daily_limit = int(sms_cfg.get('announcement_daily_limit') or 500)
         result['eta'] = _estimate_sms_campaign_duration(
-            len(recipients), total_segments, delivery_mode, daily_limit)
+            len(recipients), total_segments, delivery_mode, daily_limit,
+            cfg=sms_cfg, announcement_daily_limit=ann_daily_limit)
     return result
 
 
@@ -1607,8 +1617,11 @@ def _run_announcement_campaign_batch(batch_size=25):
                         segment_info = _sms_segment_info(message)
                         delivery.segment_count = max(
                             1, int(segment_info.get('sms_segments') or 1))
+                        ann_daily_limit = int(sms_cfg.get('announcement_daily_limit') or 500)
+                        ann_used_today = _sms_announcement_segments_used_today()
                         slot_ok, slot_reason = _sms_take_send_slot(
-                            delivery.recipient, sms_cfg, segment_info['sms_segments'])
+                            delivery.recipient, sms_cfg, segment_info['sms_segments'],
+                            daily_limit=ann_daily_limit, used_today=ann_used_today)
                         if not slot_ok:
                             delivery.status = 'retry'
                             delivery.next_attempt_at = datetime.utcnow() + timedelta(
@@ -1769,6 +1782,7 @@ SMS_EXPIRED_MAX_AGE_DAYS_KEY    = 'sms_expired_max_age_days'  # don't SMS accoun
 SMS_ENDED_MAX_AGE_DAYS_KEY      = 'sms_ended_max_age_days'    # stop SMS this many days after first 'ended' message (0 = no cutoff)
 SMS_MIN_INTERVAL_SECONDS_KEY    = 'sms_min_interval_seconds'
 SMS_DAILY_LIMIT_KEY             = 'sms_daily_limit'
+SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY = 'sms_announcement_daily_limit'
 SMS_SEND_PACE_SECONDS_KEY       = 'sms_send_pace_seconds'  # global gap between ANY two sends so the gateway doesn't return HTTP 429
 # Quiet hours (Tehran time): no automated SMS goes out inside this window. Scan
 # candidates simply wait for the next run after the window; transactional
@@ -1842,6 +1856,23 @@ def _sms_db_segments_used_today() -> int:
     return _sms_db_segment_stats_today().get('completed', 0)
 
 
+def _sms_announcement_segments_used_today() -> int:
+    """Count billable SMS segments consumed by announcement campaigns today (Tehran time)."""
+    try:
+        _day, start_utc, end_utc = _sms_tehran_day()
+        total = db.session.query(
+            db.func.coalesce(db.func.sum(AnnouncementDelivery.segment_count), 0)
+        ).filter(
+            AnnouncementDelivery.status == 'sent',
+            AnnouncementDelivery.sent_at >= start_utc,
+            AnnouncementDelivery.sent_at < end_utc,
+            AnnouncementDelivery.segment_count.isnot(None),
+        ).scalar()
+        return max(0, int(total or 0))
+    except Exception:
+        return 0
+
+
 def _sms_db_segment_stats_today() -> dict:
     """Daily SMS segment accounting in Tehran time.
 
@@ -1902,13 +1933,16 @@ def _sms_segment_counter_key(day: str) -> str:
     return f'eve:sms:segments:{day}'
 
 
-def _sms_reserve_daily_segments(segments: int, daily_limit: int) -> bool:
+def _sms_reserve_daily_segments(segments: int, daily_limit: int,
+                                 used_today: int | None = None) -> bool:
     segments = max(1, int(segments or 1))
     # Daily cap is billable/completed SMS, not mere requests accepted by GMweb.
     # If Google Messages is unpaired or a queued send later fails, it must not
     # burn the day's budget. We therefore don't "reserve" here; status polling
     # moves rows into the completed bucket when the gateway confirms success.
-    return (_sms_db_segments_used_today() + segments) <= int(daily_limit or 0)
+    if used_today is None:
+        used_today = _sms_db_segments_used_today()
+    return (used_today + segments) <= int(daily_limit or 0)
 
 
 def _sms_refund_daily_segments(segments: int) -> None:
@@ -1932,6 +1966,7 @@ def _get_sms_runtime_settings() -> dict:
         SMS_COOLDOWN_HOURS_EXPIRED_KEY, SMS_COOLDOWN_HOURS_ENDED_KEY,
         SMS_EXPIRED_MAX_AGE_DAYS_KEY, SMS_ENDED_MAX_AGE_DAYS_KEY,
         SMS_MIN_INTERVAL_SECONDS_KEY, SMS_DAILY_LIMIT_KEY,
+        SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY,
         SMS_SEND_PACE_SECONDS_KEY,
         SMS_TRIGGER_NEAR_EXPIRY_KEY, SMS_TRIGGER_LOW_VOLUME_KEY,
         SMS_TRIGGER_EXPIRED_KEY, SMS_TRIGGER_ENDED_KEY,
@@ -1992,6 +2027,7 @@ def _get_sms_runtime_settings() -> dict:
         'ended_max_age_days': _int(SMS_ENDED_MAX_AGE_DAYS_KEY, 0, lo=0, hi=3650),
         'min_interval_seconds': _int(SMS_MIN_INTERVAL_SECONDS_KEY, 30, lo=0, hi=3600),
         'daily_limit': _int(SMS_DAILY_LIMIT_KEY, 200, lo=1, hi=100000),
+        'announcement_daily_limit': _int(SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY, 500, lo=1, hi=100000),
         'send_pace_seconds': _float(SMS_SEND_PACE_SECONDS_KEY, 3.0, lo=0.0, hi=60.0),
         'quiet_enabled': _bool(SMS_QUIET_ENABLED_KEY, False),
         'quiet_start': _int(SMS_QUIET_START_KEY, 2, lo=0, hi=23),
@@ -2182,16 +2218,19 @@ def _clear_message_cooldown(email: str, server_id) -> None:
             pass
 
 
-def _sms_take_send_slot(recipient: str, cfg: dict, segments: int = 1) -> tuple[bool, str | None]:
+def _sms_take_send_slot(recipient: str, cfg: dict, segments: int = 1,
+                         daily_limit: int | None = None,
+                         used_today: int | None = None) -> tuple[bool, str | None]:
     now_ts = time.time()
     min_interval = int(cfg.get('min_interval_seconds') or 0)
-    daily_limit = int(cfg.get('daily_limit') or 200)
+    if daily_limit is None:
+        daily_limit = int(cfg.get('daily_limit') or 200)
     with SMS_SEND_TRACKER_LOCK:
         per = SMS_SEND_TRACKER.get('per_recipient') or {}
         last = float(per.get(recipient) or 0.0)
         if min_interval > 0 and last > 0 and (now_ts - last) < min_interval:
             return False, 'recipient_rate_limited'
-        if not _sms_reserve_daily_segments(segments, daily_limit):
+        if not _sms_reserve_daily_segments(segments, daily_limit, used_today=used_today):
             return False, 'daily_limit_reached'
         per[recipient] = now_ts
         SMS_SEND_TRACKER['per_recipient'] = per

@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.71"
+APP_VERSION = "2.5.72"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -446,6 +446,7 @@ from panel.jobs.messaging import (  # noqa: F401
     SMS_ENDED_MAX_AGE_DAYS_KEY,
     SMS_MIN_INTERVAL_SECONDS_KEY,
     SMS_DAILY_LIMIT_KEY,
+    SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY,
     SMS_SEND_PACE_SECONDS_KEY,
     SMS_QUIET_ENABLED_KEY,
     SMS_QUIET_START_KEY,
@@ -462,6 +463,7 @@ from panel.jobs.messaging import (  # noqa: F401
     _GSM7_EXTENDED,
     _sms_segment_info,
     _sms_tehran_day,
+    _sms_announcement_segments_used_today,
     _sms_db_segments_used_today,
     _sms_db_segment_stats_today,
     _sms_segment_counter_key,

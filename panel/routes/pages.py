@@ -180,6 +180,7 @@ def settings_page():
                          sms_ended_max_age_days=sms_cfg.get('ended_max_age_days', 0),
                          sms_min_interval_seconds=sms_cfg.get('min_interval_seconds', 30),
                          sms_daily_limit=sms_cfg.get('daily_limit', 200),
+                         sms_announcement_daily_limit=sms_cfg.get('announcement_daily_limit', 500),
                          sms_send_pace_seconds=sms_cfg.get('send_pace_seconds', 3.0),
                          sms_quiet_enabled=sms_cfg.get('quiet_enabled', False),
                          sms_quiet_start=sms_cfg.get('quiet_start', 2),

@@ -2127,10 +2127,12 @@
         const sent = Number(a.sent_count || 0);
         const failed = Number(a.failed_count || 0);
         const skipped = Number(a.skipped_count || 0);
+        const blocked = Number(a.blocked_count || 0);
         const remaining = Number.isFinite(Number(a.remaining_count))
             ? Number(a.remaining_count) : Math.max(0, total - sent - failed - skipped);
         const percent = total ? Math.min(100, ((sent + failed + skipped) / total) * 100) : 0;
         const eta = a.eta && remaining > 0 ? `${a.eta.label} remaining` : (remaining ? 'ETA unavailable' : 'Finished');
+        const isSms = (a.channel || '') === 'sms';
         return `<div class="campaign-progress-panel">
             <div style="display:flex;justify-content:space-between;gap:.75rem;"><strong>${percent.toFixed(1)}% processed</strong><span>${escapeHtml(eta)}</span></div>
             <div class="campaign-progress-track"><div class="campaign-progress-fill" style="width:${percent.toFixed(1)}%"></div></div>
@@ -2139,7 +2141,11 @@
                 <span>Errors <strong>${failed}</strong></span><span>Remaining <strong>${remaining}</strong></span>
             </div>
             ${skipped ? `<div style="margin-top:.45rem;font-size:.76rem;">Skipped: ${skipped}</div>` : ''}
-            ${failed && (a.channel || '') === 'sms' ? `<button type="button" class="btn btn-secondary ann-view-failures" onclick="openAnnouncementFailuresModal(${a.id})">View ${failed} failed ${failed === 1 ? 'delivery' : 'deliveries'}</button>` : ''}
+            ${blocked ? `<div style="margin-top:.35rem;font-size:.76rem;color:#f59e0b;">Blocked (rate/cap): <strong>${blocked}</strong></div>` : ''}
+            <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;">
+                ${failed && isSms ? `<button type="button" class="btn btn-secondary ann-view-failures" onclick="openAnnouncementFailuresModal(${a.id})">View ${failed} failed ${failed === 1 ? 'delivery' : 'deliveries'}</button>` : ''}
+                ${blocked && isSms ? `<button type="button" class="btn btn-warning ann-send-now" onclick="sendNowAnnouncementBlocked(${a.id})" style="background:#f59e0b;color:#1e1e2e;border:none;">Send Now ${blocked} blocked</button>` : ''}
+            </div>
         </div>`;
     }
 
@@ -2250,6 +2256,30 @@
 
     function resendAllAnnouncementFailures() {
         resendAnnouncementFailures(null);
+    }
+
+    async function sendNowAnnouncementBlocked(campaignId) {
+        if (!campaignId) return;
+        // First fetch blocked deliveries
+        try {
+            const resp = await fetch(`/api/announcements/${campaignId}/blocked`, {cache:'no-store'});
+            const data = await resp.json();
+            if (!data.success) throw new Error(data.error || 'Could not load blocked deliveries');
+            const blocked = Array.isArray(data.blocked) ? data.blocked : [];
+            if (!blocked.length) { showToast('No blocked deliveries found'); return; }
+            const ids = blocked.map(b => b.id);
+            if (!confirm(`Force-send ${ids.length} blocked ${ids.length === 1 ? 'delivery' : 'deliveries'} now? This bypasses the daily cap.`)) return;
+            const sendResp = await fetch(`/api/announcements/${campaignId}/deliveries/send-now`, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({delivery_ids: ids})
+            });
+            const sendData = await sendResp.json();
+            if (!sendData.success) throw new Error(sendData.error || 'Send Now failed');
+            showToast(`Send Now: ${sendData.sent_count} sent, ${sendData.failed_count} failed`);
+            await loadAnnouncements();
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
     }
 
     // Announcement Targets (reseller-style selector)

@@ -352,14 +352,19 @@ def sms_scan_run():
 def sms_scan_status():
     """Live progress of the current/last SMS scan (shared across all workers)."""
     from app import (  # deferred: app-level helper, avoids circular import
-        _get_sms_runtime_settings, _sms_db_segment_stats_today,
-        _sms_scan_snapshot, app,
+        _get_sms_runtime_settings, _sms_announcement_segments_used_today,
+        _sms_db_segment_stats_today, _sms_scan_snapshot, app,
     )
     try:
         pending_high = PendingSms.query.count()
     except Exception:
         pending_high = 0
     segment_stats = _sms_db_segment_stats_today()
+    sms_cfg = _get_sms_runtime_settings()
+    try:
+        ann_segments_used = _sms_announcement_segments_used_today()
+    except Exception:
+        ann_segments_used = 0
     return jsonify({
         'success': True,
         'job': _sms_scan_snapshot(),
@@ -369,7 +374,9 @@ def sms_scan_status():
         'segments_submitted_today': segment_stats.get('submitted', 0),
         'segments_failed_today': segment_stats.get('failed', 0),
         'segments_inflight_today': segment_stats.get('inflight', 0),
-        'segment_daily_limit': int(_get_sms_runtime_settings().get('daily_limit') or 200),
+        'segment_daily_limit': int(sms_cfg.get('daily_limit') or 200),
+        'announcement_segments_used_today': ann_segments_used,
+        'announcement_daily_limit': int(sms_cfg.get('announcement_daily_limit') or 500),
     })
 
 

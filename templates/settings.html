@@ -1600,6 +1600,10 @@
                             <input type="number" id="sms-daily-limit" class="form-control" min="1" max="100000" value="{{ sms_daily_limit }}">
                         </div>
                         <div>
+                            <small class="text-secondary">Max announcement SMS segments per day</small>
+                            <input type="number" id="sms-announcement-daily-limit" class="form-control" min="1" max="100000" value="{{ sms_announcement_daily_limit }}">
+                        </div>
+                        <div>
                             <small class="text-secondary">Gap between any two sends (sec)</small>
                             <input type="number" id="sms-send-pace" class="form-control" min="0" max="60" step="0.5" value="{{ sms_send_pace_seconds }}">
                         </div>
@@ -5777,6 +5781,7 @@
             sms_ended_max_age_days: Number((document.getElementById('sms-ended-max-age-days') || {}).value || 0),
             sms_min_interval_seconds: Number((document.getElementById('sms-min-interval') || {}).value || 30),
             sms_daily_limit: Number((document.getElementById('sms-daily-limit') || {}).value || 200),
+            sms_announcement_daily_limit: Number((document.getElementById('sms-announcement-daily-limit') || {}).value || 500),
             sms_send_pace_seconds: Number((document.getElementById('sms-send-pace') || {}).value || 3),
             sms_quiet_enabled: !!(document.getElementById('sms-quiet-enabled') || {}).checked,
             sms_quiet_start_hour: Number((document.getElementById('sms-quiet-start') || {}).value || 0),

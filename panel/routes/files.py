@@ -381,9 +381,10 @@ def delete_app_file(filename):
 @superadmin_required
 def update_system_config():
     from app import (  # deferred: app-level helper, avoids circular import
-        SMS_AUTOMATION_ENABLED_KEY, SMS_COOLDOWN_HOURS_ENDED_KEY,
-        SMS_COOLDOWN_HOURS_EXPIRED_KEY, SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY,
-        SMS_COOLDOWN_HOURS_NEAR_EXPIRY_KEY, SMS_DAILY_LIMIT_KEY,
+        SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY, SMS_AUTOMATION_ENABLED_KEY,
+        SMS_COOLDOWN_HOURS_ENDED_KEY, SMS_COOLDOWN_HOURS_EXPIRED_KEY,
+        SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY, SMS_COOLDOWN_HOURS_NEAR_EXPIRY_KEY,
+        SMS_DAILY_LIMIT_KEY,
         SMS_DEPLETION_COOLDOWN_DAYS_KEY, SMS_DEPLETION_EXPIRY_DAYS_KEY,
         SMS_DEPLETION_VOLUME_GB_KEY, SMS_ENDED_MAX_AGE_DAYS_KEY,
         SMS_EXPIRED_MAX_AGE_DAYS_KEY, SMS_GMWEB_API_KEY_KEY,
@@ -551,6 +552,8 @@ def update_system_config():
                 sanitized_value = str(_parse_int(value, 30, min_value=0, max_value=3600))
             elif key == SMS_DAILY_LIMIT_KEY:
                 sanitized_value = str(_parse_int(value, 200, min_value=1, max_value=100000))
+            elif key == SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY:
+                sanitized_value = str(_parse_int(value, 500, min_value=1, max_value=100000))
             elif key == SMS_SEND_PACE_SECONDS_KEY:
                 try:
                     _p = max(0.0, min(60.0, float(value)))

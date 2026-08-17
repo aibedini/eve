@@ -420,6 +420,18 @@ def get_announcements():
     for announcement in items:
         item = announcement.to_dict()
         item['eta'] = _announcement_campaign_eta(announcement)
+        # Count blocked (retry/skipped due to rate/cap limits) deliveries
+        try:
+            blocked = AnnouncementDelivery.query.filter(
+                AnnouncementDelivery.announcement_id == announcement.id,
+                AnnouncementDelivery.status.in_(('retry', 'skipped')),
+                AnnouncementDelivery.last_error.in_(
+                    ('daily_limit_reached', 'pace_gated', 'recipient_rate_limited',
+                     'quiet_hours', 'gateway_capacity')),
+            ).count()
+            item['blocked_count'] = blocked
+        except Exception:
+            item['blocked_count'] = 0
         payload.append(item)
     resp = jsonify(payload)
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -912,6 +924,46 @@ def announcement_campaign_failures(announcement_id):
     })
 
 
+@bp.route('/api/announcements/<int:announcement_id>/blocked', methods=['GET'])
+@user_management_required
+def announcement_campaign_blocked(announcement_id):
+    """Return retry/skipped deliveries blocked by daily_limit_reached (or similar caps)."""
+    ann = db.session.get(Announcement, announcement_id)
+    if not ann or (ann.channel or 'subscription') != 'sms':
+        return jsonify({'success': False, 'error': 'SMS campaign not found'}), 404
+
+    rows = AnnouncementDelivery.query.filter(
+        AnnouncementDelivery.announcement_id == ann.id,
+        AnnouncementDelivery.status.in_(('retry', 'skipped')),
+        AnnouncementDelivery.last_error.in_(
+            ('daily_limit_reached', 'pace_gated', 'recipient_rate_limited',
+             'quiet_hours', 'gateway_capacity')),
+    ).order_by(AnnouncementDelivery.id.asc()).limit(500).all()
+    blocked = []
+    for delivery in rows:
+        context = delivery.context()
+        blocked.append({
+            'id': delivery.id,
+            'recipient': delivery.recipient,
+            'email': delivery.email or '',
+            'account_name': context.get('account_name') or delivery.email or '',
+            'server_id': delivery.server_id,
+            'server_name': context.get('server_name') or '',
+            'reason': delivery.last_error or 'blocked',
+            'status': delivery.status,
+            'next_attempt_at': (
+                delivery.next_attempt_at.isoformat() + 'Z'
+                if delivery.next_attempt_at else None),
+            'attempts': int(delivery.attempts or 0),
+            'resend_count': int(delivery.resend_count or 0),
+        })
+    return jsonify({
+        'success': True,
+        'blocked': blocked,
+        'total': len(blocked),
+    })
+
+
 @bp.route('/api/announcements/<int:announcement_id>/failures/resend', methods=['POST'])
 @user_management_required
 def resend_announcement_campaign_failures(announcement_id):
@@ -999,6 +1051,126 @@ def delete_announcement(announcement_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bp.route('/api/announcements/<int:announcement_id>/deliveries/send-now', methods=['POST'])
+@user_management_required
+def send_now_announcement_deliveries(announcement_id):
+    """Force-send retry deliveries blocked by daily_limit_reached, bypassing the cap."""
+    from app import (  # deferred: app-level helper, avoids circular import
+        _get_sms_runtime_settings, _render_text_template, _send_sms_via_gmweb,
+        _sms_announcement_segments_used_today, _sms_segment_info, app,
+    )
+    from panel.jobs.messaging import (
+        _gmweb_sms_priority, _recount_announcement_campaign, _sms_log_row,
+    )
+
+    ann = db.session.get(Announcement, announcement_id)
+    if not ann or (ann.channel or 'subscription') != 'sms':
+        return jsonify({'success': False, 'error': 'SMS campaign not found'}), 404
+    if ann.status == 'cancelled':
+        return jsonify({'success': False, 'error': 'Cancelled campaigns cannot send'}), 409
+
+    data = request.get_json(silent=True) or {}
+    raw_ids = data.get('delivery_ids')
+    delivery_ids = None
+    if raw_ids is not None:
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return jsonify({'success': False, 'error': 'Select at least one delivery'}), 400
+        try:
+            delivery_ids = sorted({int(value) for value in raw_ids if int(value) > 0})
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Invalid delivery selection'}), 400
+        if not delivery_ids:
+            return jsonify({'success': False, 'error': 'Select at least one delivery'}), 400
+
+    # Find retry/skipped deliveries (daily_limit_reached or similar)
+    query = AnnouncementDelivery.query.filter(
+        AnnouncementDelivery.announcement_id == ann.id,
+        AnnouncementDelivery.status.in_(('retry', 'skipped')),
+    )
+    if delivery_ids is not None:
+        query = query.filter(AnnouncementDelivery.id.in_(delivery_ids))
+    deliveries = query.all()
+    if not deliveries:
+        return jsonify({'success': False, 'error': 'No blocked deliveries matched'}), 409
+
+    sms_cfg = _get_sms_runtime_settings()
+    if not sms_cfg.get('base_url') or not sms_cfg.get('api_key'):
+        return jsonify({'success': False, 'error': 'GMweb gateway is not configured'}), 400
+
+    sent_count = 0
+    failed_count = 0
+    errors = []
+    now = datetime.utcnow()
+
+    for delivery in deliveries:
+        context = delivery.context()
+        message = _render_text_template(ann.message, context).strip()
+        if not message:
+            errors.append({'id': delivery.id, 'reason': 'rendered_message_empty'})
+            failed_count += 1
+            continue
+
+        segment_info = _sms_segment_info(message)
+        segments = max(1, int(segment_info.get('sms_segments') or 1))
+
+        # Bypass daily limit check for force-send
+        result = _send_sms_via_gmweb(
+            delivery.recipient, message, cfg=sms_cfg,
+            priority=_gmweb_sms_priority('announcement'),
+            idempotency_key=(
+                f'announcement-{ann.id}-{delivery.id}'
+                f'-r{int(delivery.resend_count or 0)}-force'
+            ),
+        )
+
+        delivery.resend_count = int(delivery.resend_count or 0) + 1
+        delivery.gateway_request_id = (
+            str(result.get('request_id'))[:128] if result.get('request_id') else None)
+        delivery.gateway_state = (
+            str(result.get('status'))[:32] if result.get('status') else None)
+        delivery.gateway_priority = 'announcement'
+        delivery.gateway_priority_level = int(result.get('priority_level') or 10)
+
+        if result.get('sent') or (result.get('accepted') and result.get('request_id')):
+            delivery.status = 'sent' if result.get('sent') else 'queued'
+            delivery.sent_at = now if result.get('sent') else None
+            delivery.last_error = None
+            delivery.last_error_source = None
+            delivery.processed_at = now
+            delivery.next_attempt_at = None
+            sent_count += 1
+        else:
+            delivery.status = 'failed'
+            delivery.last_error = result.get('reason') or 'send_now_failed'
+            delivery.last_error_source = 'gmweb' if result.get('status_code') is not None else 'panel'
+            delivery.processed_at = now
+            delivery.next_attempt_at = None
+            failed_count += 1
+            errors.append({'id': delivery.id, 'reason': delivery.last_error})
+
+        _sms_log_row(
+            f'announcement-{ann.id}', (delivery.email or '').lower(),
+            delivery.server_id, context.get('server_name'), 'announcement',
+            delivery.recipient,
+            'sent' if delivery.status == 'sent' else 'failed',
+            delivery.last_error, result,
+        )
+
+    _recount_announcement_campaign(ann)
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+    return jsonify({
+        'success': True,
+        'sent_count': sent_count,
+        'failed_count': failed_count,
+        'errors': errors[:20],
+    })
 
 
 # Online Chat Scripts APIs (Sub Manager)
