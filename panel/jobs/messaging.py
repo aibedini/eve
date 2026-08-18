@@ -606,10 +606,10 @@ def whatsapp_bot_worker():
             with app.app_context():
                 result = _run_whatsapp_depletion_scan()
                 if result.get('sent'):
-                    app.logger.info(f"[whatsapp-bot] depletion scan sent={result.get('sent')} scanned={result.get('scanned')}")
+                    app.logger.info("[whatsapp-bot] depletion scan sent=%s scanned=%s", result.get('sent'), result.get('scanned'))
         except Exception as exc:
             try:
-                app.logger.warning(f"[whatsapp-bot] scan error: {exc}")
+                app.logger.warning("[whatsapp-bot] scan error: %s", exc)
             except Exception:
                 pass
         time.sleep(1800)  # every 30 minutes
@@ -746,7 +746,7 @@ def _notify_customer_telegram(customer_id, text, bot=None) -> None:
             except Exception as exc:
                 try:
                     db.session.rollback()
-                    app.logger.warning(f"[telegram-notify] customer {customer_id}: {exc}")
+                    app.logger.warning("[telegram-notify] customer %s: %s", customer_id, exc)
                 except Exception:
                     pass
 
@@ -927,7 +927,7 @@ def _run_telegram_depletion_scan() -> dict:
                     api.send_message(chat_id, text_msg)
             except Exception as exc:
                 db.session.rollback()
-                app.logger.warning(f"[telegram-bot] depletion send failed for bot {bot.id}: {exc}")
+                app.logger.warning("[telegram-bot] depletion send failed for bot %s: %s", bot.id, exc)
                 continue
             try:
                 db.session.add(WhatsappBotLog(
@@ -948,10 +948,10 @@ def telegram_depletion_worker():
             with app.app_context():
                 result = _run_telegram_depletion_scan()
                 if result.get('sent'):
-                    app.logger.info(f"[telegram-bot] depletion scan sent={result.get('sent')} scanned={result.get('scanned')}")
+                    app.logger.info("[telegram-bot] depletion scan sent=%s scanned=%s", result.get('sent'), result.get('scanned'))
         except Exception as exc:
             try:
-                app.logger.warning(f"[telegram-bot] scan error: {exc}")
+                app.logger.warning("[telegram-bot] scan error: %s", exc)
             except Exception:
                 pass
         time.sleep(1800)  # every 30 minutes
@@ -1028,7 +1028,7 @@ def telegram_announcement_worker():
             processed = 0
             try:
                 db.session.rollback()
-                app.logger.warning(f'[telegram-announcement] worker error: {exc}')
+                app.logger.warning('[telegram-announcement] worker error: %s', exc)
             except Exception:
                 pass
         time.sleep(1 if processed else 10)
@@ -3321,7 +3321,7 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
         # reseller_filter=0 → only owner-less (system/superadmin) accounts.
         idle = _compute_royalty_idle(admin.id, days, None, 0)
     except Exception as exc:
-        app.logger.warning(f"[sms-royalty] idle compute failed: {exc}")
+        app.logger.warning("[sms-royalty] idle compute failed: %s", exc)
         return {'scanned': 0, 'sent': 0, 'reason': 'idle_query_failed'}
 
     base_url = _public_base_url()
@@ -3691,7 +3691,7 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                     delivery.status = row.status
                     delivery.processed_at = None
         except Exception as exc:
-            app.logger.debug(f'[sms-status] poll failed request_id={row.request_id}: {exc}')
+            app.logger.debug('[sms-status] poll failed request_id=%s: %s', row.request_id, exc)
     for campaign_id in affected_campaign_ids:
         campaign = db.session.get(Announcement, campaign_id)
         if campaign:
@@ -3723,7 +3723,7 @@ def sms_status_worker():
                     _refresh_pending_sms_statuses()
         except Exception as exc:
             try:
-                app.logger.warning(f'[sms-status] worker error: {exc}')
+                app.logger.warning('[sms-status] worker error: %s', exc)
             except Exception:
                 pass
         # GMweb 0.3.30 recommends durable polling as the source of truth. SSE may
@@ -3812,17 +3812,17 @@ def sms_bot_worker():
                 # First drain anything parked during quiet hours (if the window ended).
                 flushed = _flush_pending_sms()
                 if flushed:
-                    app.logger.info(f"[sms-bot] flushed {flushed} queued (quiet-hours) SMS")
+                    app.logger.info("[sms-bot] flushed %s queued (quiet-hours) SMS", flushed)
                 result = _run_sms_depletion_scan()
                 if result.get('sent'):
-                    app.logger.info(f"[sms-bot] depletion scan sent={result.get('sent')} scanned={result.get('scanned')}")
+                    app.logger.info("[sms-bot] depletion scan sent=%s scanned=%s", result.get('sent'), result.get('scanned'))
                 # Royalty runs on the leftover daily budget (depletion took priority).
                 roy = _run_sms_royalty_scan()
                 if roy.get('sent'):
-                    app.logger.info(f"[sms-bot] royalty scan sent={roy.get('sent')} scanned={roy.get('scanned')}")
+                    app.logger.info("[sms-bot] royalty scan sent=%s scanned=%s", roy.get('sent'), roy.get('scanned'))
         except Exception as exc:
             try:
-                app.logger.warning(f"[sms-bot] scan error: {exc}")
+                app.logger.warning("[sms-bot] scan error: %s", exc)
             except Exception:
                 pass
         time.sleep(1800)  # every 30 minutes

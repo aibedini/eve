@@ -276,7 +276,7 @@ def save_general_settings():
         )
         nginx_updated = ok
         if not ok:
-            app.logger.warning(f"nginx update failed when changing domain to {new_domain}: {nginx_error}")
+            app.logger.warning("nginx update failed when changing domain to %s: %s", new_domain, nginx_error)
 
     _set_system_setting_value(GENERAL_TIMEZONE_SETTING_KEY, tz_name)
     _set_system_setting_value(GENERAL_CALENDAR_SETTING_KEY, calendar_name)

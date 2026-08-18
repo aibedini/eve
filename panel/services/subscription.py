@@ -837,7 +837,7 @@ def generate_client_link(client, inbound, server_host):
 
         return None
     except Exception as exc:
-        app.logger.debug(f"Link gen failed: {exc}")
+        app.logger.debug("Link gen failed: %s", exc)
         return None
 
 
@@ -979,7 +979,7 @@ def build_subscription_configs(
                 if links:
                     return links
         except Exception as e:
-            app.logger.debug(f"Multi-inbound link aggregation failed for sub {sub_id}: {e}")
+            app.logger.debug("Multi-inbound link aggregation failed for sub %s: %s", sub_id, e)
 
     # 4) Last resort: the single inbound we already matched in the route.
     if fallback_client and fallback_inbound:

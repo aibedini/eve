@@ -111,7 +111,7 @@ def get_settings_overview():
                 else:
                     ssl_type = 'custom'
         except Exception as exc:
-            app.logger.debug(f"SSL cert parse error: {exc}")
+            app.logger.debug("SSL cert parse error: %s", exc)
 
     result['ssl_type'] = ssl_type
     result['ssl_expiry'] = ssl_expiry

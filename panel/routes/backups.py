@@ -88,7 +88,7 @@ def create_backup():
         filename = _create_database_backup_file('backup')
         return jsonify({'success': True, 'message': 'Backup created', 'filename': filename})
     except Exception as e:
-        app.logger.error(f'create_backup error: {e}')
+        app.logger.error('create_backup error: %s', e)
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -106,7 +106,7 @@ def create_migration_backup():
         return jsonify({'success': True, 'filename': filename, 'size': size,
                         'message': 'Full migration bundle created (database + uploaded files)'})
     except Exception as e:
-        app.logger.error(f'create_migration_backup error: {e}', exc_info=True)
+        app.logger.error('create_migration_backup error: %s', e, exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -292,7 +292,7 @@ def restore_backup(filename):
             try:
                 _create_database_backup_file('pre_restore')
             except Exception as be:
-                app.logger.warning(f"Could not create pre-restore safety backup: {be}")
+                app.logger.warning("Could not create pre-restore safety backup: %s", be)
             _pg_restore_backup(backup_path)
 
         else:
@@ -306,7 +306,7 @@ def restore_backup(filename):
         })
 
     except Exception as e:
-        app.logger.error(f"Restore failed for {filename}: {e}")
+        app.logger.error("Restore failed for %s: %s", filename, e)
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -355,7 +355,7 @@ def restore_backup_stream(filename):
                 yield _sse('done', '✓ Migration restore complete (DB + files) — logging you out.',
                            redirect=url_for('auth.logout'))
             except Exception as exc:
-                app.logger.error(f"migration restore error: {exc}", exc_info=True)
+                app.logger.error("migration restore error: %s", exc, exc_info=True)
                 yield _sse('error', f'Migration restore failed: {exc}')
             return
 
@@ -480,7 +480,7 @@ def restore_backup_stream(filename):
                 yield _sse('error', f'Unsupported database type (URI: {uri[:30]}…)')
 
         except Exception as exc:
-            app.logger.error(f"restore_backup_stream error: {exc}", exc_info=True)
+            app.logger.error("restore_backup_stream error: %s", exc, exc_info=True)
             yield _sse('error', f'Unexpected error: {exc}')
 
     return Response(

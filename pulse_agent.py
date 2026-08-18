@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import logging
 import os
 import sys
 import time
@@ -30,9 +31,16 @@ MAX_BACKOFF_SECONDS = 300
 # SiteCheck fields accepted from the task profile payload.
 _SITE_CHECK_FIELDS = ("name", "url", "expect_substring", "timeout")
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='[pulse-agent] %(message)s',
+    stream=sys.stderr,
+)
+logger = logging.getLogger(__name__)
+
 
 def _log(message):
-    print(f"[pulse-agent] {message}", flush=True)
+    logger.info(message)
 
 
 def build_profile(payload):

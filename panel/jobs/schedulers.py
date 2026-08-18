@@ -387,7 +387,7 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
             _backoff_record_success(sid)
             srv = servers_by_id.get(sid)
             if srv is not None and persist_detected_panel_type(srv, detected_type):
-                app.logger.info(f"Detected panel type for server {sid} as {detected_type}")
+                app.logger.info("Detected panel type for server %s as %s", sid, detected_type)
             if not isinstance(inbounds, list):
                 inbounds = []
             processed, stats = process_inbounds(inbounds, srv, admin_user, '*', {}, online_index=online_index)
@@ -447,7 +447,7 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
                     try:
                         _apply_result(sid, res)
                     except Exception:
-                        app.logger.exception(f"Failed to apply fetch result for server {sid}")
+                        app.logger.exception("Failed to apply fetch result for server %s", sid)
                     _commit_snapshot()
                     dirty_server_ids.add(sid)
                     nowt = time.time()
@@ -465,7 +465,7 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
         publish_snapshot_to_redis(dirty_server_ids)
 
     except Exception as e:
-        print(f"Background fetch error: {e}")
+        app.logger.error("Background fetch error: %s", e)
     finally:
         GLOBAL_SERVER_DATA['is_updating'] = False
 
@@ -496,7 +496,7 @@ def run_scheduler():
                         try:
                             filename = _create_database_backup_file('auto')
                         except Exception as e:
-                            print(f"Auto backup failed: {e}")
+                            app.logger.error("Auto backup failed: %s", e)
                             filename = None
 
                         if filename:
@@ -507,7 +507,7 @@ def run_scheduler():
                             else:
                                 last_backup.value = now.isoformat()
                             db.session.commit()
-                            print(f"Auto backup created: {filename}")
+                            app.logger.info("Auto backup created: %s", filename)
 
                 # Backup retention cleanup (delete files older than N days)
                 try:
@@ -520,9 +520,9 @@ def run_scheduler():
                             _set_system_setting_value('backup_last_cleanup', datetime.utcnow().isoformat())
                             db.session.commit()
                             if res.get('deleted'):
-                                print(f"[Backup retention] Deleted {res['deleted']} old backup(s), freed {res['freed_bytes']} bytes")
+                                app.logger.info("[Backup retention] Deleted %s old backup(s), freed %s bytes", res['deleted'], res['freed_bytes'])
                 except Exception as _ce:
-                    print(f"Backup retention error: {_ce}")
+                    app.logger.error("Backup retention error: %s", _ce)
 
                 # Telegram backups
                 tg_enabled = _parse_bool(_get_system_setting_value('telegram_backup_enabled', 'false'))
@@ -583,10 +583,10 @@ def run_scheduler():
                             pass
                         result = _run_telegram_backup(trigger='scheduled')
                         if not result.get('success'):
-                            app.logger.warning(f"Telegram backup failed: {result.get('error')}")
+                            app.logger.warning("Telegram backup failed: %s", result.get('error'))
                             
             except Exception as e:
-                print(f"Scheduler error: {e}")
+                app.logger.error("Scheduler error: %s", e)
             
         time.sleep(60) # Check every minute
 
@@ -601,9 +601,9 @@ def update_session_lifetime():
                 if setting:
                     hours = int(setting.value)
                     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=hours)
-                    print(f"Session lifetime updated to {hours} hours")
+                    app.logger.info("Session lifetime updated to %s hours", hours)
         except Exception as e:
-            print(f"Error updating session lifetime: {e}")
+            app.logger.error("Error updating session lifetime: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +744,7 @@ def health_watchdog():
                 except Exception:
                     db.session.rollback()
             except Exception as exc:
-                print(f"[HealthWatchdog] Error in cycle: {exc}")
+                app.logger.error("[HealthWatchdog] Error in cycle: %s", exc)
                 try:
                     time.sleep(30)
                 except Exception:
@@ -840,9 +840,10 @@ def _renewal_from_counter_reset(point, now):
 
 def _collect_usage_rollups():
     """Update bounded hourly/daily aggregates without appending raw samples."""
+    from app import app  # deferred: avoids circular import
     inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
     if not inbounds:
-        print('[UsageRollup] cache empty; skipping collection')
+        app.logger.info('[UsageRollup] cache empty; skipping collection')
         return False
     now = datetime.utcnow()
     bucket_at = now.replace(minute=0, second=0, microsecond=0)
@@ -938,7 +939,7 @@ def _collect_usage_rollups():
     UsageDaily.query.filter(UsageDaily.usage_date < usage_date - timedelta(days=_USAGE_DAILY_RETENTION_DAYS)).delete(synchronize_session=False)
     UsageCounterState.query.filter(UsageCounterState.observed_at < now - timedelta(days=30)).delete(synchronize_session=False)
     db.session.commit()
-    print(f'[UsageRollup] updated accounts={len(points)} renewals={renewal_count}')
+    app.logger.info('[UsageRollup] updated accounts=%s renewals=%s', len(points), renewal_count)
     return True
 
 
@@ -992,11 +993,12 @@ def get_usage_migration_status():
 
 def _migrate_legacy_usage_snapshots_v248():
     """Stream raw legacy rows into rollups, then remove the obsolete table."""
+    from app import app  # deferred: avoids circular import
     if not _legacy_usage_table_exists():
         _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
         db.session.commit()
         return
-    print('[UsageRollup] migrating legacy usage_snapshots...')
+    app.logger.info('[UsageRollup] migrating legacy usage_snapshots...')
     _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'running')
     UsageHourly.query.delete(synchronize_session=False)
     UsageDaily.query.delete(synchronize_session=False)
@@ -1063,7 +1065,7 @@ def _migrate_legacy_usage_snapshots_v248():
                 break
             processed += len(rows)
             if processed % 1_000_000 < len(rows):
-                print(f'[UsageRollup] migrated {processed:,} legacy rows')
+                app.logger.info('[UsageRollup] migrated %s legacy rows', f'{processed:,}')
             for row in rows:
                 key = (int(row[0]), str(row[1]))
                 ts = _coerce_usage_datetime(row[3])
@@ -1127,11 +1129,12 @@ def _migrate_legacy_usage_snapshots_v248():
         conn.execute(text('DROP TABLE usage_snapshots'))
     _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
     db.session.commit()
-    print('[UsageRollup] legacy migration complete; raw table dropped')
+    app.logger.info('[UsageRollup] legacy migration complete; raw table dropped')
 
 
 def _migrate_legacy_usage_snapshots(finalize=True, batch_accounts=10):
     """Convert raw snapshots in resumable batches, validate, then reclaim them."""
+    from app import app  # deferred: avoids circular import
     source_table = _legacy_usage_table_name()
     if not source_table:
         _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
@@ -1150,7 +1153,7 @@ def _migrate_legacy_usage_snapshots(finalize=True, batch_accounts=10):
         try:
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print('[UsageRollup] migration already running in another process')
+            app.logger.info('[UsageRollup] migration already running in another process')
             lock_fd.close()
             return get_usage_migration_status()
     except (ImportError, OSError):
@@ -1183,7 +1186,7 @@ def _migrate_legacy_usage_snapshots(finalize=True, batch_accounts=10):
         record.last_error = None
         _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'running')
         db.session.commit()
-        print(f'[UsageRollup] migrating {source_table}; resume={cursor or "start"}')
+        app.logger.info('[UsageRollup] migrating %s; resume=%s', source_table, cursor or "start")
 
         hourly_cutoff = datetime.utcnow() - timedelta(hours=_USAGE_HOURLY_RETENTION_HOURS)
         daily_cutoff = _usage_tehran_date(datetime.utcnow()) - timedelta(days=_USAGE_DAILY_RETENTION_DAYS)
@@ -1325,7 +1328,7 @@ def _migrate_legacy_usage_snapshots(finalize=True, batch_accounts=10):
             record.updated_at = datetime.utcnow()
             db.session.commit()
             cursor_server, cursor_sub = last_server, last_sub
-            print(f'[UsageRollup] progress {record.processed_rows:,}/{record.total_rows or 0:,} rows')
+            app.logger.info('[UsageRollup] progress %s/%s rows', f'{record.processed_rows:,}', f'{record.total_rows or 0:,}')
 
         record.phase = 'validation'
         db.session.commit()
@@ -1354,7 +1357,7 @@ def _migrate_legacy_usage_snapshots(finalize=True, batch_accounts=10):
             record.finished_at = datetime.utcnow()
             _set_system_setting_value(_USAGE_LEGACY_MIGRATION_KEY, 'complete')
             db.session.commit()
-            print('[UsageRollup] validation passed; legacy source dropped')
+            app.logger.info('[UsageRollup] validation passed; legacy source dropped')
         return get_usage_migration_status()
     except Exception as exc:
         db.session.rollback()
@@ -1377,7 +1380,7 @@ def _migrate_legacy_usage_snapshots(finalize=True, batch_accounts=10):
 def usage_snapshot_worker():
     """Singleton daemon maintaining compact hourly and daily usage rollups."""
     from app import _add_health_log, app  # deferred: app-level helper, avoids circular import
-    print(f'[UsageRollup] singleton worker started (PID={os.getpid()})')
+    app.logger.info('[UsageRollup] singleton worker started (PID=%s)', os.getpid())
     # Give the post-update systemd unit first chance to own the migration. Old
     # updater scripts do not install that unit, so this becomes their fallback.
     try:
@@ -1397,7 +1400,7 @@ def usage_snapshot_worker():
                 if not _legacy_usage_table_exists():
                     break
         except Exception as exc:
-            print(f'[UsageRollup] legacy migration failed: {exc}')
+            app.logger.error('[UsageRollup] legacy migration failed: %s', exc)
             try:
                 with app.app_context():
                     db.session.rollback()
@@ -1417,7 +1420,7 @@ def usage_snapshot_worker():
                 with GLOBAL_REFRESH_LOCK:
                     fetch_and_update_global_data(force=True)
         except Exception as exc:
-            print(f'[UsageRollup] initial fetch failed: {exc}')
+            app.logger.error('[UsageRollup] initial fetch failed: %s', exc)
 
     while True:
         try:
@@ -1427,7 +1430,7 @@ def usage_snapshot_worker():
             # 00:00 sample closes the previous day with minimal attribution skew.
             time.sleep(_seconds_until_next_usage_hour())
         except Exception as exc:
-            print(f'[UsageRollup] worker error: {exc}')
+            app.logger.error('[UsageRollup] worker error: %s', exc)
             try:
                 with app.app_context():
                     db.session.rollback()
@@ -1449,6 +1452,7 @@ def _claim_singleton(name):
     Gracefully falls back to True on non-Unix systems (Windows dev).
     """
     try:
+        from app import app  # deferred: avoids circular import
         import fcntl as _fcntl
         lock_path = f'/tmp/eve_{name}.lock'
         fh = open(lock_path, 'w')
@@ -1456,7 +1460,7 @@ def _claim_singleton(name):
         fh.write(str(os.getpid()))
         fh.flush()
         _SINGLETON_LOCK_FDS[name] = fh  # keep open — releasing closes the lock
-        print(f"[Singleton] PID {os.getpid()} owns {name}")
+        app.logger.info("[Singleton] PID %s owns %s", os.getpid(), name)
         return True
     except (IOError, OSError):
         # Another worker already holds the lock
@@ -1527,7 +1531,7 @@ def _pulse_send_telegram_alert(run, text):
         try:
             api.send_message(chat_id, text)
         except Exception as exc:
-            app.logger.warning(f'[pulse] alert to admin {admin.id} failed: {exc}')
+            app.logger.warning('[pulse] alert to admin %s failed: %s', admin.id, exc)
 
 
 def pulse_scheduler_tick(now=None):
@@ -1608,7 +1612,7 @@ def pulse_scheduler_tick(now=None):
             try:
                 _pulse_maybe_alert(run)
             except Exception as exc:
-                app.logger.warning(f'[pulse] telegram alert failed: {exc}')
+                app.logger.warning('[pulse] telegram alert failed: %s', exc)
 
 
 def pulse_scheduler_worker():
@@ -1619,7 +1623,7 @@ def pulse_scheduler_worker():
             with app.app_context():
                 pulse_scheduler_tick()
         except Exception as exc:
-            print(f'[pulse] scheduler tick failed: {exc}')
+            app.logger.error('[pulse] scheduler tick failed: %s', exc)
         time.sleep(PULSE_WORKER_POLL_SECONDS)
 
 
@@ -1630,7 +1634,7 @@ def ensure_background_threads_started():
     owns refresh, scheduling and automation threads. ``combined`` retains the
     singleton-lock behavior used by development and legacy installations.
     """
-    from app import PROCESS_ROLE  # deferred: app-level helper, avoids circular import
+    from app import PROCESS_ROLE, app  # deferred: app-level helper, avoids circular import
     global BACKGROUND_THREADS_STARTED
     if BACKGROUND_THREADS_STARTED:
         return
@@ -1643,11 +1647,11 @@ def ensure_background_threads_started():
         try:
             threading.Thread(target=snapshot_reader_worker, daemon=True).start()
             if redis_enabled():
-                print('[ProcessRole] web worker reads snapshots from Redis.')
+                app.logger.info('[ProcessRole] web worker reads snapshots from Redis.')
             else:
-                print('[ProcessRole] Redis unavailable; snapshot reader will keep retrying.')
+                app.logger.info('[ProcessRole] Redis unavailable; snapshot reader will keep retrying.')
         except Exception as e:
-            print(f'Failed to start snapshot reader thread: {e}')
+            app.logger.error('Failed to start snapshot reader thread: %s', e)
         return
 
     # Singleton: only one worker runs the scheduler (auto-backup, etc.)
@@ -1655,9 +1659,9 @@ def ensure_background_threads_started():
         try:
             threading.Thread(target=run_scheduler, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start scheduler thread: {e}")
+            app.logger.error("Failed to start scheduler thread: %s", e)
     else:
-        print("[Singleton] scheduler already owned by another worker, skipping.")
+        app.logger.info("[Singleton] scheduler already owned by another worker, skipping.")
 
     # Data fetching:
     #  - Redis ON  : ONE worker (singleton) fetches+processes+publishes; the
@@ -1668,99 +1672,99 @@ def ensure_background_threads_started():
         if _claim_singleton('data_fetcher'):
             try:
                 threading.Thread(target=background_data_fetcher, daemon=True).start()
-                print("[Redis] this worker is the data fetcher (singleton).")
+                app.logger.info("[Redis] this worker is the data fetcher (singleton).")
             except Exception as e:
-                print(f"Failed to start data fetcher thread: {e}")
+                app.logger.error("Failed to start data fetcher thread: %s", e)
             try:
                 threading.Thread(target=refresh_queue_worker, daemon=True).start()
-                print("[Redis] refresh queue worker started.")
+                app.logger.info("[Redis] refresh queue worker started.")
             except Exception as e:
-                print(f"Failed to start refresh queue worker: {e}")
+                app.logger.error("Failed to start refresh queue worker: %s", e)
         else:
             if PROCESS_ROLE == 'combined':
                 try:
                     threading.Thread(target=snapshot_reader_worker, daemon=True).start()
-                    print("[Redis] this worker reads the shared snapshot.")
+                    app.logger.info("[Redis] this worker reads the shared snapshot.")
                 except Exception as e:
-                    print(f"Failed to start snapshot reader thread: {e}")
+                    app.logger.error("Failed to start snapshot reader thread: %s", e)
     else:
         # Per-worker: every worker fetches server data into its own memory cache
         try:
             threading.Thread(target=background_data_fetcher, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start data fetcher thread: {e}")
+            app.logger.error("Failed to start data fetcher thread: %s", e)
 
     # Singleton: only one worker runs health watchdog (DB logs, notifications)
     if _claim_singleton('health_watchdog'):
         try:
             threading.Thread(target=health_watchdog, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start health watchdog thread: {e}")
+            app.logger.error("Failed to start health watchdog thread: %s", e)
     else:
-        print("[Singleton] health_watchdog already owned by another worker, skipping.")
+        app.logger.info("[Singleton] health_watchdog already owned by another worker, skipping.")
 
     # Singleton: only one worker runs usage snapshots — no race conditions, no dedup needed
     if _claim_singleton('snapshot_worker'):
         try:
             threading.Thread(target=usage_snapshot_worker, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start usage snapshot thread: {e}")
+            app.logger.error("Failed to start usage snapshot thread: %s", e)
     else:
-        print("[Singleton] snapshot_worker already owned by another worker, skipping.")
+        app.logger.info("[Singleton] snapshot_worker already owned by another worker, skipping.")
 
     # Singleton: only one worker runs the WhatsApp near-depletion bot scanner
     if _claim_singleton('whatsapp_bot_worker'):
         try:
             threading.Thread(target=whatsapp_bot_worker, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start whatsapp bot thread: {e}")
+            app.logger.error("Failed to start whatsapp bot thread: %s", e)
     else:
-        print("[Singleton] whatsapp_bot_worker already owned by another worker, skipping.")
+        app.logger.info("[Singleton] whatsapp_bot_worker already owned by another worker, skipping.")
 
     # Singleton: only one worker runs the SMS near-depletion bot scanner
     if _claim_singleton('sms_bot_worker'):
         try:
             threading.Thread(target=sms_bot_worker, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start sms bot thread: {e}")
+            app.logger.error("Failed to start sms bot thread: %s", e)
     else:
-        print("[Singleton] sms_bot_worker already owned by another worker, skipping.")
+        app.logger.info("[Singleton] sms_bot_worker already owned by another worker, skipping.")
 
     # Singleton: only one worker runs the Telegram near-depletion bot scanner
     if _claim_singleton('telegram_depletion_worker'):
         try:
             threading.Thread(target=telegram_depletion_worker, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start telegram depletion thread: {e}")
+            app.logger.error("Failed to start telegram depletion thread: %s", e)
     else:
-        print("[Singleton] telegram_depletion_worker already owned by another worker, skipping.")
+        app.logger.info("[Singleton] telegram_depletion_worker already owned by another worker, skipping.")
 
     # Singleton: durable targeted Telegram announcement queue.
     if _claim_singleton('telegram_announcement_worker'):
         try:
             threading.Thread(target=telegram_announcement_worker, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start telegram announcement thread: {e}")
+            app.logger.error("Failed to start telegram announcement thread: %s", e)
     else:
-        print("[Singleton] telegram_announcement_worker already owned by another worker, skipping.")
+        app.logger.info("[Singleton] telegram_announcement_worker already owned by another worker, skipping.")
 
     # Singleton: reconcile queued GMweb tasks and persist their terminal status.
     if _claim_singleton('sms_status_worker'):
         try:
             threading.Thread(target=sms_status_worker, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start sms status thread: {e}")
+            app.logger.error("Failed to start sms status thread: %s", e)
     else:
-        print("[Singleton] sms_status_worker already owned by another worker, skipping.")
+        app.logger.info("[Singleton] sms_status_worker already owned by another worker, skipping.")
 
     # Singleton: pulse health-check queue worker (web-triggered + scheduled probes).
     if _claim_singleton('pulse_scheduler'):
         try:
             threading.Thread(target=pulse_scheduler_worker, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start pulse scheduler thread: {e}")
+            app.logger.error("Failed to start pulse scheduler thread: %s", e)
     else:
-        print("[Singleton] pulse_scheduler already owned by another worker, skipping.")
+        app.logger.info("[Singleton] pulse_scheduler already owned by another worker, skipping.")
 
     # Singleton: BNQO link status/detection engine + retention rollup.
     if _claim_singleton('bnqo_scheduler'):
@@ -1768,9 +1772,9 @@ def ensure_background_threads_started():
             from panel.jobs.bnqo import bnqo_scheduler_worker  # deferred: keeps module import light
             threading.Thread(target=bnqo_scheduler_worker, daemon=True).start()
         except Exception as e:
-            print(f"Failed to start bnqo scheduler thread: {e}")
+            app.logger.error("Failed to start bnqo scheduler thread: %s", e)
     else:
-        print("[Singleton] bnqo_scheduler already owned by another worker, skipping.")
+        app.logger.info("[Singleton] bnqo_scheduler already owned by another worker, skipping.")
 
 if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
     # Start threads on module import (works under gunicorn as well)

@@ -814,7 +814,7 @@ def pulse_agent_report(agent):
     try:
         _pulse_maybe_alert(run)
     except Exception as exc:
-        app.logger.warning(f'[pulse] telegram alert failed: {exc}')
+        app.logger.warning('[pulse] telegram alert failed: %s', exc)
     return jsonify({'ok': True, 'run_id': run.id, 'summary': summary})
 
 

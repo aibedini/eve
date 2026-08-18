@@ -7,11 +7,19 @@ can show it live while still capturing machine-readable output.
 import argparse
 import dataclasses
 import json
+import logging
 import os
 import sys
 from datetime import datetime
 
 os.environ.setdefault('DISABLE_BACKGROUND_THREADS', 'true')
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[pulse] %(message)s',
+    stream=sys.stderr,
+)
+logger = logging.getLogger(__name__)
 
 import app as app_module  # noqa: E402
 from app import (  # noqa: E402
@@ -56,7 +64,7 @@ def _fail(message, **extra):
 
 
 def _progress(message):
-    print(f'[pulse] {message}', file=sys.stderr, flush=True)
+    logger.info(message)
 
 
 def _parse_site_spec(value):
@@ -742,6 +750,6 @@ if __name__ == '__main__':
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f'[pulse] failed: {exc}', file=sys.stderr)
+        logger.error('failed: %s', exc)
         _emit({'error': f'pulse runner crashed: {exc}'})
         raise SystemExit(2)

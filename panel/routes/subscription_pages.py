@@ -425,7 +425,7 @@ def client_subscription(server_id, sub_id):
     
     # SSRF/Path Traversal Protection: Ensure sub_id doesn't contain characters that could manipulate the URL
     if any(c in normalized_sub_id for c in ('/', '\\', '?', '#', '@', ':', '..')):
-        app.logger.warning(f"Potential SSRF/Traversal attempt with sub_id: {normalized_sub_id}")
+        app.logger.warning("Potential SSRF/Traversal attempt with sub_id: %s", normalized_sub_id)
         return "Invalid subscription ID", 400
 
     statistics_settings = _subscription_statistics_settings()

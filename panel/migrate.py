@@ -17,6 +17,7 @@ tables half-migrated (see CHANGELOG 2.5.1). Now:
 Skip via ``EVE_SKIP_IMPORT_MIGRATIONS=1`` (set by the Docker entrypoint for
 gunicorn/background processes after it has run ``python -m panel.migrate``).
 """
+import logging
 import os
 import secrets
 import tempfile
@@ -26,6 +27,10 @@ from sqlalchemy import inspect, text
 
 from panel.extensions import db
 from panel.models import Admin, PanelAPI, SubAppConfig, SystemConfig, SystemSetting
+
+logger = logging.getLogger(__name__)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s")
 
 MIGRATION_LOCK_PATH = os.path.join(tempfile.gettempdir(), 'eve_schema_migrate.lock')
 ALEMBIC_INI = os.path.join(
@@ -72,7 +77,7 @@ def _migrate_add_columns(table_name, columns):
             return
         existing = {c['name'] for c in inspector.get_columns(table_name)}
     except Exception as exc:
-        print(f"Migration error ({table_name} inspect): {exc}")
+        logger.error("Migration error (%s inspect): %s", table_name, exc)
         return
     for col_name, col_def in columns:
         if col_name in existing:
@@ -82,7 +87,7 @@ def _migrate_add_columns(table_name, columns):
                 conn.execute(text(f'ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}'))
                 conn.commit()
         except Exception as exc:
-            print(f"Migration error ({table_name}.{col_name}): {exc}")
+            logger.error("Migration error (%s.%s): %s", table_name, col_name, exc)
 
 
 def _legacy_column_catchup():
@@ -92,7 +97,7 @@ def _legacy_column_catchup():
     try:
         inspector = inspect(db.engine)
         columns = [c['name'] for c in inspector.get_columns('admins')]
-        print(f"Current columns in admins: {columns}")
+        logger.info("Current columns in admins: %s", columns)
 
         _is_pg = db.engine.dialect.name == 'postgresql'
         admin_missing_cols = [
@@ -112,16 +117,16 @@ def _legacy_column_catchup():
         for col_name, col_type in admin_missing_cols:
             if col_name in columns:
                 continue
-            print(f"{col_name} column missing on admins, attempting to add...")
+            logger.info("%s column missing on admins, attempting to add...", col_name)
             try:
                 with db.engine.connect() as conn:
                     conn.execute(text(f'ALTER TABLE admins ADD COLUMN {col_name} {col_type}'))
                     conn.commit()
-                print(f"Added {col_name} column to admins table")
+                logger.info("Added %s column to admins table", col_name)
             except Exception as _col_err:
-                print(f"Migration error ({col_name}): {_col_err}")
+                logger.error("Migration error (%s): %s", col_name, _col_err)
     except Exception as e:
-        print(f"Migration error: {e}")
+        logger.error("Migration error: %s", e)
 
     # Delivery tracking returned by GMweb /send and /send/status/:requestId.
     # Existing installations already have sms_send_log, so add columns in place.
@@ -150,7 +155,7 @@ def _legacy_column_catchup():
                     with db.engine.connect() as conn:
                         conn.execute(text(f'ALTER TABLE sms_send_log ADD COLUMN {_cn} {_ct}'))
                         conn.commit()
-                    print(f'Migration: added sms_send_log.{_cn}')
+                    logger.info("Migration: added sms_send_log.%s", _cn)
             with db.engine.connect() as conn:
                 conn.execute(text(
                     'CREATE INDEX IF NOT EXISTS ix_sms_send_log_request_id '
@@ -158,7 +163,7 @@ def _legacy_column_catchup():
                 ))
                 conn.commit()
     except Exception as _sms_migration_error:
-        print(f'Migration error (sms_send_log delivery tracking): {_sms_migration_error}')
+        logger.error("Migration error (sms_send_log delivery tracking): %s", _sms_migration_error)
 
     # Durable Telegram support attachments for existing installations.
     try:
@@ -184,9 +189,9 @@ def _legacy_column_catchup():
                             f'ALTER TABLE telegram_service_request_messages ADD COLUMN {_cn} {_ct}'
                         ))
                         conn.commit()
-                    print(f'Migration: added telegram_service_request_messages.{_cn}')
+                    logger.info("Migration: added telegram_service_request_messages.%s", _cn)
     except Exception as _support_message_migration_error:
-        print(f'Migration error (Telegram support attachments): {_support_message_migration_error}')
+        logger.error("Migration error (Telegram support attachments): %s", _support_message_migration_error)
 
     # Optional Telegram support group and per-ticket forum topic routing.
     try:
@@ -224,7 +229,7 @@ def _legacy_column_catchup():
                 with db.engine.connect() as conn:
                     conn.execute(text(f'ALTER TABLE {_table} ADD COLUMN {_column} {_column_type}'))
                     conn.commit()
-                print(f'Migration: added {_table}.{_column}')
+                logger.info("Migration: added %s.%s", _table, _column)
         with db.engine.connect() as conn:
             conn.execute(text(
                 'CREATE INDEX IF NOT EXISTS ix_telegram_service_requests_assigned_admin_id '
@@ -236,7 +241,7 @@ def _legacy_column_catchup():
             ))
             conn.commit()
     except Exception as _support_routing_migration_error:
-        print(f'Migration error (Telegram support group routing): {_support_routing_migration_error}')
+        logger.error("Migration error (Telegram support group routing): %s", _support_routing_migration_error)
 
     # Customer wallet and card-to-card renewal/top-up payment metadata.
     _migrate_add_columns('customer_accounts', [
@@ -274,9 +279,9 @@ def _legacy_column_catchup():
             with db.engine.connect() as conn:
                 conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col_name} {col_type}'))
                 conn.commit()
-            print(f"Migration: added announcements.{col_name}")
+            logger.info("Migration: added announcements.%s", col_name)
         except Exception as _e:
-            print(f"Migration error (announcements.{col_name}): {_e}")
+            logger.error("Migration error (announcements.%s): %s", col_name, _e)
 
     _is_pg = db.engine.dialect.name == 'postgresql'
     _bool_def = 'BOOLEAN DEFAULT FALSE' if _is_pg else 'BOOLEAN DEFAULT 0'
@@ -289,26 +294,26 @@ def _legacy_column_catchup():
         inspector = inspect(db.engine)
         nt_cols = [c['name'] for c in inspector.get_columns('notification_templates')]
         if 'owner_id' not in nt_cols:
-            print("owner_id column missing on notification_templates, adding...")
+            logger.info("owner_id column missing on notification_templates, adding...")
             with db.engine.connect() as conn:
                 conn.execute(text('ALTER TABLE notification_templates ADD COLUMN owner_id INTEGER REFERENCES admins(id)'))
                 conn.commit()
-            print("Added owner_id to notification_templates")
+            logger.info("Added owner_id to notification_templates")
     except Exception as e:
-        print(f"Migration error (notification_templates.owner_id): {e}")
+        logger.error("Migration error (notification_templates.owner_id): %s", e)
 
     # Ensure sender_name exists on transactions table (older DBs)
     try:
         inspector = inspect(db.engine)
         tx_columns = [c['name'] for c in inspector.get_columns('transactions')]
         if 'sender_name' not in tx_columns:
-            print("sender_name column missing on transactions, attempting to add...")
+            logger.info("sender_name column missing on transactions, attempting to add...")
             with db.engine.connect() as conn:
                 conn.execute(text('ALTER TABLE transactions ADD COLUMN sender_name VARCHAR(120)'))
                 conn.commit()
-            print("Added sender_name column to transactions table")
+            logger.info("Added sender_name column to transactions table")
     except Exception as e:
-        print(f"Migration error (transactions.sender_name): {e}")
+        logger.error("Migration error (transactions.sender_name): %s", e)
 
     # Ensure reseller-statement columns exist on transactions (older DBs)
     try:
@@ -319,9 +324,9 @@ def _legacy_column_catchup():
                 with db.engine.connect() as conn:
                     conn.execute(text(f'ALTER TABLE transactions ADD COLUMN {_cn} {_cd}'))
                     conn.commit()
-                print(f"Added {_cn} column to transactions table")
+                logger.info("Added %s column to transactions table", _cn)
     except Exception as e:
-        print(f"Migration error (transactions.package_name/volume_gb/days): {e}")
+        logger.error("Migration error (transactions.package_name/volume_gb/days): %s", e)
 
     # Ensure servers.hidden column exists (added for server hide/show feature)
     try:
@@ -331,14 +336,14 @@ def _legacy_column_catchup():
             with db.engine.connect() as conn:
                 conn.execute(text('ALTER TABLE servers ADD COLUMN hidden BOOLEAN DEFAULT FALSE'))
                 conn.commit()
-            print("Added hidden column to servers table")
+            logger.info("Added hidden column to servers table")
         if 'api_token' not in srv_cols:
             with db.engine.connect() as conn:
                 conn.execute(text('ALTER TABLE servers ADD COLUMN api_token VARCHAR(255)'))
                 conn.commit()
-            print("Added api_token column to servers table")
+            logger.info("Added api_token column to servers table")
     except Exception as e:
-        print(f"Migration error (servers.hidden/api_token): {e}")
+        logger.error("Migration error (servers.hidden/api_token): %s", e)
 
     # Ensure system_configs.value can store long URLs (PostgreSQL only)
     try:
@@ -346,9 +351,9 @@ def _legacy_column_catchup():
             with db.engine.connect() as conn:
                 conn.execute(text('ALTER TABLE system_configs ALTER COLUMN value TYPE TEXT'))
                 conn.commit()
-            print("Ensured system_configs.value is TEXT")
+            logger.info("Ensured system_configs.value is TEXT")
     except Exception as e:
-        print(f"Migration error (system_configs.value TEXT): {e}")
+        logger.error("Migration error (system_configs.value TEXT): %s", e)
 
     # Widen phone columns for international numbers (up to 15 E.164 digits).
     # PostgreSQL only; on SQLite VARCHAR length is not enforced (type affinity),
@@ -364,9 +369,9 @@ def _legacy_column_catchup():
                     conn.execute(text(
                         f'ALTER TABLE {_table} ALTER COLUMN {_column} TYPE VARCHAR(20)'))
                 conn.commit()
-            print("Ensured phone columns are VARCHAR(20)")
+            logger.info("Ensured phone columns are VARCHAR(20)")
     except Exception as e:
-        print(f"Migration error (phone columns VARCHAR(20)): {e}")
+        logger.error("Migration error (phone columns VARCHAR(20)): %s", e)
 
     # Ensure announcements.targets exists (SQLite old DBs)
     try:
@@ -375,13 +380,13 @@ def _legacy_column_catchup():
         if 'announcements' in tables:
             ann_columns = [c['name'] for c in inspector.get_columns('announcements')]
             if 'targets' not in ann_columns:
-                print("announcements.targets column missing, attempting to add...")
+                logger.info("announcements.targets column missing, attempting to add...")
                 with db.engine.connect() as conn:
                     conn.execute(text('ALTER TABLE announcements ADD COLUMN targets TEXT'))
                     conn.commit()
-                print("Added targets column to announcements table")
+                logger.info("Added targets column to announcements table")
     except Exception as e:
-        print(f"Migration error (announcements.targets): {e}")
+        logger.error("Migration error (announcements.targets): %s", e)
 
     # Auto-detect SSL paths at startup if DB is empty (handles case where setup.sh ran but Flask hadn't started)
     try:
@@ -394,9 +399,9 @@ def _legacy_column_catchup():
                 db.session.merge(SystemSetting(key='ssl_cert_path', value=_det_cert))
                 db.session.merge(SystemSetting(key='ssl_key_path', value=_det_key))
                 db.session.commit()
-                print(f"[startup] Auto-detected SSL paths: {_det_cert}")
+                logger.info("[startup] Auto-detected SSL paths: %s", _det_cert)
     except Exception as _ssl_e:
-        print(f"[startup] SSL auto-detect error: {_ssl_e}")
+        logger.error("[startup] SSL auto-detect error: %s", _ssl_e)
 
     # Ensure packages table has extended columns (scope, assigned_reseller_ids, etc.)
     # TIMESTAMP works in both PostgreSQL and SQLite; DATETIME is SQLite-only.
@@ -487,9 +492,9 @@ def _legacy_column_catchup():
                     with db.engine.connect() as _conn:
                         _conn.execute(text(f'ALTER TABLE sub_app_configs ADD COLUMN {_cn} {_cd}'))
                         _conn.commit()
-                    print(f"Added {_cn} column to sub_app_configs table")
+                    logger.info("Added %s column to sub_app_configs table", _cn)
     except Exception as _sac_e:
-        print(f"Migration error (sub_app_configs new cols): {_sac_e}")
+        logger.error("Migration error (sub_app_configs new cols): %s", _sac_e)
 
 
 def _seed_initial_data():
@@ -547,12 +552,12 @@ def _seed_initial_data():
         initial_password = os.environ.get("INITIAL_ADMIN_PASSWORD")
         if not initial_password:
             initial_password = secrets.token_urlsafe(12)
-            print("\n" + "!"*60)
-            print("  CRITICAL SECURITY NOTICE")
-            print(f"  Initial admin created with username: {initial_username}")
-            print(f"  Generated secure password: {initial_password}")
-            print("  PLEASE SAVE THIS PASSWORD IMMEDIATELY!")
-            print("!"*60 + "\n")
+            logger.warning("\n%s", "!" * 60)
+            logger.warning("  CRITICAL SECURITY NOTICE")
+            logger.warning("  Initial admin created with username: %s", initial_username)
+            logger.warning("  Generated secure password: %s", initial_password)
+            logger.warning("  PLEASE SAVE THIS PASSWORD IMMEDIATELY!")
+            logger.warning("%s\n", "!" * 60)
         
         default_admin.set_password(initial_password)
         db.session.add(default_admin)
@@ -623,4 +628,4 @@ if __name__ == '__main__':
     from app import app as _flask_app
     with _flask_app.app_context():
         run_migrations()
-    print('[migrate] schema is up to date.')
+    logger.info('[migrate] schema is up to date.')

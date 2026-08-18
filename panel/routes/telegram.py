@@ -44,8 +44,7 @@ from telegram_diagnostics import (
 )
 from telegram_xray import build_xray_config_from_uri
 
-bp = Blueprint('telegram', __name__)
-
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('telegram', __name__)
 
@@ -354,8 +353,8 @@ def _telegram_operation_notify(row, *, result=None, reply=None):
         _telegram_bot_api_client(bot).send_message(identity.telegram_chat_id, text_value)
         return True
     except Exception as exc:
-        logging.warning('Telegram operation notification failed for %s #%s: %s',
-                        type(row).__name__, row.id, redact_connection_error(exc))
+        logger.warning('Telegram operation notification failed for %s #%s: %s',
+                       type(row).__name__, row.id, redact_connection_error(exc))
         return False
 
 
@@ -662,7 +661,7 @@ def telegram_purchase_receipt(request_id):
         return response
     except Exception as exc:
         safe_error = redact_connection_error(exc)
-        logging.warning('Telegram receipt download failed for purchase #%s: %s', row.id, safe_error)
+        logger.warning('Telegram receipt download failed for purchase #%s: %s', row.id, safe_error)
         return jsonify({'success': False, 'error': safe_error}), 502
 
 
@@ -738,8 +737,8 @@ def telegram_support_message_attachment(request_id, message_id):
         return response
     except Exception as exc:
         safe_error = redact_connection_error(exc)
-        logging.warning('Telegram support attachment failed for message #%s: %s',
-                        message.id, safe_error)
+        logger.warning('Telegram support attachment failed for message #%s: %s',
+                       message.id, safe_error)
         return jsonify({'success': False, 'error': safe_error}), 502
 
 

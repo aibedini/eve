@@ -319,7 +319,7 @@ def _rename_client_email_local(server, old_email, new_email):
         if rows:
             db.session.commit()
     except Exception as exc:
-        app.logger.debug(f"ownership rename '{old_email}' -> '{new_email}' failed: {exc}")
+        app.logger.debug("ownership rename '%s' -> '%s' failed: %s", old_email, new_email, exc)
         try:
             db.session.rollback()
         except Exception:
@@ -337,7 +337,7 @@ def _rename_client_email_local(server, old_email, new_email):
         if tx_rows:
             db.session.commit()
     except Exception as exc:
-        app.logger.debug(f"transaction email rename '{old_email}' -> '{new_email}' failed: {exc}")
+        app.logger.debug("transaction email rename '%s' -> '%s' failed: %s", old_email, new_email, exc)
         try:
             db.session.rollback()
         except Exception:
@@ -379,10 +379,10 @@ def _v3_fix_spaced_email(server, session_obj, email, client_obj=None):
         renamed = _v3_rename_email_via_inbounds(server, session_obj, original, clean)
 
     if not renamed:
-        app.logger.warning(f"v3: could not strip spaces from client email '{original}'")
+        app.logger.warning("v3: could not strip spaces from client email '%s'", original)
         return original
     _rename_client_email_local(server, original, clean)
-    app.logger.info(f"v3: client email '{original}' renamed to '{clean}' (v3 rejects spaces)")
+    app.logger.info("v3: client email '%s' renamed to '%s' (v3 rejects spaces)", original, clean)
     return clean
 
 
@@ -1095,7 +1095,7 @@ def fetch_inbounds(session_obj, host, panel_type='auto'):
                 return (d if isinstance(d, list) else d.get('list', [])), None, detected_type
         except Exception as e:
             last_error = str(e)
-            app.logger.debug(f"Failed inbounds endpoint {ep}: {last_error}")
+            app.logger.debug("Failed inbounds endpoint %s: %s", ep, last_error)
             continue
 
     return None, (last_error or "Failed to fetch inbounds from all known endpoints"), 'auto'
@@ -1207,7 +1207,7 @@ def fetch_onlines(session_obj, host, panel_type='auto'):
                     _body_snippet = re.sub(r'\s+', ' ', (resp.text or ''))[:160]
                     _srv_hdr = resp.headers.get('Server', '?')
                     _ct = resp.headers.get('Content-Type', '?')
-                    app.logger.info(f"[onlines] {method} {url} -> HTTP {resp.status_code} [Server={_srv_hdr}, CT={_ct}]: {_body_snippet}")
+                    app.logger.info("[onlines] %s %s -> HTTP %s [Server=%s, CT=%s]: %s", method, url, resp.status_code, _srv_hdr, _ct, _body_snippet)
                 except Exception:
                     pass
                 if resp.status_code != 200:
@@ -1282,7 +1282,7 @@ def fetch_onlines(session_obj, host, panel_type='auto'):
         if candidates:
             hint = last_error or (f"HTTP {last_status}" if last_status is not None else "No response")
             try:
-                app.logger.warning(f"[onlines] all endpoints failed ({normalized_type}): {hint}")
+                app.logger.warning("[onlines] all endpoints failed (%s): %s", normalized_type, hint)
             except Exception:
                 pass
             return index, f"Failed to fetch onlines ({normalized_type}): {hint}"

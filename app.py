@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.72"
+APP_VERSION = "2.5.73"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -977,9 +977,9 @@ from panel.extensions import db, limiter  # noqa: F401
 limiter.init_app(app)
 db.init_app(app)
 
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(level=logging.INFO)
+from panel.core.logging_config import setup_logging, get_logger  # noqa: E402
+setup_logging(app)
+logger = get_logger(__name__)
 
 # --- MODELS --- (extracted to panel.models; re-exported here for compatibility)
 from panel.models import *  # noqa: F401,F403
@@ -1419,7 +1419,7 @@ def _add_health_log(level, category, message, action_taken=None, details=None, r
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
-        print(f"[HealthLog] Failed to write log: {exc}")
+        logger.warning("Failed to write health log: %s", exc)
 
 
 CLIENT_UPDATE_FALLBACKS = [
@@ -2685,7 +2685,7 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
                 int(r.opening_upload_bytes or 0) + int(r.opening_download_bytes or 0)
             )
     except Exception as exc:
-        app.logger.warning(f"royalty baseline query failed: {exc}")
+        app.logger.warning("royalty baseline query failed: %s", exc)
         raise RoyaltyBaselineError(str(exc))
     t_base = time.perf_counter()
 
@@ -3088,10 +3088,10 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
             if resp.status_code != 404:
                 break
 
-        app.logger.warning(f"Toggle failed for {email}: {'; '.join(errors)}")
+        app.logger.warning("Toggle failed for %s: %s", email, '; '.join(errors))
         return False, "Client update endpoint returned error", 400
     except Exception as exc:
-        app.logger.error(f"Toggle error: {str(exc)}")
+        app.logger.error("Toggle error: %s", exc)
         return False, str(exc), 400
 
 
@@ -3162,7 +3162,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
             _ok_del, _err_del = _push_full_inbound(server, session_obj, _full_ib_del, _fs_del)
             if not _ok_del:
                 detail = _err_del or 'shadowsocks inbound delete failed'
-                app.logger.warning(f"Delete client failed for {email}: {detail}")
+                app.logger.warning("Delete client failed for %s: %s", email, detail)
                 return False, detail, 400
             success = True
         else:
@@ -3206,7 +3206,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
 
             if not success:
                 detail = '; '.join(errors) or 'no endpoint succeeded'
-                app.logger.warning(f"Delete client failed for {email}: {detail}")
+                app.logger.warning("Delete client failed for %s: %s", email, detail)
                 return False, detail, 400
 
         if success:
@@ -3231,7 +3231,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
             return True, None, 200
 
     except Exception as exc:
-        app.logger.error(f"Delete client error: {str(exc)}")
+        app.logger.error("Delete client error: %s", exc)
         return False, str(exc), 400
 
 
@@ -3322,11 +3322,11 @@ def _app_files_dir() -> str:
 with app.app_context():
     try:
         _app_files_dir()
-        print("[startup] app-files upload directory is ready")
+        logger.info("app-files upload directory is ready")
     except RuntimeError as _appfiles_err:
-        print(f"[startup] WARNING: app-files directory not ready: {_appfiles_err}")
-        print("[startup] File uploads will fail. Use the 'Fix Setup' button in File Manager, or run:")
-        print(f"[startup]   mkdir -p '{os.path.join(app.static_folder or '', _APP_FILES_DIR_NAME)}' && chmod 755 <dir>")
+        logger.warning("app-files directory not ready: %s", _appfiles_err)
+        logger.warning("File uploads will fail. Use the 'Fix Setup' button in File Manager, or run:")
+        logger.warning("  mkdir -p '%s' && chmod 755 <dir>", os.path.join(app.static_folder or '', _APP_FILES_DIR_NAME))
 
 
 # ── SSL startup migration ─────────────────────────────────────────────────────
@@ -3394,13 +3394,13 @@ with app.app_context():
                         _row.value = _v
                         db.session.merge(_row)
                     db.session.commit()
-                    print(f"[startup] SSL certs migrated → {'/etc/ssl/eve-manager/'}")
+                    logger.info("SSL certs migrated to /etc/ssl/eve-manager/")
                 else:
-                    print("[startup] SSL cert migration failed (sudo not configured yet — use Settings → SSL → Sync)")
+                    logger.warning("SSL cert migration failed (sudo not configured — use Settings → SSL → Sync)")
             else:
-                print("[startup] SSL not detected or not yet configured — skipping cert migration")
+                logger.info("SSL not detected or not yet configured — skipping cert migration")
     except Exception as _ssl_migrate_err:
-        print(f"[startup] SSL migration skipped: {_ssl_migrate_err}")
+        logger.warning("SSL migration skipped: %s", _ssl_migrate_err)
 
 
 

@@ -230,7 +230,7 @@ def reset_client_traffic(server_id, inbound_id):
                     if r2.status_code == 200:
                         break
         except Exception as exc:
-            app.logger.warning(f"apply_volume_cap_after_reset failed for {email}: {exc}")
+            app.logger.warning("apply_volume_cap_after_reset failed for %s: %s", email, exc)
 
     try:
         # v3: reset the first-class client by email (legacy resetClientTraffic is 404).
@@ -320,10 +320,10 @@ def reset_client_traffic(server_id, inbound_id):
             if resp.status_code != 404:
                 break
 
-        app.logger.warning(f"Reset traffic failed for {email}: {'; '.join(errors)}")
+        app.logger.warning("Reset traffic failed for %s: %s", email, '; '.join(errors))
         return jsonify({"success": False, "error": "Reset endpoint returned error"}), 400
     except Exception as e:
-        app.logger.error(f"Reset error: {str(e)}")
+        app.logger.error("Reset error: %s", e)
         return jsonify({"success": False, "error": str(e)}), 400
 
 
@@ -454,7 +454,7 @@ def edit_client(server_id, inbound_id, email):
             ok_v3, _vr, verr = v3_update_client(server, session_obj, email, target_client)
             if not ok_v3:
                 detail = verr or 'panel rejected update'
-                app.logger.warning(f"v3 edit client failed for {email}: {detail}")
+                app.logger.warning("v3 edit client failed for %s: %s", email, detail)
                 prefix = 'پنل خطا برگرداند' if _get_panel_ui_lang() == 'fa' else 'The panel returned an error'
                 return jsonify({"success": False, "error": f"{prefix}: {detail}"}), 502
             success = True
@@ -471,7 +471,7 @@ def edit_client(server_id, inbound_id, email):
             _ok_push_edit, _push_err_edit = _push_full_inbound(server, session_obj, _full_ib_edit, _full_settings_edit)
             if not _ok_push_edit:
                 detail = _push_err_edit or 'shadowsocks inbound update failed'
-                app.logger.warning(f"Edit client failed for {email}: {detail}")
+                app.logger.warning("Edit client failed for %s: %s", email, detail)
                 prefix = 'آپدیت ناموفق بود' if _get_panel_ui_lang() == 'fa' else 'Update failed'
                 return jsonify({"success": False, "error": f"{prefix} — {detail}"}), 400
             success = True
@@ -521,7 +521,7 @@ def edit_client(server_id, inbound_id, email):
 
             if not success:
                 detail = '; '.join(errors) or 'no endpoint succeeded'
-                app.logger.warning(f"Edit client failed for {email}: {detail}")
+                app.logger.warning("Edit client failed for %s: %s", email, detail)
                 prefix = 'آپدیت ناموفق بود' if _get_panel_ui_lang() == 'fa' else 'Update failed'
                 return jsonify({"success": False, "error": f"{prefix} — {detail}"}), 400
 
@@ -561,7 +561,7 @@ def edit_client(server_id, inbound_id, email):
             return jsonify({"success": True})
 
     except Exception as e:
-        app.logger.error(f"Edit client error: {str(e)}")
+        app.logger.error("Edit client error: %s", e)
         return jsonify({"success": False, "error": str(e)}), 400
 
 
@@ -607,7 +607,7 @@ def delete_client(server_id, inbound_id, email):
             return jsonify({"success": True})
         return jsonify({"success": False, "error": error_message}), status_code
     except Exception as exc:
-        app.logger.error(f"Unhandled delete_client error: {exc}", exc_info=True)
+        app.logger.error("Unhandled delete_client error: %s", exc, exc_info=True)
         return jsonify({"success": False, "error": f"Server error: {exc}"}), 500
 
 
@@ -1284,7 +1284,7 @@ def renew_client(server_id, inbound_id, email):
     except (ValueError, TypeError) as e:
         return _finish({"success": False, "error": f"Invalid data: {e}"}, 400)
     except Exception as e:
-        app.logger.error(f"Renew price-calc error (trace={renewal_trace_id}): {e}", exc_info=True)
+        app.logger.error("Renew price-calc error (trace=%s): %s", renewal_trace_id, e, exc_info=True)
         return _finish({"success": False, "error": f"Server error during price calculation: {e}"}, 500)
 
     if is_free:
@@ -1312,7 +1312,7 @@ def renew_client(server_id, inbound_id, email):
             if not ok:
                 return _finish({"success": False, "error": err}, 402)
     except Exception as e:
-        app.logger.error(f"Renew access-check error (trace={renewal_trace_id}): {e}", exc_info=True)
+        app.logger.error("Renew access-check error (trace=%s): %s", renewal_trace_id, e, exc_info=True)
         return _finish({"success": False, "error": f"Server error during access check: {e}"}, 500)
 
     # Optimization: Try to find client in global cache first to avoid slow fetch_inbounds
@@ -1809,7 +1809,7 @@ def renew_client(server_id, inbound_id, email):
                                 verify["observed"]["down"] = v_down
                                 verify["observed"]["enable"] = bool(v_client.get('enable', True))
                             except Exception as e:
-                                app.logger.error(f"Error computing service state in renew verify: {e}")
+                                app.logger.error("Error computing service state in renew verify: %s", e)
 
                             ok_exp = (verify["observed"]["expiryTime"] == int(new_expiry or 0))
                             ok_vol = (verify["observed"]["totalGB"] == int(new_volume or 0))
@@ -2064,7 +2064,7 @@ def renew_client(server_id, inbound_id, email):
             if resp.status_code != 404:
                 break
 
-        app.logger.warning(f"Renew failed for {email}: {'; '.join(errors)}")
+        app.logger.warning("Renew failed for %s: %s", email, '; '.join(errors))
         # Surface the REAL panel error (was a useless generic string), so the UI
         # shows what actually went wrong instead of "Server error (HTTP 400)".
         detail = '; '.join(str(e) for e in errors) or 'Client update failed on the panel'
@@ -2075,7 +2075,7 @@ def renew_client(server_id, inbound_id, email):
         _release_renew_lock(_renew_lock_key)  # failed → allow an immediate retry
         return _finish({"success": False, "error": detail}, 400)
     except Exception as e:
-        app.logger.error(f"Renew error: {str(e)}")
+        app.logger.error("Renew error: %s", e)
         _release_renew_lock(_renew_lock_key)  # failed → allow an immediate retry
         return _finish({"success": False, "error": str(e)}, 400)
 
@@ -2113,7 +2113,7 @@ def rotate_client(server_id):
         if user.role == 'reseller' and not _has_client_access(user, server_id, email):
             return jsonify({"ok": False, "success": False, "error": "Access denied"}), 403
     except Exception as e:
-        app.logger.error(f"Rotate access-check error: {e}", exc_info=True)
+        app.logger.error("Rotate access-check error: %s", e, exc_info=True)
         return jsonify({"ok": False, "success": False, "error": "Server error during access check"}), 500
 
     # Locate the client in the global cache first (any inbound on this server).
@@ -2345,7 +2345,7 @@ def rotate_client(server_id):
             db.session.commit()
         except Exception as e:
             db.session.rollback()
-            app.logger.error(f"Rotate ownership update failed for {email}: {e}", exc_info=True)
+            app.logger.error("Rotate ownership update failed for %s: %s", email, e, exc_info=True)
             _release_renew_lock(_rotate_lock_key)
             return jsonify({"ok": False, "success": False, "error": "Rotated on panel, but ownership update failed"}), 500
 
@@ -2387,7 +2387,7 @@ def rotate_client(server_id):
             "remaining_gb": remaining_gb,
         })
     except Exception as e:
-        app.logger.error(f"Rotate error for {email}: {e}", exc_info=True)
+        app.logger.error("Rotate error for %s: %s", email, e, exc_info=True)
         _release_renew_lock(_rotate_lock_key)  # failed → allow an immediate retry
         return jsonify({"ok": False, "success": False, "error": str(e)}), 400
 
@@ -2575,7 +2575,7 @@ def generate_qrcode():
         qr_base64 = base64.b64encode(buffer.getvalue()).decode()
         return jsonify({"success": True, "qrcode": f"data:image/png;base64,{qr_base64}"})
     except Exception as e:
-        app.logger.error(f"QR Code error: {str(e)}")
+        app.logger.error("QR Code error: %s", e)
         return jsonify({"success": False, "error": str(e)}), 400
 
 
@@ -2830,13 +2830,13 @@ def add_client(server_id, inbound_id):
                 # Use a short connect timeout and a longer read timeout to reduce false failures on slow panels.
                 get_resp = session_obj.get(get_url, verify=False, timeout=(3, 20))
             except requests.exceptions.ConnectTimeout:
-                app.logger.warning(f"Panel connect timeout while fetching inbound (server_id={server.id}, host={server.host}, url={get_url})")
+                app.logger.warning("Panel connect timeout while fetching inbound (server_id=%s, host=%s, url=%s)", server.id, server.host, get_url)
                 return jsonify({"success": False, "error": f"Connection timeout to panel for server '{server.name}'. Check port/firewall and panel availability."}), 504
             except requests.exceptions.ReadTimeout:
-                app.logger.warning(f"Panel read timeout while fetching inbound (server_id={server.id}, host={server.host}, url={get_url})")
+                app.logger.warning("Panel read timeout while fetching inbound (server_id=%s, host=%s, url=%s)", server.id, server.host, get_url)
                 return jsonify({"success": False, "error": f"Panel response timeout for server '{server.name}'. The panel may be slow or overloaded."}), 504
             except requests.exceptions.ConnectionError as exc:
-                app.logger.warning(f"Panel connection error while fetching inbound (server_id={server.id}, host={server.host}, url={get_url}): {exc}")
+                app.logger.warning("Panel connection error while fetching inbound (server_id=%s, host=%s, url=%s): %s", server.id, server.host, get_url, exc)
                 return jsonify({"success": False, "error": f"Unable to connect to panel for server '{server.name}'. Check host/port and network connectivity."}), 502
 
             if get_resp.status_code != 200:
@@ -2904,13 +2904,13 @@ def add_client(server_id, inbound_id):
             try:
                 up_resp = session_obj.post(up_url, json=update_data, verify=False, timeout=(3, 20))
             except requests.exceptions.ConnectTimeout:
-                app.logger.warning(f"Panel connect timeout while updating inbound (server_id={server.id}, host={server.host}, url={up_url})")
+                app.logger.warning("Panel connect timeout while updating inbound (server_id=%s, host=%s, url=%s)", server.id, server.host, up_url)
                 return jsonify({"success": False, "error": f"Connection timeout to panel for server '{server.name}'. Check port/firewall and panel availability."}), 504
             except requests.exceptions.ReadTimeout:
-                app.logger.warning(f"Panel read timeout while updating inbound (server_id={server.id}, host={server.host}, url={up_url})")
+                app.logger.warning("Panel read timeout while updating inbound (server_id=%s, host=%s, url=%s)", server.id, server.host, up_url)
                 return jsonify({"success": False, "error": f"Panel response timeout for server '{server.name}'. The panel may be slow or overloaded."}), 504
             except requests.exceptions.ConnectionError as exc:
-                app.logger.warning(f"Panel connection error while updating inbound (server_id={server.id}, host={server.host}, url={up_url}): {exc}")
+                app.logger.warning("Panel connection error while updating inbound (server_id=%s, host=%s, url=%s): %s", server.id, server.host, up_url, exc)
                 return jsonify({"success": False, "error": f"Unable to connect to panel for server '{server.name}'. Check host/port and network connectivity."}), 502
 
             if up_resp.status_code != 200:
@@ -3003,7 +3003,7 @@ def add_client(server_id, inbound_id):
                     if configs:
                         direct_link = configs[0]  # First config is usually the main one
             except Exception as e:
-                app.logger.debug(f"Failed to fetch direct link from sub: {e}")
+                app.logger.debug("Failed to fetch direct link from sub: %s", e)
             
             # Fallback to manual generation if upstream failed
             if not direct_link:
@@ -3073,5 +3073,5 @@ def add_client(server_id, inbound_id):
             return jsonify({"success": False, "error": f"Panel Error: {update_error or 'Panel update failed'}"})
 
     except Exception as e:
-        app.logger.error(f"Add client error (server_id={server_id}, inbound_id={inbound_id}): {e}")
+        app.logger.error("Add client error (server_id=%s, inbound_id=%s): %s", server_id, inbound_id, e)
         return jsonify({"success": False, "error": str(e)})

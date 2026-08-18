@@ -109,7 +109,7 @@ def bnqo_send_telegram_alert(text):
         try:
             api.send_message(chat_id, text)
         except Exception as exc:
-            app.logger.warning(f'[bnqo] alert to admin {admin.id} failed: {exc}')
+            app.logger.warning('[bnqo] alert to admin %s failed: %s', admin.id, exc)
 
 
 def _recent_windows(link_id, direction, limit, source='udp'):
@@ -249,7 +249,7 @@ def _open_incident(link, kind, direction, evidence, now, alert=True, dedup_open=
         try:
             bnqo_send_telegram_alert('\n'.join(lines))
         except Exception as exc:
-            print(f'[bnqo] telegram alert failed: {exc}')
+            app.logger.warning('[bnqo] telegram alert failed: %s', exc)
     return incident
 
 
@@ -441,13 +441,13 @@ def bnqo_scheduler_tick(now=None):
             db.session.commit()
         except Exception as exc:
             db.session.rollback()
-            app.logger.warning(f'[bnqo] link {link.id} evaluation failed: {exc}')
+            app.logger.warning('[bnqo] link %s evaluation failed: %s', link.id, exc)
     try:
         _detect_route_changes(now)
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
-        app.logger.warning(f'[bnqo] route-change detection failed: {exc}')
+        app.logger.warning('[bnqo] route-change detection failed: %s', exc)
     try:
         _rollup_old_measurements(now)
         db.session.commit()
@@ -464,5 +464,5 @@ def bnqo_scheduler_worker():
             with app.app_context():
                 bnqo_scheduler_tick()
         except Exception as exc:
-            print(f'[bnqo] scheduler tick failed: {exc}')
+            app.logger.warning('[bnqo] scheduler tick failed: %s', exc)
         time.sleep(BNQO_WORKER_POLL_SECONDS)

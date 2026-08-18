@@ -4,10 +4,13 @@ When REDIS_URL is set AND reachable, one worker fetches panel data and writes
 the processed snapshot to Redis; all workers read it from there. If Redis is
 missing/unreachable, the app transparently falls back to per-worker fetching.
 """
+import logging
 import os
 import threading
 import time
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     'GLOBAL_SERVER_DATA',
@@ -77,9 +80,9 @@ def get_redis():
                 decode_responses=False)
             client.ping()
             _REDIS_CLIENT = client
-            print(f"[Redis] connected: {REDIS_URL}")
+            logger.info("Redis connected: %s", REDIS_URL)
         except Exception as _re:
-            print(f"[Redis] unavailable ({_re}); using per-worker in-memory cache.")
+            logger.warning("Redis unavailable (%s); using per-worker in-memory cache.", _re)
             _REDIS_CLIENT = None
             _REDIS_CHECKED = False
             _REDIS_RETRY_AFTER = time.monotonic() + 10.0
@@ -194,7 +197,7 @@ def publish_snapshot_to_redis(changed_server_ids=None) -> bool:
         pipe.execute()
         return True
     except Exception as e:
-        print(f"[Redis] publish snapshot failed: {e}")
+        logger.warning("Redis publish snapshot failed: %s", e)
         return False
 
 
@@ -267,5 +270,5 @@ def load_snapshot_from_redis(force: bool = False) -> bool:
         _LAST_LOADED_SNAPSHOT_VERSION = version
         return True
     except Exception as e:
-        print(f"[Redis] load snapshot failed: {e}")
+        logger.warning("Redis load snapshot failed: %s", e)
         return False

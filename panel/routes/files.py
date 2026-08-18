@@ -188,7 +188,7 @@ def app_files_health():
     except Exception as e:
         info['error'] = str(e)
         info['success'] = False
-        app.logger.error(f'app_files_health error: {e}')
+        app.logger.error('app_files_health error: %s', e)
     return jsonify(info)
 
 
@@ -246,7 +246,7 @@ def app_files_setup():
         _step('Write test', False, str(e), fix)
         return jsonify({'success': False, 'steps': steps, 'error': str(e)})
 
-    app.logger.info(f"app_files_setup by {session.get('admin_username', '?')}: {d}")
+    app.logger.info("app_files_setup by %s: %s", session.get('admin_username', '?'), d)
     return jsonify({'success': True, 'steps': steps, 'directory': d})
 
 
@@ -259,7 +259,7 @@ def list_app_files():
     try:
         base = _app_files_dir()
     except RuntimeError as e:
-        app.logger.error(f'list_app_files dir error: {e}')
+        app.logger.error('list_app_files dir error: %s', e)
         return jsonify({'success': False, 'error': str(e)}), 500
     files = []
     try:
@@ -278,7 +278,7 @@ def list_app_files():
                 'ext': ext.lstrip('.'),
             })
     except Exception as e:
-        app.logger.error(f'list_app_files error: {e}')
+        app.logger.error('list_app_files error: %s', e)
         return jsonify({'success': False, 'error': str(e)}), 500
     return jsonify({'success': True, 'files': files})
 
@@ -322,7 +322,7 @@ def upload_app_file():
     try:
         base_dir = _app_files_dir()
     except RuntimeError as e:
-        app.logger.error(f'upload_app_file dir error: {e}')
+        app.logger.error('upload_app_file dir error: %s', e)
         return jsonify({'success': False, 'error': str(e)}), 500
 
     uid = uuid.uuid4().hex[:10]
@@ -332,7 +332,7 @@ def upload_app_file():
     try:
         f.save(dest)
     except Exception as e:
-        app.logger.error(f'upload_app_file save error ({dest}): {e}')
+        app.logger.error('upload_app_file save error (%s): %s', dest, e)
         return jsonify({'success': False, 'error': f'Save failed: {e}'}), 500
 
     try:
@@ -370,10 +370,10 @@ def delete_app_file(filename):
         return jsonify({'success': False, 'error': 'File not found'}), 404
     try:
         os.remove(fpath)
-        app.logger.info(f"App file deleted by {session.get('admin_username')}: {safe_name}")
+        app.logger.info("App file deleted by %s: %s", session.get('admin_username'), safe_name)
         return jsonify({'success': True})
     except Exception as e:
-        app.logger.error(f'delete_app_file error: {e}')
+        app.logger.error('delete_app_file error: %s', e)
         return jsonify({'success': False, 'error': 'Delete failed'}), 500
 
 

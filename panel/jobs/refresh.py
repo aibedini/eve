@@ -190,7 +190,7 @@ def _save_telegram_backup_jobs_locked():
         os.replace(tmp_path, TELEGRAM_BACKUP_JOBS_FILE)
     except Exception as exc:
         try:
-            app.logger.warning(f"Could not persist Telegram backup jobs: {exc}")
+            app.logger.warning("Could not persist Telegram backup jobs: %s", exc)
         except Exception:
             pass
 
@@ -373,7 +373,7 @@ def _save_bulk_jobs_locked():
         os.replace(tmp_path, BULK_JOBS_FILE)
     except Exception as exc:
         try:
-            app.logger.warning(f"Could not persist bulk jobs: {exc}")
+            app.logger.warning("Could not persist bulk jobs: %s", exc)
         except Exception:
             pass
 
@@ -599,7 +599,7 @@ def _run_bulk_job(job_id: str):
                         _wt_patch_cache(_server, _email, target_client)
                         return True, None, 200
                     detail = verr or 'panel rejected update'
-                    app.logger.warning(f"Bulk update client (v3) failed for {_email}: {detail}")
+                    app.logger.warning("Bulk update client (v3) failed for %s: %s", _email, detail)
                     return False, detail, 502
 
                 # Shadowsocks clients have no UUID 'id' — updateClient/:clientId won't work.
@@ -613,7 +613,7 @@ def _run_bulk_job(job_id: str):
                                 break
                     if _full_ib is None:
                         detail = 'shadowsocks: could not fetch full inbound for update'
-                        app.logger.warning(f"Bulk update client failed for {_email}: {detail}")
+                        app.logger.warning("Bulk update client failed for %s: %s", _email, detail)
                         return False, detail, 400
                     _full_settings = _json_field(_full_ib.get('settings'), {})
                     _full_settings['clients'] = [
@@ -625,7 +625,7 @@ def _run_bulk_job(job_id: str):
                         _wt_patch_cache(_server, _email, target_client)
                         return True, None, 200
                     detail = _push_err or 'shadowsocks inbound update failed'
-                    app.logger.warning(f"Bulk update client failed for {_email}: {detail}")
+                    app.logger.warning("Bulk update client failed for %s: %s", _email, detail)
                     return False, detail, 400
 
                 client_id = target_client.get('id', target_client.get('password', _email))
@@ -668,7 +668,7 @@ def _run_bulk_job(job_id: str):
                     errors.append(f"{template}: HTTP {resp.status_code}")
 
                 detail = '; '.join(errors) or 'no endpoint succeeded'
-                app.logger.warning(f"Bulk update client failed for {_email}: {detail}")
+                app.logger.warning("Bulk update client failed for %s: %s", _email, detail)
                 return False, detail, 400
 
             def _reset_client_traffic_core(_server: 'Server', _inbound_id: int, _email: str):
@@ -681,7 +681,7 @@ def _run_bulk_job(job_id: str):
                     if ok:
                         return True, None, 200
                     detail = verr or 'reset failed'
-                    app.logger.warning(f"Bulk reset traffic (v3) failed for {_email}: {detail}")
+                    app.logger.warning("Bulk reset traffic (v3) failed for %s: %s", _email, detail)
                     return False, detail, 502
 
                 replacements = {
@@ -719,7 +719,7 @@ def _run_bulk_job(job_id: str):
                     errors.append(f"{template}: HTTP {resp.status_code}")
 
                 detail = '; '.join(errors) or 'no endpoint succeeded'
-                app.logger.warning(f"Bulk reset traffic failed for {_email}: {detail}")
+                app.logger.warning("Bulk reset traffic failed for %s: %s", _email, detail)
                 return False, detail, 400
 
             def _apply_client_limit_delta(_user: 'Admin', _server: 'Server', _inbound_id: int, _email: str,
@@ -1548,7 +1548,7 @@ def refresh_queue_worker():
     if client is None:
         app.logger.error('Refresh queue worker requires Redis; worker stopped.')
         return
-    print(f'[RefreshQueue] worker started (PID={os.getpid()})')
+    app.logger.info('[RefreshQueue] worker started (PID=%s)', os.getpid())
     try:
         # Recover jobs atomically reserved by a previous background process that
         # exited before acknowledging completion.
@@ -1652,7 +1652,7 @@ def fetch_and_update_server_data(server_id: int):
             status_payload['online_count'] = online_count
 
     if persist_detected_panel_type(server, detected_type):
-        app.logger.info(f"Detected panel type for server {server.id} as {detected_type}")
+        app.logger.info("Detected panel type for server %s as %s", server.id, detected_type)
 
     if not isinstance(inbounds, list):
         inbounds = []
@@ -1863,7 +1863,7 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             if changed:
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
     except Exception as exc:
-        app.logger.debug(f"patch_cached_client failed: {exc}")
+        app.logger.debug("patch_cached_client failed: %s", exc)
         return False
     if changed and publish:
         try:
@@ -1936,7 +1936,7 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
             if changed:
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
     except Exception as exc:
-        app.logger.debug(f"add_cached_client failed: {exc}")
+        app.logger.debug("add_cached_client failed: %s", exc)
         return False
     if changed and publish:
         try:
@@ -1984,7 +1984,7 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
             if removed:
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
     except Exception as exc:
-        app.logger.debug(f"remove_cached_client failed: {exc}")
+        app.logger.debug("remove_cached_client failed: %s", exc)
         return False
     if removed and publish:
         try:
@@ -2040,7 +2040,7 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
             GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             done = True
     except Exception as exc:
-        app.logger.debug(f"clone_cached_client_into_inbound failed: {exc}")
+        app.logger.debug("clone_cached_client_into_inbound failed: %s", exc)
         return False
     if done and publish:
         try:

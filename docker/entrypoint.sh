@@ -88,7 +88,7 @@ echo "Starting web role with ${gunicorn_workers} Gunicorn worker(s) and ${GUNICO
 exec gunicorn \
     --workers "$gunicorn_workers" \
     --threads "${GUNICORN_THREADS:-4}" \
-    --worker-class gthread \
+    --config gunicorn_config.py \
     --timeout "${GUNICORN_TIMEOUT:-120}" \
     --graceful-timeout "${GUNICORN_GRACEFUL_TIMEOUT:-30}" \
     --bind "0.0.0.0:${API_PORT}" \

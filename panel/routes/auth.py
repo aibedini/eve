@@ -42,7 +42,7 @@ def login():
             # ── Client portal auth ─────────────────────────────
             client = ClientPortalUser.query.filter_by(mobile=mobile, enabled=True).first()
             if not client:
-                app.logger.warning(f"Login — unknown client mobile {mobile} from {request.remote_addr}")
+                app.logger.warning("Login — unknown client mobile %s from %s", mobile, request.remote_addr)
                 return _login_fail("Invalid credentials")
 
             if client.is_locked():
@@ -52,7 +52,7 @@ def login():
             if not client.check_password(password):
                 client.record_failed()
                 db.session.commit()
-                app.logger.warning(f"Login — wrong password for client {mobile} from {request.remote_addr} (attempt {client.failed_attempts})")
+                app.logger.warning("Login — wrong password for client %s from %s (attempt %s)", mobile, request.remote_addr, client.failed_attempts)
                 if client.is_locked():
                     return _login_fail("Account locked after 5 failed attempts. Try again in 15 minutes.")
                 left = 5 - (client.failed_attempts or 0)
@@ -89,7 +89,7 @@ def login():
                 db.session.commit()
                 return jsonify({"success": True}) if request.is_json else redirect(url_for('pages.dashboard'))
 
-            app.logger.warning(f"Failed login for '{raw_input}' from {request.remote_addr}")
+            app.logger.warning("Failed login for '%s' from %s", raw_input, request.remote_addr)
             return _login_fail("Invalid credentials")
 
     return render_template('login.html')
