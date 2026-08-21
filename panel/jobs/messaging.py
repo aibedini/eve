@@ -2674,6 +2674,29 @@ def _cancel_stale_account_sms(server_id, email: str, *, reason: str) -> dict:
     )
 
 
+def _fire_cancel_stale_account_sms(server_id, email: str, *, reason: str) -> None:
+    """Cancel stale gateway messages outside the operator-facing request.
+
+    Gateway cancellation can require one HTTP request per queued message. The
+    renewed cache state and the dispatch-time depletion guard already prevent
+    stale Eve messages from being sent, so these best-effort remote calls must
+    not add multiple gateway timeouts to the renewal response.
+    """
+    from app import app  # deferred: Flask instance lives in app.py
+
+    def _worker():
+        with app.app_context():
+            try:
+                _cancel_stale_account_sms(server_id, email, reason=reason)
+            except Exception:
+                app.logger.exception(
+                    '[sms-cancel] asynchronous stale cleanup failed for %s/%s',
+                    server_id, email,
+                )
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def _sms_accepted_status(send_result: dict) -> str:
     """A new gateway acceptance is queued; old gateways had no status API."""
     if send_result.get('manual_review'):

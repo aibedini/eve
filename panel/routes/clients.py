@@ -1152,8 +1152,9 @@ def renew_client(server_id, inbound_id, email):
         CLIENT_RESET_FALLBACKS, CLIENT_UPDATE_FALLBACKS, DEFAULT_RENEW_SMS_TEMPLATE,
         DEFAULT_RENEW_TEMPLATE, DEFAULT_TG_TPL_RENEW, GLOBAL_SERVER_DATA,
         RENEW_SMS_TEMPLATE_TYPE, _account_info_channel_links, _calculate_minimum_price,
-        _cancel_stale_account_sms, _clear_message_cooldown, _compute_client_service_state,
-        _fire_automation_sms, _get_dashboard_status_thresholds, _get_panel_ui_lang,
+        _clear_message_cooldown, _compute_client_service_state,
+        _fire_automation_sms, _fire_cancel_stale_account_sms,
+        _get_dashboard_status_thresholds, _get_panel_ui_lang,
         _get_telegram_depletion_settings, _get_whatsapp_runtime_settings, _has_client_access,
         _json_field, _notification_bot_for_account, _notify_customer_telegram,
         _push_full_inbound, _recommendation_template_vars, _render_text_template,
@@ -2010,7 +2011,9 @@ def renew_client(server_id, inbound_id, email):
 
                 # SMS automation (GMweb) — non-reseller-owned accounts only; runs
                 # in a background thread so it never delays the renew response.
-                _cancel_stale_account_sms(server.id, email, reason='renew_success')
+                _fire_cancel_stale_account_sms(
+                    server.id, email, reason='renew_success',
+                )
                 _fire_automation_sms('renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
                                      DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,
                                      server_name=getattr(server, 'name', '') or '')

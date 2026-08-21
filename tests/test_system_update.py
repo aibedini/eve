@@ -343,6 +343,21 @@ class DomainSslUpdatePersistenceTest(unittest.TestCase):
             4,
         )
 
+    def test_renew_progress_copy_is_localized_and_hides_internal_cleanup(self):
+        dashboard = (Path(__file__).parents[1] / 'templates' / 'dashboard.html').read_text(
+            encoding='utf-8',
+        )
+        renew_fn = dashboard.split('async function submitRenewal() {', 1)[1].split(
+            '\n    function showCreditAwareError', 1,
+        )[0]
+
+        self.assertIn('در حال اعمال تغییرات در 3x-ui…', renew_fn)
+        self.assertIn('Applying changes to 3x-ui…', renew_fn)
+        self.assertIn('در حال تأیید نهایی…', renew_fn)
+        self.assertIn('Verifying renewed account…', renew_fn)
+        self.assertNotIn('پاک‌سازی', renew_fn)
+        self.assertNotIn('cleanup', renew_fn.lower())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -65,6 +65,7 @@ from app import (  # noqa: E402
     _cancel_pending_sms_for_account,
     _cancel_sms_via_gmweb,
     _cancel_stale_account_sms,
+    _fire_cancel_stale_account_sms,
     _sms_depletion_state_still_valid,
     _run_sms_depletion_scan,
     _get_gmweb_send_capacity,
@@ -2496,6 +2497,32 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(SmsSendLog.query.filter_by(request_id='send_renew').one().status, 'queued')
         self.assertEqual(SmsSendLog.query.filter_by(request_id='send_created').one().status, 'queued')
         self.assertEqual(PendingSms.query.filter_by(event_name='renew').count(), 1)
+
+    def test_stale_sms_cleanup_starts_in_background(self):
+        captured = {}
+
+        class FakeThread:
+            def __init__(self, target, daemon=False):
+                captured['target'] = target
+                captured['daemon'] = daemon
+
+            def start(self):
+                captured['started'] = True
+
+        with patch('panel.jobs.messaging.threading.Thread', FakeThread), \
+                patch('panel.jobs.messaging._cancel_stale_account_sms') as cancel:
+            result = _fire_cancel_stale_account_sms(
+                12, 'stale-user', reason='renew_success',
+            )
+
+        self.assertIsNone(result)
+        self.assertTrue(captured['started'])
+        self.assertTrue(captured['daemon'])
+        cancel.assert_not_called()
+
+        with patch('panel.jobs.messaging._cancel_stale_account_sms') as cancel:
+            captured['target']()
+            cancel.assert_called_once_with(12, 'stale-user', reason='renew_success')
 
     def test_sms_scan_stops_before_sending_when_gateway_unpaired(self):
         for key, value in (

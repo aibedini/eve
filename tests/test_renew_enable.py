@@ -204,6 +204,7 @@ class RenewEnableTests(unittest.TestCase):
                               return_value=(True, {}, None)),
             mock.patch.object(app_module, 'fetch_inbounds', side_effect=fetch_confirmed),
             mock.patch.object(app_module, '_fire_automation_sms'),
+            mock.patch.object(app_module, '_fire_cancel_stale_account_sms'),
             mock.patch.object(app_module, '_notify_customer_telegram'),
             mock.patch.object(clients_module, '_fire_renew_whatsapp'),
             mock.patch.object(clients_module, '_fire_renew_postcheck',

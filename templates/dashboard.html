@@ -716,8 +716,8 @@
                 <span style="color: #4ade80;">{{ "{:,}".format(credit if credit else 0) }} T</span>
             </div>
             <div style="display: flex; gap: 10px;">
-                <button class="btn btn-secondary" onclick="closeRenewModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="submitRenewal()">Confirm</button>
+                <button class="btn btn-secondary" onclick="closeRenewModal()">{{ 'انصراف' if panel_lang == 'fa' else 'Cancel' }}</button>
+                <button class="btn btn-primary" onclick="submitRenewal()">{{ 'تأیید' if panel_lang == 'fa' else 'Confirm' }}</button>
             </div>
         </div>
     </div>
@@ -4857,8 +4857,19 @@
 
         const btn = document.querySelector('#renew-modal .btn-primary');
         const originalText = btn.innerText;
+        const renewProgressIsFa = (document.documentElement.lang || 'en') === 'fa';
+        const renewProgressSteps = renewProgressIsFa
+            ? ['در حال ارسال تمدید…', 'در حال اعمال تغییرات در 3x-ui…', 'در حال تأیید نهایی…']
+            : ['Submitting renewal…', 'Applying changes to 3x-ui…', 'Verifying renewed account…'];
+        const renewProgressTimers = [];
         btn.disabled = true;
-        btn.innerText = 'Processing...';
+        btn.innerText = renewProgressSteps[0];
+        renewProgressTimers.push(setTimeout(() => {
+            if (btn.disabled) btn.innerText = renewProgressSteps[1];
+        }, 700));
+        renewProgressTimers.push(setTimeout(() => {
+            if (btn.disabled) btn.innerText = renewProgressSteps[2];
+        }, 3500));
 
         const previousClient = getLocalClientRef(serverId, inboundId, email);
         const previousExpiryTs = Number(previousClient?.expiryTimestamp || 0);
@@ -5055,6 +5066,7 @@
         } catch (error) {
             showToast('Error: ' + error.message, 'error');
         } finally {
+            renewProgressTimers.forEach(timerId => clearTimeout(timerId));
             btn.disabled = false;
             btn.innerText = originalText;
         }
