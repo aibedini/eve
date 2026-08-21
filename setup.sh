@@ -1436,7 +1436,7 @@ Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DISABLE_BACKGROUND_THREADS=true"
 EnvironmentFile=${ENV_FILE}
 ExecStartPre=+/usr/local/sbin/eve-maintenance-root
-ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/maintenance.py run
+ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/maintenance.py run --skip-schema-migrations
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -1516,8 +1516,24 @@ show_maintenance_preflight() {
     [ -x "${APP_DIR}/venv/bin/python" ] || return 0
     [ -f "${APP_DIR}/maintenance.py" ] || return 0
     local plan
-    plan=$(cd "$APP_DIR" && sudo -u "$APP_USER" env DISABLE_BACKGROUND_THREADS=true \
-        "${APP_DIR}/venv/bin/python" "${APP_DIR}/maintenance.py" plan 2>/dev/null || true)
+    local preflight_status=0
+    print_warning "Checking post-update maintenance status (maximum 30 seconds)..."
+    print_warning "Process: maintenance.py plan --skip-schema-migrations"
+    if plan=$(cd "$APP_DIR" && timeout --foreground --signal=TERM --kill-after=5s 30s \
+            sudo -u "$APP_USER" env DISABLE_BACKGROUND_THREADS=true \
+            "${APP_DIR}/venv/bin/python" "${APP_DIR}/maintenance.py" \
+            plan --skip-schema-migrations 2>&1); then
+        print_success "Maintenance preflight completed"
+    else
+        preflight_status=$?
+        if [ "$preflight_status" -eq 124 ] || [ "$preflight_status" -eq 137 ]; then
+            print_warning "Maintenance preflight timed out; skipping it so the update can finish."
+        else
+            print_warning "Maintenance preflight failed (exit code: $preflight_status); update will continue."
+        fi
+        [ -n "$plan" ] && echo "$plan" | tail -10
+        return 0
+    fi
     if echo "$plan" | grep -q '"required": true'; then
         print_warning "One-time usage-history compaction is required."
         print_warning "It can take time on large databases; the panel may be slower or briefly unavailable."

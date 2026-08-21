@@ -54,10 +54,16 @@ def main():
     parser = argparse.ArgumentParser(description='Eve maintenance migration runner')
     parser.add_argument('command', choices=('plan', 'status', 'run'), nargs='?', default='run')
     parser.add_argument('--batch-accounts', type=int, default=10)
+    parser.add_argument(
+        '--skip-schema-migrations',
+        action='store_true',
+        help='Skip schema setup when the updater already completed it.',
+    )
     args = parser.parse_args()
 
     with app.app_context():
-        run_migrations()
+        if not args.skip_schema_migrations:
+            run_migrations()
         if args.command in ('plan', 'status'):
             print(json.dumps(maintenance_plan(), ensure_ascii=False, indent=2))
             return 0

@@ -319,6 +319,20 @@ class DomainSslUpdatePersistenceTest(unittest.TestCase):
         self.assertNotIn('python3 init_db.py', migration_fn)
         self.assertNotIn('python3 migrations.py', migration_fn)
 
+    def test_maintenance_preflight_is_visible_bounded_and_does_not_remigrate(self):
+        root = Path(__file__).parents[1]
+        setup = (root / 'setup.sh').read_text(encoding='utf-8')
+        maintenance = (root / 'maintenance.py').read_text(encoding='utf-8')
+        preflight_fn = setup.split('show_maintenance_preflight() {', 1)[1].split(
+            '\nstart_maintenance_service() {', 1)[0]
+
+        self.assertIn('maximum 30 seconds', preflight_fn)
+        self.assertIn('timeout --foreground --signal=TERM --kill-after=5s 30s', preflight_fn)
+        self.assertIn('plan --skip-schema-migrations', preflight_fn)
+        self.assertIn('update will continue', preflight_fn)
+        self.assertIn('if not args.skip_schema_migrations:', maintenance)
+        self.assertIn('maintenance.py run --skip-schema-migrations', setup)
+
 
 if __name__ == '__main__':
     unittest.main()
