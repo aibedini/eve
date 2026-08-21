@@ -1289,6 +1289,7 @@ WorkingDirectory=${APP_DIR}
 Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=${ENV_FILE}
 Environment="EVE_PROCESS_ROLE=web"
+Environment="EVE_SKIP_IMPORT_MIGRATIONS=1"
 # Override auto-sizing by running setup with GUNICORN_WORKERS=N.
 ExecStart=${APP_DIR}/venv/bin/gunicorn --workers ${gunicorn_workers} --threads 4 --worker-class gthread --timeout 120 --graceful-timeout 30 --bind 0.0.0.0:${APP_PORT} app:app
 Restart=always
@@ -1309,6 +1310,7 @@ WorkingDirectory=${APP_DIR}
 Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=${ENV_FILE}
 Environment="EVE_PROCESS_ROLE=background"
+Environment="EVE_SKIP_IMPORT_MIGRATIONS=1"
 ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/background_worker.py
 Restart=always
 RestartSec=3
@@ -1331,6 +1333,7 @@ WorkingDirectory=${APP_DIR}
 Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=${ENV_FILE}
 Environment="EVE_PROCESS_ROLE=telegram-egress"
+Environment="EVE_SKIP_IMPORT_MIGRATIONS=1"
 ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/telegram_egress_worker.py
 Restart=always
 RestartSec=3
@@ -1358,6 +1361,7 @@ WorkingDirectory=${APP_DIR}
 Environment="PATH=${APP_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=${ENV_FILE}
 Environment="EVE_PROCESS_ROLE=telegram-bot"
+Environment="EVE_SKIP_IMPORT_MIGRATIONS=1"
 ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/telegram_bot_worker.py
 Restart=always
 RestartSec=3

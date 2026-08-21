@@ -333,6 +333,16 @@ class DomainSslUpdatePersistenceTest(unittest.TestCase):
         self.assertIn('if not args.skip_schema_migrations:', maintenance)
         self.assertIn('maintenance.py run --skip-schema-migrations', setup)
 
+    def test_systemd_runtimes_never_repeat_updater_migrations(self):
+        setup = (Path(__file__).parents[1] / 'setup.sh').read_text(encoding='utf-8')
+        systemd_fn = setup.split('setup_systemd() {', 1)[1].split(
+            '\nrestart_eve_runtime_services() {', 1)[0]
+
+        self.assertEqual(
+            systemd_fn.count('Environment="EVE_SKIP_IMPORT_MIGRATIONS=1"'),
+            4,
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
