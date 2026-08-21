@@ -4716,6 +4716,12 @@
 
             const parts = [];
             parts.push(pill);
+            const statusIsFa = (document.documentElement.lang || 'en') === 'fa';
+            if (verify && verify.observed && verify.observed.enable === true) {
+                parts.push(`<span class="server-badge" style="color:#bbf7d0;">3x-ui: ${statusIsFa ? 'فعال' : 'Active'}</span>`);
+            } else if (verify && verify.observed && verify.observed.enable === false) {
+                parts.push(`<span class="server-badge" style="color:#fecaca;">3x-ui: ${statusIsFa ? 'غیرفعال' : 'Disabled'}</span>`);
+            }
             if (endpoint) parts.push(`<span class="server-badge">Endpoint: ${escapeHtml(endpoint)}</span>`);
             if (trace) parts.push(`<span class="server-badge">Trace: ${escapeHtml(trace)}</span>`);
             if (Number.isFinite(totalMs)) parts.push(`<span class="server-badge">${totalMs}ms</span>`);
@@ -5034,6 +5040,12 @@
                 // throw a red error — open the result modal in an "in progress"
                 // state so the user can Re-check until it shows Verified.
                 showRenewInProgress(serverId, inboundId, email, data.error || '');
+            } else if (data.code === 'renew_not_verified') {
+                // The panel accepted the write, but its own read-back still says
+                // disabled/stale. Keep the real panel state visible and offer
+                // Re-check; never present this as a successful renewal.
+                showRenewInProgress(serverId, inboundId, email, data.error || '');
+                renderRenewApiStatus(data);
             } else {
                 // Business errors are downgraded to HTTP 200 by the server (so the
                 // CDN doesn't swallow the JSON); the real code is in X-Eve-Status.

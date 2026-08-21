@@ -410,6 +410,21 @@ def v3_enable_client(server, session_obj, email, client: dict):
         {"emails": [email]},
     )
     if ok:
+        # 3x-ui's bulk endpoint can return HTTP 200/success=true while putting
+        # the requested account in obj.skipped.  Treat that as a failed enable;
+        # the caller must never turn a transport acknowledgement into a fake
+        # active state in EVE.
+        obj = result.get('obj') if isinstance(result, dict) else None
+        skipped = obj.get('skipped') if isinstance(obj, dict) else None
+        if isinstance(skipped, list):
+            requested = str(email or '').strip()
+            for item in skipped:
+                if not isinstance(item, dict):
+                    continue
+                skipped_email = str(item.get('email') or '').strip()
+                if not skipped_email or skipped_email == requested:
+                    reason = item.get('reason') or 'client enable was skipped'
+                    return False, result, str(reason)
         return ok, result, error
 
     unavailable = str(error or '').strip().lower()

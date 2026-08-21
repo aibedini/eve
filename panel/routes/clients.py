@@ -1698,23 +1698,9 @@ def renew_client(server_id, inbound_id, email):
                             pass
                     timing["reset_traffic_ms"] = int((time.perf_counter() - t_reset0) * 1000)
 
-                sender_card = data.get('sender_card', '') or ''
-                card_id = data.get('card_id')
-                if is_free:
-                    if user.role == 'reseller':
-                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                    else:
-                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                    db.session.commit()
-                elif price > 0:
-                    if user.role == 'reseller':
-                        user.credit -= price
-                        log_transaction(user.id, -price, 'renew', f"User Renewal (Credit Usage) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                    else:
-                        log_transaction(user.id, price, 'renew', f"User Renewal (Income) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                    db.session.commit()
-
-                # Post-update verify (best-effort): fetch inbounds and confirm expiry/volume.
+                # Read the account back from 3x-ui before charging, notifying, or
+                # updating EVE's cache.  A successful POST only acknowledges the
+                # request; it does not prove the client is active on the panel.
                 verify = {
                     "attempted": True,
                     "ok": None,
@@ -1729,14 +1715,7 @@ def renew_client(server_id, inbound_id, email):
                         "totalGB": None,
                     },
                 }
-                # Fast path by default: the panel has already acknowledged the
-                # update. A second full inbounds read is useful for diagnostics,
-                # but it must not add another network round-trip to every renew.
-                # Callers may still explicitly request the legacy inline check.
-                defer_inline_verify = (
-                    server_is_v3(server)
-                    and not bool(data.get('verify_inline', False))
-                )
+                defer_inline_verify = False
                 try:
                     if defer_inline_verify:
                         v_inbounds, v_err = [], 'verification_deferred'
@@ -1860,28 +1839,41 @@ def renew_client(server_id, inbound_id, email):
                         app.logger.error(
                             f"Renew could not re-enable {email} after 3 attempts")
 
-                if defer_inline_verify:
-                    verify = {
-                        "attempted": False,
-                        "ok": None,
-                        "error": None,
-                        "expected": {
-                            "expiryTime": new_expiry,
-                            "totalGB": new_volume,
-                            "enable": True,
-                        },
-                        # These values were accepted by the update endpoint and
-                        # let the UI patch immediately. The background post-check
-                        # later reconciles the shared cache with panel state.
-                        "observed": {
-                            "expiryTime": new_expiry,
-                            "totalGB": new_volume,
-                            "enable": True,
-                        },
-                    }
-                    _fire_renew_postcheck(
-                        server.id, inbound_id, email, target_client,
-                    )
+                if not verify.get("ok"):
+                    # Keep the lock/result so an operator can use Re-check without
+                    # accidentally submitting a second renewal while 3x-ui is
+                    # still settling.  Crucially, do not charge, notify, or write
+                    # expected values into the cache as if they were observed.
+                    _store_renew_result(_renew_lock_key, {"verify": verify})
+                    detail = ("تمدید به پنل ارسال شد، اما فعال بودن کاربر در 3x-ui تأیید نشد. "
+                              "از Re-check استفاده کنید و قبل از تمدید دوباره وضعیت پنل را بررسی کنید."
+                              if panel_is_fa else
+                              "The renewal was sent, but the client was not confirmed active in 3x-ui. "
+                              "Use Re-check and inspect the panel before renewing again.")
+                    return _finish({
+                        "success": False,
+                        "code": "renew_not_verified",
+                        "error": detail,
+                        "verify": verify,
+                    }, 409)
+
+                # Only a confirmed panel state may create financial records or
+                # trigger customer notifications.
+                sender_card = data.get('sender_card', '') or ''
+                card_id = data.get('card_id')
+                if is_free:
+                    if user.role == 'reseller':
+                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
+                    else:
+                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
+                    db.session.commit()
+                elif price > 0:
+                    if user.role == 'reseller':
+                        user.credit -= price
+                        log_transaction(user.id, -price, 'renew', f"User Renewal (Credit Usage) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
+                    else:
+                        log_transaction(user.id, price, 'renew', f"User Renewal (Income) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
+                    db.session.commit()
 
                 # Build copyable success text (dynamic template)
                 now_utc = datetime.utcnow()

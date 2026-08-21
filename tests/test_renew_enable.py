@@ -119,6 +119,27 @@ class V3EnableAdapterTests(unittest.TestCase):
         self.assertEqual(fallback_path, '/panel/api/clients/update/bob')
         self.assertTrue(fallback_payload['enable'])
 
+    def test_bulk_enable_success_with_skipped_client_is_failure(self):
+        server = mock.Mock()
+        session_obj = mock.Mock()
+        client = _raw_client(enable=False)
+        result = {
+            'success': True,
+            'obj': {'changed': 0, 'skipped': [
+                {'email': 'bob', 'reason': 'client not found'},
+            ]},
+        }
+        with (
+            mock.patch.object(xui_adapter, '_v3_fix_spaced_email', return_value='bob'),
+            mock.patch.object(xui_adapter, '_v3_post', return_value=(True, result, None)),
+        ):
+            ok, _result, error = xui_adapter.v3_enable_client(
+                server, session_obj, 'bob', client,
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(error, 'client not found')
+
 
 class RenewEnableTests(unittest.TestCase):
     """Renewal must always re-enable the client (manual or panel auto-disable)
@@ -165,6 +186,14 @@ class RenewEnableTests(unittest.TestCase):
         self.v3_update = mock.Mock(return_value=(True, {}, None))
         self.v3_enable = mock.Mock(return_value=(True, {}, None))
         self.postcheck = mock.Mock()
+
+        def fetch_confirmed(*_args, **_kwargs):
+            if not self.v3_update.call_args:
+                return [], 'not updated', '3x-ui'
+            sent = dict(self.v3_update.call_args[0][3])
+            sent['enable'] = True
+            return _panel_inbounds(sent, self.server.id), None, '3x-ui'
+
         self._patches = [
             mock.patch.object(app_module, 'get_xui_session',
                               return_value=(self.session_obj, None)),
@@ -173,6 +202,7 @@ class RenewEnableTests(unittest.TestCase):
             mock.patch.object(app_module, 'v3_enable_client', self.v3_enable),
             mock.patch.object(app_module, 'v3_reset_client',
                               return_value=(True, {}, None)),
+            mock.patch.object(app_module, 'fetch_inbounds', side_effect=fetch_confirmed),
             mock.patch.object(app_module, '_fire_automation_sms'),
             mock.patch.object(app_module, '_notify_customer_telegram'),
             mock.patch.object(clients_module, '_fire_renew_whatsapp'),
@@ -220,11 +250,11 @@ class RenewEnableTests(unittest.TestCase):
         self.assertLess(abs(sent['expiryTime'] - expected), 120000)
         self.assertEqual(sent['totalGB'], 15 * GB)
 
-        # v3 fast path defers verification to the background post-check, which
-        # receives an enable=True snapshot to re-assert if the panel lags.
-        self.assertEqual(self.postcheck.call_count, 1)
-        snapshot = self.postcheck.call_args[0][3]
-        self.assertTrue(snapshot['enable'])
+        # Success is returned only after a real read-back from 3x-ui.
+        self.assertTrue(payload['verify']['attempted'])
+        self.assertTrue(payload['verify']['ok'])
+        self.assertTrue(payload['verify']['observed']['enable'])
+        self.postcheck.assert_not_called()
 
     def test_not_started_client_stays_pending(self):
         raw = _raw_client(expiry=-5 * DAY_MS, total=0, enable=True)
@@ -301,6 +331,30 @@ class RenewEnableTests(unittest.TestCase):
         self.assertTrue(verify.get('re_enabled'))
         self.assertTrue(verify.get('ok'))
         self.assertTrue((verify.get('observed') or {}).get('enable'))
+
+    def test_unconfirmed_disabled_client_is_not_reported_or_billed_as_success(self):
+        future = int(time.time() * 1000) + 5 * DAY_MS
+        raw = _raw_client(expiry=future, total=5 * GB, enable=False)
+        self._seed_cache(raw)
+
+        still_disabled = dict(raw)
+        still_disabled['expiryTime'] = future + 30 * DAY_MS
+        still_disabled['totalGB'] = 15 * GB
+        with mock.patch.object(
+            app_module, 'fetch_inbounds',
+            return_value=(_panel_inbounds(still_disabled, self.server.id), None, '3x-ui'),
+        ):
+            resp = self._renew(mode='custom', days=30, volume=10, free=True)
+
+        # The app preserves JSON business errors through proxies as HTTP 200
+        # and carries the real status in X-Eve-Status.
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertEqual(resp.headers.get('X-Eve-Status'), '409')
+        payload = resp.get_json()
+        self.assertFalse(payload['success'])
+        self.assertEqual(payload['code'], 'renew_not_verified')
+        self.assertFalse(payload['verify']['observed']['enable'])
+        self.assertEqual(Transaction.query.filter_by(client_email='bob').count(), 0)
 
     def test_legacy_panel_update_carries_enable(self):
         self._patches[1].stop()  # server_is_v3 -> use a fresh False mock
