@@ -65,6 +65,7 @@ from app import (  # noqa: E402
     _cancel_pending_sms_for_account,
     _cancel_sms_via_gmweb,
     _cancel_stale_account_sms,
+    _sms_depletion_state_still_valid,
     _run_sms_depletion_scan,
     _get_gmweb_send_capacity,
     _gmweb_sms_priority,
@@ -2579,6 +2580,66 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         classify.assert_called_once()
         self.assertEqual(classify.call_args.kwargs['warning_days'], 0)
         self.assertEqual(classify.call_args.kwargs['warning_gb'], 0.0)
+
+    def test_sms_depletion_recheck_suppresses_warning_after_renewal(self):
+        previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': 92,
+            'clients': [{
+                'email': 'renewed-09120000000',
+                'enable': True,
+                'totalGB': 20 * 1024 ** 3,
+                'up': 0,
+                'down': 0,
+                'remaining_bytes': 20 * 1024 ** 3,
+                'expiryTimestamp': int(
+                    (datetime.now(timezone.utc) + timedelta(days=30)).timestamp() * 1000
+                ),
+            }],
+        }]
+        try:
+            with patch('panel.jobs.messaging.load_snapshot_from_redis'):
+                valid, reason = _sms_depletion_state_still_valid(
+                    92, 'renewed-09120000000', 'expired', {
+                        'depletion_expiry_days': 3,
+                        'depletion_volume_gb': 2.0,
+                    },
+                )
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
+
+        self.assertFalse(valid)
+        self.assertEqual(reason, 'state_changed_recheck')
+
+    def test_sms_depletion_recheck_keeps_matching_expired_warning(self):
+        previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': 93,
+            'clients': [{
+                'email': 'expired-09120000000',
+                'enable': False,
+                'totalGB': 20 * 1024 ** 3,
+                'up': 0,
+                'down': 0,
+                'remaining_bytes': 20 * 1024 ** 3,
+                'expiryTimestamp': int(
+                    (datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000
+                ),
+            }],
+        }]
+        try:
+            with patch('panel.jobs.messaging.load_snapshot_from_redis'):
+                valid, reason = _sms_depletion_state_still_valid(
+                    93, 'expired-09120000000', 'expired', {
+                        'depletion_expiry_days': 3,
+                        'depletion_volume_gb': 2.0,
+                    },
+                )
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = previous_inbounds
+
+        self.assertTrue(valid)
+        self.assertEqual(reason, '')
 
     def test_sms_gateway_429_keeps_rate_limit_details(self):
         class FakeResponse:

@@ -1992,6 +1992,22 @@ def renew_client(server_id, inbound_id, email):
                     'reason': None if whatsapp_allowed else 'reseller_automation_disabled',
                 }
 
+                # Write through before cancelling stale warnings. A depletion worker
+                # may already have classified this account and must see the renewed
+                # state during its final pre-dispatch validation.
+                try:
+                    patch_cached_client(
+                        server_id, email,
+                        client_uuid=str(target_client.get('id')) if target_client and target_client.get('id') else None,
+                        total_gb_bytes=int(target_client.get('totalGB') or 0),
+                        expiry_ts=int(target_client.get('expiryTime') or 0),
+                        enable=True,
+                        comment=target_client.get('comment'),
+                        up=(0 if reset_traffic else None),
+                        down=(0 if reset_traffic else None))
+                except Exception:
+                    pass
+
                 # SMS automation (GMweb) — non-reseller-owned accounts only; runs
                 # in a background thread so it never delays the renew response.
                 _cancel_stale_account_sms(server.id, email, reason='renew_success')
@@ -2020,20 +2036,6 @@ def renew_client(server_id, inbound_id, email):
                     'blocked_reason': whatsapp_runtime.get('blocked_reason') if not whatsapp_runtime.get('enabled', False) else None,
                     'delivery': whatsapp_delivery,
                 }
-
-                # Write-through cache: reflect the renewal instantly (no panel re-fetch).
-                try:
-                    patch_cached_client(
-                        server_id, email,
-                        client_uuid=str(target_client.get('id')) if target_client and target_client.get('id') else None,
-                        total_gb_bytes=int(target_client.get('totalGB') or 0),
-                        expiry_ts=int(target_client.get('expiryTime') or 0),
-                        enable=(True if _was_disabled else None),
-                        comment=target_client.get('comment'),
-                        up=(0 if reset_traffic else None),
-                        down=(0 if reset_traffic else None))
-                except Exception:
-                    pass
 
                 # Reset send counter + automation cooldown so a renewed account can
                 # be messaged again from scratch (both SMS and WhatsApp).

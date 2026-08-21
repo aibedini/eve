@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.74"
+APP_VERSION = "2.5.75"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -513,6 +513,7 @@ from panel.jobs.messaging import (  # noqa: F401
     _sms_scan_cancel_clear,
     _sms_scan_cancelled,
     _classify_monitor_status,
+    _sms_depletion_state_still_valid,
     _run_sms_depletion_scan,
     _run_sms_royalty_scan,
     _sms_log_row,

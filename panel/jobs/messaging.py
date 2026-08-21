@@ -2974,6 +2974,72 @@ def _classify_monitor_status(*, enabled: bool, total_bytes: int, remaining_bytes
     return status
 
 
+def _sms_depletion_state_still_valid(server_id, email: str, expected_state: str,
+                                     cfg: dict) -> tuple[bool, str]:
+    """Fail closed when a queued depletion candidate no longer matches live state.
+
+    A scan may spend minutes behind pacing or the GMweb queue. During that wait the
+    customer can renew. Reload the shared snapshot and recompute the exact state
+    immediately before handing the message to the external gateway. If the account
+    disappeared or duplicate cached copies disagree, suppress the stale warning.
+    """
+    from app import format_remaining_days  # deferred compatibility export
+
+    try:
+        load_snapshot_from_redis()
+    except Exception:
+        pass
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        sid = server_id
+    email_l = (email or '').strip().lower()
+    warning_days = int(cfg.get('depletion_expiry_days', 3))
+    warning_gb = float(cfg.get('depletion_volume_gb', 2.0))
+    observed_states = []
+
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id', -1)) != int(sid):
+                continue
+        except (TypeError, ValueError):
+            if inbound.get('server_id') != sid:
+                continue
+        for client in (inbound.get('clients') or []):
+            if (client.get('email') or '').strip().lower() != email_l:
+                continue
+            total_bytes = int(client.get('totalGB') or 0)
+            try:
+                used = int(client.get('up') or 0) + int(client.get('down') or 0)
+            except (TypeError, ValueError):
+                used = 0
+            remaining_bytes = client.get('remaining_bytes')
+            if remaining_bytes is None or remaining_bytes == -1:
+                remaining_bytes = max(total_bytes - used, 0) if total_bytes > 0 else None
+            remaining_gb = (
+                float(remaining_bytes) / (1024 ** 3)
+                if remaining_bytes is not None else None
+            )
+            expiry_ts = int(client.get('expiryTimestamp') or 0)
+            status = _classify_monitor_status(
+                enabled=bool(client.get('enable', True)),
+                total_bytes=total_bytes,
+                remaining_bytes=remaining_bytes,
+                remaining_gb=remaining_gb,
+                expiry_ts=expiry_ts,
+                expiry_info=format_remaining_days(expiry_ts),
+                warning_days=warning_days,
+                warning_gb=warning_gb,
+            )
+            observed_states.append(SMS_MONITOR_TAG_TO_STATE.get(status or ''))
+
+    if not observed_states:
+        return False, 'account_missing_recheck'
+    if any(state != expected_state for state in observed_states):
+        return False, 'state_changed_recheck'
+    return True, ''
+
+
 def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto',
                             states: list[str] | tuple[str, ...] | None = None) -> dict:
     """State-based automated SMS scan. For each non-reseller-owned account, derive
@@ -3227,6 +3293,14 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
                          'skipped', 'opted_out_recheck', segment_info)
             continue
+        state_valid, state_reason = _sms_depletion_state_still_valid(
+            sid_norm, email, state, cfg,
+        )
+        if not state_valid:
+            _sms_refund_daily_segments(segments)
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                         'skipped', state_reason, segment_info)
+            continue
 
         # Same idempotency key for the send and its 429-retry so the retry can't
         # double-send. Scoped to this scan run (jid) so a later scan re-sends fresh.
@@ -3244,6 +3318,14 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 _sms_refund_daily_segments(segments)
                 _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
                              'skipped', 'opted_out_recheck', segment_info)
+                continue
+            state_valid, state_reason = _sms_depletion_state_still_valid(
+                sid_norm, email, state, cfg,
+            )
+            if not state_valid:
+                _sms_refund_daily_segments(segments)
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                             'skipped', state_reason, segment_info)
                 continue
             res = _send_sms_via_gmweb(
                 recipient, text_msg, cfg, priority=gmweb_priority,
