@@ -931,30 +931,90 @@ clone_or_update_repo() {
 
 run_migrations() {
     print_header "Running Database Initialization & Migrations"
-    local MIGRATION_OK=true
+    local migration_timeout="${EVE_MIGRATION_TIMEOUT_SECONDS:-600}"
+    local migration_status=0
+    local unit
+    local -a active_units=()
 
-    if [ -f "$APP_DIR/init_db.py" ]; then
-        print_header "Initializing Database Tables..."
-        if ! sudo -u "$APP_USER" bash -c "set -a; [ -f $ENV_FILE ] && source $ENV_FILE || true; set +a; source $APP_DIR/venv/bin/activate 2>/dev/null || true && cd $APP_DIR && export DISABLE_BACKGROUND_THREADS=true && INITIAL_ADMIN_USERNAME='${ADMIN_USERNAME}' INITIAL_ADMIN_PASSWORD='${ADMIN_PASS}' python3 init_db.py"; then
-            MIGRATION_OK=false
-        fi
-    fi
-    if [ -f "$APP_DIR/migrations.py" ] && [ "$MIGRATION_OK" = true ]; then
-        print_header "Checking for Schema Updates..."
-        if ! sudo -u "$APP_USER" bash -c "set -a; [ -f $ENV_FILE ] && source $ENV_FILE || true; set +a; source $APP_DIR/venv/bin/activate 2>/dev/null || true && cd $APP_DIR && export DISABLE_BACKGROUND_THREADS=true && python3 migrations.py"; then
-            MIGRATION_OK=false
-        else
-            print_success "Database check completed"
-        fi
+    # Reject malformed/unreasonable overrides before passing the value to
+    # coreutils timeout. Ten minutes is the normal ceiling; operators running a
+    # deliberately large schema migration can raise it up to two hours.
+    if ! [[ "$migration_timeout" =~ ^[0-9]+$ ]] || \
+            [ "$migration_timeout" -lt 60 ] || [ "$migration_timeout" -gt 7200 ]; then
+        print_warning "Invalid EVE_MIGRATION_TIMEOUT_SECONDS; using 600 seconds"
+        migration_timeout=600
     fi
 
-    if [ "$MIGRATION_OK" = false ]; then
-        echo ""
-        print_error "Database migration failed!"
-        # Return non-zero so callers can handle rollback
+    if [ ! -f "$APP_DIR/panel/migrate.py" ]; then
+        print_error "Migration runner not found: $APP_DIR/panel/migrate.py"
         return 1
     fi
-    return 0
+
+    # PostgreSQL DDL can otherwise wait forever behind a request or background
+    # transaction. Remember exactly what was running, briefly quiesce it, then
+    # restore the same units after the migration attempt.
+    for unit in \
+        "${SERVICE_NAME}.service" \
+        "${SERVICE_NAME}-background.service" \
+        "${SERVICE_NAME}-telegram-egress.service" \
+        "${SERVICE_NAME}-telegram-bot.service" \
+        "eve-maintenance.service"; do
+        if systemctl is-active --quiet "$unit" 2>/dev/null; then
+            active_units+=("$unit")
+        fi
+    done
+
+    if [ "${#active_units[@]}" -gt 0 ]; then
+        print_warning "Pausing Eve services briefly to release database locks..."
+        if ! timeout --signal=TERM --kill-after=10s 45s \
+                systemctl stop "${active_units[@]}"; then
+            print_warning "Graceful service stop timed out; terminating remaining Eve workers..."
+            for unit in "${active_units[@]}"; do
+                if systemctl is-active --quiet "$unit" 2>/dev/null; then
+                    systemctl kill --kill-who=all --signal=TERM "$unit" 2>/dev/null || true
+                fi
+            done
+            sleep 2
+            for unit in "${active_units[@]}"; do
+                if systemctl is-active --quiet "$unit" 2>/dev/null; then
+                    print_warning "Force-stopping unresponsive unit: $unit"
+                    systemctl kill --kill-who=all --signal=KILL "$unit" 2>/dev/null || true
+                fi
+            done
+            sleep 1
+        fi
+    fi
+
+    print_header "Applying Schema Updates (timeout: ${migration_timeout}s)..."
+    if timeout --foreground --signal=TERM --kill-after=30s "$migration_timeout" \
+            sudo -u "$APP_USER" env \
+            EVE_MIGRATION_ENV_FILE="$ENV_FILE" \
+            EVE_MIGRATION_APP_DIR="$APP_DIR" \
+            INITIAL_ADMIN_USERNAME="$ADMIN_USERNAME" \
+            INITIAL_ADMIN_PASSWORD="$ADMIN_PASS" \
+            bash -c 'set -a; [ -f "$EVE_MIGRATION_ENV_FILE" ] && source "$EVE_MIGRATION_ENV_FILE" || true; set +a; source "$EVE_MIGRATION_APP_DIR/venv/bin/activate" 2>/dev/null || true; cd "$EVE_MIGRATION_APP_DIR" && export DISABLE_BACKGROUND_THREADS=true && python3 -m panel.migrate'; then
+        migration_status=0
+        print_success "Database migration completed"
+    else
+        migration_status=$?
+        echo ""
+        if [ "$migration_status" -eq 124 ] || [ "$migration_status" -eq 137 ]; then
+            print_error "Database migration timed out after ${migration_timeout}s. Stuck processes were terminated."
+        else
+            print_error "Database migration failed (exit code: ${migration_status})"
+        fi
+    fi
+
+    if [ "${#active_units[@]}" -gt 0 ]; then
+        print_warning "Restoring services that were active before migration..."
+        for unit in "${active_units[@]}"; do
+            if ! systemctl start "$unit"; then
+                print_warning "Could not restore $unit; inspect: systemctl status $unit --no-pager"
+            fi
+        done
+    fi
+
+    return "$migration_status"
 }
 
 setup_python_env() {

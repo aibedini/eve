@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "62d69c291a48577f07c351c809d319f6b2090379",
-    "indexed_at": "2026-08-21T11:41:07Z",
+    "commit": "3a8a8e853f01b8ddfad168b112cb0e98d518d351",
+    "indexed_at": "2026-08-21T11:51:26Z",
     "project": "C-Users-Mahna-Documents-Github-Repos-eve-xui-manager",
-    "nodes": 6772,
-    "edges": 37742,
+    "nodes": 6773,
+    "edges": 37747,
     "original_size": 24969216,
-    "compressed_size": 4699276,
+    "compressed_size": 4693485,
     "compression_level": 9
 }

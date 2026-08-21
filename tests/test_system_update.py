@@ -305,6 +305,20 @@ class DomainSslUpdatePersistenceTest(unittest.TestCase):
         self.assertIn('verify_panel_proxy', setup)
         self.assertIn('Recovered panel domain from installed TLS certificate', setup)
 
+    def test_setup_migrations_are_bounded_and_use_single_runner(self):
+        setup = (Path(__file__).parents[1] / 'setup.sh').read_text(encoding='utf-8')
+        migration_fn = setup.split('run_migrations() {', 1)[1].split(
+            '\nsetup_python_env() {', 1)[0]
+
+        self.assertIn('EVE_MIGRATION_TIMEOUT_SECONDS:-600', migration_fn)
+        self.assertIn('timeout --foreground --signal=TERM --kill-after=30s', migration_fn)
+        self.assertIn('python3 -m panel.migrate', migration_fn)
+        self.assertIn('systemctl stop "${active_units[@]}"', migration_fn)
+        self.assertIn('systemctl kill --kill-who=all --signal=KILL', migration_fn)
+        self.assertIn('systemctl start "$unit"', migration_fn)
+        self.assertNotIn('python3 init_db.py', migration_fn)
+        self.assertNotIn('python3 migrations.py', migration_fn)
+
 
 if __name__ == '__main__':
     unittest.main()
