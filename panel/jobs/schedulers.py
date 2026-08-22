@@ -270,7 +270,7 @@ def snapshot_reader_worker():
         time.sleep(10)
 
 
-def fetch_and_update_global_data(force: bool = False, server_ids=None):
+def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_callback=None):
     """یک بار داده‌ها را از سرورها واکشی و در RAM به‌روزرسانی می‌کند."""
     from app import _utc_iso_now, app, fetch_worker, get_server_password, process_inbounds  # deferred: app-level helper, avoids circular import
     try:
@@ -307,6 +307,17 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
             'panel_type': s.panel_type, 'sub_port': s.sub_port,
             'sub_path': s.sub_path, 'json_path': s.json_path
         } for s in servers if int(s.id) not in skipped_ids]
+
+        if progress_callback:
+            try:
+                progress_callback('started', {
+                    'total': len(servers),
+                    'servers': [{'id': int(s.id), 'name': s.name, 'state': (
+                        'skipped' if int(s.id) in skipped_ids else 'pending')}
+                        for s in servers],
+                })
+            except Exception:
+                app.logger.exception('Failed to initialize refresh progress')
 
         # Release the database read lock before starting long-running network I/O
         try:
@@ -449,6 +460,17 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None):
                     except Exception:
                         app.logger.exception("Failed to apply fetch result for server %s", sid)
                     _commit_snapshot()
+                    if progress_callback:
+                        try:
+                            srv = servers_by_id.get(sid)
+                            progress_callback('server_done', {
+                                'id': sid,
+                                'name': getattr(srv, 'name', None) or f'Server {sid}',
+                                'state': 'error' if res[5] else 'success',
+                                'error': res[5] or None,
+                            })
+                        except Exception:
+                            app.logger.exception('Failed to store refresh progress for server %s', sid)
                     dirty_server_ids.add(sid)
                     nowt = time.time()
                     if nowt - last_publish >= 1.0:

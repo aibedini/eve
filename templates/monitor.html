@@ -21,7 +21,7 @@
             <h2>Track expiring and low-volume clients</h2>
             <p>Filter by risk, personalize the outreach text, and message users in seconds.</p>
             <div class="monitor-hero-actions">
-                <button class="btn btn-primary" onclick="scanNetworks()">Scan Now</button>
+                <button class="btn btn-primary" id="monitor-scan-btn" onclick="scanNetworks()">Scan Now</button>
                 <button class="btn btn-ghost" onclick="saveMonitorSettings()">Save Settings</button>
             </div>
         </div>
@@ -59,6 +59,18 @@
                         <label>Hide Expired After (Days)</label>
                         <input type="number" id="monitor-hide-days" min="0" max="365" value="7">
                     </div>
+                    <label class="form-group form-toggle-item" style="cursor: pointer;">
+                        <div class="toggle-switch"><input type="checkbox" id="monitor-show-unlimited-volume"><span class="slider"></span></div>
+                        <span>Time alerts for unlimited-volume accounts</span>
+                    </label>
+                    <label class="form-group form-toggle-item" style="cursor: pointer;">
+                        <div class="toggle-switch"><input type="checkbox" id="monitor-show-unlimited-time"><span class="slider"></span></div>
+                        <span>Volume alerts for unlimited-time accounts</span>
+                    </label>
+                    <label class="form-group form-toggle-item" style="cursor: pointer;">
+                        <div class="toggle-switch"><input type="checkbox" id="monitor-show-fully-unlimited"><span class="slider"></span></div>
+                        <span>Show fully unlimited accounts</span>
+                    </label>
                     <div class="form-group">
                         <label>TimeZone</label>
                         <select id="monitor-timezone" class="form-select"></select>
@@ -137,7 +149,9 @@
                     <button class="chip active" data-status="low" data-label="Low" onclick="toggleStatusFilter(this)">Low (0)</button>
                     <button class="chip active" data-status="soon" data-label="Soon" onclick="toggleStatusFilter(this)">Soon (0)</button>
                     <button class="chip" data-status="disabled" data-label="Disabled" onclick="toggleStatusFilter(this)">Disabled (0)</button>
-                    <button class="chip" data-status="ok" data-label="All" onclick="toggleStatusFilter(this)">All (0)</button>
+                    <button class="chip" data-status="all" data-label="All" onclick="toggleStatusFilter(this)">All (0)</button>
+                    <button class="chip active" data-optout="nosms" data-label="No SMS" onclick="toggleOptoutFilter(this)">No SMS (0)</button>
+                    <button class="chip active" data-optout="nopm" data-label="No PM" onclick="toggleOptoutFilter(this)">No PM (0)</button>
                 </div>
                 {% if role != 'reseller' %}
                 <label class="filter-toggle" title="Include reseller-owned users">
@@ -165,8 +179,11 @@
 
     <div id="monitor-progress-overlay" class="monitor-progress-overlay hidden">
         <div class="monitor-progress-box">
-            <div class="monitor-spinner"></div>
-            <div id="monitor-progress-text" class="monitor-progress-text">Scanning servers...</div>
+            <button type="button" class="monitor-progress-close" onclick="hideMonitorProgress()" aria-label="Close">&times;</button>
+            <div class="monitor-progress-heading"><div class="monitor-spinner"></div><div id="monitor-progress-text" class="monitor-progress-text">Scanning servers...</div></div>
+            <div class="monitor-progress-track"><span id="monitor-progress-bar"></span></div>
+            <div id="monitor-progress-summary" class="text-secondary">Preparing server list...</div>
+            <div id="monitor-progress-servers" class="monitor-progress-servers"></div>
         </div>
     </div>
 </div>
@@ -221,6 +238,21 @@
         height: 13px;
         stroke: #8b5cf6;
     }
+    .monitor-comment { display:block; margin-top:4px; color:var(--text-secondary); font-size:.75rem; overflow-wrap:anywhere; }
+    .tag-optout { background:rgba(239,68,68,.12); color:#dc2626; border:1px solid rgba(239,68,68,.3); }
+    .btn-optout-active { border-color:rgba(239,68,68,.55)!important; color:#dc2626!important; }
+    .monitor-progress-box { position:relative; min-width:min(560px,92vw); max-width:680px; }
+    .monitor-progress-close { position:absolute; inset-inline-end:12px; top:8px; border:0; background:transparent; color:var(--text-secondary); font-size:1.6rem; cursor:pointer; }
+    .monitor-progress-close:hover { color:var(--text-primary); transform:scale(1.05); }
+    .monitor-progress-close:focus-visible { outline:2px solid var(--primary); outline-offset:2px; border-radius:4px; }
+    .monitor-progress-heading { display:flex; align-items:center; gap:12px; padding-inline-end:28px; }
+    .monitor-progress-track { height:8px; background:var(--surface-muted,rgba(148,163,184,.18)); border-radius:99px; overflow:hidden; margin:16px 0 8px; }
+    .monitor-progress-track span { display:block; width:0; height:100%; background:var(--primary); border-radius:inherit; transition:width .25s ease; }
+    .monitor-progress-servers { display:grid; gap:6px; margin-top:14px; max-height:280px; overflow:auto; text-align:start; }
+    .monitor-progress-server { display:flex; justify-content:space-between; gap:12px; padding:8px 10px; border-radius:8px; background:rgba(148,163,184,.08); font-size:.82rem; }
+    .monitor-progress-server .success { color:var(--success); }
+    .monitor-progress-server .error { color:var(--danger); }
+    .monitor-progress-server .pending { color:var(--text-secondary); }
 </style>
 <script nonce="{{ csp_nonce }}">
     const MONITOR_ROLE = '{{ role|e }}';
@@ -228,8 +260,10 @@
     let monitorTimezone = 'Asia/Tehran';
     let allAlerts = [];
     let includeResellerUsers = false;
-    const MONITOR_STATUS_KEYS = ['ended', 'expired', 'low', 'soon'];
+    const MONITOR_STATUS_KEYS = ['ended', 'expired', 'low', 'soon', 'disabled', 'ok'];
     const activeStatusFilters = new Set(['low', 'soon']);
+    const activeOptoutFilters = new Set(['nosms', 'nopm']);
+    let monitorScanPoll = null;
     let royaltyTemplates = { sms: '', whatsapp: '' };
 
     document.addEventListener('DOMContentLoaded', async () => {
@@ -295,6 +329,9 @@
         document.getElementById('monitor-warning-days').value = filters.warning_days ?? 3;
         document.getElementById('monitor-warning-gb').value = filters.warning_gb ?? 2;
         document.getElementById('monitor-hide-days').value = filters.hide_days ?? 7;
+        document.getElementById('monitor-show-unlimited-volume').checked = filters.show_unlimited_volume !== false;
+        document.getElementById('monitor-show-unlimited-time').checked = filters.show_unlimited_time !== false;
+        document.getElementById('monitor-show-fully-unlimited').checked = !!filters.show_fully_unlimited;
         document.getElementById('monitor-debug').checked = !!filters.debug;
         document.getElementById('monitor-timezone').value = monitorTimezone || 'Asia/Tehran';
 
@@ -336,6 +373,9 @@
                 warning_days: parseInt(document.getElementById('monitor-warning-days').value || '3', 10),
                 warning_gb: parseFloat(document.getElementById('monitor-warning-gb').value || '2'),
                 hide_days: parseInt(document.getElementById('monitor-hide-days').value || '7', 10),
+                show_unlimited_volume: document.getElementById('monitor-show-unlimited-volume').checked,
+                show_unlimited_time: document.getElementById('monitor-show-unlimited-time').checked,
+                show_fully_unlimited: document.getElementById('monitor-show-fully-unlimited').checked,
                 debug: document.getElementById('monitor-debug').checked
             },
             timezone: (document.getElementById('monitor-timezone').value || 'Asia/Tehran').trim(),
@@ -433,12 +473,20 @@
 
     function toggleStatusFilter(button) {
         const status = button.dataset.status;
-        if (status === 'ok') {
-            if (activeStatusFilters.size === MONITOR_STATUS_KEYS.length) {
+        if (status === 'all') {
+            if (activeStatusFilters.size === MONITOR_STATUS_KEYS.length && activeOptoutFilters.size === 2) {
                 activeStatusFilters.clear();
+                activeOptoutFilters.clear();
+                activeStatusFilters.add('low');
+                activeStatusFilters.add('soon');
+                activeOptoutFilters.add('nosms');
+                activeOptoutFilters.add('nopm');
             } else {
                 activeStatusFilters.clear();
                 MONITOR_STATUS_KEYS.forEach((s) => activeStatusFilters.add(s));
+                activeOptoutFilters.clear();
+                activeOptoutFilters.add('nosms');
+                activeOptoutFilters.add('nopm');
             }
             updateStatusChips();
             renderAlerts();
@@ -455,6 +503,14 @@
         renderAlerts();
     }
 
+    function toggleOptoutFilter(button) {
+        const key = button.dataset.optout;
+        if (activeOptoutFilters.has(key)) activeOptoutFilters.delete(key);
+        else activeOptoutFilters.add(key);
+        updateStatusChips();
+        renderAlerts();
+    }
+
     function updateStatusChips() {
         const statusChips = document.querySelectorAll('.monitor-status-filters .chip');
         const allActive = MONITOR_STATUS_KEYS.every((s) => activeStatusFilters.has(s));
@@ -464,9 +520,13 @@
             const status = chip.dataset.status;
             const label = chip.dataset.label || chip.textContent || '';
 
-            if (chip.dataset.status === 'ok') {
-                chip.classList.toggle('active', allActive);
+            if (chip.dataset.status === 'all') {
+                chip.classList.toggle('active', allActive && activeOptoutFilters.size === 2);
                 chip.textContent = `${label} (${statusCounts.all})`;
+            } else if (chip.dataset.optout) {
+                const key = chip.dataset.optout;
+                chip.classList.toggle('active', activeOptoutFilters.has(key));
+                chip.textContent = `${label} (${statusCounts[key] || 0})`;
             } else {
                 chip.classList.toggle('active', activeStatusFilters.has(status));
                 chip.textContent = `${label} (${statusCounts[status] || 0})`;
@@ -500,12 +560,14 @@
     }
 
     function getStatusCounts(alerts) {
-        const counts = { all: alerts.length, ended: 0, expired: 0, low: 0, soon: 0, disabled: 0 };
+        const counts = { all: alerts.length, ended: 0, expired: 0, low: 0, soon: 0, disabled: 0, ok: 0, nosms: 0, nopm: 0 };
         alerts.forEach((alert) => {
             const status = String(alert.status || '').toLowerCase();
             if (Object.prototype.hasOwnProperty.call(counts, status)) {
                 counts[status] += 1;
             }
+            if (alert.no_sms) counts.nosms += 1;
+            if (alert.no_pm) counts.nopm += 1;
         });
         return counts;
     }
@@ -522,7 +584,10 @@
 
         const baseFiltered = getBaseFilteredAlerts();
         const filtered = baseFiltered.filter((alert) => {
-            if (activeStatusFilters.size && !activeStatusFilters.has(alert.status)) {
+            const statusMatch = activeStatusFilters.has(alert.status);
+            const optoutMatch = (activeOptoutFilters.has('nosms') && alert.no_sms)
+                || (activeOptoutFilters.has('nopm') && alert.no_pm);
+            if (!statusMatch && !optoutMatch) {
                 return false;
             }
             return true;
@@ -568,6 +633,9 @@
         const waBtnLabel = waCount > 0 ? `WhatsApp <span class="msg-sent-badge">${waCount}×</span>` : 'WhatsApp';
         const smsBtnClass = smsCount > 0 ? ' btn-msg-sent' : '';
         const waBtnClass = waCount > 0 ? ' btn-msg-sent' : '';
+        const contactDisabled = Boolean(alert.contact_opted_out || alert.no_sms || alert.no_pm);
+        const commentHtml = alert.comment ? `<span class="monitor-comment">${escapeHtml(alert.comment)}</span>` : '';
+        const optoutTags = `${alert.no_sms ? '<span class="monitor-tag tag-optout">No SMS</span>' : ''}${alert.no_pm ? '<span class="monitor-tag tag-optout">No PM</span>' : ''}`;
 
         const zeroUsageChip = alert.zero_usage
             ? '<span class="monitor-tag tag-zero-usage" title="No traffic consumed — never connected">No Usage</span>'
@@ -584,25 +652,28 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                 ${escapeHtml(alert.email || '-')}
                 ${alert.verified ? '<span class="verified-badge" style="color: var(--success); font-size: 0.75rem; margin-left: 6px; font-weight: 600; display: inline-flex; align-items: center; gap: 2px;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>Verified</span>' : ''}
+                ${commentHtml}
             </div>
             <div class="monitor-cell monitor-phone"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>${phoneHtml}</div>
             <div class="monitor-cell"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>${escapeHtml(alert.server_name || '-')}</div>
-            <div class="monitor-cell" style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;"><span class="monitor-tag tag-${st}">${escapeHtml(alert.status_label || alert.status)}</span>${zeroUsageChip}</div>
+            <div class="monitor-cell" style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;"><span class="monitor-tag tag-${st}">${escapeHtml(alert.status_label || alert.status)}</span>${zeroUsageChip}${optoutTags}</div>
             <div class="monitor-cell monitor-detail-stack">
                 <span class="detail-remaining${remCls}">${escapeHtml(alert.remaining || '-')}</span>
                 <span class="detail-time${timeCls}">${escapeHtml(alert.time_left || '-')}</span>
                 <span class="detail-expiry${expCls}">${escapeHtml(alert.expiry_date || '-')}</span>
             </div>
             <div class="monitor-cell monitor-actions">
-                <button class="btn btn-sms${smsBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length ? '' : 'disabled'}>
+                <button class="btn btn-sms${smsBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? 'Messaging disabled by No SMS / No PM tag' : ''}">
                     <span class="icon">${getSmsIcon()}</span>
                     ${smsBtnLabel}
                 </button>
-                <button class="btn btn-whatsapp${waBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length ? '' : 'disabled'}>
+                <button class="btn btn-whatsapp${waBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? 'Messaging disabled by No SMS / No PM tag' : ''}">
                     <span class="icon">${getWhatsAppIcon()}</span>
                     ${waBtnLabel}
                 </button>
                 ${royaltyBtn}
+                <button class="btn ${alert.no_sms ? 'btn-optout-active' : ''}" type="button" onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nosms')">${alert.no_sms ? 'Allow SMS' : 'No SMS'}</button>
+                <button class="btn ${alert.no_pm ? 'btn-optout-active' : ''}" type="button" onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nopm')">${alert.no_pm ? 'Allow PM' : 'No PM'}</button>
                 <button class="btn ${alert.enabled ? 'btn-danger' : 'btn-success'}" onclick="toggleClientFromMonitor(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}', ${!alert.enabled})" title="${alert.enabled ? 'Disable' : 'Enable'}">
                     <span class="icon">${alert.enabled ? getDisableIcon() : getEnableIcon()}</span>
                     ${alert.enabled ? 'Disable' : 'Enable'}
@@ -774,6 +845,38 @@
             openTarget,
             channel === 'sms' ? 'Send SMS to' : 'Send WhatsApp to'
         );
+    }
+
+    function updateOptoutComment(comment, tag, add) {
+        const pattern = new RegExp('\\s*#\\s*' + tag + '(?![a-z0-9])', 'ig');
+        const cleaned = String(comment || '').replace(pattern, '').trim();
+        return add ? `${cleaned} #${tag}`.trim() : cleaned;
+    }
+
+    async function toggleMonitorOptout(serverId, inboundId, encodedEmail, tag) {
+        const email = decodeURIComponent(encodedEmail || '');
+        const alert = allAlerts.find((a) => Number(a.server_id) === Number(serverId)
+            && Number(a.inbound_id) === Number(inboundId) && a.email === email);
+        if (!alert) return;
+        const field = tag === 'nosms' ? 'no_sms' : 'no_pm';
+        const adding = !alert[field];
+        const nextComment = updateOptoutComment(alert.comment, tag, adding);
+        try {
+            const response = await fetch(`/api/client/${serverId}/${inboundId}/${encodeURIComponent(email)}/edit`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({new_email: email, comment: nextComment}),
+            });
+            const data = await response.json();
+            if (!data.success) throw new Error(data.error || 'Comment update failed');
+            alert.comment = nextComment;
+            alert[field] = adding;
+            alert.contact_opted_out = Boolean(alert.no_sms || alert.no_pm);
+            showToast(adding ? `#${tag} added` : `#${tag} removed`, 'success');
+            renderAlerts();
+        } catch (error) {
+            showToast(error.message || 'Failed to update messaging preference', 'error');
+        }
     }
 
     function openPhoneChoiceModal(phones, onSelect, title) {
@@ -1013,9 +1116,38 @@
         }
     }
 
+    function hideMonitorProgress() {
+        document.getElementById('monitor-progress-overlay')?.classList.add('hidden');
+    }
+
+    function renderMonitorProgress(job) {
+        const progress = job.progress || {};
+        const rows = Array.isArray(progress.servers) ? progress.servers : [];
+        const total = Number(progress.total || rows.length || 0);
+        const completed = Number(progress.completed || 0);
+        const success = Number(progress.success || 0);
+        const failed = Number(progress.failed || 0);
+        const percent = total ? Math.min(100, Math.round(completed * 100 / total)) : 4;
+        document.getElementById('monitor-progress-bar').style.width = `${percent}%`;
+        document.getElementById('monitor-progress-summary').textContent = total
+            ? `${completed} of ${total} servers checked · ${success} successful${failed ? ` · ${failed} failed` : ''}`
+            : (job.state === 'queued' ? 'Waiting for the refresh worker...' : 'Loading server list...');
+        document.getElementById('monitor-progress-servers').innerHTML = rows.map((row) => {
+            const state = row.state || 'pending';
+            const labels = {success: 'Checked', error: 'Failed', skipped: 'Skipped', pending: 'Checking…'};
+            const detail = row.error ? ` title="${escapeHtml(row.error)}"` : '';
+            return `<div class="monitor-progress-server"><span>${escapeHtml(row.name || `Server ${row.id}`)}</span><span class="${state}"${detail}>${labels[state] || state}</span></div>`;
+        }).join('');
+        const current = progress.current_server;
+        document.getElementById('monitor-progress-text').textContent = job.state === 'queued'
+            ? 'Scan queued'
+            : (current ? `Checking servers · latest: ${current}` : 'Checking servers...');
+    }
+
     async function scanNetworks() {
         const overlay = document.getElementById('monitor-progress-overlay');
         const text = document.getElementById('monitor-progress-text');
+        const scanBtn = document.getElementById('monitor-scan-btn');
 
         if (!overlay || !text) {
             showToast('Progress UI is missing', 'error');
@@ -1024,6 +1156,10 @@
 
         overlay.classList.remove('hidden');
         text.textContent = 'Initiating global scan...';
+        document.getElementById('monitor-progress-summary').textContent = 'Preparing server list...';
+        document.getElementById('monitor-progress-servers').textContent = '';
+        document.getElementById('monitor-progress-bar').style.width = '2%';
+        if (scanBtn) scanBtn.disabled = true;
 
         try {
             const startResp = await fetch('/api/monitor/refresh', { method: 'POST' });
@@ -1034,16 +1170,8 @@
             }
 
             const jobId = startData.job_id;
-            const messages = [
-                'Connecting to servers...',
-                'Fetching client usage...',
-                'Calculating expirations...',
-                'Processing alerts...',
-                'Almost done...'
-            ];
-            let msgIdx = 0;
-
-            const pollInterval = setInterval(async () => {
+            if (monitorScanPoll) clearInterval(monitorScanPoll);
+            monitorScanPoll = setInterval(async () => {
                 try {
                     const statusResp = await fetch(`/api/monitor/job/${jobId}`);
                     const statusData = await statusResp.json();
@@ -1053,26 +1181,27 @@
                     }
 
                     const job = statusData.job;
+                    renderMonitorProgress(job);
                     if (job.state === 'done') {
-                        clearInterval(pollInterval);
+                        clearInterval(monitorScanPoll);
+                        monitorScanPoll = null;
                         text.textContent = 'Scan complete. Updating view...';
+                        document.getElementById('monitor-progress-bar').style.width = '100%';
                         await refreshAlerts();
                         setTimeout(() => {
-                            overlay.classList.add('hidden');
+                            if (scanBtn) scanBtn.disabled = false;
                             showToast('Global scan completed successfully', 'success');
-                        }, 500);
+                        }, 350);
                         return;
                     }
 
                     if (job.state === 'error') {
-                        clearInterval(pollInterval);
-                        overlay.classList.add('hidden');
+                        clearInterval(monitorScanPoll);
+                        monitorScanPoll = null;
+                        if (scanBtn) scanBtn.disabled = false;
                         showToast('Scan failed: ' + (job.error || 'Unknown error'), 'error');
                         return;
                     }
-
-                    msgIdx = (msgIdx + 1) % messages.length;
-                    text.textContent = messages[msgIdx];
                 } catch (e) {
                     console.error('Poll error', e);
                 }
@@ -1080,6 +1209,7 @@
         } catch (err) {
             console.error(err);
             overlay.classList.add('hidden');
+            if (scanBtn) scanBtn.disabled = false;
             showToast(err.message || 'Error starting scan', 'error');
         }
     }

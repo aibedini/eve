@@ -1,5 +1,6 @@
 """Monitor settings/alerts API routes (extracted from app.py)."""
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 
@@ -84,6 +85,9 @@ def get_monitor_alerts():
     warning_days = int(filters.get('warning_days', 3) or 3)
     warning_gb = float(filters.get('warning_gb', 2.0) or 2.0)
     hide_days = int(filters.get('hide_days', 7) or 7)
+    show_unlimited_volume = bool(filters.get('show_unlimited_volume', True))
+    show_unlimited_time = bool(filters.get('show_unlimited_time', True))
+    show_fully_unlimited = bool(filters.get('show_fully_unlimited', False))
     debug = bool(filters.get('debug'))
 
     inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
@@ -217,6 +221,11 @@ def get_monitor_alerts():
                 seen_clients.add(dedupe_key)
 
             enabled = bool(client.get('enable', True))
+            comment = (client.get('comment') or '').strip()
+            comment_l = comment.lower()
+            no_sms = bool(re.search(r'#\s*nosms', comment_l))
+            no_pm = bool(re.search(r'#\s*nopm', comment_l))
+            contact_opted_out = no_sms or no_pm
             # IMPORTANT: We do NOT skip disabled clients here. Sanaei-style panels
             # auto-disable a client the instant its time or traffic runs out, so
             # filtering by the enable flag alone would hide exactly the users we
@@ -246,6 +255,9 @@ def get_monitor_alerts():
 
             expiry_ts = int(client.get('expiryTimestamp') or 0)
             expiry_info = format_remaining_days(expiry_ts)
+
+            volume_unlimited = total_bytes <= 0
+            time_unlimited = expiry_ts <= 0
 
             status = None
             status_rank = -1
@@ -279,14 +291,32 @@ def get_monitor_alerts():
                 status = 'disabled'
                 status_rank = 0
 
+            # Unlimited visibility is independent from classification. Keep the
+            # real reason above so a panel auto-disable never becomes a misleading
+            # manual-disable label, then apply the operator's display policy.
+            if not contact_opted_out:
+                if volume_unlimited and time_unlimited and not show_fully_unlimited:
+                    continue
+                if volume_unlimited and status in ('expired', 'soon') and not show_unlimited_volume:
+                    continue
+                if time_unlimited and status in ('ended', 'low') and not show_unlimited_time:
+                    continue
+
             # Hide long-expired garbage (date-based, independent of enable flag).
-            if expiry_info.get('type') == 'expired' and not debug:
+            if expiry_info.get('type') == 'expired' and not debug and not contact_opted_out:
                 try:
                     days_ago = abs(int(expiry_info.get('days') or 0))
                 except Exception:
                     days_ago = 0
                 if hide_days and days_ago > hide_days:
                     continue
+
+            if volume_unlimited and time_unlimited and show_fully_unlimited and not status:
+                status = 'ok'
+
+            # Opted-out accounts must remain discoverable even while otherwise healthy.
+            if not status and contact_opted_out:
+                status = 'ok'
 
             if not status and not debug:
                 continue
@@ -308,7 +338,12 @@ def get_monitor_alerts():
                 'server_name': inbound.get('server_name'),
                 'inbound_id': inbound_id,
                 'email': email,
-                'comment': (client.get('comment') or '').strip(),
+                'comment': comment,
+                'no_sms': no_sms,
+                'no_pm': no_pm,
+                'contact_opted_out': contact_opted_out,
+                'volume_unlimited': volume_unlimited,
+                'time_unlimited': time_unlimited,
                 'status': status,
                 'status_label': status_labels.get(status, status),
                 'remaining': client.get('remaining_formatted') or 'Unlimited',

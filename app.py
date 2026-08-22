@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.79"
+APP_VERSION = "2.5.80"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -1052,6 +1052,9 @@ DEFAULT_MONITOR_SETTINGS = {
         "warning_days": 3,
         "warning_gb": 2.0,
         "hide_days": 7,
+        "show_unlimited_volume": True,
+        "show_unlimited_time": True,
+        "show_fully_unlimited": False,
         "debug": False
     },
     "templates": {
@@ -1201,6 +1204,12 @@ def _normalize_monitor_settings(payload: dict | None) -> dict:
         min_value=0,
         max_value=365
     )
+    defaults['filters']['show_unlimited_volume'] = bool(filters.get(
+        'show_unlimited_volume', defaults['filters']['show_unlimited_volume']))
+    defaults['filters']['show_unlimited_time'] = bool(filters.get(
+        'show_unlimited_time', defaults['filters']['show_unlimited_time']))
+    defaults['filters']['show_fully_unlimited'] = bool(filters.get(
+        'show_fully_unlimited', defaults['filters']['show_fully_unlimited']))
     defaults['filters']['debug'] = bool(filters.get('debug', defaults['filters']['debug']))
 
     for key in defaults['templates'].keys():

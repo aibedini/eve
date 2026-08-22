@@ -1452,7 +1452,30 @@ def _run_refresh_job(job_id: str):
                                 _backoff_record_failure(int(server_id), str(e))
                                 raise
                         else:
-                            fetch_and_update_global_data(force=force)
+                            def _monitor_progress(event, payload):
+                                current_job = _get_refresh_job(job_id) or job
+                                progress = current_job.setdefault('progress', {})
+                                if event == 'started':
+                                    progress.update(payload)
+                                    progress['completed'] = sum(
+                                        1 for row in payload.get('servers', [])
+                                        if row.get('state') == 'skipped')
+                                elif event == 'server_done':
+                                    rows = progress.setdefault('servers', [])
+                                    for row in rows:
+                                        if int(row.get('id', -1)) == int(payload.get('id', -2)):
+                                            row.update(payload)
+                                            break
+                                    progress['current_server'] = payload.get('name')
+                                    progress['completed'] = sum(
+                                        1 for row in rows
+                                        if row.get('state') in ('success', 'error', 'skipped'))
+                                    progress['success'] = sum(1 for row in rows if row.get('state') == 'success')
+                                    progress['failed'] = sum(1 for row in rows if row.get('state') == 'error')
+                                _store_refresh_job(current_job)
+
+                            fetch_and_update_global_data(
+                                force=force, progress_callback=_monitor_progress)
                     # Propagate manual-refresh results to other workers (Redis mode).
                     publish_snapshot_to_redis(changed_server_ids)
                 finally:
