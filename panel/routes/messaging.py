@@ -161,7 +161,7 @@ def _sms_scan_cancel_set():
 @bp.route('/api/sms/test-connection', methods=['POST'])
 @superadmin_required
 def test_sms_connection():
-    """Verify the GMweb gateway: /health (public) then /ready (with the token)."""
+    """Verify the selected SMS gateway: /health then authenticated /ready."""
     from app import (  # deferred: app-level helper, avoids circular import
         _get_sms_runtime_settings, app,
     )
@@ -169,10 +169,11 @@ def test_sms_connection():
     base = (cfg.get('base_url') or '').strip().rstrip('/')
     api_key = (cfg.get('api_key') or '').strip()
     if not base:
-        return jsonify({'success': False, 'error': 'GMweb Base URL is not configured.'}), 400
+        return jsonify({'success': False, 'error': 'Selected SMS gateway Base URL is not configured.'}), 400
     if not api_key:
-        return jsonify({'success': False, 'error': 'GMweb API key is not configured.'}), 400
+        return jsonify({'success': False, 'error': 'Selected SMS gateway API key is not configured.'}), 400
     timeout = int(cfg.get('timeout_seconds') or 15)
+    provider_label = 'Custom HTTP' if cfg.get('provider') == 'custom_http' else 'GMweb'
     try:
         h = requests.get(f"{base}/health", timeout=timeout)
         if h.status_code != 200:
@@ -188,9 +189,12 @@ def test_sms_connection():
         return jsonify({'success': False, 'error': 'Invalid API key (gateway returned 401).'}), 400
     if r.status_code == 503:
         return jsonify({'success': True, 'ready': False,
-                        'message': 'Gateway reachable and key valid, but Google Messages is not paired yet (503).'})
+                        'provider': cfg.get('provider', 'gmweb'),
+                        'message': 'Gateway reachable and key valid, but it is not ready to send yet (503).'})
     if r.status_code == 200:
-        return jsonify({'success': True, 'ready': True, 'message': 'Gateway reachable, key valid, and ready to send.'})
+        return jsonify({'success': True, 'ready': True,
+                        'provider': cfg.get('provider', 'gmweb'),
+                        'message': f'{provider_label} gateway reachable, key valid, and ready to send.'})
     return jsonify({'success': False, 'error': f'Gateway /ready returned HTTP {r.status_code}.'}), 400
 
 
@@ -213,7 +217,7 @@ def sms_test_send():
     cfg = _get_sms_runtime_settings()
     if not (cfg.get('base_url') and cfg.get('api_key')):
         return jsonify({'success': False,
-                        'error': 'GMweb gateway is not configured. Set the Base URL and API key (and Save) first.'}), 400
+                        'error': 'The selected SMS gateway is not configured. Set its Base URL and API key (and Save) first.'}), 400
 
     user = db.session.get(Admin, session['admin_id'])
     own_raw = (getattr(user, 'support_sms', None) or '').strip()
@@ -269,7 +273,7 @@ def sms_test_send():
             'manual_review': True,
             'recipient': recipient,
             'request_id': res.get('request_id'),
-            'error': 'GMweb submitted the test once but could not verify it. Do not resend automatically; review Google Messages.',
+            'error': 'The SMS gateway submitted the test once but could not verify it. Do not resend automatically; review the provider.',
         }), 409
     _sms_refund_daily_segments(segments)
     _sms_log_row(None, (getattr(user, 'username', None) or 'test').strip().lower(),
@@ -305,7 +309,7 @@ def sms_scan_run():
     if not cfg.get('enabled'):
         return jsonify({'success': False, 'error': 'SMS automation is disabled. Enable it (and Save) first.'}), 400
     if not (cfg.get('base_url') and cfg.get('api_key')):
-        return jsonify({'success': False, 'error': 'GMweb gateway is not configured.'}), 400
+        return jsonify({'success': False, 'error': 'The selected SMS gateway is not configured.'}), 400
     if not requested_states and not any(cfg.get(f'trigger_{s}') for s in SMS_SCAN_STATES):
         return jsonify({'success': False, 'error': 'No state triggers are enabled (near expiry / low volume / expired / ended).'}), 400
     if payload.get('states') is not None and not requested_states:
@@ -313,11 +317,11 @@ def sms_scan_run():
     ready, ready_reason, ready_status = _sms_gateway_ready(cfg)
     if not ready:
         if ready_reason == 'gateway_not_paired':
-            message = 'GMweb is reachable but Google Messages is not paired/ready. Pair it first, then start again.'
+            message = 'The SMS gateway is reachable but not ready. Prepare it first, then start again.'
         elif ready_reason == 'gateway_auth_failed':
-            message = 'GMweb rejected the API key (401). Check the project API key.'
+            message = 'The SMS gateway rejected the API key (401). Check the configured key.'
         else:
-            message = f'GMweb is not ready: {ready_reason or "unknown"}'
+            message = f'SMS gateway is not ready: {ready_reason or "unknown"}'
         return jsonify({'success': False, 'error': message,
                         'reason': ready_reason, 'gateway_status': ready_status}), 400
     if _sms_in_quiet_hours(cfg):
@@ -487,7 +491,7 @@ def sms_logs():
 @bp.route('/api/sms/capacity', methods=['GET'])
 @superadmin_required
 def sms_capacity():
-    """Expose the authenticated GMweb 0.3.30 lane/capacity snapshot to Settings."""
+    """Expose the selected gateway's authenticated lane/capacity snapshot."""
     from panel.jobs.messaging import _get_gmweb_send_capacity
 
     result = _get_gmweb_send_capacity()

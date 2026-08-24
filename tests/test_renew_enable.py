@@ -357,6 +357,61 @@ class RenewEnableTests(unittest.TestCase):
         self.assertFalse(payload['verify']['observed']['enable'])
         self.assertEqual(Transaction.query.filter_by(client_email='bob').count(), 0)
 
+    def test_recheck_reports_each_partially_applied_field(self):
+        expected_expiry = int(time.time() * 1000) + 30 * DAY_MS
+        expected_total = 15 * GB
+        observed = _raw_client(
+            expiry=expected_expiry, total=5 * GB, enable=False,
+        )
+        completed = {
+            'state': 'pending',
+            'verify': {'expected': {
+                'expiryTime': expected_expiry,
+                'totalGB': expected_total,
+                'enable': True,
+            }},
+        }
+        with (
+            mock.patch.object(
+                app_module, 'fetch_inbounds',
+                return_value=(_panel_inbounds(observed, self.server.id), None, '3x-ui'),
+            ),
+            mock.patch.object(clients_module, '_load_renew_result', return_value=completed),
+        ):
+            resp = self.client.post(
+                f'/api/client/{self.server.id}/1/bob/renew/verify',
+                json={'awaiting_result': True},
+            )
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        verify = resp.get_json()['verify']
+        self.assertFalse(verify['ok'])
+        self.assertEqual(verify['state'], 'partially_applied')
+        self.assertTrue(verify['checks']['expiryTime']['matches'])
+        self.assertFalse(verify['checks']['totalGB']['matches'])
+        self.assertFalse(verify['checks']['enable']['matches'])
+        self.assertEqual(verify['checks']['totalGB']['observed'], 5 * GB)
+
+    def test_recheck_without_saved_expectation_returns_observed_state(self):
+        observed = _raw_client(expiry=7 * DAY_MS, total=3 * GB, enable=True)
+        with (
+            mock.patch.object(
+                app_module, 'fetch_inbounds',
+                return_value=(_panel_inbounds(observed, self.server.id), None, '3x-ui'),
+            ),
+            mock.patch.object(clients_module, '_load_renew_result', return_value=None),
+        ):
+            resp = self.client.post(
+                f'/api/client/{self.server.id}/1/bob/renew/verify',
+                json={'awaiting_result': True},
+            )
+
+        verify = resp.get_json()['verify']
+        self.assertEqual(verify['error'], 'renew_result_unavailable')
+        self.assertEqual(verify['state'], 'observed_without_expected')
+        self.assertEqual(verify['observed']['totalGB'], 3 * GB)
+        self.assertTrue(verify['observed']['enable'])
+
     def test_legacy_panel_update_carries_enable(self):
         self._patches[1].stop()  # server_is_v3 -> use a fresh False mock
         v3_flag = mock.patch.object(app_module, 'server_is_v3', return_value=False)

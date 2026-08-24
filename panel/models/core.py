@@ -655,6 +655,7 @@ class AnnouncementDelivery(db.Model):
     last_error = db.Column(db.String(500), nullable=True)
     last_error_source = db.Column(db.String(24), nullable=True)
     gateway_request_id = db.Column(db.String(128), nullable=True, index=True)
+    gateway_provider = db.Column(db.String(24), nullable=False, default='gmweb', index=True)
     gateway_state = db.Column(db.String(32), nullable=True)
     gateway_stage = db.Column(db.String(64), nullable=True)
     gateway_priority = db.Column(db.String(24), nullable=True)

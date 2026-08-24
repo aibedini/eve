@@ -1462,7 +1462,7 @@ def _queue_announcement_campaign(announcement):
     if announcement.channel == 'sms':
         cfg = _get_sms_runtime_settings()
         if not cfg.get('enabled') or not cfg.get('base_url') or not cfg.get('api_key'):
-            raise ValueError('SMS automation and its GMweb gateway must be enabled first')
+            raise ValueError('SMS automation and its selected gateway must be enabled first')
     elif announcement.channel == 'whatsapp':
         cfg = _get_whatsapp_runtime_settings()
         if not cfg.get('enabled') or not cfg.get('gateway_url'):
@@ -1641,6 +1641,7 @@ def _run_announcement_campaign_batch(batch_size=25):
                         delivery.gateway_request_id = (
                             str(result.get('request_id'))[:128]
                             if result.get('request_id') else None)
+                        delivery.gateway_provider = str(result.get('provider') or 'gmweb')[:24]
                         delivery.gateway_state = (
                             str(result.get('status'))[:32]
                             if result.get('status') else None)
@@ -1663,7 +1664,7 @@ def _run_announcement_campaign_batch(batch_size=25):
                             delivery.status = 'manual_review'
                             delivery.sent_at = None
                             delivery.last_error = 'unverified_manual_review'
-                            delivery.last_error_source = 'gmweb'
+                            delivery.last_error_source = result.get('provider') or 'gmweb'
                             delivery.processed_at = datetime.utcnow()
                             delivery.next_attempt_at = None
                         elif result.get('accepted') and result.get('request_id') and not result.get('terminal'):
@@ -1756,9 +1757,13 @@ def _run_announcement_campaign_batch(batch_size=25):
 # admin / superadmin accounts). Reseller-owned accounts are never messaged.
 # ─────────────────────────────────────────────────────────────────────────────
 SMS_AUTOMATION_ENABLED_KEY      = 'sms_automation_enabled'
+SMS_PROVIDER_KEY                = 'sms_provider'
 SMS_GMWEB_BASE_URL_KEY          = 'sms_gmweb_base_url'
 SMS_GMWEB_API_KEY_KEY           = 'sms_gmweb_api_key'
 SMS_GMWEB_TIMEOUT_KEY           = 'sms_gmweb_timeout'
+SMS_CUSTOM_BASE_URL_KEY         = 'sms_custom_base_url'
+SMS_CUSTOM_API_KEY_KEY          = 'sms_custom_api_key'
+SMS_CUSTOM_TIMEOUT_KEY          = 'sms_custom_timeout'
 SMS_TRIGGER_CREATED_KEY         = 'sms_trigger_created'
 SMS_TRIGGER_RENEW_KEY           = 'sms_trigger_renew'
 SMS_TRIGGER_DEPLETION_KEY       = 'sms_trigger_depletion'  # legacy combined trigger (back-compat)
@@ -1958,8 +1963,10 @@ def _sms_daily_segments_used() -> int:
 def _get_sms_runtime_settings() -> dict:
     from app import _get_system_configs_batch, _parse_bool  # deferred: app-level helper, avoids circular import
     keys = [
-        SMS_AUTOMATION_ENABLED_KEY, SMS_GMWEB_BASE_URL_KEY, SMS_GMWEB_API_KEY_KEY,
-        SMS_GMWEB_TIMEOUT_KEY, SMS_TRIGGER_CREATED_KEY, SMS_TRIGGER_RENEW_KEY,
+        SMS_AUTOMATION_ENABLED_KEY, SMS_PROVIDER_KEY,
+        SMS_GMWEB_BASE_URL_KEY, SMS_GMWEB_API_KEY_KEY, SMS_GMWEB_TIMEOUT_KEY,
+        SMS_CUSTOM_BASE_URL_KEY, SMS_CUSTOM_API_KEY_KEY, SMS_CUSTOM_TIMEOUT_KEY,
+        SMS_TRIGGER_CREATED_KEY, SMS_TRIGGER_RENEW_KEY,
         SMS_TRIGGER_DEPLETION_KEY, SMS_DEPLETION_EXPIRY_DAYS_KEY,
         SMS_DEPLETION_VOLUME_GB_KEY, SMS_DEPLETION_COOLDOWN_DAYS_KEY,
         SMS_COOLDOWN_HOURS_NEAR_EXPIRY_KEY, SMS_COOLDOWN_HOURS_LOW_VOLUME_KEY,
@@ -1997,11 +2004,25 @@ def _get_sms_runtime_settings() -> dict:
             v = min(v, hi)
         return v
 
-    return {
-        'enabled': _bool(SMS_AUTOMATION_ENABLED_KEY, False),
+    provider = _txt(SMS_PROVIDER_KEY, 'gmweb').strip().lower()
+    if provider not in ('gmweb', 'custom_http'):
+        provider = 'gmweb'
+    gmweb = {
         'base_url': _txt(SMS_GMWEB_BASE_URL_KEY, '').strip().rstrip('/'),
         'api_key': _txt(SMS_GMWEB_API_KEY_KEY, '').strip(),
         'timeout_seconds': _int(SMS_GMWEB_TIMEOUT_KEY, 15, lo=3, hi=90),
+    }
+    custom_http = {
+        'base_url': _txt(SMS_CUSTOM_BASE_URL_KEY, '').strip().rstrip('/'),
+        'api_key': _txt(SMS_CUSTOM_API_KEY_KEY, '').strip(),
+        'timeout_seconds': _int(SMS_CUSTOM_TIMEOUT_KEY, 15, lo=3, hi=90),
+    }
+    selected = gmweb if provider == 'gmweb' else custom_http
+    return {
+        'enabled': _bool(SMS_AUTOMATION_ENABLED_KEY, False),
+        'provider': provider,
+        'providers': {'gmweb': gmweb, 'custom_http': custom_http},
+        **selected,
         'trigger_created': _bool(SMS_TRIGGER_CREATED_KEY, True),
         'trigger_renew': _bool(SMS_TRIGGER_RENEW_KEY, True),
         'trigger_depletion': _bool(SMS_TRIGGER_DEPLETION_KEY, False),
@@ -2037,6 +2058,17 @@ def _get_sms_runtime_settings() -> dict:
         'royalty_days': _int(SMS_ROYALTY_DAYS_KEY, 3, lo=1, hi=365),
         'royalty_cooldown_days': _int(SMS_ROYALTY_COOLDOWN_DAYS_KEY, 30, lo=1, hi=365),
     }
+
+
+def _get_sms_provider_settings(provider: str | None = None, cfg: dict | None = None) -> dict:
+    """Return connection settings for one provider while retaining legacy cfg callers."""
+    runtime = cfg or _get_sms_runtime_settings()
+    provider_name = str(provider or runtime.get('provider') or 'gmweb').strip().lower()
+    if provider_name not in ('gmweb', 'custom_http'):
+        provider_name = 'gmweb'
+    providers = runtime.get('providers') if isinstance(runtime.get('providers'), dict) else {}
+    connection = providers.get(provider_name) if isinstance(providers.get(provider_name), dict) else runtime
+    return {**runtime, **connection, 'provider': provider_name}
 
 
 def _tehran_hour(now_utc=None) -> int:
@@ -2312,10 +2344,11 @@ def _gmweb_sms_priority(message_kind: str) -> str:
 
 
 def _get_gmweb_send_capacity(cfg: dict | None = None) -> dict:
-    """Read GMweb lane occupancy and the currently free announcement capacity."""
-    cfg = cfg or _get_sms_runtime_settings()
+    """Read selected gateway lane occupancy and free announcement capacity."""
+    cfg = _get_sms_provider_settings(cfg=cfg)
     out = {
         'ok': False, 'status_code': None, 'reason': None,
+        'provider': cfg.get('provider', 'gmweb'),
         'priorities': {}, 'announcement': {},
     }
     base = (cfg.get('base_url') or '').strip().rstrip('/')
@@ -2364,13 +2397,14 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     ``priority`` must be one of Eve's four canonical lanes. ``idempotency_key``,
     when reused across a retry of the SAME logical message, lets GMweb return the
     original request safely after a lost response."""
-    cfg = cfg or _get_sms_runtime_settings()
+    cfg = _get_sms_provider_settings(cfg=cfg)
     out = {
         'sent': False, 'reason': None, 'status_code': None,
         'request_id': None, 'job_id': None, 'status_url': None,
         'status': None, 'accepted': False, 'terminal': None, 'successful': None,
         'manual_review': False, 'error_code': None, 'retry_after_seconds': None,
         'priority': None, 'priority_level': None, 'queue_position': None,
+        'provider': cfg.get('provider', 'gmweb'),
         'submitted_once': None, 'verification_status': None,
         'verification_attempts': None, 'requested_to': None, 'sent_to': None,
         'recipient_evidence': None, 'conversation_url': None,
@@ -2482,7 +2516,7 @@ def _cancel_sms_via_gmweb(reference: str, cfg: dict | None = None) -> dict:
     already-completed messages return ok=false/not_cancellable and must continue
     to be reconciled by the normal status poller.
     """
-    cfg = cfg or _get_sms_runtime_settings()
+    cfg = _get_sms_provider_settings(cfg=cfg)
     out = {
         'ok': False, 'cancelled': False, 'reason': None, 'status_code': None,
         'status': None, 'state': None, 'terminal': None, 'successful': None,
@@ -2623,7 +2657,8 @@ def _cancel_pending_sms_for_account(server_id, email: str, *, reason: str = 'cli
         reference = (row.request_id or row.gateway_job_id or '').strip()
         if not reference:
             continue
-        res = _cancel_sms_via_gmweb(reference, cfg)
+        res = _cancel_sms_via_gmweb(
+            reference, _get_sms_provider_settings(row.gateway_provider, cfg))
         now = datetime.utcnow()
         try:
             if res.get('cancelled'):
@@ -3591,6 +3626,7 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
             reason=(str(reason)[:255] if reason else None), job_id=job_id,
             request_id=(str(gateway_result.get('request_id'))[:128]
                         if gateway_result.get('request_id') else None),
+            gateway_provider=(str(gateway_result.get('provider') or 'gmweb')[:24]),
             gateway_job_id=(str(gateway_result.get('job_id'))[:64]
                             if gateway_result.get('job_id') else None),
             status_url=(str(gateway_result.get('status_url'))[:512]
@@ -3659,13 +3695,9 @@ def _sms_status_endpoint(base_url: str, row) -> str:
 
 
 def _refresh_pending_sms_statuses(limit: int = 100) -> int:
-    """Poll accepted GMweb tasks and persist their latest delivery state."""
+    """Poll accepted gateway tasks using the provider recorded for each send."""
     from app import app  # deferred: app-level helper, avoids circular import
     cfg = _get_sms_runtime_settings()
-    base = (cfg.get('base_url') or '').strip().rstrip('/')
-    api_key = (cfg.get('api_key') or '').strip()
-    if not base or not api_key:
-        return 0
     rows = SmsSendLog.query.filter(
         SmsSendLog.request_id.isnot(None),
         or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
@@ -3675,10 +3707,15 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
 
     changed = 0
     affected_campaign_ids = set()
-    headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
-    timeout = int(cfg.get('timeout_seconds') or 15)
     for row in rows:
         try:
+            row_cfg = _get_sms_provider_settings(row.gateway_provider, cfg)
+            base = (row_cfg.get('base_url') or '').strip().rstrip('/')
+            api_key = (row_cfg.get('api_key') or '').strip()
+            if not base or not api_key:
+                continue
+            headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
+            timeout = int(row_cfg.get('timeout_seconds') or 15)
             resp = requests.get(_sms_status_endpoint(base, row), headers=headers, timeout=timeout)
             if resp.status_code != 200:
                 continue
@@ -3751,7 +3788,8 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 changed += 1
 
             delivery = AnnouncementDelivery.query.filter_by(
-                gateway_request_id=row.request_id).first()
+                gateway_request_id=row.request_id,
+                gateway_provider=(row.gateway_provider or 'gmweb')).first()
             if delivery:
                 affected_campaign_ids.add(delivery.announcement_id)
                 delivery.gateway_state = row.gateway_state or row.status
@@ -3764,14 +3802,14 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 if manual_review:
                     delivery.status = 'manual_review'
                     delivery.last_error = 'unverified_manual_review'
-                    delivery.last_error_source = 'gmweb'
+                    delivery.last_error_source = row.gateway_provider or 'gmweb'
                     delivery.processed_at = datetime.utcnow()
                     delivery.sent_at = None
                     delivery.next_attempt_at = None
                 elif row.terminal and row.status == 'suppressed':
                     delivery.status = 'skipped'
                     delivery.last_error = 'duplicate_suppressed'
-                    delivery.last_error_source = 'gmweb'
+                    delivery.last_error_source = row.gateway_provider or 'gmweb'
                     delivery.processed_at = datetime.utcnow()
                     delivery.sent_at = None
                     delivery.next_attempt_at = None
@@ -3782,7 +3820,7 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                     delivery.last_error = (
                         row.reason or row.gateway_state or row.stage or 'gmweb_delivery_failed'
                     )[:500]
-                    delivery.last_error_source = 'gmweb'
+                    delivery.last_error_source = row.gateway_provider or 'gmweb'
                     delivery.processed_at = datetime.utcnow()
                     delivery.sent_at = None
                     delivery.next_attempt_at = None

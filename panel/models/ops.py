@@ -407,6 +407,7 @@ class SmsSendLog(db.Model):
     reason = db.Column(db.String(255))                 # failure/skip detail
     job_id = db.Column(db.String(64), index=True)
     request_id = db.Column(db.String(128), index=True)
+    gateway_provider = db.Column(db.String(24), nullable=False, default='gmweb', index=True)
     gateway_job_id = db.Column(db.String(64))
     status_url = db.Column(db.String(512))
     gateway_state = db.Column(db.String(32))
@@ -456,6 +457,7 @@ class SmsSendLog(db.Model):
             'reason': self.reason,
             'job_id': self.job_id,
             'request_id': self.request_id,
+            'gateway_provider': self.gateway_provider,
             'gateway_job_id': self.gateway_job_id,
             'gateway_state': self.gateway_state,
             'stage': self.stage,

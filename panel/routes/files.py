@@ -387,8 +387,9 @@ def update_system_config():
         SMS_DAILY_LIMIT_KEY,
         SMS_DEPLETION_COOLDOWN_DAYS_KEY, SMS_DEPLETION_EXPIRY_DAYS_KEY,
         SMS_DEPLETION_VOLUME_GB_KEY, SMS_ENDED_MAX_AGE_DAYS_KEY,
-        SMS_EXPIRED_MAX_AGE_DAYS_KEY, SMS_GMWEB_API_KEY_KEY,
+        SMS_EXPIRED_MAX_AGE_DAYS_KEY, SMS_PROVIDER_KEY, SMS_GMWEB_API_KEY_KEY,
         SMS_GMWEB_BASE_URL_KEY, SMS_GMWEB_TIMEOUT_KEY,
+        SMS_CUSTOM_API_KEY_KEY, SMS_CUSTOM_BASE_URL_KEY, SMS_CUSTOM_TIMEOUT_KEY,
         SMS_MIN_INTERVAL_SECONDS_KEY, SMS_QUIET_ENABLED_KEY,
         SMS_QUIET_END_KEY, SMS_QUIET_START_KEY,
         SMS_ROYALTY_COOLDOWN_DAYS_KEY, SMS_ROYALTY_DAYS_KEY,
@@ -522,11 +523,15 @@ def update_system_config():
                 SMS_TRIGGER_EXPIRED_KEY, SMS_TRIGGER_ENDED_KEY,
             }:
                 sanitized_value = 'true' if _parse_bool(value) else 'false'
-            elif key == SMS_GMWEB_BASE_URL_KEY:
+            elif key == SMS_PROVIDER_KEY:
+                sanitized_value = str(value or '').strip().lower()
+                if sanitized_value not in {'gmweb', 'custom_http'}:
+                    return jsonify({'success': False, 'error': 'Invalid SMS provider.'}), 400
+            elif key in {SMS_GMWEB_BASE_URL_KEY, SMS_CUSTOM_BASE_URL_KEY}:
                 sanitized_value = str(value or '').strip().rstrip('/')[:512]
-            elif key == SMS_GMWEB_API_KEY_KEY:
+            elif key in {SMS_GMWEB_API_KEY_KEY, SMS_CUSTOM_API_KEY_KEY}:
                 sanitized_value = str(value or '').strip()[:512]
-            elif key == SMS_GMWEB_TIMEOUT_KEY:
+            elif key in {SMS_GMWEB_TIMEOUT_KEY, SMS_CUSTOM_TIMEOUT_KEY}:
                 sanitized_value = str(_parse_int(value, 15, min_value=3, max_value=90))
             elif key == SMS_DEPLETION_EXPIRY_DAYS_KEY:
                 sanitized_value = str(_parse_int(value, 3, min_value=0, max_value=60))

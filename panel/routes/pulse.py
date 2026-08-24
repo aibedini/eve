@@ -682,10 +682,14 @@ def pulse_v3_common_configs(server_id):
                 continue
         if not required.issubset(assigned):
             continue
-        key = str(client.get('id') or client.get('email') or '').strip()
+        email = str(client.get('email') or '').strip()
+        # The v3 client-list API's ``id`` identifies its global account row;
+        # it is not necessarily the protocol credential stored in an inbound.
+        # Prefer email because the managed-route resolver can safely match it
+        # against the selected inbound without exposing or guessing a UUID.
+        key = email or str(client.get('id') or '').strip()
         if not key:
             continue
-        email = str(client.get('email') or '').strip()
         configs.append({
             'id': key,
             'label': email or key,

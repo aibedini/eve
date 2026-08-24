@@ -1097,7 +1097,7 @@ def send_now_announcement_deliveries(announcement_id):
 
     sms_cfg = _get_sms_runtime_settings()
     if not sms_cfg.get('base_url') or not sms_cfg.get('api_key'):
-        return jsonify({'success': False, 'error': 'GMweb gateway is not configured'}), 400
+        return jsonify({'success': False, 'error': 'The selected SMS gateway is not configured'}), 400
 
     sent_count = 0
     failed_count = 0
@@ -1128,6 +1128,7 @@ def send_now_announcement_deliveries(announcement_id):
         delivery.resend_count = int(delivery.resend_count or 0) + 1
         delivery.gateway_request_id = (
             str(result.get('request_id'))[:128] if result.get('request_id') else None)
+        delivery.gateway_provider = str(result.get('provider') or 'gmweb')[:24]
         delivery.gateway_state = (
             str(result.get('status'))[:32] if result.get('status') else None)
         delivery.gateway_priority = 'announcement'
@@ -1144,7 +1145,8 @@ def send_now_announcement_deliveries(announcement_id):
         else:
             delivery.status = 'failed'
             delivery.last_error = result.get('reason') or 'send_now_failed'
-            delivery.last_error_source = 'gmweb' if result.get('status_code') is not None else 'panel'
+            delivery.last_error_source = ((result.get('provider') or 'gmweb')
+                                          if result.get('status_code') is not None else 'panel')
             delivery.processed_at = now
             delivery.next_attempt_at = None
             failed_count += 1

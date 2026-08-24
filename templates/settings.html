@@ -1400,7 +1400,7 @@
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>SMS Automation</h2>
-                        <p class="text-secondary">Auto-send SMS on create / renew / near-expiry through your GMweb gateway, using the existing SMS templates.</p>
+                        <p class="text-secondary">Auto-send SMS on create / renew / near-expiry through the selected gateway, using the existing SMS templates.</p>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center;">
                         <button id="sms-test-connection" class="btn btn-secondary" onclick="testSmsConnectionSettings()">Test Connection</button>
@@ -1420,20 +1420,44 @@
                 </div>
 
                 <div class="form-group">
-                    <label>GMweb Base URL</label>
-                    <input type="text" id="sms-base-url" class="form-control" value="{{ sms_gmweb_base_url }}" placeholder="https://your-gmweb-host">
-                    <small class="text-secondary">The GMweb-API server, e.g. <code>https://your-host</code> (locally <code>http://127.0.0.1:3030</code>). No trailing slash.</small>
+                    <label>SMS Provider</label>
+                    <select id="sms-provider" class="form-control" onchange="updateSmsProviderFields()">
+                        <option value="gmweb" {% if sms_provider == 'gmweb' %}selected{% endif %}>GMweb / Google Messages</option>
+                        <option value="custom_http" {% if sms_provider == 'custom_http' %}selected{% endif %}>Custom HTTP Gateway</option>
+                    </select>
+                    <small class="text-secondary">Custom HTTP must implement EVE's health, ready, send, status, cancel, and capacity contract.</small>
                 </div>
 
-                <div class="form-group">
-                    <label>GMweb Project API Key</label>
-                    <input type="text" id="sms-api-key" class="form-control" value="{{ sms_gmweb_api_key }}" placeholder="gmw_...">
-                    <small class="text-secondary">A project key (<code>gmw_...</code>), not the master token. Create it in the GMweb dashboard.</small>
+                <div id="sms-gmweb-fields">
+                    <div class="form-group">
+                        <label>GMweb Base URL</label>
+                        <input type="text" id="sms-base-url" class="form-control" value="{{ sms_gmweb_base_url }}" placeholder="https://your-gmweb-host">
+                        <small class="text-secondary">No trailing slash; locally usually <code>http://127.0.0.1:3030</code>.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>GMweb Project API Key</label>
+                        <input type="text" id="sms-api-key" class="form-control" value="{{ sms_gmweb_api_key }}" placeholder="gmw_...">
+                    </div>
+                    <div class="form-group">
+                        <label>GMweb Timeout (seconds)</label>
+                        <input type="number" id="sms-timeout" class="form-control" min="3" max="90" value="{{ sms_gmweb_timeout }}">
+                    </div>
                 </div>
 
-                <div class="form-group">
-                    <label>Gateway Timeout (seconds)</label>
-                    <input type="number" id="sms-timeout" class="form-control" min="3" max="90" value="{{ sms_gmweb_timeout }}">
+                <div id="sms-custom-fields">
+                    <div class="form-group">
+                        <label>Custom Gateway Base URL</label>
+                        <input type="text" id="sms-custom-base-url" class="form-control" value="{{ sms_custom_base_url }}" placeholder="https://sms.example.com">
+                        <small class="text-secondary">The server must expose <code>/health</code>, <code>/ready</code>, and the <code>/send</code> endpoints.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Custom Gateway API Key</label>
+                        <input type="text" id="sms-custom-api-key" class="form-control" value="{{ sms_custom_api_key }}" placeholder="Enter Bearer API key">
+                    </div>
+                    <div class="form-group">
+                        <label>Custom Gateway Timeout (seconds)</label>
+                        <input type="number" id="sms-custom-timeout" class="form-control" min="3" max="90" value="{{ sms_custom_timeout }}">
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -1702,7 +1726,7 @@
                         <div id="sms-scan-counts" class="text-secondary" style="font-size:0.82rem;display:flex;gap:14px;flex-wrap:wrap;"></div>
                     </div>
 
-                    <div id="sms-gmweb-capacity" class="text-secondary" style="font-size:.78rem;margin-bottom:8px;" aria-live="polite">GMweb capacity: loading…</div>
+                    <div id="sms-gmweb-capacity" class="text-secondary" style="font-size:.78rem;margin-bottom:8px;" aria-live="polite">SMS gateway capacity: loading…</div>
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
                         <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
                             <small class="text-secondary">Recent sends</small>
@@ -3783,6 +3807,7 @@
 <script nonce="{{ csp_nonce }}">
     document.addEventListener('DOMContentLoaded', () => {
         syncThemeToggleUI();
+        updateSmsProviderFields();
 
         const activeTab = document.querySelector('.settings-tab.active');
         if (activeTab) {
@@ -5758,12 +5783,24 @@
         }
     }
 
+    function updateSmsProviderFields() {
+        const provider = ((document.getElementById('sms-provider') || {}).value || 'gmweb');
+        const gmweb = document.getElementById('sms-gmweb-fields');
+        const custom = document.getElementById('sms-custom-fields');
+        if (gmweb) gmweb.style.display = provider === 'gmweb' ? '' : 'none';
+        if (custom) custom.style.display = provider === 'custom_http' ? '' : 'none';
+    }
+
     function _smsSettingsPayload() {
         return {
             sms_automation_enabled: !!(document.getElementById('sms-enabled') || {}).checked,
+            sms_provider: ((document.getElementById('sms-provider') || {}).value || 'gmweb'),
             sms_gmweb_base_url: ((document.getElementById('sms-base-url') || {}).value || '').trim(),
             sms_gmweb_api_key: ((document.getElementById('sms-api-key') || {}).value || '').trim(),
             sms_gmweb_timeout: Number((document.getElementById('sms-timeout') || {}).value || 15),
+            sms_custom_base_url: ((document.getElementById('sms-custom-base-url') || {}).value || '').trim(),
+            sms_custom_api_key: ((document.getElementById('sms-custom-api-key') || {}).value || '').trim(),
+            sms_custom_timeout: Number((document.getElementById('sms-custom-timeout') || {}).value || 15),
             sms_trigger_created: !!(document.getElementById('sms-trigger-created') || {}).checked,
             sms_trigger_renew: !!(document.getElementById('sms-trigger-renew') || {}).checked,
             sms_trigger_near_expiry: !!(document.getElementById('sms-trigger-near-expiry') || {}).checked,
@@ -6136,10 +6173,11 @@
             if (!data.success) throw new Error(data.reason || 'unavailable');
             const ann = data.announcement || {};
             const lanes = data.priorities || {};
-            el.textContent = `GMweb queues — critical ${Number(lanes.critical || 0)}, expired ${Number(lanes.expired || 0)}, expiring ${Number(lanes.expiring || 0)}, announcement ${Number(lanes.announcement || 0)} · announcement capacity ${Number(ann.available || 0)}/${Number(ann.limit || 0)} free`;
+            const provider = ((document.getElementById('sms-provider') || {}).value || 'gmweb') === 'custom_http' ? 'Custom HTTP' : 'GMweb';
+            el.textContent = `${provider} queues — critical ${Number(lanes.critical || 0)}, expired ${Number(lanes.expired || 0)}, expiring ${Number(lanes.expiring || 0)}, announcement ${Number(lanes.announcement || 0)} · announcement capacity ${Number(ann.available || 0)}/${Number(ann.limit || 0)} free`;
             el.style.color = Number(ann.available || 0) > 0 ? 'var(--text-secondary)' : '#f59e0b';
         } catch (error) {
-            el.textContent = `GMweb capacity unavailable: ${error.message}`;
+            el.textContent = `SMS gateway capacity unavailable: ${error.message}`;
             el.style.color = '#f59e0b';
         }
     }
@@ -6179,7 +6217,7 @@
             }
 
             if (data.success) {
-                showToast(data.message || 'GMweb gateway is reachable', data.ready === false ? 'warning' : 'success');
+                showToast(data.message || 'SMS gateway is reachable', data.ready === false ? 'warning' : 'success');
             } else {
                 showToast((data.error || data.message || 'Gateway test failed')
                     + (data.status_code ? ` (gateway HTTP ${data.status_code})` : ''), 'error');

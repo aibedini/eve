@@ -268,6 +268,7 @@ def reset_client_traffic(server_id, inbound_id):
             'inboundId': inbound_id,
             'email': email
         }
+
         errors = []
         for template in templates:
             full_url = build_panel_url(server.host, template, replacements)
@@ -1594,6 +1595,23 @@ def renew_client(server_id, inbound_id, email):
             'email': email
         }
 
+        # Persist the intended panel state before the slow write starts. A
+        # duplicate browser request can land on another worker and open the
+        # Re-check modal while this request is still inside 3x-ui. Without
+        # these expected values Re-check can only report a generic pending
+        # state if the original worker dies before storing its final result.
+        _store_renew_result(_renew_lock_key, {
+            'state': 'pending',
+            'stored_at_ts': time.time(),
+            'verify': {
+                'expected': {
+                    'expiryTime': new_expiry,
+                    'totalGB': new_volume,
+                    'enable': True,
+                },
+            },
+        })
+
         _is_v3 = server_is_v3(server)
         # Shadowsocks clients have no UUID 'id' field — updateClient/:clientId won't work.
         _is_shadowsocks_no_id = (not _is_v3) and ('id' not in target_client)
@@ -2047,6 +2065,7 @@ def renew_client(server_id, inbound_id, email):
                     _fire_renew_whatsapp(server.id, email, _wa_text, _client_comment)
 
                 _store_renew_result(_renew_lock_key, {
+                    "state": "complete",
                     "copy_text": copy_text,
                     "tpl_vars": _renew_tpl_vars,
                     "verify": verify,
@@ -2464,6 +2483,8 @@ def verify_renew_client(server_id, inbound_id, email):
             'enable': expected_enable,
         },
         'observed': {'expiryTime': None, 'totalGB': None, 'enable': None},
+        'checks': {},
+        'state': 'checking',
     }
 
     renew_lock_key = f"renew:lock:{server_id}:{(email or '').strip().lower()}"
@@ -2506,35 +2527,70 @@ def verify_renew_client(server_id, inbound_id, email):
         completed_verify = (completed_result or {}).get('verify') or {}
         completed_expected = completed_verify.get('expected') or {}
 
-        # A duplicate/while-running request has no expected values of its own.
-        # It is verified only when the original request has stored its exact
-        # successful result and the panel read-back matches that result.
+        def _set_check(name, expected, observed):
+            if expected is None:
+                status = 'unknown'
+                matches = None
+            else:
+                matches = observed == expected
+                status = 'applied' if matches else 'not_applied'
+            verify['checks'][name] = {
+                'expected': expected,
+                'observed': observed,
+                'matches': matches,
+                'status': status,
+            }
+            return matches
+
+        # A duplicate/while-running request uses the expected state persisted
+        # before the panel write.  Always return per-field truth from 3x-ui;
+        # callers must not collapse a partial result back to a generic spinner.
         if awaiting_result:
             cached_expiry = completed_expected.get('expiryTime')
             cached_total = completed_expected.get('totalGB')
             cached_enable = bool(completed_expected.get('enable', True))
             if not completed_result or (cached_expiry is None and cached_total is None):
                 verify['ok'] = False
-                verify['error'] = 'renew_still_in_progress'
+                verify['error'] = 'renew_result_unavailable'
+                verify['state'] = 'observed_without_expected'
+                _set_check('expiryTime', None, verify['observed']['expiryTime'])
+                _set_check('totalGB', None, verify['observed']['totalGB'])
+                _set_check('enable', True, verify['observed']['enable'])
             else:
-                ok_exp = cached_expiry is None or verify['observed']['expiryTime'] == int(cached_expiry)
-                ok_vol = cached_total is None or verify['observed']['totalGB'] == int(cached_total)
-                ok_enable = verify['observed']['enable'] is cached_enable
+                cached_expiry = None if cached_expiry is None else int(cached_expiry)
+                cached_total = None if cached_total is None else int(cached_total)
+                ok_exp = _set_check('expiryTime', cached_expiry, verify['observed']['expiryTime'])
+                ok_vol = _set_check('totalGB', cached_total, verify['observed']['totalGB'])
+                ok_enable = _set_check('enable', cached_enable, verify['observed']['enable'])
                 verify['expected'] = {
                     'expiryTime': cached_expiry,
                     'totalGB': cached_total,
                     'enable': cached_enable,
                 }
-                verify['ok'] = bool(ok_exp and ok_vol and ok_enable)
+                known_matches = [value for value in (ok_exp, ok_vol, ok_enable) if value is not None]
+                verify['ok'] = bool(known_matches and all(known_matches))
+                applied_count = sum(value is True for value in known_matches)
+                if verify['ok']:
+                    verify['state'] = 'applied'
+                elif applied_count:
+                    verify['state'] = 'partially_applied'
+                else:
+                    verify['state'] = 'not_applied'
                 if not verify['ok']:
                     verify['error'] = 'renew_result_not_applied_yet'
         elif expected_expiry is None and expected_total is None:
-            verify['ok'] = verify['observed']['enable'] is expected_enable
+            ok_enable = _set_check('enable', expected_enable, verify['observed']['enable'])
+            verify['ok'] = ok_enable is True
+            verify['state'] = 'applied' if verify['ok'] else 'not_applied'
         else:
-            ok_exp = True if expected_expiry is None else (verify['observed']['expiryTime'] == expected_expiry)
-            ok_vol = True if expected_total is None else (verify['observed']['totalGB'] == expected_total)
-            ok_enable = verify['observed']['enable'] is expected_enable
-            verify['ok'] = bool(ok_exp and ok_vol and ok_enable)
+            ok_exp = _set_check('expiryTime', expected_expiry, verify['observed']['expiryTime'])
+            ok_vol = _set_check('totalGB', expected_total, verify['observed']['totalGB'])
+            ok_enable = _set_check('enable', expected_enable, verify['observed']['enable'])
+            known_matches = [value for value in (ok_exp, ok_vol, ok_enable) if value is not None]
+            verify['ok'] = bool(known_matches and all(known_matches))
+            applied_count = sum(value is True for value in known_matches)
+            verify['state'] = ('applied' if verify['ok'] else
+                               'partially_applied' if applied_count else 'not_applied')
 
         payload = {'success': True, 'verify': verify,
                    'timing': {'login_ms': login_ms, 'verify_fetch_ms': verify_fetch_ms}}

@@ -4717,6 +4717,29 @@
             const parts = [];
             parts.push(pill);
             const statusIsFa = (document.documentElement.lang || 'en') === 'fa';
+            const checks = (verify && verify.checks) ? verify.checks : {};
+            const formatBytes = (value) => {
+                const n = Number(value);
+                if (!Number.isFinite(n)) return '-';
+                if (n === 0) return statusIsFa ? 'نامحدود' : 'Unlimited';
+                return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+            };
+            const formatExpiry = (value) => {
+                const n = Number(value);
+                if (!Number.isFinite(n)) return '-';
+                if (n === 0) return statusIsFa ? 'نامحدود' : 'Unlimited';
+                if (n < 0) return `${Math.abs(n) / 86400000} ${statusIsFa ? 'روز پس از اولین اتصال' : 'days after first use'}`;
+                try { return EveDate.format(new Date(n)); } catch (e) { return new Date(n).toLocaleString(); }
+            };
+            const addCheck = (key, label, formatter) => {
+                const check = checks[key];
+                if (!check) return;
+                const color = check.matches === true ? '#bbf7d0' : (check.matches === false ? '#fecaca' : '#fde68a');
+                const icon = check.matches === true ? '✓' : (check.matches === false ? '✗' : '?');
+                parts.push(`<span class="server-badge" style="color:${color};">${icon} ${label}: ${escapeHtml(formatter(check.observed))}</span>`);
+            };
+            addCheck('expiryTime', statusIsFa ? 'انقضا' : 'Expiry', formatExpiry);
+            addCheck('totalGB', statusIsFa ? 'حجم' : 'Volume', formatBytes);
             if (verify && verify.observed && verify.observed.enable === true) {
                 parts.push(`<span class="server-badge" style="color:#bbf7d0;">3x-ui: ${statusIsFa ? 'فعال' : 'Active'}</span>`);
             } else if (verify && verify.observed && verify.observed.enable === false) {
@@ -4800,9 +4823,15 @@
                     lastRenewContext.expectedTotalGB = data.verify.expected?.totalGB ?? expectedTotalGB;
                     lastRenewContext.awaitingResult = false;
                     showToast('Verified');
-                } else if (data.verify.error === 'renew_still_in_progress' || data.verify.error === 'renew_result_not_applied_yet') {
-                    renderRenewApiStatus({}, { inProgress: true });
-                    showToast('Renewal is still being applied. Re-check in a moment.');
+                } else if (data.verify.error === 'renew_result_not_applied_yet') {
+                    // Keep the field-by-field panel result visible.  Some fields
+                    // may already be applied even while another one (commonly
+                    // enable) is still stale.
+                    showToast(data.verify.state === 'partially_applied'
+                        ? 'Partially applied. Review the details and Re-check.'
+                        : 'Not applied yet. The current panel state is shown.');
+                } else if (data.verify.error === 'renew_result_unavailable') {
+                    showToast('Current panel state loaded; the original expected result is unavailable.', 'error');
                 } else {
                     showToast('Not verified', 'error');
                 }

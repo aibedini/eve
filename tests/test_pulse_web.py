@@ -322,7 +322,7 @@ class PulseInboundsEndpointTest(PulseWebTestBase):
 
     def test_v3_common_configs_filters_by_every_selected_inbound(self):
         clients = [
-            dict(_client('alice'), inboundIds=[1, 2, 3]),
+            dict(_client('alice'), id=731, inboundIds=[1, 2, 3]),
             dict(_client('bob'), inboundIds=[1]),
             dict(_client('carol'), inboundIds=[1, 2]),
         ]
@@ -338,6 +338,8 @@ class PulseInboundsEndpointTest(PulseWebTestBase):
         payload = resp.get_json()
         self.assertEqual(
             [row['label'] for row in payload['configs']], ['alice', 'carol'])
+        self.assertEqual(
+            [row['id'] for row in payload['configs']], ['alice', 'carol'])
         self.assertNotIn('uri', payload['configs'][0])
 
 

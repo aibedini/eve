@@ -51,6 +51,10 @@ from app import (  # noqa: E402
     SMS_GMWEB_API_KEY_KEY,
     SMS_GMWEB_BASE_URL_KEY,
     SMS_GMWEB_TIMEOUT_KEY,
+    SMS_PROVIDER_KEY,
+    SMS_CUSTOM_API_KEY_KEY,
+    SMS_CUSTOM_BASE_URL_KEY,
+    SMS_CUSTOM_TIMEOUT_KEY,
     SmsSendLog,
     SystemConfig,
     SystemSetting,
@@ -69,8 +73,10 @@ from app import (  # noqa: E402
     _sms_depletion_state_still_valid,
     _run_sms_depletion_scan,
     _get_gmweb_send_capacity,
+    _get_sms_runtime_settings,
     _gmweb_sms_priority,
     _send_sms_via_gmweb,
+    _refresh_pending_sms_statuses,
     _sms_db_segment_stats_today,
     _sms_db_segments_used_today,
     _sms_gateway_ready,
@@ -216,6 +222,10 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             SMS_GMWEB_BASE_URL_KEY,
             SMS_GMWEB_API_KEY_KEY,
             SMS_GMWEB_TIMEOUT_KEY,
+            SMS_PROVIDER_KEY,
+            SMS_CUSTOM_BASE_URL_KEY,
+            SMS_CUSTOM_API_KEY_KEY,
+            SMS_CUSTOM_TIMEOUT_KEY,
         ])).delete(synchronize_session=False)
         SystemSetting.query.filter(SystemSetting.key.in_([
             GENERAL_CALENDAR_SETTING_KEY,
@@ -950,6 +960,35 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertIn(b'grid-template-rows: minmax(0, 1fr)', operations_page.data)
         self.assertIn(b'max-height: 100%', operations_page.data)
         self.assertIn(b'Intl.NumberFormat(EveDate.locale)', operations_page.data)
+
+    def test_sms_custom_provider_settings_save_and_render(self):
+        reviewer = Admin(
+            username='claim-test-sms-provider', role='superadmin',
+            is_superadmin=True, enabled=True,
+        )
+        reviewer.set_password('StrongClaimPassword123!')
+        db.session.add(reviewer)
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session_data:
+            session_data['admin_id'] = reviewer.id
+
+        response = client.post('/api/system-config', json={
+            SMS_PROVIDER_KEY: 'custom_http',
+            SMS_CUSTOM_BASE_URL_KEY: 'https://sms.example.com/',
+            SMS_CUSTOM_API_KEY_KEY: 'custom_secret',
+            SMS_CUSTOM_TIMEOUT_KEY: 21,
+        })
+        settings_page = client.get('/settings')
+
+        self.assertEqual(200, response.status_code)
+        self.assertTrue(response.get_json()['success'])
+        self.assertEqual('custom_http', db.session.get(SystemConfig, SMS_PROVIDER_KEY).value)
+        self.assertEqual('https://sms.example.com',
+                         db.session.get(SystemConfig, SMS_CUSTOM_BASE_URL_KEY).value)
+        self.assertEqual(200, settings_page.status_code)
+        self.assertIn(b'value="custom_http" selected', settings_page.data)
+        self.assertIn(b'value="https://sms.example.com"', settings_page.data)
 
     def test_configured_calendar_and_timezone_drive_formatting_and_input_parsing(self):
         db.session.add_all([
@@ -2736,6 +2775,60 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(3, result['priority_level'])
         self.assertEqual(7, result['queue_position'])
         self.assertEqual('expired', post.call_args.kwargs['json']['priority'])
+
+    def test_custom_http_provider_uses_its_own_connection_and_marks_result(self):
+        db.session.add_all([
+            SystemConfig(key=SMS_PROVIDER_KEY, value='custom_http'),
+            SystemConfig(key=SMS_GMWEB_BASE_URL_KEY, value='https://gmweb.test'),
+            SystemConfig(key=SMS_GMWEB_API_KEY_KEY, value='gmw_secret'),
+            SystemConfig(key=SMS_CUSTOM_BASE_URL_KEY, value='https://sms.example.com/'),
+            SystemConfig(key=SMS_CUSTOM_API_KEY_KEY, value='custom_secret'),
+            SystemConfig(key=SMS_CUSTOM_TIMEOUT_KEY, value='19'),
+        ])
+        db.session.commit()
+
+        cfg = _get_sms_runtime_settings()
+        self.assertEqual('custom_http', cfg['provider'])
+        self.assertEqual('https://sms.example.com', cfg['base_url'])
+        self.assertEqual('custom_secret', cfg['api_key'])
+        self.assertEqual(19, cfg['timeout_seconds'])
+
+        response = MagicMock(status_code=202, content=b'{}', headers={})
+        response.json.return_value = {'requestId': 'custom_1', 'status': 'queued'}
+        with patch('app.requests.post', return_value=response) as post:
+            result = _send_sms_via_gmweb(
+                '09120000000', 'hello', cfg, priority='critical', idempotency_key='custom:1')
+
+        self.assertTrue(result['accepted'])
+        self.assertEqual('custom_http', result['provider'])
+        self.assertEqual('https://sms.example.com/send', post.call_args.args[0])
+        self.assertEqual('Bearer custom_secret', post.call_args.kwargs['headers']['Authorization'])
+
+    def test_status_poll_uses_provider_recorded_on_sms_log(self):
+        db.session.add_all([
+            SystemConfig(key=SMS_PROVIDER_KEY, value='gmweb'),
+            SystemConfig(key=SMS_GMWEB_BASE_URL_KEY, value='https://gmweb.test'),
+            SystemConfig(key=SMS_GMWEB_API_KEY_KEY, value='gmw_secret'),
+            SystemConfig(key=SMS_CUSTOM_BASE_URL_KEY, value='https://sms.example.com'),
+            SystemConfig(key=SMS_CUSTOM_API_KEY_KEY, value='custom_secret'),
+            SmsSendLog(
+                email='custom-user', server_id=1, state='test', recipient='0912***000',
+                status='queued', request_id='custom_2', gateway_provider='custom_http',
+                terminal=False,
+            ),
+        ])
+        db.session.commit()
+
+        response = MagicMock(status_code=200)
+        response.json.return_value = {
+            'status': 'completed', 'terminal': True, 'successful': True,
+        }
+        with patch('panel.jobs.messaging.requests.get', return_value=response) as get:
+            changed = _refresh_pending_sms_statuses()
+
+        self.assertEqual(1, changed)
+        self.assertEqual('https://sms.example.com/send/status/custom_2', get.call_args.args[0])
+        self.assertEqual('Bearer custom_secret', get.call_args.kwargs['headers']['Authorization'])
 
     def test_gmweb_capacity_normalizes_announcement_window(self):
         class FakeResponse:
