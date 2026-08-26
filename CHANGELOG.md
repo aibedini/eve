@@ -2,7 +2,7 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
-## [2.5.84] - 2026-08-26
+## [2.5.85] - 2026-08-26
 
 ### Added
 - Operator-defined **hourly SMS throttle** (`sms_hourly_limit`, Settings → SMS Automation → Rate limits; `0` = unlimited). It counts the same billable segments as the daily cap and is measured over the Tehran-clock hour, so a burst of gateway `429`/unpaired failures can never consume the allowance — only confirmed sends do.
@@ -11,6 +11,9 @@ All notable changes to Eve - Xui Manager are documented in this file.
 
 ### Changed
 - **Transactional create/renew SMS are now formally exempt from every rate ceiling except the per-recipient interval.** `_sms_take_send_slot` takes the sending lane, and the `critical` lane (create, renew, test, and quiet-hours-parked transactional flushes) bypasses the hourly throttle so a paying customer's confirmation is never delayed by a running bulk campaign.
+
+### Fixed
+- Recent sends could sit on `queued` forever while the gateway had long since reported them `sent`. The status poller walked pending rows **oldest-first**, and because the gateway ledger only retains a send for a bounded window, a growing tail of permanently-404 rows (1,353 of them, back to 18 Aug) filled every 100-row batch and starved the fresh sends. Polling is now newest-first, and a `404` on a row older than a 6-hour grace window closes it as `gateway_status_expired` (terminal, **not** successful, so it never counts as a billable segment) instead of being retried forever — the pending set drains rather than grows.
 
 ## [2.5.46] - 2026-07-29
 

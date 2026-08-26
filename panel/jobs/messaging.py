@@ -1790,6 +1790,9 @@ SMS_ENDED_MAX_AGE_DAYS_KEY      = 'sms_ended_max_age_days'    # stop SMS this ma
 SMS_MIN_INTERVAL_SECONDS_KEY    = 'sms_min_interval_seconds'
 SMS_DAILY_LIMIT_KEY             = 'sms_daily_limit'
 SMS_HOURLY_LIMIT_KEY            = 'sms_hourly_limit'          # 0 = unlimited
+# How long a non-terminal send may stay unresolved before a 404 from the gateway
+# is treated as "the record aged out of the ledger" rather than a transient miss.
+SMS_STATUS_UNRESOLVABLE_AFTER   = timedelta(hours=6)
 SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY = 'sms_announcement_daily_limit'
 SMS_SEND_PACE_SECONDS_KEY       = 'sms_send_pace_seconds'  # global gap between ANY two sends so the gateway doesn't return HTTP 429
 # Quiet hours (Tehran time): no automated SMS goes out inside this window. Scan
@@ -3765,18 +3768,31 @@ def _sms_status_endpoint(base_url: str, row) -> str:
 
 
 def _refresh_pending_sms_statuses(limit: int = 100) -> int:
-    """Poll accepted gateway tasks using the provider recorded for each send."""
+    """Poll accepted gateway tasks using the provider recorded for each send.
+
+    Newest-first on purpose: the gateway only keeps a send in its ledger for a
+    bounded window, so rows older than that answer 404 forever. Polling
+    oldest-first let a growing tail of unresolvable rows fill every batch and
+    starve the fresh sends — the panel then showed recent messages stuck on
+    'queued' indefinitely. Ancient rows are closed out by the 404 rule below,
+    so the pending set drains instead of growing.
+    """
     from app import app  # deferred: app-level helper, avoids circular import
     cfg = _get_sms_runtime_settings()
     rows = SmsSendLog.query.filter(
         SmsSendLog.request_id.isnot(None),
         or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
-    ).order_by(SmsSendLog.created_at.asc()).limit(max(1, min(int(limit), 500))).all()
+    ).order_by(SmsSendLog.created_at.desc()).limit(max(1, min(int(limit), 500))).all()
     if not rows:
         return 0
 
     changed = 0
     affected_campaign_ids = set()
+    # A send whose gateway record has aged out can never be resolved. Give it a
+    # generous grace window (the gateway may lag right after acceptance), then
+    # close it as unverifiable so it stops being polled forever. It is NOT
+    # counted as a completed/billable segment — only confirmed sends are.
+    status_expiry_cutoff = datetime.utcnow() - SMS_STATUS_UNRESOLVABLE_AFTER
     for row in rows:
         try:
             row_cfg = _get_sms_provider_settings(row.gateway_provider, cfg)
@@ -3787,6 +3803,14 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
             headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
             timeout = int(row_cfg.get('timeout_seconds') or 15)
             resp = requests.get(_sms_status_endpoint(base, row), headers=headers, timeout=timeout)
+            if resp.status_code == 404 and (row.created_at or datetime.utcnow()) < status_expiry_cutoff:
+                row.terminal = True
+                row.successful = False
+                row.reason = 'gateway_status_expired'
+                row.last_http_status = 404
+                row.updated_at = datetime.utcnow()
+                changed += 1
+                continue
             if resp.status_code != 200:
                 continue
             data = resp.json()
