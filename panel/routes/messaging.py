@@ -247,7 +247,7 @@ def sms_test_send():
             'پیام تستی پنل. اگر این پیام را دریافت کردید، اتوماسیون SMS درست کار می‌کند.')
     segment_info = _sms_segment_info(text)
     segments = segment_info['sms_segments']
-    slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments)
+    slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments, priority='test')
     if not slot_ok:
         _sms_log_row(None, (getattr(user, 'username', None) or 'test').strip().lower(),
                      0, 'Eve', 'test', recipient, 'skipped', slot_reason, segment_info)
@@ -357,7 +357,8 @@ def sms_scan_status():
     """Live progress of the current/last SMS scan (shared across all workers)."""
     from app import (  # deferred: app-level helper, avoids circular import
         _get_sms_runtime_settings, _sms_announcement_segments_used_today,
-        _sms_db_segment_stats_today, _sms_scan_snapshot, app,
+        _sms_db_segment_stats_today, _sms_db_segments_used_this_hour,
+        _sms_scan_snapshot, app,
     )
     try:
         pending_high = PendingSms.query.count()
@@ -369,6 +370,10 @@ def sms_scan_status():
         ann_segments_used = _sms_announcement_segments_used_today()
     except Exception:
         ann_segments_used = 0
+    try:
+        hour_segments_used = _sms_db_segments_used_this_hour()
+    except Exception:
+        hour_segments_used = 0
     return jsonify({
         'success': True,
         'job': _sms_scan_snapshot(),
@@ -379,6 +384,9 @@ def sms_scan_status():
         'segments_failed_today': segment_stats.get('failed', 0),
         'segments_inflight_today': segment_stats.get('inflight', 0),
         'segment_daily_limit': int(sms_cfg.get('daily_limit') or 200),
+        # Hourly throttle (0 = unlimited). Bulk lanes only; create/renew exempt.
+        'segments_used_this_hour': hour_segments_used,
+        'segment_hourly_limit': int(sms_cfg.get('hourly_limit') or 0),
         'announcement_segments_used_today': ann_segments_used,
         'announcement_daily_limit': int(sms_cfg.get('announcement_daily_limit') or 500),
     })

@@ -2,6 +2,16 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.5.84] - 2026-08-26
+
+### Added
+- Operator-defined **hourly SMS throttle** (`sms_hourly_limit`, Settings → SMS Automation → Rate limits; `0` = unlimited). It counts the same billable segments as the daily cap and is measured over the Tehran-clock hour, so a burst of gateway `429`/unpaired failures can never consume the allowance — only confirmed sends do.
+- Bulk lanes (near expiry, low volume, expired, volume ended, royalty, announcements) that hit the hourly ceiling now stop the scan cleanly with the dedicated `hourly_limit_reached` reason instead of failing rows: nobody's per-state cooldown is spent, and the next scheduled scan resumes the remaining list once the hour rolls over — the same "wait for the window" behaviour quiet hours already had. Announcement deliveries park as `retry` with a 60-minute next attempt and are counted in the campaign's blocked list.
+- `GET /api/sms/scan/status` reports `segments_used_this_hour` and `segment_hourly_limit`, and the SMS panel's segment line shows `this hour N/LIMIT` plus an explicit note when bulk sending is paused.
+
+### Changed
+- **Transactional create/renew SMS are now formally exempt from every rate ceiling except the per-recipient interval.** `_sms_take_send_slot` takes the sending lane, and the `critical` lane (create, renew, test, and quiet-hours-parked transactional flushes) bypasses the hourly throttle so a paying customer's confirmation is never delayed by a running bulk campaign.
+
 ## [2.5.46] - 2026-07-29
 
 ### Added

@@ -1624,6 +1624,10 @@
                             <input type="number" id="sms-daily-limit" class="form-control" min="1" max="100000" value="{{ sms_daily_limit }}">
                         </div>
                         <div>
+                            <small class="text-secondary">Max billable SMS segments per hour (0 = unlimited)</small>
+                            <input type="number" id="sms-hourly-limit" class="form-control" min="0" max="100000" value="{{ sms_hourly_limit }}">
+                        </div>
+                        <div>
                             <small class="text-secondary">Max announcement SMS segments per day</small>
                             <input type="number" id="sms-announcement-daily-limit" class="form-control" min="1" max="100000" value="{{ sms_announcement_daily_limit }}">
                         </div>
@@ -1633,6 +1637,7 @@
                         </div>
                     </div>
                     <small class="text-secondary" style="display:block;margin-top:4px;">Daily limit counts actual SMS segments, not API requests: GSM-7 uses 160 chars (153 multipart); Persian/Unicode uses 70 UTF-16 units (67 multipart). The gateway returns HTTP 429 if sends are too fast. 3s ≈ 20 requests/min.</small>
+                    <small class="text-secondary" style="display:block;margin-top:4px;">The hourly limit throttles bulk lanes only (near expiry, low volume, expired, volume ended, royalty, announcements). When the hour fills up, the scan stops cleanly without burning anyone's cooldown and the next scan resumes automatically. <strong>Create and renew are always exempt</strong> — a paying customer's confirmation never waits.</small>
                     <small id="sms-segments-today" class="text-secondary" style="display:block;margin-top:4px;font-weight:600;"></small>
                 </div>
 
@@ -5818,6 +5823,7 @@
             sms_ended_max_age_days: Number((document.getElementById('sms-ended-max-age-days') || {}).value || 0),
             sms_min_interval_seconds: Number((document.getElementById('sms-min-interval') || {}).value || 30),
             sms_daily_limit: Number((document.getElementById('sms-daily-limit') || {}).value || 200),
+            sms_hourly_limit: Number((document.getElementById('sms-hourly-limit') || {}).value || 0),
             sms_announcement_daily_limit: Number((document.getElementById('sms-announcement-daily-limit') || {}).value || 500),
             sms_send_pace_seconds: Number((document.getElementById('sms-send-pace') || {}).value || 3),
             sms_quiet_enabled: !!(document.getElementById('sms-quiet-enabled') || {}).checked,
@@ -5998,7 +6004,14 @@
                     const failed = Number(data.segments_failed_today || 0);
                     const inflight = Number(data.segments_inflight_today || 0);
                     const limit = Number(data.segment_daily_limit || 0);
-                    segmentEl.textContent = `Today: ${completed} / ${limit} completed SMS segments · ${submitted} submitted · ${inflight} in queue · ${failed} failed`;
+                    const hourLimit = Number(data.segment_hourly_limit || 0);
+                    const hourUsed = Number(data.segments_used_this_hour || 0);
+                    let txt = `Today: ${completed} / ${limit} completed SMS segments · ${submitted} submitted · ${inflight} in queue · ${failed} failed`;
+                    if (hourLimit > 0) {
+                        txt += ` · this hour ${hourUsed}/${hourLimit}`;
+                        if (hourUsed >= hourLimit) txt += ' (bulk paused until next hour — create/renew still send)';
+                    }
+                    segmentEl.textContent = txt;
                 }
             })
             .catch(() => { /* keep UI calm on transient errors */ });

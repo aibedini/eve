@@ -390,7 +390,8 @@ def update_system_config():
         SMS_EXPIRED_MAX_AGE_DAYS_KEY, SMS_PROVIDER_KEY, SMS_GMWEB_API_KEY_KEY,
         SMS_GMWEB_BASE_URL_KEY, SMS_GMWEB_TIMEOUT_KEY,
         SMS_CUSTOM_API_KEY_KEY, SMS_CUSTOM_BASE_URL_KEY, SMS_CUSTOM_TIMEOUT_KEY,
-        SMS_MIN_INTERVAL_SECONDS_KEY, SMS_QUIET_ENABLED_KEY,
+        SMS_MIN_INTERVAL_SECONDS_KEY, SMS_HOURLY_LIMIT_KEY,
+        SMS_QUIET_ENABLED_KEY,
         SMS_QUIET_END_KEY, SMS_QUIET_START_KEY,
         SMS_ROYALTY_COOLDOWN_DAYS_KEY, SMS_ROYALTY_DAYS_KEY,
         SMS_SEND_PACE_SECONDS_KEY, SMS_SKIP_UNLIMITED_KEY,
@@ -557,6 +558,9 @@ def update_system_config():
                 sanitized_value = str(_parse_int(value, 30, min_value=0, max_value=3600))
             elif key == SMS_DAILY_LIMIT_KEY:
                 sanitized_value = str(_parse_int(value, 200, min_value=1, max_value=100000))
+            elif key == SMS_HOURLY_LIMIT_KEY:
+                # 0 = unlimited (throttle off); otherwise segments per Tehran hour.
+                sanitized_value = str(_parse_int(value, 0, min_value=0, max_value=100000))
             elif key == SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY:
                 sanitized_value = str(_parse_int(value, 500, min_value=1, max_value=100000))
             elif key == SMS_SEND_PACE_SECONDS_KEY:

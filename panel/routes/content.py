@@ -426,8 +426,8 @@ def get_announcements():
                 AnnouncementDelivery.announcement_id == announcement.id,
                 AnnouncementDelivery.status.in_(('retry', 'skipped')),
                 AnnouncementDelivery.last_error.in_(
-                    ('daily_limit_reached', 'pace_gated', 'recipient_rate_limited',
-                     'quiet_hours', 'gateway_capacity')),
+                    ('daily_limit_reached', 'hourly_limit_reached', 'pace_gated',
+                     'recipient_rate_limited', 'quiet_hours', 'gateway_capacity')),
             ).count()
             item['blocked_count'] = blocked
         except Exception:
@@ -936,8 +936,8 @@ def announcement_campaign_blocked(announcement_id):
         AnnouncementDelivery.announcement_id == ann.id,
         AnnouncementDelivery.status.in_(('retry', 'skipped')),
         AnnouncementDelivery.last_error.in_(
-            ('daily_limit_reached', 'pace_gated', 'recipient_rate_limited',
-             'quiet_hours', 'gateway_capacity')),
+            ('daily_limit_reached', 'hourly_limit_reached', 'pace_gated',
+             'recipient_rate_limited', 'quiet_hours', 'gateway_capacity')),
     ).order_by(AnnouncementDelivery.id.asc()).limit(500).all()
     blocked = []
     for delivery in rows:

@@ -1621,11 +1621,13 @@ def _run_announcement_campaign_batch(batch_size=25):
                         ann_used_today = _sms_announcement_segments_used_today()
                         slot_ok, slot_reason = _sms_take_send_slot(
                             delivery.recipient, sms_cfg, segment_info['sms_segments'],
-                            daily_limit=ann_daily_limit, used_today=ann_used_today)
+                            daily_limit=ann_daily_limit, used_today=ann_used_today,
+                            priority='announcement')
                         if not slot_ok:
                             delivery.status = 'retry'
                             delivery.next_attempt_at = datetime.utcnow() + timedelta(
-                                minutes=30 if slot_reason == 'daily_limit_reached' else 5)
+                                minutes=30 if slot_reason == 'daily_limit_reached' else
+                                        (60 if slot_reason == 'hourly_limit_reached' else 5))
                             delivery.last_error = slot_reason
                             continue
                         result = _send_sms_via_gmweb(
@@ -1787,6 +1789,7 @@ SMS_EXPIRED_MAX_AGE_DAYS_KEY    = 'sms_expired_max_age_days'  # don't SMS accoun
 SMS_ENDED_MAX_AGE_DAYS_KEY      = 'sms_ended_max_age_days'    # stop SMS this many days after first 'ended' message (0 = no cutoff)
 SMS_MIN_INTERVAL_SECONDS_KEY    = 'sms_min_interval_seconds'
 SMS_DAILY_LIMIT_KEY             = 'sms_daily_limit'
+SMS_HOURLY_LIMIT_KEY            = 'sms_hourly_limit'          # 0 = unlimited
 SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY = 'sms_announcement_daily_limit'
 SMS_SEND_PACE_SECONDS_KEY       = 'sms_send_pace_seconds'  # global gap between ANY two sends so the gateway doesn't return HTTP 429
 # Quiet hours (Tehran time): no automated SMS goes out inside this window. Scan
@@ -1875,6 +1878,48 @@ def _sms_announcement_segments_used_today() -> int:
         ).scalar()
         return max(0, int(total or 0))
     except Exception:
+        return 0
+
+
+def _sms_tehran_hour_bucket(now_utc: datetime | None = None) -> tuple[str, datetime, datetime]:
+    """[hour_key, window_start_utc, window_end_utc) for the Tehran-clock hour."""
+    base = now_utc or datetime.utcnow()
+    try:
+        tz = ZoneInfo('Asia/Tehran')
+        local = base.replace(tzinfo=timezone.utc).astimezone(tz)
+    except Exception:
+        local = base + timedelta(hours=3, minutes=30)
+    hour_start_local = local.replace(minute=0, second=0, microsecond=0)
+    try:
+        start_utc = hour_start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    except Exception:
+        start_utc = hour_start_local - timedelta(hours=3, minutes=30)
+    return (f'{local.year:04d}{local.month:02d}{local.day:02d}{local.hour:02d}',
+            start_utc, start_utc + timedelta(hours=1))
+
+
+def _sms_db_segments_used_this_hour(now_utc: datetime | None = None) -> int:
+    """Billable SMS segments completed inside the current Tehran-clock hour.
+
+    Same accounting as the daily counter (completed-only), so failed/queued
+    sends never burn the hourly budget — the status worker's reconciliation
+    moves rows into the completed bucket only once the gateway confirms.
+    """
+    _key, start_utc, end_utc = _sms_tehran_hour_bucket(now_utc)
+    try:
+        total = db.session.query(
+            db.func.coalesce(db.func.sum(SmsSendLog.segment_count), 0)
+        ).filter(
+            SmsSendLog.created_at >= start_utc,
+            SmsSendLog.created_at < end_utc,
+            SmsSendLog.status.in_(('sent', 'completed', 'delivered')),
+            SmsSendLog.segment_count.isnot(None),
+        ).scalar()
+        return max(0, int(total or 0))
+    except Exception:
+        # Best-effort like every other counter here: a DB hiccup must not
+        # wedge the whole scan — 0 lets this hour proceed (daily cap still
+        # applies on the next gate).
         return 0
 
 
@@ -1973,6 +2018,7 @@ def _get_sms_runtime_settings() -> dict:
         SMS_COOLDOWN_HOURS_EXPIRED_KEY, SMS_COOLDOWN_HOURS_ENDED_KEY,
         SMS_EXPIRED_MAX_AGE_DAYS_KEY, SMS_ENDED_MAX_AGE_DAYS_KEY,
         SMS_MIN_INTERVAL_SECONDS_KEY, SMS_DAILY_LIMIT_KEY,
+        SMS_HOURLY_LIMIT_KEY,
         SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY,
         SMS_SEND_PACE_SECONDS_KEY,
         SMS_TRIGGER_NEAR_EXPIRY_KEY, SMS_TRIGGER_LOW_VOLUME_KEY,
@@ -2048,6 +2094,10 @@ def _get_sms_runtime_settings() -> dict:
         'ended_max_age_days': _int(SMS_ENDED_MAX_AGE_DAYS_KEY, 0, lo=0, hi=3650),
         'min_interval_seconds': _int(SMS_MIN_INTERVAL_SECONDS_KEY, 30, lo=0, hi=3600),
         'daily_limit': _int(SMS_DAILY_LIMIT_KEY, 200, lo=1, hi=100000),
+        # Hourly throttle for bulk lanes (near_expiry/low_volume/expired/ended/
+        # royalty/announcement). 0 = unlimited. Transactional create/renew
+        # (critical lane) never counts against this gate.
+        'hourly_limit': _int(SMS_HOURLY_LIMIT_KEY, 0, lo=0, hi=100000),
         'announcement_daily_limit': _int(SMS_ANNOUNCEMENT_DAILY_LIMIT_KEY, 500, lo=1, hi=100000),
         'send_pace_seconds': _float(SMS_SEND_PACE_SECONDS_KEY, 3.0, lo=0.0, hi=60.0),
         'quiet_enabled': _bool(SMS_QUIET_ENABLED_KEY, False),
@@ -2251,17 +2301,32 @@ def _clear_message_cooldown(email: str, server_id) -> None:
 
 
 def _sms_take_send_slot(recipient: str, cfg: dict, segments: int = 1,
-                         daily_limit: int | None = None,
-                         used_today: int | None = None) -> tuple[bool, str | None]:
+                        daily_limit: int | None = None,
+                        used_today: int | None = None,
+                        priority: str | None = None,
+                        used_this_hour: int | None = None) -> tuple[bool, str | None]:
     now_ts = time.time()
     min_interval = int(cfg.get('min_interval_seconds') or 0)
     if daily_limit is None:
         daily_limit = int(cfg.get('daily_limit') or 200)
+    # Transactional create/renew (critical lane) is always exempt from the
+    # hourly throttle — a paying customer's confirmation must never wait for
+    # a bulk window to reopen.
+    if not priority:
+        priority = str(cfg.get('priority') or '')
+    hourly_exempt = str(priority).strip().lower() in ('created', 'renew', 'critical')
     with SMS_SEND_TRACKER_LOCK:
         per = SMS_SEND_TRACKER.get('per_recipient') or {}
         last = float(per.get(recipient) or 0.0)
         if min_interval > 0 and last > 0 and (now_ts - last) < min_interval:
             return False, 'recipient_rate_limited'
+        if not hourly_exempt:
+            hourly_limit = int(cfg.get('hourly_limit') or 0)
+            if hourly_limit > 0:
+                hour_used = _sms_db_segments_used_this_hour() if used_this_hour is None \
+                    else max(0, int(used_this_hour))
+                if (hour_used + segments) > hourly_limit:
+                    return False, 'hourly_limit_reached'
         if not _sms_reserve_daily_segments(segments, daily_limit, used_today=used_today):
             return False, 'daily_limit_reached'
         per[recipient] = now_ts
@@ -2855,7 +2920,8 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                     return
                 segment_info = _sms_segment_info(text)
                 segments = segment_info['sms_segments']
-                slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments)
+                slot_ok, slot_reason = _sms_take_send_slot(
+                    recipient, cfg, segments, priority=event_name)
                 if not slot_ok:
                     _log(recipient, 'skipped', slot_reason, segment_info)
                     return
@@ -3327,9 +3393,12 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
 
         segment_info = _sms_segment_info(text_msg)
         segments = segment_info['sms_segments']
-        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments)
+        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments, priority=state)
         if not slot_ok:
-            if slot_reason == 'daily_limit_reached':
+            # Daily OR hourly budget exhausted → stop this run cleanly. Candidates
+            # already messaged keep their cooldown; everyone else keeps waiting,
+            # and the next scheduled scan picks the work back up.
+            if slot_reason in ('daily_limit_reached', 'hourly_limit_reached'):
                 _sms_scan_set(stopped=slot_reason, state='done', finished_at=_utc_iso_now(), current=None)
                 _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', slot_reason, segment_info)
                 return {'scanned': total_clients, 'sent': sent, 'stopped': slot_reason}
@@ -3541,11 +3610,12 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
 
         segment_info = _sms_segment_info(text_msg)
         segments = segment_info['sms_segments']
-        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments)
+        slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments, priority='royalty')
         if not slot_ok:
-            if slot_reason == 'daily_limit_reached':
-                # Out of today's budget — stop; the next scheduled run resumes the rest
-                # (cooldown skips everyone already sent), so the list keeps draining.
+            if slot_reason in ('daily_limit_reached', 'hourly_limit_reached'):
+                # Out of this hour/day's budget — stop; the next scheduled run
+                # resumes the rest (cooldown skips everyone already sent), so
+                # the list keeps draining.
                 _sms_scan_set(stopped=slot_reason, state='done', finished_at=_utc_iso_now(), current=None)
                 _sms_log_row(jid, email_l, sid_norm, server_name, 'royalty', recipient, 'skipped', slot_reason, segment_info)
                 return {'scanned': len(idle), 'sent': sent, 'stopped': slot_reason}
@@ -3904,10 +3974,14 @@ def _flush_pending_sms(force: bool = False) -> int:
             continue
         segment_info = _sms_segment_info(r.text)
         segments = segment_info['sms_segments']
-        slot_ok, slot_reason = _sms_take_send_slot(r.recipient, cfg, segments)
+        # These rows are transactional create/renew messages parked by quiet
+        # hours, so pass their own event through: the critical lane stays exempt
+        # from the hourly bulk throttle.
+        slot_ok, slot_reason = _sms_take_send_slot(
+            r.recipient, cfg, segments, priority=r.event_name)
         if not slot_ok:
-            if slot_reason == 'daily_limit_reached':
-                break  # out of budget today; retry next tick
+            if slot_reason in ('daily_limit_reached', 'hourly_limit_reached'):
+                break  # out of budget for now; retry next tick
             continue
         pace = float(cfg.get('send_pace_seconds') or 0)
         if pace > 0 and SMS_LAST_SEND_TS[0] > 0:

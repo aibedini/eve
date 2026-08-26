@@ -79,8 +79,10 @@ from app import (  # noqa: E402
     _refresh_pending_sms_statuses,
     _sms_db_segment_stats_today,
     _sms_db_segments_used_today,
+    _sms_db_segments_used_this_hour,
     _sms_gateway_ready,
     _sms_reserve_daily_segments,
+    _sms_take_send_slot,
     _select_subscription_package,
     normalize_iran_mobile,
     discover_phone_ownership_claim,
@@ -2933,6 +2935,77 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(_sms_db_segments_used_today(), 2)
         self.assertTrue(_sms_reserve_daily_segments(1, 3))
         self.assertFalse(_sms_reserve_daily_segments(2, 3))
+
+    def test_sms_hourly_counter_only_counts_successful_segments(self):
+        db.session.add_all([
+            SmsSendLog(
+                email='hour-sent', server_id=1, server_name='ECO1', state='low_volume',
+                recipient='9891***101', status='sent', gateway_state='completed',
+                request_id='hour_sent', terminal=True, successful=True, segment_count=2,
+            ),
+            SmsSendLog(
+                email='hour-failed', server_id=1, server_name='ECO1', state='low_volume',
+                recipient='9891***102', status='failed', gateway_state='failed',
+                request_id='hour_failed', terminal=True, successful=False, segment_count=5,
+            ),
+            SmsSendLog(
+                email='hour-queued', server_id=1, server_name='ECO1', state='near_expiry',
+                recipient='9891***103', status='queued', gateway_state='queued',
+                request_id='hour_queued', terminal=False, segment_count=4,
+            ),
+        ])
+        db.session.commit()
+
+        # Only the successful row counts, so a 429/unpaired burst can never
+        # exhaust the operator's hourly allowance.
+        self.assertEqual(_sms_db_segments_used_this_hour(), 2)
+
+    def test_sms_hourly_limit_blocks_bulk_but_never_create_or_renew(self):
+        cfg = {'min_interval_seconds': 0, 'daily_limit': 10_000, 'hourly_limit': 3}
+
+        # Bulk lane: fits inside the hourly allowance.
+        ok, reason = _sms_take_send_slot(
+            '9891***201', cfg, segments=3, priority='low_volume', used_this_hour=0)
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+        # Bulk lane: one more segment would cross the hour cap → blocked, and
+        # the caller sees the dedicated reason so it can park (not fail) the row.
+        ok, reason = _sms_take_send_slot(
+            '9891***202', cfg, segments=1, priority='low_volume', used_this_hour=3)
+        self.assertFalse(ok)
+        self.assertEqual(reason, 'hourly_limit_reached')
+
+        for bulk_priority in ('near_expiry', 'expired', 'ended', 'royalty', 'announcement'):
+            ok, reason = _sms_take_send_slot(
+                f'9891***{bulk_priority[:3]}', cfg, segments=2,
+                priority=bulk_priority, used_this_hour=3)
+            self.assertFalse(ok, bulk_priority)
+            self.assertEqual(reason, 'hourly_limit_reached', bulk_priority)
+
+        # Transactional lanes are exempt: a paying customer's confirmation goes
+        # out even when the bulk hour is completely full.
+        for critical_priority in ('created', 'renew', 'critical'):
+            ok, reason = _sms_take_send_slot(
+                f'9891***{critical_priority[:3]}9', cfg, segments=4,
+                priority=critical_priority, used_this_hour=999)
+            self.assertTrue(ok, critical_priority)
+            self.assertIsNone(reason, critical_priority)
+
+    def test_sms_hourly_limit_zero_means_unlimited(self):
+        cfg = {'min_interval_seconds': 0, 'daily_limit': 10_000, 'hourly_limit': 0}
+        ok, reason = _sms_take_send_slot(
+            '9891***301', cfg, segments=500, priority='low_volume', used_this_hour=100_000)
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    def test_sms_daily_limit_still_wins_over_open_hourly_window(self):
+        cfg = {'min_interval_seconds': 0, 'daily_limit': 1, 'hourly_limit': 1000}
+        ok, reason = _sms_take_send_slot(
+            '9891***401', cfg, segments=5, priority='low_volume',
+            used_today=0, used_this_hour=0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, 'daily_limit_reached')
 
 
     def _make_telegram_operation_records(self, suffix='ops'):
