@@ -38,7 +38,10 @@ from panel.core.redis_client import (
     REDIS_REFRESH_PROCESSING_KEY,
     REDIS_REFRESH_QUEUE_KEY,
     REDIS_REFRESH_SCOPE_PREFIX,
+    bump_server_revision,
     get_redis,
+    get_server_revision,
+    load_snapshot_from_redis,
     publish_snapshot_to_redis,
 )
 from panel.extensions import db
@@ -1444,10 +1447,18 @@ def _run_refresh_job(job_id: str):
                         _update_reachability_status(servers, force=force)
                     else:
                         if server_id:
+                            server_revision = get_server_revision(int(server_id))
                             try:
                                 fetch_and_update_server_data(int(server_id))
-                                _backoff_record_success(int(server_id))
-                                changed_server_ids = [int(server_id)]
+                                if get_server_revision(int(server_id)) != server_revision:
+                                    app.logger.info(
+                                        'Discarded stale manual refresh for server %s after a concurrent mutation',
+                                        server_id,
+                                    )
+                                    load_snapshot_from_redis(force=True)
+                                else:
+                                    _backoff_record_success(int(server_id))
+                                    changed_server_ids = [int(server_id)]
                             except Exception as e:
                                 _backoff_record_failure(int(server_id), str(e))
                                 raise
@@ -1477,7 +1488,11 @@ def _run_refresh_job(job_id: str):
                             fetch_and_update_global_data(
                                 force=force, progress_callback=_monitor_progress)
                     # Propagate manual-refresh results to other workers (Redis mode).
-                    publish_snapshot_to_redis(changed_server_ids)
+                    expected = ({int(server_id): server_revision}
+                                if changed_server_ids and server_id else None)
+                    publish_snapshot_to_redis(
+                        changed_server_ids, expected_server_revisions=expected,
+                    )
                 finally:
                     GLOBAL_SERVER_DATA['is_updating'] = False
 
@@ -1828,6 +1843,91 @@ def _recompute_cached_client(cd, thresholds=None, lang=None):
     cd['id'] = raw.get('id', cd.get('id'))
 
 
+def _recompute_cached_server_stats(server_id):
+    """Rebuild one server's cached counters after a write-through mutation."""
+    from app import format_bytes
+    sid = int(server_id)
+    inbounds = []
+    stats = {
+        'total_inbounds': 0, 'active_inbounds': 0, 'total_clients': 0,
+        'online_clients': 0, 'active_clients': 0, 'inactive_clients': 0,
+        'not_started_clients': 0, 'unlimited_expiry_clients': 0,
+        'unlimited_volume_clients': 0, 'upload_raw': 0, 'download_raw': 0,
+        'remaining_raw': 0,
+    }
+    seen = set()
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id', -1)) != sid:
+                continue
+        except Exception:
+            continue
+        inbounds.append(inbound)
+        clients = inbound.get('clients') or []
+        inbound['client_count'] = len(clients)
+        inbound['active_count'] = sum(1 for client in clients if client.get('enable', True))
+        inbound_remaining = sum(
+            int(client.get('remaining_bytes') or 0)
+            for client in clients
+            if client.get('enable', True)
+            and client.get('service_state', 'active') in {'active', 'expiring_soon', 'volume_low'}
+            and int(client.get('remaining_bytes', -1) or 0) >= 0
+        )
+        inbound['remaining_total_raw'] = inbound_remaining
+        inbound['remaining_total'] = format_bytes(inbound_remaining) if inbound_remaining > 0 else None
+        if inbound.get('enable'):
+            stats['active_inbounds'] += 1
+
+        for client in clients:
+            client_id = str(client.get('id') or '').strip().lower()
+            email = str(client.get('email') or '').strip().lower()
+            identity = ('uuid', client_id) if client_id else (
+                'inbound_email', str(inbound.get('id')), email,
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            stats['total_clients'] += 1
+            if client.get('is_online'):
+                stats['online_clients'] += 1
+            enabled = bool(client.get('enable', True))
+            stats['active_clients' if enabled else 'inactive_clients'] += 1
+            if client.get('expiryType') == 'start_after_use':
+                stats['not_started_clients'] += 1
+            if client.get('expiryType') == 'unlimited':
+                stats['unlimited_expiry_clients'] += 1
+            try:
+                total_bytes = int(client.get('totalGB') or 0)
+            except (TypeError, ValueError):
+                total_bytes = 0
+            if total_bytes <= 0:
+                stats['unlimited_volume_clients'] += 1
+            stats['upload_raw'] += int(client.get('up') or 0)
+            stats['download_raw'] += int(client.get('down') or 0)
+            remaining = int(client.get('remaining_bytes', -1) or 0)
+            if enabled and remaining >= 0:
+                stats['remaining_raw'] += remaining
+
+    stats['total_inbounds'] = len(inbounds)
+    stats['limited_clients'] = stats['total_clients'] - stats['unlimited_volume_clients']
+    stats['total_upload'] = format_bytes(stats['upload_raw'])
+    stats['total_download'] = format_bytes(stats['download_raw'])
+    stats['total_traffic'] = format_bytes(stats['upload_raw'] + stats['download_raw'])
+    stats['total_remaining'] = format_bytes(stats['remaining_raw'])
+
+    statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
+    for status in statuses:
+        try:
+            if int(status.get('server_id', -1)) == sid:
+                status['stats'] = stats
+                status['success'] = True
+                break
+        except Exception:
+            continue
+    GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(statuses)
+    return stats
+
+
 def _iter_cached_client_copies(server_id, email, client_uuid=None):
     """Yield (inbound, processed_client) for every cached copy of a client on a
     server (a v3 client appears once per assigned inbound)."""
@@ -1884,15 +1984,21 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                 _recompute_cached_client(cd, thresholds, lang)
                 changed = True
             if changed:
+                _recompute_cached_server_stats(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
     except Exception as exc:
-        app.logger.debug("patch_cached_client failed: %s", exc)
+        app.logger.warning(
+            "patch_cached_client failed (server_id=%s, email=%s): %s",
+            server_id, email, exc, exc_info=True,
+        )
         return False
     if changed and publish:
-        try:
-            publish_snapshot_to_redis([server_id])
-        except Exception:
-            pass
+        bump_server_revision(server_id)
+        if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
+            app.logger.warning(
+                "patch_cached_client Redis sync failed (server_id=%s, email=%s)",
+                server_id, email,
+            )
     return changed
 
 
@@ -1957,15 +2063,15 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
                 changed = True
 
             if changed:
+                _recompute_cached_server_stats(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
     except Exception as exc:
         app.logger.debug("add_cached_client failed: %s", exc)
         return False
     if changed and publish:
-        try:
-            publish_snapshot_to_redis([server_id])
-        except Exception:
-            pass
+        bump_server_revision(server_id)
+        if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
+            app.logger.warning("add_cached_client Redis sync failed (server_id=%s)", server_id)
     return changed
 
 
@@ -2005,15 +2111,15 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
                 if len(kept) != len(clients):
                     ib['clients'] = kept
             if removed:
+                _recompute_cached_server_stats(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
     except Exception as exc:
         app.logger.debug("remove_cached_client failed: %s", exc)
         return False
     if removed and publish:
-        try:
-            publish_snapshot_to_redis([server_id])
-        except Exception:
-            pass
+        bump_server_revision(server_id)
+        if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
+            app.logger.warning("remove_cached_client Redis sync failed (server_id=%s)", server_id)
     return removed
 
 
@@ -2060,16 +2166,16 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
             clone = copy.deepcopy(source)
             clone['inbound_id'] = iid
             target_ib.setdefault('clients', []).append(clone)
+            _recompute_cached_server_stats(server_id)
             GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             done = True
     except Exception as exc:
         app.logger.debug("clone_cached_client_into_inbound failed: %s", exc)
         return False
     if done and publish:
-        try:
-            publish_snapshot_to_redis([server_id])
-        except Exception:
-            pass
+        bump_server_revision(server_id)
+        if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
+            app.logger.warning("clone_cached_client Redis sync failed (server_id=%s)", server_id)
     return done
 
 

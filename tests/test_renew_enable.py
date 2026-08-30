@@ -14,6 +14,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 import app as app_module  # noqa: E402
 import panel.adapters.xui as xui_adapter  # noqa: E402
+import panel.core.redis_client as redis_cache  # noqa: E402
 import panel.routes.clients as clients_module  # noqa: E402
 import panel.routes.packages as packages_module  # noqa: E402
 from app import (  # noqa: E402
@@ -179,7 +180,10 @@ class RenewEnableTests(unittest.TestCase):
             sess['role'] = self.admin.role
             sess['is_superadmin'] = True
 
-        self._orig_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
+        self._orig_snapshot = {
+            key: GLOBAL_SERVER_DATA.get(key)
+            for key in ('inbounds', 'stats', 'servers_status', 'last_update')
+        }
         GLOBAL_SERVER_DATA['inbounds'] = []
 
         self.session_obj = mock.Mock()
@@ -217,7 +221,7 @@ class RenewEnableTests(unittest.TestCase):
     def tearDown(self):
         for p in self._patches:
             p.stop()
-        GLOBAL_SERVER_DATA['inbounds'] = self._orig_inbounds
+        GLOBAL_SERVER_DATA.update(self._orig_snapshot)
         db.session.rollback()
         db.session.remove()
 
@@ -412,6 +416,64 @@ class RenewEnableTests(unittest.TestCase):
         self.assertEqual(verify['observed']['totalGB'], 3 * GB)
         self.assertTrue(verify['observed']['enable'])
 
+    def test_successful_recheck_repairs_shared_cache_and_stats(self):
+        old = _raw_client(expiry=DAY_MS, total=5 * GB, enable=False)
+        self._seed_cache(old)
+        expected_expiry = int(time.time() * 1000) + 30 * DAY_MS
+        expected_total = 15 * GB
+        observed = _raw_client(
+            expiry=expected_expiry, total=expected_total, enable=True,
+        )
+        GLOBAL_SERVER_DATA['servers_status'] = [{
+            'server_id': self.server.id,
+            'success': True,
+            'stats': {},
+        }]
+        completed = {
+            'state': 'complete',
+            'verify': {'expected': {
+                'expiryTime': expected_expiry,
+                'totalGB': expected_total,
+                'enable': True,
+            }},
+        }
+        with (
+            mock.patch.object(
+                app_module, 'fetch_inbounds',
+                return_value=(_panel_inbounds(observed, self.server.id), None, '3x-ui'),
+            ),
+            mock.patch.object(clients_module, '_load_renew_result', return_value=completed),
+        ):
+            resp = self.client.post(
+                f'/api/client/{self.server.id}/1/bob/renew/verify',
+                json={'awaiting_result': True},
+            )
+
+        payload = resp.get_json()
+        self.assertTrue(payload['verify']['ok'], payload)
+        self.assertTrue(payload['cache_sync'], payload)
+        cached = GLOBAL_SERVER_DATA['inbounds'][0]['clients'][0]
+        self.assertEqual(cached['expiryTimestamp'], expected_expiry)
+        self.assertEqual(cached['totalGB'], expected_total)
+        self.assertTrue(cached['enable'])
+        server_stats = GLOBAL_SERVER_DATA['servers_status'][0]['stats']
+        self.assertEqual(server_stats['active_clients'], 1)
+        self.assertEqual(server_stats['inactive_clients'], 0)
+
+    def test_dashboard_refresh_hydrates_shared_snapshot_before_read(self):
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': self.server.id, 'id': 1, 'clients': [], 'enable': True,
+        }]
+        GLOBAL_SERVER_DATA['servers_status'] = [{
+            'server_id': self.server.id, 'success': True, 'stats': {},
+        }]
+        GLOBAL_SERVER_DATA['last_update'] = '2026-08-30T00:00:00'
+        with mock.patch.object(app_module, 'load_snapshot_from_redis', return_value=False) as load:
+            resp = self.client.get('/api/refresh?mode=cache&enqueue=0')
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        load.assert_called_once_with()
+
     def test_legacy_panel_update_carries_enable(self):
         self._patches[1].stop()  # server_is_v3 -> use a fresh False mock
         v3_flag = mock.patch.object(app_module, 'server_is_v3', return_value=False)
@@ -448,6 +510,36 @@ class RenewEnableTests(unittest.TestCase):
         self.assertIsNotNone(posted, 'no updateClient POST observed')
         self.assertTrue(posted['enable'])
         self.assertEqual(posted['expiryTime'], future + 30 * DAY_MS)
+
+
+class RedisSnapshotRevisionTests(unittest.TestCase):
+    def test_publish_discards_refresh_result_when_server_revision_changed(self):
+        client = mock.Mock()
+        pipe = mock.Mock()
+        client.pipeline.return_value = pipe
+        # The refresh started at revision 4, but a renew bumped it to 5.
+        pipe.get.side_effect = lambda key: (
+            b'5' if key.endswith(':7') else None
+        )
+        original = dict(redis_cache.GLOBAL_SERVER_DATA)
+        redis_cache.GLOBAL_SERVER_DATA.update({
+            'inbounds': [{'server_id': 7, 'id': 1, 'clients': []}],
+            'servers_status': [{'server_id': 7, 'success': True, 'stats': {}}],
+            'stats': {},
+            'last_update': 'now',
+        })
+        try:
+            with mock.patch.object(redis_cache, 'get_redis', return_value=client):
+                published = redis_cache.publish_snapshot_to_redis(
+                    [7], expected_server_revisions={7: 4},
+                )
+        finally:
+            redis_cache.GLOBAL_SERVER_DATA.clear()
+            redis_cache.GLOBAL_SERVER_DATA.update(original)
+
+        self.assertFalse(published)
+        pipe.unwatch.assert_called_once_with()
+        pipe.execute.assert_not_called()
 
 
 if __name__ == '__main__':

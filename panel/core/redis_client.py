@@ -21,6 +21,7 @@ __all__ = [
     'REDIS_SERVER_SNAPSHOT_PREFIX',
     'REDIS_SNAPSHOT_VERSION_KEY',
     'REDIS_SNAPSHOT_TTL',
+    'REDIS_SERVER_REVISION_PREFIX',
     'REDIS_REFRESH_QUEUE_KEY',
     'REDIS_REFRESH_PROCESSING_KEY',
     'REDIS_REFRESH_JOB_PREFIX',
@@ -30,6 +31,8 @@ __all__ = [
     'redis_enabled',
     'publish_snapshot_to_redis',
     'load_snapshot_from_redis',
+    'get_server_revision',
+    'bump_server_revision',
 ]
 
 # کش برای نگهداری وضعیت سرورها در RAM
@@ -44,12 +47,13 @@ GLOBAL_SERVER_DATA = {
 
 # Serializes all writes to GLOBAL_SERVER_DATA (fetch pipeline, ownership
 # enrichment, snapshot publish). Moved here from app.py; identity is shared.
-GLOBAL_REFRESH_LOCK = threading.Lock()
+GLOBAL_REFRESH_LOCK = threading.RLock()
 
 REDIS_URL = (os.environ.get('REDIS_URL') or '').strip()
 REDIS_SNAPSHOT_KEY = 'eve:server_data_snapshot'
 REDIS_SNAPSHOT_MANIFEST_KEY = 'eve:server_data_manifest'
 REDIS_SERVER_SNAPSHOT_PREFIX = 'eve:server_data:'
+REDIS_SERVER_REVISION_PREFIX = 'eve:server_revision:'
 _REDIS_CLIENT = None
 _REDIS_CHECKED = False
 _REDIS_RETRY_AFTER = 0.0
@@ -109,7 +113,80 @@ def _redis_server_snapshot_key(server_id: int) -> str:
     return f'{REDIS_SERVER_SNAPSHOT_PREFIX}{int(server_id)}'
 
 
-def publish_snapshot_to_redis(changed_server_ids=None) -> bool:
+def _redis_server_revision_key(server_id: int) -> str:
+    return f'{REDIS_SERVER_REVISION_PREFIX}{int(server_id)}'
+
+
+def get_server_revision(server_id: int) -> int:
+    """Return the shared mutation revision for one server (zero without Redis)."""
+    client = get_redis()
+    if client is None:
+        return 0
+    try:
+        raw = client.get(_redis_server_revision_key(server_id))
+        return int(raw or 0)
+    except Exception:
+        return 0
+
+
+def bump_server_revision(server_id: int) -> int:
+    """Mark an authoritative panel/cache mutation for stale-refresh detection."""
+    client = get_redis()
+    if client is None:
+        return 0
+    try:
+        key = _redis_server_revision_key(server_id)
+        pipe = client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, REDIS_SNAPSHOT_TTL)
+        result = pipe.execute()
+        return int(result[0] or 0)
+    except Exception as exc:
+        logger.warning("Redis server revision bump failed for %s: %s", server_id, exc)
+        return 0
+
+
+def _format_bytes(value) -> str:
+    try:
+        size = max(0, int(value or 0))
+    except (TypeError, ValueError):
+        size = 0
+    units = ('B', 'KB', 'MB', 'GB', 'TB', 'PB')
+    amount = float(size)
+    for unit in units:
+        if amount < 1024.0 or unit == units[-1]:
+            if unit == 'B':
+                return f'{int(amount)} B'
+            return f'{amount:.2f} {unit}'
+        amount /= 1024.0
+    return '0 B'
+
+
+def _aggregate_stats(server_statuses):
+    """Build manifest-wide totals from the merged per-server status rows."""
+    keys = (
+        'total_inbounds', 'active_inbounds', 'total_clients', 'online_clients',
+        'active_clients', 'inactive_clients', 'not_started_clients',
+        'unlimited_expiry_clients', 'unlimited_volume_clients', 'upload_raw',
+        'download_raw', 'remaining_raw', 'limited_clients',
+    )
+    total = {key: 0 for key in keys}
+    for status in server_statuses or []:
+        stats = status.get('stats') if isinstance(status, dict) and status.get('success') else None
+        if not isinstance(stats, dict):
+            continue
+        for key in keys:
+            value = stats.get(key, 0)
+            if isinstance(value, int):
+                total[key] += value
+    total['total_upload'] = _format_bytes(total['upload_raw'])
+    total['total_download'] = _format_bytes(total['download_raw'])
+    total['total_traffic'] = _format_bytes(total['upload_raw'] + total['download_raw'])
+    total['total_remaining'] = _format_bytes(total['remaining_raw'])
+    return total
+
+
+def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisions=None) -> bool:
     """Publish a small manifest plus independently compressed server blocks.
 
     ``changed_server_ids`` limits expensive serialization to servers replaced by
@@ -144,64 +221,137 @@ def publish_snapshot_to_redis(changed_server_ids=None) -> bool:
         if publish_all:
             changed = set(blocks)
 
-        # Other web processes can write-through one server after an edit. Merge
-        # the authoritative versions on every publish so this process never
-        # rolls such a newer server block back while publishing another server.
-        try:
-            old_manifest_blob = client.get(REDIS_SNAPSHOT_MANIFEST_KEY)
-            if old_manifest_blob:
-                old_manifest = pickle.loads(zlib.decompress(old_manifest_blob))
-                _PUBLISHED_SERVER_VERSIONS.update({
-                    int(k): str(v) for k, v in (old_manifest.get('server_versions') or {}).items()
-                })
-        except Exception:
-            pass
-
         for status in (GLOBAL_SERVER_DATA.get('servers_status') or []):
             try:
                 active_server_ids.add(int(status.get('server_id')))
             except Exception:
                 continue
-        _PUBLISHED_SERVER_VERSIONS = {
-            sid: version for sid, version in _PUBLISHED_SERVER_VERSIONS.items()
-            if sid in active_server_ids
+        expected = {
+            int(sid): int(revision or 0)
+            for sid, revision in (expected_server_revisions or {}).items()
+            if int(sid) in changed
         }
+        revision_keys = [_redis_server_revision_key(sid) for sid in sorted(expected)]
 
-        version = str(time.time_ns())
-        pipe = client.pipeline()
-        for sid in changed:
-            block_blob = zlib.compress(
-                pickle.dumps(blocks.get(sid, []), protocol=pickle.HIGHEST_PROTOCOL), 1
-            )
-            pipe.set(_redis_server_snapshot_key(sid), block_blob, ex=REDIS_SNAPSHOT_TTL)
-            _PUBLISHED_SERVER_VERSIONS[sid] = version
+        # WATCH makes the revision check and snapshot publication one atomic CAS.
+        # The manifest is watched too, so concurrent publishers merge rather than
+        # silently overwriting one another's server versions/status rows.
+        for _attempt in range(3):
+            pipe = client.pipeline()
+            try:
+                watch_keys = [REDIS_SNAPSHOT_MANIFEST_KEY] + revision_keys
+                pipe.watch(*watch_keys)
+                for sid in expected:
+                    current = pipe.get(_redis_server_revision_key(sid))
+                    if int(current or 0) != expected[sid]:
+                        pipe.unwatch()
+                        logger.info(
+                            "Discarded stale refresh snapshot for server %s (revision %s -> %s)",
+                            sid, expected[sid], int(current or 0),
+                        )
+                        return False
 
-        # Refresh TTLs for unchanged blocks referenced by the manifest.
-        for sid in _PUBLISHED_SERVER_VERSIONS:
-            if sid not in changed:
-                pipe.expire(_redis_server_snapshot_key(sid), REDIS_SNAPSHOT_TTL)
+                old_manifest = {}
+                old_manifest_blob = pipe.get(REDIS_SNAPSHOT_MANIFEST_KEY)
+                if old_manifest_blob:
+                    try:
+                        old_manifest = pickle.loads(zlib.decompress(old_manifest_blob))
+                    except Exception:
+                        old_manifest = {}
 
-        manifest = {
-            'format': 2,
-            'version': version,
-            'server_versions': _PUBLISHED_SERVER_VERSIONS,
-            'stats': GLOBAL_SERVER_DATA.get('stats') or {},
-            'servers_status': GLOBAL_SERVER_DATA.get('servers_status') or [],
-            'last_update': GLOBAL_SERVER_DATA.get('last_update'),
-        }
-        manifest_blob = zlib.compress(
-            pickle.dumps(manifest, protocol=pickle.HIGHEST_PROTOCOL), 1
-        )
-        pipe.set(REDIS_SNAPSHOT_MANIFEST_KEY, manifest_blob, ex=REDIS_SNAPSHOT_TTL)
-        pipe.set(REDIS_SNAPSHOT_VERSION_KEY, version, ex=REDIS_SNAPSHOT_TTL)
-        pipe.execute()
-        return True
+                published_versions = {
+                    int(k): str(v)
+                    for k, v in (old_manifest.get('server_versions') or {}).items()
+                }
+                old_status_map = {}
+                for status in (old_manifest.get('servers_status') or []):
+                    try:
+                        old_status_map[int(status.get('server_id'))] = status
+                    except Exception:
+                        continue
+                local_status_map = {}
+                local_status_order = []
+                for status in (GLOBAL_SERVER_DATA.get('servers_status') or []):
+                    try:
+                        sid = int(status.get('server_id'))
+                    except Exception:
+                        continue
+                    local_status_map[sid] = status
+                    local_status_order.append(sid)
+
+                merged_status_map = dict(old_status_map)
+                metadata_only = not publish_all and not changed
+                if metadata_only:
+                    for sid, local_status in local_status_map.items():
+                        old_status = old_status_map.get(sid) or {}
+                        merged = dict(old_status)
+                        merged.update(local_status)
+                        # Reachability/status refreshes must not replace newer
+                        # client counters written through by another worker.
+                        if isinstance(old_status.get('stats'), dict):
+                            merged['stats'] = old_status['stats']
+                        merged_status_map[sid] = merged
+                else:
+                    for sid in changed:
+                        if sid in local_status_map:
+                            merged_status_map[sid] = local_status_map[sid]
+                for sid in local_status_order:
+                    if sid not in merged_status_map:
+                        merged_status_map[sid] = local_status_map[sid]
+                status_order = local_status_order + [
+                    sid for sid in merged_status_map if sid not in local_status_order
+                ]
+                merged_statuses = [merged_status_map[sid] for sid in status_order]
+
+                published_versions = {
+                    sid: version for sid, version in published_versions.items()
+                    if sid in active_server_ids or sid in merged_status_map
+                }
+                version = str(time.time_ns())
+                for sid in changed:
+                    published_versions[sid] = version
+
+                manifest = {
+                    'format': 2,
+                    'version': version,
+                    'server_versions': published_versions,
+                    'stats': _aggregate_stats(merged_statuses),
+                    'servers_status': merged_statuses,
+                    'last_update': GLOBAL_SERVER_DATA.get('last_update'),
+                }
+                manifest_blob = zlib.compress(
+                    pickle.dumps(manifest, protocol=pickle.HIGHEST_PROTOCOL), 1
+                )
+
+                pipe.multi()
+                for sid in changed:
+                    block_blob = zlib.compress(
+                        pickle.dumps(blocks.get(sid, []), protocol=pickle.HIGHEST_PROTOCOL), 1
+                    )
+                    pipe.set(_redis_server_snapshot_key(sid), block_blob, ex=REDIS_SNAPSHOT_TTL)
+                for sid in published_versions:
+                    if sid not in changed:
+                        pipe.expire(_redis_server_snapshot_key(sid), REDIS_SNAPSHOT_TTL)
+                pipe.set(REDIS_SNAPSHOT_MANIFEST_KEY, manifest_blob, ex=REDIS_SNAPSHOT_TTL)
+                pipe.set(REDIS_SNAPSHOT_VERSION_KEY, version, ex=REDIS_SNAPSHOT_TTL)
+                pipe.execute()
+                _PUBLISHED_SERVER_VERSIONS = published_versions
+                return True
+            except Exception as exc:
+                try:
+                    pipe.reset()
+                except Exception:
+                    pass
+                if exc.__class__.__name__ == 'WatchError' and _attempt < 2:
+                    continue
+                raise
+        return False
     except Exception as e:
         logger.warning("Redis publish snapshot failed: %s", e)
         return False
 
 
-def load_snapshot_from_redis(force: bool = False) -> bool:
+def _load_snapshot_from_redis_unlocked(force: bool = False) -> bool:
     """Pull the shared snapshot from Redis into local GLOBAL_SERVER_DATA, but
     only when the version changed (cheap version check first). Returns True if
     the local cache was updated."""
@@ -223,12 +373,13 @@ def load_snapshot_from_redis(force: bool = False) -> bool:
                 int(k): str(v) for k, v in (manifest.get('server_versions') or {}).items()
             }
 
-            current_blocks = defaultdict(list)
-            for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
-                try:
-                    current_blocks[int(inbound.get('server_id'))].append(inbound)
-                except Exception:
-                    continue
+            with GLOBAL_REFRESH_LOCK:
+                current_blocks = defaultdict(list)
+                for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                    try:
+                        current_blocks[int(inbound.get('server_id'))].append(inbound)
+                    except Exception:
+                        continue
 
             new_blocks = {}
             for sid, server_version in server_versions.items():
@@ -250,25 +401,33 @@ def load_snapshot_from_redis(force: bool = False) -> bool:
                 except Exception:
                     continue
             ordered_ids.extend(sid for sid in new_blocks if sid not in ordered_ids)
-            GLOBAL_SERVER_DATA['inbounds'] = [
-                inbound for sid in ordered_ids for inbound in new_blocks.get(sid, [])
-            ]
-            GLOBAL_SERVER_DATA['stats'] = manifest.get('stats') or {}
-            GLOBAL_SERVER_DATA['servers_status'] = manifest.get('servers_status') or []
-            GLOBAL_SERVER_DATA['last_update'] = manifest.get('last_update')
-            _LAST_LOADED_SERVER_VERSIONS = server_versions
+            with GLOBAL_REFRESH_LOCK:
+                GLOBAL_SERVER_DATA['inbounds'] = [
+                    inbound for sid in ordered_ids for inbound in new_blocks.get(sid, [])
+                ]
+                GLOBAL_SERVER_DATA['stats'] = manifest.get('stats') or {}
+                GLOBAL_SERVER_DATA['servers_status'] = manifest.get('servers_status') or []
+                GLOBAL_SERVER_DATA['last_update'] = manifest.get('last_update')
+                _LAST_LOADED_SERVER_VERSIONS = server_versions
         else:
             # Rolling-upgrade compatibility with snapshots written by v1 workers.
             blob = client.get(REDIS_SNAPSHOT_KEY)
             if not blob:
                 return False
             payload = pickle.loads(zlib.decompress(blob))
-            GLOBAL_SERVER_DATA['inbounds'] = payload.get('inbounds') or []
-            GLOBAL_SERVER_DATA['stats'] = payload.get('stats') or {}
-            GLOBAL_SERVER_DATA['servers_status'] = payload.get('servers_status') or []
-            GLOBAL_SERVER_DATA['last_update'] = payload.get('last_update')
+            with GLOBAL_REFRESH_LOCK:
+                GLOBAL_SERVER_DATA['inbounds'] = payload.get('inbounds') or []
+                GLOBAL_SERVER_DATA['stats'] = payload.get('stats') or {}
+                GLOBAL_SERVER_DATA['servers_status'] = payload.get('servers_status') or []
+                GLOBAL_SERVER_DATA['last_update'] = payload.get('last_update')
         _LAST_LOADED_SNAPSHOT_VERSION = version
         return True
     except Exception as e:
         logger.warning("Redis load snapshot failed: %s", e)
         return False
+
+
+def load_snapshot_from_redis(force: bool = False) -> bool:
+    """Atomically hydrate the complete local snapshot under the shared RLock."""
+    with GLOBAL_REFRESH_LOCK:
+        return _load_snapshot_from_redis_unlocked(force=force)

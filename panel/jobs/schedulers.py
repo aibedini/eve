@@ -20,6 +20,7 @@ from panel.adapters.xui import persist_detected_panel_type
 from panel.core.redis_client import (
     GLOBAL_REFRESH_LOCK,
     GLOBAL_SERVER_DATA,
+    get_server_revision,
     load_snapshot_from_redis,
     publish_snapshot_to_redis,
     redis_enabled,
@@ -113,6 +114,7 @@ def _run_snapshot_with_progress():
                     ),
                 })
                 try:
+                    revision_before = get_server_revision(srv.id)
                     srv_dict = {
                         'id': srv.id, 'name': srv.name, 'host': srv.host,
                         'username': srv.username, 'password': get_server_password(srv),
@@ -121,6 +123,13 @@ def _run_snapshot_with_progress():
                         'sub_path': srv.sub_path, 'json_path': srv.json_path,
                     }
                     srv_id, inbounds, online_index, status_payload, status_error, error, detected_type = fetch_worker(srv_dict)
+                    if get_server_revision(srv.id) != revision_before:
+                        app.logger.info(
+                            'Discarded stale snapshot fetch for server %s after a concurrent mutation',
+                            srv.id,
+                        )
+                        load_snapshot_from_redis(force=True)
+                        continue
                     if not error:
                         if not isinstance(inbounds, list):
                             inbounds = []
@@ -129,7 +138,9 @@ def _run_snapshot_with_progress():
                         without = [ib for ib in existing if int(ib.get('server_id', -1)) != int(srv.id)]
                         GLOBAL_SERVER_DATA['inbounds'] = without + list(processed or [])
                         GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
-                        publish_snapshot_to_redis([srv.id])
+                        publish_snapshot_to_redis(
+                            [srv.id], expected_server_revisions={srv.id: revision_before},
+                        )
                 except Exception:
                     pass  # keep going for other servers
 
@@ -307,6 +318,9 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
             'panel_type': s.panel_type, 'sub_port': s.sub_port,
             'sub_path': s.sub_path, 'json_path': s.json_path
         } for s in servers if int(s.id) not in skipped_ids]
+        refresh_revisions = {
+            int(s['id']): get_server_revision(int(s['id'])) for s in server_dicts
+        }
 
         if progress_callback:
             try:
@@ -371,6 +385,13 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
             GLOBAL_SERVER_DATA['last_update'] = _utc_iso_now()
 
         def _apply_result(sid, res):
+            expected_revision = refresh_revisions.get(sid, 0)
+            if get_server_revision(sid) != expected_revision:
+                app.logger.info(
+                    'Discarded stale background refresh for server %s after a concurrent mutation',
+                    sid,
+                )
+                return False
             _, inbounds, online_index, status_payload, status_error, error, detected_type = res
             if error:
                 _backoff_record_failure(sid, error)
@@ -393,7 +414,7 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
                     st['xray_core'] = status_payload.get('xray_core')
                     st['online_count'] = status_payload.get('online_count')
                 status_map[sid] = st
-                return  # keep existing inbounds block (if any)
+                return True  # keep existing inbounds block (if any)
 
             _backoff_record_success(sid)
             srv = servers_by_id.get(sid)
@@ -424,6 +445,7 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
                 "panel_status_checked_at": now_iso
             })
             status_map[sid] = st
+            return True
 
         # Backoff-skipped servers: mark unreachable up-front (keep their cached inbounds).
         for sid in skipped_ids:
@@ -443,6 +465,29 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
         pending_ids = {int(s['id']) for s in server_dicts}
         last_publish = 0.0
         dirty_server_ids = set()
+
+        def _publish_dirty():
+            nonlocal last_publish
+            publishable = {
+                sid for sid in dirty_server_ids
+                if get_server_revision(sid) == refresh_revisions.get(sid, 0)
+            }
+            if not publishable:
+                dirty_server_ids.clear()
+                return
+            expected = {sid: refresh_revisions.get(sid, 0) for sid in publishable}
+            if publish_snapshot_to_redis(
+                    publishable, expected_server_revisions=expected):
+                dirty_server_ids.difference_update(publishable)
+            else:
+                # A CAS failure means at least one mutation won the race. Drop
+                # those stale candidates; successful panel data is fetched again
+                # on the next refresh cycle.
+                for sid in list(publishable):
+                    if get_server_revision(sid) != expected[sid]:
+                        dirty_server_ids.discard(sid)
+            last_publish = time.time()
+
         if server_dicts:
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 future_to_id = {executor.submit(fetch_worker, s): int(s['id']) for s in server_dicts}
@@ -456,9 +501,10 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
                     except Exception as e:
                         res = (sid, None, None, None, None, str(e) or "Timeout", 'auto')
                     try:
-                        _apply_result(sid, res)
+                        applied = _apply_result(sid, res)
                     except Exception:
                         app.logger.exception("Failed to apply fetch result for server %s", sid)
+                        applied = False
                     _commit_snapshot()
                     if progress_callback:
                         try:
@@ -471,12 +517,11 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
                             })
                         except Exception:
                             app.logger.exception('Failed to store refresh progress for server %s', sid)
-                    dirty_server_ids.add(sid)
+                    if applied:
+                        dirty_server_ids.add(sid)
                     nowt = time.time()
                     if nowt - last_publish >= 1.0:
-                        publish_snapshot_to_redis(dirty_server_ids)
-                        dirty_server_ids.clear()
-                        last_publish = nowt
+                        _publish_dirty()
 
         # Defensive: any server that never produced a result → timeout entry.
         for sid in list(pending_ids):
@@ -484,7 +529,7 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
 
         # Final authoritative commit + publish to the other workers (no-op w/o Redis).
         _commit_snapshot()
-        publish_snapshot_to_redis(dirty_server_ids)
+        _publish_dirty()
 
     except Exception as e:
         app.logger.error("Background fetch error: %s", e)

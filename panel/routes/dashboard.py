@@ -21,10 +21,19 @@ def api_refresh():
         _parse_bool, _summarize_job, enqueue_refresh_job,
         ensure_background_threads_started, format_bytes,
         get_reseller_access_maps, is_inbound_accessible,
+        load_snapshot_from_redis,
     )
     # Make sure background threads are running (covers gunicorn/uwsgi workers)
     if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
         ensure_background_threads_started()
+
+    # Multi-worker: hydrate this process from the newest shared snapshot before
+    # any mode reads GLOBAL_SERVER_DATA. The loader first checks the cheap
+    # version key and only decompresses when another process published changes.
+    try:
+        load_snapshot_from_redis()
+    except Exception:
+        pass
 
     force = _parse_bool(request.args.get('force'))
     wait = _parse_bool(request.args.get('wait'))

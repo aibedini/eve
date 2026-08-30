@@ -543,6 +543,7 @@ def edit_client(server_id, inbound_id, email):
             db.session.commit()
 
             # Write-through cache: reflect the edit instantly (no panel re-fetch).
+            cache_sync = False
             try:
                 _tg = None
                 _ex = None
@@ -551,15 +552,18 @@ def edit_client(server_id, inbound_id, email):
                         _tg = int(float(new_total_gb) * 1024 * 1024 * 1024)
                     if new_expiry_time is not None:
                         _ex = int(new_expiry_time)
-                patch_cached_client(
+                cache_sync = patch_cached_client(
                     server_id, email, client_uuid=str(client_id) if client_id else None,
                     new_email=(new_email if new_email != email else None),
                     comment=(new_comment if new_comment is not None else None),
                     total_gb_bytes=_tg, expiry_ts=_ex)
             except Exception:
-                pass
+                app.logger.warning(
+                    "Edit cache sync failed (server_id=%s, email=%s)",
+                    server_id, email, exc_info=True,
+                )
 
-            return jsonify({"success": True})
+            return jsonify({"success": True, "cache_sync": bool(cache_sync)})
 
     except Exception as e:
         app.logger.error("Edit client error: %s", e)
@@ -2014,8 +2018,9 @@ def renew_client(server_id, inbound_id, email):
                 # Write through before cancelling stale warnings. A depletion worker
                 # may already have classified this account and must see the renewed
                 # state during its final pre-dispatch validation.
+                cache_sync = False
                 try:
-                    patch_cached_client(
+                    cache_sync = patch_cached_client(
                         server_id, email,
                         client_uuid=str(target_client.get('id')) if target_client and target_client.get('id') else None,
                         total_gb_bytes=int(target_client.get('totalGB') or 0),
@@ -2025,7 +2030,10 @@ def renew_client(server_id, inbound_id, email):
                         up=(0 if reset_traffic else None),
                         down=(0 if reset_traffic else None))
                 except Exception:
-                    pass
+                    app.logger.warning(
+                        "Renew cache sync failed (trace=%s, server_id=%s, email=%s)",
+                        renewal_trace_id, server_id, email, exc_info=True,
+                    )
 
                 # SMS automation (GMweb) — non-reseller-owned accounts only; runs
                 # in a background thread so it never delays the renew response.
@@ -2071,8 +2079,9 @@ def renew_client(server_id, inbound_id, email):
                     "verify": verify,
                     "client_comment": _client_comment,
                     "was_reactivated": _was_disabled,
+                    "cache_sync": bool(cache_sync),
                 })
-                return _finish({"success": True, "copy_text": copy_text, "tpl_vars": _renew_tpl_vars, "verify": verify, "whatsapp": whatsapp_meta, "was_reactivated": _was_disabled})
+                return _finish({"success": True, "copy_text": copy_text, "tpl_vars": _renew_tpl_vars, "verify": verify, "whatsapp": whatsapp_meta, "was_reactivated": _was_disabled, "cache_sync": bool(cache_sync)})
 
             errors.append(f"{template}: {resp.status_code}")
             timing["update_endpoint"] = template
@@ -2418,8 +2427,8 @@ def verify_renew_client(server_id, inbound_id, email):
        "expected_enable": true}
     """
     from app import (  # deferred: app-level helper, avoids circular import
-        _has_client_access, _v3_sanitize_email, fetch_inbounds, find_client, get_xui_session,
-        persist_detected_panel_type, server_is_v3,
+        _has_client_access, _v3_sanitize_email, app, fetch_inbounds, find_client,
+        get_xui_session, patch_cached_client, persist_detected_panel_type, server_is_v3,
     )
     trace_id = secrets.token_hex(4)
     t0 = time.perf_counter()
@@ -2592,7 +2601,25 @@ def verify_renew_client(server_id, inbound_id, email):
             verify['state'] = ('applied' if verify['ok'] else
                                'partially_applied' if applied_count else 'not_applied')
 
-        payload = {'success': True, 'verify': verify,
+        cache_sync = None
+        if verify.get('ok'):
+            try:
+                cache_sync = patch_cached_client(
+                    server_id, email,
+                    client_uuid=str(v_client.get('id')) if v_client.get('id') else None,
+                    total_gb_bytes=verify['observed']['totalGB'],
+                    expiry_ts=verify['observed']['expiryTime'],
+                    enable=verify['observed']['enable'],
+                    comment=v_client.get('comment'),
+                )
+            except Exception:
+                cache_sync = False
+                app.logger.warning(
+                    "Renew verify cache repair failed (trace=%s, server_id=%s, email=%s)",
+                    trace_id, server_id, email, exc_info=True,
+                )
+
+        payload = {'success': True, 'verify': verify, 'cache_sync': cache_sync,
                    'timing': {'login_ms': login_ms, 'verify_fetch_ms': verify_fetch_ms}}
         if verify.get('ok') and completed_result:
             payload.update({

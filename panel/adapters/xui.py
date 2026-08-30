@@ -15,7 +15,7 @@ from urllib.parse import quote
 import requests
 from sqlalchemy import func, or_
 
-from panel.core.redis_client import publish_snapshot_to_redis
+from panel.core.redis_client import bump_server_revision, publish_snapshot_to_redis
 from panel.extensions import db
 from panel.models import (
     Admin,
@@ -780,10 +780,14 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
             for _iid in removed:
                 remove_cached_client(server.id, email, client_uuid=base_client.get('id'),
                                      inbound_id=_iid, publish=False)
-            if added or removed:
-                publish_snapshot_to_redis([server.id])
+        if added or removed:
+            bump_server_revision(server.id)
+            publish_snapshot_to_redis([server.id])
     except Exception:
-        pass
+        app.logger.warning(
+            "Client inbound membership cache sync failed (server_id=%s, email=%s)",
+            server.id, email, exc_info=True,
+        )
 
     if errors and not added and not removed:
         return False, '; '.join(errors), 502, None

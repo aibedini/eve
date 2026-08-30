@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.85"
+APP_VERSION = "2.5.86"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -143,6 +143,7 @@ from panel.core.redis_client import (  # noqa: F401
     REDIS_SNAPSHOT_KEY,
     REDIS_SNAPSHOT_MANIFEST_KEY,
     REDIS_SERVER_SNAPSHOT_PREFIX,
+    REDIS_SERVER_REVISION_PREFIX,
     REDIS_SNAPSHOT_VERSION_KEY,
     REDIS_SNAPSHOT_TTL,
     REDIS_REFRESH_QUEUE_KEY,
@@ -154,6 +155,8 @@ from panel.core.redis_client import (  # noqa: F401
     redis_enabled,
     publish_snapshot_to_redis,
     load_snapshot_from_redis,
+    get_server_revision,
+    bump_server_revision,
 )
 
 # Ownership cache: pre-loaded from DB, used by enrich_inbounds_with_ownership.
