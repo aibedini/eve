@@ -557,9 +557,15 @@ def delete_server(server_id):
 @login_required
 def test_server_connection(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
-        _autoupgrade_http_to_https, fetch_inbounds, get_server_api_token, get_xui_session,
+        _autoupgrade_http_to_https, fetch_inbounds, get_accessible_servers,
+        get_server_api_token, get_xui_session,
     )
+    user = db.session.get(Admin, session['admin_id'])
     server = Server.query.get_or_404(server_id)
+    if server.id not in {
+        item.id for item in get_accessible_servers(user, include_disabled=True)
+    }:
+        return jsonify({"success": False, "error": "Access denied"}), 403
     # Self-heal the common "http:// stored for an HTTPS-only panel" foot-gun, which
     # otherwise fails with a bare ConnectionError ("Error testing connection").
     _autoupgrade_http_to_https(server)
@@ -621,9 +627,14 @@ def get_server_panel_info(server_id):
     Does NOT fetch inbounds. Designed to be called right after adding a server."""
     from app import (  # deferred: app-level helper, avoids circular import
         GLOBAL_SERVER_DATA, _normalize_server_status_payload, fetch_server_status,
-        get_xui_session, persist_detected_panel_type,
+        get_accessible_servers, get_xui_session, persist_detected_panel_type,
     )
+    user = db.session.get(Admin, session['admin_id'])
     server = Server.query.get_or_404(server_id)
+    if server.id not in {
+        item.id for item in get_accessible_servers(user, include_disabled=True)
+    }:
+        return jsonify({"success": False, "error": "Access denied"}), 403
 
     session_obj, login_error = get_xui_session(server)
     if login_error:

@@ -331,7 +331,16 @@ def _restore_full_migration_zip(zip_path: str, log=None):
         try:
             # 1) Restore the database
             db_ext = os.path.splitext(db_member)[1].lower()
-            extracted_db = zf.extract(db_member, tmp_dir)
+            tmp_root = os.path.realpath(tmp_dir)
+            extracted_db = os.path.realpath(os.path.join(tmp_root, db_member))
+            if os.path.commonpath((tmp_root, extracted_db)) != tmp_root:
+                raise RuntimeError(f'Unsafe database archive path: {db_member!r}')
+            db_info = zf.getinfo(db_member)
+            if (db_info.external_attr >> 16) & 0o170000 == 0o120000:
+                raise RuntimeError(f'Symlink entries are not allowed: {db_member!r}')
+            os.makedirs(os.path.dirname(extracted_db), exist_ok=True)
+            with zf.open(db_info) as src, open(extracted_db, 'wb') as out:
+                shutil.copyfileobj(src, out)
             _say(f'Database file: {os.path.basename(db_member)}')
 
             if _is_sqlite_db():
@@ -369,11 +378,17 @@ def _restore_full_migration_zip(zip_path: str, log=None):
                     continue
                 os.makedirs(dest_dir, exist_ok=True)
                 restored = 0
+                dest_root = os.path.realpath(dest_dir)
                 for n in members:
                     rel = n[len(arc_root) + 1:]
-                    target = os.path.join(dest_dir, rel)
+                    info = zf.getinfo(n)
+                    if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                        raise RuntimeError(f'Symlink entries are not allowed: {n!r}')
+                    target = os.path.realpath(os.path.join(dest_root, rel))
+                    if os.path.commonpath((dest_root, target)) != dest_root:
+                        raise RuntimeError(f'Unsafe archive path: {n!r}')
                     os.makedirs(os.path.dirname(target), exist_ok=True)
-                    with zf.open(n) as src, open(target, 'wb') as out:
+                    with zf.open(info) as src, open(target, 'wb') as out:
                         shutil.copyfileobj(src, out)
                     restored += 1
                 _say(f'✓ Restored {restored} file(s) → {arc_root}')

@@ -10,7 +10,10 @@ from panel.models import Admin
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'admin_id' not in session:
+        admin_id = session.get('admin_id')
+        admin = db.session.get(Admin, admin_id) if admin_id is not None else None
+        if not admin or not bool(admin.enabled):
+            session.clear()
             # For API endpoints, AJAX/XHR requests, or requests that accept JSON, return JSON errors
             is_api_path = request.path.startswith('/api/')
             accepts_json = 'application/json' in (request.headers.get('Accept') or '')
@@ -37,7 +40,10 @@ def superadmin_required(f):
         if 'admin_id' not in session:
             return jsonify({"success": False, "error": "Unauthorized"}), 401
         admin = db.session.get(Admin, session['admin_id'])
-        if not admin or (admin.role != 'superadmin' and not admin.is_superadmin):
+        if not admin or not bool(admin.enabled):
+            session.clear()
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        if admin.role != 'superadmin' and not admin.is_superadmin:
             return jsonify({"success": False, "error": "Access Denied: SuperAdmin only"}), 403
         return f(*args, **kwargs)
     return decorated_function

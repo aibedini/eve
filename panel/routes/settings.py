@@ -12,7 +12,9 @@ from panel.models import (
     Admin, HealthLog, SystemSetting, UsageCounterState, UsageDaily,
     UsageHourly,
 )
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import (
+    login_required, superadmin_required, user_management_required,
+)
 from panel.services.backup import _parse_int, _set_system_setting_value
 
 
@@ -312,7 +314,7 @@ def save_general_settings():
 
 
 @bp.route('/api/settings/ssl/diagnose', methods=['GET'])
-@login_required
+@superadmin_required
 def diagnose_ssl():
     """Figure out where HTTPS is actually coming from for THIS request.
 
@@ -417,7 +419,7 @@ def diagnose_ssl():
 
 
 @bp.route('/api/settings/ssl', methods=['GET'])
-@login_required
+@superadmin_required
 def get_ssl_settings():
     from app import (  # deferred: app-level helper, avoids circular import
         _autodetect_ssl_paths, app,
@@ -517,7 +519,7 @@ def get_ssl_settings():
 
 
 @bp.route('/api/settings/ssl', methods=['POST'])
-@login_required
+@superadmin_required
 def save_ssl_settings():
     from app import app  # deferred: app-level helper, avoids circular import
     data = request.json
@@ -564,7 +566,7 @@ def save_ssl_settings():
 
 # ── SSL Sync — copy LetsEncrypt certs to /etc/ssl/eve-manager/ via sudo ──────
 @bp.route('/api/settings/ssl/sync', methods=['POST'])
-@login_required
+@superadmin_required
 def ssl_sync():
     """Copy LetsEncrypt cert+key to /etc/ssl/eve-manager/.
 
@@ -727,7 +729,7 @@ def ssl_sync():
 
 # ── SSL Export — download cert + key as a zip ───────────────────────────────
 @bp.route('/api/settings/ssl/export')
-@login_required
+@superadmin_required
 def ssl_export():
     """Return a zip containing the SSL certificate and private key."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -780,7 +782,7 @@ SSL_DEST_DIR = '/etc/ssl/eve-manager'
 
 
 @bp.route('/api/settings/ssl/upload', methods=['POST'])
-@login_required
+@superadmin_required
 def ssl_upload():
     """Accept a zip (with fullchain.pem + privkey.pem) or two individual files.
 
@@ -900,7 +902,7 @@ def _io_BytesIO(data):
 
 # ── SSL Apply — write nginx config + reload ─────────────────────────────────
 @bp.route('/api/settings/ssl/apply', methods=['POST'])
-@login_required
+@superadmin_required
 def ssl_apply():
     """Write HTTPS nginx config and reload nginx."""
     cert = db.session.get(SystemSetting, 'ssl_cert_path')

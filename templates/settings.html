@@ -7932,11 +7932,11 @@
 
         appendLog('▶ ' + filename, '#7eb8f7');
 
-        const es = new EventSource(`/api/backups/${encodeURIComponent(filename)}/restore/stream`);
+        const controller = new AbortController();
 
-        es.onmessage = function(e) {
+        function handleEventData(rawData) {
             let data;
-            try { data = JSON.parse(e.data); } catch { return; }
+            try { data = JSON.parse(rawData); } catch { return; }
 
             if (data.type === 'log') {
                 appendLog(data.message);
@@ -7944,7 +7944,7 @@
                 // Update status line without adding a log entry (keeps log clean during parallel restore)
                 statusTxt.textContent = data.message;
             } else if (data.type === 'error') {
-                es.close();
+                controller.abort();
                 appendLog('✗ ' + data.message, '#ff6b6b');
                 spinner.textContent = '❌';
                 statusTxt.textContent = 'Restore failed';
@@ -7955,17 +7955,17 @@
                 closeBtn.onclick = () => overlay.remove();
                 footer.appendChild(closeBtn);
             } else if (data.type === 'done') {
-                es.close();
+                controller.abort();
                 appendLog('✓ ' + data.message, '#51cf66');
                 spinner.textContent = '✅';
                 statusTxt.textContent = 'Redirecting to login…';
                 statusTxt.style.color = '#51cf66';
                 setTimeout(() => { window.location.href = data.redirect || '/logout'; }, 2000);
             }
-        };
+        }
 
-        es.onerror = function() {
-            es.close();
+        function handleConnectionError() {
+            controller.abort();
             appendLog('Connection lost or server error.', '#ff6b6b');
             spinner.textContent = '❌';
             statusTxt.textContent = 'Connection error';
@@ -7975,7 +7975,32 @@
             closeBtn.style.cssText = 'margin-left:auto;padding:6px 18px;background:#c0392b;color:#fff;border:none;border-radius:6px;cursor:pointer';
             closeBtn.onclick = () => overlay.remove();
             footer.appendChild(closeBtn);
-        };
+        }
+
+        fetch(`/api/backups/${encodeURIComponent(filename)}/restore/stream`, {
+            method: 'POST',
+            headers: { 'Accept': 'text/event-stream' },
+            signal: controller.signal,
+        }).then(async response => {
+            if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const events = buffer.split(/\n\n/);
+                buffer = events.pop() || '';
+                for (const event of events) {
+                    for (const line of event.split(/\n/)) {
+                        if (line.startsWith('data: ')) handleEventData(line.slice(6));
+                    }
+                }
+            }
+        }).catch(error => {
+            if (error.name !== 'AbortError') handleConnectionError();
+        });
     }
 
     async function deleteBackup(filename) {

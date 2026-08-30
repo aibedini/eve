@@ -334,9 +334,9 @@ def api_traffic_check():
     result_clients = []
     total_remaining_bytes = 0
 
-    for client in inbounds:
+    for inbound in inbounds:
         try:
-            sid = int(client.get('server_id', -1))
+            sid = int(inbound.get('server_id', -1))
         except Exception:
             continue
         if sid not in accessible_ids:
@@ -347,29 +347,30 @@ def api_traffic_check():
                     continue
             except Exception:
                 continue
-        if not client.get('enable', True):
-            continue
-        remaining_bytes = client.get('remaining_bytes', -1)
-        if remaining_bytes is None or remaining_bytes <= 0:
-            continue
-        expiry_ts = int(client.get('expiryTimestamp') or 0)
-        if end_ts_ms is not None:
-            if expiry_ts <= 0:
+        for client in (inbound.get('clients') or []):
+            if not client.get('enable', True):
                 continue
-            if expiry_ts > end_ts_ms:
+            remaining_bytes = client.get('remaining_bytes', -1)
+            if remaining_bytes is None or remaining_bytes <= 0:
                 continue
-        total_remaining_bytes += remaining_bytes
-        result_clients.append({
-            "email": client.get('email', ''),
-            "server_id": sid,
-            "server_name": server_names.get(sid, f"Server {sid}"),
-            "expiry_text": client.get('expiryTime', ''),
-            "expiry_timestamp": expiry_ts,
-            "remaining": format_bytes(remaining_bytes),
-            "remaining_bytes": remaining_bytes,
-            "total": client.get('totalGB_formatted', ''),
-            "used": format_bytes(int(client.get('up', 0) or 0) + int(client.get('down', 0) or 0)),
-        })
+            expiry_ts = int(client.get('expiryTimestamp') or 0)
+            if end_ts_ms is not None:
+                if expiry_ts <= 0:
+                    continue
+                if expiry_ts > end_ts_ms:
+                    continue
+            total_remaining_bytes += remaining_bytes
+            result_clients.append({
+                "email": client.get('email', ''),
+                "server_id": sid,
+                "server_name": server_names.get(sid, f"Server {sid}"),
+                "expiry_text": client.get('expiryTime', ''),
+                "expiry_timestamp": expiry_ts,
+                "remaining": format_bytes(remaining_bytes),
+                "remaining_bytes": remaining_bytes,
+                "total": client.get('totalGB_formatted', ''),
+                "used": format_bytes(int(client.get('up', 0) or 0) + int(client.get('down', 0) or 0)),
+            })
 
     result_clients.sort(key=lambda x: x['remaining_bytes'], reverse=True)
     return jsonify({
@@ -386,15 +387,15 @@ def api_refresh_single_server(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
         GLOBAL_SERVER_DATA, _get_refresh_job, _parse_bool, _summarize_job,
         enqueue_refresh_job, enrich_inbounds_with_ownership,
-        load_snapshot_from_redis,
+        get_accessible_servers, load_snapshot_from_redis,
     )
     user = db.session.get(Admin, session['admin_id'])
     server = Server.query.get_or_404(server_id)
     
-    # Check access
-    if user.role != 'superadmin':
-        if user.allowed_servers != '*' and str(server.id) not in user.allowed_servers.split(','):
-             return jsonify({"success": False, "error": "Access denied"}), 403
+    if server.id not in {
+        item.id for item in get_accessible_servers(user, include_disabled=True)
+    }:
+        return jsonify({"success": False, "error": "Access denied"}), 403
 
     # Non-blocking: optionally enqueue a refresh job and return cached data immediately.
     force = _parse_bool(request.args.get('force'))

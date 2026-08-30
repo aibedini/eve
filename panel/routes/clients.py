@@ -938,29 +938,61 @@ def client_last_renewal(email):
     return jsonify({'success': True, 'renewals': renewals, 'last_gift': last_gift, 'gift_count': gift_count})
 
 
-def _acquire_renew_lock(key: str, ttl: int = 45) -> bool:
+def _acquire_renew_lock(key: str, ttl: int = 45) -> str | None:
     """Best-effort cross-worker lock so a slow v3.4 renew (panel takes 10-18s to
     push to the node) can't be charged / SMS'd twice when the operator retries.
-    Returns True if acquired (or when Redis is unavailable — don't block renews)."""
+    Returns an owner token if acquired (or when Redis is unavailable), otherwise
+    None. The token prevents an expired request from deleting a newer lease."""
     from app import get_redis  # deferred: app-level helper, avoids circular import
+    token = secrets.token_urlsafe(24)
     r = get_redis()
     if r is None:
-        return True
+        return token
     try:
-        return bool(r.set(key, '1', nx=True, ex=ttl))
+        return token if r.set(key, token, nx=True, ex=ttl) else None
     except Exception:
-        return True
+        return token
 
 
-def _release_renew_lock(key: str) -> None:
+def _release_renew_lock(key: str, token: str | None) -> None:
     from app import get_redis  # deferred: app-level helper, avoids circular import
     r = get_redis()
-    if r is None:
+    if r is None or not token:
         return
     try:
-        r.delete(key)
+        r.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('del', KEYS[1]) else return 0 end",
+            1, key, token,
+        )
     except Exception:
         pass
+
+
+def _start_renew_lock_heartbeat(key: str, token: str, ttl: int = 45):
+    """Renew a lock lease only while this request still owns its token."""
+    from app import get_redis  # deferred: app-level helper, avoids circular import
+    r = get_redis()
+    if r is None:
+        return None
+    stop = threading.Event()
+
+    def _worker():
+        interval = max(5, ttl // 3)
+        while not stop.wait(interval):
+            try:
+                renewed = r.eval(
+                    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+                    1, key, token, ttl,
+                )
+                if not renewed:
+                    break
+            except Exception:
+                break
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return stop
 
 
 def _renew_result_key(lock_key: str) -> str:
@@ -1173,6 +1205,7 @@ def renew_client(server_id, inbound_id, email):
     t0 = time.perf_counter()
     renewal_trace_id = secrets.token_hex(4)
     panel_is_fa = _get_panel_ui_lang() == 'fa'
+    renew_lock_heartbeat_stop = None
     timing = {
         "total_ms": None,
         "used_cache_client": False,
@@ -1186,6 +1219,10 @@ def renew_client(server_id, inbound_id, email):
     }
 
     def _finish(payload: dict, status_code: int = 200):
+        nonlocal renew_lock_heartbeat_stop
+        if renew_lock_heartbeat_stop is not None:
+            renew_lock_heartbeat_stop.set()
+            renew_lock_heartbeat_stop = None
         try:
             timing["total_ms"] = int((time.perf_counter() - t0) * 1000)
         except Exception:
@@ -1353,7 +1390,8 @@ def renew_client(server_id, inbound_id, email):
     # would double-charge + double-SMS. Held for the TTL on SUCCESS (so a retry
     # right after completion is also blocked) and released immediately on failure.
     _renew_lock_key = f"renew:lock:{server_id}:{(email or '').strip().lower()}"
-    if not _acquire_renew_lock(_renew_lock_key, ttl=45):
+    _renew_lock_token = _acquire_renew_lock(_renew_lock_key, ttl=45)
+    if not _renew_lock_token:
         _lang = _get_panel_ui_lang()
         _msg = ("این اکانت همین الان در حال تمدید است — چند لحظه صبر کنید و سپس Re-check بزنید."
                 if _lang == 'fa' else
@@ -1363,6 +1401,9 @@ def renew_client(server_id, inbound_id, email):
         # than a red error toast, and never double-charge.
         return _finish({"success": False, "code": "renew_in_progress", "error": _msg,
                         "server_id": server_id, "inbound_id": inbound_id, "email": email}, 409)
+    renew_lock_heartbeat_stop = _start_renew_lock_heartbeat(
+        _renew_lock_key, _renew_lock_token, ttl=45,
+    )
 
     # This is a new renewal, not a duplicate retry. Do not let a short-lived
     # result from the previous renewal satisfy this one's Re-check.
@@ -2097,11 +2138,11 @@ def renew_client(server_id, inbound_id, email):
             detail += ((' — این اکانت subId تکراری دارد و پنل اجازه‌ی آپدیت نمی‌دهد. در پنل، subId را یکتا کنید و دوباره تمدید کنید.'
                         if panel_is_fa else
                         ' — This account has a duplicate subId, so the panel rejected the update. Make its subId unique in the panel, then retry the renewal.'))
-        _release_renew_lock(_renew_lock_key)  # failed → allow an immediate retry
+        _release_renew_lock(_renew_lock_key, _renew_lock_token)  # failed → allow an immediate retry
         return _finish({"success": False, "error": detail}, 400)
     except Exception as e:
         app.logger.error("Renew error: %s", e)
-        _release_renew_lock(_renew_lock_key)  # failed → allow an immediate retry
+        _release_renew_lock(_renew_lock_key, _renew_lock_token)  # failed → allow an immediate retry
         return _finish({"success": False, "error": str(e)}, 400)
 
 
@@ -2171,9 +2212,13 @@ def rotate_client(server_id):
     # Same lock family as renew: a rotate must never overlap a renew (or a second
     # rotate) of the same account — both rewrite the client on the panel.
     _rotate_lock_key = f"renew:lock:{server_id}:{email.lower()}"
-    if not _acquire_renew_lock(_rotate_lock_key, ttl=45):
+    _rotate_lock_token = _acquire_renew_lock(_rotate_lock_key, ttl=45)
+    if not _rotate_lock_token:
         return jsonify({"ok": False, "success": False, "code": "rotate_in_progress",
                         "error": "This account is already being rotated/renewed — please wait a moment."}), 409
+    _rotate_lock_heartbeat_stop = _start_renew_lock_heartbeat(
+        _rotate_lock_key, _rotate_lock_token, ttl=45,
+    )
 
     fetched_inbound_row = None
     try:
@@ -2181,7 +2226,7 @@ def rotate_client(server_id):
             # Fallback to fetching from the panel if not in cache
             inbounds, fetch_err, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type)
             if fetch_err:
-                _release_renew_lock(_rotate_lock_key)
+                _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
                 return jsonify({"ok": False, "success": False, "error": "Failed to fetch inbounds"}), 400
             persist_detected_panel_type(server, detected_type)
             for ib in (inbounds or []):
@@ -2198,11 +2243,11 @@ def rotate_client(server_id):
                         except (ValueError, TypeError):
                             inbound_id = None
             if not target_client:
-                _release_renew_lock(_rotate_lock_key)
+                _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
                 return jsonify({"ok": False, "success": False, "error": "Client not found"}), 404
 
         if inbound_id is None:
-            _release_renew_lock(_rotate_lock_key)
+            _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
             return jsonify({"ok": False, "success": False, "error": "Could not determine client's inbound"}), 400
 
         # Merge in traffic/cap fields from the cached row (raw_client often lacks usage).
@@ -2285,7 +2330,7 @@ def rotate_client(server_id):
         if _is_v3:
             ok, _vr, verr = v3_update_client(server, session_obj, email, disabled_client)
             if not ok:
-                _release_renew_lock(_rotate_lock_key)
+                _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
                 return jsonify({"ok": False, "success": False, "error": f"v3 disable failed: {verr}"}), 502
         else:
             # Legacy/SS: no per-client disable endpoint — push the full inbound.
@@ -2297,7 +2342,7 @@ def rotate_client(server_id):
                             fetched_inbound_row = _ib
                             break
             if fetched_inbound_row is None:
-                _release_renew_lock(_rotate_lock_key)
+                _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
                 return jsonify({"ok": False, "success": False, "error": "Could not fetch full inbound for update"}), 502
             _full_settings = _json_field(fetched_inbound_row.get('settings'), {})
             _full_settings['clients'] = [
@@ -2306,7 +2351,7 @@ def rotate_client(server_id):
             ]
             _ok_push, _push_err = _push_full_inbound(server, session_obj, fetched_inbound_row, _full_settings)
             if not _ok_push:
-                _release_renew_lock(_rotate_lock_key)
+                _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
                 return jsonify({"ok": False, "success": False, "error": f"Disable failed: {_push_err}"}), 502
 
         # ── Create the replacement client ──
@@ -2331,12 +2376,12 @@ def rotate_client(server_id):
         if _is_v3:
             ok, _vr, verr = v3_add_client(server, session_obj, new_client, [inbound_id])
             if not ok:
-                _release_renew_lock(_rotate_lock_key)
+                _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
                 return jsonify({"ok": False, "success": False, "error": f"v3 add failed: {verr}"}), 502
         else:
             _ok_add, _add_err = _add_client_to_inbound(server, session_obj, fetched_inbound_row, new_client)
             if not _ok_add:
-                _release_renew_lock(_rotate_lock_key)
+                _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
                 return jsonify({"ok": False, "success": False, "error": f"Add failed: {_add_err}"}), 502
 
         # ── Ownership rows ──
@@ -2371,7 +2416,7 @@ def rotate_client(server_id):
         except Exception as e:
             db.session.rollback()
             app.logger.error("Rotate ownership update failed for %s: %s", email, e, exc_info=True)
-            _release_renew_lock(_rotate_lock_key)
+            _release_renew_lock(_rotate_lock_key, _rotate_lock_token)
             return jsonify({"ok": False, "success": False, "error": "Rotated on panel, but ownership update failed"}), 500
 
         invalidate_ownership_cache()
@@ -2413,8 +2458,11 @@ def rotate_client(server_id):
         })
     except Exception as e:
         app.logger.error("Rotate error for %s: %s", email, e, exc_info=True)
-        _release_renew_lock(_rotate_lock_key)  # failed → allow an immediate retry
+        _release_renew_lock(_rotate_lock_key, _rotate_lock_token)  # failed → allow an immediate retry
         return jsonify({"ok": False, "success": False, "error": str(e)}), 400
+    finally:
+        if _rotate_lock_heartbeat_stop is not None:
+            _rotate_lock_heartbeat_stop.set()
 
 
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew/verify', methods=['POST'])
