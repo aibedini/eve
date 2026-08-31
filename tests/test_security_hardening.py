@@ -14,7 +14,11 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 import app as app_module  # noqa: E402
 import panel.routes.clients as clients_module  # noqa: E402
 import panel.services.backup as backup_service  # noqa: E402
-from app import Admin, GLOBAL_SERVER_DATA, Server, app, db  # noqa: E402
+from panel.services.client_operations import (  # noqa: E402
+    begin_client_operation, complete_client_operation, fail_client_operation,
+    mark_client_operation_applied, resolve_client_operation,
+)
+from app import Admin, ClientOperation, GLOBAL_SERVER_DATA, Server, app, db  # noqa: E402
 
 
 class SecurityHardeningTests(unittest.TestCase):
@@ -31,6 +35,7 @@ class SecurityHardeningTests(unittest.TestCase):
         cls.ctx.pop()
 
     def setUp(self):
+        ClientOperation.query.delete()
         Server.query.delete()
         Admin.query.delete()
         db.session.commit()
@@ -74,6 +79,84 @@ class SecurityHardeningTests(unittest.TestCase):
         self._login(self.superadmin)
         response = self.client.get('/api/backups/example.db/restore/stream')
         self.assertEqual(response.status_code, 405)
+
+    def test_raw_xui_backup_requires_superadmin(self):
+        regular = Admin(
+            username='security-admin', password_hash='x', role='admin',
+            is_superadmin=False, enabled=True,
+        )
+        db.session.add(regular)
+        db.session.commit()
+        self._login(regular)
+        response = self.client.get(f'/api/servers/{self.server.id}/xui-backup')
+        self.assertEqual(response.status_code, 403)
+
+    def test_session_authority_is_refreshed_from_admin_record(self):
+        self._login(self.reseller)
+        with self.client.session_transaction() as sess:
+            sess['role'] = 'superadmin'
+            sess['is_superadmin'] = True
+        response = self.client.get('/api/backups')
+        self.assertEqual(response.status_code, 403)
+        with self.client.session_transaction() as sess:
+            self.assertEqual(sess['role'], 'reseller')
+            self.assertFalse(sess['is_superadmin'])
+
+    def test_credit_reservation_is_atomic_and_idempotent(self):
+        self.reseller.credit = 100
+        db.session.commit()
+        first, disposition, data = begin_client_operation(
+            idempotency_key='renew-atomic-1', action='renew', admin=self.reseller,
+            server_id=self.server.id, inbound_id=1, client_email='alice',
+            amount=80, payload={'days': 30},
+        )
+        self.assertEqual(disposition, 'new')
+        self.assertEqual(data['remaining_credit'], 20)
+
+        _second, disposition, _data = begin_client_operation(
+            idempotency_key='renew-atomic-2', action='renew', admin=self.reseller,
+            server_id=self.server.id, inbound_id=1, client_email='bob',
+            amount=80, payload={'days': 30},
+        )
+        self.assertEqual(disposition, 'insufficient_credit')
+
+        complete_client_operation(first, {'success': True, 'marker': 'once'})
+        replay, disposition, payload = begin_client_operation(
+            idempotency_key='renew-atomic-1', action='renew', admin=self.reseller,
+            server_id=self.server.id, inbound_id=1, client_email='alice',
+            amount=80, payload={'days': 30},
+        )
+        self.assertEqual(replay.id, first.id)
+        self.assertEqual(disposition, 'replay')
+        self.assertEqual(payload['marker'], 'once')
+
+        # A definitive pre-panel failure refunds exactly once.
+        third, disposition, _data = begin_client_operation(
+            idempotency_key='renew-atomic-3', action='renew', admin=self.reseller,
+            server_id=self.server.id, inbound_id=1, client_email='carol',
+            amount=10, payload={'days': 1},
+        )
+        self.assertEqual(disposition, 'new')
+        fail_client_operation(third, 'panel rejected request')
+        fail_client_operation(third, 'duplicate cleanup')
+        db.session.refresh(self.reseller)
+        self.assertEqual(self.reseller.credit, 20)
+
+        ambiguous, disposition, _data = begin_client_operation(
+            idempotency_key='renew-atomic-4', action='renew', admin=self.reseller,
+            server_id=self.server.id, inbound_id=1, client_email='dave',
+            amount=10, payload={'days': 1},
+        )
+        self.assertEqual(disposition, 'new')
+        mark_client_operation_applied(ambiguous, {'expiryTime': 123})
+        fail_client_operation(ambiguous, 'worker crashed after panel write', uncertain=True)
+        resolved, error = resolve_client_operation(
+            ambiguous.id, 'refund', self.superadmin.id,
+        )
+        self.assertIsNone(error)
+        self.assertEqual(resolved.state, 'failed')
+        db.session.refresh(self.reseller)
+        self.assertEqual(self.reseller.credit, 20)
 
     def test_disabled_admin_session_is_revoked(self):
         self._login(self.reseller)

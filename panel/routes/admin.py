@@ -10,15 +10,60 @@ from werkzeug.utils import secure_filename
 
 from panel.extensions import db
 from panel.models import (
-    Admin, ClientOwnership, PriceTier, RenewalEvent, Server, SystemConfig,
+    Admin, ClientOperation, ClientOwnership, PriceTier, RenewalEvent, Server, SystemConfig,
     Transaction, UsageCounterState, UsageDaily, UsageHourly,
     announcement_servers,
 )
 from panel.routes.common import (
     login_required, superadmin_required, user_management_required,
 )
+from panel.services.client_operations import resolve_client_operation
 
 bp = Blueprint('admin', __name__)
+
+
+def _client_operation_payload(operation):
+    return {
+        'id': operation.id,
+        'idempotency_key': operation.idempotency_key,
+        'action': operation.action,
+        'admin_id': operation.admin_id,
+        'server_id': operation.server_id,
+        'inbound_id': operation.inbound_id,
+        'client_email': operation.client_email,
+        'amount': operation.amount,
+        'credit_reserved': bool(operation.credit_reserved),
+        'state': operation.state,
+        'expected': json.loads(operation.expected_json or '{}'),
+        'error': operation.error,
+        'created_at': operation.created_at.isoformat() if operation.created_at else None,
+        'updated_at': operation.updated_at.isoformat() if operation.updated_at else None,
+    }
+
+
+@bp.route('/api/client-operations/reconciliation', methods=['GET'])
+@superadmin_required
+def list_client_operation_reconciliation():
+    rows = ClientOperation.query.filter(
+        ClientOperation.state.in_(('panel_applied', 'needs_reconciliation')),
+    ).order_by(ClientOperation.created_at.asc()).limit(500).all()
+    return jsonify({'success': True, 'operations': [
+        _client_operation_payload(row) for row in rows
+    ]})
+
+
+@bp.route('/api/client-operations/<int:operation_id>/resolve', methods=['POST'])
+@superadmin_required
+def reconcile_client_operation(operation_id):
+    data = request.get_json(silent=True) or {}
+    if data.get('confirmed') is not True:
+        return jsonify({'success': False, 'error': 'Explicit confirmation is required'}), 400
+    operation, error = resolve_client_operation(
+        operation_id, data.get('resolution'), session['admin_id'],
+    )
+    if error:
+        return jsonify({'success': False, 'error': error}), 409
+    return jsonify({'success': True, 'operation': _client_operation_payload(operation)})
 
 
 @bp.route('/api/admins', methods=['GET'])
@@ -414,14 +459,11 @@ def update_server_subscription_order(server_id):
     })
 
 @bp.route('/api/servers', methods=['POST'])
-@login_required
+@user_management_required
 def add_server():
     from app import (  # deferred: app-level helper, avoids circular import
         encrypt_server_password, sanitize_html,
     )
-    if session.get('role') == 'reseller':
-        return jsonify({"success": False, "error": "Only admins can add servers"}), 403
-    
     data = request.json
     server_password = (data.get('password') or '').strip()
     if not server_password:
@@ -443,14 +485,11 @@ def add_server():
     return jsonify({"success": True, "id": server.id})
 
 @bp.route('/api/servers/<int:server_id>', methods=['PUT'])
-@login_required
+@user_management_required
 def update_server(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
         XUI_CAPABILITY_CACHE, XUI_SESSION_CACHE, encrypt_server_password, sanitize_html,
     )
-    if session.get('role') == 'reseller':
-        return jsonify({"success": False, "error": "Only admins can update servers"}), 403
-    
     server = Server.query.get_or_404(server_id)
     data = request.json
     server.name = sanitize_html(data.get('name', server.name))
@@ -479,12 +518,10 @@ def update_server(server_id):
 
 
 @bp.route('/api/servers/<int:server_id>/hidden', methods=['POST'])
-@login_required
+@user_management_required
 def toggle_server_hidden(server_id):
     """Toggle server hidden flag. Hidden servers are skipped in fetching/dashboard but still backed up."""
     from app import GLOBAL_SERVER_DATA  # deferred: app-level helper, avoids circular import
-    if session.get('role') == 'reseller':
-        return jsonify({"success": False, "error": "Only admins can toggle server visibility"}), 403
     server = Server.query.get_or_404(server_id)
     server.hidden = not bool(server.hidden)
     db.session.commit()
@@ -502,15 +539,12 @@ def toggle_server_hidden(server_id):
 
 
 @bp.route('/api/servers/<int:server_id>', methods=['DELETE'])
-@login_required
+@user_management_required
 def delete_server(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
         GLOBAL_SERVER_DATA, REFRESH_BACKOFF, XUI_CAPABILITY_CACHE, XUI_SESSION_CACHE, app,
         invalidate_ownership_cache,
     )
-    if session.get('role') == 'reseller':
-        return jsonify({"success": False, "error": "Only admins can delete servers"}), 403
-
     server = Server.query.get_or_404(server_id)
 
     try:
@@ -526,6 +560,10 @@ def delete_server(server_id):
         Transaction.query.filter_by(server_id=server_id).update(
             {Transaction.server_id: None},
             synchronize_session=False
+        )
+        ClientOperation.query.filter_by(server_id=server_id).update(
+            {ClientOperation.server_id: None},
+            synchronize_session=False,
         )
 
         db.session.delete(server)
@@ -586,7 +624,7 @@ def test_server_connection(server_id):
 
 
 @bp.route('/api/servers/<int:server_id>/xui-backup', methods=['GET'])
-@login_required
+@superadmin_required
 def download_server_xui_backup(server_id):
     """Download the X-UI database backup for a single server.
 
@@ -597,10 +635,6 @@ def download_server_xui_backup(server_id):
         _fetch_xui_backup, get_xui_session,
     )
     server = Server.query.get_or_404(server_id)
-    # Resellers cannot pull raw panel DB backups
-    if session.get('role') == 'reseller':
-        return jsonify({"success": False, "error": "Only admins can download panel backups"}), 403
-
     session_obj, error = get_xui_session(server)
     if error:
         return jsonify({"success": False, "error": error}), 400

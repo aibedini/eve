@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload
 
 from panel.extensions import db, limiter
 from panel.models import (
-    Admin, BankCard, ClientOwnership, CustomerAccount, CustomerTransaction,
+    Admin, BankCard, ClientOperation, ClientOwnership, CustomerAccount, CustomerTransaction,
     ManualReceipt, Package, Payment, Server, Transaction, UsageDaily,
 )
 from panel.routes.common import login_required, user_management_required
@@ -381,6 +381,9 @@ def delete_transaction(tx_id):
         # If audit creation fails, continue with delete (avoid blocking admin cleanup)
         pass
 
+    ClientOperation.query.filter_by(transaction_id=tx.id).update(
+        {ClientOperation.transaction_id: None}, synchronize_session=False,
+    )
     db.session.delete(tx)
     db.session.commit()
     return jsonify({"success": True})

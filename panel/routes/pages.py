@@ -8,7 +8,7 @@ from panel.models import (
     Admin, BankCard, PulseAgent, PulseRun, PulseTemplate, Server, SystemConfig,
     get_pulse_settings,
 )
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import current_admin, login_required, user_management_required
 from panel.services.billing import calculate_reseller_price, get_config
 from panel.services.subscription import (
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
@@ -125,7 +125,8 @@ def merger_page():
 @login_required
 def admins_page():
     from app import _get_panel_ui_lang  # deferred: app-level helper, avoids circular import
-    if session.get('role') == 'reseller':
+    user = current_admin()
+    if not user or user.role == 'reseller':
         return redirect(url_for('pages.dashboard'))
     return render_template('admins.html',
                          admin_username=session.get('admin_username'),

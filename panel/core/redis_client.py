@@ -6,9 +6,11 @@ missing/unreachable, the app transparently falls back to per-worker fetching.
 """
 import logging
 import os
+import secrets
 import threading
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ __all__ = [
     'load_snapshot_from_redis',
     'get_server_revision',
     'bump_server_revision',
+    'serialized_server_snapshot_write',
 ]
 
 # کش برای نگهداری وضعیت سرورها در RAM
@@ -107,6 +110,75 @@ REDIS_REFRESH_JOB_TTL = 900
 _LAST_LOADED_SNAPSHOT_VERSION = None
 _LAST_LOADED_SERVER_VERSIONS = {}
 _PUBLISHED_SERVER_VERSIONS = {}
+_LOCAL_SERVER_WRITE_LOCKS = defaultdict(threading.RLock)
+
+
+@contextmanager
+def serialized_server_snapshot_write(server_id: int, *, wait_seconds: float = 5.0,
+                                     lease_seconds: int = 30):
+    """Serialize one server's read-modify-publish cache cycle across workers.
+
+    The caller receives ``GLOBAL_REFRESH_LOCK`` while its local snapshot has
+    already been refreshed from Redis.  This prevents two workers that changed
+    different clients on the same server from publishing stale whole-server
+    blocks over one another.
+    """
+    sid = int(server_id)
+    client = get_redis()
+    if client is None:
+        with _LOCAL_SERVER_WRITE_LOCKS[sid]:
+            with GLOBAL_REFRESH_LOCK:
+                yield
+        return
+
+    key = f'eve:server_snapshot_write:{sid}'
+    token = secrets.token_urlsafe(24)
+    deadline = time.monotonic() + max(0.1, float(wait_seconds))
+    acquired = False
+    while time.monotonic() < deadline:
+        try:
+            acquired = bool(client.set(key, token, nx=True, ex=max(5, int(lease_seconds))))
+        except Exception:
+            acquired = False
+            break
+        if acquired:
+            break
+        time.sleep(0.05)
+    if not acquired:
+        raise TimeoutError(f'timed out waiting for server snapshot write lock: {sid}')
+
+    stop = threading.Event()
+
+    def _heartbeat():
+        interval = max(2, int(lease_seconds) // 3)
+        while not stop.wait(interval):
+            try:
+                renewed = client.eval(
+                    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+                    1, key, token, max(5, int(lease_seconds)),
+                )
+                if not renewed:
+                    break
+            except Exception:
+                break
+
+    heartbeat = threading.Thread(target=_heartbeat, daemon=True)
+    heartbeat.start()
+    try:
+        with GLOBAL_REFRESH_LOCK:
+            _load_snapshot_from_redis_unlocked(force=True)
+            yield
+    finally:
+        stop.set()
+        try:
+            client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1, key, token,
+            )
+        except Exception:
+            pass
 
 
 def _redis_server_snapshot_key(server_id: int) -> str:

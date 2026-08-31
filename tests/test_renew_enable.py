@@ -15,11 +15,13 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 import app as app_module  # noqa: E402
 import panel.adapters.xui as xui_adapter  # noqa: E402
 import panel.core.redis_client as redis_cache  # noqa: E402
+import panel.jobs.refresh as refresh_jobs  # noqa: E402
 import panel.routes.clients as clients_module  # noqa: E402
 import panel.routes.packages as packages_module  # noqa: E402
 from app import (  # noqa: E402
     GLOBAL_SERVER_DATA,
     Admin,
+    ClientOperation,
     Server,
     SystemConfig,
     Transaction,
@@ -159,6 +161,7 @@ class RenewEnableTests(unittest.TestCase):
         cls.ctx.pop()
 
     def setUp(self):
+        ClientOperation.query.delete()
         Transaction.query.delete()
         Server.query.delete()
         Admin.query.delete()
@@ -260,6 +263,21 @@ class RenewEnableTests(unittest.TestCase):
         self.assertTrue(payload['verify']['ok'])
         self.assertTrue(payload['verify']['observed']['enable'])
         self.postcheck.assert_not_called()
+
+    def test_completed_renew_operation_replays_without_second_panel_write(self):
+        future = int(time.time() * 1000) + DAY_MS
+        self._seed_cache(_raw_client(expiry=future, total=5 * GB, enable=True))
+        request_payload = {
+            'mode': 'custom', 'days': 30, 'volume': 10, 'free': True,
+            'operation_id': 'renew-replay-once',
+        }
+        first = self._renew(**request_payload)
+        second = self._renew(**request_payload)
+
+        self.assertEqual(first.status_code, 200, first.get_json())
+        self.assertEqual(second.status_code, 200, second.get_json())
+        self.assertTrue(second.get_json()['idempotent_replay'])
+        self.assertEqual(self.v3_update.call_count, 1)
 
     def test_not_started_client_stays_pending(self):
         raw = _raw_client(expiry=-5 * DAY_MS, total=0, enable=True)
@@ -513,6 +531,60 @@ class RenewEnableTests(unittest.TestCase):
 
 
 class RedisSnapshotRevisionTests(unittest.TestCase):
+    def test_cache_patch_bumps_revision_even_when_local_row_is_missing(self):
+        with (
+            mock.patch.object(refresh_jobs, 'bump_server_revision') as bump,
+            mock.patch.object(refresh_jobs, 'serialized_server_snapshot_write') as serialized,
+            mock.patch.object(app_module, '_get_dashboard_status_thresholds', return_value={}),
+            mock.patch.object(app_module, '_get_panel_ui_lang', return_value='en'),
+        ):
+            serialized.return_value = redis_cache.contextmanager(lambda: (yield))()
+            with app_module.app.app_context():
+                changed = refresh_jobs.patch_cached_client(77, 'missing@example', enable=True)
+
+        self.assertFalse(changed)
+        bump.assert_called_once_with(77)
+
+    def test_cache_patch_enters_serialized_server_write_cycle(self):
+        original = dict(redis_cache.GLOBAL_SERVER_DATA)
+        latest = {
+            'server_id': 7,
+            'id': 1,
+            'clients': [{
+                'email': 'alice', 'id': 'u1', 'up': 0, 'down': 0,
+                'raw_client': {'email': 'alice', 'id': 'u1', 'enable': False},
+            }],
+        }
+
+        class LatestSnapshotContext:
+            def __enter__(self):
+                redis_cache.GLOBAL_SERVER_DATA['inbounds'] = [latest]
+
+            def __exit__(self, *_args):
+                return False
+
+        try:
+            redis_cache.GLOBAL_SERVER_DATA.update({
+                'inbounds': [], 'servers_status': [], 'stats': {}, 'last_update': None,
+            })
+            with (
+                mock.patch.object(refresh_jobs, 'bump_server_revision'),
+                mock.patch.object(refresh_jobs, 'serialized_server_snapshot_write',
+                                  return_value=LatestSnapshotContext()) as serialized,
+                mock.patch.object(refresh_jobs, 'publish_snapshot_to_redis', return_value=True),
+                mock.patch.object(app_module, '_get_dashboard_status_thresholds', return_value={}),
+                mock.patch.object(app_module, '_get_panel_ui_lang', return_value='en'),
+            ):
+                with app_module.app.app_context():
+                    changed = refresh_jobs.patch_cached_client(7, 'alice', enable=True)
+        finally:
+            redis_cache.GLOBAL_SERVER_DATA.clear()
+            redis_cache.GLOBAL_SERVER_DATA.update(original)
+
+        self.assertTrue(changed)
+        serialized.assert_called_once_with(7)
+        self.assertTrue(latest['clients'][0]['raw_client']['enable'])
+
     def test_publish_discards_refresh_result_when_server_revision_changed(self):
         client = mock.Mock()
         pipe = mock.Mock()

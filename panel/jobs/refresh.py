@@ -43,6 +43,7 @@ from panel.core.redis_client import (
     get_server_revision,
     load_snapshot_from_redis,
     publish_snapshot_to_redis,
+    serialized_server_snapshot_write,
 )
 from panel.extensions import db
 from panel.models import Admin, ClientOwnership, Server
@@ -1956,8 +1957,13 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
     """Write-through: update every cached copy of a client after a panel write."""
     from app import _get_dashboard_status_thresholds, _get_panel_ui_lang, app, format_bytes  # deferred: app-level helper, avoids circular import
     changed = False
+    if publish:
+        # The panel mutation is authoritative even if this worker's local cache
+        # has no matching row.  Invalidate stale refreshes before best-effort RAM sync.
+        bump_server_revision(server_id)
     try:
-        with GLOBAL_REFRESH_LOCK:
+        write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
+        with write_context:
             thresholds = _get_dashboard_status_thresholds()
             lang = _get_panel_ui_lang()
             for _ib, cd in _iter_cached_client_copies(server_id, email, client_uuid):
@@ -1986,19 +1992,18 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             if changed:
                 _recompute_cached_server_stats(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+            if changed and publish:
+                if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
+                    app.logger.warning(
+                        "patch_cached_client Redis sync failed (server_id=%s, email=%s)",
+                        server_id, email,
+                    )
     except Exception as exc:
         app.logger.warning(
             "patch_cached_client failed (server_id=%s, email=%s): %s",
             server_id, email, exc, exc_info=True,
         )
         return False
-    if changed and publish:
-        bump_server_revision(server_id)
-        if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
-            app.logger.warning(
-                "patch_cached_client Redis sync failed (server_id=%s, email=%s)",
-                server_id, email,
-            )
     return changed
 
 
@@ -2022,7 +2027,10 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
         if not email_l and not uuid_l:
             return False
 
-        with GLOBAL_REFRESH_LOCK:
+        if publish:
+            bump_server_revision(server_id)
+        write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
+        with write_context:
             thresholds = _get_dashboard_status_thresholds()
             lang = _get_panel_ui_lang()
             for ib in (GLOBAL_SERVER_DATA.get('inbounds') or []):
@@ -2065,13 +2073,12 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
             if changed:
                 _recompute_cached_server_stats(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+            if changed and publish:
+                if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
+                    app.logger.warning("add_cached_client Redis sync failed (server_id=%s)", server_id)
     except Exception as exc:
         app.logger.debug("add_cached_client failed: %s", exc)
         return False
-    if changed and publish:
-        bump_server_revision(server_id)
-        if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
-            app.logger.warning("add_cached_client Redis sync failed (server_id=%s)", server_id)
     return changed
 
 
@@ -2080,7 +2087,10 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
     from app import app  # deferred: app-level helper, avoids circular import
     removed = False
     try:
-        with GLOBAL_REFRESH_LOCK:
+        if publish:
+            bump_server_revision(server_id)
+        write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
+        with write_context:
             try:
                 sid = int(server_id)
             except (TypeError, ValueError):
@@ -2113,13 +2123,12 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
             if removed:
                 _recompute_cached_server_stats(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+            if removed and publish:
+                if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
+                    app.logger.warning("remove_cached_client Redis sync failed (server_id=%s)", server_id)
     except Exception as exc:
         app.logger.debug("remove_cached_client failed: %s", exc)
         return False
-    if removed and publish:
-        bump_server_revision(server_id)
-        if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
-            app.logger.warning("remove_cached_client Redis sync failed (server_id=%s)", server_id)
     return removed
 
 
@@ -2129,7 +2138,10 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
     from app import app  # deferred: app-level helper, avoids circular import
     done = False
     try:
-        with GLOBAL_REFRESH_LOCK:
+        if publish:
+            bump_server_revision(server_id)
+        write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
+        with write_context:
             try:
                 sid = int(server_id)
                 iid = int(inbound_id)
@@ -2169,13 +2181,12 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
             _recompute_cached_server_stats(server_id)
             GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             done = True
+            if publish:
+                if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
+                    app.logger.warning("clone_cached_client Redis sync failed (server_id=%s)", server_id)
     except Exception as exc:
         app.logger.debug("clone_cached_client_into_inbound failed: %s", exc)
         return False
-    if done and publish:
-        bump_server_revision(server_id)
-        if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
-            app.logger.warning("clone_cached_client Redis sync failed (server_id=%s)", server_id)
     return done
 
 

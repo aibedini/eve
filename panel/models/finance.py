@@ -202,6 +202,34 @@ class Transaction(db.Model):
             'admin': admin_info
         }
 
+
+class ClientOperation(db.Model):
+    """Durable idempotency and credit-reservation ledger for panel mutations."""
+    __tablename__ = 'client_operations'
+    id = db.Column(db.Integer, primary_key=True)
+    idempotency_key = db.Column(db.String(160), nullable=False, unique=True, index=True)
+    request_hash = db.Column(db.String(64), nullable=False)
+    action = db.Column(db.String(32), nullable=False, index=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=False, index=True)
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=True, index=True)
+    inbound_id = db.Column(db.Integer, nullable=True)
+    client_email = db.Column(db.String(100), nullable=True, index=True)
+    amount = db.Column(db.Integer, nullable=False, default=0)
+    credit_reserved = db.Column(db.Boolean, nullable=False, default=False)
+    state = db.Column(db.String(32), nullable=False, default='reserved', index=True)
+    expected_json = db.Column(db.Text, nullable=True)
+    response_json = db.Column(db.Text, nullable=True)
+    error = db.Column(db.Text, nullable=True)
+    transaction_id = db.Column(db.Integer, db.ForeignKey('transactions.id'), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    admin = db.relationship('Admin')
+    server = db.relationship('Server')
+    transaction = db.relationship('Transaction')
+
 class CustomerAccount(db.Model):
     """Channel-independent identity for an end customer."""
     __tablename__ = 'customer_accounts'

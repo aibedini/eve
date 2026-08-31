@@ -23,7 +23,11 @@ from panel.models import (
     Admin, ClientOwnership, NotificationTemplate, Package, RenewTemplate,
     Server, ServiceOwnership, Transaction, VolumeRulePreset,
 )
-from panel.routes.common import login_required
+from panel.routes.common import admin_is_superadmin, login_required
+from panel.services.client_operations import (
+    begin_client_operation, complete_client_operation, fail_client_operation,
+    install_client_operation_response_guard, mark_client_operation_applied,
+)
 
 bp = Blueprint('clients', __name__)
 
@@ -190,6 +194,30 @@ def reset_client_traffic(server_id, inbound_id):
         if not ok:
             return jsonify({"success": False, "error": err}), 402
 
+    operation_key = (
+        request.headers.get('Idempotency-Key')
+        or data.get('operation_id')
+        or f"legacy-reset:{user.id}:{secrets.token_urlsafe(24)}"
+    )
+    operation_payload = dict(data)
+    operation_payload.pop('operation_id', None)
+    client_operation, disposition, operation_data = begin_client_operation(
+        idempotency_key=operation_key, action='reset_traffic', admin=user,
+        server_id=server_id, inbound_id=inbound_id, client_email=email,
+        amount=charge_amount, payload=operation_payload,
+    )
+    if disposition == 'replay':
+        operation_data.setdefault('idempotent_replay', True)
+        return jsonify(operation_data)
+    if disposition != 'new':
+        status = 402 if disposition == 'insufficient_credit' else 409
+        return jsonify({
+            'success': False,
+            'code': 'operation_in_progress' if disposition == 'in_progress' else 'operation_rejected',
+            'error': operation_data.get('error') or 'Reset operation rejected',
+        }), status
+    install_client_operation_response_guard(client_operation)
+
     session_obj, error = get_xui_session(server)
     if error: return jsonify({"success": False, "error": error}), 400
 
@@ -245,20 +273,25 @@ def reset_client_traffic(server_id, inbound_id):
                 if target_r:
                     _apply_volume_cap_after_reset(target_r)
 
+            mark_client_operation_applied(client_operation, {
+                'up': 0, 'down': 0,
+                'totalGB': volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None,
+            })
+
+            transaction_record = None
             if charge_amount > 0:
                 sender_card = data.get('sender_card', '') or ''
                 card_id = data.get('card_id')
                 if user.role == 'reseller':
-                    user.credit -= charge_amount
-                    log_transaction(user.id, -charge_amount, 'reset_traffic', "Reset traffic (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
+                    transaction_record = log_transaction(user.id, -charge_amount, 'reset_traffic', "Reset traffic (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
                 else:
-                    log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
-                db.session.commit()
+                    transaction_record = log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
             patch_cached_client(server.id, email, up=0, down=0,
                                 total_gb_bytes=(volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None))
             response = {"success": True}
             if user.role == 'reseller':
                 response["remaining_credit"] = user.credit
+            complete_client_operation(client_operation, response, transaction_record)
             return jsonify(response)
 
         templates = collect_endpoint_templates(server.panel_type, 'client_reset_traffic', CLIENT_RESET_FALLBACKS)
@@ -300,21 +333,26 @@ def reset_client_traffic(server_id, inbound_id):
                     if target_r:
                         _apply_volume_cap_after_reset(target_r)
 
+                mark_client_operation_applied(client_operation, {
+                    'up': 0, 'down': 0,
+                    'totalGB': volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None,
+                })
+
+                transaction_record = None
                 if charge_amount > 0:
                     sender_card = data.get('sender_card', '') or ''
                     card_id = data.get('card_id')
                     if user.role == 'reseller':
-                        user.credit -= charge_amount
-                        log_transaction(user.id, -charge_amount, 'reset_traffic', "Reset traffic (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
+                        transaction_record = log_transaction(user.id, -charge_amount, 'reset_traffic', "Reset traffic (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
                     else:
-                        log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
-                    db.session.commit()
+                        transaction_record = log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
 
                 patch_cached_client(server.id, email, up=0, down=0,
                                     total_gb_bytes=(volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None))
                 response = {"success": True}
                 if user.role == 'reseller':
                     response["remaining_credit"] = user.credit
+                complete_client_operation(client_operation, response, transaction_record)
                 return jsonify(response)
 
             errors.append(f"{template}: {resp.status_code}")
@@ -662,7 +700,7 @@ def delete_volume_rule_preset(preset_id):
     if not preset:
         return jsonify({'success': False, 'error': 'Preset not found'}), 404
     # Only the owner (or superadmin) can delete
-    if preset.owner_id != user.id and not session.get('is_superadmin', False):
+    if preset.owner_id != user.id and not admin_is_superadmin(user):
         return jsonify({'success': False, 'error': 'Access denied'}), 403
     db.session.delete(preset)
     db.session.commit()
@@ -710,7 +748,7 @@ def bulk_client_action():
 
     reseller_id = None
     if action in ('assign_owner', 'unassign_owner'):
-        if session.get('role') == 'reseller':
+        if user.role == 'reseller':
             return jsonify({"success": False, "error": "Access denied"}), 403
 
     if action in ('add_days', 'add_volume', 'volume_policy', 'volume_multiplier'):
@@ -828,10 +866,10 @@ def bulk_client_job(job_id):
 
         # Simple access control: only the job owner or superadmin can view
         try:
-            if int(job.get('user_id') or 0) != int(user.id) and not session.get('is_superadmin', False):
+            if int(job.get('user_id') or 0) != int(user.id) and not admin_is_superadmin(user):
                 return jsonify({'success': False, 'error': 'Access denied'}), 403
         except Exception:
-            if not session.get('is_superadmin', False):
+            if not admin_is_superadmin(user):
                 return jsonify({'success': False, 'error': 'Access denied'}), 403
 
         resp = jsonify({'success': True, 'job': _summarize_bulk_job(job)})
@@ -1206,6 +1244,9 @@ def renew_client(server_id, inbound_id, email):
     renewal_trace_id = secrets.token_hex(4)
     panel_is_fa = _get_panel_ui_lang() == 'fa'
     renew_lock_heartbeat_stop = None
+    client_operation = None
+    client_operation_completed = False
+    client_operation_panel_applied = False
     timing = {
         "total_ms": None,
         "used_cache_client": False,
@@ -1219,7 +1260,7 @@ def renew_client(server_id, inbound_id, email):
     }
 
     def _finish(payload: dict, status_code: int = 200):
-        nonlocal renew_lock_heartbeat_stop
+        nonlocal renew_lock_heartbeat_stop, client_operation
         if renew_lock_heartbeat_stop is not None:
             renew_lock_heartbeat_stop.set()
             renew_lock_heartbeat_stop = None
@@ -1230,6 +1271,17 @@ def renew_client(server_id, inbound_id, email):
         if isinstance(payload, dict):
             payload.setdefault("trace_id", renewal_trace_id)
             payload.setdefault("timing", timing)
+        if client_operation is not None and not client_operation_completed and status_code >= 400:
+            try:
+                fail_client_operation(
+                    client_operation,
+                    (payload or {}).get('error') if isinstance(payload, dict) else 'renew failed',
+                    payload if isinstance(payload, dict) else None,
+                    uncertain=client_operation_panel_applied,
+                )
+            except Exception:
+                app.logger.exception("Renew operation finalization failed (trace=%s)", renewal_trace_id)
+            client_operation = None
         # Log only slow renews (keeps logs clean)
         try:
             if timing.get("total_ms") is not None and timing["total_ms"] >= 2000:
@@ -1357,6 +1409,37 @@ def renew_client(server_id, inbound_id, email):
     except Exception as e:
         app.logger.error("Renew access-check error (trace=%s): %s", renewal_trace_id, e, exc_info=True)
         return _finish({"success": False, "error": f"Server error during access check: {e}"}, 500)
+
+    operation_key = (
+        request.headers.get('Idempotency-Key')
+        or data.get('operation_id')
+        or f"legacy-renew:{user.id}:{secrets.token_urlsafe(24)}"
+    )
+    operation_payload = dict(data)
+    operation_payload.pop('operation_id', None)
+    client_operation, operation_disposition, operation_data = begin_client_operation(
+        idempotency_key=operation_key,
+        action='renew',
+        admin=user,
+        server_id=server_id,
+        inbound_id=inbound_id,
+        client_email=email,
+        amount=price,
+        payload=operation_payload,
+    )
+    if operation_disposition == 'replay':
+        client_operation = None
+        operation_data.setdefault('idempotent_replay', True)
+        return _finish(operation_data)
+    if operation_disposition != 'new':
+        client_operation = None
+        code = 'renew_in_progress' if operation_disposition == 'in_progress' else 'renew_operation_rejected'
+        status_code = 402 if operation_disposition == 'insufficient_credit' else 409
+        return _finish({
+            'success': False,
+            'code': code,
+            'error': operation_data.get('error') or 'Renew operation rejected',
+        }, status_code)
 
     # Optimization: Try to find client in global cache first to avoid slow fetch_inbounds
     # NOTE: cached display rows include usage stats while `raw_client` often does not.
@@ -1733,6 +1816,13 @@ def renew_client(server_id, inbound_id, email):
                         continue
                 except ValueError:
                     pass
+
+                mark_client_operation_applied(client_operation, {
+                    'expiryTime': new_expiry,
+                    'totalGB': new_volume,
+                    'enable': True,
+                })
+                client_operation_panel_applied = True
                 
                 # If reset_traffic was requested, we must call the specific reset endpoint
                 # because updateClient usually ignores 'up'/'down' fields.
@@ -1925,19 +2015,17 @@ def renew_client(server_id, inbound_id, email):
                 # trigger customer notifications.
                 sender_card = data.get('sender_card', '') or ''
                 card_id = data.get('card_id')
+                transaction_record = None
                 if is_free:
                     if user.role == 'reseller':
-                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
+                        transaction_record = log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
                     else:
-                        log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                    db.session.commit()
+                        transaction_record = log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
                 elif price > 0:
                     if user.role == 'reseller':
-                        user.credit -= price
-                        log_transaction(user.id, -price, 'renew', f"User Renewal (Credit Usage) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
+                        transaction_record = log_transaction(user.id, -price, 'renew', f"User Renewal (Credit Usage) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
                     else:
-                        log_transaction(user.id, price, 'renew', f"User Renewal (Income) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                    db.session.commit()
+                        transaction_record = log_transaction(user.id, price, 'renew', f"User Renewal (Income) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
 
                 # Build copyable success text (dynamic template)
                 now_utc = datetime.utcnow()
@@ -2113,6 +2201,19 @@ def renew_client(server_id, inbound_id, email):
                 if whatsapp_scheduled:
                     _fire_renew_whatsapp(server.id, email, _wa_text, _client_comment)
 
+                completed_payload = {
+                    "success": True,
+                    "copy_text": copy_text,
+                    "tpl_vars": _renew_tpl_vars,
+                    "verify": verify,
+                    "whatsapp": whatsapp_meta,
+                    "was_reactivated": _was_disabled,
+                    "cache_sync": bool(cache_sync),
+                }
+                if user.role == 'reseller':
+                    completed_payload['remaining_credit'] = user.credit
+                complete_client_operation(client_operation, completed_payload, transaction_record)
+                client_operation_completed = True
                 _store_renew_result(_renew_lock_key, {
                     "state": "complete",
                     "copy_text": copy_text,
@@ -2122,7 +2223,7 @@ def renew_client(server_id, inbound_id, email):
                     "was_reactivated": _was_disabled,
                     "cache_sync": bool(cache_sync),
                 })
-                return _finish({"success": True, "copy_text": copy_text, "tpl_vars": _renew_tpl_vars, "verify": verify, "whatsapp": whatsapp_meta, "was_reactivated": _was_disabled, "cache_sync": bool(cache_sync)})
+                return _finish(completed_payload)
 
             errors.append(f"{template}: {resp.status_code}")
             timing["update_endpoint"] = template
@@ -2807,6 +2908,30 @@ def add_client(server_id, inbound_id):
         if not ok:
             return jsonify({"success": False, "error": err}), 402
 
+    operation_key = (
+        request.headers.get('Idempotency-Key')
+        or data.get('operation_id')
+        or f"legacy-add:{user.id}:{secrets.token_urlsafe(24)}"
+    )
+    operation_payload = dict(data)
+    operation_payload.pop('operation_id', None)
+    client_operation, disposition, operation_data = begin_client_operation(
+        idempotency_key=operation_key, action='add_client', admin=user,
+        server_id=server_id, inbound_id=inbound_id, client_email=email,
+        amount=price, payload=operation_payload,
+    )
+    if disposition == 'replay':
+        operation_data.setdefault('idempotent_replay', True)
+        return jsonify(operation_data)
+    if disposition != 'new':
+        status = 402 if disposition == 'insufficient_credit' else 409
+        return jsonify({
+            'success': False,
+            'code': 'operation_in_progress' if disposition == 'in_progress' else 'operation_rejected',
+            'error': operation_data.get('error') or 'Add operation rejected',
+        }), status
+    install_client_operation_response_guard(client_operation)
+
     session_obj, error = get_xui_session(server)
     if error: return jsonify({"success": False, "error": error})
 
@@ -2849,18 +2974,21 @@ def add_client(server_id, inbound_id):
             ok, _vr, verr = v3_add_client(server, session_obj, new_client, assign_ids)
             if not ok:
                 return jsonify({"success": False, "error": f"v3 add failed: {verr}"}), 502
+            mark_client_operation_applied(client_operation, {
+                'client_uuid': client_uuid, 'email': email, 'inbound_ids': assign_ids,
+            })
 
             # Billing (charged once for the whole client)
             sender_card = data.get('sender_card', '') or ''
             card_id = data.get('card_id')
+            transaction_record = None
             if is_free:
-                log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category=('usage' if user.role == 'reseller' else 'income'), client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+                transaction_record = log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category=('usage' if user.role == 'reseller' else 'income'), client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
             elif price > 0:
                 if user.role == 'reseller':
-                    user.credit -= price
-                    log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+                    transaction_record = log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
                 else:
-                    log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+                    transaction_record = log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
 
             # Ownership row per assigned inbound (price recorded once on the first)
             for _idx, _iid in enumerate(assign_ids):
@@ -2934,7 +3062,7 @@ def add_client(server_id, inbound_id):
                                  }, data.get('comment', '') or '',
                                  server_name=getattr(server, 'name', '') or '')
 
-            return jsonify({
+            completed_payload = {
                 "success": True,
                 "copy_text": copy_text,
                 "client": {
@@ -2943,7 +3071,11 @@ def add_client(server_id, inbound_id):
                     "sub_link": sub_url, "direct_link": None, "dashboard_link": dash_sub_url,
                     "inbound_ids": assign_ids,
                 }
-            })
+            }
+            if user.role == 'reseller':
+                completed_payload['remaining_credit'] = user.credit
+            complete_client_operation(client_operation, completed_payload, transaction_record)
+            return jsonify(completed_payload)
 
         inbound_data = None
         last_fetch_error = None
@@ -3060,19 +3192,23 @@ def add_client(server_id, inbound_id):
 
         if update_ok:
 
+            mark_client_operation_applied(client_operation, {
+                'client_uuid': client_uuid, 'email': email, 'inbound_ids': [inbound_id],
+            })
+
             sender_card = data.get('sender_card', '') or ''
             card_id = data.get('card_id')
+            transaction_record = None
             if is_free:
                 if user.role == 'reseller':
-                    log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+                    transaction_record = log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
                 else:
-                    log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+                    transaction_record = log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
             elif price > 0:
                 if user.role == 'reseller':
-                    user.credit -= price
-                    log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+                    transaction_record = log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
                 else:
-                    log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+                    transaction_record = log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
             
             ownership = ClientOwnership(
                 reseller_id=user.id,
@@ -3182,7 +3318,7 @@ def add_client(server_id, inbound_id):
                                  DEFAULT_CLIENT_CREATED_SMS_TEMPLATE, _cc_tpl_vars, data.get('comment', '') or '',
                                  server_name=getattr(server, 'name', '') or '')
 
-            return jsonify({
+            completed_payload = {
                 "success": True,
                 "copy_text": copy_text,
                 "tpl_vars": _cc_tpl_vars,
@@ -3196,7 +3332,11 @@ def add_client(server_id, inbound_id):
                     "direct_link": direct_link,
                     "dashboard_link": dash_sub_url
                 }
-            })
+            }
+            if user.role == 'reseller':
+                completed_payload['remaining_credit'] = user.credit
+            complete_client_operation(client_operation, completed_payload, transaction_record)
+            return jsonify(completed_payload)
         else:
             return jsonify({"success": False, "error": f"Panel Error: {update_error or 'Panel update failed'}"})
 

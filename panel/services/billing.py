@@ -522,6 +522,7 @@ def log_transaction(user_id, amount, type, desc, server_id=None, card_id=None, s
         days=days
     )
     db.session.add(trans)
+    return trans
 
 def inject_wallet_credit():
     # Deferred: timezone/calendar/lang helpers live in app.py (circular at module level).

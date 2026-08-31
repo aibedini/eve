@@ -105,7 +105,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.87"
+APP_VERSION = "2.5.88"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2812,7 +2812,8 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
 
 
 def _merger_user_is_allowed():
-    return bool(session.get('is_superadmin') or session.get('role') == 'superadmin')
+    from panel.routes.common import admin_is_superadmin, current_admin
+    return admin_is_superadmin(current_admin())
 
 
 

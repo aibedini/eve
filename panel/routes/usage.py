@@ -11,7 +11,7 @@ from panel.extensions import db
 from panel.models import (
     Admin, ClientOwnership, Server, UsageCounterState, UsageDaily, UsageHourly,
 )
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import admin_is_superadmin, current_admin, login_required, user_management_required
 
 bp = Blueprint('usage', __name__)
 
@@ -165,16 +165,16 @@ def _traffic_check_from_rollups(period, from_dt, to_dt, sub_email):
         GLOBAL_SERVER_DATA, _usage_tehran_date, format_bytes,
         get_reseller_access_maps,
     )
-    role = session.get('role', 'admin')
-    is_superadmin = session.get('is_superadmin', False)
-    admin_id = session.get('admin_id')
+    user = current_admin()
+    if not user:
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    role = user.role
+    is_superadmin = admin_is_superadmin(user)
+    admin_id = user.id
     allowed_server_ids = None
     allowed_sub_ids = None
 
     if not is_superadmin and role == 'reseller':
-        user = db.session.get(Admin, admin_id)
-        if not user:
-            return jsonify({'success': False, 'error': 'Unauthorized'}), 403
         allowed_map, assignments = get_reseller_access_maps(user)
         if allowed_map != '*':
             allowed_server_ids = set()

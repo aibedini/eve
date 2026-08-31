@@ -37,6 +37,7 @@ from panel.models.finance import (
     AutoApprovalWindow,
     Payment,
     Transaction,
+    ClientOperation,
     CustomerAccount,
     ServiceOwnership,
     ServiceDelegation,

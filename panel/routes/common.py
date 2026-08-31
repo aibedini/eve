@@ -7,12 +7,28 @@ from panel.extensions import db
 from panel.models import Admin
 
 
+def current_admin():
+    """Return the authoritative enabled admin for this request, if any."""
+    admin_id = session.get('admin_id')
+    admin = db.session.get(Admin, admin_id) if admin_id is not None else None
+    return admin if admin and bool(admin.enabled) else None
+
+
+def admin_is_superadmin(admin) -> bool:
+    return bool(admin and (admin.role == 'superadmin' or admin.is_superadmin))
+
+
+def _sync_session_authority(admin) -> None:
+    """Keep presentation fields current; authorization always uses ``admin``."""
+    session['role'] = admin.role
+    session['is_superadmin'] = admin_is_superadmin(admin)
+
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        admin_id = session.get('admin_id')
-        admin = db.session.get(Admin, admin_id) if admin_id is not None else None
-        if not admin or not bool(admin.enabled):
+        admin = current_admin()
+        if not admin:
             session.clear()
             # For API endpoints, AJAX/XHR requests, or requests that accept JSON, return JSON errors
             is_api_path = request.path.startswith('/api/')
@@ -21,6 +37,7 @@ def login_required(f):
             if is_api_path or accepts_json or is_xhr:
                 return jsonify({"success": False, "error": "Unauthorized"}), 401
             return redirect(url_for('auth.login'))
+        _sync_session_authority(admin)
         return f(*args, **kwargs)
     return decorated_function
 
@@ -37,13 +54,12 @@ def client_portal_required(f):
 def superadmin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'admin_id' not in session:
-            return jsonify({"success": False, "error": "Unauthorized"}), 401
-        admin = db.session.get(Admin, session['admin_id'])
-        if not admin or not bool(admin.enabled):
+        admin = current_admin()
+        if not admin:
             session.clear()
             return jsonify({"success": False, "error": "Unauthorized"}), 401
-        if admin.role != 'superadmin' and not admin.is_superadmin:
+        _sync_session_authority(admin)
+        if not admin_is_superadmin(admin):
             return jsonify({"success": False, "error": "Access Denied: SuperAdmin only"}), 403
         return f(*args, **kwargs)
     return decorated_function
@@ -57,11 +73,11 @@ def user_management_required(f):
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'admin_id' not in session:
-            return jsonify({"success": False, "error": "Unauthorized"}), 401
-        editor = db.session.get(Admin, session['admin_id'])
+        editor = current_admin()
         if not editor:
+            session.clear()
             return jsonify({"success": False, "error": "Unauthorized"}), 401
+        _sync_session_authority(editor)
         if editor.role == 'reseller':
             return jsonify({"success": False, "error": "Access Denied"}), 403
         return f(*args, **kwargs)

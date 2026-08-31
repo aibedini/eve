@@ -4301,6 +4301,8 @@
     }
 
     function openResetModal(serverId, inboundId, email, totalBytes = 0) {
+        window._resetOperationId = crypto.randomUUID
+            ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
         document.getElementById('reset-server-id').value = serverId;
         document.getElementById('reset-inbound-id').value = inboundId;
         document.getElementById('reset-email').value = email;
@@ -4367,7 +4369,8 @@
                     volume_gb: volume,
                     is_free: isFree,
                     sender_card: senderCard,
-                    card_id: destCardId ? parseInt(destCardId) : null
+                    card_id: destCardId ? parseInt(destCardId) : null,
+                    operation_id: window._resetOperationId
                 })
             });
             
@@ -4390,6 +4393,8 @@
     }
 
     function openRenewModal(serverId, inboundId, email, volumeStatus, remainingFormatted, totalFormatted, expiryType, expiryText, expiryTimestamp) {
+        window._renewOperationId = crypto.randomUUID
+            ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
         document.getElementById('renew-server-id').value = serverId;
         document.getElementById('renew-inbound-id').value = inboundId;
         document.getElementById('renew-email').value = email;
@@ -4868,6 +4873,8 @@
             sender_card: senderCard,
             card_id: destCardId ? parseInt(destCardId) : null,
             gift_volume_gb: giftGb > 0 ? giftGb : 0,
+            operation_id: window._renewOperationId || (window._renewOperationId =
+                (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`)),
         };
 
         if (usePackage) {
@@ -4921,6 +4928,8 @@
                 data = { success: false, error: `Server error (HTTP ${response.status})${preview ? ': ' + preview : ''}` };
             }
             if (data.success) {
+                window._resetOperationId = null;
+                window._renewOperationId = null;
                 closeRenewModal();
                 
                 let finalDays = 0;
@@ -5113,6 +5122,8 @@
     let allServers = [];
 
     function openAddClientModal() {
+        window._addClientOperationId = crypto.randomUUID
+            ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
         document.getElementById('add-client-server-select').innerHTML = '<option value="">-- Select Server --</option>';
         const _inbSel = document.getElementById('add-client-inbound-select');
         _inbSel.innerHTML = '<option value="">-- Select Inbound --</option>';
@@ -5938,7 +5949,9 @@
             free: Boolean(document.getElementById('add-client-free-toggle')?.checked),
             start_after_first_use: startAfterFirstUse,
             sender_card: senderCard,
-            card_id: destCardId ? parseInt(destCardId) : null
+            card_id: destCardId ? parseInt(destCardId) : null,
+            operation_id: window._addClientOperationId || (window._addClientOperationId =
+                (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`))
         };
 
         if (usePackage) {
@@ -5977,6 +5990,7 @@
             }
 
             if (data.success) {
+                window._addClientOperationId = null;
                 showToast('Client created successfully');
 
                 // Instantly update local last-user cache so the next

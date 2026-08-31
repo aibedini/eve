@@ -15,7 +15,11 @@ from urllib.parse import quote
 import requests
 from sqlalchemy import func, or_
 
-from panel.core.redis_client import bump_server_revision, publish_snapshot_to_redis
+from panel.core.redis_client import (
+    bump_server_revision,
+    publish_snapshot_to_redis,
+    serialized_server_snapshot_write,
+)
 from panel.extensions import db
 from panel.models import (
     Admin,
@@ -771,18 +775,21 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
     # Native attach may have generated protocol credentials (WireGuard key/IP),
     # so refresh authoritative data instead of cloning a stale VLESS-style row.
     try:
+        if added or removed:
+            # Panel state changed regardless of whether a local cached row exists.
+            bump_server_revision(server.id)
         if native_membership_used:
             fetch_and_update_server_data(server.id)
         else:
-            for _iid in added:
-                clone_cached_client_into_inbound(server.id, _iid, email,
-                                                 client_uuid=base_client.get('id'), publish=False)
-            for _iid in removed:
-                remove_cached_client(server.id, email, client_uuid=base_client.get('id'),
-                                     inbound_id=_iid, publish=False)
-        if added or removed:
-            bump_server_revision(server.id)
-            publish_snapshot_to_redis([server.id])
+            with serialized_server_snapshot_write(server.id):
+                for _iid in added:
+                    clone_cached_client_into_inbound(server.id, _iid, email,
+                                                     client_uuid=base_client.get('id'), publish=False)
+                for _iid in removed:
+                    remove_cached_client(server.id, email, client_uuid=base_client.get('id'),
+                                         inbound_id=_iid, publish=False)
+                if added or removed:
+                    publish_snapshot_to_redis([server.id])
     except Exception:
         app.logger.warning(
             "Client inbound membership cache sync failed (server_id=%s, email=%s)",
