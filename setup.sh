@@ -894,6 +894,55 @@ print_git_fetch_help() {
     echo "  - Connectivity: curl -I https://github.com"
 }
 
+resolve_update_target() {
+    # Resolve only a branch, semantic version, tag, or commit SHA. The value is
+    # passed as a Git argument (never eval'd), so browser-triggered restores do
+    # not become shell injection points.
+    local requested="${EVE_UPDATE_REF:-main}"
+    local candidate resolved normalized pattern candidates commit
+    requested="${requested//[$'\r\n ']/}"
+    [ "$requested" = "latest" ] && requested="main"
+    [ "$requested" = "main" ] && { echo "origin/main"; return 0; }
+    if [[ "$requested" == v.* ]]; then
+        requested="v${requested#v.}"
+    fi
+
+    # A full or abbreviated SHA is a valid immutable restore target.
+    if [[ "$requested" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+        resolved=$(git_for_update 0 -C "$APP_DIR" rev-parse --verify \
+            "$requested^{commit}" 2>/dev/null || true)
+        [ -n "$resolved" ] && { echo "$resolved"; return 0; }
+    fi
+
+    # Prefer a real tag when one exists (including the common v-prefixed form).
+    for candidate in "$requested" "v${requested#v}"; do
+        resolved=$(git_for_update 0 -C "$APP_DIR" rev-parse --verify \
+            "refs/tags/$candidate^{commit}" 2>/dev/null || true)
+        [ -n "$resolved" ] && { echo "$resolved"; return 0; }
+    done
+
+    # Patch versions in this project are recorded in APP_VERSION but are not
+    # necessarily Git tags. Find the commit that introduced the requested
+    # version so v2.5.86 (for example) remains restorable.
+    normalized="${requested#v}"
+    if [[ "$normalized" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+        pattern="^APP_VERSION[[:space:]]*=[[:space:]]*[\"']${normalized//./\\.}[\"']"
+        candidates=$(git_for_update 0 -C "$APP_DIR" log --all --format='%H' \
+            -G "$pattern" -- app.py 2>/dev/null || true)
+        while IFS= read -r commit; do
+            [ -n "$commit" ] || continue
+            if git_for_update 0 -C "$APP_DIR" show "$commit:app.py" 2>/dev/null \
+                    | grep -Eq "$pattern"; then
+                echo "$commit"
+                return 0
+            fi
+        done <<< "$candidates"
+    fi
+
+    print_error "Requested update ref '$requested' was not found. Use a listed version, tag, or commit SHA." >&2
+    return 1
+}
+
 clone_or_update_repo() {
     print_header "Step 6: Fetch application"
     import_legacy_remote_auth
@@ -910,7 +959,10 @@ clone_or_update_repo() {
             print_git_fetch_help
             exit 1
         fi
-        git_for_update 0 -C "$APP_DIR" reset --hard origin/main
+        local update_target
+        update_target=$(resolve_update_target) || return 1
+        print_warning "Selecting application ref: ${EVE_UPDATE_REF:-main}"
+        git_for_update 0 -C "$APP_DIR" reset --hard "$update_target"
     elif [ -d "$APP_DIR" ] && [ "$(ls -A "$APP_DIR")" ]; then
         print_warning "Directory $APP_DIR exists but is not a git repo. Backing up..."
         mv "$APP_DIR" "${APP_DIR}.bak.$(date +%s)"
@@ -1454,8 +1506,9 @@ EOF
 }
 
 install_web_update_service() {
-    local runner_source="$APP_DIR/eve_web_update_runner.sh"
+    local runner_source="${EVE_LATEST_UPDATE_RUNNER:-$APP_DIR/eve_web_update_runner.sh}"
     local runner_target="/usr/local/sbin/eve-web-update-runner"
+    [ -f "$runner_source" ] || runner_source="$APP_DIR/eve_web_update_runner.sh"
     [ -f "$runner_source" ] || return 0
 
     mkdir -p /var/lib/eve-manager/web-update
@@ -2559,6 +2612,8 @@ PY
 }
 
 do_online_update() {
+    local requested_ref="${1:-${EVE_UPDATE_REF:-main}}"
+    EVE_UPDATE_REF="$requested_ref"
     # Backup before pulling so we can roll back on migration failure
     local _BAK_TS; _BAK_TS="$(date +%s)"
     if [ -d "$APP_DIR" ]; then
@@ -2614,8 +2669,10 @@ run_latest_online_update() {
     # The installed CLI may predate a critical preflight/cleanup fix. Execute a
     # freshly fetched copy for the whole update. Git authentication is shared
     # with the real update, so this also works for a private repository.
-    local latest_script
+    local latest_script latest_runner requested_ref
+    requested_ref="${1:-${EVE_UPDATE_REF:-main}}"
     latest_script=$(mktemp /tmp/eve-update-runner-XXXXXX.sh)
+    latest_runner=$(mktemp /tmp/eve-web-update-runner-XXXXXX.sh)
     import_legacy_remote_auth
     prepare_git_auth
     trap cleanup_git_auth EXIT
@@ -2624,15 +2681,20 @@ run_latest_online_update() {
             && git_for_update 0 -C "$APP_DIR" remote set-url origin "$REPO_URL" \
             && git_for_update 240 -C "$APP_DIR" fetch origin main --prune --quiet \
             && git_for_update 0 -C "$APP_DIR" show origin/main:setup.sh > "$latest_script" \
+            && git_for_update 0 -C "$APP_DIR" show origin/main:eve_web_update_runner.sh > "$latest_runner" \
             && [ -s "$latest_script" ]; then
         cleanup_git_auth
         trap - EXIT
         chmod +x "$latest_script"
-        exec bash "$latest_script" --online-update
+        exec env EVE_UPDATE_REF="$requested_ref" \
+            EVE_LATEST_SETUP_SCRIPT="$latest_script" \
+            EVE_LATEST_UPDATE_RUNNER="$latest_runner" \
+            bash "$latest_script" --online-update "$requested_ref"
     fi
     cleanup_git_auth
     trap - EXIT
     rm -f "$latest_script"
+    rm -f "$latest_runner"
     print_warning "Could not bootstrap the latest updater; using the installed updater."
     do_online_update
 }
@@ -2925,6 +2987,9 @@ install_eve_cli() {
     # left the menu script one version behind.
     local SRC="$APP_DIR/setup.sh"
     [ -f "$SRC" ] || SRC="$0"
+    if [ -n "${EVE_LATEST_SETUP_SCRIPT:-}" ] && [ -f "$EVE_LATEST_SETUP_SCRIPT" ]; then
+        SRC="$EVE_LATEST_SETUP_SCRIPT"
+    fi
 
     # When piped through bash (e.g. curl | bash), $0 is /dev/stdin
     if [ ! -f "$SRC" ] || [[ "$SRC" == /dev/std* ]] || [[ "$SRC" == /proc/* ]]; then
@@ -4041,12 +4106,12 @@ elif [ "${1:-}" = "--restart-telegram-bot" ]; then
 elif [ "${1:-}" = "--browser-update" ]; then
     require_root
     detect_os
-    run_latest_online_update
+    run_latest_online_update "${2:-${EVE_UPDATE_REF:-main}}"
     exit $?
 elif [ "${1:-}" = "--online-update" ]; then
     require_root
     detect_os
-    do_online_update
+    do_online_update "${2:-${EVE_UPDATE_REF:-main}}"
     exit $?
 elif [ $# -gt 0 ]; then
     require_root

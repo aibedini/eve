@@ -1,6 +1,7 @@
 """System health, current-user, and self-update routes (extracted from app.py)."""
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -14,6 +15,66 @@ from panel.models import Admin
 from panel.routes.common import login_required, superadmin_required
 
 bp = Blueprint('system', __name__)
+
+_UPDATE_REF_RE = re.compile(
+    r'^(?:main|v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|[0-9a-fA-F]{7,40})$'
+)
+
+
+def _normalize_update_ref(value):
+    """Return a safe updater ref, accepting ``v.2.5.86`` as a convenience."""
+    ref = str(value or '').strip()
+    if ref.lower().startswith('v.'):
+        ref = 'v' + ref[2:]
+    if ref in ('', 'latest'):
+        ref = 'main'
+    return ref if _UPDATE_REF_RE.fullmatch(ref) else None
+
+
+def _local_version_history():
+    """Read version/ref pairs from the local Git checkout, newest first."""
+    from app import APP_VERSION  # deferred: app-level helper, avoids circular import
+
+    app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    versions = []
+    seen = set()
+    try:
+        commits = subprocess.run(
+            ['git', '-C', app_dir, 'log', '--format=%H', '-G',
+             r'^APP_VERSION\s*=\s*["\']', '--', 'app.py'],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=5, check=False,
+        )
+        if commits.returncode != 0:
+            return versions
+        for commit in (commits.stdout or '').splitlines()[:100]:
+            commit = commit.strip()
+            if not commit:
+                continue
+            source = subprocess.run(
+                ['git', '-C', app_dir, 'show', f'{commit}:app.py'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=5, check=False,
+            )
+            match = re.search(r'^APP_VERSION\s*=\s*["\']([^"\']+)',
+                              source.stdout or '', re.MULTILINE)
+            if not match:
+                continue
+            version = match.group(1)
+            if version in seen:
+                continue
+            seen.add(version)
+            versions.append({
+                'version': version,
+                'ref': commit,
+                'current': version == APP_VERSION,
+            })
+    except (OSError, subprocess.SubprocessError):
+        return versions
+
+    if APP_VERSION not in seen:
+        versions.insert(0, {'version': APP_VERSION, 'ref': 'main', 'current': True})
+    return versions
 
 
 @bp.route('/healthz', methods=['GET'])
@@ -137,10 +198,19 @@ def system_update_status():
 @bp.route('/api/system-update/start', methods=['POST'])
 @superadmin_required
 def system_update_start():
-    from app import SYSTEM_UPDATE_START_COMMAND, SYSTEM_UPDATE_UNIT_PATH, app  # deferred: app-level helper, avoids circular import
+    from app import (  # deferred: app-level helper, avoids circular import
+        SYSTEM_UPDATE_START_COMMAND, SYSTEM_UPDATE_STATE_DIR,
+        SYSTEM_UPDATE_UNIT_PATH, app,
+    )
     data = request.get_json(silent=True) or {}
     if data.get('confirm') != 'UPDATE':
         return jsonify({'success': False, 'error': 'Update confirmation is required'}), 400
+    target_ref = _normalize_update_ref(data.get('ref') or data.get('version'))
+    if target_ref is None:
+        return jsonify({
+            'success': False,
+            'error': 'Invalid version/ref. Use main, a semantic version, or a commit SHA.',
+        }), 400
     if not os.path.isfile(SYSTEM_UPDATE_UNIT_PATH):
         return jsonify({
             'success': False,
@@ -149,21 +219,59 @@ def system_update_start():
     current = _system_update_status_payload(0).get('status') or {}
     if current.get('state') == 'running':
         return jsonify({'success': False, 'error': 'An update is already running'}), 409
+
+    # systemd intentionally receives only a fixed command. Pass the selected
+    # ref through the state directory instead of interpolating it into a shell
+    # command or unit override.
+    ref_path = os.path.join(SYSTEM_UPDATE_STATE_DIR, 'requested-ref')
+    temp_ref_path = f'{ref_path}.tmp-{os.getpid()}'
+    try:
+        os.makedirs(SYSTEM_UPDATE_STATE_DIR, exist_ok=True)
+        with open(temp_ref_path, 'w', encoding='utf-8') as handle:
+            handle.write(target_ref + '\n')
+        os.replace(temp_ref_path, ref_path)
+    except OSError as exc:
+        try:
+            os.unlink(temp_ref_path)
+        except OSError:
+            pass
+        app.logger.exception('Could not persist requested update ref')
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
     try:
         result = subprocess.run(
             list(SYSTEM_UPDATE_START_COMMAND), capture_output=True, text=True,
             timeout=10, check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
+        try:
+            os.unlink(ref_path)
+        except OSError:
+            pass
         app.logger.exception('Could not launch browser update')
         return jsonify({'success': False, 'error': str(exc)}), 500
     if result.returncode != 0:
+        try:
+            os.unlink(ref_path)
+        except OSError:
+            pass
         detail = (result.stderr or result.stdout or 'systemd rejected the update').strip()
         return jsonify({'success': False, 'error': detail[:500]}), 500
     app.logger.warning(
         'Browser panel update started by admin_id=%s from %s',
         session.get('admin_id'), request.remote_addr)
-    return jsonify({'success': True, 'state': 'starting'}), 202
+    return jsonify({'success': True, 'state': 'starting', 'target_ref': target_ref}), 202
+
+
+@bp.route('/api/system-update/versions', methods=['GET'])
+@superadmin_required
+def system_update_versions():
+    from app import APP_VERSION  # deferred: app-level helper, avoids circular import
+    return jsonify({
+        'success': True,
+        'current_version': APP_VERSION,
+        'versions': _local_version_history(),
+    })
 
 @bp.route('/api/check-update', methods=['GET'])
 @login_required

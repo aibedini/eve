@@ -16,6 +16,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 import app as app_module  # noqa: E402
 from app import Admin, app, db  # noqa: E402
 from panel.routes import settings as settings_routes  # noqa: E402
+from panel.routes import system as system_routes  # noqa: E402
 
 
 class SystemUpdateApiTest(unittest.TestCase):
@@ -100,6 +101,50 @@ class SystemUpdateApiTest(unittest.TestCase):
         self.assertEqual(
             run.call_args.args[0], list(app_module.SYSTEM_UPDATE_START_COMMAND))
         self.assertEqual(run.call_args.kwargs['timeout'], 10)
+
+    def test_start_normalizes_version_and_persists_target_for_runner(self):
+        completed = mock.Mock(returncode=0, stdout='', stderr='')
+        with mock.patch.object(app_module.subprocess, 'run', return_value=completed) as run:
+            response = self.client.post(
+                '/api/system-update/start',
+                json={'confirm': 'UPDATE', 'ref': 'v.2.5.86'},
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()['target_ref'], 'v2.5.86')
+        self.assertEqual(
+            (self.state_dir / 'requested-ref').read_text(encoding='utf-8').strip(),
+            'v2.5.86',
+        )
+        run.assert_called_once_with(
+            list(app_module.SYSTEM_UPDATE_START_COMMAND),
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+
+    def test_start_rejects_unsafe_version_ref(self):
+        with mock.patch.object(app_module.subprocess, 'run') as run:
+            response = self.client.post(
+                '/api/system-update/start',
+                json={'confirm': 'UPDATE', 'ref': '../../etc/passwd'},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get('X-Eve-Status'), '400')
+        self.assertFalse((self.state_dir / 'requested-ref').exists())
+        run.assert_not_called()
+
+    def test_versions_lists_git_history_with_current_marker(self):
+        git_log = mock.Mock(returncode=0, stdout='abc123\n', stderr='')
+        git_show = mock.Mock(
+            returncode=0, stdout='APP_VERSION = "2.5.86"\n', stderr='')
+        with mock.patch.object(
+                system_routes.subprocess, 'run', side_effect=[git_log, git_show]):
+            response = self.client.get('/api/system-update/versions')
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['current_version'], app_module.APP_VERSION)
+        self.assertEqual(payload['versions'][0]['version'], app_module.APP_VERSION)
+        self.assertEqual(payload['versions'][1], {
+            'version': '2.5.86', 'ref': 'abc123', 'current': False,
+        })
 
     def _write_status(self, state, **extra):
         payload = {'state': state}
@@ -197,13 +242,17 @@ class SystemUpdateApiTest(unittest.TestCase):
             session['is_superadmin'] = False
         self.assertEqual(
             regular_client.get('/api/system-update/status').status_code, 403)
+        self.assertEqual(
+            regular_client.get('/api/system-update/versions').status_code, 403)
         self.assertNotIn(
             'id="system-update-version"',
             regular_client.get('/').get_data(as_text=True))
         super_html = self.client.get('/').get_data(as_text=True)
         self.assertIn('id="system-update-version"', super_html)
         self.assertIn('id="system-update-log"', super_html)
-        self.assertIn("body: JSON.stringify({confirm:'UPDATE'})", super_html)
+        self.assertIn('id="system-update-version-select"', super_html)
+        self.assertIn("/api/system-update/versions", super_html)
+        self.assertIn("body: JSON.stringify({confirm:'UPDATE', ref:targetRef})", super_html)
         self.assertIn('const currentVersion = data.current_version;', super_html)
         self.assertIn('versionEl.textContent = `v${currentVersion}`;', super_html)
 
@@ -302,7 +351,13 @@ class DomainSslUpdatePersistenceTest(unittest.TestCase):
         setup = (root / 'setup.sh').read_text(encoding='utf-8')
         self.assertIn('/etc/eve-manager/domain', runner)
         self.assertIn('/etc/ssl/eve-manager', runner)
+        self.assertIn('requested-ref', runner)
+        self.assertIn('EVE_UPDATE_REF', runner)
+        self.assertIn('/usr/local/bin/eve', runner)
         self.assertIn('verify_panel_proxy', setup)
+        self.assertIn('resolve_update_target', setup)
+        self.assertIn('EVE_LATEST_UPDATE_RUNNER', setup)
+        self.assertIn('APP_VERSION', setup)
         self.assertIn('Recovered panel domain from installed TLS certificate', setup)
 
     def test_setup_migrations_are_bounded_and_use_single_runner(self):

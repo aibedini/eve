@@ -14,6 +14,7 @@ HEARTBEAT_FILE="$STATE_DIR/heartbeat"
 BACKUP_FILE="$STATE_DIR/backup-path"
 ROLLBACK_FILE="$STATE_DIR/rolled-back"
 SYSTEM_BACKUP="$STATE_DIR/system-files.tar.gz"
+TARGET_REF_FILE="$STATE_DIR/requested-ref"
 LOCK_FILE="/run/lock/eve-web-update.lock"
 
 mkdir -p "$STATE_DIR"
@@ -93,8 +94,22 @@ restore_previous_version() {
     health_check
 }
 
+requested_ref="main"
+if [ -r "$TARGET_REF_FILE" ]; then
+    requested_ref="$(tr -d '\r\n' < "$TARGET_REF_FILE")"
+fi
+rm -f "$TARGET_REF_FILE"
+case "$requested_ref" in
+    main|v[0-9]*|[0-9]*|[0-9a-fA-F][0-9a-fA-F]*) ;;
+    *)
+        write_status "failed" "Invalid requested update ref"
+        echo "Invalid requested update ref: $requested_ref"
+        exit 2
+        ;;
+esac
+
 rm -f "$BACKUP_FILE" "$ROLLBACK_FILE" "$SYSTEM_BACKUP"
-write_status "running" "Preparing a recoverable update"
+write_status "running" "Preparing a recoverable update (${requested_ref})"
 echo "Eve browser update started at $started_at (current version: ${current_version:-unknown})"
 
 # Liveness marker for the panel backend: a cheap mtime probe that survives
@@ -127,8 +142,11 @@ if [ "${#system_files[@]}" -gt 0 ]; then
 fi
 
 set +e
+update_script="/usr/local/bin/eve"
+[ -f "$update_script" ] || update_script="$APP_DIR/setup.sh"
 env \
     EVE_AUTO_ROLLBACK=true \
+    EVE_UPDATE_REF="$requested_ref" \
     EVE_UPDATE_BACKUP_FILE="$BACKUP_FILE" \
     EVE_UPDATE_ROLLED_BACK_FILE="$ROLLBACK_FILE" \
     DEBIAN_FRONTEND=noninteractive \
@@ -136,7 +154,7 @@ env \
     APT_LISTCHANGES_FRONTEND=none \
     UCF_FORCE_CONFFOLD=1 \
     PYTHONUNBUFFERED=1 \
-    bash "$APP_DIR/setup.sh" --browser-update
+    bash "$update_script" --browser-update "$requested_ref"
 update_rc=$?
 set -e
 

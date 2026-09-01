@@ -156,6 +156,14 @@
                     <span>{{ 'قبل از تغییر فایل‌ها backup ساخته می‌شود. اگر آپدیت، restart یا health-check شکست بخورد، نسخه سالم قبلی خودکار برمی‌گردد. ممکن است هنگام restart چند ثانیه اتصال قطع و دوباره برقرار شود.' if panel_lang == 'fa' else 'A backup is created before files change. If update, restart, or health checks fail, the previous healthy version is restored automatically. The connection may briefly reconnect during restart.' }}</span>
                 </div>
             </div>
+            <div class="system-update-target">
+                <label for="system-update-version-select">Target version</label>
+                <select id="system-update-version-select" aria-describedby="system-update-target-help">
+                    <option value="main">Latest version (main)</option>
+                </select>
+                <input id="system-update-version-custom" type="text" inputmode="text" maxlength="80" placeholder="Version or commit SHA" aria-label="Custom version or commit SHA">
+                <small id="system-update-target-help">Choose a version from the local Git history, or restore the latest version.</small>
+            </div>
             <div class="system-update-log-head"><span>{{ 'لاگ زنده' if panel_lang == 'fa' else 'Live log' }}</span><span id="system-update-log-state"></span></div>
             <pre class="system-update-log" id="system-update-log">{{ 'هنوز آپدیتی شروع نشده است.' if panel_lang == 'fa' else 'No update has started yet.' }}</pre>
             <div class="pulse-message" id="system-update-message"></div>
@@ -1284,6 +1292,11 @@
     .system-update-safety div { display:flex; flex-direction:column; gap:3px; }
     .system-update-safety strong { font-size:.79rem; }
     .system-update-safety span { color:var(--text-secondary); font-size:.72rem; line-height:1.6; }
+    .system-update-target { display:flex; align-items:center; flex-wrap:wrap; gap:9px; margin:0 0 14px; }
+    .system-update-target label { color:var(--text-secondary); font-size:.75rem; white-space:nowrap; }
+    .system-update-target select,.system-update-target input { min-width:190px; max-width:100%; padding:7px 9px; border:1px solid var(--border-color); border-radius:8px; color:var(--text-primary); background:var(--bg-secondary); font-size:.75rem; }
+    .system-update-target input { min-width:165px; }
+    .system-update-target small { flex:1 1 100%; color:var(--text-secondary); font-size:.68rem; line-height:1.5; }
     .system-update-log-head { display:flex; justify-content:space-between; gap:10px; margin-bottom:6px; color:var(--text-secondary); font-size:.72rem; }
     .system-update-log { box-sizing:border-box; width:100%; height:270px; margin:0; padding:12px; overflow:auto; border:1px solid var(--border-color); border-radius:10px; background:#080e1c; color:#cbd5e1; font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; direction:ltr; text-align:left; white-space:pre-wrap; word-break:break-word; }
     #system-update-message { min-height:18px; margin-top:8px; color:#fca5a5; font-size:.76rem; }
@@ -8972,6 +8985,7 @@ Connection links
     let systemUpdateStartDeadline = 0;
     let systemUpdateStartedAt = 0;
     let systemUpdateReloadPending = false;
+    let systemUpdateVersionsPromise = null;
 
     function setSystemUpdateState(state, detail) {
         const box = document.getElementById('system-update-state');
@@ -8986,6 +9000,38 @@ Connection links
     function scheduleSystemUpdatePoll(delay = 1500) {
         if (systemUpdateTimer) clearTimeout(systemUpdateTimer);
         systemUpdateTimer = setTimeout(() => refreshSystemUpdateStatus(false), delay);
+    }
+
+    async function loadSystemUpdateVersions() {
+        const select = document.getElementById('system-update-version-select');
+        if (!select || systemUpdateVersionsPromise) return systemUpdateVersionsPromise;
+        systemUpdateVersionsPromise = (async () => {
+            try {
+                const response = await fetch('/api/system-update/versions', {cache:'no-store'});
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.error || 'Version list unavailable');
+                const currentValue = select.value || 'main';
+                const options = [{ref:'main', label:'Latest version (main)'}];
+                for (const item of (data.versions || [])) {
+                    if (!item || !item.version || !item.ref || item.ref === 'main') continue;
+                    const suffix = item.current ? ' (current)' : '';
+                    options.push({ref: item.ref, label: `v${item.version}${suffix}`});
+                }
+                select.replaceChildren(...options.map(item => {
+                    const option = document.createElement('option');
+                    option.value = item.ref;
+                    option.textContent = item.label;
+                    return option;
+                }));
+                if (options.some(item => item.ref === currentValue)) select.value = currentValue;
+            } catch (error) {
+                // The latest option remains usable if Git history is unavailable.
+                console.debug('Could not load update versions:', error);
+            } finally {
+                systemUpdateVersionsPromise = null;
+            }
+        })();
+        return systemUpdateVersionsPromise;
     }
 
     async function refreshSystemUpdateStatus(resetLog = false) {
@@ -9047,6 +9093,10 @@ Connection links
                 startButton.disabled = systemUpdateIsRunning || !data.available;
                 startButton.textContent = systemUpdateIsRunning ? SYSTEM_UPDATE_TEXT.running : SYSTEM_UPDATE_TEXT.start;
             }
+            const versionSelect = document.getElementById('system-update-version-select');
+            if (versionSelect) versionSelect.disabled = systemUpdateIsRunning || systemUpdateAwaitingStart || !data.available;
+            const customVersion = document.getElementById('system-update-version-custom');
+            if (customVersion) customVersion.disabled = systemUpdateIsRunning || systemUpdateAwaitingStart || !data.available;
             if (message) message.textContent = data.available ? '' : SYSTEM_UPDATE_TEXT.unavailable;
             const logState = document.getElementById('system-update-log-state');
             if (logState) logState.textContent = systemUpdateIsRunning ? SYSTEM_UPDATE_TEXT.running : '';
@@ -9084,6 +9134,7 @@ Connection links
 
     function openSystemUpdateModal() {
         document.getElementById('system-update-modal')?.classList.remove('hidden');
+        loadSystemUpdateVersions();
         refreshSystemUpdateStatus(true);
     }
 
@@ -9098,13 +9149,18 @@ Connection links
     async function startSystemUpdate() {
         const button = document.getElementById('system-update-start');
         const message = document.getElementById('system-update-message');
+        const versionSelect = document.getElementById('system-update-version-select');
+        const customVersion = document.getElementById('system-update-version-custom');
+        const targetRef = customVersion?.value.trim() || versionSelect?.value || 'main';
         if (button) button.disabled = true;
+        if (versionSelect) versionSelect.disabled = true;
+        if (customVersion) customVersion.disabled = true;
         if (message) message.textContent = '';
         setSystemUpdateState('running', SYSTEM_UPDATE_TEXT.starting);
         try {
             const response = await fetch('/api/system-update/start', {
                 method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({confirm:'UPDATE'}),
+                body: JSON.stringify({confirm:'UPDATE', ref:targetRef}),
             });
             const data = await response.json();
             if (!response.ok || !data.success) throw new Error(data.error || 'Update could not start');
@@ -9122,6 +9178,8 @@ Connection links
             setSystemUpdateState('failed', error.message || String(error));
             if (message) message.textContent = error.message || String(error);
             if (button) button.disabled = false;
+            if (versionSelect) versionSelect.disabled = false;
+            if (customVersion) customVersion.disabled = false;
         }
     }
 
