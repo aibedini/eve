@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "consumer": "eve",
+  "projectKeyDefaults": {
+    "scopes": [
+      "sms.send",
+      "sms.status",
+      "sms.cancel",
+      "sms.capacity"
+    ],
+    "ingressRatePerMinute": 30,
+    "ingressRatePerHour": 1000
+  },
+  "endpoints": [
+    { "method": "GET", "path": "/ready", "scope": "sms.capacity" },
+    { "method": "POST", "path": "/send", "scope": "sms.send" },
+    { "method": "GET", "path": "/send/status/{requestId}", "scope": "sms.status" },
+    { "method": "POST", "path": "/send/cancel/{requestId}", "scope": "sms.cancel" },
+    { "method": "GET", "path": "/send/capacity", "scope": "sms.capacity" }
+  ]
+}
