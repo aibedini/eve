@@ -4,10 +4,12 @@ import secrets
 from urllib.parse import quote, unquote, urlparse
 
 from flask import Blueprint, jsonify, make_response, request
+from sqlalchemy import text
 
 from panel.extensions import db, limiter
 from panel.models import CustomSubscription, CustomSubscriptionConfig
 from panel.routes.common import login_required, user_management_required
+from panel.security import hash_bearer_token
 
 bp = Blueprint('custom_subs', __name__)
 
@@ -54,7 +56,18 @@ def _custom_subscription_public_url(row):
 @bp.route('/cs/<token>')
 @limiter.limit('60 per minute')
 def public_custom_subscription(token):
-    row = CustomSubscription.query.filter_by(token=str(token), enabled=True).first()
+    raw_token = str(token)
+    token_hash = hash_bearer_token(raw_token, 'custom-subscription')
+    row = CustomSubscription.query.filter_by(token_hash=token_hash, enabled=True).first()
+    if row is None:
+        legacy_id = db.session.execute(text(
+            'SELECT id FROM custom_subscriptions WHERE token = :token AND enabled = :enabled'
+        ), {'token': raw_token, 'enabled': True}).scalar()
+        row = db.session.get(CustomSubscription, legacy_id) if legacy_id else None
+        if row is not None:
+            row.token_hash = token_hash
+            row.token = raw_token
+            db.session.commit()
     if not row:
         return 'Subscription not found', 404
     configs = CustomSubscriptionConfig.query.filter_by(
@@ -111,8 +124,10 @@ def create_custom_subscription():
         return jsonify({'success': False, 'error': 'Interval and sort order must be whole numbers'}), 400
     if interval < 0 or interval > 10080:
         return jsonify({'success': False, 'error': 'Update interval must be between 0 and 10080 minutes'}), 400
+    token = secrets.token_urlsafe(16)
     row = CustomSubscription(
-        name=name, token=secrets.token_urlsafe(16),
+        name=name, token=token,
+        token_hash=hash_bearer_token(token, 'custom-subscription'),
         tag_prefix=str(data.get('tag_prefix') or '')[:64],
         enabled=bool(data.get('enabled', True)), update_interval_min=interval,
         sort_order=sort_order,
@@ -150,6 +165,7 @@ def update_custom_subscription(subscription_id):
         return jsonify({'success': False, 'error': 'Update interval must be between 0 and 10080 minutes'}), 400
     if bool(data.get('regenerate_token')):
         row.token = secrets.token_urlsafe(16)
+        row.token_hash = hash_bearer_token(row.token, 'custom-subscription')
     db.session.commit()
     return jsonify({'success': True, 'subscription': row.to_dict(
         public_url=_custom_subscription_public_url(row))})
@@ -184,7 +200,7 @@ def add_custom_subscription_configs(subscription_id):
         return jsonify({'success': False, 'error': str(exc)}), 400
     if len(set(uris)) != len(uris):
         return jsonify({'success': False, 'error': 'The pasted list contains duplicate configs'}), 409
-    existing = {value for value, in db.session.query(CustomSubscriptionConfig.uri).filter_by(
+    existing = {item.uri for item in CustomSubscriptionConfig.query.filter_by(
         subscription_id=row.id).all()}
     duplicates = [uri for uri in uris if uri in existing]
     if duplicates:
@@ -193,7 +209,8 @@ def add_custom_subscription_configs(subscription_id):
     created = []
     for offset, uri in enumerate(uris):
         item = CustomSubscriptionConfig(
-            subscription_id=row.id, uri=uri, enabled=True,
+            subscription_id=row.id, uri=uri,
+            uri_hash=hash_bearer_token(uri, 'custom-subscription-config'), enabled=True,
             sort_order=next_order + offset,
         )
         db.session.add(item)
@@ -215,14 +232,22 @@ def update_custom_subscription_config(subscription_id, config_id):
             uri = _custom_subscription_uri(data.get('uri'))
         except ValueError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
+        uri_hash = hash_bearer_token(uri, 'custom-subscription-config')
         duplicate = CustomSubscriptionConfig.query.filter(
             CustomSubscriptionConfig.subscription_id == subscription_id,
-            CustomSubscriptionConfig.uri == uri,
+            CustomSubscriptionConfig.uri_hash == uri_hash,
             CustomSubscriptionConfig.id != item.id,
         ).first()
+        if duplicate is None:
+            duplicate = next((candidate for candidate in CustomSubscriptionConfig.query.filter(
+                CustomSubscriptionConfig.subscription_id == subscription_id,
+                CustomSubscriptionConfig.uri_hash.is_(None),
+                CustomSubscriptionConfig.id != item.id,
+            ).all() if candidate.uri == uri), None)
         if duplicate:
             return jsonify({'success': False, 'error': 'This config already exists'}), 409
         item.uri = uri
+        item.uri_hash = uri_hash
     if 'remark' in data:
         item.remark = str(data.get('remark') or '').strip()[:190] or None
     if 'enabled' in data:

@@ -5,6 +5,7 @@ the processed snapshot to Redis; all workers read it from there. If Redis is
 missing/unreachable, the app transparently falls back to per-worker fetching.
 """
 import logging
+import json
 import os
 import secrets
 import threading
@@ -111,6 +112,18 @@ _LAST_LOADED_SNAPSHOT_VERSION = None
 _LAST_LOADED_SERVER_VERSIONS = {}
 _PUBLISHED_SERVER_VERSIONS = {}
 _LOCAL_SERVER_WRITE_LOCKS = defaultdict(threading.RLock)
+
+
+def _encode_snapshot(value) -> bytes:
+    """Serialize cache data without executable object deserialization."""
+    import zlib
+    payload = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    return zlib.compress(payload, 1)
+
+
+def _decode_snapshot(blob: bytes):
+    import zlib
+    return json.loads(zlib.decompress(blob).decode('utf-8'))
 
 
 @contextmanager
@@ -270,7 +283,6 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
     if client is None:
         return False
     try:
-        import pickle, zlib
         publish_all = changed_server_ids is None
         changed = set()
         if not publish_all:
@@ -327,7 +339,7 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                 old_manifest_blob = pipe.get(REDIS_SNAPSHOT_MANIFEST_KEY)
                 if old_manifest_blob:
                     try:
-                        old_manifest = pickle.loads(zlib.decompress(old_manifest_blob))
+                        old_manifest = _decode_snapshot(old_manifest_blob)
                     except Exception:
                         old_manifest = {}
 
@@ -391,15 +403,11 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                     'servers_status': merged_statuses,
                     'last_update': GLOBAL_SERVER_DATA.get('last_update'),
                 }
-                manifest_blob = zlib.compress(
-                    pickle.dumps(manifest, protocol=pickle.HIGHEST_PROTOCOL), 1
-                )
+                manifest_blob = _encode_snapshot(manifest)
 
                 pipe.multi()
                 for sid in changed:
-                    block_blob = zlib.compress(
-                        pickle.dumps(blocks.get(sid, []), protocol=pickle.HIGHEST_PROTOCOL), 1
-                    )
+                    block_blob = _encode_snapshot(blocks.get(sid, []))
                     pipe.set(_redis_server_snapshot_key(sid), block_blob, ex=REDIS_SNAPSHOT_TTL)
                 for sid in published_versions:
                     if sid not in changed:
@@ -437,10 +445,9 @@ def _load_snapshot_from_redis_unlocked(force: bool = False) -> bool:
             return False
         if not force and version == _LAST_LOADED_SNAPSHOT_VERSION:
             return False  # nothing new — skip the expensive decompress
-        import pickle, zlib
         manifest_blob = client.get(REDIS_SNAPSHOT_MANIFEST_KEY)
         if manifest_blob:
-            manifest = pickle.loads(zlib.decompress(manifest_blob))
+            manifest = _decode_snapshot(manifest_blob)
             server_versions = {
                 int(k): str(v) for k, v in (manifest.get('server_versions') or {}).items()
             }
@@ -461,7 +468,7 @@ def _load_snapshot_from_redis_unlocked(force: bool = False) -> bool:
                     continue
                 block_blob = client.get(_redis_server_snapshot_key(sid))
                 if block_blob:
-                    new_blocks[sid] = pickle.loads(zlib.decompress(block_blob))
+                    new_blocks[sid] = _decode_snapshot(block_blob)
                 elif sid in current_blocks:
                     # Keep the last good local block if Redis is between writes.
                     new_blocks[sid] = current_blocks[sid]
@@ -482,11 +489,12 @@ def _load_snapshot_from_redis_unlocked(force: bool = False) -> bool:
                 GLOBAL_SERVER_DATA['last_update'] = manifest.get('last_update')
                 _LAST_LOADED_SERVER_VERSIONS = server_versions
         else:
-            # Rolling-upgrade compatibility with snapshots written by v1 workers.
+            # The old pickle format is intentionally rejected. Redis is an
+            # ephemeral cache and a current worker will republish safe JSON.
             blob = client.get(REDIS_SNAPSHOT_KEY)
             if not blob:
                 return False
-            payload = pickle.loads(zlib.decompress(blob))
+            payload = _decode_snapshot(blob)
             with GLOBAL_REFRESH_LOCK:
                 GLOBAL_SERVER_DATA['inbounds'] = payload.get('inbounds') or []
                 GLOBAL_SERVER_DATA['stats'] = payload.get('stats') or {}

@@ -17,9 +17,9 @@ RUN apt-get update \
         sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY requirements.txt requirements.lock ./
 RUN pip install --upgrade pip \
-    && pip install -r requirements.txt
+    && pip install --require-hashes -r requirements.lock
 
 COPY . .
 COPY docker/entrypoint.sh /usr/local/bin/eve-entrypoint

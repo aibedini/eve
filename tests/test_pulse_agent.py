@@ -271,7 +271,8 @@ class PulseAgentAdminTest(PulseAgentApiTestBase):
         token = payload['agent']['token']
         self.assertEqual(len(token), 32)
         agent = PulseAgent.query.filter_by(name='nl-ams-1').one()
-        self.assertEqual(agent.token, token)
+        self.assertNotEqual(agent.token, token)
+        self.assertTrue(agent.token.startswith('h1:'))
         self.assertTrue(agent.enabled)
 
     def test_create_agent_rejects_duplicate_and_bad_name(self):

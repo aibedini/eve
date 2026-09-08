@@ -25,13 +25,13 @@ print_warning() { echo -e "  ${YELLOW}⚠${NC} $1"; }
 # Get project directory
 PROJECT_DIR="${1:-.}"
 WHEELS_DIR="$PROJECT_DIR/wheels"
-REQUIREMENTS_FILE="$PROJECT_DIR/requirements.txt"
+REQUIREMENTS_FILE="$PROJECT_DIR/requirements.lock"
 
 print_header "Eve X-UI Manager: Prepare Offline Wheels"
 
 # Validate inputs
 if [ ! -f "$REQUIREMENTS_FILE" ]; then
-    print_error "requirements.txt not found in $PROJECT_DIR"
+    print_error "requirements.lock not found in $PROJECT_DIR"
     echo "  Usage: $0 /path/to/eve-xui-manager"
     exit 1
 fi

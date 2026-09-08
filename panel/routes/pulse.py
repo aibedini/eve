@@ -15,6 +15,7 @@ from panel.models import (
     Admin, PulseAgent, PulseRun, PulseTemplate, Server, get_pulse_settings,
 )
 from panel.routes.common import login_required
+from panel.security import hash_bearer_token
 from panel.services.subscription import generate_client_link
 
 bp = Blueprint('pulse', __name__)
@@ -758,9 +759,16 @@ def _pulse_agent_required(view):
     def wrapper(*args, **kwargs):
         auth = request.headers.get('Authorization') or ''
         token = auth[7:].strip() if auth.startswith('Bearer ') else ''
-        agent = PulseAgent.query.filter_by(token=token).first() if token else None
+        token_hash = hash_bearer_token(token, 'pulse-agent') if token else ''
+        agent = PulseAgent.query.filter_by(token=token_hash).first() if token else None
+        legacy_token = False
+        if agent is None and token:
+            agent = PulseAgent.query.filter_by(token=token).first()
+            legacy_token = agent is not None
         if agent is None or not agent.enabled:
             return jsonify({'ok': False, 'error': 'invalid agent token'}), 401
+        if legacy_token:
+            agent.token = token_hash
         agent.last_seen_at = datetime.utcnow()
         agent.last_ip = request.remote_addr
         db.session.commit()
@@ -840,12 +848,15 @@ def pulse_agent_create():
         return _error('نام ایجنت نامعتبر است (حروف، عدد، خط تیره؛ حداقل ۲ کاراکتر)')
     if PulseAgent.query.filter_by(name=name).first() is not None:
         return _error('ایجنتی با این نام از قبل وجود دارد', status=409)
-    agent = PulseAgent(name=name, token=secrets.token_hex(16))
+    token = secrets.token_hex(16)
+    agent = PulseAgent(name=name, token=hash_bearer_token(token, 'pulse-agent'))
     db.session.add(agent)
     db.session.commit()
     if wants_json:
         # the token is returned exactly once, at creation time
-        return jsonify({'ok': True, 'agent': agent.to_dict(include_token=True)})
+        payload = agent.to_dict()
+        payload['token'] = token
+        return jsonify({'ok': True, 'agent': payload})
     return redirect(url_for('pages.pulse_page'))
 
 

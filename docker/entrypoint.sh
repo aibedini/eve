@@ -27,6 +27,7 @@ if [ ! -f "$SECRETS_FILE" ]; then
     {
         printf 'SESSION_SECRET=%s\n' "$(generate_hex 32)"
         printf 'SERVER_PASSWORD_KEY=%s\n' "$(generate_fernet)"
+        printf 'EVE_BACKUP_KEY=%s\n' "$(generate_fernet)"
     } > "$SECRETS_FILE"
     chmod 600 "$SECRETS_FILE"
 fi
@@ -35,8 +36,14 @@ set -a
 . "$SECRETS_FILE"
 set +a
 
+if [ -z "${EVE_BACKUP_KEY:-}" ]; then
+    EVE_BACKUP_KEY="$(generate_fernet)"
+    printf 'EVE_BACKUP_KEY=%s\n' "$EVE_BACKUP_KEY" >> "$SECRETS_FILE"
+fi
+
 export SESSION_SECRET="${SESSION_SECRET:-$(generate_hex 32)}"
 export SERVER_PASSWORD_KEY="${SERVER_PASSWORD_KEY:-$(generate_fernet)}"
+export EVE_BACKUP_KEY
 export API_PORT="${API_PORT:-5000}"
 export FLASK_ENV="${FLASK_ENV:-production}"
 export DISABLE_BACKGROUND_THREADS=1

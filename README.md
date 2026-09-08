@@ -42,11 +42,11 @@ bash scripts/docker/build-offline-bundle.sh
 
 ### 🔐 Enterprise Security
 
-- **Brute-force protection**: 5 login attempts per minute, rate-limited.
-- **Secure sessions**: `HTTPONLY` + `SAMESITE` cookies on every request.
-- **Strong password hashing**: PBKDF2 with per-user salt.
-- **Audit-ready**: every failed login is stored with IP metadata.
-- **No secrets in the repo**: all credentials are environment-driven.
+- **Brute-force protection**: 10 login attempts per minute, rate-limited.
+- **Secure sessions**: `HTTPONLY` + `SECURE` + `SAMESITE` production cookies.
+- **Strong password hashing**: Werkzeug's versioned password-hash format.
+- **Encrypted operational secrets**: versioned envelopes backed by deployment keys.
+- **Private vulnerability handling**: see [`SECURITY.md`](SECURITY.md).
 
 ### 📊 Unified Operations Dashboard
 
@@ -136,7 +136,7 @@ cd eve-xui-manager
 
 2. **Install dependencies**
 ```bash
-pip install -r requirements.txt   # or: uv pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
 ```
 
 3. **Environment variables**
@@ -172,6 +172,8 @@ The dashboard is available at `http://localhost:5000`.
 
 **Security**
 - `SESSION_SECRET` — Flask session secret key
+- `SERVER_PASSWORD_KEY` — Fernet key for stored application secrets
+- `EVE_BACKUP_KEY` — AES-256 key for encrypted Telegram backup files
 - `INITIAL_ADMIN_PASSWORD` — initial admin password (default: `admin`)
 
 **Optional**
@@ -204,7 +206,8 @@ The dashboard is available at `http://localhost:5000`.
 ├── maintenance.py          # Post-update maintenance runner (systemd eve-maintenance.service)
 ├── telegram_bot_worker.py  # Interactive Telegram bot process
 ├── setup.sh                # One-line installer for Ubuntu/Debian
-├── requirements.txt        # Runtime Python dependencies
+├── requirements.txt        # Direct dependency policy (lock input)
+├── requirements.lock       # Fully pinned, hashed runtime dependencies
 ├── pyproject.toml          # Python project metadata
 ├── templates/              # Jinja2 views
 │   ├── base.html           # Layout + sidebar + wallet pill

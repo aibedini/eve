@@ -584,10 +584,12 @@ def update_system_config():
             else:
                 sanitized_value = sanitize_html(str(value))
 
+            from panel.security import protect_system_config
+            protected_value = protect_system_config(key, sanitized_value)
             if config:
-                config.value = sanitized_value
+                config.value = protected_value
             else:
-                config = SystemConfig(key=key, value=sanitized_value)
+                config = SystemConfig(key=key, value=protected_value)
                 db.session.add(config)
 
         effective_region = normalized_region

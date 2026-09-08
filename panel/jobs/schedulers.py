@@ -8,6 +8,8 @@ import concurrent.futures
 import json
 import os
 import shutil
+import subprocess
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -1216,7 +1218,8 @@ def _migrate_legacy_usage_snapshots(finalize=True, batch_accounts=10):
     lock_fd = None
     try:
         import fcntl
-        lock_fd = open('/tmp/eve-usage-migration.lock', 'a+')
+        from panel.core.runtime_files import open_private_lock
+        lock_fd = open_private_lock('usage-migration.lock')
         try:
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -1521,8 +1524,8 @@ def _claim_singleton(name):
     try:
         from app import app  # deferred: avoids circular import
         import fcntl as _fcntl
-        lock_path = f'/tmp/eve_{name}.lock'
-        fh = open(lock_path, 'w')
+        from panel.core.runtime_files import open_private_lock
+        fh = open_private_lock(f'{name}.lock', 'w')
         _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
         fh.write(str(os.getpid()))
         fh.flush()
@@ -1694,6 +1697,34 @@ def pulse_scheduler_worker():
         time.sleep(PULSE_WORKER_POLL_SECONDS)
 
 
+def _security_maintenance_fallback_worker():
+    """Run post-update maintenance when an older updater did not start systemd."""
+    from app import app  # deferred: avoids circular import
+    time.sleep(30)  # let eve-maintenance.service claim the ledger first
+    try:
+        with app.app_context():
+            record = SystemMigration.query.filter_by(
+                migration_id='encrypt_sensitive_values_v1',
+            ).first()
+            if record and record.status in {'running', 'complete'}:
+                return
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        result = subprocess.run(
+            [sys.executable, os.path.join(project_root, 'maintenance.py'),
+             'run', '--skip-schema-migrations'],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        if result.returncode != 0:
+            app.logger.error('[MaintenanceFallback] failed: %s', (result.stderr or '')[-2000:])
+        else:
+            app.logger.info('[MaintenanceFallback] sensitive-data migration completed.')
+    except Exception as exc:
+        app.logger.error('[MaintenanceFallback] failed: %s', exc)
+
+
 def ensure_background_threads_started():
     """Start background threads once per process.
 
@@ -1720,6 +1751,9 @@ def ensure_background_threads_started():
         except Exception as e:
             app.logger.error('Failed to start snapshot reader thread: %s', e)
         return
+
+    if _claim_singleton('security_maintenance_fallback'):
+        threading.Thread(target=_security_maintenance_fallback_worker, daemon=True).start()
 
     # Singleton: only one worker runs the scheduler (auto-backup, etc.)
     if _claim_singleton('scheduler'):

@@ -1,6 +1,7 @@
 """Finance, payments, transactions, and reseller-statement API routes (extracted from app.py)."""
 import io
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 
@@ -17,6 +18,7 @@ from panel.models import (
 from panel.routes.common import login_required, user_management_required
 
 bp = Blueprint('finance', __name__)
+logger = logging.getLogger(__name__)
 
 
 EMAIL_IN_DESCRIPTION = re.compile(r'([A-Za-z0-9_.+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9-.]+)$')
@@ -145,8 +147,8 @@ def get_transactions():
         # (rest of the function remains unchanged)
         # ...existing code...
     except Exception as ex:
-        import traceback
-        return jsonify({"success": False, "error": str(ex), "trace": traceback.format_exc()}), 500
+        logger.exception('Failed to build transaction query')
+        return jsonify({"success": False, "error": "Internal server error."}), 500
 
     # Pagination
     page = request.args.get('page', 1, type=int)
@@ -422,7 +424,6 @@ def get_payments():
             pattern = f"%{search_term}%"
             payment_query = payment_query.filter(or_(
                 Payment.description.ilike(pattern),
-                Payment.sender_card.ilike(pattern),
                 Payment.sender_name.ilike(pattern),
                 Payment.client_email.ilike(pattern)
             ))
@@ -438,8 +439,8 @@ def get_payments():
         # (rest of the function remains unchanged)
         # ...existing code...
     except Exception as ex:
-        import traceback
-        return jsonify({"success": False, "error": str(ex), "trace": traceback.format_exc()}), 500
+        logger.exception('Failed to build finance dashboard query')
+        return jsonify({"success": False, "error": "Internal server error."}), 500
     tx_query = Transaction.query
     if user.role == 'reseller':
         tx_query = tx_query.filter(Transaction.admin_id == user.id)
@@ -456,7 +457,6 @@ def get_payments():
         pattern = f"%{search_term}%"
         tx_query = tx_query.filter(or_(
             Transaction.description.ilike(pattern),
-            Transaction.sender_card.ilike(pattern),
             Transaction.sender_name.ilike(pattern),
             Transaction.client_email.ilike(pattern),
             Transaction.type.ilike(pattern)
@@ -665,7 +665,6 @@ def _apply_finance_tx_filters(q, filters: dict, *, date_column=None,
         pattern = f"%{search_term}%"
         q = q.filter(or_(
             Transaction.description.ilike(pattern),
-            Transaction.sender_card.ilike(pattern),
             Transaction.sender_name.ilike(pattern),
             Transaction.client_email.ilike(pattern),
             Transaction.type.ilike(pattern)
@@ -693,7 +692,6 @@ def _apply_finance_payment_filters(q, filters: dict, *, date_column=None):
         pattern = f"%{search_term}%"
         q = q.filter(or_(
             Payment.description.ilike(pattern),
-            Payment.sender_card.ilike(pattern),
             Payment.sender_name.ilike(pattern),
             Payment.client_email.ilike(pattern)
         ))

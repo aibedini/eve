@@ -358,7 +358,9 @@ class BnqoAdminApiTest(BnqoTestBase):
         self.assertIn('token', payload)
         self.assertIn('install_command', payload)
         self.assertIn('BNQO_ENROLL_TOKEN', payload['install_command'])
-        row = BnqoEnrollToken.query.filter_by(token=payload['token']).one()
+        row = BnqoEnrollToken.query.one()
+        self.assertNotEqual(row.token, payload['token'])
+        self.assertTrue(row.token.startswith('h1:'))
         self.assertEqual(row.role, 'relay')
 
     def test_link_crud_and_diagnose(self):

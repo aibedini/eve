@@ -568,7 +568,7 @@ def save_ssl_settings():
 @bp.route('/api/settings/ssl/sync', methods=['POST'])
 @superadmin_required
 def ssl_sync():
-    """Copy LetsEncrypt cert+key to /etc/ssl/eve-manager/.
+    """Host-managed TLS keys cannot be copied by the web process.
 
     Strategy (no broad sudo needed):
     - /etc/ssl/eve-manager/ must be owned by evemgr (one-time admin setup)
@@ -577,6 +577,10 @@ def ssl_sync():
 
     If the destination dir isn't writable, a clear fix command is returned.
     """
+    return jsonify({
+        'success': False,
+        'error': 'SSL key sync is disabled. Configure the certificate on the host.',
+    }), 410
     from app import app  # deferred: app-level helper, avoids circular import
     import glob as _glob, re as _re
 
@@ -731,51 +735,11 @@ def ssl_sync():
 @bp.route('/api/settings/ssl/export')
 @superadmin_required
 def ssl_export():
-    """Return a zip containing the SSL certificate and private key."""
-    from app import (  # deferred: app-level helper, avoids circular import
-        _autodetect_ssl_paths, app,
-    )
-    import zipfile, io as _io
-
-    cert = db.session.get(SystemSetting, 'ssl_cert_path')
-    key  = db.session.get(SystemSetting, 'ssl_key_path')
-    cert_path = (cert.value if cert else '').strip()
-    key_path  = (key.value  if key  else '').strip()
-
-    # Auto-detect if not saved
-    if not cert_path or not key_path:
-        cert_path, key_path = _autodetect_ssl_paths()
-
-    # If still not found, try syncing from LetsEncrypt first
-    if not cert_path or not key_path:
-        return jsonify({
-            'success': False,
-            'error': 'SSL certificate not configured. Click "Sync from LetsEncrypt" first.'
-        }), 400
-
-    # Try to read — if permission denied, suggest sync
-    errors = []
-    for label, path in [('Certificate', cert_path), ('Private key', key_path)]:
-        if not path or not os.path.isfile(path):
-            errors.append(f'{label} file not found: {path or "(empty)"}')
-        elif not os.access(path, os.R_OK):
-            errors.append(f'{label} not readable (permission denied): {path} — click "Sync from LetsEncrypt" to fix')
-    if errors:
-        return jsonify({'success': False, 'error': ' | '.join(errors)}), 400
-
-    buf = _io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.write(cert_path, 'ssl/fullchain.pem')
-        zf.write(key_path,  'ssl/privkey.pem')
-    buf.seek(0)
-
-    return send_file(
-        buf,
-        mimetype='application/zip',
-        as_attachment=True,
-        download_name='eve-ssl-bundle.zip',
-    )
-
+    """Private keys are deliberately non-exportable from the web process."""
+    return jsonify({
+        'success': False,
+        'error': 'SSL private-key export is disabled. Manage keys on the host.',
+    }), 410
 
 # ── SSL Upload — receive zip, extract cert+key ──────────────────────────────
 SSL_DEST_DIR = '/etc/ssl/eve-manager'
@@ -784,13 +748,17 @@ SSL_DEST_DIR = '/etc/ssl/eve-manager'
 @bp.route('/api/settings/ssl/upload', methods=['POST'])
 @superadmin_required
 def ssl_upload():
-    """Accept a zip (with fullchain.pem + privkey.pem) or two individual files.
+    """TLS private-key upload is disabled for the web process.
 
     Strategy:
     1. Write uploaded files to a temp dir that evemgr CAN write to (/tmp)
     2. Use sudo cp/mkdir/chown/chmod to install them under /etc/ssl/eve-manager/
        (sudoers entry created by setup.sh)
     """
+    return jsonify({
+        'success': False,
+        'error': 'SSL private-key upload is disabled. Install keys on the host.',
+    }), 410
     from app import app  # deferred: app-level helper, avoids circular import
     import zipfile, tempfile
 

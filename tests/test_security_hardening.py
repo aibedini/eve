@@ -1,4 +1,5 @@
 import os
+import base64
 import tempfile
 import unittest
 import zipfile
@@ -19,6 +20,12 @@ from panel.services.client_operations import (  # noqa: E402
     mark_client_operation_applied, resolve_client_operation,
 )
 from app import Admin, ClientOperation, GLOBAL_SERVER_DATA, Server, app, db  # noqa: E402
+from panel.core.redis_client import _decode_snapshot, _encode_snapshot  # noqa: E402
+from panel.security.backup_crypto import decrypt_backup_file, encrypt_backup_file  # noqa: E402
+from panel.security.secrets import (  # noqa: E402
+    _fernet, decrypt_secret, encrypt_secret, protect_system_setting,
+)
+from panel.security.tls import outbound_tls_verify  # noqa: E402
 
 
 class SecurityHardeningTests(unittest.TestCase):
@@ -74,6 +81,69 @@ class SecurityHardeningTests(unittest.TestCase):
         ):
             response = getattr(self.client, method)(path)
             self.assertEqual(response.status_code, 403, path)
+
+    def test_superadmin_cannot_export_tls_private_key(self):
+        self._login(self.superadmin)
+        response = self.client.get('/api/settings/ssl/export')
+        self.assertEqual(response.status_code, 410)
+        self.assertNotIn(b'privkey', response.data.lower())
+
+    def test_secret_envelope_and_backup_file_round_trip(self):
+        old_server_key = os.environ.get('SERVER_PASSWORD_KEY')
+        old_backup_key = os.environ.get('EVE_BACKUP_KEY')
+        key = base64.urlsafe_b64encode(os.urandom(32)).decode('ascii')
+        os.environ['SERVER_PASSWORD_KEY'] = key
+        os.environ['EVE_BACKUP_KEY'] = key
+        _fernet.cache_clear()
+        source = tempfile.NamedTemporaryFile(delete=False)
+        encrypted = f'{source.name}.eveenc'
+        restored = f'{source.name}.restored'
+        try:
+            source.write(b'sensitive-backup-content')
+            source.close()
+            protected = encrypt_secret('top-secret')
+            self.assertTrue(protected.startswith('enc:v1:'))
+            self.assertEqual(decrypt_secret(protected), 'top-secret')
+            self.assertTrue(protect_system_setting('telegram_backup_bot_token', 'token').startswith('enc:v1:'))
+            encrypt_backup_file(source.name, encrypted)
+            with open(encrypted, 'rb') as handle:
+                self.assertNotIn(b'sensitive-backup-content', handle.read())
+            decrypt_backup_file(encrypted, restored)
+            with open(restored, 'rb') as handle:
+                self.assertEqual(handle.read(), b'sensitive-backup-content')
+        finally:
+            for path in (source.name, encrypted, restored):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+            if old_server_key is None:
+                os.environ.pop('SERVER_PASSWORD_KEY', None)
+            else:
+                os.environ['SERVER_PASSWORD_KEY'] = old_server_key
+            if old_backup_key is None:
+                os.environ.pop('EVE_BACKUP_KEY', None)
+            else:
+                os.environ['EVE_BACKUP_KEY'] = old_backup_key
+            _fernet.cache_clear()
+
+    def test_redis_snapshot_uses_safe_json_serialization(self):
+        payload = {'items': [{'id': 1, 'name': 'ایمن'}], 'ok': True}
+        encoded = _encode_snapshot(payload)
+        self.assertEqual(_decode_snapshot(encoded), payload)
+
+    def test_tls_policy_uses_verification_or_custom_ca(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('EVE_XUI_CA_BUNDLE', None)
+            os.environ.pop('EVE_OUTBOUND_CA_BUNDLE', None)
+            self.assertIs(outbound_tls_verify('EVE_XUI_CA_BUNDLE'), True)
+        ca_file = tempfile.NamedTemporaryFile(delete=False)
+        ca_file.close()
+        try:
+            with mock.patch.dict(os.environ, {'EVE_XUI_CA_BUNDLE': ca_file.name}):
+                self.assertEqual(outbound_tls_verify('EVE_XUI_CA_BUNDLE'), ca_file.name)
+        finally:
+            os.remove(ca_file.name)
 
     def test_restore_stream_is_not_a_destructive_get(self):
         self._login(self.superadmin)

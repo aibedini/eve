@@ -11,8 +11,9 @@ import math
 import sqlite3
 import base64
 import requests
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from panel.security import (
+    decrypt_secret, encrypt_secret, outbound_tls_verify, reveal_system_config,
+)
 from telegram_diagnostics import (
     classify_telegram_connection_error, probe_telegram_transport,
     redact_connection_error,
@@ -72,7 +73,7 @@ except ModuleNotFoundError:
         sys.stderr.write('\nMissing required package: cryptography\n')
         sys.stderr.write('Install into the project venv or activate it before running.\n')
         sys.stderr.write('Example:\n')
-        sys.stderr.write('  pip install -r requirements.txt\n\n')
+        sys.stderr.write('  pip install --require-hashes -r requirements.lock\n\n')
         sys.exit(1)
     else:
         raise
@@ -105,7 +106,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.89"
+APP_VERSION = "2.5.90"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -597,34 +598,24 @@ def _get_server_password_fernet() -> Any:
 def encrypt_server_password(plaintext: str) -> str:
     f = _get_server_password_fernet()
     if not f:
-        # If no key is configured, we store as plaintext (legacy behavior)
-        return plaintext
-    plain = str(plaintext or '')
-    token = f.encrypt(plain.encode('utf-8')).decode('utf-8')
-    return f'{SERVER_PASSWORD_PREFIX}{token}'
+        return str(plaintext or '')
+    token = f.encrypt(str(plaintext or '').encode('utf-8')).decode('ascii')
+    return f'enc:v1:{token}'
 
 
 def decrypt_server_password(value: str) -> str:
     raw = str(value or '')
-    if not raw:
-        return ''
-    if not raw.startswith(SERVER_PASSWORD_PREFIX):
-        return raw
-
-    f = _get_server_password_fernet()
-    if not f:
-        # If no key is configured, we can't decrypt. 
-        # Return raw value as fallback (might be plaintext from legacy)
-        return raw
-
-    token = raw[len(SERVER_PASSWORD_PREFIX):]
-    try:
-        return f.decrypt(token.encode('utf-8')).decode('utf-8')
-    except InvalidToken:
-        # Decryption failed (e.g. key changed or data corrupted).
-        # We log a warning instead of raising RuntimeError to avoid crashing background tasks.
-        app.logger.warning("Failed to decrypt a stored server password (invalid key/token). Returning empty string.")
-        return ""
+    if raw.startswith('enc:v1:') or raw.startswith('enc:'):
+        prefix = 'enc:v1:' if raw.startswith('enc:v1:') else 'enc:'
+        f = _get_server_password_fernet()
+        if not f:
+            return raw
+        try:
+            return f.decrypt(raw[len(prefix):].encode('ascii')).decode('utf-8')
+        except InvalidToken:
+            app.logger.warning("Failed to decrypt a stored secret (invalid key/token). Returning empty string.")
+            return ''
+    return raw
 
 
 def get_server_password(server: 'Server') -> str:
@@ -684,6 +675,18 @@ def _security_per_request_setup():
     # Keep stable per request.
     g.csp_nonce = secrets.token_urlsafe(16)
     _maybe_migrate_server_passwords()
+
+    # Reject cross-site browser mutations for session-authenticated users.
+    # Bearer/signature authenticated agent APIs do not use these sessions.
+    if (not _is_dev_mode() and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}
+            and (session.get('admin_id') or session.get('client_id'))):
+        supplied = (request.headers.get('Origin') or request.headers.get('Referer') or '').strip()
+        if not supplied:
+            return jsonify({'success': False, 'error': 'CSRF origin header is required.'}), 403
+        expected = urlparse(request.host_url)
+        actual = urlparse(supplied)
+        if (actual.scheme.lower(), actual.netloc.lower()) != (expected.scheme.lower(), expected.netloc.lower()):
+            return jsonify({'success': False, 'error': 'Cross-site request rejected.'}), 403
 
 app = Flask(__name__)
 app.json.ensure_ascii = False  # send emoji/Persian as real UTF-8, not \uXXXX escapes
@@ -804,8 +807,9 @@ def too_many_requests(e):
 
 @app.errorhandler(500)
 def internal_server_error(e):
+    app.logger.exception('Unhandled request error', exc_info=e)
     if _want_json():
-        return jsonify({'success': False, 'error': f'Internal server error: {e}'}), 500
+        return jsonify({'success': False, 'error': 'Internal server error.'}), 500
     return e
 
 
@@ -815,6 +819,11 @@ def add_security_headers(response):
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
     response.headers.setdefault('Referrer-Policy', 'same-origin')
     response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+    if not _is_dev_mode() and request.is_secure:
+        response.headers.setdefault(
+            'Strict-Transport-Security',
+            'max-age=31536000; includeSubDomains',
+        )
 
     # Settings contain live operational state and must never be replayed by a
     # browser, reverse proxy, or CDN. In particular, Telegram tester/runtime
@@ -924,9 +933,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE=(os.environ.get('SESSION_COOKIE_SAMESITE') or ('Lax' if _is_dev_mode() else 'Strict')),
-    SESSION_COOKIE_SECURE=((os.environ.get('SESSION_COOKIE_SECURE') or '').strip().lower() in ('1', 'true', 'yes', 'on'))
-    if (os.environ.get('SESSION_COOKIE_SECURE') is not None)
-    else False
+    SESSION_COOKIE_SECURE=(False if _is_dev_mode() else True),
 )
 
 RECEIPT_ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'heic', 'heif', 'pdf'}
@@ -1365,7 +1372,7 @@ def _get_system_config_text(key: str, default: str = '') -> str:
     conf = db.session.get(SystemConfig, key)
     if not conf or conf.value is None:
         return default
-    return str(conf.value)
+    return reveal_system_config(key, conf.value)
 
 
 def _get_system_config_int(key: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
@@ -1380,7 +1387,7 @@ def _get_system_configs_batch(keys: list) -> dict:
     if not keys:
         return {}
     rows = SystemConfig.query.filter(SystemConfig.key.in_(keys)).all()
-    result = {r.key: r.value for r in rows}
+    result = {r.key: reveal_system_config(r.key, r.value) for r in rows}
     for k in keys:
         if k not in result:
             result[k] = None
@@ -3085,7 +3092,7 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
             if not full_url:
                 continue
             try:
-                resp = session_obj.post(full_url, json=payload, verify=False, timeout=10)
+                resp = session_obj.post(full_url, json=payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
             except Exception as exc:
                 errors.append(f"{template}: {exc}")
                 continue
@@ -3207,7 +3214,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
                 if not full_url:
                     continue
                 try:
-                    resp = session_obj.post(full_url, verify=False, timeout=10)
+                    resp = session_obj.post(full_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                 except Exception as exc:
                     errors.append(f"{template}: {exc}")
                     continue
@@ -4804,4 +4811,8 @@ if __name__ == '__main__':
     if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
         ensure_background_threads_started()
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(
+        host=(os.environ.get('EVE_DEV_BIND') or '127.0.0.1'),
+        port=int(os.environ.get('EVE_DEV_PORT') or '5000'),
+        debug=_is_dev_mode(),
+    )

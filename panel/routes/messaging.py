@@ -12,6 +12,7 @@ from panel.core.redis_client import get_redis
 from panel.extensions import db
 from panel.models import Admin, PendingSms, SmsSendLog, SystemConfig
 from panel.routes.common import superadmin_required
+from panel.security import outbound_tls_verify
 
 
 bp = Blueprint('messaging', __name__)
@@ -40,7 +41,7 @@ def _probe_whatsapp_gateway(gateway_url: str, timeout_seconds: int, api_key: str
             health_path,
             headers=headers,
             timeout=max(3, int(timeout_seconds or 10)),
-            verify=False,
+            verify=outbound_tls_verify('EVE_WHATSAPP_CA_BUNDLE'),
         )
         status_code = int(response.status_code)
         if 200 <= status_code < 300:

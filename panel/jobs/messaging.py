@@ -29,6 +29,7 @@ from panel.core.redis_client import (
     load_snapshot_from_redis,
 )
 from panel.extensions import db
+from panel.security import outbound_tls_verify
 from panel.models import (
     Admin,
     Announcement,
@@ -216,7 +217,7 @@ def _openwa_session_status(gateway_url: str, api_key: str, session_name: str, ti
             f"{normalized}/api/sessions",
             headers=headers,
             timeout=max(3, int(timeout_seconds or 10)),
-            verify=False,
+            verify=outbound_tls_verify('EVE_WHATSAPP_CA_BUNDLE'),
         )
         if resp.status_code != 200:
             result['error'] = f"sessions_http_{resp.status_code}"
@@ -4192,7 +4193,7 @@ def _send_whatsapp_message(event_name: str, recipient_source: str, message_text:
                 json=payload,
                 headers=headers,
                 timeout=timeout,
-                verify=False,
+                verify=outbound_tls_verify('EVE_WHATSAPP_CA_BUNDLE'),
             )
             result['status_code'] = int(response.status_code)
             if 200 <= response.status_code < 300:
@@ -4228,7 +4229,7 @@ def _send_whatsapp_message(event_name: str, recipient_source: str, message_text:
             json=payload,
             headers=headers,
             timeout=timeout,
-            verify=False,
+            verify=outbound_tls_verify('EVE_WHATSAPP_CA_BUNDLE'),
         )
         result['status_code'] = int(response.status_code)
         if 200 <= response.status_code < 300:

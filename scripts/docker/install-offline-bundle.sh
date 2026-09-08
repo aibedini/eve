@@ -188,7 +188,7 @@ configure_env() {
     set_env_kv "GUNICORN_WORKERS" "${GUNICORN_WORKERS:-3}"
     set_env_kv "GUNICORN_THREADS" "${GUNICORN_THREADS:-4}"
     set_env_kv "GUNICORN_TIMEOUT" "${GUNICORN_TIMEOUT:-120}"
-    set_env_kv "SESSION_COOKIE_SECURE" "${SESSION_COOKIE_SECURE:-false}"
+    set_env_kv "SESSION_COOKIE_SECURE" "${SESSION_COOKIE_SECURE:-true}"
 
     write_caddyfile "$SSL_MODE"
 }
@@ -204,7 +204,7 @@ create_default_env() {
     GUNICORN_WORKERS="${GUNICORN_WORKERS:-3}"
     GUNICORN_THREADS="${GUNICORN_THREADS:-4}"
     GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-120}"
-    SESSION_COOKIE_SECURE="${SESSION_COOKIE_SECURE:-false}"
+    SESSION_COOKIE_SECURE="${SESSION_COOKIE_SECURE:-true}"
 
     echo "-- Creating default .env"
     set_env_kv "DOMAIN" "$DOMAIN"

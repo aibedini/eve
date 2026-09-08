@@ -32,6 +32,7 @@ from panel.models import (
     BnqoServiceProbe,
 )
 from panel.routes.common import login_required
+from panel.security import hash_bearer_token
 from panel.services.bnqo_crypto import (
     decode_pubkey,
     get_cp_pubkey_b64,
@@ -177,7 +178,12 @@ def _bnqo_agent_required(view):
     def wrapper(*args, **kwargs):
         auth = request.headers.get('Authorization') or ''
         token = auth[7:].strip() if auth.startswith('Bearer ') else ''
-        agent = BnqoAgent.query.filter_by(token=token).first() if token else None
+        token_hash = hash_bearer_token(token, 'bnqo-agent') if token else ''
+        agent = BnqoAgent.query.filter_by(token=token_hash).first() if token else None
+        legacy_token = False
+        if agent is None and token:
+            agent = BnqoAgent.query.filter_by(token=token).first()
+            legacy_token = agent is not None
         if agent is None or not agent.enabled:
             return _err('invalid_agent_token', 'invalid agent token', 401)
         timestamp = request.headers.get('X-BNQO-Timestamp') or ''
@@ -195,6 +201,8 @@ def _bnqo_agent_required(view):
         body = request.get_data() or b''
         if not verify_with_signature(agent.pubkey, timestamp, signature, body):
             return _err('invalid_signature', 'invalid request signature', 401)
+        if legacy_token:
+            agent.token = token_hash
         agent.last_seen_at = datetime.utcnow()
         agent.last_ip = request.remote_addr
         db.session.commit()
@@ -214,7 +222,11 @@ def bnqo_agent_enroll():
     token_value = data.get('enroll_token')
     if not isinstance(token_value, str) or not token_value:
         return _err('enroll_token_invalid', 'enroll_token is required', 404)
-    enroll = BnqoEnrollToken.query.filter_by(token=token_value.strip()[:64]).first()
+    raw_enroll_token = token_value.strip()[:64]
+    enroll_hash = hash_bearer_token(raw_enroll_token, 'bnqo-enroll')
+    enroll = BnqoEnrollToken.query.filter_by(token=enroll_hash).first()
+    if enroll is None:
+        enroll = BnqoEnrollToken.query.filter_by(token=raw_enroll_token).first()
     if enroll is None:
         return _err('enroll_token_invalid', 'unknown enroll token', 404)
     now = datetime.utcnow()
@@ -243,12 +255,13 @@ def bnqo_agent_enroll():
     if BnqoAgent.query.filter_by(name=name).first() is not None:
         return _err('agent_name_taken', 'an agent with this name already exists', 409)
 
+    raw_agent_token = secrets.token_hex(32)
     agent = BnqoAgent(
         name=name,
         role=role,
         address=address,
         port=port,
-        token=secrets.token_hex(32),
+        token=hash_bearer_token(raw_agent_token, 'bnqo-agent'),
         pubkey=pubkey,
         enabled=True,
         version=version,
@@ -261,10 +274,11 @@ def bnqo_agent_enroll():
     # Single use: the token is invalidated atomically with the enrollment.
     enroll.used_at = now
     enroll.used_by_agent_id = agent.id
+    enroll.token = enroll_hash
     db.session.commit()
     return jsonify({
         'agent_id': agent.id,
-        'agent_token': agent.token,
+        'agent_token': raw_agent_token,
         'cp_pubkey': get_cp_pubkey_b64(),
         'config_version': agent.config_version,
     })
@@ -589,8 +603,9 @@ def bnqo_admin_enroll_token_create():
     except (TypeError, ValueError):
         return _err('invalid_payload', 'ttl_minutes must be an integer', 400)
     ttl_minutes = max(1, min(24 * 60, ttl_minutes))
+    raw_token = secrets.token_hex(32)
     token = BnqoEnrollToken(
-        token=secrets.token_hex(32),
+        token=hash_bearer_token(raw_token, 'bnqo-enroll'),
         role=role,
         expires_at=datetime.utcnow() + timedelta(minutes=ttl_minutes),
     )
@@ -599,11 +614,11 @@ def bnqo_admin_enroll_token_create():
     origin = request.url_root.rstrip('/')
     install_command = (
         f'curl -fsSL {origin}/static/app-files/bnqo/install.sh -o /tmp/bnqo-install.sh'
-        f' && sudo BNQO_EVE_URL={origin} BNQO_ENROLL_TOKEN={token.token}'
+        f' && sudo BNQO_EVE_URL={origin} BNQO_ENROLL_TOKEN={raw_token}'
         ' bash /tmp/bnqo-install.sh'
     )
     return jsonify({
-        'token': token.token,
+        'token': raw_token,
         'expires_at': _iso(token.expires_at),
         'install_command': install_command,
     })

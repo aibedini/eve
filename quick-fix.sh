@@ -79,7 +79,7 @@ if [ $WHEELS_COUNT -gt 10 ]; then
     print_warning "Attempting offline installation from wheels..."
     if sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && \
         pip install --no-index --find-links='$APP_DIR/wheels' \
-        -r '$APP_DIR/requirements.txt' --default-timeout=120 2>&1 | tail -10"; then
+        --require-hashes -r '$APP_DIR/requirements.lock' --default-timeout=120 2>&1 | tail -10"; then
         print_success "Offline installation succeeded!"
     else
         print_warning "Offline failed, trying online..."
@@ -94,7 +94,7 @@ print_warning "Step 3: Installing from online mirrors..."
 # Try PyPI first
 if sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && \
     pip install --default-timeout=120 --retries 10 \
-    -r '$APP_DIR/requirements.txt' 2>&1 | tail -10"; then
+    --require-hashes -r '$APP_DIR/requirements.lock' 2>&1 | tail -10"; then
     print_success "Installation succeeded from PyPI!"
 else
     # Try Aliyun mirror
@@ -102,7 +102,7 @@ else
     if sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && \
         pip install -i https://mirrors.aliyun.com/pypi/simple/ \
         --default-timeout=120 --retries 10 \
-        -r '$APP_DIR/requirements.txt' 2>&1 | tail -10"; then
+        --require-hashes -r '$APP_DIR/requirements.lock' 2>&1 | tail -10"; then
         print_success "Installation succeeded from Aliyun mirror!"
     else
         # Try Tsinghua mirror
@@ -110,7 +110,7 @@ else
         if sudo -u "$APP_USER" bash -c "source $APP_DIR/venv/bin/activate && \
             pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
             --default-timeout=120 --retries 10 \
-            -r '$APP_DIR/requirements.txt' 2>&1 | tail -10"; then
+            --require-hashes -r '$APP_DIR/requirements.lock' 2>&1 | tail -10"; then
             print_success "Installation succeeded from Tsinghua mirror!"
         else
             print_error "All installation methods failed"

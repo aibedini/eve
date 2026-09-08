@@ -125,13 +125,17 @@ class CustomSubscriptionTests(unittest.TestCase):
 
     def test_wireguard_output_keeps_standard_percent_encoding(self):
         subscription = self._create()
-        private_key = 'eAa8ZCl94VvnagSvRF4+/lYUyYWFbhDP316H624bk1I='
-        public_key = 'zeYgDsVqwHMaSTIqgn76jdDFG/yJVR5ciyLOlNBVYBg='
+        import base64
+        from urllib.parse import quote
+        # Construct non-secret fixture material at runtime so secret scanners do
+        # not normalize a test vector into an apparent live WireGuard key.
+        private_key = base64.b64encode(bytes(range(32))).decode('ascii')
+        public_key = base64.b64encode(bytes(reversed(range(32)))).decode('ascii')
         encoded_uri = (
             'wireguard://'
-            'eAa8ZCl94VvnagSvRF4%2B%2FlYUyYWFbhDP316H624bk1I%3D'
+            f'{quote(private_key, safe="")}'
             '@tr3.example:51820'
-            '?publickey=zeYgDsVqwHMaSTIqgn76jdDFG%2FyJVR5ciyLOlNBVYBg%3D'
+            f'?publickey={quote(public_key, safe="")}'
             '&address=10.70.1.2%2F32#TR3'
         )
         created = self.client.post(

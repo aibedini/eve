@@ -343,8 +343,8 @@ class PulseAgent(db.Model):
     last_seen_at = db.Column(db.DateTime, nullable=True)
     last_ip = db.Column(db.String(64), nullable=True)
 
-    def to_dict(self, include_token=False):
-        payload = {
+    def to_dict(self):
+        return {
             'id': self.id,
             'name': self.name,
             'enabled': bool(self.enabled),
@@ -352,9 +352,6 @@ class PulseAgent(db.Model):
             'last_seen_at': self.last_seen_at.isoformat() + 'Z' if self.last_seen_at else None,
             'last_ip': self.last_ip,
         }
-        if include_token:
-            payload['token'] = self.token
-        return payload
 
 
 class MonitorMessageLog(db.Model):
@@ -583,7 +580,6 @@ class BnqoEnrollToken(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
-            'token': self.token,
             'role': self.role,
             'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
             'expires_at': self.expires_at.isoformat() + 'Z' if self.expires_at else None,

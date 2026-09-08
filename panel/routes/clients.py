@@ -24,6 +24,7 @@ from panel.models import (
     Server, ServiceOwnership, Transaction, VolumeRulePreset,
 )
 from panel.routes.common import admin_is_superadmin, login_required
+from panel.security import outbound_tls_verify
 from panel.services.client_operations import (
     begin_client_operation, complete_client_operation, fail_client_operation,
     install_client_operation_response_guard, mark_client_operation_applied,
@@ -254,7 +255,7 @@ def reset_client_traffic(server_id, inbound_id):
                     url2 = build_panel_url(server.host, tpl, rpl)
                     if not url2:
                         continue
-                    r2 = session_obj.post(url2, json=up, verify=False, timeout=10)
+                    r2 = session_obj.post(url2, json=up, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                     if r2.status_code == 200:
                         break
         except Exception as exc:
@@ -311,9 +312,9 @@ def reset_client_traffic(server_id, inbound_id):
             payload = None if requires_path_email else {"email": email}
             try:
                 if payload is None:
-                    resp = session_obj.post(full_url, verify=False, timeout=10)
+                    resp = session_obj.post(full_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                 else:
-                    resp = session_obj.post(full_url, json=payload, verify=False, timeout=10)
+                    resp = session_obj.post(full_url, json=payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
             except Exception as exc:
                 errors.append(f"{template}: {exc}")
                 continue
@@ -538,7 +539,7 @@ def edit_client(server_id, inbound_id, email):
                 if not full_url:
                     continue
                 try:
-                    resp = session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
+                    resp = session_obj.post(full_url, json=update_payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                 except Exception as exc:
                     errors.append(f"{template}: {exc}")
                     continue
@@ -1801,7 +1802,7 @@ def renew_client(server_id, inbound_id, email):
                 resp = _SyntheticOK()
             else:
                 try:
-                    resp = session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
+                    resp = session_obj.post(full_url, json=update_payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                 except Exception as exc:
                     errors.append(f"{template}: {exc}")
                     continue
@@ -1843,9 +1844,9 @@ def renew_client(server_id, inbound_id, email):
                         
                         try:
                             if r_payload is None:
-                                session_obj.post(r_url, verify=False, timeout=5)
+                                session_obj.post(r_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=5)
                             else:
-                                session_obj.post(r_url, json=r_payload, verify=False, timeout=5)
+                                session_obj.post(r_url, json=r_payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=5)
                             # We don't strictly check success here as the main update succeeded, 
                             # but we try our best to reset traffic.
                         except:
@@ -1964,7 +1965,7 @@ def renew_client(server_id, inbound_id, email):
                             if _is_v3:
                                 v3_enable_client(server, session_obj, email, target_client)
                             else:
-                                session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
+                                session_obj.post(full_url, json=update_payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                             time.sleep(1)
                             r_inbounds, r_err, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
                             if r_err or not r_inbounds:
@@ -3088,7 +3089,7 @@ def add_client(server_id, inbound_id):
             last_fetch_url = get_url
             try:
                 # Use a short connect timeout and a longer read timeout to reduce false failures on slow panels.
-                get_resp = session_obj.get(get_url, verify=False, timeout=(3, 20))
+                get_resp = session_obj.get(get_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=(3, 20))
             except requests.exceptions.ConnectTimeout:
                 app.logger.warning("Panel connect timeout while fetching inbound (server_id=%s, host=%s, url=%s)", server.id, server.host, get_url)
                 return jsonify({"success": False, "error": f"Connection timeout to panel for server '{server.name}'. Check port/firewall and panel availability."}), 504
@@ -3162,7 +3163,7 @@ def add_client(server_id, inbound_id):
             if not up_url:
                 continue
             try:
-                up_resp = session_obj.post(up_url, json=update_data, verify=False, timeout=(3, 20))
+                up_resp = session_obj.post(up_url, json=update_data, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=(3, 20))
             except requests.exceptions.ConnectTimeout:
                 app.logger.warning("Panel connect timeout while updating inbound (server_id=%s, host=%s, url=%s)", server.id, server.host, up_url)
                 return jsonify({"success": False, "error": f"Connection timeout to panel for server '{server.name}'. Check port/firewall and panel availability."}), 504
@@ -3254,7 +3255,7 @@ def add_client(server_id, inbound_id):
                     sub_url,
                     headers={'User-Agent': 'v2rayng'},
                     timeout=(2, 3),
-                    verify=False,
+                    verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'),
                     allow_redirects=False
                 )
                 if sub_resp.status_code == 200:

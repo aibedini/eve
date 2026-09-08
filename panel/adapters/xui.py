@@ -21,6 +21,7 @@ from panel.core.redis_client import (
     serialized_server_snapshot_write,
 )
 from panel.extensions import db
+from panel.security import outbound_tls_verify
 from panel.models import (
     Admin,
     ClientOwnership,
@@ -135,7 +136,7 @@ def _probe_v3_client_api(server, session_obj, *, force=False) -> bool:
     url = f"{base}{webpath}/panel/api/clients/get/__eve_capability_probe__"
     supported = False
     try:
-        resp = session_obj.get(url, verify=False, timeout=(3, 8),
+        resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=(3, 8),
                                headers={'Accept': 'application/json'})
         payload, parse_error = _safe_response_json(resp)
         supported = (
@@ -188,7 +189,7 @@ def _v3_post(server, session_obj, path, json_body=None, *, timeout=(3, 20)):
         resp = session_obj.post(
             url,
             json=(json_body if json_body is not None else {}),
-            verify=False,
+            verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'),
             timeout=timeout,
         )
     except Exception as e:
@@ -241,7 +242,7 @@ def _v3_get(server, session_obj, path, *, timeout=(3, 20)):
                 'Cache-Control': 'no-store, no-cache, max-age=0',
                 'Pragma': 'no-cache',
             },
-            verify=False,
+            verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'),
             timeout=timeout,
         )
     except Exception as e:
@@ -540,7 +541,7 @@ def _push_full_inbound(server, session_obj, inbound_obj, settings_dict):
         if not up_url:
             continue
         try:
-            resp = session_obj.post(up_url, json=update_data, verify=False, timeout=(3, 20))
+            resp = session_obj.post(up_url, json=update_data, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=(3, 20))
         except Exception as exc:
             errors.append(str(exc))
             continue
@@ -826,7 +827,7 @@ def _autoupgrade_http_to_https(server):
 
     def _reaches(b):
         try:
-            r = requests.get(f"{b}{probe_path}", timeout=6, verify=False, allow_redirects=False)
+            r = requests.get(f"{b}{probe_path}", timeout=6, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), allow_redirects=False)
             return r.status_code < 500
         except Exception:
             return False
@@ -918,9 +919,8 @@ def get_xui_session(server):
     session_obj = requests.Session()
     session_obj.trust_env = False
     session_obj.proxies = {'http': None, 'https': None}
-    # Disable SSL verification at session level so redirects also skip cert checks
-    # (self-signed certs on remote panels are supported this way)
-    session_obj.verify = False
+    # Apply the same trust policy to redirects and calls that inherit Session.verify.
+    session_obj.verify = outbound_tls_verify('EVE_XUI_CA_BUNDLE')
 
     # ── 3x-ui v3+ : authenticate with the API token (Bearer) ──
     # The token bypasses the v3 login CSRF guard and never expires, so we attach
@@ -1097,13 +1097,13 @@ def fetch_inbounds(session_obj, host, panel_type='auto'):
 
             # Request strategy per panel flavor
             if '/xui/' in ep_l and 'api' in ep_l:
-                resp = session_obj.get(url, verify=False, timeout=timeout_sec)
+                resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
                 if resp.status_code == 405:
-                    resp = session_obj.post(url, verify=False, timeout=timeout_sec)
+                    resp = session_obj.post(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
             elif '/xui/' in ep_l:
-                resp = session_obj.post(url, json={"page": 1, "limit": 100}, verify=False, timeout=timeout_sec)
+                resp = session_obj.post(url, json={"page": 1, "limit": 100}, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
             else:
-                resp = session_obj.get(url, verify=False, timeout=timeout_sec)
+                resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
 
             if resp.status_code != 200:
                 last_error = f"HTTP {resp.status_code} from {ep}"
@@ -1156,7 +1156,7 @@ def get_xui_cookie_session(host, username, password, panel_type='auto', cache_ke
         s = requests.Session()
         s.trust_env = False
         s.proxies = {'http': None, 'https': None}
-        s.verify = False
+        s.verify = outbound_tls_verify('EVE_XUI_CA_BUNDLE')
         creds = {"username": username, "password": password}
         # v3.3.1+ CSRF guard: pin a token before the login POST so both /login and
         # the later /panel/inbound/onlines POST (made through this same session)
@@ -1224,9 +1224,9 @@ def fetch_onlines(session_obj, host, panel_type='auto'):
             try:
                 url = ep if ep.startswith('http') else f"{base}{webpath}{ep}"
                 if method == 'POST':
-                    resp = session_obj.post(url, json={}, verify=False, timeout=timeout_sec)
+                    resp = session_obj.post(url, json={}, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
                 else:
-                    resp = session_obj.get(url, verify=False, timeout=timeout_sec)
+                    resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
 
                 last_status = resp.status_code
                 try:
@@ -1426,7 +1426,7 @@ def fetch_server_status(session_obj, host, panel_type='auto'):
     for ep, detected_type in deduped:
         try:
             url = ep if ep.startswith('http') else f"{base}{webpath}{ep}"
-            resp = session_obj.get(url, verify=False, timeout=timeout_sec, allow_redirects=False)
+            resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec, allow_redirects=False)
 
             # Redirect usually means session expired -> redirected to login page
             if resp.status_code in (301, 302, 303, 307, 308):
@@ -1488,7 +1488,7 @@ def fetch_direct_link_from_subscription(sub_url: str, fallback_func=None, fallba
             sub_url, 
             headers={'User-Agent': 'v2rayng'}, 
             timeout=5, 
-            verify=False,
+            verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'),
             allow_redirects=False
         )
         if resp.status_code == 200:

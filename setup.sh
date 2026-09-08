@@ -165,6 +165,7 @@ DB_USER="eve_manager"
 DB_PASS="$(generate_secret 20 alnum)"
 SESSION_SECRET="$(generate_secret 64 hex)"
 SERVER_PASSWORD_KEY="$(generate_fernet_key)"
+EVE_BACKUP_KEY="$(generate_fernet_key)"
 ADMIN_USERNAME_DEFAULT="admin"
 ADMIN_USERNAME="$ADMIN_USERNAME_DEFAULT"
 ADMIN_PASS="$(generate_secret 12 alnum)"
@@ -1106,7 +1107,7 @@ setup_python_env() {
     local WHEELS_COUNT=0
     [ -n "$WHEELS_DIR" ] && WHEELS_COUNT="$(find "$WHEELS_DIR" -name '*.whl' 2>/dev/null | wc -l)"
 
-    print_warning "Checking dependencies: requirements.txt"
+    print_warning "Checking dependencies: requirements.lock"
 
     # ── OFFLINE MODE: wheels only, no internet ──────────────────
     if is_offline_mode; then
@@ -1122,7 +1123,7 @@ setup_python_env() {
             cd '$APP_DIR'
             source venv/bin/activate
             pip install --no-index --find-links='$WHEELS_DIR' pip setuptools wheel 2>&1 | tail -5
-            pip install --no-index --find-links='$WHEELS_DIR' -r requirements.txt 2>&1 | tail -20
+            pip install --no-index --find-links='$WHEELS_DIR' --require-hashes -r requirements.lock 2>&1 | tail -20
             pip install --no-index --find-links='$WHEELS_DIR' gunicorn psycopg2-binary 2>&1 | tail -5
         " || {
             print_error "Offline Python package installation failed"
@@ -1136,7 +1137,7 @@ setup_python_env() {
         if [ "$WHEELS_COUNT" -gt 10 ]; then
             print_success "Found $WHEELS_COUNT wheels — attempting offline install first"
             if sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
-                pip install --no-cache-dir --no-index --find-links='$WHEELS_DIR' -r requirements.txt 2>&1 | tail -20"; then
+                pip install --no-cache-dir --no-index --find-links='$WHEELS_DIR' --require-hashes -r requirements.lock 2>&1 | tail -20"; then
                 print_success "Offline installation succeeded"
                 OFFLINE_SUCCESS=1
             else
@@ -1147,15 +1148,15 @@ setup_python_env() {
         if [ "$OFFLINE_SUCCESS" -ne 1 ]; then
             print_warning "Attempting online install (120s timeout)..."
             if ! sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
-                    pip install --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+                    pip install --default-timeout=120 --retries 10 --require-hashes -r requirements.lock 2>&1 | tail -20"; then
                 print_warning "PyPI failed — trying Aliyun mirror..."
                 if ! sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
                         pip install -i https://mirrors.aliyun.com/pypi/simple/ \
-                        --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+                        --default-timeout=120 --retries 10 --require-hashes -r requirements.lock 2>&1 | tail -20"; then
                     print_warning "Aliyun failed — trying Tsinghua mirror..."
                     sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
                         pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
-                        --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20" || {
+                        --default-timeout=120 --retries 10 --require-hashes -r requirements.lock 2>&1 | tail -20" || {
                         print_error "All pip install methods failed"
                         return 1
                     }
@@ -1182,7 +1183,7 @@ setup_python_env() {
 }
 
 # ── Dependency verification ─────────────────────────────────────────
-# Exit 0 = every requirement in requirements.txt is installed at a satisfying
+# Exit 0 = every direct requirement in requirements.txt is installed at a satisfying
 # version inside the venv. Exit 1 = something missing/outdated (printed to
 # stderr). Exit 2 = couldn't introspect (caller should just (re)install).
 verify_requirements() {
@@ -1222,12 +1223,12 @@ sys.exit(0)
 PY"
 }
 
-# Guarantee every requirements.txt entry is installed. Verifies first and only
+# Guarantee every requirements.lock entry is installed. Verifies first and only
 # installs what's actually missing (online, with mirror fallbacks), then
 # re-verifies. Lets a freshly-added dependency get picked up automatically on
 # online update — no manual "pip install" needed.
 ensure_requirements_satisfied() {
-    print_header "Verifying Python dependencies (requirements.txt)"
+    print_header "Verifying Python dependencies (requirements.lock)"
 
     verify_requirements
     local rc=$?
@@ -1243,16 +1244,16 @@ ensure_requirements_satisfied() {
     fi
 
     if sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
-            pip install --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+            pip install --default-timeout=120 --retries 10 --require-hashes -r requirements.lock 2>&1 | tail -20"; then
         :
     elif sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
             pip install -i https://mirrors.aliyun.com/pypi/simple/ \
-            --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20"; then
+            --default-timeout=120 --retries 10 --require-hashes -r requirements.lock 2>&1 | tail -20"; then
         :
     else
         sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && source venv/bin/activate && \
             pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
-            --default-timeout=120 --retries 10 -r requirements.txt 2>&1 | tail -20" || true
+            --default-timeout=120 --retries 10 --require-hashes -r requirements.lock 2>&1 | tail -20" || true
     fi
 
     # If we couldn't verify to begin with, trust the install we just ran.
@@ -1269,7 +1270,7 @@ ensure_requirements_satisfied() {
 
     print_error "Some requirements are still missing after install."
     print_warning "Install manually, then restart the service:"
-    echo -e "  ${DIM}sudo -u ${APP_USER} bash -c 'source ${APP_DIR}/venv/bin/activate && pip install -r ${APP_DIR}/requirements.txt'${NC}"
+    echo -e "  ${DIM}sudo -u ${APP_USER} bash -c 'source ${APP_DIR}/venv/bin/activate && pip install --require-hashes -r ${APP_DIR}/requirements.lock'${NC}"
     return 1
 }
 
@@ -1284,6 +1285,9 @@ create_env_file() {
         if ! grep -q '^SERVER_PASSWORD_KEY=' "$ENV_FILE"; then
             echo "SERVER_PASSWORD_KEY=${SERVER_PASSWORD_KEY}" >> "$ENV_FILE"
         fi
+        if ! grep -q '^EVE_BACKUP_KEY=' "$ENV_FILE"; then
+            echo "EVE_BACKUP_KEY=${EVE_BACKUP_KEY}" >> "$ENV_FILE"
+        fi
         # Enable the shared Redis cache (safe: app falls back if Redis is down)
         if ! grep -q '^REDIS_URL=' "$ENV_FILE"; then
             echo "REDIS_URL=redis://127.0.0.1:6379/0" >> "$ENV_FILE"
@@ -1297,6 +1301,7 @@ create_env_file() {
 FLASK_ENV=${ENVIRONMENT}
 SESSION_SECRET=${SESSION_SECRET}
 SERVER_PASSWORD_KEY=${SERVER_PASSWORD_KEY}
+EVE_BACKUP_KEY=${EVE_BACKUP_KEY}
 INITIAL_ADMIN_USERNAME=${ADMIN_USERNAME}
 INITIAL_ADMIN_PASSWORD=${ADMIN_PASS}
 API_PORT=${APP_PORT}
@@ -1343,7 +1348,7 @@ EnvironmentFile=${ENV_FILE}
 Environment="EVE_PROCESS_ROLE=web"
 Environment="EVE_SKIP_IMPORT_MIGRATIONS=1"
 # Override auto-sizing by running setup with GUNICORN_WORKERS=N.
-ExecStart=${APP_DIR}/venv/bin/gunicorn --workers ${gunicorn_workers} --threads 4 --worker-class gthread --timeout 120 --graceful-timeout 30 --bind 0.0.0.0:${APP_PORT} app:app
+ExecStart=${APP_DIR}/venv/bin/gunicorn --workers ${gunicorn_workers} --threads 4 --worker-class gthread --timeout 120 --graceful-timeout 30 --bind 127.0.0.1:${APP_PORT} app:app
 Restart=always
 
 [Install]
@@ -2048,7 +2053,7 @@ setup_certbot_ssl() {
         mkdir -p "$SSL_DIR"
         cp -f "$CERT_SRC" "$SSL_DIR/fullchain.pem"
         cp -f "$KEY_SRC"  "$SSL_DIR/privkey.pem"
-        chown "${APP_USER}:${APP_USER}" "$SSL_DIR/fullchain.pem" "$SSL_DIR/privkey.pem"
+        chown root:root "$SSL_DIR/fullchain.pem" "$SSL_DIR/privkey.pem"
         chmod 644 "$SSL_DIR/fullchain.pem"
         chmod 600 "$SSL_DIR/privkey.pem"
         print_success "Cert copied to $SSL_DIR/ (readable by $APP_USER)"
@@ -2063,7 +2068,7 @@ SSL_DIR="/etc/ssl/eve-manager"
 mkdir -p "\$SSL_DIR"
 cp -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" "\$SSL_DIR/fullchain.pem"
 cp -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem"  "\$SSL_DIR/privkey.pem"
-chown ${APP_USER}:${APP_USER} "\$SSL_DIR/fullchain.pem" "\$SSL_DIR/privkey.pem"
+chown root:root "\$SSL_DIR/fullchain.pem" "\$SSL_DIR/privkey.pem"
 chmod 644 "\$SSL_DIR/fullchain.pem"
 chmod 600 "\$SSL_DIR/privkey.pem"
 # Reload nginx so it picks up the freshly-renewed cert (otherwise it keeps
@@ -3017,11 +3022,11 @@ install_eve_cli() {
         print_warning "Could not install eve CLI (permission denied?)"
     fi
 
-    # Create /etc/ssl/eve-manager/ owned by app user so the panel can write there directly
+    # TLS keys are host-managed and never readable by the application user.
     mkdir -p /etc/ssl/eve-manager
-    chown "${APP_USER}:${APP_USER}" /etc/ssl/eve-manager
+    chown root:root /etc/ssl/eve-manager
     chmod 700 /etc/ssl/eve-manager
-    print_success "/etc/ssl/eve-manager/ ready (owned by $APP_USER)"
+    print_success "/etc/ssl/eve-manager/ ready (host-managed)"
 
     # Minimal sudoers: only what the panel actually needs
     # - sudo cat to read LetsEncrypt private keys (mode 600, root-owned)
@@ -3030,9 +3035,7 @@ install_eve_cli() {
     cat > "$SUDOERS_FILE" <<EOF
 # Eve Manager — minimal sudo for SSL + nginx management
 ${APP_USER} ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/live/*/fullchain.pem
-${APP_USER} ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/live/*/privkey.pem
 ${APP_USER} ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/archive/*/fullchain*.pem
-${APP_USER} ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/archive/*/privkey*.pem
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl reload nginx
 ${APP_USER} ALL=(root) NOPASSWD: /usr/sbin/nginx -t
 ${APP_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/nginx/sites-available/${SERVICE_NAME}
@@ -3149,7 +3152,7 @@ offline_update() {
             if sudo -u "$APP_USER" bash -c \
                 "source $APP_DIR/venv/bin/activate && \
                  pip install --no-index --find-links='$EXTRACT_ROOT/wheels' \
-                 -r '$APP_DIR/requirements.txt' --retries 1"; then
+                 --require-hashes -r '$APP_DIR/requirements.lock' --retries 1"; then
                 print_success "Python packages installed from wheels (offline)"
                 _pkgs_done=true
             else
@@ -3175,7 +3178,7 @@ offline_update() {
             # network drops mid-install.
             timeout 120 sudo -u "$APP_USER" bash -c \
                 "source $APP_DIR/venv/bin/activate && \
-                 pip install --timeout 15 --retries 2 -r '$APP_DIR/requirements.txt' 2>&1 | tail -10" \
+                 pip install --timeout 15 --retries 2 --require-hashes -r '$APP_DIR/requirements.lock' 2>&1 | tail -10" \
               || print_warning "pip install skipped/failed (timeout or offline). Continuing with existing packages."
             print_success "Python packages updated/installed"
         else

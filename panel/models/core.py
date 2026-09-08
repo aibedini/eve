@@ -7,6 +7,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from panel.extensions import db
 from panel.models._helpers import _format_jalali, _parse_allowed_servers, _server_is_v3  # noqa: F401
+from panel.security import EncryptedText
 
 
 _PHOSPHOR_ICON_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
@@ -212,7 +213,8 @@ class CustomSubscription(db.Model):
     __tablename__ = 'custom_subscriptions'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
-    token = db.Column(db.String(48), nullable=False, unique=True, index=True)
+    token = db.Column(EncryptedText, nullable=False)
+    token_hash = db.Column(db.String(64), nullable=True, unique=True, index=True)
     tag_prefix = db.Column(db.String(64), nullable=False, default='')
     enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
     update_interval_min = db.Column(db.Integer, nullable=False, default=0)
@@ -246,14 +248,17 @@ class CustomSubscription(db.Model):
 class CustomSubscriptionConfig(db.Model):
     __tablename__ = 'custom_subscription_configs'
     __table_args__ = (
-        db.UniqueConstraint('subscription_id', 'uri', name='uq_custom_subscription_uri'),
+        db.UniqueConstraint(
+            'subscription_id', 'uri_hash', name='uq_custom_subscription_uri_hash',
+        ),
     )
     id = db.Column(db.Integer, primary_key=True)
     subscription_id = db.Column(
         db.Integer, db.ForeignKey('custom_subscriptions.id', ondelete='CASCADE'),
         nullable=False, index=True,
     )
-    uri = db.Column(db.Text, nullable=False)
+    uri = db.Column(EncryptedText, nullable=False)
+    uri_hash = db.Column(db.String(64), nullable=True)
     remark = db.Column(db.String(190), nullable=True)
     enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
     sort_order = db.Column(db.Integer, nullable=False, default=0, index=True)
@@ -404,9 +409,9 @@ class BankCard(db.Model):
     label = db.Column(db.String(120), nullable=False)
     bank_name = db.Column(db.String(120))
     owner_name = db.Column(db.String(120))
-    card_number = db.Column(db.String(32))
-    iban = db.Column(db.String(34))
-    account_number = db.Column(db.String(64))
+    card_number = db.Column(EncryptedText())
+    iban = db.Column(EncryptedText())
+    account_number = db.Column(EncryptedText())
     notes = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -710,7 +715,7 @@ class BackupConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='SET NULL'), nullable=True)
     title = db.Column(db.String(200), nullable=False)
-    config_url = db.Column(db.Text, nullable=False)
+    config_url = db.Column(EncryptedText(), nullable=False)
     description = db.Column(db.Text, nullable=False, default='')
     is_enabled = db.Column(db.Boolean, default=True)
     sort_order = db.Column(db.Integer, default=0)

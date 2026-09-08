@@ -45,6 +45,8 @@ from panel.core.redis_client import (
     publish_snapshot_to_redis,
     serialized_server_snapshot_write,
 )
+from panel.core.runtime_files import runtime_path
+from panel.security import outbound_tls_verify
 from panel.extensions import db
 from panel.models import Admin, ClientOwnership, Server
 from panel.services.backup import _run_telegram_backup
@@ -76,7 +78,7 @@ BULK_SAVE_EVERY = 25   # write progress to disk every N clients (not every singl
 
 # Manual snapshot progress tracking
 # Written to a shared file so all gunicorn workers see the same state.
-_SNAPSHOT_PROGRESS_FILE = '/tmp/eve_snapshot_progress.json'
+_SNAPSHOT_PROGRESS_FILE = runtime_path('snapshot_progress.json')
 _SNAPSHOT_PROGRESS = {
     'status': 'idle',   # idle | running | done | error
     'step': 0,
@@ -93,11 +95,20 @@ def _set_snap_progress(updates):
     """Update _SNAPSHOT_PROGRESS and persist to shared file for cross-worker visibility."""
     global _SNAPSHOT_PROGRESS
     _SNAPSHOT_PROGRESS.update(updates)
+    temp_path = None
     try:
         import json as _json
-        with open(_SNAPSHOT_PROGRESS_FILE, 'w') as _f:
+        fd, temp_path = tempfile.mkstemp(prefix='.snapshot-progress-', dir=os.path.dirname(_SNAPSHOT_PROGRESS_FILE))
+        with os.fdopen(fd, 'w') as _f:
             _json.dump(_SNAPSHOT_PROGRESS, _f)
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, _SNAPSHOT_PROGRESS_FILE)
     except Exception:
+        try:
+            if temp_path:
+                os.remove(temp_path)
+        except Exception:
+            pass
         pass
 
 def _read_snap_progress():
@@ -654,7 +665,7 @@ def _run_bulk_job(job_id: str):
                     if not full_url:
                         continue
                     try:
-                        resp = session_obj.post(full_url, json=update_payload, verify=False, timeout=10)
+                        resp = session_obj.post(full_url, json=update_payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                     except Exception as exc:
                         errors.append(f"{template}: {exc}")
                         continue
@@ -704,9 +715,9 @@ def _run_bulk_job(job_id: str):
                     payload = None if requires_path_email else {'email': _email}
                     try:
                         if payload is None:
-                            resp = session_obj.post(full_url, verify=False, timeout=10)
+                            resp = session_obj.post(full_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                         else:
-                            resp = session_obj.post(full_url, json=payload, verify=False, timeout=10)
+                            resp = session_obj.post(full_url, json=payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                     except Exception as exc:
                         errors.append(f"{template}: {exc}")
                         continue
@@ -1355,7 +1366,7 @@ def _check_server_reachable(server: 'Server', timeout_sec: float = 2.0):
     try:
         base, webpath = extract_base_and_webpath(server.host)
         url = f"{base}{webpath}/login"
-        resp = requests.get(url, timeout=timeout_sec, verify=False, allow_redirects=True)
+        resp = requests.get(url, timeout=timeout_sec, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), allow_redirects=True)
         return (resp.status_code < 500), None
     except Exception as e:
         return False, str(e)

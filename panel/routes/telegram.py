@@ -1731,6 +1731,10 @@ def test_telegram_egress_profile(profile_id):
 @user_management_required
 def get_telegram_backup_settings():
     settings = _get_telegram_backup_settings()
+    settings['has_bot_token'] = bool(settings.get('bot_token'))
+    settings['has_proxy_password'] = bool(settings.get('proxy_password'))
+    settings['bot_token'] = ''
+    settings['proxy_password'] = ''
     return jsonify({'success': True, **settings})
 
 
@@ -1762,7 +1766,10 @@ def save_telegram_backup_settings():
         min_value=1,
         max_value=TELEGRAM_BACKUP_MAX_INTERVAL_MINUTES
     )
+    current_settings = _get_telegram_backup_settings()
     bot_token = (data.get('bot_token') or '').strip()
+    if not bot_token and not bool(data.get('clear_bot_token')):
+        bot_token = (current_settings.get('bot_token') or '').strip()
     chat_id = (data.get('chat_id') or '').strip()
     use_proxy = bool(data.get('use_proxy'))
     route_source = str(data.get('route_source') or '').strip().lower()
@@ -1777,6 +1784,8 @@ def save_telegram_backup_settings():
     proxy_port = _parse_int(data.get('proxy_port'), 0, min_value=0, max_value=65535)  # 0 = not set
     proxy_username = (data.get('proxy_username') or '').strip()
     proxy_password = (data.get('proxy_password') or '').strip()
+    if not proxy_password and not bool(data.get('clear_proxy_password')):
+        proxy_password = (current_settings.get('proxy_password') or '').strip()
 
     managed_profile = None
     if route_source == 'panel_account':
@@ -2029,5 +2038,4 @@ def telegram_xray_runtime_install():
         session.get('admin_id'), request.remote_addr,
     )
     return jsonify({'success': True, 'state': 'installing'}), 202
-
 

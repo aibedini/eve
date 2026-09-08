@@ -7011,7 +7011,7 @@
 
     // ── Export: download cert+key zip from this server ────────────────────
     function exportSSL() {
-        window.location.href = '/api/settings/ssl/export';
+        showToast('SSL private-key export is disabled. Manage keys on the host.', 'warning');
     }
 
     // ── Upload: send zip to this server ──────────────────────────────────

@@ -35,6 +35,10 @@ except Exception:
 from panel.adapters.xui import _safe_response_json, get_xui_session
 from panel.extensions import db
 from panel.models import Server, SystemSetting, TelegramEgressProfile
+from panel.security import (
+    encrypt_backup_file, outbound_tls_verify, protect_system_setting,
+    reveal_system_setting,
+)
 from telegram_diagnostics import redact_connection_error
 
 TELEGRAM_BACKUP_TMP_DIR = None
@@ -405,16 +409,17 @@ TELEGRAM_BACKUP_MAX_INTERVAL_MINUTES = 1440
 
 def _get_system_setting_value(key: str, default: str | None = None) -> str | None:
     setting = db.session.get(SystemSetting, key)
-    return setting.value if setting else default
+    return reveal_system_setting(key, setting.value) if setting else default
 
 
 def _set_system_setting_value(key: str, value: str | int | bool | None):
+    protected_value = protect_system_setting(key, value)
     setting = db.session.get(SystemSetting, key)
     if not setting:
-        setting = SystemSetting(key=key, value=str(value) if value is not None else '')
+        setting = SystemSetting(key=key, value=protected_value)
         db.session.add(setting)
     else:
-        setting.value = str(value) if value is not None else ''
+        setting.value = protected_value
     return setting
 
 
@@ -839,9 +844,9 @@ def _fetch_xui_backup(session_obj: requests.Session, server: 'Server') -> tuple[
             continue
         try:
             if method == 'POST':
-                resp = session_obj.post(full_url, verify=False, timeout=15)
+                resp = session_obj.post(full_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=15)
             else:
-                resp = session_obj.get(full_url, verify=False, timeout=15)
+                resp = session_obj.get(full_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=15)
         except Exception as exc:
             errors.append(f"{method} {template}: {exc}")
             continue
@@ -967,6 +972,9 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
             file_path = os.path.join(tmp_dir, filename)
             with open(file_path, 'wb') as handle:
                 handle.write(payload)
+            encrypted_path = encrypt_backup_file(file_path)
+            os.remove(file_path)
+            file_path = encrypted_path
 
             caption = _build_telegram_backup_caption(server, now)
             if progress_cb:
@@ -1041,7 +1049,11 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
                         pass
                 try:
                     caption = _build_telegram_panel_backup_caption(now)
-                    resp = _telegram_send_document(token, chat_id, panel_file_path, caption, proxies=proxies)
+                    encrypted_panel_path = encrypt_backup_file(
+                        panel_file_path,
+                        os.path.join(tmp_dir, f'{os.path.basename(panel_file_path)}.eveenc'),
+                    )
+                    resp = _telegram_send_document(token, chat_id, encrypted_panel_path, caption, proxies=proxies)
                     resp_json, resp_err = _safe_response_json(resp)
                     if resp_err:
                         results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Telegram API Error: {resp_err}"})
