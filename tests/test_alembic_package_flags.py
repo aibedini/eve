@@ -39,14 +39,14 @@ class PackageFlagsRevisionTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
-    def _upgrade_head(self):
+    def _upgrade_target(self):
         # alembic/env.py resolves the URL from DATABASE_URL (it overrides
         # sqlalchemy.url), so point the env var at the scratch database.
         old_url = os.environ.get('DATABASE_URL')
         os.environ['DATABASE_URL'] = f"sqlite:///{self.db_path.replace(os.sep, '/')}"
         try:
             cfg = Config(ALEMBIC_INI)
-            command.upgrade(cfg, 'head')
+            command.upgrade(cfg, HEAD)
         finally:
             if old_url is None:
                 os.environ.pop('DATABASE_URL', None)
@@ -64,7 +64,7 @@ class PackageFlagsRevisionTests(unittest.TestCase):
         # The broken v2.5.44 state: columns added by the runtime catch-up,
         # ledger still at the baseline. Upgrade must not raise DuplicateColumn.
         self._init_db(with_columns=True)
-        self._upgrade_head()
+        self._upgrade_target()
         cols, version = self._state()
         self.assertIn('show_on_create', cols)
         self.assertIn('show_on_renew', cols)
@@ -72,7 +72,7 @@ class PackageFlagsRevisionTests(unittest.TestCase):
 
     def test_upgrade_adds_columns_on_clean_baseline(self):
         self._init_db(with_columns=False)
-        self._upgrade_head()
+        self._upgrade_target()
         cols, version = self._state()
         self.assertIn('show_on_create', cols)
         self.assertIn('show_on_renew', cols)
