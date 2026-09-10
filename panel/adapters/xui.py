@@ -1033,7 +1033,7 @@ def persist_detected_panel_type(server, detected_type: str) -> bool:
             pass
         return False
 
-def fetch_inbounds(session_obj, host, panel_type='auto'):
+def fetch_inbounds(session_obj, host, panel_type='auto', *, force_fresh=False):
     # Deferred import: lives in app.py (module-level import would be circular)
     from app import app
     base, webpath = extract_base_and_webpath(host)
@@ -1094,16 +1094,32 @@ def fetch_inbounds(session_obj, host, panel_type='auto'):
         try:
             url = ep if ep.startswith('http') else f"{base}{webpath}{ep}"
             ep_l = ep.lower()
+            request_headers = None
+            request_params = None
+            if force_fresh:
+                # Several 3x-ui builds (and reverse proxies in front of them)
+                # cache the inbound list briefly.  A renew read-after-write must
+                # never verify against that stale representation.
+                request_headers = {
+                    'Cache-Control': 'no-store, no-cache, max-age=0',
+                    'Pragma': 'no-cache',
+                }
+                request_params = {'_eve_ts': str(time.time_ns())}
 
             # Request strategy per panel flavor
             if '/xui/' in ep_l and 'api' in ep_l:
-                resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                resp = session_obj.get(url, headers=request_headers, params=request_params,
+                                       verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
                 if resp.status_code == 405:
-                    resp = session_obj.post(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                    resp = session_obj.post(url, headers=request_headers, params=request_params,
+                                            verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
             elif '/xui/' in ep_l:
-                resp = session_obj.post(url, json={"page": 1, "limit": 100}, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                resp = session_obj.post(url, json={"page": 1, "limit": 100},
+                                        headers=request_headers, params=request_params,
+                                        verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
             else:
-                resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                resp = session_obj.get(url, headers=request_headers, params=request_params,
+                                       verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
 
             if resp.status_code != 200:
                 last_error = f"HTTP {resp.status_code} from {ep}"

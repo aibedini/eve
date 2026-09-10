@@ -1239,6 +1239,7 @@ def renew_client(server_id, inbound_id, email):
         build_panel_url, calculate_reseller_price, collect_endpoint_templates, fetch_inbounds,
         find_client, format_jalali, format_remaining_days, get_xui_session, log_transaction,
         patch_cached_client, persist_detected_panel_type, server_is_v3, v3_enable_client,
+        _v3_get_client,
         v3_reset_client, v3_update_client,
     )
     t0 = time.perf_counter()
@@ -1741,7 +1742,10 @@ def renew_client(server_id, inbound_id, email):
             },
         })
 
-        _is_v3 = server_is_v3(server)
+        # Capability probing requires the authenticated session.  Token-less v3
+        # panels were otherwise misclassified as legacy and received the old
+        # updateClient request, which can leave renewed users inactive.
+        _is_v3 = server_is_v3(server, session_obj)
         # Shadowsocks clients have no UUID 'id' field — updateClient/:clientId won't work.
         _is_shadowsocks_no_id = (not _is_v3) and ('id' not in target_client)
 
@@ -1877,14 +1881,23 @@ def renew_client(server_id, inbound_id, email):
                         timing["verify_fetch_ms"] = 0
                     else:
                         t_v0 = time.perf_counter()
-                        v_inbounds, v_err, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                        v_inbounds, v_err, _ = fetch_inbounds(
+                            session_obj, server.host, server.panel_type, force_fresh=True,
+                        )
                         timing["verify_fetch_ms"] = int((time.perf_counter() - t_v0) * 1000)
                     if v_err or not v_inbounds:
                         verify["ok"] = False
                         verify["error"] = v_err or "verify_fetch_failed"
                     else:
                         v_client, v_inbound = find_client(v_inbounds, inbound_id, email)
-                        if not v_client and server_is_v3(server):
+                        if _is_v3:
+                            # The first-class client endpoint reflects writes
+                            # sooner than the aggregate inbound list on some
+                            # versions. Prefer it for authoritative fields.
+                            direct_client = _v3_get_client(server, session_obj, email)
+                            if direct_client:
+                                v_client = direct_client
+                        if not v_client and _is_v3:
                             # v3 stores the email space-free; after a spaced-email
                             # rename the lookup must use the sanitized form, else
                             # verify wrongly reports "not verified".
@@ -1967,7 +1980,9 @@ def renew_client(server_id, inbound_id, email):
                             else:
                                 session_obj.post(full_url, json=update_payload, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=10)
                             time.sleep(1)
-                            r_inbounds, r_err, _ = fetch_inbounds(session_obj, server.host, server.panel_type)
+                            r_inbounds, r_err, _ = fetch_inbounds(
+                                session_obj, server.host, server.panel_type, force_fresh=True,
+                            )
                             if r_err or not r_inbounds:
                                 continue
                             r_client, _r_ib = find_client(r_inbounds, inbound_id, email)
@@ -2579,6 +2594,7 @@ def verify_renew_client(server_id, inbound_id, email):
     from app import (  # deferred: app-level helper, avoids circular import
         _has_client_access, _v3_sanitize_email, app, fetch_inbounds, find_client,
         get_xui_session, patch_cached_client, persist_detected_panel_type, server_is_v3,
+        v3_enable_client, _v3_get_client,
     )
     trace_id = secrets.token_hex(4)
     t0 = time.perf_counter()
@@ -2650,7 +2666,10 @@ def verify_renew_client(server_id, inbound_id, email):
 
     try:
         t_v0 = time.perf_counter()
-        inbounds, fetch_err, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type)
+        is_v3 = server_is_v3(server, session_obj)
+        inbounds, fetch_err, detected_type = fetch_inbounds(
+            session_obj, server.host, server.panel_type, force_fresh=True,
+        )
         verify_fetch_ms = int((time.perf_counter() - t_v0) * 1000)
         persist_detected_panel_type(server, detected_type)
         if fetch_err or not inbounds:
@@ -2659,7 +2678,11 @@ def verify_renew_client(server_id, inbound_id, email):
             return _finish({'success': True, 'verify': verify, 'timing': {'login_ms': login_ms, 'verify_fetch_ms': verify_fetch_ms}})
 
         v_client, _ = find_client(inbounds, inbound_id, email)
-        if not v_client and server_is_v3(server):
+        if is_v3:
+            direct_client = _v3_get_client(server, session_obj, email)
+            if direct_client:
+                v_client = direct_client
+        if not v_client and is_v3:
             # v3 stores the client email without spaces; retry the lookup with
             # the sanitized form so Re-check works after a spaced-email rename.
             _clean = _v3_sanitize_email(email)
@@ -2681,6 +2704,27 @@ def verify_renew_client(server_id, inbound_id, email):
         except Exception:
             verify['observed']['totalGB'] = None
         verify['observed']['enable'] = bool(v_client.get('enable', True))
+
+        # Re-check is also a repair action: if a panel accepted the renewal but
+        # retained its disabled flag, re-enable it and read the direct v3 record
+        # back immediately. This makes repeated operator clicks useful instead
+        # of merely polling the same stale aggregate response.
+        if is_v3 and verify['observed']['enable'] is False:
+            repair_client = dict(v_client)
+            repair_client['enable'] = True
+            repaired, _repair_response, repair_error = v3_enable_client(
+                server, session_obj, email, repair_client,
+            )
+            if repaired:
+                repaired_client = _v3_get_client(server, session_obj, email)
+                if repaired_client:
+                    v_client = repaired_client
+                    verify['observed']['enable'] = bool(
+                        repaired_client.get('enable', True)
+                    )
+                    verify['re_enabled'] = verify['observed']['enable']
+            elif repair_error:
+                verify['enable_repair_error'] = str(repair_error)
 
         completed_result = _load_renew_result(renew_lock_key)
         completed_verify = (completed_result or {}).get('verify') or {}

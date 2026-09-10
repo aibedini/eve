@@ -264,6 +264,10 @@ class RenewEnableTests(unittest.TestCase):
         self.assertTrue(payload['verify']['observed']['enable'])
         self.postcheck.assert_not_called()
 
+        # Cookie-authenticated v3 panels have no API token, so capability
+        # detection must receive the live authenticated session.
+        app_module.server_is_v3.assert_called_with(self.server, self.session_obj)
+
     def test_completed_renew_operation_replays_without_second_panel_write(self):
         future = int(time.time() * 1000) + DAY_MS
         self._seed_cache(_raw_client(expiry=future, total=5 * GB, enable=True))
@@ -413,6 +417,68 @@ class RenewEnableTests(unittest.TestCase):
         self.assertFalse(verify['checks']['totalGB']['matches'])
         self.assertFalse(verify['checks']['enable']['matches'])
         self.assertEqual(verify['checks']['totalGB']['observed'], 5 * GB)
+
+    def test_recheck_prefers_fresh_v3_client_over_stale_inbound_list(self):
+        expected_expiry = int(time.time() * 1000) + 30 * DAY_MS
+        expected_total = 15 * GB
+        stale = _raw_client(expiry=DAY_MS, total=5 * GB, enable=True)
+        fresh = _raw_client(
+            expiry=expected_expiry, total=expected_total, enable=True,
+        )
+        completed = {'verify': {'expected': {
+            'expiryTime': expected_expiry,
+            'totalGB': expected_total,
+            'enable': True,
+        }}}
+        with (
+            mock.patch.object(
+                app_module, 'fetch_inbounds',
+                return_value=(_panel_inbounds(stale, self.server.id), None, '3x-ui'),
+            ) as fetch,
+            mock.patch.object(app_module, '_v3_get_client', return_value=fresh),
+            mock.patch.object(clients_module, '_load_renew_result', return_value=completed),
+        ):
+            resp = self.client.post(
+                f'/api/client/{self.server.id}/1/bob/renew/verify',
+                json={'awaiting_result': True},
+            )
+
+        payload = resp.get_json()
+        self.assertTrue(payload['verify']['ok'], payload)
+        self.assertEqual(payload['verify']['observed']['expiryTime'], expected_expiry)
+        self.assertTrue(fetch.call_args.kwargs['force_fresh'])
+
+    def test_recheck_repairs_disabled_v3_client(self):
+        expected_expiry = int(time.time() * 1000) + 30 * DAY_MS
+        expected_total = 15 * GB
+        disabled = _raw_client(
+            expiry=expected_expiry, total=expected_total, enable=False,
+        )
+        enabled = dict(disabled, enable=True)
+        completed = {'verify': {'expected': {
+            'expiryTime': expected_expiry,
+            'totalGB': expected_total,
+            'enable': True,
+        }}}
+        with (
+            mock.patch.object(
+                app_module, 'fetch_inbounds',
+                return_value=(_panel_inbounds(disabled, self.server.id), None, '3x-ui'),
+            ),
+            mock.patch.object(
+                app_module, '_v3_get_client', side_effect=[disabled, enabled],
+            ),
+            mock.patch.object(clients_module, '_load_renew_result', return_value=completed),
+        ):
+            resp = self.client.post(
+                f'/api/client/{self.server.id}/1/bob/renew/verify',
+                json={'awaiting_result': True},
+            )
+
+        payload = resp.get_json()
+        self.assertTrue(payload['verify']['ok'], payload)
+        self.assertTrue(payload['verify']['re_enabled'])
+        self.assertTrue(self.v3_enable.call_args[0][3]['enable'])
 
     def test_recheck_without_saved_expectation_returns_observed_state(self):
         observed = _raw_client(expiry=7 * DAY_MS, total=3 * GB, enable=True)
