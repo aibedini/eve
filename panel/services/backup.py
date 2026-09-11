@@ -13,6 +13,7 @@ import base64
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import sqlite3
@@ -54,6 +55,12 @@ def init_backup_tmp_dir(flask_app):
     global TELEGRAM_BACKUP_TMP_DIR
     TELEGRAM_BACKUP_TMP_DIR = os.path.join(flask_app.instance_path, 'telegram_backup_tmp')
     os.makedirs(TELEGRAM_BACKUP_TMP_DIR, exist_ok=True)
+    # Startup janitor: remove transient X-UI spool files left by a crashed or
+    # kill -9'd worker. Nothing is in flight this early in process startup.
+    try:
+        prune_xui_backup_spool()
+    except Exception:
+        pass
     return TELEGRAM_BACKUP_TMP_DIR
 
 
@@ -61,6 +68,146 @@ def _telegram_backup_tmp_dir() -> str:
     if TELEGRAM_BACKUP_TMP_DIR is None:
         raise RuntimeError('TELEGRAM_BACKUP_TMP_DIR is not initialized; call init_backup_tmp_dir(app) first')
     return TELEGRAM_BACKUP_TMP_DIR
+
+
+# ── X-UI panel backups: transient, unencrypted, never persisted ──────────────
+# Policy (docs/security/BACKUP_POLICY.md): an X-UI panel database is the vendor
+# artifact Eve re-uploads; it is intentionally NOT encrypted by Eve. It only
+# exists as a 0600 file inside a RAM-backed 0700 spool directory for the
+# duration of one Telegram upload, then is unlinked in a finally block on both
+# success and failure. A retry always downloads a fresh copy from the panel.
+XUI_BACKUP_SPOOL_DIR = (os.environ.get('EVE_XUI_BACKUP_DIR') or '').strip() or '/run/eve/xui-backup'
+XUI_BACKUP_STALE_SECONDS = max(60, int(os.environ.get('EVE_XUI_BACKUP_STALE_SECONDS') or 300))
+
+
+def _xui_backup_spool_dir() -> str:
+    """Return the transient X-UI spool directory (tmpfs when available)."""
+    override = (os.environ.get('EVE_XUI_BACKUP_DIR') or '').strip()
+    if override:
+        base = override
+    elif os.name == 'posix' and os.path.isdir('/run'):
+        base = XUI_BACKUP_SPOOL_DIR
+    else:
+        # Development / non-systemd hosts: still transient, never instance/.
+        base = os.path.join(tempfile.gettempdir(), 'eve-xui-backup')
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        os.chmod(base, 0o700)
+    except OSError:
+        base = os.path.join(tempfile.gettempdir(), 'eve-xui-backup')
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(base, 0o700)
+        except OSError:
+            pass
+    return base
+
+
+def _unlink_quietly(path: str | None) -> bool:
+    """Best-effort unlink; returns True when a file was actually removed."""
+    try:
+        if path and os.path.exists(path):
+            os.unlink(path)
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def _xui_backup_spool_file(payload: bytes, ext: str) -> str:
+    """Write the X-UI backup to a random 0600 file inside the tmpfs spool."""
+    directory = _xui_backup_spool_dir()
+    suffix = ext if ext and ext.startswith('.') else '.db'
+    name = f'{os.getpid()}-{secrets.token_hex(12)}{suffix}'
+    path = os.path.join(directory, name)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(payload)
+    except BaseException:
+        _unlink_quietly(path)
+        raise
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return path
+
+
+def _xui_backup_document_name(server, ext: str, now: datetime) -> str:
+    """Descriptive Telegram-side filename; the on-disk spool name stays random."""
+    safe = secure_filename(getattr(server, 'name', '') or '') or f'server_{getattr(server, "id", 0)}'
+    return f'{safe}_{now:%Y%m%d_%H%M%S}{ext if ext and ext.startswith(".") else ".db"}'
+
+
+def _spool_owner_pid(name: str) -> int | None:
+    try:
+        return int(str(name).split('-', 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
+    if not pid or pid <= 0:
+        return False
+    if os.name != 'posix':
+        return True  # cannot probe portably; age-based cleanup covers it
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def prune_xui_backup_spool(now: float | None = None, stale_seconds: int | None = None) -> int:
+    """Delete transient X-UI spool files left by crashed or killed workers.
+
+    A file whose owning PID is gone is removed immediately (kill -9 recovery);
+    anything older than the stale threshold is removed too, covering PID reuse
+    or platforms where the process probe is unavailable.
+    """
+    directory = _xui_backup_spool_dir()
+    stale = XUI_BACKUP_STALE_SECONDS if stale_seconds is None else max(0, int(stale_seconds))
+    now_ts = time.time() if now is None else float(now)
+    removed = 0
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return 0
+    for entry in entries:
+        path = os.path.join(directory, entry)
+        if not os.path.isfile(path):
+            continue
+        pid = _spool_owner_pid(entry)
+        try:
+            age = now_ts - os.path.getmtime(path)
+        except OSError:
+            age = 0.0
+        if (pid is not None and not _pid_alive(pid)) or age > stale:
+            if _unlink_quietly(path):
+                removed += 1
+    return removed
+
+
+def _telegram_document_delivered(resp_json) -> bool:
+    """True only when Telegram acknowledged a real document with metadata."""
+    if not isinstance(resp_json, dict) or resp_json.get('ok') is not True:
+        return False
+    result = resp_json.get('result')
+    if not isinstance(result, dict):
+        return False
+    message_id = result.get('message_id')
+    document = result.get('document')
+    if not isinstance(message_id, int) or message_id <= 0:
+        return False
+    if not isinstance(document, dict):
+        return False
+    file_id = document.get('file_id')
+    return isinstance(file_id, str) and bool(file_id)
 
 
 def _db_uri() -> str:
@@ -644,7 +791,8 @@ TELEGRAM_UPLOAD_READ_TIMEOUT_SECONDS = 600
 TELEGRAM_UPLOAD_RETRIES = 3
 
 
-def _telegram_send_document(token: str, chat_id: str, file_path: str, caption: str | None, proxies: dict | None = None):
+def _telegram_send_document(token: str, chat_id: str, file_path: str, caption: str | None,
+                            proxies: dict | None = None, document_name: str | None = None):
     url = f"https://api.telegram.org/bot{token}/sendDocument"
     data = {'chat_id': chat_id}
     if caption:
@@ -654,7 +802,7 @@ def _telegram_send_document(token: str, chat_id: str, file_path: str, caption: s
     for attempt in range(1, TELEGRAM_UPLOAD_RETRIES + 1):
         try:
             with open(file_path, 'rb') as handle:
-                files = {'document': (os.path.basename(file_path), handle)}
+                files = {'document': (document_name or os.path.basename(file_path), handle)}
                 return requests.post(url, data=data, files=files, proxies=proxies, timeout=timeout)
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
             last_exc = exc
@@ -862,6 +1010,78 @@ def _fetch_xui_backup(session_obj: requests.Session, server: 'Server') -> tuple[
     return None, None, '; '.join(errors) or 'No backup endpoint succeeded'
 
 
+def _send_xui_backup_to_telegram(server, payload: bytes, ext: str | None, token: str,
+                                 chat_id: str, proxies, now: datetime) -> tuple[bool, str | None]:
+    """Transient X-UI panel backup: tmpfs spool -> Telegram -> unlink.
+
+    The X-UI database is intentionally NOT encrypted by Eve. The spool file is
+    removed in a finally block whether or not Telegram accepted the upload, so
+    a failed send never leaves a local copy behind for a later retry; the
+    retry downloads a fresh backup from the panel instead.
+    """
+    ext = ext or '.db'
+    temp_path = _xui_backup_spool_file(payload, ext)
+    try:
+        caption = _build_telegram_backup_caption(server, now)
+        resp = _telegram_send_document(
+            token, chat_id, temp_path, caption, proxies=proxies,
+            document_name=_xui_backup_document_name(server, ext, now),
+        )
+        resp_json, resp_err = _safe_response_json(resp)
+        if resp_err:
+            return False, f'Telegram API Error: {redact_connection_error(resp_err, (token,))}'
+        if not _telegram_document_delivered(resp_json):
+            msg = None
+            if isinstance(resp_json, dict):
+                msg = resp_json.get('description') or resp_json.get('error')
+            safe = redact_connection_error(msg or 'Unknown error', (token,))
+            return False, f'Telegram API Refused: {safe}'
+        return True, None
+    except Exception as exc:
+        safe = redact_connection_error(exc, (token,))
+        return False, f'Telegram Upload Failed (Network/Proxy): {safe}'
+    finally:
+        _unlink_quietly(temp_path)
+
+
+def _send_eve_backup_to_telegram(panel_file_path: str, token: str, chat_id: str,
+                                 proxies, now: datetime, work_dir: str | None = None
+                                 ) -> tuple[bool, str | None]:
+    """Eve database backup: AES-GCM ciphertext -> Telegram -> unlink temp.
+
+    Separate pipeline from X-UI panel backups: the plaintext Eve database file
+    is never uploaded, and the transient ciphertext is removed in a finally
+    block on success and failure alike.
+    """
+    encrypted_path = None
+    target_dir = work_dir or _telegram_backup_tmp_dir()
+    try:
+        encrypted_path = encrypt_backup_file(
+            panel_file_path,
+            os.path.join(target_dir, f'{os.path.basename(panel_file_path)}.eveenc'),
+        )
+        resp = _telegram_send_document(
+            token, chat_id, encrypted_path,
+            _build_telegram_panel_backup_caption(now), proxies=proxies,
+        )
+        resp_json, resp_err = _safe_response_json(resp)
+        if resp_err:
+            return False, f'Telegram API Error: {redact_connection_error(resp_err, (token,))}'
+        if not _telegram_document_delivered(resp_json):
+            msg = None
+            if isinstance(resp_json, dict):
+                msg = resp_json.get('description') or resp_json.get('error')
+            safe = redact_connection_error(msg or 'Unknown error', (token,))
+            return False, f'Telegram API Refused: {safe}'
+        return True, None
+    except Exception as exc:
+        safe = redact_connection_error(exc, (token,))
+        return False, f'Telegram Upload Failed (Network/Proxy): {safe}'
+    finally:
+        _unlink_quietly(encrypted_path)
+
+
+
 def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
     from app import BACKUP_DIR
     if not TELEGRAM_BACKUP_LOCK.acquire(blocking=False):
@@ -925,6 +1145,8 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
                 pass
 
         tmp_dir = tempfile.mkdtemp(prefix='telegram_backup_', dir=_telegram_backup_tmp_dir())
+        # Sweep transient X-UI spool files left behind by a crashed worker.
+        prune_xui_backup_spool()
         results = []
 
         total_items = len(servers) + (1 if send_panel_backup else 0)
@@ -939,7 +1161,8 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
 
             session_obj, error = get_xui_session(server)
             if error:
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Connection Failed: {error}"})
+                safe_error = redact_connection_error(error, (token,))
+                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Connection Failed: {safe_error}"})
                 processed_items += 1
                 if progress_cb:
                     try:
@@ -956,7 +1179,8 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
 
             payload, ext, err = _fetch_xui_backup(session_obj, server)
             if err or not payload:
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Backup Download Failed: {err or 'Empty response'}"})
+                safe_error = redact_connection_error(err or 'Empty response', (token,))
+                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Backup Download Failed: {safe_error}"})
                 processed_items += 1
                 if progress_cb:
                     try:
@@ -965,54 +1189,22 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
                         pass
                 continue
 
-            safe_server_name = secure_filename(server.name) or f"server_{server.id}"
-            timestamp = now.strftime('%Y%m%d_%H%M%S')
-            ext = ext or '.db'
-            filename = f"{safe_server_name}_{timestamp}{ext}"
-            file_path = os.path.join(tmp_dir, filename)
-            with open(file_path, 'wb') as handle:
-                handle.write(payload)
-            encrypted_path = encrypt_backup_file(file_path)
-            os.remove(file_path)
-            file_path = encrypted_path
-
-            caption = _build_telegram_backup_caption(server, now)
             if progress_cb:
                 try:
                     progress_cb({'stage': f"telegram_upload:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
                 except Exception:
                     pass
-            try:
-                resp = _telegram_send_document(token, chat_id, file_path, caption, proxies=proxies)
-            except Exception as exc:
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"Telegram Upload Failed (Network/Proxy): {str(exc)}"})
-                processed_items += 1
-                if progress_cb:
-                    try:
-                        progress_cb({'stage': f"telegram_failed:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
-                    except Exception:
-                        pass
-                continue
 
-            resp_json, resp_err = _safe_response_json(resp)
-            if resp_err:
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"Telegram API Error: {resp_err}"})
-                processed_items += 1
-                if progress_cb:
-                    try:
-                        progress_cb({'stage': f"telegram_failed:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
-                    except Exception:
-                        pass
-                continue
-
-            server_ok = isinstance(resp_json, dict) and resp_json.get('ok')
+            # Transient X-UI backup: never encrypted, never persisted; a fresh
+            # download happens for every retry attempt.
+            server_ok, upload_error = _send_xui_backup_to_telegram(
+                server, payload, ext, token, chat_id, proxies, now,
+            )
             if server_ok:
                 results.append({'server_id': server.id, 'server_name': server.name, 'success': True})
             else:
-                msg = None
-                if isinstance(resp_json, dict):
-                    msg = resp_json.get('description') or resp_json.get('error')
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"Telegram API Refused: {msg or 'Unknown error'}"})
+                results.append({'server_id': server.id, 'server_name': server.name, 'success': False,
+                                'error': f"X-UI Backup Upload Failed: {upload_error}"})
 
             processed_items += 1
             if progress_cb:
@@ -1034,7 +1226,8 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
                 panel_filename = _create_database_backup_file('telegram_panel')
                 panel_file_path = os.path.join(BACKUP_DIR, panel_filename)
             except Exception as exc:
-                results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Panel Backup Create Failed: {str(exc)}"})
+                safe = redact_connection_error(exc, (token,))
+                results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Panel Backup Create Failed: {safe}"})
                 processed_items += 1
                 if progress_cb:
                     try:
@@ -1047,25 +1240,15 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
                         progress_cb({'stage': 'panel_backup_upload', 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
                     except Exception:
                         pass
-                try:
-                    caption = _build_telegram_panel_backup_caption(now)
-                    encrypted_panel_path = encrypt_backup_file(
-                        panel_file_path,
-                        os.path.join(tmp_dir, f'{os.path.basename(panel_file_path)}.eveenc'),
-                    )
-                    resp = _telegram_send_document(token, chat_id, encrypted_panel_path, caption, proxies=proxies)
-                    resp_json, resp_err = _safe_response_json(resp)
-                    if resp_err:
-                        results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Telegram API Error: {resp_err}"})
-                    elif isinstance(resp_json, dict) and resp_json.get('ok'):
-                        results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': True})
-                    else:
-                        msg = None
-                        if isinstance(resp_json, dict):
-                            msg = resp_json.get('description') or resp_json.get('error')
-                        results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Telegram API Refused: {msg or 'Unknown error'}"})
-                except Exception as exc:
-                    results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': f"Telegram Upload Failed (Network/Proxy): {str(exc)}"})
+                # Eve DB backup pipeline: AES-GCM encrypted, transient ciphertext,
+                # unlinked by the helper in a finally block.
+                panel_ok, panel_error = _send_eve_backup_to_telegram(
+                    panel_file_path, token, chat_id, proxies, now, work_dir=tmp_dir,
+                )
+                if panel_ok:
+                    results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': True})
+                else:
+                    results.append({'server_id': None, 'server_name': panel_label, 'kind': 'panel', 'success': False, 'error': panel_error})
 
                 processed_items += 1
                 if progress_cb:
