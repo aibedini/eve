@@ -16,7 +16,7 @@ from panel.models import (
     Admin, BankCard, ClientOperation, ClientOwnership, CustomerAccount, CustomerTransaction,
     ManualReceipt, Package, Payment, Server, Transaction, UsageDaily,
 )
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import login_required, permission_required
 
 bp = Blueprint('finance', __name__)
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ def extract_email_from_description(description):
 
 
 @bp.route('/admin/charge', methods=['POST'])
-@user_management_required
+@permission_required('finance.manage')
 def charge_admin():
     data = request.json
     admin_id = int(data.get('admin_id'))
@@ -248,7 +248,7 @@ def _build_tx_delete_audit(deleter_username: str, at_jalali: str, deleted_tx_id:
 
 
 @bp.route('/api/transactions/<int:tx_id>', methods=['PUT'])
-@user_management_required
+@permission_required('finance.manage')
 def update_transaction(tx_id):
     from app import format_jalali, parse_jalali_date  # deferred: app-level helper, avoids circular import
     editor = db.session.get(Admin, session.get('admin_id'))
@@ -347,7 +347,7 @@ def update_transaction(tx_id):
 
 
 @bp.route('/api/transactions/<int:tx_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('finance.manage')
 def delete_transaction(tx_id):
     from app import format_jalali  # deferred: app-level helper, avoids circular import
     deleter = db.session.get(Admin, session.get('admin_id'))

@@ -29,7 +29,7 @@ from panel.models import (
     TelegramServiceRequestMessage, TelegramWalletTopup,
 )
 from panel.routes.common import (
-    login_required, superadmin_required, user_management_required,
+    login_required, permission_required,
 )
 from panel.services.backup import (
     TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES,
@@ -972,7 +972,7 @@ def _telegram_promo_from_payload(promo: TelegramPromo, data: dict):
 
 
 @bp.route('/api/settings/telegram-promos', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def list_telegram_promos():
     promos = TelegramPromo.query.order_by(TelegramPromo.id.desc()).all()
     stats = {
@@ -994,7 +994,7 @@ def list_telegram_promos():
 
 
 @bp.route('/api/settings/telegram-promos', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def create_telegram_promo():
     from app import _log_audit  # deferred: app-level helper, avoids circular import
     promo = TelegramPromo(name='')
@@ -1011,7 +1011,7 @@ def create_telegram_promo():
 
 
 @bp.route('/api/settings/telegram-promos/<int:promo_id>', methods=['PUT', 'DELETE'])
-@superadmin_required
+@permission_required('secrets.manage')
 def update_telegram_promo(promo_id):
     from app import _log_audit  # deferred: app-level helper, avoids circular import
     promo = db.session.get(TelegramPromo, promo_id)
@@ -1376,7 +1376,7 @@ def save_telegram_bot_settings():
 
 
 @bp.route('/api/settings/telegram-bots/purchase-routes/detect', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def detect_telegram_purchase_routes():
     from app import _detect_telegram_inbound_profiles  # deferred: app-level helper, avoids circular import
     data = request.get_json(silent=True) or {}
@@ -1572,7 +1572,7 @@ def test_telegram_bot_proxy(proxy_id):
 
 
 @bp.route('/api/settings/telegram-bots/egress/candidates', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def get_telegram_egress_candidates():
     from app import (  # deferred: app-level helper, avoids circular import
         GLOBAL_SERVER_DATA, TELEGRAM_EGRESS_PROTOCOLS, load_snapshot_from_redis,
@@ -1735,7 +1735,7 @@ def test_telegram_egress_profile(profile_id):
 
 
 @bp.route('/api/settings/telegram-backup', methods=['GET'])
-@user_management_required
+@permission_required('telegram.write')
 def get_telegram_backup_settings():
     settings = _get_telegram_backup_settings()
     settings['has_bot_token'] = bool(settings.get('bot_token'))
@@ -1746,7 +1746,7 @@ def get_telegram_backup_settings():
 
 
 @bp.route('/api/settings/telegram-backup', methods=['POST'])
-@user_management_required
+@permission_required('telegram.write')
 def save_telegram_backup_settings():
     try:
         data = request.get_json() or {}
@@ -1833,7 +1833,7 @@ def save_telegram_backup_settings():
 
 
 @bp.route('/api/settings/telegram-backup/test', methods=['POST'])
-@user_management_required
+@permission_required('telegram.write')
 def test_telegram_backup_settings():
     from app import _telegram_get_me  # deferred: app-level helper, avoids circular import
     settings = _get_telegram_backup_settings()
@@ -1906,7 +1906,7 @@ def test_telegram_backup_settings():
 
 
 @bp.route('/api/telegram-backup/now', methods=['POST'])
-@user_management_required
+@permission_required('telegram.write')
 def telegram_backup_now():
     from app import (  # deferred: app-level helper, avoids circular import
         TELEGRAM_BACKUP_JOBS, TELEGRAM_BACKUP_JOBS_LOCK, _load_telegram_backup_jobs_locked, _prune_telegram_backup_jobs_locked, _run_telegram_backup_job, _save_telegram_backup_jobs_locked, _utc_iso_now,
@@ -1940,7 +1940,7 @@ def telegram_backup_now():
 
 
 @bp.route('/api/telegram-backup/job/<job_id>', methods=['GET'])
-@user_management_required
+@permission_required('telegram.write')
 def telegram_backup_job_status(job_id):
     from app import (  # deferred: app-level helper, avoids circular import
         TELEGRAM_BACKUP_JOBS_LOCK, _load_telegram_backup_jobs_locked, _summarize_telegram_backup_job,
@@ -2004,7 +2004,7 @@ def _xray_runtime_status_payload():
 
 
 @bp.route('/api/settings/telegram-bots/xray-runtime', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def telegram_xray_runtime_status():
     response = jsonify(_xray_runtime_status_payload())
     response.headers['Cache-Control'] = 'no-store'
@@ -2012,7 +2012,7 @@ def telegram_xray_runtime_status():
 
 
 @bp.route('/api/settings/telegram-bots/xray-runtime/install', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def telegram_xray_runtime_install():
     from app import XRAY_INSTALL_START_COMMAND, app  # deferred: app-level helper, avoids circular import
     data = request.get_json(silent=True) or {}

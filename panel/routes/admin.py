@@ -15,7 +15,8 @@ from panel.models import (
     announcement_servers,
 )
 from panel.routes.common import (
-    login_required, step_up_required, superadmin_required, user_management_required,
+    current_admin, current_permissions, login_required, permission_required,
+    step_up_required, superadmin_required, user_management_required,
 )
 from panel.services.client_operations import resolve_client_operation
 
@@ -67,13 +68,13 @@ def reconcile_client_operation(operation_id):
 
 
 @bp.route('/api/admins', methods=['GET'])
-@user_management_required
+@permission_required('admins.read')
 def get_admins():
     admins = Admin.query.all()
     return jsonify([a.to_dict() for a in admins])
 
 @bp.route('/api/admins', methods=['POST'])
-@superadmin_required
+@permission_required('admins.manage')
 @step_up_required('admins.manage')
 def add_admin():
     from app import (  # deferred: app-level helper, avoids circular import
@@ -178,7 +179,7 @@ def add_admin():
     return jsonify({"success": True})
 
 @bp.route('/api/admins/<int:admin_id>', methods=['PUT'])
-@user_management_required
+@permission_required('admins.write')
 @step_up_required('admins.manage')
 def update_admin(admin_id):
     from app import (  # deferred: app-level helper, avoids circular import
@@ -277,7 +278,7 @@ def update_admin(admin_id):
     return jsonify({"success": True})
 
 @bp.route('/api/admins/<int:admin_id>', methods=['DELETE'])
-@superadmin_required
+@permission_required('admins.manage')
 @step_up_required('admins.manage')
 def delete_admin(admin_id):
     if admin_id == session['admin_id']:
@@ -286,6 +287,78 @@ def delete_admin(admin_id):
     db.session.delete(admin)
     db.session.commit()
     return jsonify({"success": True})
+
+
+@bp.route('/api/me/permissions', methods=['GET'])
+@login_required
+def my_permissions():
+    """Effective permissions for the signed-in admin (drives UI affordances)."""
+    from panel.services.permissions import normalize_role, overrides_for
+    admin = current_admin()
+    return jsonify({
+        'success': True,
+        'role': normalize_role(admin),
+        'permissions': sorted(current_permissions()),
+        'overrides': overrides_for(admin.id),
+    })
+
+
+@bp.route('/api/admins/<int:admin_id>/permissions', methods=['GET'])
+@permission_required('admins.manage')
+def get_admin_permissions(admin_id):
+    from panel.services.permissions import (
+        PERMISSIONS, normalize_role, overrides_for, permissions_for,
+    )
+    target = db.session.get(Admin, admin_id)
+    if target is None:
+        return jsonify({'success': False, 'error': 'Admin not found'}), 404
+    return jsonify({
+        'success': True,
+        'role': normalize_role(target),
+        'permissions': sorted(permissions_for(target)),
+        'overrides': overrides_for(target.id),
+        'catalog': sorted(PERMISSIONS),
+    })
+
+
+@bp.route('/api/admins/<int:admin_id>/permissions', methods=['PUT'])
+@permission_required('admins.manage')
+@step_up_required('admins.manage')
+def set_admin_permissions(admin_id):
+    """Grant or deny individual permissions; a null value clears an override."""
+    from app import _log_audit
+    from panel.services.permissions import (
+        clear_permission, overrides_for, permissions_for, set_permission,
+    )
+    target = db.session.get(Admin, admin_id)
+    if target is None:
+        return jsonify({'success': False, 'error': 'Admin not found'}), 404
+    data = request.get_json(silent=True) or {}
+    changes = data.get('permissions')
+    if not isinstance(changes, dict) or not changes:
+        return jsonify({'success': False, 'error': 'A non-empty permissions object is required'}), 400
+    try:
+        for permission, allowed in changes.items():
+            if allowed is None:
+                clear_permission(target.id, str(permission))
+            else:
+                set_permission(target.id, str(permission), bool(allowed))
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    db.session.commit()
+    _log_audit(
+        'admins.permissions_update', target,
+        actor=db.session.get(Admin, session.get('admin_id')),
+        meta={'changes': {str(key): (None if value is None else bool(value))
+                          for key, value in changes.items()}},
+    )
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'permissions': sorted(permissions_for(target)),
+        'overrides': overrides_for(target.id),
+    })
 
 
 @bp.route('/api/servers', methods=['GET'])
@@ -378,7 +451,7 @@ def _server_subscription_inbounds(server):
 
 
 @bp.route('/api/servers/<int:server_id>/subscription-order', methods=['GET'])
-@user_management_required
+@permission_required('servers.read')
 def get_server_subscription_order(server_id):
     from panel.services.subscription import get_subscription_inbound_order
 
@@ -407,7 +480,7 @@ def get_server_subscription_order(server_id):
 
 
 @bp.route('/api/servers/<int:server_id>/subscription-order', methods=['PUT'])
-@user_management_required
+@permission_required('servers.write')
 def update_server_subscription_order(server_id):
     server = Server.query.get_or_404(server_id)
     data = request.get_json(silent=True) or {}
@@ -462,7 +535,7 @@ def update_server_subscription_order(server_id):
     })
 
 @bp.route('/api/servers', methods=['POST'])
-@user_management_required
+@permission_required('servers.write')
 def add_server():
     from app import (  # deferred: app-level helper, avoids circular import
         encrypt_server_password, sanitize_html,
@@ -488,7 +561,7 @@ def add_server():
     return jsonify({"success": True, "id": server.id})
 
 @bp.route('/api/servers/<int:server_id>', methods=['PUT'])
-@user_management_required
+@permission_required('servers.write')
 def update_server(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
         XUI_CAPABILITY_CACHE, XUI_SESSION_CACHE, encrypt_server_password, sanitize_html,
@@ -521,7 +594,7 @@ def update_server(server_id):
 
 
 @bp.route('/api/servers/<int:server_id>/hidden', methods=['POST'])
-@user_management_required
+@permission_required('servers.write')
 def toggle_server_hidden(server_id):
     """Toggle server hidden flag. Hidden servers are skipped in fetching/dashboard but still backed up."""
     from app import GLOBAL_SERVER_DATA  # deferred: app-level helper, avoids circular import
@@ -542,7 +615,7 @@ def toggle_server_hidden(server_id):
 
 
 @bp.route('/api/servers/<int:server_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('servers.write')
 def delete_server(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
         GLOBAL_SERVER_DATA, REFRESH_BACKOFF, XUI_CAPABILITY_CACHE, XUI_SESSION_CACHE, app,
@@ -596,6 +669,7 @@ def delete_server(server_id):
 
 @bp.route('/api/servers/<int:server_id>/test', methods=['POST'])
 @login_required
+@permission_required('servers.read')
 def test_server_connection(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
         _autoupgrade_http_to_https, fetch_inbounds, get_accessible_servers,
@@ -627,7 +701,7 @@ def test_server_connection(server_id):
 
 
 @bp.route('/api/servers/<int:server_id>/xui-backup', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def download_server_xui_backup(server_id):
     """Download the X-UI database backup for a single server.
 
@@ -659,6 +733,7 @@ def download_server_xui_backup(server_id):
 
 @bp.route('/api/servers/<int:server_id>/panel-info', methods=['GET'])
 @login_required
+@permission_required('servers.read')
 def get_server_panel_info(server_id):
     """Quick fetch: login → status endpoint → return version/state info.
     Does NOT fetch inbounds. Designed to be called right after adding a server."""
@@ -723,7 +798,7 @@ def get_server_panel_info(server_id):
 
 
 @bp.route('/api/assign-client', methods=['POST'])
-@user_management_required
+@permission_required('servers.write')
 def assign_client():
     from app import (  # deferred: app-level helper, avoids circular import
         ensure_reseller_allowed_for_assignment, invalidate_ownership_cache,
@@ -813,7 +888,7 @@ def assign_client():
 
 
 @bp.route('/api/resellers/<int:reseller_id>/bulk-assign-inbound', methods=['POST'])
-@user_management_required
+@permission_required('servers.write')
 def bulk_assign_inbound(reseller_id):
     """Assign all existing clients in a cached inbound to a reseller."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -901,7 +976,7 @@ def bulk_assign_inbound(reseller_id):
 
 
 @bp.route('/admin/config', methods=['POST'])
-@user_management_required
+@permission_required('settings.write')
 def update_config():
     data = request.json
     for key, value in data.items():

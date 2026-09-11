@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 
 from panel.extensions import db
 from panel.models import SystemSetting
-from panel.routes.common import step_up_required, superadmin_required
+from panel.routes.common import permission_required, step_up_required
 from panel.services.backup import (
     _create_database_backup_file, _create_full_migration_zip, _db_uri,
     _get_system_setting_value, _is_postgres_db, _is_sqlite_db, _parse_int,
@@ -31,7 +31,7 @@ BACKUP_UPLOAD_MAX_SIZE = 2048 * 1024 * 1024  # 2 GB — full migration bundles (
 
 
 @bp.route('/api/backups', methods=['GET'])
-@superadmin_required
+@permission_required('backups.run')
 def list_backups():
     from app import (  # deferred: app-level helper, avoids circular import
         BACKUP_DIR, app,
@@ -81,7 +81,7 @@ def list_backups():
 
 
 @bp.route('/api/backups', methods=['POST'])
-@superadmin_required
+@permission_required('backups.run')
 def create_backup():
     from app import app  # deferred: app-level helper, avoids circular import
     try:
@@ -93,7 +93,7 @@ def create_backup():
 
 
 @bp.route('/api/backups/migration', methods=['POST'])
-@superadmin_required
+@permission_required('backups.run')
 def create_migration_backup():
     """Create a COMPLETE migration bundle (DB + all uploaded files) and return its filename.
     Use this to move everything to another server."""
@@ -111,7 +111,7 @@ def create_migration_backup():
 
 
 @bp.route('/api/backups/diag', methods=['GET'])
-@superadmin_required
+@permission_required('backups.run')
 def backup_diag():
     """Diagnostic: show backup directory path and files on disk."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -139,7 +139,7 @@ def backup_diag():
 
 
 @bp.route('/api/backups/upload', methods=['POST'])
-@superadmin_required
+@permission_required('backups.run')
 def upload_backup():
     from app import (  # deferred: app-level helper, avoids circular import
         BACKUP_DIR, app,
@@ -174,7 +174,7 @@ def upload_backup():
 
 
 @bp.route('/api/settings/backup', methods=['GET'])
-@superadmin_required
+@permission_required('backups.run')
 def get_backup_settings():
     from app import (  # deferred: app-level helper, avoids circular import
         _parse_bool, app,
@@ -189,7 +189,7 @@ def get_backup_settings():
 
 
 @bp.route('/api/settings/backup', methods=['POST'])
-@superadmin_required
+@permission_required('backups.run')
 def save_backup_settings():
     from app import app  # deferred: app-level helper, avoids circular import
     data = request.json
@@ -213,7 +213,7 @@ def save_backup_settings():
 
 
 @bp.route('/api/backups/cleanup', methods=['POST'])
-@superadmin_required
+@permission_required('backups.run')
 def cleanup_backups_now():
     """Apply the retention rule right now (Clear now button)."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -231,7 +231,7 @@ def cleanup_backups_now():
 
 
 @bp.route('/api/backups/<filename>/download', methods=['GET'])
-@superadmin_required
+@permission_required('backups.run')
 def download_backup(filename):
     from app import (  # deferred: app-level helper, avoids circular import
         BACKUP_DIR, app,
@@ -258,7 +258,7 @@ def download_backup(filename):
 
 
 @bp.route('/api/backups/<filename>/restore', methods=['POST'])
-@superadmin_required
+@permission_required('backups.restore')
 @step_up_required('backups.restore')
 def restore_backup(filename):
     from app import (  # deferred: app-level helper, avoids circular import
@@ -312,7 +312,7 @@ def restore_backup(filename):
 
 
 @bp.route('/api/backups/<filename>/restore/stream', methods=['POST'])
-@superadmin_required
+@permission_required('backups.restore')
 @step_up_required('backups.restore')
 def restore_backup_stream(filename):
     """SSE endpoint — streams live restore progress to the browser."""
@@ -497,7 +497,7 @@ def restore_backup_stream(filename):
 
 
 @bp.route('/api/backups/<filename>', methods=['DELETE'])
-@superadmin_required
+@permission_required('backups.run')
 def delete_backup(filename):
     from app import (  # deferred: app-level helper, avoids circular import
         BACKUP_DIR, app,

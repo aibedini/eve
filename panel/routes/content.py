@@ -12,7 +12,7 @@ from panel.models import (
     Admin, Announcement, AnnouncementDelivery, FAQ, OnlineChatScript, Server, SubAppConfig,
     SystemConfig,
 )
-from panel.routes.common import user_management_required
+from panel.routes.common import permission_required
 from panel.services.subscription import (
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA,
@@ -117,7 +117,7 @@ def get_sub_apps():
 
 
 @bp.route('/api/sub-apps', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_sub_app():
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -170,7 +170,7 @@ def create_sub_app():
 
 
 @bp.route('/api/sub-apps/<int:app_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_sub_app(app_id):
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -228,7 +228,7 @@ def update_sub_app(app_id):
 
 
 @bp.route('/api/sub-apps/reorder', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def reorder_sub_apps():
     """Accept [{id, display_order}, ...] and bulk-update ordering."""
     from app import app  # deferred: app-level helper, avoids circular import
@@ -249,7 +249,7 @@ def reorder_sub_apps():
 
 
 @bp.route('/api/sub-apps/<int:app_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_sub_app(app_id):
     from app import app  # deferred: app-level helper, avoids circular import
     app_config = db.session.get(SubAppConfig, app_id)
@@ -266,7 +266,7 @@ def delete_sub_app(app_id):
 
 
 @bp.route('/api/subscription-statistics', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_subscription_statistics():
     """Save the configurable, connectable statistics subscription entry."""
     data = request.get_json(silent=True)
@@ -309,7 +309,7 @@ def update_subscription_statistics():
 
 # FAQ APIs
 @bp.route('/api/faqs', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def get_faqs():
     from app import app  # deferred: app-level helper, avoids circular import
     faqs = FAQ.query.order_by(FAQ.created_at.desc()).all()
@@ -319,7 +319,7 @@ def get_faqs():
 
 
 @bp.route('/api/faqs', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_faq():
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -358,7 +358,7 @@ def create_faq():
 
 
 @bp.route('/api/faqs/<int:faq_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_faq(faq_id):
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -394,7 +394,7 @@ def update_faq(faq_id):
 
 
 @bp.route('/api/faqs/<int:faq_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_faq(faq_id):
     from app import app  # deferred: app-level helper, avoids circular import
     faq = db.session.get(FAQ, faq_id)
@@ -412,7 +412,7 @@ def delete_faq(faq_id):
 
 # Announcement APIs (Sub Manager)
 @bp.route('/api/announcements', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def get_announcements():
     from panel.jobs.messaging import _announcement_campaign_eta
     items = Announcement.query.order_by(Announcement.created_at.desc()).all()
@@ -660,7 +660,7 @@ def _parse_announcement_payload(data: dict) -> tuple[dict | None, str | None]:
 
 
 @bp.route('/api/announcements', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_announcement():
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -727,7 +727,7 @@ def create_announcement():
 
 
 @bp.route('/api/announcements/<int:announcement_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_announcement(announcement_id):
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -819,7 +819,7 @@ def update_announcement(announcement_id):
 
 
 @bp.route('/api/announcements/preview', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def preview_announcement_campaign():
     from panel.jobs.messaging import _announcement_campaign_estimate
     data = request.get_json(silent=True) or {}
@@ -837,7 +837,7 @@ def preview_announcement_campaign():
 
 
 @bp.route('/api/announcements/<int:announcement_id>/<action>', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def mutate_announcement_campaign(announcement_id, action):
     from panel.jobs.messaging import _queue_announcement_campaign
     ann = db.session.get(Announcement, announcement_id)
@@ -861,7 +861,7 @@ def mutate_announcement_campaign(announcement_id, action):
 
 
 @bp.route('/api/announcements/<int:announcement_id>/failures', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def announcement_campaign_failures(announcement_id):
     ann = db.session.get(Announcement, announcement_id)
     if not ann or (ann.channel or 'subscription') != 'sms':
@@ -925,7 +925,7 @@ def announcement_campaign_failures(announcement_id):
 
 
 @bp.route('/api/announcements/<int:announcement_id>/blocked', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def announcement_campaign_blocked(announcement_id):
     """Return retry/skipped deliveries blocked by daily_limit_reached (or similar caps)."""
     ann = db.session.get(Announcement, announcement_id)
@@ -965,7 +965,7 @@ def announcement_campaign_blocked(announcement_id):
 
 
 @bp.route('/api/announcements/<int:announcement_id>/failures/resend', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def resend_announcement_campaign_failures(announcement_id):
     from panel.jobs.messaging import _recount_announcement_campaign
 
@@ -1035,7 +1035,7 @@ def resend_announcement_campaign_failures(announcement_id):
 
 
 @bp.route('/api/announcements/<int:announcement_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_announcement(announcement_id):
     from app import app  # deferred: app-level helper, avoids circular import
     ann = db.session.get(Announcement, announcement_id)
@@ -1054,7 +1054,7 @@ def delete_announcement(announcement_id):
 
 
 @bp.route('/api/announcements/<int:announcement_id>/deliveries/send-now', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def send_now_announcement_deliveries(announcement_id):
     """Force-send retry deliveries blocked by daily_limit_reached, bypassing the cap."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -1199,7 +1199,7 @@ def _parse_online_chat_payload(data: dict) -> tuple[dict | None, str | None]:
 
 
 @bp.route('/api/online-chat-scripts', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def get_online_chat_scripts():
     from app import app  # deferred: app-level helper, avoids circular import
     items = OnlineChatScript.query.order_by(OnlineChatScript.created_at.desc()).all()
@@ -1207,7 +1207,7 @@ def get_online_chat_scripts():
 
 
 @bp.route('/api/online-chat-scripts', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_online_chat_script():
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -1237,7 +1237,7 @@ def create_online_chat_script():
 
 
 @bp.route('/api/online-chat-scripts/<int:item_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_online_chat_script(item_id):
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -1263,7 +1263,7 @@ def update_online_chat_script(item_id):
 
 
 @bp.route('/api/online-chat-scripts/<int:item_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_online_chat_script(item_id):
     from app import app  # deferred: app-level helper, avoids circular import
     item = db.session.get(OnlineChatScript, item_id)
@@ -1280,7 +1280,7 @@ def delete_online_chat_script(item_id):
 
 
 @bp.route('/api/online-chat-scripts/<int:item_id>/activate', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def activate_online_chat_script(item_id):
     from app import app  # deferred: app-level helper, avoids circular import
     item = db.session.get(OnlineChatScript, item_id)

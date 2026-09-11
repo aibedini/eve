@@ -958,3 +958,24 @@ class AdminWebAuthnCredential(db.Model):
             'last_used_at': self.last_used_at.isoformat() + 'Z' if self.last_used_at else None,
         }
 
+
+class AdminPermission(db.Model):
+    """Per-admin permission override that wins over the role default."""
+    __tablename__ = 'admin_permissions'
+    __table_args__ = (
+        db.UniqueConstraint('admin_id', 'permission', name='uq_admin_permission'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    permission = db.Column(db.String(48), nullable=False, index=True)
+    allowed = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'permission': self.permission,
+            'allowed': bool(self.allowed),
+        }
+
+

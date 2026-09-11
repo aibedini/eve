@@ -5,7 +5,7 @@ from flask import Blueprint, jsonify, request, session
 
 from panel.extensions import db
 from panel.models import Admin, BankCard
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import login_required, permission_required
 
 bp = Blueprint('bank_cards', __name__)
 
@@ -65,7 +65,7 @@ def _bank_card_reseller_fields(data):
 
 
 @bp.route('/api/bank-cards', methods=['POST'])
-@user_management_required
+@permission_required('bank.manage')
 def create_bank_card():
     from app import sanitize_html  # deferred: app-level helper, avoids circular import
     user = db.session.get(Admin, session['admin_id'])
@@ -96,7 +96,7 @@ def create_bank_card():
     return jsonify({'success': True, 'card': card.to_dict()})
 
 @bp.route('/api/bank-cards/<int:card_id>', methods=['PUT'])
-@user_management_required
+@permission_required('bank.manage')
 def update_bank_card(card_id):
     from app import sanitize_html  # deferred: app-level helper, avoids circular import
     user = db.session.get(Admin, session['admin_id'])
@@ -125,7 +125,7 @@ def update_bank_card(card_id):
     return jsonify({'success': True, 'card': card.to_dict()})
 
 @bp.route('/api/bank-cards/<int:card_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('bank.manage')
 def delete_bank_card(card_id):
     card = db.session.get(BankCard, card_id)
     if not card:

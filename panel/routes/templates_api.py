@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request, session
 
 from panel.extensions import db
 from panel.models import Admin, NotificationTemplate, RenewTemplate
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import login_required, permission_required
 from panel.services.billing import (
     _empty_recommendation_template_vars, _recommendation_template_vars,
 )
@@ -87,7 +87,7 @@ Renewed. Link: {dashboard_link}"""
 
 
 @bp.route('/api/templates', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def get_templates():
     from app import app  # deferred: app-level helper, avoids circular import
     template_type = (request.args.get('type') or 'client_created').strip().lower()
@@ -99,7 +99,7 @@ def get_templates():
 
 
 @bp.route('/api/templates', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_template():
     from app import app  # deferred: app-level helper, avoids circular import
     data = request.get_json()
@@ -122,7 +122,7 @@ def create_template():
 
 
 @bp.route('/api/templates/<int:template_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(NotificationTemplate, template_id)
@@ -137,7 +137,7 @@ def update_template(template_id):
 
 
 @bp.route('/api/templates/<int:template_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(NotificationTemplate, template_id)
@@ -152,7 +152,7 @@ def delete_template(template_id):
 
 
 @bp.route('/api/templates/<int:template_id>/activate', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def activate_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(NotificationTemplate, template_id)
@@ -322,7 +322,7 @@ def _resolve_account_info_template(admin: 'Admin', channel: str = 'whatsapp') ->
 
 
 @bp.route('/api/account-message-templates', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def get_account_message_templates():
     from app import (  # deferred: app-level helper, avoids circular import
         DEFAULT_ACCOUNT_INFO_WHATSAPP_TEMPLATE,
@@ -416,7 +416,7 @@ def get_active_account_message_template():
 
 
 @bp.route('/api/account-message-templates', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_account_message_template():
     from app import app  # deferred: app-level helper, avoids circular import
     data = request.get_json() or {}
@@ -461,7 +461,7 @@ def create_account_message_template():
 
 
 @bp.route('/api/account-message-templates/<int:template_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_account_message_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(NotificationTemplate, template_id)
@@ -483,7 +483,7 @@ def update_account_message_template(template_id):
 
 
 @bp.route('/api/account-message-templates/<int:template_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_account_message_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(NotificationTemplate, template_id)
@@ -497,7 +497,7 @@ def delete_account_message_template(template_id):
 
 
 @bp.route('/api/account-message-templates/<int:template_id>/activate', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def activate_account_message_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(NotificationTemplate, template_id)
@@ -513,7 +513,7 @@ def activate_account_message_template(template_id):
 
 
 @bp.route('/api/account-message-templates/<int:template_id>/disable', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def disable_account_message_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(NotificationTemplate, template_id)
@@ -525,7 +525,7 @@ def disable_account_message_template(template_id):
 
 
 @bp.route('/api/renew-templates', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def get_renew_templates():
     from app import app  # deferred: app-level helper, avoids circular import
     templates = RenewTemplate.query.order_by(RenewTemplate.created_at.desc()).all()
@@ -545,7 +545,7 @@ def get_renew_templates():
 
 
 @bp.route('/api/renew-templates', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_renew_template():
     from app import app  # deferred: app-level helper, avoids circular import
     data = request.get_json()
@@ -566,7 +566,7 @@ def create_renew_template():
 
 
 @bp.route('/api/renew-templates/<int:template_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_renew_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(RenewTemplate, template_id)
@@ -581,7 +581,7 @@ def update_renew_template(template_id):
 
 
 @bp.route('/api/renew-templates/<int:template_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_renew_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(RenewTemplate, template_id)
@@ -596,7 +596,7 @@ def delete_renew_template(template_id):
 
 
 @bp.route('/api/renew-templates/<int:template_id>/activate', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def activate_renew_template(template_id):
     from app import app  # deferred: app-level helper, avoids circular import
     template = db.session.get(RenewTemplate, template_id)

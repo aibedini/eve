@@ -8,7 +8,7 @@ from werkzeug.utils import secure_filename
 
 from panel.extensions import db
 from panel.models import BackupConfig, Server, SystemConfig
-from panel.routes.common import superadmin_required, user_management_required
+from panel.routes.common import permission_required, superadmin_required
 from panel.services.backup import _parse_int
 
 
@@ -16,7 +16,7 @@ bp = Blueprint('files', __name__)
 
 
 @bp.route('/api/backup-configs', methods=['GET'])
-@user_management_required
+@permission_required('settings.write')
 def get_backup_configs():
     from app import app  # deferred: app-level helper, avoids circular import
     items = BackupConfig.query.order_by(BackupConfig.sort_order, BackupConfig.id).all()
@@ -30,7 +30,7 @@ def get_backup_configs():
 
 
 @bp.route('/api/backup-configs', methods=['POST'])
-@user_management_required
+@permission_required('settings.write')
 def create_backup_config():
     from app import app  # deferred: app-level helper, avoids circular import
     data = request.get_json(force=True) or {}
@@ -56,7 +56,7 @@ def create_backup_config():
 
 
 @bp.route('/api/backup-configs/<int:item_id>', methods=['PUT'])
-@user_management_required
+@permission_required('settings.write')
 def update_backup_config(item_id):
     from app import app  # deferred: app-level helper, avoids circular import
     item = db.session.get(BackupConfig, item_id)
@@ -85,7 +85,7 @@ def update_backup_config(item_id):
 
 
 @bp.route('/api/backup-configs/<int:item_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('settings.write')
 def delete_backup_config(item_id):
     from app import app  # deferred: app-level helper, avoids circular import
     item = db.session.get(BackupConfig, item_id)
@@ -101,7 +101,7 @@ def delete_backup_config(item_id):
 
 
 @bp.route('/api/upload', methods=['POST'])
-@user_management_required
+@permission_required('settings.write')
 def upload_file():
     from app import (  # deferred: app-level helper, avoids circular import
         MAX_FILE_SIZE, app,

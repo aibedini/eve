@@ -13,7 +13,7 @@ from panel.models import (
     UsageHourly,
 )
 from panel.routes.common import (
-    login_required, step_up_required, superadmin_required, user_management_required,
+    login_required, permission_required, step_up_required,
 )
 from panel.services.backup import _parse_int, _set_system_setting_value
 
@@ -140,7 +140,7 @@ def _apply_nginx_config(domain: str, cert_path: str = '', key_path: str = '') ->
 
 
 @bp.route('/api/settings/subscription-page', methods=['GET'])
-@user_management_required
+@permission_required('settings.write')
 def get_subscription_page_settings():
     from app import (  # deferred: app-level helper, avoids circular import
         _get_or_create_system_setting, app,
@@ -152,7 +152,7 @@ def get_subscription_page_settings():
 
 
 @bp.route('/api/settings/subscription-page', methods=['POST'])
-@user_management_required
+@permission_required('settings.write')
 def save_subscription_page_settings():
     from app import app  # deferred: app-level helper, avoids circular import
     try:
@@ -176,7 +176,7 @@ def save_subscription_page_settings():
 
 
 @bp.route('/api/settings/general', methods=['GET'])
-@user_management_required
+@permission_required('settings.write')
 def get_general_settings():
     from app import (  # deferred: app-level helper, avoids circular import
         PANEL_DOMAIN_SETTING_KEY, _get_app_calendar_name,
@@ -216,7 +216,7 @@ def get_general_settings():
 
 
 @bp.route('/api/settings/general', methods=['POST'])
-@user_management_required
+@permission_required('settings.write')
 def save_general_settings():
     from app import (  # deferred: app-level helper, avoids circular import
         DEFAULT_APP_CALENDAR, DEFAULT_APP_TIMEZONE,
@@ -314,7 +314,7 @@ def save_general_settings():
 
 
 @bp.route('/api/settings/ssl/diagnose', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def diagnose_ssl():
     """Figure out where HTTPS is actually coming from for THIS request.
 
@@ -419,7 +419,7 @@ def diagnose_ssl():
 
 
 @bp.route('/api/settings/ssl', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def get_ssl_settings():
     from app import (  # deferred: app-level helper, avoids circular import
         _autodetect_ssl_paths, app,
@@ -519,7 +519,7 @@ def get_ssl_settings():
 
 
 @bp.route('/api/settings/ssl', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 @step_up_required('settings.write')
 def save_ssl_settings():
     from app import app  # deferred: app-level helper, avoids circular import
@@ -567,7 +567,7 @@ def save_ssl_settings():
 
 # ── SSL Sync — copy LetsEncrypt certs to /etc/ssl/eve-manager/ via sudo ──────
 @bp.route('/api/settings/ssl/sync', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def ssl_sync():
     """Host-managed TLS keys cannot be copied by the web process.
 
@@ -734,7 +734,7 @@ def ssl_sync():
 
 # ── SSL Export — download cert + key as a zip ───────────────────────────────
 @bp.route('/api/settings/ssl/export')
-@superadmin_required
+@permission_required('secrets.manage')
 def ssl_export():
     """Private keys are deliberately non-exportable from the web process."""
     return jsonify({
@@ -747,7 +747,7 @@ SSL_DEST_DIR = '/etc/ssl/eve-manager'
 
 
 @bp.route('/api/settings/ssl/upload', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def ssl_upload():
     """TLS private-key upload is disabled for the web process.
 
@@ -871,7 +871,7 @@ def _io_BytesIO(data):
 
 # ── SSL Apply — write nginx config + reload ─────────────────────────────────
 @bp.route('/api/settings/ssl/apply', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 @step_up_required('settings.write')
 def ssl_apply():
     """Write HTTPS nginx config and reload nginx."""

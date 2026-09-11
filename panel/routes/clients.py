@@ -23,7 +23,7 @@ from panel.models import (
     Admin, ClientOwnership, NotificationTemplate, Package, RenewTemplate,
     Server, ServiceOwnership, Transaction, VolumeRulePreset,
 )
-from panel.routes.common import admin_is_superadmin, login_required
+from panel.routes.common import admin_is_superadmin, login_required, permission_required
 from panel.security import outbound_tls_verify
 from panel.services.client_operations import (
     begin_client_operation, complete_client_operation, fail_client_operation,
@@ -35,6 +35,7 @@ bp = Blueprint('clients', __name__)
 
 @bp.route('/api/clients/search')
 @login_required
+@permission_required('clients.read')
 @limiter.limit("60 per minute")
 def global_client_search():
     from app import (  # deferred: app-level helper, avoids circular import
@@ -118,6 +119,7 @@ def global_client_search():
 
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/toggle', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def toggle_client(server_id, inbound_id):
     from app import _toggle_client_core  # deferred: app-level helper, avoids circular import
     user = db.session.get(Admin, session['admin_id'])
@@ -146,6 +148,7 @@ def toggle_client(server_id, inbound_id):
 
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/reset', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def reset_client_traffic(server_id, inbound_id):
     from app import (  # deferred: app-level helper, avoids circular import
         CLIENT_RESET_FALLBACKS, CLIENT_UPDATE_FALLBACKS, _has_client_access, _json_field,
@@ -369,6 +372,7 @@ def reset_client_traffic(server_id, inbound_id):
 
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/edit', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def edit_client(server_id, inbound_id, email):
     from app import (  # deferred: app-level helper, avoids circular import
         CLIENT_UPDATE_FALLBACKS, GLOBAL_REFRESH_LOCK, GLOBAL_SERVER_DATA, _get_panel_ui_lang,
@@ -611,6 +615,7 @@ def edit_client(server_id, inbound_id, email):
 
 @bp.route('/api/client/<int:server_id>/<email>/inbounds', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def set_client_inbounds(server_id, email):
     """Change which inbounds a v3 client is assigned to (add/replace/remove)."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -637,6 +642,7 @@ def set_client_inbounds(server_id, email):
 
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/delete', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def delete_client(server_id, inbound_id, email):
     from app import _delete_client_core, app  # deferred: app-level helper, avoids circular import
     try:
@@ -710,6 +716,7 @@ def delete_volume_rule_preset(preset_id):
 
 @bp.route('/api/client/bulk', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def bulk_client_action():
     from app import (  # deferred: app-level helper, avoids circular import
         BULK_JOBS, BULK_JOBS_CLIENTS, BULK_JOBS_LOCK, _load_bulk_jobs_locked, _parse_bool,
@@ -881,6 +888,7 @@ def bulk_client_job(job_id):
 
 @bp.route('/api/client/<email>/last-renewal', methods=['GET'])
 @login_required
+@permission_required('clients.read')
 def client_last_renewal(email):
     """Return the most recent renewal transaction(s) for a client email so the
     operator can avoid charging the same account twice."""
@@ -1222,6 +1230,7 @@ def _fire_renew_whatsapp(server_id: int, email: str, text: str,
 
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def renew_client(server_id, inbound_id, email):
     """Renew client expiry and/or volume"""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -2265,6 +2274,7 @@ def renew_client(server_id, inbound_id, email):
 
 @bp.route('/api/client/<int:server_id>/rotate', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def rotate_client(server_id):
     """Replace a leaked client: disable the old one (uid/link revoked) and create
     a fresh client (new UUID + new subId) carrying over the remaining traffic
@@ -2584,6 +2594,7 @@ def rotate_client(server_id):
 
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew/verify', methods=['POST'])
 @login_required
+@permission_required('clients.read')
 def verify_renew_client(server_id, inbound_id, email):
     """Re-check a client's expiry, volume, and active state after a renew.
 
@@ -2878,6 +2889,7 @@ def client_qrcode():
 
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/add', methods=['POST'])
 @login_required
+@permission_required('clients.write')
 def add_client(server_id, inbound_id):
     from app import (  # deferred: app-level helper, avoids circular import
         CLIENT_CREATED_SMS_TEMPLATE_TYPE, DEFAULT_CLIENT_CREATED_SMS_TEMPLATE,

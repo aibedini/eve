@@ -11,7 +11,7 @@ from panel.models import (
     RECEIPT_STATUS_APPROVED, RECEIPT_STATUS_AUTO_APPROVED,
     RECEIPT_STATUS_AUTO_PENDING, RECEIPT_STATUS_PENDING, RECEIPT_STATUS_REJECTED,
 )
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import login_required, permission_required
 
 bp = Blueprint('receipts', __name__)
 
@@ -144,7 +144,7 @@ def download_receipt_file(receipt_id):
     return send_file(full_path, as_attachment=False)
 
 @bp.route('/api/receipts/<int:receipt_id>/approve', methods=['POST'])
-@user_management_required
+@permission_required('finance.manage')
 def approve_receipt(receipt_id):
     from app import apply_receipt_credit, trigger_auto_receipt_processing  # deferred: app-level helper, avoids circular import
     trigger_auto_receipt_processing()
@@ -170,7 +170,7 @@ def approve_receipt(receipt_id):
     return jsonify({'success': True, 'receipt': data})
 
 @bp.route('/api/receipts/<int:receipt_id>/reject', methods=['POST'])
-@user_management_required
+@permission_required('finance.manage')
 def reject_receipt(receipt_id):
     from app import rollback_receipt_credit, trigger_auto_receipt_processing  # deferred: app-level helper, avoids circular import
     trigger_auto_receipt_processing()
@@ -227,13 +227,13 @@ def reject_receipt(receipt_id):
     return jsonify({'success': True, 'receipt': data})
 
 @bp.route('/api/receipts/auto-windows', methods=['GET'])
-@user_management_required
+@permission_required('finance.manage')
 def list_auto_windows():
     windows = AutoApprovalWindow.query.order_by(AutoApprovalWindow.starts_at.desc()).all()
     return jsonify({'success': True, 'windows': [w.to_dict() for w in windows]})
 
 @bp.route('/api/receipts/auto-windows', methods=['POST'])
-@user_management_required
+@permission_required('finance.manage')
 def create_auto_window():
     from app import parse_iso_datetime  # deferred: app-level helper, avoids circular import
     data = request.get_json() or {}
@@ -256,7 +256,7 @@ def create_auto_window():
     return jsonify({'success': True, 'window': window.to_dict()})
 
 @bp.route('/api/receipts/auto-windows/<int:window_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('finance.manage')
 def disable_auto_window(window_id):
     window = db.session.get(AutoApprovalWindow, window_id)
     if not window:

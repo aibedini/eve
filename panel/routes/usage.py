@@ -11,7 +11,7 @@ from panel.extensions import db
 from panel.models import (
     Admin, ClientOwnership, Server, UsageCounterState, UsageDaily, UsageHourly,
 )
-from panel.routes.common import admin_is_superadmin, current_admin, login_required, user_management_required
+from panel.routes.common import admin_is_superadmin, current_admin, login_required, permission_required
 
 bp = Blueprint('usage', __name__)
 
@@ -130,7 +130,7 @@ def get_settings_overview():
 
 
 @bp.route('/api/usage-snapshot/trigger', methods=['POST'])
-@user_management_required
+@permission_required('settings.read')
 def trigger_usage_snapshot():
     """Queue a usage snapshot in the dedicated background process."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -153,7 +153,7 @@ def trigger_usage_snapshot():
 
 
 @bp.route('/api/usage-snapshot/progress', methods=['GET'])
-@user_management_required
+@permission_required('settings.read')
 def snapshot_progress():
     """Return current progress of the running/last snapshot task (cross-worker via shared file)."""
     from app import _read_snap_progress  # deferred: app-level helper, avoids circular import

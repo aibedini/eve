@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, make_response, request, session
 
 from panel.extensions import db
 from panel.models import Admin, Package, PriceTier, SystemConfig
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import login_required, permission_required
 from panel.services.billing import calculate_reseller_price
 
 bp = Blueprint('packages', __name__)
@@ -61,7 +61,7 @@ def get_packages():
     return resp
 
 @bp.route('/admin/packages', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_package():
     import json as _j
     data = request.json or {}
@@ -89,7 +89,7 @@ def create_package():
     return jsonify({"success": True, "id": package.id})
 
 @bp.route('/admin/packages/<int:package_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_package(package_id):
     package = Package.query.get_or_404(package_id)
     data = request.json or {}
@@ -124,7 +124,7 @@ def update_package(package_id):
     return jsonify({"success": True})
 
 @bp.route('/admin/packages/<int:package_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_package(package_id):
     package = Package.query.get_or_404(package_id)
     db.session.delete(package)
@@ -334,7 +334,7 @@ def reseller_toggle_package_sub(package_id):
 # ── Package scope / reseller endpoints ───────────────────────────────────────
 
 @bp.route('/admin/packages/<int:package_id>/assign', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def assign_package_to_resellers(package_id):
     """Set which resellers can see this package (scope=assigned)."""
     import json as _j
@@ -555,7 +555,7 @@ def package_min_price():
 
 
 @bp.route('/api/price-tiers', methods=['GET'])
-@user_management_required
+@permission_required('content.manage')
 def list_price_tiers():
     reseller_id = request.args.get('reseller_id')
     q = PriceTier.query
@@ -576,7 +576,7 @@ def list_price_tiers():
 
 
 @bp.route('/api/price-tiers', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_price_tier():
     data = request.json or {}
     admin_id = session.get('admin_id')
@@ -611,7 +611,7 @@ def create_price_tier():
 
 
 @bp.route('/api/price-tiers/<int:tier_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_price_tier(tier_id):
     tier = db.session.get(PriceTier, tier_id)
     if not tier:
@@ -647,7 +647,7 @@ def update_price_tier(tier_id):
 
 
 @bp.route('/api/price-tiers/<int:tier_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_price_tier(tier_id):
     tier = db.session.get(PriceTier, tier_id)
     if not tier:

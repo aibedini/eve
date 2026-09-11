@@ -11,7 +11,7 @@ from panel.core.phone import _extract_iran_mobile_from_text
 from panel.core.redis_client import get_redis
 from panel.extensions import db
 from panel.models import Admin, PendingSms, SmsSendLog, SystemConfig
-from panel.routes.common import superadmin_required
+from panel.routes.common import permission_required
 from panel.security import outbound_tls_verify
 
 
@@ -160,7 +160,7 @@ def _sms_scan_cancel_set():
 
 
 @bp.route('/api/sms/test-connection', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def test_sms_connection():
     """Verify the selected SMS gateway: /health then authenticated /ready."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -200,7 +200,7 @@ def test_sms_connection():
 
 
 @bp.route('/api/sms/test-send', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def sms_test_send():
     """Send a real test SMS so the admin can confirm the gateway works end-to-end.
 
@@ -285,7 +285,7 @@ def sms_test_send():
 
 
 @bp.route('/api/sms/scan/run', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def sms_scan_run():
     """Kick off the automated state-based SMS scan now (non-blocking). The UI then
     polls /api/sms/scan/status to watch progress."""
@@ -353,7 +353,7 @@ def sms_scan_run():
 
 
 @bp.route('/api/sms/scan/status', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def sms_scan_status():
     """Live progress of the current/last SMS scan (shared across all workers)."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -394,7 +394,7 @@ def sms_scan_status():
 
 
 @bp.route('/api/sms/queue/promote-high', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def sms_queue_promote_high():
     """Move all delayed high-priority GMweb jobs to the queue front now."""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -443,7 +443,7 @@ def sms_queue_promote_high():
 
 
 @bp.route('/api/sms/scan/stop', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def sms_scan_stop():
     """Signal the running scan to abort after the current item, then disable
     SMS automation so no new scan starts automatically. The UI should reflect
@@ -467,7 +467,7 @@ def sms_scan_stop():
 
 
 @bp.route('/api/sms/logs', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def sms_logs():
     """Recent SMS send-log history (newest first), paginated."""
     from app import app  # deferred: app-level helper, avoids circular import
@@ -498,7 +498,7 @@ def sms_logs():
 
 
 @bp.route('/api/sms/capacity', methods=['GET'])
-@superadmin_required
+@permission_required('secrets.manage')
 def sms_capacity():
     """Expose the selected gateway's authenticated lane/capacity snapshot."""
     from panel.jobs.messaging import _get_gmweb_send_capacity
@@ -509,7 +509,7 @@ def sms_capacity():
 
 
 @bp.route('/api/whatsapp/test-connection', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def test_whatsapp_connection():
     from app import (  # deferred: app-level helper, avoids circular import
         _get_whatsapp_runtime_settings, _openwa_session_status, app,
@@ -584,7 +584,7 @@ def test_whatsapp_connection():
 
 
 @bp.route('/api/whatsapp/auto-configure', methods=['POST'])
-@superadmin_required
+@permission_required('secrets.manage')
 def auto_configure_whatsapp_gateway():
     from app import (  # deferred: app-level helper, avoids circular import
         WHATSAPP_GATEWAY_URL_KEY, _get_whatsapp_runtime_settings,

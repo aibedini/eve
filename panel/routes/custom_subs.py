@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from panel.extensions import db, limiter
 from panel.models import CustomSubscription, CustomSubscriptionConfig
-from panel.routes.common import login_required, user_management_required
+from panel.routes.common import login_required, permission_required
 from panel.security import hash_bearer_token
 
 bp = Blueprint('custom_subs', __name__)
@@ -111,7 +111,7 @@ def preview_custom_subscription(subscription_id):
 
 
 @bp.route('/api/custom-subscriptions', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def create_custom_subscription():
     data = request.get_json(silent=True) or {}
     name = str(data.get('name') or '').strip()[:120]
@@ -139,7 +139,7 @@ def create_custom_subscription():
 
 
 @bp.route('/api/custom-subscriptions/<int:subscription_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_custom_subscription(subscription_id):
     row = db.session.get(CustomSubscription, subscription_id)
     if not row:
@@ -172,7 +172,7 @@ def update_custom_subscription(subscription_id):
 
 
 @bp.route('/api/custom-subscriptions/<int:subscription_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_custom_subscription(subscription_id):
     row = db.session.get(CustomSubscription, subscription_id)
     if not row:
@@ -183,7 +183,7 @@ def delete_custom_subscription(subscription_id):
 
 
 @bp.route('/api/custom-subscriptions/<int:subscription_id>/configs', methods=['POST'])
-@user_management_required
+@permission_required('content.manage')
 def add_custom_subscription_configs(subscription_id):
     row = db.session.get(CustomSubscription, subscription_id)
     if not row:
@@ -220,7 +220,7 @@ def add_custom_subscription_configs(subscription_id):
 
 
 @bp.route('/api/custom-subscriptions/<int:subscription_id>/configs/<int:config_id>', methods=['PUT'])
-@user_management_required
+@permission_required('content.manage')
 def update_custom_subscription_config(subscription_id, config_id):
     item = CustomSubscriptionConfig.query.filter_by(
         id=config_id, subscription_id=subscription_id).first()
@@ -262,7 +262,7 @@ def update_custom_subscription_config(subscription_id, config_id):
 
 
 @bp.route('/api/custom-subscriptions/<int:subscription_id>/configs/<int:config_id>', methods=['DELETE'])
-@user_management_required
+@permission_required('content.manage')
 def delete_custom_subscription_config(subscription_id, config_id):
     item = CustomSubscriptionConfig.query.filter_by(
         id=config_id, subscription_id=subscription_id).first()

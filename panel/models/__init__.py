@@ -93,6 +93,7 @@ from panel.models.ops import (
     AdminMFABackupCode,
     AdminSession,
     AdminWebAuthnCredential,
+    AdminPermission,
     WhatsappBotLog,
     SmsSendLog,
     PendingSms,

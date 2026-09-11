@@ -5,6 +5,7 @@ from flask import g, jsonify, redirect, request, session, url_for
 
 from panel.extensions import db
 from panel.models import Admin
+from panel.services.permissions import has_permission, permissions_for
 from panel.services.sessions import (
     SESSION_TOKEN_KEY, resolve_session, role_of, step_up_fresh,
 )
@@ -114,6 +115,44 @@ def step_up_required(scope: str | None = None):
                         "scope": scope,
                     }), 403
             _sync_session_authority(admin)
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+
+
+def current_permissions() -> frozenset:
+    """Effective permission set for the signed-in admin (empty when anonymous)."""
+    admin = current_admin()
+    if admin is None:
+        return frozenset()
+    return permissions_for(admin)
+
+
+def permission_required(permission: str):
+    """Server-side permission gate.
+
+    Runs after the session guard so an unauthenticated caller is still a 401 and
+    a missing permission is a 403. The permission catalog and role defaults live
+    in panel/services/permissions.py.
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            admin = current_admin()
+            if not admin:
+                session.clear()
+                return jsonify({"success": False, "error": "Unauthorized"}), 401
+            # Refresh presentation fields from the authoritative admin row before
+            # the decision, so a tampered session role is corrected even on a 403.
+            _sync_session_authority(admin)
+            if not has_permission(admin, permission):
+                return jsonify({
+                    "success": False,
+                    "code": "forbidden",
+                    "error": f"Permission required: {permission}",
+                }), 403
             return f(*args, **kwargs)
         return wrapper
     return decorator

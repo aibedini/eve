@@ -8,7 +8,7 @@ from panel.models import (
     Admin, BankCard, PulseAgent, PulseRun, PulseTemplate, Server, SystemConfig,
     get_pulse_settings,
 )
-from panel.routes.common import current_admin, login_required, user_management_required
+from panel.routes.common import current_admin, login_required, permission_required
 from panel.services.billing import calculate_reseller_price, get_config
 from panel.services.subscription import (
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
@@ -286,7 +286,7 @@ def finance_page():
                            servers=servers)
 
 @bp.route('/sub-manager')
-@user_management_required
+@permission_required('content.manage')
 def sub_manager_page():
     from app import (
         DEFAULT_WHATSAPP_BOT_TPL_CREATED, DEFAULT_WHATSAPP_BOT_TPL_ENDED,
@@ -364,7 +364,7 @@ def sub_manager_page():
                          whatsapp_bot_tpl_info=whatsapp_cfg.get('bot_tpl_info', DEFAULT_WHATSAPP_BOT_TPL_INFO))
 
 @bp.route('/packages')
-@user_management_required
+@permission_required('content.manage')
 def packages_page():
     cost_gb = db.session.get(SystemConfig, 'cost_per_gb')
     cost_day = db.session.get(SystemConfig, 'cost_per_day')
@@ -379,7 +379,7 @@ def packages_page():
                          role=session.get('role', 'admin'))
 
 @bp.route('/bank-cards')
-@user_management_required
+@permission_required('content.manage')
 def bank_cards_page():
     return render_template('bank_cards.html',
                          admin_username=session.get('admin_username'),
@@ -387,7 +387,7 @@ def bank_cards_page():
                          role=session.get('role', 'admin'))
 
 @bp.route('/custom-subscriptions')
-@user_management_required
+@permission_required('content.manage')
 def custom_subscriptions_page():
     return render_template(
         'custom_subscriptions.html',
