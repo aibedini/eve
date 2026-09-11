@@ -5,6 +5,7 @@ from datetime import datetime
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from panel.core.finance_privacy import mask_account_like, mask_card_number
 from panel.extensions import db
 from panel.models._helpers import _format_jalali, _parse_allowed_servers, _server_is_v3  # noqa: F401
 from panel.security import EncryptedText
@@ -420,14 +421,16 @@ class BankCard(db.Model):
     assigned_reseller_ids = db.Column(db.Text, default='[]')  # JSON list of admin IDs
 
     def masked_card(self):
-        if not self.card_number:
-            return None
-        cleaned = ''.join(filter(str.isdigit, self.card_number))
-        if len(cleaned) <= 4:
-            return cleaned
-        return f"{'*' * (len(cleaned) - 4)}{cleaned[-4:]}"
+        return mask_card_number(self.card_number)
+
+    def masked_iban(self):
+        return mask_account_like(self.iban)
+
+    def masked_account_number(self):
+        return mask_account_like(self.account_number)
 
     def to_dict(self):
+        """Default representation: financial identifiers are always masked."""
         try:
             assigned = json.loads(self.assigned_reseller_ids or '[]')
         except Exception:
@@ -437,16 +440,28 @@ class BankCard(db.Model):
             'label': self.label,
             'bank_name': self.bank_name,
             'owner_name': self.owner_name,
-            'card_number': self.card_number,
+            'card_number': self.masked_card(),
             'masked_card': self.masked_card(),
-            'iban': self.iban,
-            'account_number': self.account_number,
+            'iban': self.masked_iban(),
+            'account_number': self.masked_account_number(),
             'notes': self.notes,
             'is_active': self.is_active,
             'reseller_id': self.reseller_id,
             'assigned_reseller_ids': assigned,
+            'revealed': False,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+
+    def to_reveal_dict(self):
+        """Full representation, only for the audited, step-up-gated reveal route."""
+        payload = self.to_dict()
+        payload.update({
+            'card_number': self.card_number,
+            'iban': self.iban,
+            'account_number': self.account_number,
+            'revealed': True,
+        })
+        return payload
 
 
 class NotificationTemplate(db.Model):

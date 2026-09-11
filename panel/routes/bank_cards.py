@@ -3,9 +3,14 @@ import json
 
 from flask import Blueprint, jsonify, request, session
 
-from panel.extensions import db
+from panel.core.finance_privacy import (
+    is_masked_value, mask_account_like, mask_card_number, mask_iban,
+)
+from panel.extensions import db, limiter
 from panel.models import Admin, BankCard
-from panel.routes.common import login_required, permission_required
+from panel.routes.common import (
+    admin_is_superadmin, login_required, permission_required, step_up_required,
+)
 
 bp = Blueprint('bank_cards', __name__)
 
@@ -104,11 +109,22 @@ def update_bank_card(card_id):
     if not card:
         return jsonify({'success': False, 'error': 'Card not found'}), 404
     data = request.get_json() or {}
+    # The edit form is pre-filled from the masked list payload, so a client that
+    # posts the form back unchanged would otherwise overwrite the stored number
+    # with its own mask. Only a genuinely new submission replaces a secret field.
+    secret_fields = {
+        'card_number': mask_card_number,
+        'iban': mask_iban,
+        'account_number': mask_account_like,
+    }
     for field in ('label', 'bank_name', 'owner_name', 'card_number', 'iban', 'account_number', 'notes'):
         if field in data:
             value = data.get(field)
             if isinstance(value, str):
                 value = sanitize_html(value.strip())
+            masker = secret_fields.get(field)
+            if masker and is_masked_value(value, getattr(card, field, None), masker):
+                continue
             setattr(card, field, value)
     if 'is_active' in data:
         card.is_active = bool(data.get('is_active'))
@@ -133,3 +149,31 @@ def delete_bank_card(card_id):
     db.session.delete(card)
     db.session.commit()
     return jsonify({'success': True})
+
+
+@bp.route('/api/bank-cards/<int:card_id>/reveal', methods=['POST'])
+@limiter.limit('20 per minute')
+@permission_required('bank.reveal')
+@step_up_required('bank.reveal')
+def reveal_bank_card(card_id):
+    """Return the full identifiers of one card - the only unmasked read path.
+
+    Every list/detail response masks card_number/iban/account_number. Support
+    and reconciliation occasionally need the real values, so this route returns
+    them behind three independent gates (permission, a fresh MFA step-up and the
+    card's own access scope) and records an audit row that notes that a reveal
+    happened - never the value itself.
+    """
+    from app import _log_audit  # deferred: app-level helper, avoids circular import
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 401
+    card = db.session.get(BankCard, card_id)
+    if not card:
+        return jsonify({'success': False, 'error': 'Card not found'}), 404
+    if not admin_is_superadmin(user) and not _bank_card_accessible_to(card, user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    payload = card.to_reveal_dict()
+    _log_audit('bank_card.reveal', card, actor=user)
+    db.session.commit()
+    return jsonify({'success': True, 'card': payload})

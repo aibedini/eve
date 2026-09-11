@@ -1917,6 +1917,14 @@
 
     kindSelect.addEventListener('change', () => updateKindUI());
 
+    function resetSenderCardField() {
+        const field = document.getElementById('payment-sender-card');
+        if (!field) return;
+        field.value = '';
+        field.placeholder = '6037xxxxxxxxxxxx';
+        delete field.dataset.masked;
+    }
+
     function openModal() {
         document.getElementById('payment-modal').classList.remove('hidden');
         updateKindUI();
@@ -1926,6 +1934,7 @@
         document.getElementById('payment-modal').classList.add('hidden');
         document.getElementById('payment-form').reset();
         document.getElementById('payment-id').value = '';
+        resetSenderCardField();
         document.getElementById('modal-title').textContent = 'Add Payment';
         const err = document.getElementById('payment-error');
         if (err) { err.style.display = 'none'; err.textContent = ''; }
@@ -1994,11 +2003,19 @@
             payment_time: paymentTime,
             card_id: document.getElementById('payment-card').value || null,
             sender_name: document.getElementById('payment-sender-name').value,
-            sender_card: document.getElementById('payment-sender-card').value,
             client_email: document.getElementById('payment-client').value,
             description: document.getElementById('payment-description').value,
             is_expense: kindSelect.value === 'expense'
         };
+
+        // The edit form only ever receives the masked card, so the field starts
+        // empty; a blank field must leave the stored value untouched instead of
+        // overwriting it with a mask or clearing it.
+        const senderCardField = document.getElementById('payment-sender-card');
+        const senderCardValue = senderCardField ? senderCardField.value.trim() : '';
+        if (senderCardValue) {
+            data.sender_card = senderCardValue;
+        }
 
         if (data.is_expense) {
             data.server_id = document.getElementById('payment-server').value || null;
@@ -2095,7 +2112,14 @@
             document.getElementById('payment-time').value = timePart;
             document.getElementById('payment-card').value = entry.card_id || '';
             document.getElementById('payment-sender-name').value = entry.sender_name || '';
-            document.getElementById('payment-sender-card').value = entry.sender_card || '';
+            // Only the masked card is returned by the API. Show it as a hint and
+            // leave the input empty, so saving the form does not resubmit the mask.
+            const senderCardInput = document.getElementById('payment-sender-card');
+            if (senderCardInput) {
+                senderCardInput.value = '';
+                senderCardInput.dataset.masked = entry.sender_card || '';
+                senderCardInput.placeholder = entry.sender_card || '6037xxxxxxxxxxxx';
+            }
             document.getElementById('payment-client').value = entry.client_email || '';
             document.getElementById('payment-description').value = entry.description || '';
 

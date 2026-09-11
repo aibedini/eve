@@ -624,7 +624,11 @@
             const el = document.createElement('div');
             el.className = 'card-option';
             const cardNumber = card.card_number || card.number || '';
-            el.onclick = (e) => selectCard(card.id, cardNumber);
+            // The API only returns a masked number. Treat a masked value as
+            // display-only so selecting/copying a card cannot put a mask on the
+            // clipboard as if it were the real number.
+            const copyableNumber = /[*xX•]/.test(cardNumber) ? '' : cardNumber;
+            el.onclick = (e) => selectCard(card.id, copyableNumber);
             
             // Format card number (groups of 4)
             const formattedNumber = (cardNumber).replace(/(\d{4})(?=\d)/g, '$1 ');
@@ -639,7 +643,7 @@
                         <span class="card-bank-name">${card.bank_name || card.bank || 'Bank Card'} - ${card.owner_name || card.owner || ''}</span>
                     </div>
                 </div>
-                <button class="card-copy-btn" type="button" onclick="copyCardNumber(event, '${cardNumber}')" title="Copy Number">
+                <button class="card-copy-btn" type="button" onclick="copyCardNumber(event, '${copyableNumber}')" title="Copy Number">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 </button>
             `;

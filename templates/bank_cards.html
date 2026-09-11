@@ -208,8 +208,12 @@
 
     function formatCardNumber(raw) {
         if (!raw) return '---- ---- ---- ----';
-        const digits = String(raw).replace(/[^0-9]/g, '');
-        if (!digits) return raw;
+        const text = String(raw);
+        // The API only returns the masked number; stripping the mask would
+        // render 6037********5678 as the plausible-looking 6037 5678.
+        if (/[*xX•]/.test(text)) return text;
+        const digits = text.replace(/[^0-9]/g, '');
+        if (!digits) return text;
         return digits.replace(/(.{4})/g, '$1 ').trim();
     }
 
@@ -217,6 +221,21 @@
         if (!raw) return '-';
         const cleaned = String(raw).replace(/\s+/g, '').toUpperCase();
         return cleaned.replace(/(.{4})/g, '$1 ').trim();
+    }
+
+    const SECRET_FIELD_PLACEHOLDERS = {
+        'card-number': '6219 86•• •••• 1234',
+        'card-iban': 'IR••',
+        'card-account': '0123456789'
+    };
+
+    function setSecretField(id, maskedValue) {
+        const field = document.getElementById(id);
+        if (!field) return;
+        // The API only returns masked identifiers; display the mask as a hint and
+        // send the field only when the operator types a real replacement value.
+        field.value = '';
+        field.placeholder = maskedValue || SECRET_FIELD_PLACEHOLDERS[id] || '';
     }
 
     function openCardModal(cardId) {
@@ -227,6 +246,9 @@
             document.getElementById('card-form').reset();
             document.getElementById('card-id').value = '';
             document.getElementById('card-active').checked = true;
+            setSecretField('card-number', '');
+            setSecretField('card-iban', '');
+            setSecretField('card-account', '');
             renderCardResellerFields(null);
             return;
         }
@@ -237,9 +259,9 @@
         document.getElementById('card-label').value = card.label || '';
         document.getElementById('card-bank').value = card.bank_name || '';
         document.getElementById('card-owner').value = card.owner_name || '';
-        document.getElementById('card-number').value = card.card_number || '';
-        document.getElementById('card-iban').value = card.iban || '';
-        document.getElementById('card-account').value = card.account_number || '';
+        setSecretField('card-number', card.card_number);
+        setSecretField('card-iban', card.iban);
+        setSecretField('card-account', card.account_number);
         document.getElementById('card-notes').value = card.notes || '';
         document.getElementById('card-active').checked = !!card.is_active;
         renderCardResellerFields(card);
@@ -268,6 +290,11 @@
             document.querySelectorAll('#card-reseller-checkboxes input[type=checkbox]:checked')
                 .forEach(cb => payload.assigned_reseller_ids.push(parseInt(cb.value)));
         }
+        // A blank secret input means 'keep what is stored', so omit it entirely
+        // rather than posting an empty or masked value.
+        ['card_number', 'iban', 'account_number'].forEach((field) => {
+            if (!payload[field]) delete payload[field];
+        });
         const method = id ? 'PUT' : 'POST';
         const url = id ? `/api/bank-cards/${id}` : '/api/bank-cards';
         try {

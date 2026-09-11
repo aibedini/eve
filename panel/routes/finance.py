@@ -11,12 +11,13 @@ from jdatetime import datetime as jdatetime_class
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import joinedload
 
+from panel.core.finance_privacy import is_masked_value, mask_card_number
 from panel.extensions import db, limiter
 from panel.models import (
     Admin, BankCard, ClientOperation, ClientOwnership, CustomerAccount, CustomerTransaction,
     ManualReceipt, Package, Payment, Server, Transaction, UsageDaily,
 )
-from panel.routes.common import login_required, permission_required
+from panel.routes.common import login_required, permission_required, step_up_required
 
 bp = Blueprint('finance', __name__)
 logger = logging.getLogger(__name__)
@@ -298,7 +299,11 @@ def update_transaction(tx_id):
     if 'card_id' in data:
         tx.card_id = data.get('card_id') or None
     if 'sender_card' in data:
-        tx.sender_card = (data.get('sender_card') or '').strip() or None
+        submitted_card = str(data.get('sender_card') or '').strip() or None
+        # The edit form is pre-filled with the masked value; never persist a mask
+        # over the real customer card number.
+        if not is_masked_value(submitted_card, tx.sender_card, mask_card_number):
+            tx.sender_card = submitted_card
     if 'sender_name' in data:
         tx.sender_name = (data.get('sender_name') or '').strip() or None
     if 'client_email' in data:
@@ -563,7 +568,7 @@ def get_payments():
                 'username': admin.username,
                 'role': admin.role
             } if admin else None,
-            'sender_card': t.sender_card or '',
+            'sender_card': mask_card_number(t.sender_card) or '',
             'sender_name': getattr(t, 'sender_name', None) or None,
             'card_id': t.card_id,
             'card': {
@@ -860,6 +865,8 @@ def update_payment(payment_id):
         base_desc = (data.get('description') if 'description' in data else payment.description) or ''
 
         sender_card = (sender_card or '').strip() or None
+        if is_masked_value(sender_card, payment.sender_card, mask_card_number):
+            sender_card = payment.sender_card
         sender_name = (sender_name or '').strip() or None
         client_email = (client_email or '').strip() or None
         base_desc = (base_desc or '').strip()
@@ -911,7 +918,11 @@ def update_payment(payment_id):
     if 'card_id' in data:
         payment.card_id = data['card_id'] or None
     if 'sender_card' in data:
-        payment.sender_card = data['sender_card'].strip() or None
+        submitted_card = str(data.get('sender_card') or '').strip() or None
+        # Same mask-round-trip guard as the transaction editor: a posted mask must
+        # not replace the stored sender card.
+        if not is_masked_value(submitted_card, payment.sender_card, mask_card_number):
+            payment.sender_card = submitted_card
     if 'sender_name' in data:
         payment.sender_name = data['sender_name'].strip() or None
     if 'client_email' in data:
@@ -964,6 +975,58 @@ def delete_payment(payment_id):
     db.session.delete(payment)
     db.session.commit()
     return jsonify({"success": True})
+
+
+@bp.route('/api/payments/<int:payment_id>/reveal', methods=['POST'])
+@limiter.limit('20 per minute')
+@permission_required('finance.manage')
+@step_up_required('finance.manage')
+def reveal_payment_sender_card(payment_id):
+    """Return the full sender card of one payment - the only unmasked read path.
+
+    Payment rows carry only the masked identifier. Reconciling a bank statement
+    sometimes needs the full number, so it is returned here behind a permission,
+    a fresh MFA step-up and the payment owner scope, and the access is audited
+    without ever writing the number itself into the audit row or a log line.
+    """
+    from app import _log_audit  # deferred: app-level helper, avoids circular import
+    user = db.session.get(Admin, session.get('admin_id'))
+    if not user:
+        return jsonify({"success": False, "error": "User not found"}), 401
+    payment = db.session.get(Payment, payment_id)
+    if not payment:
+        return jsonify({"success": False, "error": "Payment not found"}), 404
+    is_super = (user.role == 'superadmin' or user.is_superadmin)
+    if payment.admin_id != user.id and not is_super:
+        return jsonify({"success": False, "error": "Access denied"}), 403
+    _log_audit('payment.sender_card_reveal', payment, actor=user)
+    db.session.commit()
+    return jsonify({"success": True, "revealed": True, "sender_card": payment.sender_card or ""})
+
+
+@bp.route('/api/transactions/<int:tx_id>/reveal', methods=['POST'])
+@limiter.limit('20 per minute')
+@permission_required('finance.manage')
+@step_up_required('finance.manage')
+def reveal_transaction_sender_card(tx_id):
+    """Return the full sender card of one transaction - the only unmasked read path.
+
+    Mirrors the payment reveal: permission, fresh step-up, owner scope and an
+    audit row that records the reveal event only.
+    """
+    from app import _log_audit  # deferred: app-level helper, avoids circular import
+    user = db.session.get(Admin, session.get('admin_id'))
+    if not user:
+        return jsonify({"success": False, "error": "User not found"}), 401
+    tx = db.session.get(Transaction, tx_id)
+    if not tx:
+        return jsonify({"success": False, "error": "Transaction not found"}), 404
+    is_super = (user.role == 'superadmin' or user.is_superadmin)
+    if tx.admin_id != user.id and not is_super:
+        return jsonify({"success": False, "error": "Access denied"}), 403
+    _log_audit('transaction.sender_card_reveal', tx, actor=user)
+    db.session.commit()
+    return jsonify({"success": True, "revealed": True, "sender_card": tx.sender_card or ""})
 
 
 @bp.route('/api/finance/stats', methods=['GET'])

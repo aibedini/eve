@@ -2,6 +2,7 @@
 import json
 from datetime import datetime
 
+from panel.core.finance_privacy import mask_card_number
 from panel.core.phone import _normalize_contact_phone  # noqa: F401
 from panel.extensions import db
 from panel.models._helpers import _format_jalali  # noqa: F401
@@ -123,7 +124,7 @@ class Payment(db.Model):
             'admin': admin_info,
             'card_id': self.card_id,
             'card': card_info,
-            'sender_card': self.sender_card,
+            'sender_card': mask_card_number(self.sender_card),
             'sender_name': self.sender_name,
             'amount': self.amount,
             'payment_date': self.payment_date.isoformat() if self.payment_date else None,
@@ -189,7 +190,7 @@ class Transaction(db.Model):
             'server': server_info,
             'card_id': self.card_id,
             'card': card_info,
-            'sender_card': self.sender_card,
+            'sender_card': mask_card_number(self.sender_card),
             'sender_name': self.sender_name,
             'client_email': self.client_email,
             'amount': self.amount,
