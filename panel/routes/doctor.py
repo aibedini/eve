@@ -126,6 +126,16 @@ def doctor_summary():
     }
 
     try:
+        from panel.core import redis_client as _redis_cache
+        checks['snapshot_cache'] = {
+            'state': 'ok',
+            'redis_configured': bool(_redis_cache.REDIS_URL),
+            **_redis_cache.snapshot_metrics(),
+        }
+    except Exception as exc:
+        checks['snapshot_cache'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         recent = [row.to_dict() for row in HealthLog.query.filter(
             HealthLog.level.in_(('critical', 'error')),
         ).order_by(HealthLog.id.desc()).limit(5).all()]

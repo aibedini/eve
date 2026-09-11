@@ -36,6 +36,8 @@ __all__ = [
     'load_snapshot_from_redis',
     'get_server_revision',
     'bump_server_revision',
+    'snapshot_metrics',
+    'reset_snapshot_metrics',
     'serialized_server_snapshot_write',
 ]
 
@@ -113,6 +115,27 @@ _LAST_LOADED_SERVER_VERSIONS = {}
 _PUBLISHED_SERVER_VERSIONS = {}
 _LOCAL_SERVER_WRITE_LOCKS = defaultdict(threading.RLock)
 
+# Per-server cache traffic counters (diagnostics + performance comparisons).
+_SNAPSHOT_METRICS = {
+    'publishes': 0,
+    'blocks_encoded': 0,
+    'blocks_decoded': 0,
+    'bytes_encoded': 0,
+    'bytes_decoded': 0,
+    'full_loads': 0,
+    'targeted_loads': 0,
+}
+
+
+def snapshot_metrics() -> dict:
+    """Snapshot cache counters for the current process."""
+    return dict(_SNAPSHOT_METRICS)
+
+
+def reset_snapshot_metrics() -> None:
+    for key in _SNAPSHOT_METRICS:
+        _SNAPSHOT_METRICS[key] = 0
+
 
 def _encode_snapshot(value) -> bytes:
     """Serialize cache data without executable object deserialization."""
@@ -180,7 +203,10 @@ def serialized_server_snapshot_write(server_id: int, *, wait_seconds: float = 5.
     heartbeat.start()
     try:
         with GLOBAL_REFRESH_LOCK:
-            _load_snapshot_from_redis_unlocked(force=True)
+            # Only this server's block has to be fresh: a full forced load would
+            # decompress every other server's block on every client mutation
+            # (measured 441 ms vs 30 ms at 12 servers, see docs/performance/PER_SERVER_CACHE.md).
+            _load_snapshot_from_redis_unlocked(force=True, server_ids=[sid])
             yield
     finally:
         stop.set()
@@ -406,8 +432,10 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                 manifest_blob = _encode_snapshot(manifest)
 
                 pipe.multi()
+                encoded_blocks = {}
                 for sid in changed:
                     block_blob = _encode_snapshot(blocks.get(sid, []))
+                    encoded_blocks[sid] = block_blob
                     pipe.set(_redis_server_snapshot_key(sid), block_blob, ex=REDIS_SNAPSHOT_TTL)
                 for sid in published_versions:
                     if sid not in changed:
@@ -416,6 +444,10 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                 pipe.set(REDIS_SNAPSHOT_VERSION_KEY, version, ex=REDIS_SNAPSHOT_TTL)
                 pipe.execute()
                 _PUBLISHED_SERVER_VERSIONS = published_versions
+                _SNAPSHOT_METRICS['publishes'] += 1
+                _SNAPSHOT_METRICS['blocks_encoded'] += len(encoded_blocks)
+                _SNAPSHOT_METRICS['bytes_encoded'] += sum(
+                    len(blob) for blob in encoded_blocks.values())
                 return True
             except Exception as exc:
                 try:
@@ -431,19 +463,32 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
         return False
 
 
-def _load_snapshot_from_redis_unlocked(force: bool = False) -> bool:
-    """Pull the shared snapshot from Redis into local GLOBAL_SERVER_DATA, but
-    only when the version changed (cheap version check first). Returns True if
-    the local cache was updated."""
+def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> bool:
+    """Pull the shared snapshot from Redis into local GLOBAL_SERVER_DATA.
+
+    Only blocks whose published version changed are decompressed, and the cheap
+    version key short-circuits an unchanged snapshot. server_ids restricts the
+    read to those servers (a per-server read-modify-write only needs its own
+    block): every other block keeps the local copy. Returns True when the local
+    cache was updated.
+    """
     global _LAST_LOADED_SNAPSHOT_VERSION, _LAST_LOADED_SERVER_VERSIONS
     client = get_redis()
     if client is None:
         return False
+    targets = None
+    if server_ids is not None:
+        targets = set()
+        for sid in server_ids:
+            try:
+                targets.add(int(sid))
+            except (TypeError, ValueError):
+                continue
     try:
         version = client.get(REDIS_SNAPSHOT_VERSION_KEY)
         if version is None:
             return False
-        if not force and version == _LAST_LOADED_SNAPSHOT_VERSION:
+        if not force and targets is None and version == _LAST_LOADED_SNAPSHOT_VERSION:
             return False  # nothing new — skip the expensive decompress
         manifest_blob = client.get(REDIS_SNAPSHOT_MANIFEST_KEY)
         if manifest_blob:
@@ -460,18 +505,30 @@ def _load_snapshot_from_redis_unlocked(force: bool = False) -> bool:
                     except Exception:
                         continue
 
+            if targets is None:
+                _SNAPSHOT_METRICS['full_loads'] += 1
+            else:
+                _SNAPSHOT_METRICS['targeted_loads'] += 1
+
             new_blocks = {}
             for sid, server_version in server_versions.items():
+                local = current_blocks.get(sid)
+                if targets is not None and sid not in targets and local:
+                    # A per-server write cycle: leave every other block as it is.
+                    new_blocks[sid] = local
+                    continue
                 if (not force and _LAST_LOADED_SERVER_VERSIONS.get(sid) == server_version
-                        and sid in current_blocks):
-                    new_blocks[sid] = current_blocks[sid]
+                        and local):
+                    new_blocks[sid] = local
                     continue
                 block_blob = client.get(_redis_server_snapshot_key(sid))
                 if block_blob:
                     new_blocks[sid] = _decode_snapshot(block_blob)
-                elif sid in current_blocks:
+                    _SNAPSHOT_METRICS['blocks_decoded'] += 1
+                    _SNAPSHOT_METRICS['bytes_decoded'] += len(block_blob)
+                elif local:
                     # Keep the last good local block if Redis is between writes.
-                    new_blocks[sid] = current_blocks[sid]
+                    new_blocks[sid] = local
 
             ordered_ids = []
             for status in (manifest.get('servers_status') or []):
@@ -487,7 +544,14 @@ def _load_snapshot_from_redis_unlocked(force: bool = False) -> bool:
                 GLOBAL_SERVER_DATA['stats'] = manifest.get('stats') or {}
                 GLOBAL_SERVER_DATA['servers_status'] = manifest.get('servers_status') or []
                 GLOBAL_SERVER_DATA['last_update'] = manifest.get('last_update')
-                _LAST_LOADED_SERVER_VERSIONS = server_versions
+                if targets is None:
+                    _LAST_LOADED_SERVER_VERSIONS = server_versions
+                else:
+                    refreshed = dict(_LAST_LOADED_SERVER_VERSIONS)
+                    for sid in targets:
+                        if sid in server_versions:
+                            refreshed[sid] = server_versions[sid]
+                    _LAST_LOADED_SERVER_VERSIONS = refreshed
         else:
             # The old pickle format is intentionally rejected. Redis is an
             # ephemeral cache and a current worker will republish safe JSON.
@@ -500,14 +564,21 @@ def _load_snapshot_from_redis_unlocked(force: bool = False) -> bool:
                 GLOBAL_SERVER_DATA['stats'] = payload.get('stats') or {}
                 GLOBAL_SERVER_DATA['servers_status'] = payload.get('servers_status') or []
                 GLOBAL_SERVER_DATA['last_update'] = payload.get('last_update')
-        _LAST_LOADED_SNAPSHOT_VERSION = version
+        if targets is None:
+            # A targeted load deliberately leaves the global version unmarked so
+            # the next full load still merges servers changed by other workers.
+            _LAST_LOADED_SNAPSHOT_VERSION = version
         return True
     except Exception as e:
         logger.warning("Redis load snapshot failed: %s", e)
         return False
 
 
-def load_snapshot_from_redis(force: bool = False) -> bool:
-    """Atomically hydrate the complete local snapshot under the shared RLock."""
+def load_snapshot_from_redis(force: bool = False, *, server_ids=None) -> bool:
+    """Atomically hydrate the local snapshot under the shared RLock.
+
+    server_ids limits the read to those servers, which is what a per-server
+    read-modify-write cycle needs.
+    """
     with GLOBAL_REFRESH_LOCK:
-        return _load_snapshot_from_redis_unlocked(force=force)
+        return _load_snapshot_from_redis_unlocked(force=force, server_ids=server_ids)

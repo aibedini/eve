@@ -1,0 +1,13 @@
+{
+  "servers": 12,
+  "inbounds_per_server": 30,
+  "clients_per_inbound": 50,
+  "full_ms": 329.34,
+  "targeted_ms": 26.63,
+  "speedup": 12.4,
+  "full_blocks_decoded": 12,
+  "targeted_blocks_decoded": 1,
+  "full_bytes": 353462,
+  "targeted_bytes": 29344,
+  "traffic_reduction": 12.0
+}
