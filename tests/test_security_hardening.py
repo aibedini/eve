@@ -265,6 +265,40 @@ class SecurityHardeningTests(unittest.TestCase):
         db.session.refresh(self.reseller)
         self.assertEqual(self.reseller.credit, 20)
 
+    def test_receipt_credit_claim_is_idempotent(self):
+        from app import ManualReceipt, apply_receipt_credit
+        self.reseller.credit = 0
+        db.session.commit()
+        receipt = ManualReceipt(admin_id=self.reseller.id, amount=5_000, status='pending')
+        db.session.add(receipt)
+        db.session.commit()
+
+        ok, error = apply_receipt_credit(receipt)
+        self.assertTrue(ok, error)
+        db.session.commit()
+        self.assertEqual(db.session.get(Admin, self.reseller.id).credit, 5_000)
+
+        # A repeated approval (double click, overlapping auto scan) must not credit twice.
+        ok_again, error_again = apply_receipt_credit(receipt)
+        self.assertFalse(ok_again)
+        self.assertIn('already', error_again)
+        db.session.commit()
+        self.assertEqual(db.session.get(Admin, self.reseller.id).credit, 5_000)
+
+    def test_repeated_rejection_reverses_credit_once(self):
+        from app import ManualReceipt
+        self._login(self.superadmin)
+        self.reseller.credit = 10_000
+        receipt = ManualReceipt(admin_id=self.reseller.id, amount=4_000, status='approved')
+        db.session.add(receipt)
+        db.session.commit()
+
+        first = self.client.post(f'/api/receipts/{receipt.id}/reject', json={'reason': 'dup'})
+        self.assertEqual(first.status_code, 200, first.data)
+        second = self.client.post(f'/api/receipts/{receipt.id}/reject', json={'reason': 'dup'})
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertEqual(db.session.get(Admin, self.reseller.id).credit, 6_000)
+
     def test_qrcode_endpoint_requires_a_login(self):
         # Only the authenticated dashboard uses this; it must not stay open.
         response = self.client.get('/api/client/qrcode?link=https://example.com')

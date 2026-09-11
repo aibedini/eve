@@ -102,11 +102,11 @@ from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, quote, urlencode, unquote
 from jdatetime import datetime as jdatetime_class
-from sqlalchemy import or_, and_, func, text, inspect, case
+from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.99"
+APP_VERSION = "2.5.100"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2085,15 +2085,34 @@ def apply_receipt_credit(receipt, reviewer=None, auto=False):
     owner = db.session.get(Admin, receipt.admin_id)
     if not owner:
         return False, 'Owner not found'
+    new_status = RECEIPT_STATUS_AUTO_APPROVED if auto else RECEIPT_STATUS_APPROVED
+    now = datetime.utcnow()
+    # Claim the receipt atomically BEFORE crediting. Concurrent approval clicks
+    # or overlapping auto-approval scans would otherwise credit it twice.
+    claimed = db.session.execute(
+        update(ManualReceipt)
+        .where(
+            ManualReceipt.id == receipt.id,
+            ManualReceipt.status.in_((
+                RECEIPT_STATUS_PENDING,
+                RECEIPT_STATUS_AUTO_PENDING,
+                RECEIPT_STATUS_REJECTED,
+            )),
+        )
+        .values(
+            status=new_status,
+            reviewed_at=now,
+            reviewer_id=(reviewer.id if reviewer else None),
+            auto_deadline=None,
+            rejection_reason=None,
+        )
+    )
+    if claimed.rowcount != 1:
+        return False, 'Receipt was already processed'
     owner.credit = (owner.credit or 0) + receipt.amount
     tx_type = 'manual_receipt_auto' if auto else 'manual_receipt'
     description = f"Receipt #{receipt.id}"
     log_transaction(owner.id, receipt.amount, tx_type, description)
-    receipt.status = RECEIPT_STATUS_AUTO_APPROVED if auto else RECEIPT_STATUS_APPROVED
-    receipt.reviewed_at = datetime.utcnow()
-    receipt.reviewer_id = reviewer.id if reviewer else None
-    receipt.auto_deadline = None
-    receipt.rejection_reason = None
     return True, None
 
 def rollback_receipt_credit(receipt, reviewer=None, reason=None):
@@ -2120,9 +2139,20 @@ def trigger_auto_receipt_processing():
         if success:
             updated += 1
         else:
-            receipt.status = RECEIPT_STATUS_PENDING
-            receipt.auto_deadline = None
-            receipt.rejection_reason = err
+            # A lost claim means another worker already processed the receipt, so
+            # only fall back to manual review while it is still auto-pending.
+            db.session.execute(
+                update(ManualReceipt)
+                .where(
+                    ManualReceipt.id == receipt.id,
+                    ManualReceipt.status == RECEIPT_STATUS_AUTO_PENDING,
+                )
+                .values(
+                    status=RECEIPT_STATUS_PENDING,
+                    auto_deadline=None,
+                    rejection_reason=err,
+                )
+            )
     if updated or due_receipts:
         db.session.commit()
 

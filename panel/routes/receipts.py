@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, send_file, session, url_for
+from sqlalchemy import update
 
 from panel.extensions import db
 from panel.models import (
@@ -178,15 +179,34 @@ def reject_receipt(receipt_id):
     data = request.get_json() or {}
     reason = (data.get('reason') or '').strip() or 'Rejected'
     reviewer = db.session.get(Admin, session['admin_id'])
-    if receipt.status in (RECEIPT_STATUS_APPROVED, RECEIPT_STATUS_AUTO_APPROVED):
+    now = datetime.utcnow()
+    # Claim the approved → rejected transition atomically so two concurrent
+    # rejections cannot reverse the same credit twice.
+    claimed = db.session.execute(
+        update(ManualReceipt)
+        .where(
+            ManualReceipt.id == receipt.id,
+            ManualReceipt.status.in_((RECEIPT_STATUS_APPROVED, RECEIPT_STATUS_AUTO_APPROVED)),
+        )
+        .values(
+            status=RECEIPT_STATUS_REJECTED,
+            reviewer_id=(reviewer.id if reviewer else None),
+            reviewed_at=now,
+            rejection_reason=reason,
+            auto_deadline=None,
+        )
+    )
+    if claimed.rowcount == 1:
         success, error = rollback_receipt_credit(receipt, reviewer=reviewer, reason=reason)
         if not success:
             return jsonify({'success': False, 'error': error}), 400
-    receipt.status = RECEIPT_STATUS_REJECTED
-    receipt.reviewer_id = reviewer.id if reviewer else None
-    receipt.reviewed_at = datetime.utcnow()
-    receipt.rejection_reason = reason
-    receipt.auto_deadline = None
+    else:
+        # Still pending/auto-pending, or already rejected: just record the decision.
+        receipt.status = RECEIPT_STATUS_REJECTED
+        receipt.reviewer_id = reviewer.id if reviewer else None
+        receipt.reviewed_at = now
+        receipt.rejection_reason = reason
+        receipt.auto_deadline = None
     db.session.commit()
     data = receipt.to_dict()
     data['image_url'] = url_for('receipts.download_receipt_file', receipt_id=receipt.id)
