@@ -36,6 +36,7 @@ from telegram_bot_worker import (  # noqa: E402
     _handle_purchase_receipt,
     _qualify_referral,
     _record_referral,
+    _send_purchase_card_payment,
 )
 
 
@@ -357,6 +358,10 @@ class TelegramPromoTests(unittest.TestCase):
         _begin_purchase_payment(api, bot, 8_700_030, 8_700_030, 'fa', server, package, state)
         self.assertEqual(session_row.quoted_amount, 80_000)
         self.assertEqual(session_row.promo_id, promo.id)
+        # The wallet layer (v2.5.2+) shows the balance/top-up prompt first when the
+        # customer's credit is below the quoted amount. Choosing card-to-card then
+        # renders the payment instructions that carry the frozen promo breakdown.
+        _send_purchase_card_payment(api, bot, 8_700_030, 8_700_030, 'fa', state)
         payment_text = api.messages[-1]['text']
         self.assertIn('<s>100,000</s>', payment_text)
         self.assertIn('80,000', payment_text)
