@@ -87,7 +87,7 @@ class Payment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=False)
     card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id'), nullable=True)  # کارت مقصد (شما)
-    sender_card = db.Column(EncryptedText())  # encrypted customer card identifier
+    sender_card = db.Column(EncryptedText('finance'))  # encrypted customer card identifier
     sender_name = db.Column(db.String(120))  # نام فرستنده
     amount = db.Column(db.Integer, nullable=False)  # مبلغ به تومان
     payment_date = db.Column(db.DateTime, nullable=False)  # تاریخ واریز

@@ -106,9 +106,13 @@ class SecurityHardeningTests(unittest.TestCase):
             source.write(b'sensitive-backup-content')
             source.close()
             protected = encrypt_secret('top-secret')
-            self.assertTrue(protected.startswith('enc:v1:'))
+            # Envelopes are versioned (enc:v1:, enc:v2: ...); v2 is current.
+            self.assertRegex(protected, r'^enc:v[0-9]+:')
             self.assertEqual(decrypt_secret(protected), 'top-secret')
-            self.assertTrue(protect_system_setting('telegram_backup_bot_token', 'token').startswith('enc:v1:'))
+            self.assertRegex(
+                protect_system_setting('telegram_backup_bot_token', 'token'),
+                r'^enc:v[0-9]+:',
+            )
             encrypt_backup_file(source.name, encrypted)
             with open(encrypted, 'rb') as handle:
                 self.assertNotIn(b'sensitive-backup-content', handle.read())

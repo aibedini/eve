@@ -213,7 +213,7 @@ class CustomSubscription(db.Model):
     __tablename__ = 'custom_subscriptions'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
-    token = db.Column(EncryptedText, nullable=False)
+    token = db.Column(EncryptedText('subscriptions'), nullable=False)
     token_hash = db.Column(db.String(64), nullable=True, unique=True, index=True)
     tag_prefix = db.Column(db.String(64), nullable=False, default='')
     enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
@@ -257,7 +257,7 @@ class CustomSubscriptionConfig(db.Model):
         db.Integer, db.ForeignKey('custom_subscriptions.id', ondelete='CASCADE'),
         nullable=False, index=True,
     )
-    uri = db.Column(EncryptedText, nullable=False)
+    uri = db.Column(EncryptedText('subscriptions'), nullable=False)
     uri_hash = db.Column(db.String(64), nullable=True)
     remark = db.Column(db.String(190), nullable=True)
     enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
@@ -409,9 +409,9 @@ class BankCard(db.Model):
     label = db.Column(db.String(120), nullable=False)
     bank_name = db.Column(db.String(120))
     owner_name = db.Column(db.String(120))
-    card_number = db.Column(EncryptedText())
-    iban = db.Column(EncryptedText())
-    account_number = db.Column(EncryptedText())
+    card_number = db.Column(EncryptedText('finance'))
+    iban = db.Column(EncryptedText('finance'))
+    account_number = db.Column(EncryptedText('finance'))
     notes = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

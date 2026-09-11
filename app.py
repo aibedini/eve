@@ -106,7 +106,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.113"
+APP_VERSION = "2.5.114"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -573,49 +573,48 @@ def _is_dev_mode() -> bool:
     return debug or env in ('development', 'dev')
 
 
-def _get_server_password_fernet() -> Any:
-    """Return cached Fernet instance from SERVER_PASSWORD_KEY.
+def _get_server_password_fernet(domain: str = 'xui_credentials'):
+    """Return the current-version Fernet key for a secret domain.
 
-    SERVER_PASSWORD_KEY must be a URL-safe base64-encoded 32-byte key.
+    Kept under the historical name (now domain-aware) so callers and tests that
+    patch it keep working. Returns None in development when no master key is
+    configured, preserving the plaintext fallback.
     """
-    global _SERVER_PASSWORD_FERNET
-    if _SERVER_PASSWORD_FERNET is not None:
-        return _SERVER_PASSWORD_FERNET
-
-    key = (os.environ.get('SERVER_PASSWORD_KEY') or '').strip()
-    if not key:
-        return None
-
-    try:
-        _SERVER_PASSWORD_FERNET = Fernet(key)
-        return _SERVER_PASSWORD_FERNET
-    except Exception:
-        # Invalid key format. Log warning and return None to fallback to plaintext.
-        app.logger.warning("Invalid SERVER_PASSWORD_KEY (must be Fernet key). Encryption/Decryption disabled.")
-        return None
+    from panel.security import keyring  # deferred: avoids an import cycle
+    return keyring.fernet(domain)
 
 
 def encrypt_server_password(plaintext: str) -> str:
-    f = _get_server_password_fernet()
+    from panel.security import keyring  # deferred: avoids an import cycle
+    f = _get_server_password_fernet('xui_credentials')
     if not f:
         return str(plaintext or '')
+    version = keyring.current_version('xui_credentials')
     token = f.encrypt(str(plaintext or '').encode('utf-8')).decode('ascii')
-    return f'enc:v1:{token}'
+    return f'enc:v{version}:{token}'
 
 
 def decrypt_server_password(value: str) -> str:
+    from panel.security import keyring  # deferred: avoids an import cycle
     raw = str(value or '')
-    if raw.startswith('enc:v1:') or raw.startswith('enc:'):
-        prefix = 'enc:v1:' if raw.startswith('enc:v1:') else 'enc:'
-        f = _get_server_password_fernet()
-        if not f:
-            return raw
+    if not raw.startswith(SERVER_PASSWORD_PREFIX):
+        return raw
+    _version, token = keyring.split_envelope(raw)
+    if token is None:
+        return raw
+    f = _get_server_password_fernet('xui_credentials')
+    if f:
         try:
-            return f.decrypt(raw[len(prefix):].encode('ascii')).decode('utf-8')
+            return f.decrypt(token.encode('ascii')).decode('utf-8')
         except InvalidToken:
-            app.logger.warning("Failed to decrypt a stored secret (invalid key/token). Returning empty string.")
-            return ''
-    return raw
+            pass
+        except Exception:
+            pass
+    try:
+        return keyring.decrypt(raw, 'xui_credentials')
+    except RuntimeError:
+        app.logger.warning("Failed to decrypt a stored secret (invalid key/token). Returning empty string.")
+        return ''
 
 
 def get_server_password(server: 'Server') -> str:
@@ -4116,13 +4115,33 @@ def _save_telegram_purchase_settings(bot: TelegramBotInstance, data: dict):
 
 
 def _encrypt_telegram_secret(value: str) -> str:
-    if not _get_server_password_fernet():
+    from panel.security import keyring  # deferred: avoids an import cycle
+    f = _get_server_password_fernet('messaging')
+    if not f:
         raise RuntimeError('SERVER_PASSWORD_KEY is required before Telegram secrets can be saved')
-    return encrypt_server_password(value)
+    version = keyring.current_version('messaging')
+    token = f.encrypt(str(value or '').encode('utf-8')).decode('ascii')
+    return f'enc:v{version}:{token}'
 
 
 def _decrypt_telegram_secret(value: str | None) -> str:
-    return decrypt_server_password(value or '')
+    from panel.security import keyring  # deferred: avoids an import cycle
+    raw = str(value or '')
+    if not raw.startswith(SERVER_PASSWORD_PREFIX):
+        return raw
+    _version, token = keyring.split_envelope(raw)
+    if token is None:
+        return raw
+    f = _get_server_password_fernet('messaging')
+    if f:
+        try:
+            return f.decrypt(token.encode('ascii')).decode('utf-8')
+        except Exception:
+            pass
+    try:
+        return keyring.decrypt(raw, 'messaging')
+    except RuntimeError:
+        return ''
 
 
 def _validate_telegram_token(token: str) -> bool:

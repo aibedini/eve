@@ -1,21 +1,25 @@
 """Versioned encryption helpers for application-managed secrets.
 
-The current envelope uses the existing ``SERVER_PASSWORD_KEY`` Fernet key so
-upgrades can decrypt legacy ``enc:`` values. New values carry an explicit key
-version marker, allowing a later online rotation to introduce ``v2`` safely.
+Envelopes now carry an explicit key version (enc:v1:, enc:v2: ...) and are
+scoped to a logical domain, so the X-UI credentials, messaging, finance,
+subscription, MFA and backup secrets each use a different key. The keyring in
+panel/security/keyring.py owns key resolution; this module keeps the historical
+public API (encrypt_secret, decrypt_secret, hash_bearer_token, EncryptedText)
+working unchanged.
 """
-
 import base64
 import hashlib
 import hmac
 import os
 from functools import lru_cache
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken  # noqa: F401 (public re-export)
 from sqlalchemy.types import Text, TypeDecorator
 
+from panel.security import keyring
 
-SECRET_PREFIX = 'enc:v1:'
+
+SECRET_PREFIX = 'enc:v1:'   # historical marker, kept for compatibility
 LEGACY_PREFIX = 'enc:'
 TOKEN_HASH_PREFIX = 'h1:'
 
@@ -34,57 +38,53 @@ SENSITIVE_SYSTEM_SETTING_KEYS = frozenset({
 
 
 def _is_dev_mode() -> bool:
-    env = (os.environ.get('FLASK_ENV') or os.environ.get('ENV') or '').strip().lower()
-    debug = (os.environ.get('DEBUG') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
-    return debug or env in {'development', 'dev', 'test', 'testing'}
+    return keyring._is_dev_mode()
 
 
-@lru_cache(maxsize=1)
-def _fernet() -> Fernet | None:
-    key = (os.environ.get('SERVER_PASSWORD_KEY') or '').strip()
-    if not key:
-        if _is_dev_mode():
-            return None
-        raise RuntimeError('SERVER_PASSWORD_KEY is required to protect stored secrets')
-    try:
-        return Fernet(key)
-    except Exception as exc:
-        raise RuntimeError('SERVER_PASSWORD_KEY is not a valid Fernet key') from exc
+class _FernetProxy:
+    """Backward-compatible accessor for the generic-domain Fernet key.
+
+    Callers (and tests) historically used secrets._fernet() and
+    secrets._fernet.cache_clear(); both keep working and clearing also drops the
+    keyring's derived-key cache so an environment change takes effect.
+    """
+
+    def __call__(self):
+        return keyring.fernet('generic')
+
+    def cache_clear(self):
+        keyring._key_b64.cache_clear()
 
 
-def is_encrypted(value: object) -> bool:
-    raw = str(value or '')
-    return raw.startswith(SECRET_PREFIX) or raw.startswith(LEGACY_PREFIX)
+_fernet = _FernetProxy()
 
 
-def encrypt_secret(value: object) -> str:
-    raw = str(value or '')
-    if not raw or is_encrypted(raw):
-        return raw
-    cipher = _fernet()
-    if cipher is None:  # development compatibility only
-        return raw
-    token = cipher.encrypt(raw.encode('utf-8')).decode('ascii')
-    return f'{SECRET_PREFIX}{token}'
+def secret_domain(key: str) -> str:
+    """Map a sensitive config/setting key to its cryptographic domain."""
+    if key in SENSITIVE_SYSTEM_CONFIG_KEYS or key in SENSITIVE_SYSTEM_SETTING_KEYS:
+        return 'messaging'
+    return 'generic'
 
 
-def decrypt_secret(value: object) -> str:
-    raw = str(value or '')
-    if not raw:
-        return ''
-    if raw.startswith(SECRET_PREFIX):
-        token = raw[len(SECRET_PREFIX):]
-    elif raw.startswith(LEGACY_PREFIX):
-        token = raw[len(LEGACY_PREFIX):]
-    else:
-        return raw
-    cipher = _fernet()
-    if cipher is None:
-        return raw
-    try:
-        return cipher.decrypt(token.encode('ascii')).decode('utf-8')
-    except InvalidToken as exc:
-        raise RuntimeError('Stored secret cannot be decrypted with the configured key') from exc
+def is_encrypted(value) -> bool:
+    return keyring.is_envelope(value)
+
+
+def encrypt_secret(value, domain: str = 'generic') -> str:
+    return keyring.encrypt(value, domain)
+
+
+def decrypt_secret(value, domain: str = 'generic') -> str:
+    return keyring.decrypt(value, domain)
+
+
+def rotate_secret(value, domain: str = 'generic'):
+    """Re-encrypt a stored value at the current key version."""
+    return keyring.rotate(value, domain)
+
+
+def redact_secret(value) -> str:
+    return keyring.redact(value)
 
 
 def _token_hash_key() -> bytes:
@@ -100,7 +100,7 @@ def _token_hash_key() -> bytes:
     raise RuntimeError('SERVER_PASSWORD_KEY is required to protect stored tokens')
 
 
-def hash_bearer_token(token: object, purpose: str) -> str:
+def hash_bearer_token(token, purpose: str) -> str:
     """Create a domain-separated, deterministic digest suitable for DB lookup."""
     raw = str(token or '')
     if not raw or raw.startswith(TOKEN_HASH_PREFIX):
@@ -111,28 +111,28 @@ def hash_bearer_token(token: object, purpose: str) -> str:
     return f'{TOKEN_HASH_PREFIX}{encoded}'
 
 
-def is_hashed_bearer_token(value: object) -> bool:
+def is_hashed_bearer_token(value) -> bool:
     return str(value or '').startswith(TOKEN_HASH_PREFIX)
 
 
-def protect_system_config(key: str, value: object) -> str:
+def protect_system_config(key: str, value) -> str:
     raw = str(value or '')
-    return encrypt_secret(raw) if key in SENSITIVE_SYSTEM_CONFIG_KEYS else raw
+    return encrypt_secret(raw, secret_domain(key)) if key in SENSITIVE_SYSTEM_CONFIG_KEYS else raw
 
 
-def reveal_system_config(key: str, value: object) -> str:
+def reveal_system_config(key: str, value) -> str:
     raw = str(value or '')
-    return decrypt_secret(raw) if key in SENSITIVE_SYSTEM_CONFIG_KEYS else raw
+    return decrypt_secret(raw, secret_domain(key)) if key in SENSITIVE_SYSTEM_CONFIG_KEYS else raw
 
 
-def protect_system_setting(key: str, value: object) -> str:
+def protect_system_setting(key: str, value) -> str:
     raw = str(value or '')
-    return encrypt_secret(raw) if key in SENSITIVE_SYSTEM_SETTING_KEYS else raw
+    return encrypt_secret(raw, secret_domain(key)) if key in SENSITIVE_SYSTEM_SETTING_KEYS else raw
 
 
-def reveal_system_setting(key: str, value: object) -> str:
+def reveal_system_setting(key: str, value) -> str:
     raw = str(value or '')
-    return decrypt_secret(raw) if key in SENSITIVE_SYSTEM_SETTING_KEYS else raw
+    return decrypt_secret(raw, secret_domain(key)) if key in SENSITIVE_SYSTEM_SETTING_KEYS else raw
 
 
 class EncryptedText(TypeDecorator):
@@ -141,12 +141,16 @@ class EncryptedText(TypeDecorator):
     impl = Text
     cache_ok = True
 
+    def __init__(self, domain: str = 'generic'):
+        super().__init__()
+        self.domain = domain if domain in keyring.DOMAINS else 'generic'
+
     def process_bind_param(self, value, dialect):
         if value is None:
             return None
-        return encrypt_secret(value)
+        return encrypt_secret(value, self.domain)
 
     def process_result_value(self, value, dialect):
         if value is None:
             return None
-        return decrypt_secret(value)
+        return decrypt_secret(value, self.domain)

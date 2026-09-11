@@ -18,6 +18,10 @@ from app import (  # noqa: E402
     _migrate_legacy_usage_snapshots,
 )
 from panel.migrate import run_migrations  # noqa: E402
+from panel.services.secret_rotation import (  # noqa: E402
+    rotation_status as _rotation_status,
+    run_rotation as _run_rotation,
+)
 from panel.models import SystemMigration  # noqa: E402
 from panel.security import (  # noqa: E402
     encrypt_secret,
@@ -325,9 +329,10 @@ def maintenance_plan():
     secret_status = _secret_migration_status()
     token_status = _token_migration_status()
     custom_secret_status = _custom_secret_migration_status()
+    rotation = _rotation_status()
     status['required'] = bool(
         status['required'] or secret_status['required'] or token_status['required']
-        or custom_secret_status['required']
+        or custom_secret_status['required'] or rotation['required']
     )
     disk = shutil.disk_usage(os.path.dirname(os.path.abspath(__file__)))
     status.update({
@@ -340,6 +345,7 @@ def maintenance_plan():
         'secretEncryption': secret_status,
         'agentTokenHashing': token_status,
         'customSubscriptionProtection': custom_secret_status,
+        'secretRotation': rotation,
     })
     return status
 
@@ -375,12 +381,14 @@ def main():
         custom_secret_result = _run_custom_secret_migration(
             batch_size=max(20, min(args.batch_accounts * 20, 1000))
         )
+        rotation_result = _run_rotation(batch_size=max(20, min(args.batch_accounts * 20, 1000)))
         print(json.dumps({
             'event': 'maintenance-complete',
             'usage': usage_result,
             'secretEncryption': secret_result,
             'agentTokenHashing': token_result,
             'customSubscriptionProtection': custom_secret_result,
+            'secretRotation': rotation_result,
         }, ensure_ascii=False))
         return 0
 

@@ -877,7 +877,7 @@ class AdminMFASetting(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='CASCADE'),
                          nullable=False, unique=True, index=True)
-    totp_secret = db.Column(EncryptedText, nullable=True)
+    totp_secret = db.Column(EncryptedText('mfa'), nullable=True)
     enabled = db.Column(db.Boolean, nullable=False, default=False)
     confirmed_at = db.Column(db.DateTime, nullable=True)
     last_counter = db.Column(db.Integer, nullable=True)   # last accepted TOTP step

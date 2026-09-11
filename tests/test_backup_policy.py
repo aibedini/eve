@@ -59,7 +59,7 @@ class BackupPolicyTests(unittest.TestCase):
         self.assertTrue(captured['existed'])
         self.assertEqual(captured['data'], payload)  # byte-for-byte, no encryption envelope
         self.assertFalse(captured['data'].startswith(BACKUP_MAGIC))
-        self.assertNotIn(b'enc:v1:', captured['data'])
+        self.assertNotIn(b'enc:v', captured['data'])
         self.assertFalse(os.path.exists(captured['path']))  # deleted in finally
         self.assertEqual(os.listdir(self.spool), [])
         self.assertTrue(captured['document_name'].startswith('panel-one_'))
