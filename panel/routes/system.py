@@ -132,11 +132,14 @@ def _system_update_status_payload(log_offset=0):
     # The unit is Type=oneshot, so it reports ActiveState=activating for its
     # entire run; `is-active --quiet` would misread that as dead. Query the
     # ActiveState value instead and treat every live state as alive.
-    if status.get('state') == 'running':
+    if status.get('state') == 'running' and os.path.isfile(SYSTEM_UPDATE_UNIT_PATH):
+        # Only interpret systemd state when the configured unit is installed;
+        # otherwise a stored 'running' status would be rewritten to 'interrupted'
+        # on any host that simply has no update unit (or on a foreign runner).
         try:
+            unit_name = os.path.basename(SYSTEM_UPDATE_UNIT_PATH)
             probe = subprocess.run(
-                ['/bin/systemctl', 'show', '--property=ActiveState', '--value',
-                 'eve-web-update.service'],
+                ['/bin/systemctl', 'show', '--property=ActiveState', '--value', unit_name],
                 capture_output=True, timeout=3, check=False, text=True,
             )
             if probe.returncode == 0:

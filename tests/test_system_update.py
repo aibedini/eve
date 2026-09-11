@@ -78,7 +78,11 @@ class SystemUpdateApiTest(unittest.TestCase):
         (self.state_dir / 'update.log').write_bytes(
             b'first line\n\x1b[0;32msecond line\x1b[0m\n')
 
-        response = self.client.get('/api/system-update/status?offset=0')
+        # The systemd probe reads real host state; force a failed probe so the
+        # stored status is left untouched, independent of the runner's systemd.
+        probe = mock.Mock(returncode=1, stdout='', stderr='')
+        with mock.patch.object(system_routes.subprocess, 'run', return_value=probe):
+            response = self.client.get('/api/system-update/status?offset=0')
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload['available'])

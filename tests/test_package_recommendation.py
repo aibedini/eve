@@ -690,6 +690,9 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             binary = os.path.join(directory, 'xray.exe')
             with open(binary, 'wb') as handle:
                 handle.write(b'placeholder')
+            # find_xray_binary() requires an executable on POSIX; Windows has no
+            # execute bit, so without this the fixture only worked there.
+            os.chmod(binary, 0o755)
             config_path = os.path.join(directory, 'profile-1.json')
             process = MagicMock()
             process.poll.return_value = None
