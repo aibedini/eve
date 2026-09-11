@@ -43,28 +43,45 @@ def encrypt_backup_file(source: str, destination: str | None = None) -> str:
 
 
 def decrypt_backup_file(source: str, destination: str) -> str:
-    """Decrypt a file produced by :func:`encrypt_backup_file`."""
+    """Decrypt a file produced by encrypt_backup_file.
+
+    Plaintext is streamed to a temporary sibling and only moved into place after
+    the AES-GCM tag authenticates. A truncated, tampered, or wrong-key archive
+    therefore never leaves unauthenticated plaintext at the destination path.
+    """
     source_path = Path(source)
     total_size = source_path.stat().st_size
     header_size = len(MAGIC) + 12
     if total_size < header_size + 16:
         raise ValueError('Encrypted backup is truncated')
-    with source_path.open('rb') as src:
-        if src.read(len(MAGIC)) != MAGIC:
-            raise ValueError('Not an Eve encrypted backup')
-        nonce = src.read(12)
-        src.seek(-16, os.SEEK_END)
-        tag = src.read(16)
-        ciphertext_size = total_size - header_size - 16
-        src.seek(header_size)
-        decryptor = Cipher(algorithms.AES(_backup_key()), modes.GCM(nonce, tag)).decryptor()
-        with open(destination, 'wb') as dst:
-            remaining = ciphertext_size
-            while remaining:
-                chunk = src.read(min(1024 * 1024, remaining))
-                if not chunk:
-                    raise ValueError('Encrypted backup is truncated')
-                remaining -= len(chunk)
-                dst.write(decryptor.update(chunk))
-            dst.write(decryptor.finalize())
-    return destination
+    destination_path = Path(destination)
+    temp_path = destination_path.with_name(
+        f'.{destination_path.name}.part-{os.getpid()}'
+    )
+    try:
+        with source_path.open('rb') as src:
+            if src.read(len(MAGIC)) != MAGIC:
+                raise ValueError('Not an Eve encrypted backup')
+            nonce = src.read(12)
+            src.seek(-16, os.SEEK_END)
+            tag = src.read(16)
+            ciphertext_size = total_size - header_size - 16
+            src.seek(header_size)
+            decryptor = Cipher(algorithms.AES(_backup_key()), modes.GCM(nonce, tag)).decryptor()
+            with open(temp_path, 'wb') as dst:
+                remaining = ciphertext_size
+                while remaining:
+                    chunk = src.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError('Encrypted backup is truncated')
+                    remaining -= len(chunk)
+                    dst.write(decryptor.update(chunk))
+                dst.write(decryptor.finalize())
+        os.replace(temp_path, destination_path)
+    except BaseException:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+    return str(destination_path)

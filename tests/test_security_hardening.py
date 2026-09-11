@@ -21,7 +21,11 @@ from panel.services.client_operations import (  # noqa: E402
 )
 from app import Admin, ClientOperation, GLOBAL_SERVER_DATA, Server, app, db  # noqa: E402
 from panel.core.redis_client import _decode_snapshot, _encode_snapshot  # noqa: E402
-from panel.security.backup_crypto import decrypt_backup_file, encrypt_backup_file  # noqa: E402
+from panel.security.backup_crypto import (  # noqa: E402
+    MAGIC as BACKUP_MAGIC,
+    decrypt_backup_file,
+    encrypt_backup_file,
+)
 from panel.security.secrets import (  # noqa: E402
     _fernet, decrypt_secret, encrypt_secret, protect_system_setting,
 )
@@ -126,6 +130,39 @@ class SecurityHardeningTests(unittest.TestCase):
             else:
                 os.environ['EVE_BACKUP_KEY'] = old_backup_key
             _fernet.cache_clear()
+
+    def test_tampered_backup_never_reaches_destination(self):
+        old_backup_key = os.environ.get('EVE_BACKUP_KEY')
+        os.environ['EVE_BACKUP_KEY'] = base64.urlsafe_b64encode(os.urandom(32)).decode('ascii')
+        source = tempfile.NamedTemporaryFile(delete=False)
+        source.write(b'authentic-backup-content')
+        source.close()
+        encrypted = f'{source.name}.eveenc'
+        restored = f'{source.name}.restored'
+        try:
+            encrypt_backup_file(source.name, encrypted)
+            with open(encrypted, 'r+b') as handle:
+                handle.seek(len(BACKUP_MAGIC) + 12)  # flip one ciphertext byte
+                byte = handle.read(1)
+                handle.seek(-1, os.SEEK_CUR)
+                handle.write(bytes([byte[0] ^ 0x01]))
+            with self.assertRaises(Exception):
+                decrypt_backup_file(encrypted, restored)
+            # Authentication failed, so no plaintext (partial or full) is published.
+            self.assertFalse(os.path.exists(restored))
+            leftovers = [name for name in os.listdir(os.path.dirname(restored) or '.')
+                         if name.startswith(f'.{os.path.basename(restored)}.part-')]
+            self.assertEqual(leftovers, [])
+        finally:
+            for path in (source.name, encrypted, restored):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+            if old_backup_key is None:
+                os.environ.pop('EVE_BACKUP_KEY', None)
+            else:
+                os.environ['EVE_BACKUP_KEY'] = old_backup_key
 
     def test_redis_snapshot_uses_safe_json_serialization(self):
         payload = {'items': [{'id': 1, 'name': 'ایمن'}], 'ok': True}
