@@ -30,6 +30,7 @@ from panel.adapters.xui import (
     v3_reset_client,
     v3_update_client,
 )
+from panel.core import snapshot_delta
 from panel.core.redis_client import (
     GLOBAL_REFRESH_LOCK,
     GLOBAL_SERVER_DATA,
@@ -1743,6 +1744,9 @@ def fetch_and_update_server_data(server_id: int):
         insert_at = min(max(first_idx, 0), len(without_server))
         GLOBAL_SERVER_DATA['inbounds'] = without_server[:insert_at] + new_block + without_server[insert_at:]
 
+    # Only this server's block changed, so the delta sync only has to re-fingerprint it.
+    snapshot_delta.mark_dirty(server_ids=[server.id])
+
     statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
     updated = False
     for st in statuses:
@@ -2002,6 +2006,7 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                 changed = True
             if changed:
                 _recompute_cached_server_stats(server_id)
+                snapshot_delta.mark_dirty(server_ids=[server_id])
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             if changed and publish:
                 if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
@@ -2083,6 +2088,7 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
 
             if changed:
                 _recompute_cached_server_stats(server_id)
+                snapshot_delta.mark_dirty(server_ids=[server_id])
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             if changed and publish:
                 if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
@@ -2133,6 +2139,7 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
                     ib['clients'] = kept
             if removed:
                 _recompute_cached_server_stats(server_id)
+                snapshot_delta.mark_dirty(server_ids=[server_id])
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             if removed and publish:
                 if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
@@ -2190,6 +2197,7 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
             clone['inbound_id'] = iid
             target_ib.setdefault('clients', []).append(clone)
             _recompute_cached_server_stats(server_id)
+            snapshot_delta.mark_dirty(server_ids=[server_id])
             GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             done = True
             if publish:

@@ -6,11 +6,23 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, make_response, request, session
 
+from panel.core import snapshot_delta
 from panel.extensions import db, limiter
 from panel.models import Admin, ClientOwnership, Server
 from panel.routes.common import login_required
 
 bp = Blueprint('dashboard', __name__)
+
+
+def _request_since():
+    """Client's snapshot revision, from ?since= or the X-Eve-Snapshot header."""
+    raw = request.args.get('since')
+    if raw is None:
+        raw = request.headers.get('X-Eve-Snapshot')
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 @bp.route('/api/refresh')
@@ -82,6 +94,7 @@ def api_refresh():
         }), (202 if job and job.get('state') in ('queued', 'running') else 200)
 
     user = db.session.get(Admin, session['admin_id'])
+    since = _request_since()
 
     # === حالت سوپرادمین (یا ادمین معمولی غیر ریسلر) ===
     if user.role != 'reseller':
@@ -90,9 +103,27 @@ def api_refresh():
         # scale and made the skeleton linger). Read-only response, additive fields.
         _ensure_snapshot_enriched()
 
+        sync = snapshot_delta.build_sync(GLOBAL_SERVER_DATA, since)
+        if sync['mode'] == 'unchanged':
+            # The client already holds this revision: answer with a small
+            # envelope instead of the whole snapshot.
+            return jsonify({
+                "success": True,
+                "sync": sync,
+                "refresh_job": _summarize_job(job),
+                "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
+            }), 200
+
+        if sync['mode'] == 'delta':
+            inbounds = snapshot_delta.select_inbounds(GLOBAL_SERVER_DATA, sync['changed'])
+        else:
+            inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+
         resp = {
             "success": True,
-            "inbounds": GLOBAL_SERVER_DATA.get('inbounds') or [],
+            "sync": sync,
+            "inbounds": inbounds,
+            "removed": sync.get('removed') or [],
             "stats": GLOBAL_SERVER_DATA.get('stats') or {},
             "servers": GLOBAL_SERVER_DATA.get('servers_status') or [],
             "server_count": len(GLOBAL_SERVER_DATA.get('servers_status') or []),
@@ -107,6 +138,18 @@ def api_refresh():
         return jsonify(resp), (202 if job and job.get('state') in ('queued', 'running') else 200)
 
     # === حالت ریسلر ===
+    # The reseller view is derived per user. When nothing changed since the
+    # client's revision the whole deepcopy + filter pass is skipped; otherwise
+    # the full filtered view is sent (the client applies it as a full snapshot).
+    reseller_sync = snapshot_delta.build_sync(GLOBAL_SERVER_DATA, since)
+    if reseller_sync['mode'] == 'unchanged':
+        return jsonify({
+            "success": True,
+            "sync": reseller_sync,
+            "refresh_job": _summarize_job(job),
+            "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
+        }), 200
+
     # The reseller path filters/annotates per-user, so it works on a private copy.
     data = copy.deepcopy(GLOBAL_SERVER_DATA)
     t_after_copy = time.perf_counter() if debug_timing else None
@@ -258,7 +301,14 @@ def api_refresh():
 
     resp = {
         "success": True,
+        "sync": {
+            "mode": "full",
+            "reason": "reseller_view",
+            "revision": reseller_sync['revision'],
+            "last_update": reseller_sync.get('last_update'),
+        },
         "inbounds": filtered_inbounds,
+        "removed": [],
         "stats": reseller_stats,
         "servers": filtered_servers_status,
         "server_count": len(unique_server_ids),

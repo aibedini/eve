@@ -1640,6 +1640,7 @@
     let allInboundsData = [];
     let pendingServers = [];
     let serverStatuses = []; // /api/refresh -> servers (status list)
+    let snapshotRevision = null; // last applied /api/refresh revision (delta sync)
     let refreshController = null;
     const serverRefreshControllers = new Map(); // serverId -> AbortController
     let activeRefreshJobId = null;
@@ -3138,6 +3139,46 @@
         pollOnce();
     }
 
+    // Apply a full snapshot payload (first load or an explicit refresh).
+    function applySnapshotFull(data) {
+        allInboundsData = data.inbounds || [];
+        invalidateClientSearchIndex();
+        inboundsData = allInboundsData;
+        serverStatuses = data.servers || [];
+        // Clear pending servers since we have full data
+        pendingServers = [];
+        updateStats(data.stats, serverStatuses.length);
+        applyFilters();
+    }
+
+    // Merge a delta payload: replace changed inbounds in place, drop removed ones,
+    // append new ones. Keeps the on-screen order stable between polls.
+    function applySnapshotDelta(data) {
+        const changed = data.inbounds || [];
+        const removed = data.removed || [];
+        const removedKeys = new Set(removed.map(function (pair) { return pair[0] + '|' + pair[1]; }));
+        let next = (allInboundsData || []).filter(function (ib) {
+            return !removedKeys.has(ib.server_id + '|' + ib.id);
+        });
+        const indexByKey = new Map();
+        next.forEach(function (ib, idx) { indexByKey.set(ib.server_id + '|' + ib.id, idx); });
+        changed.forEach(function (ib) {
+            const key = ib.server_id + '|' + ib.id;
+            if (indexByKey.has(key)) {
+                next[indexByKey.get(key)] = ib;
+            } else {
+                indexByKey.set(key, next.length);
+                next.push(ib);
+            }
+        });
+        allInboundsData = next;
+        invalidateClientSearchIndex();
+        inboundsData = allInboundsData;
+        serverStatuses = data.servers || [];
+        updateStats(data.stats, serverStatuses.length);
+        applyFilters();
+    }
+
     async function refreshData(isSilent = false, options = {}) {
         const refreshBtn = document.querySelector('.header-controls .btn-primary');
 
@@ -3172,6 +3213,10 @@
             if (mode) params.set('mode', mode);
             if (enqueue) params.set('enqueue', '1');
             if (serverId !== null && serverId !== '' && serverId !== undefined) params.set('server_id', String(serverId));
+            // Silent polls ask for a delta; an explicit refresh always takes a
+            // full snapshot so the operator's click cannot be answered with a
+            // stale revision.
+            if (isSilent && snapshotRevision !== null) params.set('since', String(snapshotRevision));
             const qs = params.toString() ? `?${params.toString()}` : '';
             const response = await fetch(`/api/refresh${qs}`, { signal, cache: 'no-store' });
             const data = await response.json();
@@ -3186,17 +3231,19 @@
                 // payload keeps the skeleton instead of flashing "No servers".
                 if (isAsyncJobPending && poll) _dashboardRefreshing = true;
 
+                const sync = data.sync || null;
+                if (sync && typeof sync.revision === 'number') {
+                    snapshotRevision = sync.revision;
+                }
+
                 if (shouldApplySnapshotNow) {
-                    allInboundsData = data.inbounds;
-                    invalidateClientSearchIndex();
-                    inboundsData = data.inbounds;
-                    serverStatuses = data.servers || [];
-
-                    // Clear pending servers since we have full data
-                    pendingServers = [];
-
-                    updateStats(data.stats, data.servers ? data.servers.length : 0);
-                    applyFilters();
+                    if (sync && sync.mode === 'unchanged') {
+                        // Nothing changed since the last poll: keep the current view.
+                    } else if (sync && sync.mode === 'delta') {
+                        applySnapshotDelta(data);
+                    } else {
+                        applySnapshotFull(data);
+                    }
                 }
 
                 if (jobId && poll) {

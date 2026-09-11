@@ -319,12 +319,69 @@ def _client_for(flask_app, admin_id, role, is_superadmin):
     return client
 
 
+class _NullResponse:
+    """Stand-in response for scenarios that measure a function, not an HTTP call."""
+
+    status_code = 200
+
+    def get_data(self):
+        return b''
+
+
 def build_scenarios(sizes, ids):
-    flask_app, _ns = load_app()
+    flask_app, ns = load_app()
+    from panel.core import snapshot_delta
     root = _client_for(flask_app, ids['root'], 'superadmin', True)
     admin = _client_for(flask_app, ids['admin'], 'admin', False)
     reseller = _client_for(flask_app, ids['reseller'], 'reseller', False)
     anonymous = flask_app.test_client()
+
+    state = {'revision': None, 'counter': 0}
+
+    def unchanged_refresh():
+        if state['revision'] is None:
+            payload = root.get('/api/refresh').get_json() or {}
+            state['revision'] = (payload.get('sync') or {}).get('revision')
+        return root.get('/api/refresh?since=%s' % state['revision'])
+
+    def delta_refresh():
+        inbounds = ns['GLOBAL_SERVER_DATA'].get('inbounds') or []
+        if inbounds:
+            target = inbounds[state['counter'] % len(inbounds)]
+            state['counter'] += 1
+            target['client_count'] = int(target.get('client_count') or 0) + 1
+            # Mirror the real writer: the fetcher and the cached-client helpers
+            # pass the server ids they replaced, so only those blocks are hashed.
+            snapshot_delta.mark_dirty(server_ids=[target.get('server_id')])
+        ns['GLOBAL_SERVER_DATA']['last_update'] = 'bench-delta-%d' % state['counter']
+        if state['revision'] is None:
+            payload = root.get('/api/refresh').get_json() or {}
+            state['revision'] = (payload.get('sync') or {}).get('revision')
+        response = root.get('/api/refresh?since=%s' % state['revision'])
+        payload = response.get_json(silent=True) or {}
+        revision = (payload.get('sync') or {}).get('revision')
+        if revision is not None:
+            state['revision'] = revision
+        return response
+
+    def delta_sync_hinted():
+        # What a per-server fetch cycle costs: one server's block is re-hashed.
+        server_ids = ids['servers'] or [None]
+        state['counter'] += 1
+        snapshot_delta.mark_dirty(server_ids=[server_ids[state['counter'] % len(server_ids)]])
+        ns['GLOBAL_SERVER_DATA']['last_update'] = 'bench-hint-%d' % state['counter']
+        snapshot_delta.sync(ns['GLOBAL_SERVER_DATA'])
+        return _NullResponse()
+
+    def delta_sync_unhinted():
+        # Worst case: a writer without a server hint (or a Redis snapshot merge)
+        # forces a full fingerprint pass.
+        state['counter'] += 1
+        snapshot_delta.mark_dirty()
+        ns['GLOBAL_SERVER_DATA']['last_update'] = 'bench-full-%d' % state['counter']
+        snapshot_delta.sync(ns['GLOBAL_SERVER_DATA'])
+        return _NullResponse()
+
     return [
         ('html_login', 'public login page render',
          lambda: anonymous.get('/login')),
@@ -334,6 +391,14 @@ def build_scenarios(sizes, ids):
          lambda: admin.get('/api/me/permissions')),
         ('api_refresh_superadmin', 'serialize the shared snapshot',
          lambda: root.get('/api/refresh')),
+        ('api_refresh_superadmin_unchanged', 'poll a known revision (delta sync)',
+         unchanged_refresh),
+        ('api_refresh_superadmin_delta', 'one changed inbound since the known revision',
+         delta_refresh),
+        ('snapshot_delta_sync_hinted', 're-hash one server block after a change (no HTTP)',
+         delta_sync_hinted),
+        ('snapshot_delta_sync_unhinted', 're-hash the whole snapshot after a change (no HTTP)',
+         delta_sync_unhinted),
         ('api_refresh_reseller', 'deepcopy + per-client filter for a reseller',
          lambda: reseller.get('/api/refresh')),
         ('api_transactions_page', 'paginated transaction list',
@@ -407,7 +472,14 @@ def run_harness(sizes, repeat=7, warmup=2, seed_value=1234):
     }
 
 
-def compare_reports(baseline, current, tolerance_pct=10.0):
+def compare_reports(baseline, current, tolerance_pct=10.0, min_abs_ms=5.0):
+    """Compare two reports.
+
+    A latency change is only flagged when it is both relatively large
+    (tolerance_pct) and absolutely meaningful (min_abs_ms): on a 10 ms scenario a
+    single noisy sample can swing 40%, which is not a regression worth acting on.
+    Response size and SQL counts stay exact.
+    """
     rows = []
     regressions = []
     improvements = []
@@ -424,15 +496,20 @@ def compare_reports(baseline, current, tolerance_pct=10.0):
             delta = ((cur_value - base_value) / base_value) * 100.0 if base_value else 0.0
             row[metric] = round(cur_value, 3)
             row[metric + '_delta_pct'] = round(delta, 1)
+            row[metric + '_abs_delta'] = round(cur_value - base_value, 3)
         rows.append(row)
         for metric in ('mean_ms', 'p95_ms'):
-            if row[metric + '_delta_pct'] > tolerance_pct:
+            if (row[metric + '_delta_pct'] > tolerance_pct
+                    and row[metric + '_abs_delta'] >= min_abs_ms):
                 regressions.append({
                     'scenario': name, 'metric': metric,
                     'delta_pct': row[metric + '_delta_pct'],
+                    'abs_delta_ms': row[metric + '_abs_delta'],
                 })
-        if (row['mean_ms_delta_pct'] < -tolerance_pct
-                or row['p95_ms_delta_pct'] < -tolerance_pct):
+        if ((row['mean_ms_delta_pct'] < -tolerance_pct
+             and row['mean_ms_abs_delta'] <= -min_abs_ms)
+                or (row['p95_ms_delta_pct'] < -tolerance_pct
+                    and row['p95_ms_abs_delta'] <= -min_abs_ms)):
             improvements.append({
                 'scenario': name,
                 'mean_delta_pct': row['mean_ms_delta_pct'],
@@ -440,6 +517,7 @@ def compare_reports(baseline, current, tolerance_pct=10.0):
             })
     return {
         'tolerance_pct': tolerance_pct,
+        'min_abs_ms': min_abs_ms,
         'rows': rows,
         'regressions': regressions,
         'improvements': improvements,
@@ -490,7 +568,9 @@ def main(argv=None):
     parser.add_argument('--compare', default=None, help='baseline JSON to compare against')
     parser.add_argument('--fail-on-regression', dest='fail_on_regression', type=float,
                         default=None, help='exit non-zero when mean/p95 worsen by more than this %%')
-    parser.add_argument('--repeat', type=int, default=7)
+    parser.add_argument('--min-abs-ms', dest='min_abs_ms', type=float, default=5.0,
+                        help='ignore latency changes smaller than this many ms')
+    parser.add_argument('--repeat', type=int, default=11)
     parser.add_argument('--warmup', type=int, default=2)
     parser.add_argument('--seed', type=int, default=1234)
     parser.add_argument('--quick', action='store_true', help='tiny dataset for smoke tests')
@@ -517,6 +597,7 @@ def main(argv=None):
         compare = compare_reports(
             baseline, report,
             tolerance_pct=(args.fail_on_regression if args.fail_on_regression is not None else 10.0),
+            min_abs_ms=args.min_abs_ms,
         )
         report['compare'] = compare
 

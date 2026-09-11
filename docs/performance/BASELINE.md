@@ -69,6 +69,11 @@ A later phase should run, for example:
 python scripts/benchmark_baseline.py --compare docs/performance/baseline-2.5.120.json --fail-on-regression 10
 ```
 
+## Later measurements
+
+- Phase 11 (delta sync for /api/refresh): `after-2.5.121.json` compared against
+  this baseline, with the same-process before/after table in `DELTA_SYNC.md`.
+
 ## Caveats
 
 - Numbers are from the Flask test client in one process, not a real HTTP server,

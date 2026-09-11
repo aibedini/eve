@@ -68,7 +68,11 @@ class HarnessSmokeTests(unittest.TestCase):
                 self.assertIsInstance(row[metric], (int, float), name + "." + metric)
             self.assertGreaterEqual(row["mean_ms"], 0)
             self.assertGreater(row["p50_ms"], 0, name)
-            self.assertGreater(row["response_bytes"], 0, name)
+            # The snapshot_delta_sync_* scenarios measure a function, not a response.
+            if name.startswith("snapshot_delta_sync"):
+                self.assertGreaterEqual(row["response_bytes"], 0, name)
+            else:
+                self.assertGreater(row["response_bytes"], 0, name)
             self.assertGreaterEqual(row["sql_statements"], 0, name)
 
 
@@ -92,6 +96,15 @@ class CompareReportTests(unittest.TestCase):
         self.assertEqual(result["improvements"][0]["scenario"], "faster")
         rows = {row["scenario"]: row for row in result["rows"]}
         self.assertAlmostEqual(rows["slower"]["mean_ms_delta_pct"], 30.0, places=1)
+
+    def test_small_absolute_changes_are_not_regressions(self):
+        baseline = {"scenarios": {"tiny": self._scenario(10.0, 10.0)}}
+        current = {"scenarios": {"tiny": self._scenario(12.0, 12.0)}}
+        result = self.harness.compare_reports(baseline, current, tolerance_pct=10.0,
+                                              min_abs_ms=5.0)
+        self.assertEqual(result["regressions"], [])
+        rows = {row["scenario"]: row for row in result["rows"]}
+        self.assertEqual(rows["tiny"]["mean_ms_abs_delta"], 2.0)
 
     def test_new_scenarios_are_reported_without_crashing_the_compare(self):
         result = self.harness.compare_reports({"scenarios": {}},
