@@ -2830,6 +2830,7 @@ def verify_renew_client(server_id, inbound_id, email):
 
 
 @bp.route('/api/client/qrcode', methods=['GET'])
+@login_required
 def generate_qrcode():
     """Generate QR code from URL query parameter (GET request)"""
     from app import app  # deferred: app-level helper, avoids circular import

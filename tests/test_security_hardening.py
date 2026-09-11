@@ -265,6 +265,11 @@ class SecurityHardeningTests(unittest.TestCase):
         db.session.refresh(self.reseller)
         self.assertEqual(self.reseller.credit, 20)
 
+    def test_qrcode_endpoint_requires_a_login(self):
+        # Only the authenticated dashboard uses this; it must not stay open.
+        response = self.client.get('/api/client/qrcode?link=https://example.com')
+        self.assertEqual(response.status_code, 401)
+
     def test_disabled_admin_session_is_revoked(self):
         self._login(self.reseller)
         self.reseller.enabled = False
