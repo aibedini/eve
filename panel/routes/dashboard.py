@@ -8,7 +8,7 @@ from datetime import datetime
 
 from flask import Blueprint, Response, jsonify, make_response, request, session, stream_with_context
 
-from panel.core import snapshot_delta
+from panel.core import refresh_policy, snapshot_delta
 from panel.extensions import db, limiter
 from panel.models import Admin, ClientOwnership, Server
 from panel.routes.common import login_required
@@ -127,6 +127,9 @@ def api_refresh_stream():
             last_heartbeat = time.monotonic()
             ticks_since_hydrate = 0
             while time.monotonic() < deadline:
+                # A connected viewer counts as activity, but only once per minute
+                # so a forgotten tab cannot pin the fetcher to the fast cadence.
+                refresh_policy.record_activity(throttle_seconds=60.0)
                 ticks_since_hydrate += 1
                 if ticks_since_hydrate >= 5:
                     # Multi-worker: pick up a snapshot another worker published, so
@@ -171,6 +174,9 @@ def api_refresh():
         get_reseller_access_maps, is_inbound_accessible,
         load_snapshot_from_redis,
     )
+    # Dashboard traffic drives the adaptive fetch cadence.
+    refresh_policy.record_activity(throttle_seconds=1.0)
+
     # Make sure background threads are running (covers gunicorn/uwsgi workers)
     if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
         ensure_background_threads_started()

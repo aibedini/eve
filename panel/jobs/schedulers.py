@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from sqlalchemy import and_, inspect, or_, text
 
 from panel.adapters.xui import persist_detected_panel_type
-from panel.core import panel_limits
+from panel.core import panel_limits, refresh_policy
 from panel.core.redis_client import (
     GLOBAL_REFRESH_LOCK,
     GLOBAL_SERVER_DATA,
@@ -243,10 +243,12 @@ def inject_version():
 
 def background_data_fetcher():
     """
-    این تابع در پس‌زمینه اجرا می‌شود و هر ۳۰ ثانیه اطلاعات را در RAM بروز می‌کند.
-    Fetches from panels, processes, and (if Redis is on) publishes the snapshot.
+    Adaptive fetcher loop: fetch every panel when the snapshot is stale for the
+    current activity level (active/recent/idle), otherwise sleep in short slices so
+    dashboard activity is noticed promptly. Idle panels are polled far less often
+    while the maximum staleness still bounds data age. See panel/core/refresh_policy.py.
     """
-    from app import app  # deferred: app-level helper, avoids circular import
+    from app import GLOBAL_SERVER_DATA, app  # deferred: app-level helper, avoids circular import
     ensure_background_threads_started()
     # Warm the dedicated process from the previous Redis snapshot so failed or
     # backoff-skipped panels retain their last good server block.
@@ -255,12 +257,29 @@ def background_data_fetcher():
     except Exception:
         pass
     while True:
-        with app.app_context():
-            # fetch_and_update_global_data owns the fetch guard (and skips the
-            # cycle when a manual refresh is already fetching), so this loop never
-            # holds the shared snapshot lock across the network I/O.
-            fetch_and_update_global_data(force=False)
-        time.sleep(30)
+        try:
+            with app.app_context():
+                snapshot_age = refresh_policy.snapshot_age_seconds(
+                    GLOBAL_SERVER_DATA.get('last_update'))
+                should_fetch, _reason = refresh_policy.should_fetch_now(snapshot_age)
+                if should_fetch:
+                    # fetch_and_update_global_data owns the fetch guard (and skips
+                    # the cycle when a manual refresh is already fetching), so this
+                    # loop never holds the shared snapshot lock across network I/O.
+                    fetch_and_update_global_data(force=False)
+                    continue
+                interval = refresh_policy.next_interval(snapshot_age)
+            # Sleep a bounded slice: a request (local event or shared Redis
+            # timestamp) makes the next evaluation switch to the active cadence.
+            refresh_policy.wait_for_interval(
+                min(interval, refresh_policy.activity_poll_seconds()))
+        except Exception:
+            try:
+                with app.app_context():
+                    app.logger.exception('Background fetcher cycle failed')
+            except Exception:
+                pass
+            time.sleep(refresh_policy.MIN_INTERVAL_SECONDS)
 
 
 def snapshot_reader_worker():

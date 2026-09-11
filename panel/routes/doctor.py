@@ -126,6 +126,18 @@ def doctor_summary():
     }
 
     try:
+        from app import GLOBAL_SERVER_DATA  # deferred: app-level state
+        from panel.core import refresh_policy
+        checks['refresh_policy'] = {
+            'state': 'ok',
+            **refresh_policy.status(
+                snapshot_age=refresh_policy.snapshot_age_seconds(
+                    GLOBAL_SERVER_DATA.get('last_update'))),
+        }
+    except Exception as exc:
+        checks['refresh_policy'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.core.db_pool import pool_summary
         checks['db_pool'] = {'state': 'ok', **pool_summary(db.engine)}
     except Exception as exc:

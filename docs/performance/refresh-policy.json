@@ -1,0 +1,21 @@
+{
+  "day_seconds": 86400,
+  "fixed_interval_seconds": 30,
+  "servers": 12,
+  "fixed_cycles": 2880,
+  "adaptive_cycles": 1159,
+  "reduction_pct": 59.8,
+  "fixed_fanout_requests": 34560,
+  "adaptive_fanout_requests": 13908,
+  "seconds_by_level": {
+    "active": 28891,
+    "recent": 480,
+    "idle": 57029
+  },
+  "policy_intervals": {
+    "active": 30,
+    "recent": 90,
+    "idle": 300,
+    "max_staleness": 900
+  }
+}
