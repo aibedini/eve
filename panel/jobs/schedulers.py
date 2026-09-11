@@ -22,6 +22,7 @@ from panel.adapters.xui import persist_detected_panel_type
 from panel.core.redis_client import (
     GLOBAL_REFRESH_LOCK,
     GLOBAL_SERVER_DATA,
+    fetch_guard,
     get_server_revision,
     load_snapshot_from_redis,
     publish_snapshot_to_redis,
@@ -254,15 +255,10 @@ def background_data_fetcher():
         pass
     while True:
         with app.app_context():
-            # Avoid overlapping with a manual refresh job.
-            if GLOBAL_REFRESH_LOCK.acquire(blocking=False):
-                try:
-                    fetch_and_update_global_data(force=False)
-                finally:
-                    try:
-                        GLOBAL_REFRESH_LOCK.release()
-                    except Exception:
-                        pass
+            # fetch_and_update_global_data owns the fetch guard (and skips the
+            # cycle when a manual refresh is already fetching), so this loop never
+            # holds the shared snapshot lock across the network I/O.
+            fetch_and_update_global_data(force=False)
         time.sleep(30)
 
 
@@ -283,11 +279,28 @@ def snapshot_reader_worker():
         time.sleep(10)
 
 
-def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_callback=None):
-    """یک بار داده‌ها را از سرورها واکشی و در RAM به‌روزرسانی می‌کند."""
+def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_callback=None,
+                                 wait_seconds: float = 0.0) -> bool:
+    """Fetch the enabled panels and update the shared snapshot.
+
+    The panel I/O runs WITHOUT GLOBAL_REFRESH_LOCK: the lock only covers the short
+    in-memory commits, so a reader is never blocked for the duration of a fan-out.
+    GLOBAL_FETCH_LOCK still guarantees one fan-out at a time; when another fetch
+    holds it, the call returns False immediately (or waits up to wait_seconds).
+    """
+    with fetch_guard(wait_seconds) as owns_fetch:
+        if not owns_fetch:
+            return False
+        _fetch_and_update_global_data_inner(force, server_ids, progress_callback)
+        return True
+
+
+def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_callback=None):
+    """Body of fetch_and_update_global_data; the caller owns the fetch guard."""
     from app import _utc_iso_now, app, fetch_worker, get_server_password, process_inbounds  # deferred: app-level helper, avoids circular import
     try:
-        GLOBAL_SERVER_DATA['is_updating'] = True
+        with GLOBAL_REFRESH_LOCK:
+            GLOBAL_SERVER_DATA['is_updating'] = True
 
         servers_q = Server.query.filter_by(enabled=True).filter(
             (Server.hidden == False) | (Server.hidden == None))
@@ -344,7 +357,8 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
         # ── Seed working maps from the current cache so partial updates MERGE ──
         # (a warm refresh keeps every server's data on screen and replaces it
         #  server-by-server; a cold start fills in progressively from empty).
-        existing_inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+        with GLOBAL_REFRESH_LOCK:
+            existing_inbounds = list(GLOBAL_SERVER_DATA.get('inbounds') or [])
         existing_by_server = defaultdict(list)
         for inbound in existing_inbounds:
             try:
@@ -354,7 +368,8 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
             except Exception:
                 continue
 
-        existing_statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
+        with GLOBAL_REFRESH_LOCK:
+            existing_statuses = list(GLOBAL_SERVER_DATA.get('servers_status') or [])
         status_map = {}
         for st in existing_statuses:
             try:
@@ -381,10 +396,12 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
                 flat.extend(new_by_server.get(_sid, []))
             statuses = [status_map.get(_sid) or {"server_id": _sid, "success": False, "error": "No data"}
                         for _sid in server_order]
-            GLOBAL_SERVER_DATA['inbounds'] = flat
-            GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(statuses)
-            GLOBAL_SERVER_DATA['servers_status'] = statuses
-            GLOBAL_SERVER_DATA['last_update'] = _utc_iso_now()
+            stats = _recompute_global_stats_from_server_statuses(statuses)
+            with GLOBAL_REFRESH_LOCK:
+                GLOBAL_SERVER_DATA['inbounds'] = flat
+                GLOBAL_SERVER_DATA['stats'] = stats
+                GLOBAL_SERVER_DATA['servers_status'] = statuses
+                GLOBAL_SERVER_DATA['last_update'] = _utc_iso_now()
 
         def _apply_result(sid, res):
             expected_revision = refresh_revisions.get(sid, 0)
@@ -470,24 +487,26 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
 
         def _publish_dirty():
             nonlocal last_publish
-            publishable = {
-                sid for sid in dirty_server_ids
-                if get_server_revision(sid) == refresh_revisions.get(sid, 0)
-            }
-            if not publishable:
-                dirty_server_ids.clear()
-                return
-            expected = {sid: refresh_revisions.get(sid, 0) for sid in publishable}
-            if publish_snapshot_to_redis(
-                    publishable, expected_server_revisions=expected):
-                dirty_server_ids.difference_update(publishable)
-            else:
-                # A CAS failure means at least one mutation won the race. Drop
-                # those stale candidates; successful panel data is fetched again
-                # on the next refresh cycle.
-                for sid in list(publishable):
-                    if get_server_revision(sid) != expected[sid]:
-                        dirty_server_ids.discard(sid)
+            with GLOBAL_REFRESH_LOCK:
+                publishable = {
+                    sid for sid in dirty_server_ids
+                    if get_server_revision(sid) == refresh_revisions.get(sid, 0)
+                }
+                if not publishable:
+                    dirty_server_ids.clear()
+                    last_publish = time.time()
+                    return
+                expected = {sid: refresh_revisions.get(sid, 0) for sid in publishable}
+                if publish_snapshot_to_redis(
+                        publishable, expected_server_revisions=expected):
+                    dirty_server_ids.difference_update(publishable)
+                else:
+                    # A CAS failure means at least one mutation won the race. Drop
+                    # those stale candidates; successful panel data is fetched again
+                    # on the next refresh cycle.
+                    for sid in list(publishable):
+                        if get_server_revision(sid) != expected[sid]:
+                            dirty_server_ids.discard(sid)
             last_publish = time.time()
 
         if server_dicts:
@@ -536,7 +555,8 @@ def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_
     except Exception as e:
         app.logger.error("Background fetch error: %s", e)
     finally:
-        GLOBAL_SERVER_DATA['is_updating'] = False
+        with GLOBAL_REFRESH_LOCK:
+            GLOBAL_SERVER_DATA['is_updating'] = False
 
 def run_scheduler():
     from app import _cleanup_old_backups, _get_app_tzinfo, _parse_bool, app  # deferred: app-level helper, avoids circular import
@@ -1594,8 +1614,8 @@ def usage_snapshot_worker():
     if not GLOBAL_SERVER_DATA.get('inbounds'):
         try:
             with app.app_context():
-                with GLOBAL_REFRESH_LOCK:
-                    fetch_and_update_global_data(force=True)
+                # The fetch acquires its own guard for the duration of the I/O.
+                fetch_and_update_global_data(force=True)
         except Exception as exc:
             app.logger.error('[UsageRollup] initial fetch failed: %s', exc)
 

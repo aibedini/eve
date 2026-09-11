@@ -1,0 +1,12 @@
+{
+  "servers": 6,
+  "fetch_delay_seconds": 0.2,
+  "rounds": 1,
+  "fetch_ms": 448.6,
+  "reader_worst_block_ms": 0.053,
+  "reader_mean_block_ms": 0.008,
+  "reader_samples": 110,
+  "lock_sections": 14,
+  "lock_section_max_ms": 0.037,
+  "lock_section_total_ms": 0.266
+}

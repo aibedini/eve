@@ -32,6 +32,7 @@ from panel.adapters.xui import (
 )
 from panel.core import snapshot_delta
 from panel.core.redis_client import (
+    fetch_guard,
     GLOBAL_REFRESH_LOCK,
     GLOBAL_SERVER_DATA,
     REDIS_REFRESH_JOB_PREFIX,
@@ -1425,8 +1426,9 @@ def _update_reachability_status(servers, force: bool = False):
                 ordered.append(st)
     except Exception:
         ordered = list(status_map.values())
-    GLOBAL_SERVER_DATA['servers_status'] = ordered
-    GLOBAL_SERVER_DATA['last_update'] = _utc_iso_now()
+    with GLOBAL_REFRESH_LOCK:
+        GLOBAL_SERVER_DATA['servers_status'] = ordered
+        GLOBAL_SERVER_DATA['last_update'] = _utc_iso_now()
 
 
 def _run_refresh_job(job_id: str):
@@ -1441,73 +1443,95 @@ def _run_refresh_job(job_id: str):
     try:
         # Important: background threads must run inside app context for SQLAlchemy.
         with app.app_context():
+            # The shared snapshot lock is NOT held across the panel fan-out: the
+            # fetch owns GLOBAL_FETCH_LOCK and only takes GLOBAL_REFRESH_LOCK for
+            # its short in-memory commits (see docs/performance/REFRESH_LOCK.md).
+            owns_update_flag = True
             with GLOBAL_REFRESH_LOCK:
                 GLOBAL_SERVER_DATA['is_updating'] = True
-                try:
-                    mode = (job.get('mode') or 'full').strip().lower()
-                    server_id = job.get('server_id')
-                    force = bool(job.get('force'))
-                    changed_server_ids = []
+            try:
+                mode = (job.get('mode') or 'full').strip().lower()
+                server_id = job.get('server_id')
+                force = bool(job.get('force'))
+                changed_server_ids = []
 
-                    if mode == 'usage_snapshot':
-                        _run_snapshot_with_progress()
-                    elif mode == 'status':
-                        servers_q = Server.query.filter_by(enabled=True).filter(
-                            (Server.hidden == False) | (Server.hidden == None))
-                        if server_id:
-                            servers_q = servers_q.filter(Server.id == int(server_id))
-                        servers = servers_q.all()
+                if mode == 'usage_snapshot':
+                    _run_snapshot_with_progress()
+                elif mode == 'status':
+                    servers_q = Server.query.filter_by(enabled=True).filter(
+                        (Server.hidden == False) | (Server.hidden == None))
+                    if server_id:
+                        servers_q = servers_q.filter(Server.id == int(server_id))
+                    servers = servers_q.all()
+                    with fetch_guard(wait_seconds=900) as owns_fetch:
+                        if not owns_fetch:
+                            owns_update_flag = False
+                            raise RuntimeError('Another refresh is already running')
                         _update_reachability_status(servers, force=force)
-                    else:
-                        if server_id:
-                            server_revision = get_server_revision(int(server_id))
-                            try:
+                else:
+                    if server_id:
+                        server_revision = get_server_revision(int(server_id))
+                        try:
+                            with fetch_guard(wait_seconds=900) as owns_fetch:
+                                if not owns_fetch:
+                                    owns_update_flag = False
+                                    raise RuntimeError('Another refresh is already running')
                                 fetch_and_update_server_data(int(server_id))
-                                if get_server_revision(int(server_id)) != server_revision:
-                                    app.logger.info(
-                                        'Discarded stale manual refresh for server %s after a concurrent mutation',
-                                        server_id,
-                                    )
-                                    load_snapshot_from_redis(force=True)
-                                else:
-                                    _backoff_record_success(int(server_id))
-                                    changed_server_ids = [int(server_id)]
-                            except Exception as e:
-                                _backoff_record_failure(int(server_id), str(e))
-                                raise
-                        else:
-                            def _monitor_progress(event, payload):
-                                current_job = _get_refresh_job(job_id) or job
-                                progress = current_job.setdefault('progress', {})
-                                if event == 'started':
-                                    progress.update(payload)
-                                    progress['completed'] = sum(
-                                        1 for row in payload.get('servers', [])
-                                        if row.get('state') == 'skipped')
-                                elif event == 'server_done':
-                                    rows = progress.setdefault('servers', [])
-                                    for row in rows:
-                                        if int(row.get('id', -1)) == int(payload.get('id', -2)):
-                                            row.update(payload)
-                                            break
-                                    progress['current_server'] = payload.get('name')
-                                    progress['completed'] = sum(
-                                        1 for row in rows
-                                        if row.get('state') in ('success', 'error', 'skipped'))
-                                    progress['success'] = sum(1 for row in rows if row.get('state') == 'success')
-                                    progress['failed'] = sum(1 for row in rows if row.get('state') == 'error')
-                                _store_refresh_job(current_job)
+                            if get_server_revision(int(server_id)) != server_revision:
+                                app.logger.info(
+                                    'Discarded stale manual refresh for server %s after a concurrent mutation',
+                                    server_id,
+                                )
+                                load_snapshot_from_redis(force=True)
+                            else:
+                                _backoff_record_success(int(server_id))
+                                changed_server_ids = [int(server_id)]
+                        except Exception as e:
+                            _backoff_record_failure(int(server_id), str(e))
+                            raise
+                    else:
+                        def _monitor_progress(event, payload):
+                            current_job = _get_refresh_job(job_id) or job
+                            progress = current_job.setdefault('progress', {})
+                            if event == 'started':
+                                progress.update(payload)
+                                progress['completed'] = sum(
+                                    1 for row in payload.get('servers', [])
+                                    if row.get('state') == 'skipped')
+                            elif event == 'server_done':
+                                rows = progress.setdefault('servers', [])
+                                for row in rows:
+                                    if int(row.get('id', -1)) == int(payload.get('id', -2)):
+                                        row.update(payload)
+                                        break
+                                progress['current_server'] = payload.get('name')
+                                progress['completed'] = sum(
+                                    1 for row in rows
+                                    if row.get('state') in ('success', 'error', 'skipped'))
+                                progress['success'] = sum(1 for row in rows if row.get('state') == 'success')
+                                progress['failed'] = sum(1 for row in rows if row.get('state') == 'error')
+                            _store_refresh_job(current_job)
 
-                            fetch_and_update_global_data(
-                                force=force, progress_callback=_monitor_progress)
-                    # Propagate manual-refresh results to other workers (Redis mode).
-                    expected = ({int(server_id): server_revision}
-                                if changed_server_ids and server_id else None)
+                        # wait_seconds keeps the manual refresh waiting for a
+                        # background cycle (user intent) while never blocking a
+                        # reader; a False result means another fetch is running.
+                        started = fetch_and_update_global_data(
+                            force=force, progress_callback=_monitor_progress,
+                            wait_seconds=900)
+                        if not started:
+                            owns_update_flag = False
+                            raise RuntimeError('Another refresh is already running')
+                # Propagate manual-refresh results to other workers (Redis mode).
+                expected = ({int(server_id): server_revision}
+                            if changed_server_ids and server_id else None)
+                with GLOBAL_REFRESH_LOCK:
                     publish_snapshot_to_redis(
                         changed_server_ids, expected_server_revisions=expected,
                     )
-                finally:
-                    GLOBAL_SERVER_DATA['is_updating'] = False
+            finally:
+                if owns_update_flag:
+                    with GLOBAL_REFRESH_LOCK:
+                        GLOBAL_SERVER_DATA['is_updating'] = False
 
         job = _get_refresh_job(job_id) or job
         job['state'] = 'done'

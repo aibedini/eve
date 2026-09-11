@@ -108,7 +108,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.123"
+APP_VERSION = "2.5.124"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -142,6 +142,8 @@ _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 from panel.core.redis_client import (  # noqa: F401
     GLOBAL_SERVER_DATA,
     GLOBAL_REFRESH_LOCK,
+    GLOBAL_FETCH_LOCK,
+    fetch_guard,
     REDIS_URL,
     REDIS_SNAPSHOT_KEY,
     REDIS_SNAPSHOT_MANIFEST_KEY,

@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     'GLOBAL_SERVER_DATA',
     'GLOBAL_REFRESH_LOCK',
+    'GLOBAL_FETCH_LOCK',
+    'fetch_guard',
     'REDIS_URL',
     'REDIS_SNAPSHOT_KEY',
     'REDIS_SNAPSHOT_MANIFEST_KEY',
@@ -54,6 +56,11 @@ GLOBAL_SERVER_DATA = {
 # Serializes all writes to GLOBAL_SERVER_DATA (fetch pipeline, ownership
 # enrichment, snapshot publish). Moved here from app.py; identity is shared.
 GLOBAL_REFRESH_LOCK = threading.RLock()
+
+# Serializes panel fetches (one fan-out at a time) WITHOUT being held while the
+# network I/O runs: readers take GLOBAL_REFRESH_LOCK only for the short in-memory
+# commits. See docs/performance/REFRESH_LOCK.md.
+GLOBAL_FETCH_LOCK = threading.Lock()
 
 REDIS_URL = (os.environ.get('REDIS_URL') or '').strip()
 REDIS_SNAPSHOT_KEY = 'eve:server_data_snapshot'
@@ -101,6 +108,25 @@ def get_redis():
 
 def redis_enabled() -> bool:
     return get_redis() is not None
+
+
+@contextmanager
+def fetch_guard(wait_seconds: float = 0.0):
+    """Yield True when this caller owns the panel-fetch slot, False otherwise.
+
+    The lock is released as soon as the caller leaves the block, so it must only
+    cover a fetch and never surround a reader.
+    """
+    acquired = GLOBAL_FETCH_LOCK.acquire(
+        blocking=bool(wait_seconds), timeout=wait_seconds if wait_seconds else -1)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                GLOBAL_FETCH_LOCK.release()
+            except Exception:
+                pass
 
 
 REDIS_SNAPSHOT_VERSION_KEY = 'eve:server_data_version'
