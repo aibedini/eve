@@ -30,7 +30,7 @@ from panel.adapters.xui import (
     v3_reset_client,
     v3_update_client,
 )
-from panel.core import snapshot_delta
+from panel.core import panel_limits, snapshot_delta
 from panel.core.redis_client import (
     fetch_guard,
     GLOBAL_REFRESH_LOCK,
@@ -1695,6 +1695,20 @@ def _recompute_global_stats_from_server_statuses(server_statuses):
 
 
 def fetch_and_update_server_data(server_id: int):
+    """Fetch one server, coalescing duplicate callers.
+
+    Several requests (or a request plus the membership sync) can ask for the same
+    server at once; the first one fetches, the others wait for its result instead
+    of hitting the panel again. See panel/core/panel_limits.py.
+    """
+    with panel_limits.coalesce('xui-fetch:%d' % int(server_id)) as slot:
+        if not slot.leader:
+            return slot.result
+        slot.result = _fetch_and_update_server_data_inner(server_id)
+        return slot.result
+
+
+def _fetch_and_update_server_data_inner(server_id: int):
     """Fetch a single server's inbounds and update GLOBAL_SERVER_DATA in-place."""
     from app import app, process_inbounds  # deferred: app-level helper, avoids circular import
     server = db.session.get(Server, int(server_id))
@@ -1733,50 +1747,70 @@ def fetch_and_update_server_data(server_id: int):
         inbounds = []
     processed, stats = process_inbounds(inbounds, server, admin_user, '*', {}, online_index=online_index)
 
-    # Update cache atomically under lock
-    # - Replace only this server's inbounds
-    # - Preserve the previous ordering position (do NOT move the server's block to the end)
-    # - Update per-server status stats
-    # - Recompute aggregate stats
-    existing_inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
-    new_block = list(processed or [])
+    # Update the shared snapshot atomically: the read-modify-write of one
+    # server's block is serialized with the background fan-out commits.
+    with GLOBAL_REFRESH_LOCK:
+        # Update cache atomically under lock
+        # - Replace only this server's inbounds
+        # - Preserve the previous ordering position (do NOT move the server's block to the end)
+        # - Update per-server status stats
+        # - Recompute aggregate stats
+        existing_inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+        new_block = list(processed or [])
 
-    # Find the first occurrence index of this server in the existing list (if any)
-    first_idx = None
-    for idx, item in enumerate(existing_inbounds):
-        try:
-            if int(item.get('server_id', -1)) == int(server.id):
-                first_idx = idx
-                break
-        except Exception:
-            continue
-
-    without_server = []
-    for item in existing_inbounds:
-        try:
-            if int(item.get('server_id', -1)) == int(server.id):
+        # Find the first occurrence index of this server in the existing list (if any)
+        first_idx = None
+        for idx, item in enumerate(existing_inbounds):
+            try:
+                if int(item.get('server_id', -1)) == int(server.id):
+                    first_idx = idx
+                    break
+            except Exception:
                 continue
-        except Exception:
-            pass
-        without_server.append(item)
 
-    if first_idx is None:
-        # Server didn't exist in cache before: append to end
-        GLOBAL_SERVER_DATA['inbounds'] = without_server + new_block
-    else:
-        # Insert new block at the previous position
-        insert_at = min(max(first_idx, 0), len(without_server))
-        GLOBAL_SERVER_DATA['inbounds'] = without_server[:insert_at] + new_block + without_server[insert_at:]
+        without_server = []
+        for item in existing_inbounds:
+            try:
+                if int(item.get('server_id', -1)) == int(server.id):
+                    continue
+            except Exception:
+                pass
+            without_server.append(item)
 
-    # Only this server's block changed, so the delta sync only has to re-fingerprint it.
-    snapshot_delta.mark_dirty(server_ids=[server.id])
+        if first_idx is None:
+            # Server didn't exist in cache before: append to end
+            GLOBAL_SERVER_DATA['inbounds'] = without_server + new_block
+        else:
+            # Insert new block at the previous position
+            insert_at = min(max(first_idx, 0), len(without_server))
+            GLOBAL_SERVER_DATA['inbounds'] = without_server[:insert_at] + new_block + without_server[insert_at:]
 
-    statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
-    updated = False
-    for st in statuses:
-        if isinstance(st, dict) and int(st.get('server_id', -1)) == int(server.id):
+        # Only this server's block changed, so the delta sync only has to re-fingerprint it.
+        snapshot_delta.mark_dirty(server_ids=[server.id])
+
+        statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
+        updated = False
+        for st in statuses:
+            if isinstance(st, dict) and int(st.get('server_id', -1)) == int(server.id):
+                status_payload = status_payload or {}
+                st.update({
+                    "server_id": server.id,
+                    "success": True,
+                    "stats": stats,
+                    "panel_type": server.panel_type,
+                    "xui_version": status_payload.get('xui_version'),
+                    "xray_version": status_payload.get('xray_version'),
+                    "xray_state": status_payload.get('xray_state'),
+                    "xray_core": status_payload.get('xray_core'),
+                    "online_count": status_payload.get('online_count'),
+                    "panel_status_error": status_error if status_error else None,
+                    "panel_status_checked_at": datetime.utcnow().isoformat()
+                })
+                updated = True
+                break
+        if not updated:
             status_payload = status_payload or {}
-            st.update({
+            statuses.append({
                 "server_id": server.id,
                 "success": True,
                 "stats": stats,
@@ -1789,27 +1823,10 @@ def fetch_and_update_server_data(server_id: int):
                 "panel_status_error": status_error if status_error else None,
                 "panel_status_checked_at": datetime.utcnow().isoformat()
             })
-            updated = True
-            break
-    if not updated:
-        status_payload = status_payload or {}
-        statuses.append({
-            "server_id": server.id,
-            "success": True,
-            "stats": stats,
-            "panel_type": server.panel_type,
-            "xui_version": status_payload.get('xui_version'),
-            "xray_version": status_payload.get('xray_version'),
-            "xray_state": status_payload.get('xray_state'),
-            "xray_core": status_payload.get('xray_core'),
-            "online_count": status_payload.get('online_count'),
-            "panel_status_error": status_error if status_error else None,
-            "panel_status_checked_at": datetime.utcnow().isoformat()
-        })
-    GLOBAL_SERVER_DATA['servers_status'] = statuses
+        GLOBAL_SERVER_DATA['servers_status'] = statuses
 
-    GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(statuses)
-    GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+        GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(statuses)
+        GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
 
 
 # ── Write-through cache ──────────────────────────────────────────────────────

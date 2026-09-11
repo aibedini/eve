@@ -1,0 +1,13 @@
+{
+  "callers": 20,
+  "delay_seconds": 0.05,
+  "unbounded_executions": 20,
+  "unbounded_wall_ms": 59.0,
+  "coalesced_executions": 1,
+  "coalesced_wall_ms": 53.4,
+  "coalesced_started": 1,
+  "coalesced_followers": 19,
+  "cap_limit": 4,
+  "cap_tasks": 16,
+  "cap_max_concurrency": 4
+}

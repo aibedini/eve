@@ -108,7 +108,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.124"
+APP_VERSION = "2.5.125"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2966,16 +2966,20 @@ def _ss_password(method: str) -> str:
 
 
 def fetch_worker(server_dict):
+    from panel.core.panel_limits import panel_slot  # deferred: keeps the core import light
     with app.app_context():
         # Convert dict to object for compatibility with existing functions
         server_obj = SimpleNamespace(**server_dict)
-        session_obj, error = get_xui_session(server_obj)
-        if error:
-            return server_dict['id'], None, None, None, None, error, 'auto'
-        
-        inbounds, fetch_error, detected_type = fetch_inbounds(session_obj, server_obj.host, server_obj.panel_type)
-        online_index, _ = fetch_onlines(session_obj, server_obj.host, server_obj.panel_type)
-        status_payload, status_error, _status_type = fetch_server_status(session_obj, server_obj.host, server_obj.panel_type)
+        # Every panel session shares the process-wide concurrency cap, so a burst
+        # of requests cannot open more simultaneous X-UI sessions than configured.
+        with panel_slot():
+            session_obj, error = get_xui_session(server_obj)
+            if error:
+                return server_dict['id'], None, None, None, None, error, 'auto'
+
+            inbounds, fetch_error, detected_type = fetch_inbounds(session_obj, server_obj.host, server_obj.panel_type)
+            online_index, _ = fetch_onlines(session_obj, server_obj.host, server_obj.panel_type)
+            status_payload, status_error, _status_type = fetch_server_status(session_obj, server_obj.host, server_obj.panel_type)
 
         # Enrich status_payload with online_count from the onlines endpoint
         # (the /status API does NOT return online_count; it comes from /onlines)

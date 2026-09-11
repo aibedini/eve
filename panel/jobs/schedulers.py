@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from sqlalchemy import and_, inspect, or_, text
 
 from panel.adapters.xui import persist_detected_panel_type
+from panel.core import panel_limits
 from panel.core.redis_client import (
     GLOBAL_REFRESH_LOCK,
     GLOBAL_SERVER_DATA,
@@ -510,7 +511,8 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
             last_publish = time.time()
 
         if server_dicts:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=panel_limits.refresh_worker_limit()) as executor:
                 future_to_id = {executor.submit(fetch_worker, s): int(s['id']) for s in server_dicts}
                 for future in concurrent.futures.as_completed(future_to_id):
                     sid = future_to_id[future]

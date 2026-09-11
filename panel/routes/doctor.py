@@ -126,6 +126,12 @@ def doctor_summary():
     }
 
     try:
+        from panel.core.panel_limits import panel_metrics
+        checks['panel_limits'] = {'state': 'ok', **panel_metrics()}
+    except Exception as exc:
+        checks['panel_limits'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.core import redis_client as _redis_cache
         checks['snapshot_cache'] = {
             'state': 'ok',
