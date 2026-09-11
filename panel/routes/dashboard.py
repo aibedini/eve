@@ -292,9 +292,14 @@ def api_refresh():
             "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
         }), 200
 
-    # The reseller path filters/annotates per-user, so it works on a private copy.
-    data = copy.deepcopy(GLOBAL_SERVER_DATA)
-    t_after_copy = time.perf_counter() if debug_timing else None
+    # The reseller view is derived from the shared snapshot. Only the inbound
+    # dicts that are actually returned are annotated (total_up/total_down,
+    # clients, client_count), so each visible inbound gets a shallow copy in the
+    # loop below instead of deep-copying the whole snapshot up front. That copy
+    # was the dominant latency at scale (tens of MB per poll) and left the client
+    # waiting. Client and server dicts are read-only here and are shared.
+    data = GLOBAL_SERVER_DATA
+    t_projection_start = time.perf_counter() if debug_timing else None
 
     # 1. دریافت دسترسی‌های سرور و اینباند
     allowed_map, assignments = get_reseller_access_maps(user)
@@ -355,14 +360,18 @@ def api_refresh():
         "download_raw": 0
     }
 
-    for inbound in data['inbounds']:
-        sid = inbound['server_id']
-        iid = inbound['id']
-        
+    for source_inbound in data['inbounds']:
+        sid = source_inbound['server_id']
+        iid = source_inbound['id']
+
         # شرط ۱: دسترسی به اینباند (از طریق Allowed Server یا Assignment)
         if not is_inbound_accessible(sid, iid, allowed_map, assignments):
             continue
-            
+
+        # The shared snapshot must never be mutated by a per-user view: annotate a
+        # shallow copy of this inbound only.
+        inbound = dict(source_inbound)
+
         # اینباند مجاز است
         unique_server_ids.add(sid)
         
@@ -458,9 +467,9 @@ def api_refresh():
         "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
         "refresh_job": _summarize_job(job),
     }
-    if debug_timing and t0 is not None and t_after_copy is not None:
+    if debug_timing and t0 is not None and t_projection_start is not None:
         resp['timing_ms'] = {
-            'deepcopy': round((t_after_copy - t0) * 1000.0, 2),
+            'projection': round((time.perf_counter() - t_projection_start) * 1000.0, 2),
             'total': round((time.perf_counter() - t0) * 1000.0, 2),
         }
     return jsonify(resp), (202 if job and job.get('state') in ('queued', 'running') else 200)
