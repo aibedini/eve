@@ -39,6 +39,16 @@ variables; nothing else in the codebase needs to change.
   same transaction under the system_migrations ledger (id rotate_secrets_v2),
   and values that cannot be decrypted are counted and skipped. It runs as part
   of the standard maintenance runner (python -m maintenance).
+  A task may list legacy domains for a column whose domain changed, so a row
+  written under the old domain is re-encrypted to the current one instead of
+  being skipped (currently the finance columns, whose legacy domain is
+  generic).
+
+The one-time encrypt_sensitive_values_v1 migration encrypts each column with
+the same domain the model reads with (system configs/settings: messaging,
+bank cards, payments and transaction sender cards: finance, backup configs:
+generic). Mismatched domains there would make a freshly migrated row
+unreadable, so keep maintenance.py and the model definitions in sync.
 
 ## Rotation runbook
 

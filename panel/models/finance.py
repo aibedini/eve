@@ -140,7 +140,7 @@ class Transaction(db.Model):
     admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=False)
     server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=True)
     card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id'), nullable=True)  # کارت مقصد (شما)
-    sender_card = db.Column(EncryptedText(), nullable=True)  # encrypted customer card identifier
+    sender_card = db.Column(EncryptedText('finance'), nullable=True)  # encrypted customer card identifier
     sender_name = db.Column(db.String(120), nullable=True)  # نام فرستنده
     client_email = db.Column(db.String(100), nullable=True)  # ایمیل کلاینت مرتبط
     amount = db.Column(db.Integer, nullable=False)

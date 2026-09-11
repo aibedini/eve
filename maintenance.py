@@ -34,13 +34,16 @@ from sqlalchemy import text  # noqa: E402
 
 
 _SECRET_MIGRATION_ID = 'encrypt_sensitive_values_v1'
+# (table, primary key, encrypted columns, optional WHERE, cryptographic domain).
+# The domain must match the one the model reads with: encrypting a finance
+# column under the generic domain would make the row unreadable for the model.
 _SECRET_TASKS = (
-    ('system_configs', 'key', ('value',), "key IN ('whatsapp_gateway_api_key','sms_gmweb_api_key','sms_custom_api_key')"),
-    ('system_settings', 'key', ('value',), "key IN ('telegram_backup_bot_token','telegram_backup_proxy_url','telegram_backup_proxy_username','telegram_backup_proxy_password')"),
-    ('bank_cards', 'id', ('card_number', 'iban', 'account_number'), None),
-    ('payments', 'id', ('sender_card',), None),
-    ('transactions', 'id', ('sender_card',), None),
-    ('backup_configs', 'id', ('config_url',), None),
+    ('system_configs', 'key', ('value',), "key IN ('whatsapp_gateway_api_key','sms_gmweb_api_key','sms_custom_api_key')", 'messaging'),
+    ('system_settings', 'key', ('value',), "key IN ('telegram_backup_bot_token','telegram_backup_proxy_url','telegram_backup_proxy_username','telegram_backup_proxy_password')", 'messaging'),
+    ('bank_cards', 'id', ('card_number', 'iban', 'account_number'), None, 'finance'),
+    ('payments', 'id', ('sender_card',), None, 'finance'),
+    ('transactions', 'id', ('sender_card',), None, 'finance'),
+    ('backup_configs', 'id', ('config_url',), None, 'generic'),
 )
 _TOKEN_MIGRATION_ID = 'hash_agent_tokens_v1'
 _TOKEN_TASKS = (
@@ -89,7 +92,7 @@ def _run_secret_migration(batch_size=200):
         task_index = int(cursor.get('task') or 0)
         after = cursor.get('after')
         while task_index < len(_SECRET_TASKS):
-            table, primary_key, columns, where_clause = _SECRET_TASKS[task_index]
+            table, primary_key, columns, where_clause, domain = _SECRET_TASKS[task_index]
             predicates = []
             params = {'limit': max(1, min(int(batch_size), 1000))}
             if where_clause:
@@ -114,7 +117,7 @@ def _run_secret_migration(batch_size=200):
                 for column in columns:
                     value = row[column]
                     if value not in (None, '') and not is_encrypted(value):
-                        updates[column] = encrypt_secret(value)
+                        updates[column] = encrypt_secret(value, domain)
                 if updates:
                     assignments = ', '.join(f'{column} = :{column}' for column in updates)
                     db.session.execute(text(

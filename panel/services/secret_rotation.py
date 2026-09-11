@@ -5,7 +5,9 @@ cryptographic domain those columns belong to. The runner advances a cursor in
 the system_migrations ledger after every batch, commits data and cursor
 together, and is therefore idempotent and resumable. Values that cannot be
 decrypted with any configured key are counted and skipped rather than aborting
-the whole run.
+the whole run. A task may also declare legacy domains: a value that the current
+domain cannot read is decrypted with the legacy domain and re-encrypted with the
+current one, which migrates rows written before a column's domain was settled.
 """
 import json
 from datetime import datetime
@@ -22,21 +24,49 @@ _MESSAGING_CONFIG_WHERE = "key IN ('whatsapp_gateway_api_key','sms_gmweb_api_key
 _MESSAGING_SETTING_WHERE = ("key IN ('telegram_backup_bot_token','telegram_backup_proxy_url',"
                             "'telegram_backup_proxy_username','telegram_backup_proxy_password')")
 
+# (table, primary key, encrypted columns, domain, optional WHERE, legacy domains).
+# The legacy domains list is the compatibility path for values written before a
+# column's domain was settled: they are decrypted with the legacy domain and
+# re-encrypted with the current one instead of being skipped forever.
 TASKS = (
-    ('servers', 'id', ('password',), 'xui_credentials', None),
-    ('custom_subscriptions', 'id', ('token',), 'subscriptions', None),
-    ('custom_subscription_configs', 'id', ('uri',), 'subscriptions', None),
-    ('bank_cards', 'id', ('card_number', 'iban', 'account_number'), 'finance', None),
-    ('payments', 'id', ('sender_card',), 'finance', None),
-    ('transactions', 'id', ('sender_card',), 'finance', None),
-    ('backup_configs', 'id', ('config_url',), 'generic', None),
-    ('admin_mfa_settings', 'id', ('totp_secret',), 'mfa', None),
-    ('telegram_bot_instances', 'id', ('token_encrypted',), 'messaging', None),
-    ('telegram_proxy_endpoints', 'id', ('username_encrypted', 'password_encrypted'), 'messaging', None),
-    ('telegram_egress_profiles', 'id', ('config_encrypted',), 'messaging', None),
-    ('system_configs', 'key', ('value',), 'messaging', _MESSAGING_CONFIG_WHERE),
-    ('system_settings', 'key', ('value',), 'messaging', _MESSAGING_SETTING_WHERE),
+    ('servers', 'id', ('password',), 'xui_credentials', None, ()),
+    ('custom_subscriptions', 'id', ('token',), 'subscriptions', None, ()),
+    ('custom_subscription_configs', 'id', ('uri',), 'subscriptions', None, ()),
+    ('bank_cards', 'id', ('card_number', 'iban', 'account_number'), 'finance', None, ('generic',)),
+    ('payments', 'id', ('sender_card',), 'finance', None, ('generic',)),
+    ('transactions', 'id', ('sender_card',), 'finance', None, ('generic',)),
+    ('backup_configs', 'id', ('config_url',), 'generic', None, ()),
+    ('admin_mfa_settings', 'id', ('totp_secret',), 'mfa', None, ()),
+    ('telegram_bot_instances', 'id', ('token_encrypted',), 'messaging', None, ()),
+    ('telegram_proxy_endpoints', 'id', ('username_encrypted', 'password_encrypted'), 'messaging', None, ()),
+    ('telegram_egress_profiles', 'id', ('config_encrypted',), 'messaging', None, ()),
+    ('system_configs', 'key', ('value',), 'messaging', _MESSAGING_CONFIG_WHERE, ()),
+    ('system_settings', 'key', ('value',), 'messaging', _MESSAGING_SETTING_WHERE, ()),
 )
+
+
+def _rotate_value(value, domain, legacy_domains=()):
+    """Re-encrypt one stored ciphertext to the domain's current version.
+
+    Returns (value, changed, resolved); resolved is False only when the value
+    cannot be read with the domain key or any documented legacy domain.
+    """
+    try:
+        updated, changed = keyring.rotate(value, domain)
+        return updated, changed, True
+    except Exception:
+        pass
+    for legacy in legacy_domains:
+        try:
+            plaintext = keyring.decrypt(value, legacy)
+        except Exception:
+            continue
+        try:
+            updated = keyring.encrypt(plaintext, domain)
+        except Exception:
+            return value, False, False
+        return updated, updated != value, True
+    return value, False, False
 
 
 def rotation_needed() -> bool:
@@ -82,7 +112,7 @@ def run_rotation(batch_size: int = 200) -> dict:
         after = cursor.get('after')
         skipped = int(cursor.get('skipped') or 0)
         while task_index < len(TASKS):
-            table, primary_key, columns, domain, where_clause = TASKS[task_index]
+            table, primary_key, columns, domain, where_clause, legacy_domains = TASKS[task_index]
             predicates = []
             params = {'limit': max(1, min(int(batch_size), 1000))}
             if where_clause:
@@ -108,9 +138,8 @@ def run_rotation(batch_size: int = 200) -> dict:
                     value = row[column]
                     if value in (None, '') or not keyring.is_envelope(value):
                         continue
-                    try:
-                        updated, changed = keyring.rotate(value, domain)
-                    except Exception:
+                    updated, changed, resolved = _rotate_value(value, domain, legacy_domains)
+                    if not resolved:
                         skipped += 1
                         continue
                     if changed:
