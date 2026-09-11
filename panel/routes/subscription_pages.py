@@ -6,11 +6,13 @@ from datetime import datetime, timedelta
 from urllib.parse import quote, urlparse
 
 from flask import (
-    Blueprint, g, jsonify, make_response, render_template, request, session,
+    Blueprint, after_this_request, g, jsonify, make_response, render_template, request,
+    session,
 )
 from sqlalchemy import func, or_
 
 from panel.adapters.xui import fetch_inbounds, get_xui_session, persist_detected_panel_type
+from panel.core import subscription_cache
 from panel.extensions import db, limiter
 from panel.models import (
     Admin, Announcement, BackupConfig, ClientOwnership, FAQ, OnlineChatScript,
@@ -434,7 +436,44 @@ def client_subscription(server_id, sub_id):
     # config-only path. An enabled statistics entry needs live usage/expiry
     # values, so it intentionally continues through the full live read below.
     request_user_agent = (request.headers.get('User-Agent') or '').lower()
-    if 'v2rayng' in request_user_agent and not statistics_settings['enabled']:
+    fast_variant = 'v2rayng' in request_user_agent and not statistics_settings['enabled']
+
+    # ── Response cache ────────────────────────────────────────────────────────
+    # VPN clients poll subscriptions on their own schedule and many clients share
+    # one subscription id; serving a short-TTL cached response keeps the panel out
+    # of the request path. A burst of misses for the same key triggers one panel
+    # read; the others reuse its result.
+    cache_key = None
+    cache_variant = 'fast' if fast_variant else 'full'
+    if subscription_cache.enabled():
+        cache_key = subscription_cache.make_key(
+            server_id, normalized_sub_id,
+            cache_variant + (':html' if wants_html_view else ''))
+        cached = subscription_cache.get(cache_key)
+        if cached is None:
+            if subscription_cache.in_flight(cache_key):
+                subscription_cache.wait_for_fill(cache_key)
+                cached = subscription_cache.get(cache_key)
+            if cached is None:
+                subscription_cache.note_miss()
+        if cached is not None:
+            body, status, headers = cached
+            return body, status, {**headers, 'X-Eve-Cache': 'hit'}
+        if subscription_cache.begin(cache_key):
+            @after_this_request
+            def _store_subscription_response(response):
+                try:
+                    if response.status_code == 200:
+                        subscription_cache.set(
+                            cache_key,
+                            (response.get_data(), response.status_code, dict(response.headers)),
+                            variant=cache_variant)
+                    response.headers['X-Eve-Cache'] = 'miss'
+                finally:
+                    subscription_cache.end(cache_key)
+                return response
+
+    if fast_variant:
         fast_session, fast_login_error = get_xui_session(server)
         if not fast_login_error and fast_session:
             fast_configs = fetch_authoritative_subscription_configs(

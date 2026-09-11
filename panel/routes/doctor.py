@@ -126,6 +126,12 @@ def doctor_summary():
     }
 
     try:
+        from panel.core import subscription_cache
+        checks['subscription_cache'] = {'state': 'ok', **subscription_cache.metrics()}
+    except Exception as exc:
+        checks['subscription_cache'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from app import GLOBAL_SERVER_DATA  # deferred: app-level state
         from panel.core import refresh_policy
         checks['refresh_policy'] = {

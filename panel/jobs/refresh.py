@@ -30,7 +30,7 @@ from panel.adapters.xui import (
     v3_reset_client,
     v3_update_client,
 )
-from panel.core import panel_limits, snapshot_delta
+from panel.core import panel_limits, snapshot_delta, subscription_cache
 from panel.core.redis_client import (
     fetch_guard,
     GLOBAL_REFRESH_LOCK,
@@ -2048,6 +2048,9 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             if changed:
                 _recompute_cached_server_stats(server_id)
                 snapshot_delta.mark_dirty(server_ids=[server_id])
+                # Credentials changed: drop this server's cached subscription
+                # responses so the next client poll reads the new ones.
+                subscription_cache.invalidate_server(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             if changed and publish:
                 if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
@@ -2130,6 +2133,9 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
             if changed:
                 _recompute_cached_server_stats(server_id)
                 snapshot_delta.mark_dirty(server_ids=[server_id])
+                # Credentials changed: drop this server's cached subscription
+                # responses so the next client poll reads the new ones.
+                subscription_cache.invalidate_server(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             if changed and publish:
                 if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
@@ -2181,6 +2187,9 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
             if removed:
                 _recompute_cached_server_stats(server_id)
                 snapshot_delta.mark_dirty(server_ids=[server_id])
+                # Credentials changed: drop this server's cached subscription
+                # responses so the next client poll reads the new ones.
+                subscription_cache.invalidate_server(server_id)
                 GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             if removed and publish:
                 if not publish_snapshot_to_redis([server_id]) and get_redis() is not None:
@@ -2239,6 +2248,9 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
             target_ib.setdefault('clients', []).append(clone)
             _recompute_cached_server_stats(server_id)
             snapshot_delta.mark_dirty(server_ids=[server_id])
+            # Credentials changed: drop this server's cached subscription
+            # responses so the next client poll reads the new ones.
+            subscription_cache.invalidate_server(server_id)
             GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
             done = True
             if publish:

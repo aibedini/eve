@@ -121,6 +121,15 @@ class LiveSubscriptionContentTests(unittest.TestCase):
         with self.client.session_transaction() as flask_session:
             flask_session['admin_id'] = self.admin.id
 
+        # These tests assert the live panel content, so the short-TTL subscription
+        # response cache (phase 18) must be bypassed for them; it has its own
+        # coverage in tests/test_subscription_cache.py. Patched per test so the
+        # setting cannot leak into other modules.
+        self._cache_env = mock.patch.dict(
+            os.environ, {'EVE_SUBSCRIPTION_CACHE_ENABLED': '0'})
+        self._cache_env.start()
+        self.addCleanup(self._cache_env.stop)
+
         self.previous_inbounds = GLOBAL_SERVER_DATA.get('inbounds')
         stale = _shadowsocks_inbound(STALE_PASSWORD)
         GLOBAL_SERVER_DATA['inbounds'] = [{
