@@ -1,0 +1,16 @@
+# Gitleaks configuration.
+#
+# Full git history is scanned in CI (`--log-opts=--all`). The only historical
+# hit is a deterministic, non-secret WireGuard test vector in
+# tests/test_custom_subscriptions.py that was later replaced with
+# runtime-generated material; it is allowlisted here so a real secret in any
+# other file still fails the build.
+title = "Eve secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Non-secret WireGuard test fixture (now generated at runtime)"
+targetRules = ["generic-api-key"]
+paths = ['''tests/test_custom_subscriptions\.py$''']

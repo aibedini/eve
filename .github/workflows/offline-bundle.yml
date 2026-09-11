@@ -15,12 +15,41 @@ permissions:
   contents: write
 
 jobs:
+  # A tag release must never be built on a commit whose Security or Tests
+  # workflow is red. Non-tag (workflow_dispatch) builds skip this gate.
+  preflight:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require green Security and Tests on this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for wf in security.yml tests.yml; do
+            conclusion=$(gh api \
+              "repos/${{ github.repository }}/actions/workflows/${wf}/runs?head_sha=${TARGET_SHA}&per_page=1" \
+              --jq '.workflow_runs[0].conclusion // "missing"')
+            echo "${wf}: ${conclusion}"
+            if [ "${conclusion}" != "success" ]; then
+              echo "Refusing to build a release: ${wf} is '${conclusion}' for ${TARGET_SHA}" >&2
+              exit 1
+            fi
+          done
+
   build:
+    needs: preflight
+    if: always() && (needs.preflight.result == 'success' || needs.preflight.result == 'skipped')
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0   # needed for git log in release notes
 
@@ -75,14 +104,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact (all runs)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: eve-xui-manager-offline-jammy
           path: dist/eve-xui-manager-offline.tar.gz
           retention-days: 90
 
       - name: Upload Redis add-on artifact (all runs)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: redis-offline-jammy
           path: dist/redis-offline-jammy.tar.gz
@@ -90,7 +119,7 @@ jobs:
 
       - name: Attach to GitHub Release (tag pushes only)
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/eve-xui-manager-offline.tar.gz
