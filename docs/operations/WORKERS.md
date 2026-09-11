@@ -55,7 +55,8 @@ Redis disabled every worker fetches into its own memory cache.
 
 ## Verification
 
-`tests/test_worker_inventory.py` (8 tests, 1 POSIX-only): a started worker is
+`tests/test_worker_inventory.py` (10 tests, 1 POSIX-only, plus emulated-fcntl
+coverage of the contention and fail-open branches on every platform): a started worker is
 recorded and reported alive; a thread that cannot start is recorded as `failed`
 with its error; the inventory shape and empty error map; a second claim of the same
 singleton fails (POSIX); a lock-file failure fails open and is recorded; the `web`

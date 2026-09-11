@@ -1,7 +1,10 @@
 """Phase 24 tests: background worker inventory and singleton ownership."""
+import errno
 import os
+import sys
 import tempfile
 import threading
+import types
 import unittest
 from unittest import mock
 
@@ -13,6 +16,19 @@ os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
 
 from app import Admin, app, db  # noqa: E402
 from panel.jobs import schedulers  # noqa: E402
+
+
+def _fake_fcntl(flock_error):
+    module = types.ModuleType("fcntl")
+    module.LOCK_EX = 2
+    module.LOCK_NB = 4
+    module.LOCK_UN = 8
+
+    def flock(_fh, _operation):
+        if flock_error is not None:
+            raise flock_error
+    module.flock = flock
+    return module
 
 
 class WorkerRegistryTests(unittest.TestCase):
@@ -57,26 +73,40 @@ class WorkerRegistryTests(unittest.TestCase):
         self.assertIn("singletons_owned", inventory)
         self.assertEqual(inventory["singleton_errors"], {})
 
+    def test_contention_returns_false_without_recording_an_error(self):
+        # Emulated on every platform: a second claim (EWOULDBLOCK) means another
+        # worker owns the singleton, which is normal and not a fault.
+        name = "unit_contended_%d" % os.getpid()
+        with mock.patch.dict(sys.modules, {"fcntl": _fake_fcntl(
+                BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable"))}):
+            self.assertFalse(schedulers._claim_singleton(name))
+        self.assertNotIn(name, schedulers._SINGLETON_LOCK_FDS)
+        self.assertNotIn(name, schedulers._SINGLETON_ERRORS)
+
+    def test_lock_file_failure_fails_open_and_is_recorded(self):
+        # Emulated on every platform so the POSIX branch is covered on Windows too.
+        name = "unit_singleton_fault_%d" % os.getpid()
+        with mock.patch.dict(sys.modules, {"fcntl": _fake_fcntl(None)}), \
+                mock.patch("panel.core.runtime_files.open_private_lock",
+                           side_effect=PermissionError(errno.EACCES, "read-only directory")):
+            self.assertTrue(schedulers._claim_singleton(name))
+        self.assertIn(name, schedulers._SINGLETON_ERRORS)
+        self.assertNotIn(name, schedulers._SINGLETON_LOCK_FDS)
+
+    def test_unexpected_flock_failure_fails_open_and_is_recorded(self):
+        name = "unit_singleton_flock_%d" % os.getpid()
+        with mock.patch.dict(sys.modules, {"fcntl": _fake_fcntl(
+                OSError(errno.ENOLCK, "No locks available"))}):
+            self.assertTrue(schedulers._claim_singleton(name))
+        self.assertIn(name, schedulers._SINGLETON_ERRORS)
+
     @unittest.skipIf(os.name == "nt", "fcntl locking is POSIX only")
-    def test_a_second_claim_of_the_same_singleton_fails(self):
+    def test_a_second_real_claim_of_the_same_singleton_fails(self):
         name = "unit_singleton_%d" % os.getpid()
         self.assertTrue(schedulers._claim_singleton(name))
         self.assertIn(name, schedulers._SINGLETON_LOCK_FDS)
         self.assertIn(name, schedulers.worker_inventory()["singletons_owned"])
         self.assertFalse(schedulers._claim_singleton(name))
-
-    def test_lock_file_failure_fails_open_and_is_recorded(self):
-        name = "unit_singleton_fault_%d" % os.getpid()
-        with mock.patch("panel.core.runtime_files.open_private_lock",
-                        side_effect=PermissionError(13, "read-only directory")):
-            if os.name == "nt":
-                # No fcntl on Windows: every process fails open already.
-                self.assertTrue(schedulers._claim_singleton(name))
-                self.assertEqual(schedulers._SINGLETON_ERRORS, {})
-            else:
-                self.assertTrue(schedulers._claim_singleton(name))
-                self.assertIn(name, schedulers._SINGLETON_ERRORS)
-        self.assertNotIn(name, schedulers._SINGLETON_LOCK_FDS)
 
 
 class ThreadBootstrapTests(unittest.TestCase):

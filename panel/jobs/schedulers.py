@@ -5,6 +5,7 @@ watchdog, usage-snapshot rollup worker (+ its legacy-table data migration),
 pulse scheduler, and the role-aware ``ensure_background_threads_started``.
 """
 import concurrent.futures
+import errno
 import json
 import os
 import shutil
@@ -1666,40 +1667,59 @@ _SINGLETON_ERRORS = {}
 
 def _claim_singleton(name):
     """Try to claim exclusive ownership of a singleton background thread.
-    Uses a non-blocking fcntl exclusive lock on a /tmp file so:
-    - Only one gunicorn worker wins (returns True).
-    - If that worker dies, the OS releases the lock automatically.
-    - Other workers return False and skip starting the thread.
-    Gracefully falls back to True on non-Unix systems (Windows dev).
+
+    A non-blocking fcntl exclusive lock on a runtime file means:
+    - only one gunicorn worker wins (returns True);
+    - if that worker dies, the OS releases the lock automatically;
+    - the others return False and skip starting the thread.
+
+    A lock file that cannot be created or flocked at all (read-only directory,
+    permissions, no locks available) is a deployment fault rather than contention:
+    losing the worker would silently disable backups and automation, so it fails
+    open and records the reason for the doctor payload. Platforms without fcntl
+    (Windows development) always fail open.
     """
     try:
         from app import app  # deferred: avoids circular import
         import fcntl as _fcntl
         from panel.core.runtime_files import open_private_lock
-        fh = open_private_lock(f'{name}.lock', 'w')
-        _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-        fh.write(str(os.getpid()))
-        fh.flush()
-        _SINGLETON_LOCK_FDS[name] = fh  # keep open — releasing closes the lock
-        app.logger.info("[Singleton] PID %s owns %s", os.getpid(), name)
+    except ImportError:
         return True
+
+    try:
+        fh = open_private_lock('%s.lock' % name, 'w')
     except (IOError, OSError) as exc:
+        _SINGLETON_ERRORS[name] = 'lock file unavailable: %s' % exc
+        _warn_singleton(app, name, exc)
+        return True
+
+    try:
+        _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+    except (IOError, OSError) as exc:
+        fh.close()
         if getattr(exc, 'errno', None) in (errno.EAGAIN, errno.EACCES):
             # Another worker already holds the lock
             return False
-        # The lock file itself could not be created or locked (read-only
-        # directory, permissions). That is a deployment fault, not contention:
-        # losing this worker would silently disable backups and automation, so
-        # run it and record why the exclusive guarantee was not available.
-        _SINGLETON_ERRORS[name] = 'lock unavailable: %s' % exc
-        try:
-            app.logger.warning('[Singleton] %s cannot use its lock file (%s); running it anyway.', name, exc)
-        except Exception:
-            pass
+        _SINGLETON_ERRORS[name] = 'flock failed: %s' % exc
+        _warn_singleton(app, name, exc)
         return True
-    except ImportError:
-        # fcntl unavailable (Windows) — allow all threads (dev mode)
-        return True
+
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _SINGLETON_LOCK_FDS[name] = fh  # keep open — releasing closes the lock
+    try:
+        app.logger.info("[Singleton] PID %s owns %s", os.getpid(), name)
+    except Exception:
+        pass
+    return True
+
+
+def _warn_singleton(app, name, exc):
+    try:
+        app.logger.warning(
+            '[Singleton] %s cannot use its lock file (%s); running it anyway.', name, exc)
+    except Exception:
+        pass
 
 
 # Process-local inventory of the background workers this process started. It is
