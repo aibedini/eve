@@ -45,10 +45,10 @@ jobs:
           status=$?
           tail -n 40 pytest-unit.log
           if [ "$status" -ne 0 ]; then
-            # Surface the tail as a check-run annotation so a collection error
-            # is diagnosable from the API even without admin log access.
-            summary=$(tail -n 25 pytest-unit.log | tr '\n' '|' | cut -c1-900)
-            echo "::error title=pytest failed ($status)::$summary"
+            # Surface the failing test ids as a check-run annotation so a
+            # collection error is diagnosable from the API without log access.
+            failures=$(grep -E '^(FAILED|ERROR) ' pytest-unit.log | head -n 15 | tr '\n' '|' | cut -c1-900)
+            echo "::error title=pytest failed ($status)::$failures"
           fi
           exit $status
 
@@ -74,7 +74,7 @@ jobs:
           status=$?
           tail -n 40 pytest-all.log
           if [ "$status" -ne 0 ]; then
-            summary=$(tail -n 25 pytest-all.log | tr '\n' '|' | cut -c1-900)
-            echo "::error title=pytest failed ($status)::$summary"
+            failures=$(grep -E '^(FAILED|ERROR) ' pytest-all.log | head -n 15 | tr '\n' '|' | cut -c1-900)
+            echo "::error title=pytest failed ($status)::$failures"
           fi
           exit $status
