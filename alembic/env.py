@@ -2,12 +2,19 @@
 
 The database URL comes from DATABASE_URL (same resolution as app.py);
 the metadata comes from panel.models via the shared panel.extensions db.
+
+The engine is built with panel.core.db_pool so an upgrade reaches PostgreSQL with
+the deployment's TLS policy, an identifiable application_name ('eve-migrate') and
+the configured statement timeout -- a long migration must not look like an
+anonymous idle backend in pg_stat_activity.
 """
 import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
+
+from panel.core.db_pool import alembic_engine_options
 
 config = context.config
 if config.config_file_name is not None:
@@ -47,10 +54,11 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix='sqlalchemy.',
+    url = config.get_main_option('sqlalchemy.url')
+    connectable = create_engine(
+        url,
         poolclass=pool.NullPool,
+        **alembic_engine_options(url),
     )
     with connectable.connect() as connection:
         context.configure(

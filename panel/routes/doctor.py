@@ -150,6 +150,29 @@ def doctor_summary():
         checks['db_pool'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.core.db_pool import host_of, pg_health, ssl_mode
+        info = pg_health(db.engine)
+        if info.get('state') == 'skipped':
+            checks['postgres'] = {'state': 'ok', 'detail': 'sqlite deployment'}
+        else:
+            mode = ssl_mode()
+            remote = bool(host_of(db.engine.url))
+            tls_warning = None
+            if remote and mode in ('', 'disable', 'allow', 'prefer'):
+                tls_warning = (
+                    'PostgreSQL at %s is configured with sslmode=%s; use require or '
+                    'verify-full.' % (host_of(db.engine.url), mode or 'unset'))
+            state = 'ok'
+            if info.get('state') != 'ok' or tls_warning:
+                state = 'warning'
+            checks['postgres'] = {
+                'state': state, **info, 'sslmode': mode or None,
+                'tls_warning': tls_warning,
+            }
+    except Exception as exc:
+        checks['postgres'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.core.panel_limits import panel_metrics
         checks['panel_limits'] = {'state': 'ok', **panel_metrics()}
     except Exception as exc:

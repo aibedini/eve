@@ -105,10 +105,15 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, quote, urlencode, unquote
 from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case, update
-from sqlalchemy.exc import IntegrityError, TimeoutError as SQLAlchemyTimeoutError
+from sqlalchemy.exc import (
+    DisconnectionError,
+    IntegrityError,
+    OperationalError,
+    TimeoutError as SQLAlchemyTimeoutError,
+)
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.128"
+APP_VERSION = "2.5.129"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -824,22 +829,41 @@ def too_many_requests(e):
     return e
 
 
+def _service_unavailable(message, retry_after=2):
+    """503 + Retry-After in whatever shape the caller understands."""
+    payload = {'success': False, 'error': message, 'retry_after': retry_after}
+    response = make_response(jsonify(payload) if _want_json() else message, 503)
+    response.headers['Retry-After'] = str(retry_after)
+    return response
+
+
 @app.errorhandler(SQLAlchemyTimeoutError)
 def database_pool_timeout(e):
     """Pool exhaustion is backpressure, not a server bug: answer 503 + Retry-After."""
     app.logger.warning('Database connection pool exhausted: %s', e)
-    retry_after = 2
-    if _want_json():
-        response = jsonify({
-            'success': False,
-            'error': 'Server is busy; please retry in a moment.',
-            'retry_after': retry_after,
-        })
-        response.headers['Retry-After'] = str(retry_after)
-        return response, 503
-    response = make_response('Server is busy; please retry in a moment.', 503)
-    response.headers['Retry-After'] = str(retry_after)
-    return response
+    return _service_unavailable('Server is busy; please retry in a moment.')
+
+
+@app.errorhandler(OperationalError)
+@app.errorhandler(DisconnectionError)
+def database_connection_error(e):
+    """A dropped or refused connection is transient; a bad query is a bug.
+
+    Pool pre-ping and connection recycling hide most of these, but a database
+    restart, failover or max_connections rejection surfaces here. Only the
+    connection-level failures become a retryable 503; everything else keeps the
+    normal 500 path so a real defect is not disguised as backpressure.
+    """
+    from panel.core.db_pool import is_transient_disconnect
+
+    if not is_transient_disconnect(e):
+        return internal_server_error(e)
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    app.logger.warning('Transient database connection error: %s', e)
+    return _service_unavailable('Database is temporarily unavailable; please retry in a moment.')
 
 
 @app.errorhandler(500)
@@ -1009,6 +1033,8 @@ try:
     app.logger.info('Database pool: %s', _db_pool_audit_info)
     if _db_pool_audit_info.get('warning'):
         app.logger.warning('%s', _db_pool_audit_info['warning'])
+    if _db_pool_audit_info.get('tls_warning'):
+        app.logger.warning('%s', _db_pool_audit_info['tls_warning'])
 except Exception:
     _db_pool_audit_info = {}
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = _pool_options
