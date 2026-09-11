@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import Blueprint, abort, jsonify, render_template, request
-from sqlalchemy import or_
+from sqlalchemy import or_, update
 
 from panel.extensions import db
 from panel.models import (
@@ -271,10 +271,18 @@ def bnqo_agent_enroll():
     )
     db.session.add(agent)
     db.session.flush()  # assign agent.id before marking the token used
-    # Single use: the token is invalidated atomically with the enrollment.
-    enroll.used_at = now
-    enroll.used_by_agent_id = agent.id
-    enroll.token = enroll_hash
+    # Single use: claim the token with a conditional UPDATE. The used_at check
+    # above is a fast path; only this guarded write is atomic, so two concurrent
+    # enrollments cannot both consume the same token.
+    claimed = db.session.execute(
+        update(BnqoEnrollToken)
+        .where(BnqoEnrollToken.id == enroll.id,
+               BnqoEnrollToken.used_at.is_(None))
+        .values(used_at=now, used_by_agent_id=agent.id, token=enroll_hash)
+    )
+    if claimed.rowcount != 1:
+        db.session.rollback()
+        return _err('enroll_token_used', 'enroll token already used', 409)
     db.session.commit()
     return jsonify({
         'agent_id': agent.id,
