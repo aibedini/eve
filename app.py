@@ -113,7 +113,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.136"
+APP_VERSION = "2.5.137"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -1072,6 +1072,18 @@ def add_security_headers(response):
         if not _is_dev_mode() and request.is_secure:
             directives.append('upgrade-insecure-requests')
         response.headers.setdefault('Content-Security-Policy', '; '.join(directives))
+
+    # Anything served back from an upload directory is untrusted input. Even with
+    # content validation at upload time, an unexpected file must not become a
+    # same-origin document: sandbox it and force non-images to download. This
+    # overrides the document CSP above on purpose.
+    try:
+        from panel.security.uploads import is_upload_path, serve_policy
+        if is_upload_path(request.path):
+            for header, value in serve_policy(request.path).items():
+                response.headers[header] = value
+    except Exception:
+        pass
     return response
 
 

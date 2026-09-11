@@ -9,6 +9,7 @@ from werkzeug.utils import secure_filename
 from panel.extensions import db
 from panel.models import BackupConfig, Server, SystemConfig
 from panel.routes.common import permission_required, superadmin_required
+from panel.security.uploads import validate_extension_content, validate_image_upload
 from panel.services.backup import _parse_int
 
 
@@ -118,6 +119,12 @@ def upload_file():
         file.seek(0)
         if file_length > MAX_FILE_SIZE:
             return jsonify({'success': False, 'error': 'File too large'}), 413
+
+        # The editor only embeds raster images; the bytes must match the
+        # extension so nothing else can be stored under the panel origin.
+        ok, reason = validate_image_upload(file)
+        if not ok:
+            return jsonify({'success': False, 'error': reason}), 415
 
         filename = secure_filename(f"{uuid.uuid4().hex[:8]}_{file.filename}")
         upload_folder = os.path.join(app.static_folder, 'uploads')
@@ -304,6 +311,12 @@ def upload_app_file():
     ext = os.path.splitext(original)[1].lower()
     if ext not in _ALLOWED_APP_EXTS:
         return jsonify({'success': False, 'error': f'File type not allowed: {ext or "(none)"}'}), 415
+
+    # Image extensions must carry image bytes; installers, archives and videos
+    # have no reliable signature and are covered by the serving policy.
+    ok, reason = validate_extension_content(f, ext)
+    if not ok:
+        return jsonify({'success': False, 'error': reason}), 415
 
     # Use Content-Length header first (fast, no extra read); fall back to seek/tell
     size = request.content_length or 0
