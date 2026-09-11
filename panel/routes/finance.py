@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import re
+import secrets
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request, send_file, session
@@ -2122,13 +2123,24 @@ def adjust_customer_credit(customer_id):
         amount = 0
     if amount == 0:
         return jsonify({'success': False, 'error': 'A non-zero amount is required'}), 400
-    customer.credit = int(customer.credit or 0) + amount
-    db.session.add(CustomerTransaction(
-        customer_id=customer.id,
-        type='adjust',
-        amount=amount,
-        description=str(payload.get('description') or '').strip()[:255] or None,
-    ))
+    from panel.services.wallet import apply_balance_delta  # deferred: avoids import cycle
+    note = str(payload.get('description') or '').strip()[:255] or None
+    applied, reason = apply_balance_delta(
+        'customer', customer.id, amount, entry_type='adjust',
+        reference_type='admin_adjust', reference_id=admin.id,
+        idempotency_key=f'adjust:{secrets.token_hex(16)}',
+        description=note,
+        transaction_row=CustomerTransaction(
+            customer_id=customer.id,
+            type='adjust',
+            amount=amount,
+            description=note,
+        ),
+    )
+    if not applied:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': reason or 'Credit adjustment failed'}), 400
     _log_audit('customer.credit_adjust', customer, actor=admin, meta={'amount': amount})
     db.session.commit()
-    return jsonify({'success': True, 'credit': int(customer.credit or 0)})
+    fresh = db.session.get(CustomerAccount, customer.id)
+    return jsonify({'success': True, 'credit': int(fresh.credit or 0) if fresh else 0})

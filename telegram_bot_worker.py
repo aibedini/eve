@@ -94,7 +94,10 @@ from telegram_bot_runtime import (  # noqa: E402
     resolve_copy,
 )
 from telegram_diagnostics import redact_connection_error  # noqa: E402
+from sqlalchemy import update  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+from panel.services.wallet import apply_balance_delta  # noqa: E402
 
 
 running = True
@@ -1549,25 +1552,44 @@ def _handle_admin_topup_callback(api: TelegramBotApi, callback: dict, data: str)
         if callback_id:
             api.answer_callback(callback_id, 'Access denied')
         return True
-    if topup.status != 'pending':
+    decision = 'approved' if parts[2] == 'approve' else 'rejected'
+    now = datetime.utcnow()
+    # Guarded transition: two concurrent clicks (or two workers) can never
+    # approve the same top-up twice and double-credit the wallet.
+    claimed = db.session.execute(
+        update(TelegramWalletTopup)
+        .where(
+            TelegramWalletTopup.id == topup.id,
+            TelegramWalletTopup.status == 'pending',
+        )
+        .values(status=decision, reviewer_admin_id=reviewer.id, reviewed_at=now)
+    )
+    if claimed.rowcount != 1:
+        db.session.rollback()
         api.answer_callback(callback_id, 'Already reviewed')
         return True
-    topup.status = 'approved' if parts[2] == 'approve' else 'rejected'
-    topup.reviewer_admin_id = reviewer.id
-    topup.reviewed_at = datetime.utcnow()
     customer = db.session.get(CustomerAccount, topup.customer_id)
-    if topup.status == 'approved' and customer:
-        customer.credit = int(customer.credit or 0) + int(topup.amount or 0)
-        db.session.add(CustomerTransaction(
-            customer_id=customer.id,
-            type='topup',
-            amount=int(topup.amount or 0),
-            bank_card_id=topup.bank_card_id,
-            receipt_file_id=topup.receipt_file_id,
-            receipt_file_kind=topup.receipt_file_kind,
-            receipt_file_unique_id=topup.receipt_file_unique_id,
-            request_ref=f'topup:{topup.id}',
-        ))
+    amount = int(topup.amount or 0)
+    if decision == 'approved' and customer and amount > 0:
+        applied, reason = apply_balance_delta(
+            'customer', customer.id, amount, entry_type='topup',
+            reference_type='telegram_topup', reference_id=topup.id,
+            idempotency_key=f'telegram_topup:{topup.id}:credit',
+            transaction_row=CustomerTransaction(
+                customer_id=customer.id,
+                type='topup',
+                amount=amount,
+                bank_card_id=topup.bank_card_id,
+                receipt_file_id=topup.receipt_file_id,
+                receipt_file_kind=topup.receipt_file_kind,
+                receipt_file_unique_id=topup.receipt_file_unique_id,
+                request_ref=f'topup:{topup.id}',
+            ),
+        )
+        if not applied:
+            db.session.rollback()
+            api.answer_callback(callback_id, 'Already reviewed' if reason == 'duplicate' else 'Failed')
+            return True
     _log_audit(f"telegram_topup.{parts[2]}", topup, actor=reviewer)
     db.session.flush()
     api.answer_callback(callback_id, 'Saved')
@@ -2189,10 +2211,30 @@ def _create_renewal_wallet_request(api: TelegramBotApi, bot: TelegramBotInstance
         return
     amount = int(request_row.amount or 0)
     customer = db.session.get(CustomerAccount, request_row.customer_id)
-    if not customer or int(customer.credit or 0) < amount:
+    applied = False
+    if customer and amount > 0:
+        # Conditional SQL debit: the balance is checked and decremented in one
+        # statement, so two concurrent spends cannot both succeed.
+        applied, _reason = apply_balance_delta(
+            'customer', customer.id, -amount, entry_type='renewal',
+            reference_type='renewal', reference_id=request_row.id,
+            idempotency_key=f'renewal:{request_row.id}:debit',
+            transaction_row=CustomerTransaction(
+                customer_id=customer.id,
+                type='renewal',
+                amount=-amount,
+                request_ref=f'renewal:{request_row.id}',
+            ),
+        )
+    if not applied:
         # Balance changed since the choice screen; never create an unpaid wallet request.
         db.session.delete(request_row)
         db.session.flush()
+        if customer is not None:
+            try:
+                db.session.refresh(customer)
+            except Exception:
+                pass
         balance = int(customer.credit or 0) if customer else 0
         api.send_message(
             chat_id,
@@ -2200,13 +2242,6 @@ def _create_renewal_wallet_request(api: TelegramBotApi, bot: TelegramBotInstance
                 balance=f"{balance:,}", needed=f"{max(0, amount - balance):,}"),
         )
         return
-    customer.credit = int(customer.credit or 0) - amount
-    db.session.add(CustomerTransaction(
-        customer_id=customer.id,
-        type='renewal',
-        amount=-amount,
-        request_ref=f'renewal:{request_row.id}',
-    ))
     db.session.flush()
     _send_renewal_request_state(api, chat_id, language, request_row, duplicate=False)
     _notify_service_request_admins(api, request_row)
@@ -2917,13 +2952,19 @@ def _handle_admin_service_callback(api: TelegramBotApi, callback: dict, data: st
         wallet_customer = db.session.get(CustomerAccount, request_row.customer_id)
         refunded_amount = int(request_row.amount or 0)
         if wallet_customer and refunded_amount > 0:
-            wallet_customer.credit = int(wallet_customer.credit or 0) + refunded_amount
-            db.session.add(CustomerTransaction(
-                customer_id=wallet_customer.id,
-                type='refund',
-                amount=refunded_amount,
-                request_ref=f'renewal:{request_row.id}',
-            ))
+            applied, _reason = apply_balance_delta(
+                'customer', wallet_customer.id, refunded_amount, entry_type='refund',
+                reference_type='renewal', reference_id=request_row.id,
+                idempotency_key=f'renewal:{request_row.id}:refund',
+                transaction_row=CustomerTransaction(
+                    customer_id=wallet_customer.id,
+                    type='refund',
+                    amount=refunded_amount,
+                    request_ref=f'renewal:{request_row.id}',
+                ),
+            )
+            if not applied:
+                refunded_amount = 0
         else:
             refunded_amount = 0
     _log_audit(f"telegram_service.{parts[2]}", request_row, actor=reviewer)
@@ -3831,23 +3872,38 @@ def _handle_admin_purchase_callback(api: TelegramBotApi, callback: dict, data: s
         return True
     refunded_amount = 0
     if parts[2] == 'reject':
-        if request_row.status != 'pending':
+        reject_now = datetime.utcnow()
+        # Guarded transition: only one concurrent rejection wins, so the wallet
+        # refund for this request can never be posted twice.
+        claimed = db.session.execute(
+            update(TelegramPurchaseRequest)
+            .where(
+                TelegramPurchaseRequest.id == request_row.id,
+                TelegramPurchaseRequest.status == 'pending',
+            )
+            .values(status='rejected', reviewed_by_admin_id=reviewer.id, reviewed_at=reject_now)
+        )
+        if claimed.rowcount != 1:
+            db.session.rollback()
             api.answer_callback(callback_id, 'Already reviewed')
             return True
-        request_row.status = 'rejected'
-        request_row.reviewed_by_admin_id = reviewer.id
-        request_row.reviewed_at = datetime.utcnow()
         if str(getattr(request_row, 'payment_method', '') or 'card') == 'wallet':
             wallet_customer = db.session.get(CustomerAccount, request_row.customer_id)
             refunded_amount = int(request_row.amount or 0)
             if wallet_customer and refunded_amount > 0:
-                wallet_customer.credit = int(wallet_customer.credit or 0) + refunded_amount
-                db.session.add(CustomerTransaction(
-                    customer_id=wallet_customer.id,
-                    type='refund',
-                    amount=refunded_amount,
-                    request_ref=f'purchase:{request_row.id}',
-                ))
+                applied, _reason = apply_balance_delta(
+                    'customer', wallet_customer.id, refunded_amount, entry_type='refund',
+                    reference_type='purchase', reference_id=request_row.id,
+                    idempotency_key=f'purchase:{request_row.id}:refund',
+                    transaction_row=CustomerTransaction(
+                        customer_id=wallet_customer.id,
+                        type='refund',
+                        amount=refunded_amount,
+                        request_ref=f'purchase:{request_row.id}',
+                    ),
+                )
+                if not applied:
+                    refunded_amount = 0
             else:
                 refunded_amount = 0
         _log_audit('telegram_purchase.reject', request_row, actor=reviewer)
@@ -4945,13 +5001,29 @@ def _create_wallet_purchase_request(api: TelegramBotApi, bot: TelegramBotInstanc
     )
     db.session.add(request_row)
     db.session.flush()
-    customer.credit = int(customer.credit or 0) - amount
-    db.session.add(CustomerTransaction(
-        customer_id=customer.id,
-        type='purchase',
-        amount=-amount,
-        request_ref=f'purchase:{request_row.id}',
-    ))
+    applied, _reason = apply_balance_delta(
+        'customer', customer.id, -amount, entry_type='purchase',
+        reference_type='purchase', reference_id=request_row.id,
+        idempotency_key=f'purchase:{request_row.id}:debit',
+        transaction_row=CustomerTransaction(
+            customer_id=customer.id,
+            type='purchase',
+            amount=-amount,
+            request_ref=f'purchase:{request_row.id}',
+        ),
+    )
+    if not applied:
+        # The balance changed since the check screen: drop the request instead
+        # of creating an unpaid wallet order, and post no debit.
+        db.session.rollback()
+        fresh_customer = db.session.get(CustomerAccount, customer.id)
+        balance = int(fresh_customer.credit or 0) if fresh_customer else 0
+        api.send_message(
+            chat_id,
+            _cc(language)['wallet_insufficient'].format(
+                balance=f"{balance:,}", needed=f"{max(0, amount - balance):,}"),
+        )
+        return
     _finalize_purchase_request(
         api, bot, chat_id, user_id, language, state, session_row, identity, request_row,
     )

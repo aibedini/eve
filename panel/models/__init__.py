@@ -44,6 +44,7 @@ from panel.models.finance import (
     TelegramIdentity,
     OwnershipClaim,
     OwnershipClaimItem,
+    WalletLedger,
 )
 from panel.models.telegram import (
     TelegramBotInstance,

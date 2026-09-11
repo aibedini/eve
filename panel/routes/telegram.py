@@ -572,18 +572,25 @@ def _refund_wallet_request(row, kind):
     """Refund a wallet-paid request back to the customer wallet; returns the amount."""
     if str(getattr(row, 'payment_method', '') or 'card') != 'wallet':
         return 0
+    from panel.services.wallet import apply_balance_delta  # deferred: avoids import cycle
     customer = db.session.get(CustomerAccount, row.customer_id)
     amount = int(getattr(row, 'amount', 0) or 0)
     if not customer or amount <= 0:
         return 0
-    customer.credit = int(customer.credit or 0) + amount
-    db.session.add(CustomerTransaction(
-        customer_id=customer.id,
-        type='refund',
-        amount=amount,
-        request_ref=f'{kind}:{row.id}',
-    ))
-    return amount
+    # SQL-level credit + idempotency-keyed ledger entry: a repeated refund (or a
+    # concurrent one) can never double-credit this request.
+    applied, _reason = apply_balance_delta(
+        'customer', customer.id, amount, entry_type='refund',
+        reference_type=str(kind)[:32], reference_id=getattr(row, 'id', None),
+        idempotency_key=f'{kind}:{getattr(row, "id", 0)}:refund',
+        transaction_row=CustomerTransaction(
+            customer_id=customer.id,
+            type='refund',
+            amount=amount,
+            request_ref=f'{kind}:{row.id}',
+        ),
+    )
+    return amount if applied else 0
 
 
 @bp.route('/api/telegram-operations/purchases/<int:request_id>/<action>', methods=['POST'])

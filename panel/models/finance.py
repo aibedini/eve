@@ -411,3 +411,40 @@ class OwnershipClaimItem(db.Model):
 
     claim = db.relationship('OwnershipClaim', backref=db.backref('items', lazy=True, cascade='all, delete-orphan'))
     server = db.relationship('Server')
+
+
+class WalletLedger(db.Model):
+    """Immutable, append-only record of every wallet balance change.
+
+    The unique ``idempotency_key`` is the authoritative guard against double
+    posting: a retry or concurrent duplicate insert violates the unique index,
+    which rolls back the whole balance mutation together with it. Rows are
+    never updated or deleted by the application.
+    """
+    __tablename__ = 'wallet_ledger'
+    id = db.Column(db.Integer, primary_key=True)
+    account_type = db.Column(db.String(16), nullable=False, index=True)  # admin | customer
+    owner_id = db.Column(db.Integer, nullable=False, index=True)
+    transaction_id = db.Column(db.Integer, nullable=True)  # linked domain ledger row
+    amount = db.Column(db.Integer, nullable=False)  # signed: + credit, - debit
+    type = db.Column(db.String(32), nullable=False, index=True)
+    reference_type = db.Column(db.String(32), nullable=True, index=True)
+    reference_id = db.Column(db.Integer, nullable=True, index=True)
+    idempotency_key = db.Column(db.String(128), nullable=True, unique=True, index=True)
+    description = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'account_type': self.account_type,
+            'owner_id': self.owner_id,
+            'transaction_id': self.transaction_id,
+            'amount': self.amount,
+            'type': self.type,
+            'reference_type': self.reference_type,
+            'reference_id': self.reference_id,
+            'idempotency_key': self.idempotency_key,
+            'description': self.description,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+        }

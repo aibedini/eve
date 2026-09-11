@@ -161,6 +161,7 @@ def approve_receipt(receipt_id):
         return jsonify({'success': False, 'error': 'Invalid receipt state'}), 400
     success, error = apply_receipt_credit(receipt, reviewer=reviewer, auto=False)
     if not success:
+        db.session.rollback()
         return jsonify({'success': False, 'error': error}), 400
     db.session.commit()
     data = receipt.to_dict()
@@ -199,14 +200,27 @@ def reject_receipt(receipt_id):
     if claimed.rowcount == 1:
         success, error = rollback_receipt_credit(receipt, reviewer=reviewer, reason=reason)
         if not success:
+            # The reversal could not be applied (e.g. the credit was already
+            # spent): undo the rejected claim so the receipt stays approved.
+            db.session.rollback()
             return jsonify({'success': False, 'error': error}), 400
     else:
-        # Still pending/auto-pending, or already rejected: just record the decision.
-        receipt.status = RECEIPT_STATUS_REJECTED
-        receipt.reviewer_id = reviewer.id if reviewer else None
-        receipt.reviewed_at = now
-        receipt.rejection_reason = reason
-        receipt.auto_deadline = None
+        # Still pending/auto-pending (or already rejected): guarded transition
+        # only, so no unguarded ORM write can race the claim above.
+        db.session.execute(
+            update(ManualReceipt)
+            .where(
+                ManualReceipt.id == receipt.id,
+                ManualReceipt.status.in_((RECEIPT_STATUS_PENDING, RECEIPT_STATUS_AUTO_PENDING)),
+            )
+            .values(
+                status=RECEIPT_STATUS_REJECTED,
+                reviewer_id=(reviewer.id if reviewer else None),
+                reviewed_at=now,
+                rejection_reason=reason,
+                auto_deadline=None,
+            )
+        )
     db.session.commit()
     data = receipt.to_dict()
     data['image_url'] = url_for('receipts.download_receipt_file', receipt_id=receipt.id)

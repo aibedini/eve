@@ -106,7 +106,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.102"
+APP_VERSION = "2.5.103"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2093,9 +2093,13 @@ def get_active_auto_window(now=None):
     ).order_by(AutoApprovalWindow.ends_at.asc()).first()
 
 def apply_receipt_credit(receipt, reviewer=None, auto=False):
+    from panel.services.wallet import apply_balance_delta  # deferred: avoids import cycle
     owner = db.session.get(Admin, receipt.admin_id)
     if not owner:
         return False, 'Owner not found'
+    amount = int(receipt.amount or 0)
+    if amount <= 0:
+        return False, 'Receipt amount is not positive'
     new_status = RECEIPT_STATUS_AUTO_APPROVED if auto else RECEIPT_STATUS_APPROVED
     now = datetime.utcnow()
     # Claim the receipt atomically BEFORE crediting. Concurrent approval clicks
@@ -2120,18 +2124,37 @@ def apply_receipt_credit(receipt, reviewer=None, auto=False):
     )
     if claimed.rowcount != 1:
         return False, 'Receipt was already processed'
-    owner.credit = (owner.credit or 0) + receipt.amount
     tx_type = 'manual_receipt_auto' if auto else 'manual_receipt'
-    description = f"Receipt #{receipt.id}"
-    log_transaction(owner.id, receipt.amount, tx_type, description)
+    ledger_row = log_transaction(owner.id, amount, tx_type, f"Receipt #{receipt.id}")
+    # SQL-level increment (never a Python read-modify-write) plus an immutable,
+    # idempotency-keyed ledger entry committed in the same transaction.
+    applied, reason = apply_balance_delta(
+        'admin', owner.id, amount, entry_type=tx_type,
+        reference_type='manual_receipt', reference_id=receipt.id,
+        idempotency_key=f'manual_receipt:{receipt.id}:credit',
+        transaction_row=ledger_row,
+    )
+    if not applied:
+        return False, reason or 'Receipt credit could not be applied'
     return True, None
 
 def rollback_receipt_credit(receipt, reviewer=None, reason=None):
+    from panel.services.wallet import apply_balance_delta  # deferred: avoids import cycle
     owner = db.session.get(Admin, receipt.admin_id)
     if not owner:
         return False, 'Owner not found'
-    owner.credit = (owner.credit or 0) - receipt.amount
-    log_transaction(owner.id, -receipt.amount, 'manual_receipt_reversal', f"Receipt #{receipt.id} rejected")
+    amount = int(receipt.amount or 0)
+    if amount <= 0:
+        return False, 'Receipt amount is not positive'
+    ledger_row = log_transaction(owner.id, -amount, 'manual_receipt_reversal', f"Receipt #{receipt.id} rejected")
+    applied, error = apply_balance_delta(
+        'admin', owner.id, -amount, entry_type='manual_receipt_reversal',
+        reference_type='manual_receipt', reference_id=receipt.id,
+        idempotency_key=f'manual_receipt:{receipt.id}:reversal',
+        transaction_row=ledger_row,
+    )
+    if not applied:
+        return False, error or 'Receipt reversal could not be applied'
     receipt.reviewer_id = reviewer.id if reviewer else None
     receipt.reviewed_at = datetime.utcnow()
     receipt.rejection_reason = reason
@@ -2146,26 +2169,30 @@ def trigger_auto_receipt_processing():
     ).all()
     updated = 0
     for receipt in due_receipts:
+        # One transaction per receipt: the guarded status claim and the atomic
+        # balance increment commit together or not at all.
         success, err = apply_receipt_credit(receipt, reviewer=None, auto=True)
         if success:
+            db.session.commit()
             updated += 1
-        else:
-            # A lost claim means another worker already processed the receipt, so
-            # only fall back to manual review while it is still auto-pending.
-            db.session.execute(
-                update(ManualReceipt)
-                .where(
-                    ManualReceipt.id == receipt.id,
-                    ManualReceipt.status == RECEIPT_STATUS_AUTO_PENDING,
-                )
-                .values(
-                    status=RECEIPT_STATUS_PENDING,
-                    auto_deadline=None,
-                    rejection_reason=err,
-                )
+            continue
+        db.session.rollback()
+        # A lost claim / duplicate means another worker already handled it; only
+        # fall back to manual review while it is still auto-pending.
+        db.session.execute(
+            update(ManualReceipt)
+            .where(
+                ManualReceipt.id == receipt.id,
+                ManualReceipt.status == RECEIPT_STATUS_AUTO_PENDING,
             )
-    if updated or due_receipts:
+            .values(
+                status=RECEIPT_STATUS_PENDING,
+                auto_deadline=None,
+                rejection_reason=err,
+            )
+        )
         db.session.commit()
+    return updated
 
 def format_bytes(size):
     if size is None or size == 0: return "0 B"
