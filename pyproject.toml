@@ -22,3 +22,11 @@ dependencies = [
 
 [tool.setuptools]
 py-modules = ["app", "main"]
+
+[tool.pytest.ini_options]
+# The suite imports the top-level "app" module. The pytest console script does
+# not put the repository root on sys.path (only "python -m pytest" does), so
+# CI failed with "ModuleNotFoundError: No module named 'app'". Make the intent
+# explicit for every invocation.
+pythonpath = ["."]
+testpaths = ["tests"]
