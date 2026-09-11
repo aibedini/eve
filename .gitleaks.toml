@@ -14,3 +14,8 @@ useDefault = true
 description = "Non-secret WireGuard test fixture (now generated at runtime)"
 targetRules = ["generic-api-key"]
 paths = ['''tests/test_custom_subscriptions\.py$''']
+
+[[allowlists]]
+description = "RFC 6238 public TOTP test vector in the MFA test suite (non-secret)"
+targetRules = ["generic-api-key"]
+paths = ['''tests/test_mfa_auth\.py$''']
