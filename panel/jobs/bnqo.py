@@ -218,6 +218,7 @@ def _worst(statuses):
 
 def _open_incident(link, kind, direction, evidence, now, alert=True, dedup_open=True):
     """Open an incident unless an identical open/ack one exists; returns it."""
+    from app import app  # deferred: app-level helper, avoids circular import
     existing = None
     if dedup_open:
         existing = (BnqoIncident.query
