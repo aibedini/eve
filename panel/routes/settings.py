@@ -13,7 +13,7 @@ from panel.models import (
     UsageHourly,
 )
 from panel.routes.common import (
-    login_required, superadmin_required, user_management_required,
+    login_required, step_up_required, superadmin_required, user_management_required,
 )
 from panel.services.backup import _parse_int, _set_system_setting_value
 
@@ -520,6 +520,7 @@ def get_ssl_settings():
 
 @bp.route('/api/settings/ssl', methods=['POST'])
 @superadmin_required
+@step_up_required('settings.write')
 def save_ssl_settings():
     from app import app  # deferred: app-level helper, avoids circular import
     data = request.json
@@ -871,6 +872,7 @@ def _io_BytesIO(data):
 # ── SSL Apply — write nginx config + reload ─────────────────────────────────
 @bp.route('/api/settings/ssl/apply', methods=['POST'])
 @superadmin_required
+@step_up_required('settings.write')
 def ssl_apply():
     """Write HTTPS nginx config and reload nginx."""
     cert = db.session.get(SystemSetting, 'ssl_cert_path')
@@ -938,6 +940,7 @@ def get_session_settings():
 
 @bp.route('/api/settings/session', methods=['POST'])
 @login_required
+@step_up_required('settings.write')
 def save_session_settings():
     from app import app  # deferred: app-level helper, avoids circular import
     data = request.json

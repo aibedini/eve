@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 
 from panel.extensions import db
 from panel.models import SystemSetting
-from panel.routes.common import superadmin_required
+from panel.routes.common import step_up_required, superadmin_required
 from panel.services.backup import (
     _create_database_backup_file, _create_full_migration_zip, _db_uri,
     _get_system_setting_value, _is_postgres_db, _is_sqlite_db, _parse_int,
@@ -259,6 +259,7 @@ def download_backup(filename):
 
 @bp.route('/api/backups/<filename>/restore', methods=['POST'])
 @superadmin_required
+@step_up_required('backups.restore')
 def restore_backup(filename):
     from app import (  # deferred: app-level helper, avoids circular import
         BACKUP_DIR, app,
@@ -312,6 +313,7 @@ def restore_backup(filename):
 
 @bp.route('/api/backups/<filename>/restore/stream', methods=['POST'])
 @superadmin_required
+@step_up_required('backups.restore')
 def restore_backup_stream(filename):
     """SSE endpoint — streams live restore progress to the browser."""
     from app import (  # deferred: app-level helper, avoids circular import

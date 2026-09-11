@@ -12,7 +12,7 @@ from sqlalchemy import text
 
 from panel.extensions import db
 from panel.models import Admin
-from panel.routes.common import login_required, superadmin_required
+from panel.routes.common import login_required, step_up_required, superadmin_required
 
 bp = Blueprint('system', __name__)
 
@@ -200,6 +200,7 @@ def system_update_status():
 
 @bp.route('/api/system-update/start', methods=['POST'])
 @superadmin_required
+@step_up_required('system.update')
 def system_update_start():
     from app import (  # deferred: app-level helper, avoids circular import
         SYSTEM_UPDATE_START_COMMAND, SYSTEM_UPDATE_STATE_DIR,

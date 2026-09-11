@@ -1,21 +1,68 @@
 """Shared route decorators (session auth guards) extracted from app.py."""
 from functools import wraps
 
-from flask import jsonify, redirect, request, session, url_for
+from flask import g, jsonify, redirect, request, session, url_for
 
 from panel.extensions import db
 from panel.models import Admin
+from panel.services.sessions import (
+    SESSION_TOKEN_KEY, resolve_session, role_of, step_up_fresh,
+)
 
 
 def current_admin():
-    """Return the authoritative enabled admin for this request, if any."""
+    """Return the authoritative enabled admin for this request, if any.
+
+    When the browser carries a server-side session token (every login after
+    Phase 3), the registry row is authoritative: revoked, expired or idle
+    sessions are rejected even though the signed cookie is still valid.
+    Sessions created before the registry existed (and the test suite, which
+    seeds the Flask session directly) fall back to the admin row.
+    """
     admin_id = session.get('admin_id')
     admin = db.session.get(Admin, admin_id) if admin_id is not None else None
-    return admin if admin and bool(admin.enabled) else None
+    if not admin or not bool(admin.enabled):
+        return None
+    token = session.get(SESSION_TOKEN_KEY)
+    if token:
+        row = resolve_session(token)
+        if row is None or row.admin_id != admin.id:
+            return None
+        g._admin_session = row
+        try:
+            if row in db.session.dirty:
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+    return admin
+
+
+def current_session():
+    """Return the registry row for this request, if it has one."""
+    cached = getattr(g, '_admin_session', None)
+    if cached is not None:
+        return cached
+    token = session.get(SESSION_TOKEN_KEY)
+    if not token:
+        return None
+    row = resolve_session(token)
+    g._admin_session = row
+    return row
 
 
 def admin_is_superadmin(admin) -> bool:
     return bool(admin and (admin.role == 'superadmin' or admin.is_superadmin))
+
+
+def mfa_required_for(admin) -> bool:
+    """True when the account must complete MFA before a session is granted."""
+    if not admin or not bool(admin.enabled):
+        return False
+    raw = (__import__('os').environ.get('EVE_MFA_REQUIRED_ROLES') or 'superadmin').strip().lower()
+    if raw in ('', 'none', 'off', 'false', '0'):
+        return False
+    roles = {part.strip() for part in raw.split(',') if part.strip()}
+    return role_of(admin) in roles
 
 
 def _sync_session_authority(admin) -> None:
@@ -40,6 +87,36 @@ def login_required(f):
         _sync_session_authority(admin)
         return f(*args, **kwargs)
     return decorated_function
+
+
+def step_up_required(scope: str | None = None):
+    """Require a fresh MFA re-check for a sensitive mutation.
+
+    Enforced for registry-backed sessions. Legacy sessions that predate the
+    registry (no token in the cookie) are grandfathered so a rolling deploy
+    cannot lock operators out; every new login is registry-backed.
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            admin = current_admin()
+            if not admin:
+                session.clear()
+                return jsonify({"success": False, "error": "Unauthorized"}), 401
+            token = session.get(SESSION_TOKEN_KEY)
+            if token:
+                row = current_session()
+                if not step_up_fresh(row):
+                    return jsonify({
+                        "success": False,
+                        "code": "step_up_required",
+                        "error": "Re-authentication required for this action",
+                        "scope": scope,
+                    }), 403
+            _sync_session_authority(admin)
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 def client_portal_required(f):

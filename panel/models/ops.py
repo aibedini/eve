@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from panel.extensions import db
+from panel.security import EncryptedText
 
 class ClientPortalUser(db.Model):
     """End-user portal accounts — login with Iranian mobile + password."""
@@ -868,3 +869,64 @@ class BnqoJob(db.Model):
             'error_class': self.error_class,
             'result_received_at': self.result_received_at.isoformat() + 'Z' if self.result_received_at else None,
         }
+
+
+class AdminMFASetting(db.Model):
+    """Per-admin MFA state: TOTP secret, confirmation and replay watermark."""
+    __tablename__ = 'admin_mfa_settings'
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='CASCADE'),
+                         nullable=False, unique=True, index=True)
+    totp_secret = db.Column(EncryptedText, nullable=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=False)
+    confirmed_at = db.Column(db.DateTime, nullable=True)
+    last_counter = db.Column(db.Integer, nullable=True)   # last accepted TOTP step
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+
+class AdminMFABackupCode(db.Model):
+    """Single-use MFA recovery code, stored as a keyed digest only."""
+    __tablename__ = 'admin_mfa_backup_codes'
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    code_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    used_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class AdminSession(db.Model):
+    """Server-side registry entry backing one browser session.
+
+    The Flask session only carries an opaque token; idle/absolute timeouts,
+    MFA state, step-up freshness and revocation are enforced here so a stolen
+    cookie can be revoked and privileged roles expire quickly.
+    """
+    __tablename__ = 'admin_sessions'
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    ip = db.Column(db.String(64), nullable=True)
+    user_agent = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    last_seen_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False)          # absolute lifetime
+    mfa_verified = db.Column(db.Boolean, nullable=False, default=False)
+    step_up_at = db.Column(db.DateTime, nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True, index=True)
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'ip': self.ip,
+            'user_agent': self.user_agent,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'last_seen_at': self.last_seen_at.isoformat() + 'Z' if self.last_seen_at else None,
+            'expires_at': self.expires_at.isoformat() + 'Z' if self.expires_at else None,
+            'mfa_verified': bool(self.mfa_verified),
+            'revoked': self.revoked_at is not None,
+        }
+

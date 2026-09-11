@@ -15,7 +15,7 @@ from panel.models import (
     announcement_servers,
 )
 from panel.routes.common import (
-    login_required, superadmin_required, user_management_required,
+    login_required, step_up_required, superadmin_required, user_management_required,
 )
 from panel.services.client_operations import resolve_client_operation
 
@@ -74,6 +74,7 @@ def get_admins():
 
 @bp.route('/api/admins', methods=['POST'])
 @superadmin_required
+@step_up_required('admins.manage')
 def add_admin():
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html, serialize_allowed_servers, validate_password_strength,
@@ -178,6 +179,7 @@ def add_admin():
 
 @bp.route('/api/admins/<int:admin_id>', methods=['PUT'])
 @user_management_required
+@step_up_required('admins.manage')
 def update_admin(admin_id):
     from app import (  # deferred: app-level helper, avoids circular import
         _normalize_username, _validate_username, sanitize_html, serialize_allowed_servers,
@@ -276,6 +278,7 @@ def update_admin(admin_id):
 
 @bp.route('/api/admins/<int:admin_id>', methods=['DELETE'])
 @superadmin_required
+@step_up_required('admins.manage')
 def delete_admin(admin_id):
     if admin_id == session['admin_id']:
         return jsonify({"success": False, "error": "Self-delete not allowed"}), 400

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backup codes</title>
+    <style nonce="{{ csp_nonce }}">
+        body { font-family: system-ui, sans-serif; background:#0f172a; color:#f8fafc;
+               display:flex; min-height:100vh; align-items:center; justify-content:center; margin:0; }
+        .card { background:#1e293b; padding:32px; border-radius:16px; width:100%; max-width:420px; }
+        h1 { font-size:1.25rem; margin:0 0 16px; }
+        label { display:block; font-size:.85rem; color:#94a3b8; margin:12px 0 6px; }
+        input { width:100%; padding:12px; border-radius:8px; border:1px solid #334155;
+                background:#0f172a; color:#f8fafc; font-size:1rem; letter-spacing:2px; }
+        button { margin-top:18px; width:100%; padding:12px; border:0; border-radius:8px;
+                 background:#6366f1; color:#fff; font-size:1rem; cursor:pointer; }
+        .error { background:#7f1d1d; padding:10px; border-radius:8px; margin-bottom:8px; }
+        .hint { color:#94a3b8; font-size:.8rem; margin-top:14px; }
+        code, .secret { word-break:break-all; color:#a5b4fc; }
+        .codes { display:grid; grid-template-columns:1fr 1fr; gap:8px; font-family:monospace; }
+        a.button { display:block; text-align:center; margin-top:18px; color:#a5b4fc; }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <h1>Save your backup codes</h1>
+        <p class="hint">Each code works once if you lose your authenticator. They are shown only now.</p>
+        <div class="codes">
+            {% for code in codes %}<code>{{ code }}</code>{% endfor %}
+        </div>
+        <a class="button" href="{{ url_for('pages.dashboard') }}">Continue to the dashboard</a>
+    </main>
+</body>
+</html>
