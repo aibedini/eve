@@ -18,6 +18,7 @@ from panel.routes.common import (
     current_admin, current_permissions, login_required, permission_required,
     step_up_required, superadmin_required, user_management_required,
 )
+from panel.security import InsecurePanelTransportError, enforce_panel_transport
 from panel.services.client_operations import resolve_client_operation
 
 bp = Blueprint('admin', __name__)
@@ -545,9 +546,15 @@ def add_server():
     if not server_password:
         return jsonify({"success": False, "error": "Password is required"}), 400
     _api_token = (data.get('api_token') or '').strip()
+    # Refuse to store a remote plaintext URL: the panel password is sent over it.
+    host = sanitize_html(data.get('host') or '')
+    try:
+        enforce_panel_transport(host)
+    except InsecurePanelTransportError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     server = Server(
         name=sanitize_html(data['name']),
-        host=sanitize_html(data['host']),
+        host=host,
         username=sanitize_html(data['username']),
         password=encrypt_server_password(server_password),
         panel_type=data.get('panel_type', 'auto'),
@@ -569,7 +576,13 @@ def update_server(server_id):
     server = Server.query.get_or_404(server_id)
     data = request.json
     server.name = sanitize_html(data.get('name', server.name))
-    server.host = sanitize_html(data.get('host', server.host))
+    if 'host' in data:
+        new_host = sanitize_html(data.get('host') or '')
+        try:
+            enforce_panel_transport(new_host)
+        except InsecurePanelTransportError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        server.host = new_host
     server.username = sanitize_html(data.get('username', server.username))
     if 'password' in data:
         new_password = (data.get('password') or '').strip()

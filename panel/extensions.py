@@ -4,10 +4,10 @@ This lets every module (models, workers, services) import ``db``/``limiter``
 without importing the Flask app object itself.
 """
 from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
 
 from panel.core.redis_client import REDIS_URL, redis_enabled
+from panel.security.network import limiter_client_key
 
 db = SQLAlchemy()
 
@@ -16,7 +16,7 @@ db = SQLAlchemy()
 # to in-memory if Redis isn't configured/reachable.
 _LIMITER_STORAGE_URI = REDIS_URL if (REDIS_URL and redis_enabled()) else "memory://"
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=limiter_client_key,
     default_limits=["5000 per day", "500 per hour"],
     storage_uri=_LIMITER_STORAGE_URI,
 )

@@ -13,6 +13,7 @@ from sqlalchemy import text
 from panel.extensions import db
 from panel.models import Admin
 from panel.routes.common import login_required, step_up_required, superadmin_required
+from panel.security import client_ip
 
 bp = Blueprint('system', __name__)
 
@@ -263,7 +264,7 @@ def system_update_start():
         return jsonify({'success': False, 'error': detail[:500]}), 500
     app.logger.warning(
         'Browser panel update started by admin_id=%s from %s',
-        session.get('admin_id'), request.remote_addr)
+        session.get('admin_id'), client_ip())
     return jsonify({'success': True, 'state': 'starting', 'target_ref': target_ref}), 202
 
 

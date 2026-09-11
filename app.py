@@ -12,7 +12,9 @@ import sqlite3
 import base64
 import requests
 from panel.security import (
-    decrypt_secret, encrypt_secret, outbound_tls_verify, reveal_system_config,
+    InsecurePanelTransportError, TrustedProxyMiddleware, client_ip,
+    decrypt_secret, encrypt_secret, enforce_panel_transport, outbound_tls_verify,
+    reveal_system_config,
 )
 from telegram_diagnostics import (
     classify_telegram_connection_error, probe_telegram_transport,
@@ -106,7 +108,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.116"
+APP_VERSION = "2.5.117"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -711,8 +713,13 @@ else:
         app.logger.warning('flask-compress not installed; HTTP responses will not be gzipped (large /api/refresh payloads stay uncompressed).')
     except Exception:
         pass
-# Trust one proxy hop (nginx SSL termination) so Flask sees correct scheme/host
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# Trust one proxy hop (nginx SSL termination) so Flask sees correct scheme/host.
+# TrustedProxyMiddleware runs first: it records the real client address and drops
+# forwarded headers entirely when the direct peer is not an allowed proxy, so a
+# directly exposed instance cannot forge X-Forwarded-For/-Host/-Proto.
+app.wsgi_app = TrustedProxyMiddleware(
+    ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1),
+)
 
 # Register per-request security setup.
 app.before_request(_security_per_request_setup)

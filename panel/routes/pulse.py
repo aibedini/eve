@@ -15,7 +15,7 @@ from panel.models import (
     Admin, PulseAgent, PulseRun, PulseTemplate, Server, get_pulse_settings,
 )
 from panel.routes.common import login_required
-from panel.security import hash_bearer_token
+from panel.security import client_ip, hash_bearer_token
 from panel.services.subscription import generate_client_link
 
 bp = Blueprint('pulse', __name__)
@@ -770,7 +770,7 @@ def _pulse_agent_required(view):
         if legacy_token:
             agent.token = token_hash
         agent.last_seen_at = datetime.utcnow()
-        agent.last_ip = request.remote_addr
+        agent.last_ip = client_ip()
         db.session.commit()
         return view(agent, *args, **kwargs)
     return wrapper

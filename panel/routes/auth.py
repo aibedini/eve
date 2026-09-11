@@ -20,7 +20,7 @@ from panel.routes.common import (
     client_portal_required, current_admin, current_session, login_required,
     mfa_required_for,
 )
-from panel.security import hash_bearer_token
+from panel.security import client_ip, hash_bearer_token
 from panel.services.mfa import (
     generate_backup_codes, generate_totp_secret, normalize_backup_code,
     provisioning_uri, verify_totp,
@@ -152,7 +152,7 @@ def _pending_admin():
 def _establish_session(admin, *, mfa_verified: bool, commit: bool = True) -> str:
     token, _row = create_session(
         admin,
-        ip=request.remote_addr,
+        ip=client_ip(),
         user_agent=request.headers.get('User-Agent'),
         mfa_verified=mfa_verified,
     )
@@ -189,7 +189,7 @@ def login():
             # ── Client portal auth ─────────────────────────────
             client = ClientPortalUser.query.filter_by(mobile=mobile, enabled=True).first()
             if not client:
-                app.logger.warning("Login — unknown client mobile %s from %s", mobile, request.remote_addr)
+                app.logger.warning("Login — unknown client mobile %s from %s", mobile, client_ip())
                 return _login_fail("Invalid credentials")
 
             if client.is_locked():
@@ -199,7 +199,7 @@ def login():
             if not client.check_password(password):
                 client.record_failed()
                 db.session.commit()
-                app.logger.warning("Login — wrong password for client %s from %s (attempt %s)", mobile, request.remote_addr, client.failed_attempts)
+                app.logger.warning("Login — wrong password for client %s from %s (attempt %s)", mobile, client_ip(), client.failed_attempts)
                 if client.is_locked():
                     return _login_fail("Account locked after 5 failed attempts. Try again in 15 minutes.")
                 left = 5 - (client.failed_attempts or 0)
@@ -250,8 +250,8 @@ def login():
                 db.session.commit()
                 return jsonify({"success": True}) if request.is_json else redirect(url_for('pages.dashboard'))
 
-            app.logger.warning("Failed login for '%s' from %s", raw_input, request.remote_addr)
-            _audit('auth.login.failed', None, meta={'username': raw_input[:64], 'ip': request.remote_addr})
+            app.logger.warning("Failed login for '%s' from %s", raw_input, client_ip())
+            _audit('auth.login.failed', None, meta={'username': raw_input[:64], 'ip': client_ip()})
             db.session.commit()
             return _login_fail("Invalid credentials")
 

@@ -32,7 +32,7 @@ from panel.models import (
     BnqoServiceProbe,
 )
 from panel.routes.common import login_required
-from panel.security import hash_bearer_token
+from panel.security import client_ip, hash_bearer_token
 from panel.services.bnqo_crypto import (
     decode_pubkey,
     get_cp_pubkey_b64,
@@ -204,7 +204,7 @@ def _bnqo_agent_required(view):
         if legacy_token:
             agent.token = token_hash
         agent.last_seen_at = datetime.utcnow()
-        agent.last_ip = request.remote_addr
+        agent.last_ip = client_ip()
         db.session.commit()
         return view(agent, *args, **kwargs)
     return wrapper
@@ -246,7 +246,7 @@ def bnqo_agent_enroll():
         pubkey = _req_str(data.get('pubkey'), 64, 'pubkey')
         if decode_pubkey(pubkey) is None:
             raise ValueError('bad pubkey')
-        address = _opt_str(data.get('address'), 64) or (request.remote_addr or None)
+        address = _opt_str(data.get('address'), 64) or (client_ip() or None)
         port = _req_int(data.get('port'), 1, 65535)
         version = _opt_str(data.get('version'), 32)
     except ValueError as exc:
@@ -267,7 +267,7 @@ def bnqo_agent_enroll():
         version=version,
         config_version=1,
         last_seen_at=now,
-        last_ip=request.remote_addr,
+        last_ip=client_ip(),
     )
     db.session.add(agent)
     db.session.flush()  # assign agent.id before marking the token used

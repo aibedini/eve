@@ -20,6 +20,7 @@ from werkzeug.utils import secure_filename
 
 from panel.adapters.xui import _safe_response_json
 from panel.extensions import db, limiter
+from panel.security import client_ip
 from panel.models import (
     Admin, BankCard, CustomerAccount, CustomerTransaction, Package, Server,
     ServiceOwnership, TelegramAnnouncement, TelegramBotInstance,
@@ -2042,7 +2043,7 @@ def telegram_xray_runtime_install():
         return jsonify({'success': False, 'error': detail[:500]}), 500
     app.logger.warning(
         'Xray install started by admin_id=%s from %s',
-        session.get('admin_id'), request.remote_addr,
+        session.get('admin_id'), client_ip(),
     )
     return jsonify({'success': True, 'state': 'installing'}), 202
 

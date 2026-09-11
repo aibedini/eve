@@ -21,7 +21,9 @@ from panel.core.redis_client import (
     serialized_server_snapshot_write,
 )
 from panel.extensions import db
-from panel.security import outbound_tls_verify
+from panel.security import (
+    InsecurePanelTransportError, enforce_panel_transport, outbound_tls_verify,
+)
 from panel.models import (
     Admin,
     ClientOwnership,
@@ -899,6 +901,11 @@ def _fetch_csrf_token(session_obj, base, webpath):
 def get_xui_session(server):
     # Deferred import: lives in app.py (module-level import would be circular)
     from app import app, get_server_password
+    # Never build a credential-bearing session for a plaintext remote panel.
+    try:
+        enforce_panel_transport(getattr(server, 'host', '') or '')
+    except InsecurePanelTransportError as exc:
+        return None, str(exc)
     # Current auth identity: the token for v3, or '' for cookie-login panels.
     # Cached sessions are keyed to this so a server that just switched to v3
     # (token added) doesn't keep returning a stale, token-less cookie session
@@ -1155,6 +1162,10 @@ def get_xui_cookie_session(host, username, password, panel_type='auto', cache_ke
     valid login cookie. This logs in and caches the cookie session.
     """
     if not username or not password:
+        return None
+    try:
+        enforce_panel_transport(host)
+    except InsecurePanelTransportError:
         return None
     now = time.time()
     ck = cache_key or f"{host}|{username}"
