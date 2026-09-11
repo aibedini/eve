@@ -223,8 +223,20 @@ function renderIncidents(items){
     +'</div></td></tr>'}).join('');
 }
 
-function refreshAgents(){return apiFetch('/api/bnqo/agents').then(d=>{agents=d.agents||[];renderAgents()}).catch(()=>{})}
-function refreshLinks(){return apiFetch('/api/bnqo/links').then(d=>{links=d.links||[];renderLinks()}).catch(()=>{})}
+function fetchAllPages(path,key,pageSize){
+  pageSize=pageSize||500;
+  const sep=path.indexOf('?')===-1?'?':'&';
+  function step(offset,acc){
+    return apiFetch(path+sep+'limit='+pageSize+'&offset='+offset).then(d=>{
+      const all=acc.concat(d[key]||[]);
+      if(d.has_more&&typeof d.next_offset==='number'){return step(d.next_offset,all)}
+      return all;
+    });
+  }
+  return step(0,[]);
+}
+function refreshAgents(){return fetchAllPages('/api/bnqo/agents','agents').then(list=>{agents=list;renderAgents()}).catch(()=>{})}
+function refreshLinks(){return fetchAllPages('/api/bnqo/links','links').then(list=>{links=list;renderLinks()}).catch(()=>{})}
 function refreshIncidents(){return apiFetch('/api/bnqo/incidents?status=open').then(d=>renderIncidents(d.incidents||[])).catch(()=>{})}
 function refreshAll(){refreshAgents();refreshLinks();refreshIncidents()}
 

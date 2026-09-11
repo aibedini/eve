@@ -170,8 +170,8 @@ function renderHeader(){
   document.getElementById('bnqo-dir-a-status').innerHTML=statusBadge(dirStatus(det,'a_to_b'));
   document.getElementById('bnqo-dir-b-status').innerHTML=statusBadge(dirStatus(det,'b_to_a'));
 }
-function refreshLink(){return apiFetch('/api/bnqo/links').then(d=>{
-  link=(d.links||[]).find(l=>String(l.id)===String(LINK_ID))||null;
+function refreshLink(){return apiFetch('/api/bnqo/links?link_id='+encodeURIComponent(LINK_ID)).then(d=>{
+  link=(d.links||[])[0]||null;
   renderHeader(); renderServices();
 }).catch(()=>{})}
 

@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-09-11T20:53:11.003973Z",
+  "app_version": "2.5.132",
+  "git_sha": "6d4bf3d",
+  "python": "3.11.6",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "links": 1000,
+  "repeat": 5,
+  "unbounded": {
+    "rows": 1000,
+    "bytes": 288783,
+    "mean_ms": 54.1,
+    "statements": 3
+  },
+  "bounded_page": {
+    "rows": 200,
+    "bytes": 57687,
+    "mean_ms": 27.4,
+    "statements": 2,
+    "limit": 200,
+    "has_more": true,
+    "total": 1000
+  },
+  "full_walk": {
+    "requests": 5,
+    "rows": 1000,
+    "unique_rows": 1000
+  },
+  "row_reduction": 5.0,
+  "byte_reduction": 5.0
+}

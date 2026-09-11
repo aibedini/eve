@@ -13,6 +13,7 @@ from functools import wraps
 
 from flask import Blueprint, abort, jsonify, render_template, request
 from sqlalchemy import or_, update
+from sqlalchemy.orm import joinedload
 
 from panel.extensions import db
 from panel.models import (
@@ -31,7 +32,7 @@ from panel.models import (
     BnqoRouteHop,
     BnqoServiceProbe,
 )
-from panel.routes.common import login_required
+from panel.routes.common import login_required, paginate_query
 from panel.security import client_ip, hash_bearer_token
 from panel.services.bnqo_crypto import (
     decode_pubkey,
@@ -590,13 +591,13 @@ def _apply_job_ack(agent, entry, now):
 @bp.route('/api/bnqo/agents')
 @login_required
 def bnqo_admin_agents():
-    agents = BnqoAgent.query.order_by(BnqoAgent.id.asc()).all()
+    agents, meta = paginate_query(BnqoAgent.query.order_by(BnqoAgent.id.asc()))
     return jsonify({'agents': [
         {key: value for key, value in agent.to_dict().items()
          if key in ('id', 'name', 'role', 'address', 'port', 'enabled',
                     'version', 'last_seen_at', 'last_ip', 'config_version')}
         for agent in agents
-    ]})
+    ], **meta})
 
 
 @bp.route('/api/bnqo/enroll-tokens', methods=['POST'])
@@ -692,8 +693,15 @@ def _bump_agents_config_version(*agents):
 @bp.route('/api/bnqo/links')
 @login_required
 def bnqo_admin_links():
-    links = BnqoLink.query.order_by(BnqoLink.id.asc()).all()
-    return jsonify({'links': [link.to_dict() for link in links]})
+    """Bounded link inventory; ?link_id= fetches exactly one row."""
+    query = BnqoLink.query.order_by(BnqoLink.id.asc())
+    link_id = request.args.get('link_id', type=int)
+    if link_id is not None:
+        query = query.filter(BnqoLink.id == link_id)
+    # to_dict() reads both agents; load them with the page instead of per row.
+    links, meta = paginate_query(
+        query.options(joinedload(BnqoLink.agent_a), joinedload(BnqoLink.agent_b)))
+    return jsonify({'links': [link.to_dict() for link in links], **meta})
 
 
 @bp.route('/api/bnqo/links', methods=['POST'])
@@ -871,14 +879,15 @@ def bnqo_admin_incidents():
     status = request.args.get('status')
     if status in ('open', 'ack', 'resolved'):
         query = query.filter(BnqoIncident.status == status)
-    incidents = query.order_by(BnqoIncident.opened_at.desc()).limit(500).all()
+    incidents, meta = paginate_query(
+        query.order_by(BnqoIncident.opened_at.desc()), default=500, maximum=1000)
     link_names = {link.id: link.name for link in
                   BnqoLink.query.filter(BnqoLink.id.in_({i.link_id for i in incidents})).all()} \
         if incidents else {}
     return jsonify({'incidents': [
         incident.to_dict(link_name=link_names.get(incident.link_id))
         for incident in incidents
-    ]})
+    ], **meta})
 
 
 @bp.route('/api/bnqo/incidents/<int:incident_id>/ack', methods=['POST'])

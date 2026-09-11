@@ -72,6 +72,73 @@ def _sync_session_authority(admin) -> None:
     session['is_superadmin'] = admin_is_superadmin(admin)
 
 
+# --- Bounded list responses -------------------------------------------------
+# Every list endpoint must have a server-side ceiling: a single GET must never
+# materialise an unbounded table (memory + response size) because a client asked
+# for it. These helpers are the one place that decides page size, offset and the
+# metadata the client needs to continue.
+DEFAULT_PAGE_SIZE = 200
+MAX_PAGE_SIZE = 1000
+
+
+def _page_int(raw, default=None):
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def page_params(default=DEFAULT_PAGE_SIZE, maximum=MAX_PAGE_SIZE):
+    """Return (limit, offset) for this request, always inside the server bounds.
+
+    Accepts limit/offset (the house style) and page/per_page as an alternative.
+    A missing limit uses the default; an oversized one is clamped to the maximum;
+    page implies the offset.
+    """
+    default = max(1, int(default))
+    maximum = max(1, int(maximum))
+    args = request.args
+    limit = _page_int(args.get("limit"))
+    if limit is None:
+        limit = _page_int(args.get("per_page"))
+    if limit is None:
+        limit = default
+    limit = max(1, min(limit, maximum))
+    offset = _page_int(args.get("offset"))
+    if offset is None:
+        page = _page_int(args.get("page"), 1) or 1
+        offset = (max(1, page) - 1) * limit
+    return limit, max(0, offset)
+
+
+def page_meta(total, limit, offset):
+    """Pagination metadata shared by every bounded list endpoint."""
+    total = max(0, _page_int(total, 0) or 0)
+    limit = max(1, _page_int(limit, 1) or 1)
+    offset = max(0, _page_int(offset, 0) or 0)
+    consumed = offset + limit
+    has_more = consumed < total
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "count": max(0, min(limit, total - offset)),
+        "has_more": has_more,
+        "next_offset": consumed if has_more else None,
+    }
+
+
+def paginate_query(query, default=DEFAULT_PAGE_SIZE, maximum=MAX_PAGE_SIZE):
+    """Return (rows, meta) for one bounded page of the query.
+
+    The caller keeps its ORDER BY; only the count query drops it.
+    """
+    limit, offset = page_params(default, maximum)
+    total = query.order_by(None).count()
+    rows = query.offset(offset).limit(limit).all()
+    return rows, page_meta(total, limit, offset)
+
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
