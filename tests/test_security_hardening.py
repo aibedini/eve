@@ -265,6 +265,13 @@ class SecurityHardeningTests(unittest.TestCase):
         db.session.refresh(self.reseller)
         self.assertEqual(self.reseller.credit, 20)
 
+    def test_413_message_reports_the_configured_limit(self):
+        import app as app_module
+        body, status = app_module.request_entity_too_large(None)
+        self.assertEqual(status, 413)
+        limit = app_module.app.config['MAX_CONTENT_LENGTH']
+        self.assertIn(f'{limit / (1024 ** 3):g} GB', body.get_json()['error'])
+
     def test_receipt_credit_claim_is_idempotent(self):
         from app import ManualReceipt, apply_receipt_credit
         self.reseller.credit = 0

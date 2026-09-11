@@ -106,7 +106,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.100"
+APP_VERSION = "2.5.101"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -767,7 +767,18 @@ if _is_dev_mode():
 
 @app.errorhandler(413)
 def request_entity_too_large(e):
-    return jsonify({'success': False, 'error': 'File too large. Maximum allowed size is 512 MB.'}), 413
+    # Report the real configured limit instead of a stale hardcoded figure:
+    # Flask only raises RequestEntityTooLarge at MAX_CONTENT_LENGTH, while the
+    # per-endpoint handlers return their own (smaller) limits.
+    limit = int(app.config.get('MAX_CONTENT_LENGTH') or 0)
+    if limit >= 1024 ** 3:
+        limit_text = f'{limit / (1024 ** 3):g} GB'
+    elif limit:
+        limit_text = f'{limit // (1024 ** 2)} MB'
+    else:
+        limit_text = ''
+    message = f'File too large. Maximum allowed size is {limit_text}.' if limit_text else 'File too large.'
+    return jsonify({'success': False, 'error': message}), 413
 
 
 def _want_json() -> bool:
