@@ -108,7 +108,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.118"
+APP_VERSION = "2.5.119"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -832,15 +832,31 @@ def internal_server_error(e):
 
 @app.after_request
 def add_security_headers(response):
-    # Baseline security headers (kept permissive to avoid breaking current inline scripts/styles)
+    # Baseline security headers (the CSP below still allows the inline handlers
+    # and styles the current templates rely on).
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
     response.headers.setdefault('Referrer-Policy', 'same-origin')
     response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+    response.headers.setdefault('X-Permitted-Cross-Domain-Policies', 'none')
+    response.headers.setdefault('Cross-Origin-Opener-Policy', 'same-origin')
+    # The legacy XSS auditor is superseded by the CSP and has its own bug class;
+    # an explicit 0 disables it instead of leaving the browser default.
+    response.headers.setdefault('X-XSS-Protection', '0')
+    # Deny the features the panel never uses. Clipboard access, fullscreen and
+    # the WebAuthn entry points stay available to the panel itself.
+    response.headers.setdefault(
+        'Permissions-Policy',
+        'accelerometer=(), autoplay=(), camera=(), display-capture=(), '
+        'encrypted-media=(), geolocation=(), gyroscope=(), magnetometer=(), '
+        'microphone=(), midi=(), payment=(), usb=(), '
+        'clipboard-write=(self), fullscreen=(self), '
+        'publickey-credentials-create=(self), publickey-credentials-get=(self)',
+    )
     if not _is_dev_mode() and request.is_secure:
-        response.headers.setdefault(
-            'Strict-Transport-Security',
-            'max-age=31536000; includeSubDomains',
-        )
+        hsts = 'max-age=31536000; includeSubDomains'
+        if (os.environ.get('EVE_HSTS_PRELOAD') or '').strip().lower() in ('1', 'true', 'yes', 'on'):
+            hsts += '; preload'
+        response.headers.setdefault('Strict-Transport-Security', hsts)
 
     # Settings contain live operational state and must never be replayed by a
     # browser, reverse proxy, or CDN. In particular, Telegram tester/runtime
@@ -894,6 +910,25 @@ def add_security_headers(response):
     except Exception:
         pass
 
+    # Authenticated responses are user-specific. Without an explicit policy an
+    # intermediate proxy or the CDN in front of the panel can serve one
+    # operator's page to another, and a stale dashboard is misleading. Static
+    # assets are excluded so normal caching keeps working.
+    try:
+        authenticated = bool(session.get('admin_id') or session.get('client_id'))
+        path = request.path or ''
+        is_asset = path.startswith('/static/') or path.startswith('/assets/')
+        if authenticated and not is_asset:
+            response.headers.setdefault(
+                'Cache-Control',
+                'private, no-store, no-cache, must-revalidate, max-age=0',
+            )
+            vary = response.headers.get('Vary') or ''
+            if 'cookie' not in vary.lower():
+                response.headers['Vary'] = (vary + ', Cookie') if vary else 'Cookie'
+    except Exception:
+        pass
+
     # The CDN (WCDN) replaces ANY non-2xx response with its own HTML error page,
     # throwing away our JSON {success:false, error:"..."} body — so the UI only
     # saw "Server error (HTTP 4xx)" with no reason. For business errors on /api/
@@ -910,33 +945,38 @@ def add_security_headers(response):
     except Exception:
         pass
 
+    # Content-Security-Policy: only HTML documents execute anything, so sending
+    # it on JSON and asset responses adds bytes without adding protection.
     nonce = getattr(g, 'csp_nonce', None) or ''
-    
-    # Debug endpoint
-    # print(f"DEBUG: endpoint={getattr(request, 'endpoint', '')}", flush=True)
-
-    # All assets are local by default. Subscription page can optionally allow external
-    # online-chat widget domains when an active chat script is configured.
-    allow_external_chat = bool(getattr(g, 'allow_external_chat_widget', False))
-    script_src_extra = " https:" if allow_external_chat else ""
-    connect_src_extra = " https: wss:" if allow_external_chat else ""
-    frame_src_part = "frame-src 'self' https:; " if allow_external_chat else ""
-
-    style_src = f"style-src 'self' 'nonce-{nonce}'; "
-    response.headers.setdefault(
-        'Content-Security-Policy',
-        (
-            "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; "
-            "img-src 'self' data:; "
-            "font-src 'self' data:; "
-            f"{frame_src_part}"
-            f"{style_src}"
-            "style-src-attr 'unsafe-inline'; "
-            f"script-src 'self' 'nonce-{nonce}'{script_src_extra}; "
-            "script-src-attr 'unsafe-inline'; "
-            f"connect-src 'self'{connect_src_extra}"
-        )
-    )
+    content_type = (response.content_type or '').lower()
+    if content_type.startswith('text/html'):
+        # All assets are local by default. The subscription page can optionally
+        # allow external online-chat widget domains when a chat script is set.
+        allow_external_chat = bool(getattr(g, 'allow_external_chat_widget', False))
+        script_src_extra = " https:" if allow_external_chat else ""
+        connect_src_extra = " https: wss:" if allow_external_chat else ""
+        directives = [
+            "default-src 'self'",
+            "base-uri 'self'",
+            "object-src 'none'",
+            "frame-ancestors 'self'",
+            "form-action 'self'",
+            "img-src 'self' data:",
+            "font-src 'self' data:",
+            "manifest-src 'self'",
+        ]
+        if allow_external_chat:
+            directives.append("frame-src 'self' https:")
+        directives.extend([
+            f"style-src 'self' 'nonce-{nonce}'",
+            "style-src-attr 'unsafe-inline'",
+            f"script-src 'self' 'nonce-{nonce}'{script_src_extra}",
+            "script-src-attr 'unsafe-inline'",
+            f"connect-src 'self'{connect_src_extra}",
+        ])
+        if not _is_dev_mode() and request.is_secure:
+            directives.append('upgrade-insecure-requests')
+        response.headers.setdefault('Content-Security-Policy', '; '.join(directives))
     return response
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_recycle': 1800,

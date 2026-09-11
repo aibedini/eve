@@ -10,6 +10,9 @@
   trail keep the real client address. See `NETWORK.md`.
 - Browser users authenticate with an HttpOnly, Secure, SameSite session cookie.
   Unsafe session requests must carry a same-origin `Origin` or `Referer`.
+- Every response carries the baseline security headers, HTML responses a
+  nonce-based CSP, and authenticated responses a private no-store cache policy.
+  See `HEADERS.md`.
 - BNQO agents use bearer authentication plus Ed25519 request signatures and do
   not rely on browser sessions.
 - X-UI, WhatsApp, and other outbound HTTPS calls always verify certificates.
