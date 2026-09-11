@@ -73,6 +73,13 @@ The existing http-to-https self-heal still runs from the connection test: a
 panel that only answers over TLS is upgraded to `https://` and then passes the
 policy.
 
+## Certificates
+
+The certificate of the panel and of every https panel endpoint is monitored with
+the same policy: a verified handshake or a reported failure, never an unverified
+one. See `CERTIFICATE_MONITORING.md` for thresholds, the health-log category and
+the `/api/doctor` API.
+
 ## Tests
 
 `tests/test_network_hardening.py` covers the URL policy, the peer/chain

@@ -779,13 +779,120 @@ def _health_check_servers():
     return True, None
 
 
-def _run_single_health_cycle():
+# TLS certificate monitoring is expensive relative to the 60 s health tick
+# (it opens sockets), so it runs at most once per configured interval.
+_CERT_CHECK_STATE = {'last_run': 0.0, 'summary': None}
+
+
+def _tls_probe_targets():
+    """https panel endpoints to probe: the public panel URL and each server."""
+    from app import _public_base_url  # deferred: app-level helper
+    targets = []
+    try:
+        public = (_public_base_url() or '').strip()
+        if public.lower().startswith('https://'):
+            targets.append(public)
+    except Exception:
+        pass
+    try:
+        for srv in Server.query.filter_by(enabled=True).all():
+            host = (getattr(srv, 'host', '') or '').strip()
+            if host.lower().startswith('https://'):
+                targets.append(host)
+    except Exception:
+        pass
+    return targets
+
+
+def _certificate_alert_message(items):
+    """Build a short, secret-free health-log message for unhealthy certs."""
+    parts = []
+    for item in items[:5]:
+        label = item.get('host') or item.get('path') or 'certificate'
+        if item.get('state') == 'expired':
+            parts.append(f'{label}: expired')
+        elif item.get('days_remaining') is not None:
+            parts.append(f"{label}: {item['days_remaining']} day(s) left ({item.get('state')})")
+        else:
+            parts.append(f"{label}: {item.get('error_code') or item.get('state')}")
+    suffix = '' if len(items) <= 5 else f' (+{len(items) - 5} more)'
+    return 'TLS certificate attention needed: ' + ', '.join(parts) + suffix
+
+
+def _unhealthy_certificate_items(report):
+    """Flatten the report into the entries an operator has to act on."""
+    items = []
+    local = report.get('local') or {}
+    if local.get('path') and local.get('state') in ('warning', 'critical', 'expired', 'error'):
+        items.append({
+            'scope': 'panel',
+            'path': local.get('path'),
+            'state': local.get('state'),
+            'days_remaining': local.get('days_remaining'),
+            'error_code': local.get('error_code'),
+        })
+    for entry in report.get('endpoints') or []:
+        if entry.get('state') in ('warning', 'critical', 'expired', 'error'):
+            items.append({
+                'scope': 'panel-endpoint',
+                'host': entry.get('host'),
+                'port': entry.get('port'),
+                'state': entry.get('state'),
+                'days_remaining': entry.get('days_remaining'),
+                'error_code': entry.get('error_code'),
+            })
+    return items
+
+
+def _health_check_certificates(force=False):
+    """Check the panel certificate and https panel endpoints for expiry.
+
+    Never breaks the health cycle: any failure is a non-fatal detail. One
+    HealthLog row (category 'tls') is written only when at least one
+    certificate needs attention.
+    """
+    from app import (  # deferred: app-level helpers, avoids circular import
+        _add_health_log, _autodetect_ssl_paths, _get_system_setting_value,
+    )
+    from panel.services import certificates
+
+    now = time.monotonic()
+    interval = certificates.check_interval_seconds()
+    if not force and (now - float(_CERT_CHECK_STATE.get('last_run') or 0.0)) < interval:
+        return True, _CERT_CHECK_STATE.get('summary')
+    _CERT_CHECK_STATE['last_run'] = now
+    try:
+        cert_path = (_get_system_setting_value('ssl_cert_path', '') or '').strip()
+        if not cert_path:
+            cert_path, _key_path = _autodetect_ssl_paths()
+        report = certificates.get_tls_report(
+            refresh=True, cert_path=cert_path or None, endpoints=_tls_probe_targets(),
+        )
+    except Exception as exc:
+        return True, str(exc)[:200]
+    _CERT_CHECK_STATE['summary'] = report.get('summary')
+    items = _unhealthy_certificate_items(report)
+    if not items:
+        return True, report.get('summary')
+    level = 'critical' if any(
+        item.get('state') in ('critical', 'expired') for item in items
+    ) else 'warning'
+    try:
+        _add_health_log(level, 'tls', _certificate_alert_message(items),
+                        details={'certificates': items})
+    except Exception:
+        pass
+    return False, items
+
+
+def _run_single_health_cycle(force_certificates=False):
     """Execute one full health-check cycle. Returns summary dict."""
     results = {}
     results['db'] = _health_check_db()
     results['static'] = _health_check_static_files()
     results['disk'] = _health_check_disk()
     results['servers'] = _health_check_servers()
+    results['tls'] = _health_check_certificates(force=force_certificates)
     return results
 
 

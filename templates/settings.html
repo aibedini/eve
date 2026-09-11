@@ -1949,7 +1949,7 @@
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>System Health Logs</h2>
-                        <p class="text-secondary">Self-healing watchdog monitors DB, servers, disk &amp; static files every 60 s.</p>
+                        <p class="text-secondary">Self-healing watchdog monitors DB, servers, disk, static files every 60 s and TLS certificates every 6 h.</p>
                     </div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
                         <button class="btn btn-primary" onclick="runHealthCheckNow()">
@@ -1965,6 +1965,21 @@
                             Clear Logs
                         </button>
                     </div>
+                </div>
+
+                <!-- TLS certificate monitor (Eve Doctor) -->
+                <div style="border:1px solid var(--border-color);border-radius:10px;padding:14px;margin-bottom:16px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+                        <div>
+                            <strong style="font-size:0.95rem;">TLS certificates</strong>
+                            <p class="text-secondary" style="font-size:0.8rem;margin:4px 0 0;">Panel certificate and https panel endpoints. Checked by the watchdog every 6 hours; problems are written to the log below.</p>
+                        </div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-secondary" onclick="loadTlsReport()">Refresh</button>
+                            <button class="btn btn-primary" onclick="loadTlsReport(true)">Check now</button>
+                        </div>
+                    </div>
+                    <div id="tls-report" class="text-secondary" style="margin-top:12px;font-size:0.85rem;">Loading&hellip;</div>
                 </div>
 
                 <!-- Filters -->
@@ -1984,6 +1999,7 @@
                         <option value="server">Server</option>
                         <option value="static">Static Files</option>
                         <option value="disk">Disk</option>
+                        <option value="tls">TLS Certificate</option>
                     </select>
                     <span id="hl-total-badge" class="text-secondary" style="font-size:0.85rem;"></span>
                 </div>
@@ -3828,7 +3844,7 @@
             else if (onclick.includes("'whatsapp'")) loadWhatsAppSettings();
             else if (onclick.includes("'ssl'")) loadSSLSettings();
             else if (onclick.includes("'session'")) loadSessionSettings();
-            else if (onclick.includes("'health_logs'")) loadHealthLogs();
+            else if (onclick.includes("'health_logs'")) { loadHealthLogs(); loadTlsReport(); }
         }
     });
 
@@ -3916,6 +3932,7 @@
             loadAccountMessageTemplates();
         } else if (tabName === 'health_logs') {
             loadHealthLogs();
+            loadTlsReport();
         }
     }
 
@@ -8877,7 +8894,7 @@
     }
 
     function _hlCategoryLabel(cat) {
-        const labels = { db: 'Database', server: 'Server', static: 'Static Files', disk: 'Disk', general: 'General' };
+        const labels = { db: 'Database', server: 'Server', static: 'Static Files', disk: 'Disk', tls: 'TLS Certificate', general: 'General' };
         return labels[cat] || cat || '-';
     }
 
@@ -8886,6 +8903,62 @@
         try {
             return EveDate.format(iso);
         } catch { return iso; }
+    }
+
+    function _tlsStateBadge(state) {
+        const colors = {
+            ok: 'background:#22c55e;color:#06210f;',
+            warning: 'background:#f59e0b;color:#000;',
+            critical: 'background:#dc2626;color:#fff;font-weight:700;',
+            expired: 'background:#dc2626;color:#fff;font-weight:700;',
+            error: 'background:#dc2626;color:#fff;',
+            unknown: 'background:var(--card-bg);color:var(--text);',
+        };
+        const style = colors[state] || colors.unknown;
+        const label = String(state || 'unknown').toUpperCase();
+        return '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.78rem;' + style + '">' + escapeHtml(label) + '</span>';
+    }
+
+    async function loadTlsReport(force) {
+        const box = document.getElementById('tls-report');
+        if (!box) return;
+        box.textContent = 'Checking...';
+        try {
+            const resp = await fetch('/api/doctor/tls' + (force ? '?refresh=1' : ''));
+            const data = await resp.json();
+            if (!data.success) {
+                box.textContent = data.error || data.message || 'Unavailable';
+                return;
+            }
+            const rows = [];
+            const local = data.local || {};
+            if (local.path) {
+                rows.push({ target: local.path, state: local.state, days: local.days_remaining, detail: local.issuer_cn || local.error_code || '' });
+            }
+            (data.endpoints || []).forEach(function (entry) {
+                const port = (entry.port && entry.port !== 443) ? ':' + entry.port : '';
+                rows.push({ target: (entry.host || '') + port, state: entry.state, days: entry.days_remaining, detail: entry.error_code || entry.issuer_cn || '' });
+            });
+            if (!rows.length) {
+                box.textContent = 'No certificate configured and no https panel endpoints.';
+                return;
+            }
+            const thresholds = data.thresholds || {};
+            const summary = data.summary || {};
+            let summaryHtml = _tlsStateBadge(data.healthy ? 'ok' : 'warning');
+            Object.keys(summary).forEach(function (key) {
+                if (summary[key]) summaryHtml += ' <span class="badge badge-secondary">' + escapeHtml(key) + ': ' + summary[key] + '</span>';
+            });
+            summaryHtml += ' <span class="text-secondary" style="font-size:0.78rem;">warn &lt; ' + (thresholds.warn_days || '?') + 'd &middot; critical &lt; ' + (thresholds.critical_days || '?') + 'd</span>';
+            const bodyHtml = rows.map(function (row) {
+                const days = (row.days === null || row.days === undefined) ? '&mdash;' : row.days;
+                return '<tr><td style="font-size:0.82rem;word-break:break-all;">' + escapeHtml(row.target) + '</td><td>' + _tlsStateBadge(row.state) + '</td><td>' + days + '</td><td style="font-size:0.8rem;color:var(--text-secondary);">' + escapeHtml(row.detail || '') + '</td></tr>';
+            }).join('');
+            box.innerHTML = '<div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' + summaryHtml + '</div>' +
+                '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Certificate</th><th style="width:110px;">State</th><th style="width:90px;">Days left</th><th>Detail</th></tr></thead><tbody>' + bodyHtml + '</tbody></table></div>';
+        } catch (e) {
+            box.textContent = 'Network error';
+        }
     }
 
     async function loadHealthLogs(page) {

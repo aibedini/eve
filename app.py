@@ -108,7 +108,7 @@ from sqlalchemy import or_, and_, func, text, inspect, case, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.117"
+APP_VERSION = "2.5.118"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2664,6 +2664,7 @@ from panel.routes.usage import bp as usage_bp
 from panel.routes.backups import bp as backups_bp
 from panel.routes.bnqo import bp as bnqo_bp
 from panel.routes.content import bp as content_bp
+from panel.routes.doctor import bp as doctor_bp
 from panel.routes.files import bp as files_bp
 from panel.routes.messaging import bp as messaging_bp
 from panel.routes.settings import bp as settings_bp
@@ -2694,6 +2695,7 @@ app.register_blueprint(files_bp)
 app.register_blueprint(messaging_bp)
 app.register_blueprint(templates_api_bp)
 app.register_blueprint(backups_bp)
+app.register_blueprint(doctor_bp)
 
 
 
@@ -4862,6 +4864,7 @@ from panel.jobs.schedulers import (  # noqa: F401
     _health_check_static_files,
     _health_check_disk,
     _health_check_servers,
+    _health_check_certificates,
     _run_single_health_cycle,
     health_watchdog,
     _USAGE_HOURLY_RETENTION_HOURS,

@@ -1029,7 +1029,7 @@ def run_health_check_now():
     if not user or not user.is_superadmin:
         return jsonify({'success': False, 'message': 'Forbidden'}), 403
     try:
-        results = _run_single_health_cycle()
+        results = _run_single_health_cycle(force_certificates=True)
         summary = {}
         for key, (ok, detail) in results.items():
             summary[key] = {'ok': ok, 'detail': str(detail) if detail else None}
