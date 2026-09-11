@@ -17,6 +17,17 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_db_session_between_tests():
+    # The rate limiter uses in-memory storage in tests and keys on the client
+    # address, so every test shares one bucket per route. A file that makes a
+    # few requests to a tightly limited route (the login page allows 10/minute)
+    # would otherwise make a later file see 429 instead of 200. Clearing the
+    # counters before each test keeps them independent; a test that verifies a
+    # limit still issues all of its requests inside its own body.
+    try:
+        from panel.extensions import limiter
+        limiter.reset()
+    except Exception:
+        pass
     yield
     try:
         from app import db

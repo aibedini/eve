@@ -26,6 +26,9 @@ class RequestIdTests(unittest.TestCase):
             value = response.headers.get("X-Request-ID")
             self.assertTrue(value, path)
             self.assertLessEqual(len(value), 64)
+        # The login page is tightly rate limited (10/minute); the shared test
+        # fixture clears the limiter before each test, so this is deterministic.
+        self.assertEqual(self.client.get("/login").status_code, 200)
 
     def test_two_requests_get_different_ids(self):
         first = self.client.get("/login").headers.get("X-Request-ID")
