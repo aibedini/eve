@@ -1660,6 +1660,9 @@ def usage_snapshot_worker():
 
 # File handles kept open so fcntl locks are held for the process lifetime.
 _SINGLETON_LOCK_FDS = {}
+# Why a singleton lock could not be used (permissions, read-only dir). Reported by
+# worker_inventory() so an operator can see that the fail-open path was taken.
+_SINGLETON_ERRORS = {}
 
 def _claim_singleton(name):
     """Try to claim exclusive ownership of a singleton background thread.
@@ -1680,13 +1683,97 @@ def _claim_singleton(name):
         _SINGLETON_LOCK_FDS[name] = fh  # keep open — releasing closes the lock
         app.logger.info("[Singleton] PID %s owns %s", os.getpid(), name)
         return True
-    except (IOError, OSError):
-        # Another worker already holds the lock
-        return False
+    except (IOError, OSError) as exc:
+        if getattr(exc, 'errno', None) in (errno.EAGAIN, errno.EACCES):
+            # Another worker already holds the lock
+            return False
+        # The lock file itself could not be created or locked (read-only
+        # directory, permissions). That is a deployment fault, not contention:
+        # losing this worker would silently disable backups and automation, so
+        # run it and record why the exclusive guarantee was not available.
+        _SINGLETON_ERRORS[name] = 'lock unavailable: %s' % exc
+        try:
+            app.logger.warning('[Singleton] %s cannot use its lock file (%s); running it anyway.', name, exc)
+        except Exception:
+            pass
+        return True
     except ImportError:
         # fcntl unavailable (Windows) — allow all threads (dev mode)
         return True
 
+
+# Process-local inventory of the background workers this process started. It is
+# what /api/doctor reports, so an operator can see which process owns which
+# singleton instead of guessing from the logs.
+_WORKER_REGISTRY = {}
+_WORKER_REGISTRY_LOCK = threading.Lock()
+
+
+def _record_worker(name, info):
+    with _WORKER_REGISTRY_LOCK:
+        _WORKER_REGISTRY[name] = info
+
+
+def _start_worker(name, target, *, singleton=False):
+    """Start one background worker and record it in the process inventory.
+
+    A singleton worker another process owns is recorded as skipped; a worker
+    whose thread cannot start is recorded as failed. Returns True when a thread
+    was actually started.
+    """
+    from app import app  # deferred: avoids circular import
+    if singleton and not _claim_singleton(name):
+        _record_worker(name, {"state": "skipped", "singleton": True,
+                              "reason": "owned by another process"})
+        try:
+            app.logger.info("[Singleton] %s already owned by another worker, skipping.", name)
+        except Exception:
+            pass
+        return False
+    try:
+        thread = threading.Thread(target=target, name="eve-%s" % name, daemon=True)
+        thread.start()
+    except Exception as exc:
+        _record_worker(name, {"state": "failed", "singleton": bool(singleton),
+                              "error": str(exc)[:200]})
+        try:
+            app.logger.error("Failed to start %s thread: %s", name, exc)
+        except Exception:
+            pass
+        return False
+    _record_worker(name, {
+        "state": "started",
+        "singleton": bool(singleton),
+        "thread": thread.name,
+        "started_at": datetime.utcnow().isoformat() + "Z",
+    })
+    try:
+        app.logger.info("[Worker] started %s%s", name, " (singleton)" if singleton else "")
+    except Exception:
+        pass
+    return True
+
+
+def worker_inventory():
+    """Background workers and singleton locks of this process (diagnostics)."""
+    try:
+        from app import PROCESS_ROLE  # deferred: app-level constant
+        role = PROCESS_ROLE
+    except Exception:
+        role = "unknown"
+    alive_names = {thread.name for thread in threading.enumerate() if thread.is_alive()}
+    with _WORKER_REGISTRY_LOCK:
+        workers = {name: dict(info) for name, info in _WORKER_REGISTRY.items()}
+    for info in workers.values():
+        info["alive"] = bool(info.get("thread")) and info["thread"] in alive_names
+    return {
+        "pid": os.getpid(),
+        "process_role": role,
+        "threads_started": bool(BACKGROUND_THREADS_STARTED),
+        "singletons_owned": sorted(_SINGLETON_LOCK_FDS),
+        "singleton_errors": dict(_SINGLETON_ERRORS),
+        "workers": workers,
+    }
 
 # ---------------------------------------------------------------------------
 # Eve Pulse scheduler – drains queued probe runs and fires scheduled probes.
@@ -1890,27 +1977,18 @@ def ensure_background_threads_started():
     # Panel fan-out, scheduled jobs and automations belong to the background
     # process so request-serving workers do not inherit their memory peaks.
     if PROCESS_ROLE == 'web':
-        try:
-            threading.Thread(target=snapshot_reader_worker, daemon=True).start()
-            if redis_enabled():
-                app.logger.info('[ProcessRole] web worker reads snapshots from Redis.')
-            else:
-                app.logger.info('[ProcessRole] Redis unavailable; snapshot reader will keep retrying.')
-        except Exception as e:
-            app.logger.error('Failed to start snapshot reader thread: %s', e)
+        _start_worker('snapshot_reader', snapshot_reader_worker)
+        if redis_enabled():
+            app.logger.info('[ProcessRole] web worker reads snapshots from Redis.')
+        else:
+            app.logger.info('[ProcessRole] Redis unavailable; snapshot reader will keep retrying.')
         return
 
-    if _claim_singleton('security_maintenance_fallback'):
-        threading.Thread(target=_security_maintenance_fallback_worker, daemon=True).start()
+    _start_worker('security_maintenance_fallback',
+                  _security_maintenance_fallback_worker, singleton=True)
 
     # Singleton: only one worker runs the scheduler (auto-backup, etc.)
-    if _claim_singleton('scheduler'):
-        try:
-            threading.Thread(target=run_scheduler, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start scheduler thread: %s", e)
-    else:
-        app.logger.info("[Singleton] scheduler already owned by another worker, skipping.")
+    _start_worker('scheduler', run_scheduler, singleton=True)
 
     # Data fetching:
     #  - Redis ON  : ONE worker (singleton) fetches+processes+publishes; the
@@ -1918,112 +1996,43 @@ def ensure_background_threads_started():
     #                → panels hit once, processing done once (not per-worker).
     #  - Redis OFF : fall back to every worker fetching into its own RAM cache.
     if redis_enabled():
-        if _claim_singleton('data_fetcher'):
-            try:
-                threading.Thread(target=background_data_fetcher, daemon=True).start()
-                app.logger.info("[Redis] this worker is the data fetcher (singleton).")
-            except Exception as e:
-                app.logger.error("Failed to start data fetcher thread: %s", e)
-            try:
-                threading.Thread(target=refresh_queue_worker, daemon=True).start()
-                app.logger.info("[Redis] refresh queue worker started.")
-            except Exception as e:
-                app.logger.error("Failed to start refresh queue worker: %s", e)
-        else:
-            if PROCESS_ROLE == 'combined':
-                try:
-                    threading.Thread(target=snapshot_reader_worker, daemon=True).start()
-                    app.logger.info("[Redis] this worker reads the shared snapshot.")
-                except Exception as e:
-                    app.logger.error("Failed to start snapshot reader thread: %s", e)
+        if _start_worker('data_fetcher', background_data_fetcher, singleton=True):
+            app.logger.info("[Redis] this worker is the data fetcher (singleton).")
+            _start_worker('refresh_queue_worker', refresh_queue_worker)
+        elif PROCESS_ROLE == 'combined':
+            _start_worker('snapshot_reader', snapshot_reader_worker)
+            app.logger.info("[Redis] this worker reads the shared snapshot.")
     else:
         # Per-worker: every worker fetches server data into its own memory cache
-        try:
-            threading.Thread(target=background_data_fetcher, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start data fetcher thread: %s", e)
+        _start_worker('data_fetcher', background_data_fetcher)
 
     # Singleton: only one worker runs health watchdog (DB logs, notifications)
-    if _claim_singleton('health_watchdog'):
-        try:
-            threading.Thread(target=health_watchdog, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start health watchdog thread: %s", e)
-    else:
-        app.logger.info("[Singleton] health_watchdog already owned by another worker, skipping.")
+    _start_worker('health_watchdog', health_watchdog, singleton=True)
 
     # Singleton: only one worker runs usage snapshots — no race conditions, no dedup needed
-    if _claim_singleton('snapshot_worker'):
-        try:
-            threading.Thread(target=usage_snapshot_worker, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start usage snapshot thread: %s", e)
-    else:
-        app.logger.info("[Singleton] snapshot_worker already owned by another worker, skipping.")
+    _start_worker('snapshot_worker', usage_snapshot_worker, singleton=True)
 
     # Singleton: only one worker runs the WhatsApp near-depletion bot scanner
-    if _claim_singleton('whatsapp_bot_worker'):
-        try:
-            threading.Thread(target=whatsapp_bot_worker, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start whatsapp bot thread: %s", e)
-    else:
-        app.logger.info("[Singleton] whatsapp_bot_worker already owned by another worker, skipping.")
+    _start_worker('whatsapp_bot_worker', whatsapp_bot_worker, singleton=True)
 
     # Singleton: only one worker runs the SMS near-depletion bot scanner
-    if _claim_singleton('sms_bot_worker'):
-        try:
-            threading.Thread(target=sms_bot_worker, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start sms bot thread: %s", e)
-    else:
-        app.logger.info("[Singleton] sms_bot_worker already owned by another worker, skipping.")
+    _start_worker('sms_bot_worker', sms_bot_worker, singleton=True)
 
     # Singleton: only one worker runs the Telegram near-depletion bot scanner
-    if _claim_singleton('telegram_depletion_worker'):
-        try:
-            threading.Thread(target=telegram_depletion_worker, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start telegram depletion thread: %s", e)
-    else:
-        app.logger.info("[Singleton] telegram_depletion_worker already owned by another worker, skipping.")
+    _start_worker('telegram_depletion_worker', telegram_depletion_worker, singleton=True)
 
     # Singleton: durable targeted Telegram announcement queue.
-    if _claim_singleton('telegram_announcement_worker'):
-        try:
-            threading.Thread(target=telegram_announcement_worker, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start telegram announcement thread: %s", e)
-    else:
-        app.logger.info("[Singleton] telegram_announcement_worker already owned by another worker, skipping.")
+    _start_worker('telegram_announcement_worker', telegram_announcement_worker, singleton=True)
 
     # Singleton: reconcile queued GMweb tasks and persist their terminal status.
-    if _claim_singleton('sms_status_worker'):
-        try:
-            threading.Thread(target=sms_status_worker, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start sms status thread: %s", e)
-    else:
-        app.logger.info("[Singleton] sms_status_worker already owned by another worker, skipping.")
+    _start_worker('sms_status_worker', sms_status_worker, singleton=True)
 
     # Singleton: pulse health-check queue worker (web-triggered + scheduled probes).
-    if _claim_singleton('pulse_scheduler'):
-        try:
-            threading.Thread(target=pulse_scheduler_worker, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start pulse scheduler thread: %s", e)
-    else:
-        app.logger.info("[Singleton] pulse_scheduler already owned by another worker, skipping.")
+    _start_worker('pulse_scheduler', pulse_scheduler_worker, singleton=True)
 
     # Singleton: BNQO link status/detection engine + retention rollup.
-    if _claim_singleton('bnqo_scheduler'):
-        try:
-            from panel.jobs.bnqo import bnqo_scheduler_worker  # deferred: keeps module import light
-            threading.Thread(target=bnqo_scheduler_worker, daemon=True).start()
-        except Exception as e:
-            app.logger.error("Failed to start bnqo scheduler thread: %s", e)
-    else:
-        app.logger.info("[Singleton] bnqo_scheduler already owned by another worker, skipping.")
+    from panel.jobs.bnqo import bnqo_scheduler_worker  # deferred: keeps module import light
+    _start_worker('bnqo_scheduler', bnqo_scheduler_worker, singleton=True)
 
 if not os.environ.get('DISABLE_BACKGROUND_THREADS'):
     # Start threads on module import (works under gunicorn as well)

@@ -179,6 +179,18 @@ def doctor_summary():
         checks['panel_limits'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.jobs.schedulers import worker_inventory
+        info = worker_inventory()
+        failed = sorted(
+            name for name, item in (info.get('workers') or {}).items()
+            if item.get('state') == 'failed')
+        degraded = bool(failed or info.get('singleton_errors'))
+        checks['workers'] = {'state': 'warning' if degraded else 'ok',
+                             'failed': failed, **info}
+    except Exception as exc:
+        checks['workers'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.core import redis_client as _redis_cache
         checks['snapshot_cache'] = {
             'state': 'ok',
