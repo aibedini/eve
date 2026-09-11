@@ -7,30 +7,98 @@
     <style nonce="{{ csp_nonce }}">
         body { font-family: system-ui, sans-serif; background:#0f172a; color:#f8fafc;
                display:flex; min-height:100vh; align-items:center; justify-content:center; margin:0; }
-        .card { background:#1e293b; padding:32px; border-radius:16px; width:100%; max-width:420px; }
+        .card { background:#1e293b; padding:32px; border-radius:16px; width:100%; max-width:460px; }
         h1 { font-size:1.25rem; margin:0 0 16px; }
         label { display:block; font-size:.85rem; color:#94a3b8; margin:12px 0 6px; }
         input { width:100%; padding:12px; border-radius:8px; border:1px solid #334155;
                 background:#0f172a; color:#f8fafc; font-size:1rem; letter-spacing:2px; }
         button { margin-top:18px; width:100%; padding:12px; border:0; border-radius:8px;
                  background:#6366f1; color:#fff; font-size:1rem; cursor:pointer; }
+        button.secondary { background:#334155; }
         .error { background:#7f1d1d; padding:10px; border-radius:8px; margin-bottom:8px; }
         .hint { color:#94a3b8; font-size:.8rem; margin-top:14px; }
         code, .secret { word-break:break-all; color:#a5b4fc; }
         .codes { display:grid; grid-template-columns:1fr 1fr; gap:8px; font-family:monospace; }
         a.button { display:block; text-align:center; margin-top:18px; color:#a5b4fc; }
+        table { width:100%; border-collapse:collapse; font-size:.85rem; }
+        th, td { text-align:left; padding:6px 4px; border-bottom:1px solid #334155; }
     </style>
 </head>
 <body>
     <main class="card">
         <h1>Two-factor authentication</h1>
+        <p id="mfa-error" class="error" style="display:none"></p>
         {% if error %}<p class="error">{{ error }}</p>{% endif %}
+        {% if passkey %}
+        <button type="button" id="passkey-btn" class="secondary">Sign in with a passkey</button>
+        <p class="hint">Or use your authenticator code below.</p>
+        {% endif %}
         <form method="POST" action="{{ url_for('auth.mfa_verify') }}" autocomplete="off">
-            <label for="code">Authenticator code</label>
-            <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" autofocus required>
+            <label for="code">Authenticator or backup code</label>
+            <input id="code" name="code" autocomplete="one-time-code" autofocus required>
             <button type="submit">Verify</button>
         </form>
         <p class="hint">Lost your device? Enter one of your backup codes instead.</p>
     </main>
+    <script nonce="{{ csp_nonce }}">
+        function b64urlToBuf(value) {
+            let s = String(value).replace(/-/g, '+').replace(/_/g, '/');
+            s += '='.repeat((4 - (s.length % 4)) % 4);
+            const binary = atob(s);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return bytes.buffer;
+        }
+        function bufToB64url(buffer) {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+        function showError(message) {
+            const node = document.getElementById('mfa-error');
+            node.textContent = message;
+            node.style.display = 'block';
+        }
+        const passkeyButton = document.getElementById('passkey-btn');
+        if (passkeyButton) {
+            passkeyButton.addEventListener('click', async () => {
+                try {
+                    const begin = await fetch('/api/webauthn/login/begin', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    });
+                    const options = await begin.json();
+                    if (!options.success) { showError(options.error || 'Passkey unavailable'); return; }
+                    const pk = options.publicKey;
+                    const credential = await navigator.credentials.get({ publicKey: {
+                        challenge: b64urlToBuf(pk.challenge),
+                        rpId: pk.rpId,
+                        timeout: pk.timeout,
+                        userVerification: pk.userVerification,
+                        allowCredentials: (pk.allowCredentials || []).map((item) => ({
+                            type: item.type, id: b64urlToBuf(item.id),
+                        })),
+                    }});
+                    const payload = {
+                        id: bufToB64url(credential.rawId),
+                        response: {
+                            clientDataJSON: bufToB64url(credential.response.clientDataJSON),
+                            authenticatorData: bufToB64url(credential.response.authenticatorData),
+                            signature: bufToB64url(credential.response.signature),
+                        },
+                    };
+                    const done = await fetch('/api/webauthn/login/complete', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    const result = await done.json();
+                    if (result.success) { window.location = result.redirect || '/'; }
+                    else { showError(result.error || 'Passkey sign-in failed'); }
+                } catch (err) {
+                    showError('Passkey sign-in was cancelled or failed.');
+                }
+            });
+        }
+    </script>
 </body>
 </html>

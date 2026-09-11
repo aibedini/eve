@@ -6,12 +6,35 @@
 |--------|--------|-------|
 | TOTP (RFC 6238) | **implemented** | stdlib HMAC-SHA1, 6 digits / 30 s, ±1 step window |
 | Backup codes | **implemented** | 10 single-use codes, stored as keyed HMAC digests |
-| WebAuthn / passkeys | **planned (next increment)** | schema and flow are factor-agnostic; tracked as Phase 3b |
+| WebAuthn / passkeys | **implemented** | ES256/RS256, dependency-free CBOR/COSE verification |
 
 The TOTP secret is stored through `EncryptedText` (the application Fernet key),
 so a database dump does not reveal it. The last accepted TOTP step is persisted
 and every candidate at or below it is rejected, which makes a captured code
 non-replayable.
+
+## Passkeys (WebAuthn)
+
+Implemented in `panel/services/webauthn.py` with no new dependency: a canonical
+CBOR decoder, COSE key parsing for ES256 and RS256, and full registration and
+assertion verification.
+
+- Challenge is a 32-byte random value kept in the signed session and consumed
+  once (5 min TTL).
+- `clientDataJSON.type`, `challenge` and `origin` are checked, and the
+  `rpIdHash` is compared with SHA-256 of the relying-party id.
+- Registration requires the attested-credential-data flag and stores only the
+  credential id, the PEM public key, the algorithm, the AAGUID and the signature
+  counter.
+- Assertions verify the signature over `authenticatorData || SHA-256(clientDataJSON)`
+  and reject a counter that does not increase (cloned-authenticator detection).
+- RP id and origin come from the request host, overridable with
+  `EVE_WEBAUTHN_RP_ID` and `EVE_WEBAUTHN_ORIGIN`.
+
+An account with a passkey is treated as MFA-configured, so the login challenge
+offers the passkey and the TOTP form remains as fallback. Registration is an
+**authenticated** action (post-MFA) at `/security`, because enrolling a factor
+from a password-only pending state would defeat MFA.
 
 ## Login flow
 

@@ -930,3 +930,31 @@ class AdminSession(db.Model):
             'revoked': self.revoked_at is not None,
         }
 
+
+class AdminWebAuthnCredential(db.Model):
+    """A registered passkey (WebAuthn credential) for an admin account."""
+    __tablename__ = 'admin_webauthn_credentials'
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(db.Integer, db.ForeignKey('admins.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    credential_id = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    public_key_pem = db.Column(db.Text, nullable=False)
+    alg = db.Column(db.Integer, nullable=False, default=-7)   # COSE ES256/RS256
+    sign_count = db.Column(db.Integer, nullable=False, default=0)
+    aaguid = db.Column(db.String(64), nullable=True)
+    name = db.Column(db.String(120), nullable=True)
+    transports = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    last_used_at = db.Column(db.DateTime, nullable=True)
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'credential_id': self.credential_id,
+            'name': self.name,
+            'alg': self.alg,
+            'sign_count': self.sign_count,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'last_used_at': self.last_used_at.isoformat() + 'Z' if self.last_used_at else None,
+        }
+

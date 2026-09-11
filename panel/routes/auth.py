@@ -1,6 +1,7 @@
 """Authentication, MFA, session management and client-portal routes."""
 import base64
 import io
+import os
 from datetime import datetime
 
 import qrcode
@@ -12,7 +13,8 @@ from sqlalchemy import func
 from panel.core.phone import _extract_iran_mobile_from_text
 from panel.extensions import db, limiter
 from panel.models import (
-    Admin, AdminMFABackupCode, AdminMFASetting, AdminSession, ClientPortalUser,
+    Admin, AdminMFABackupCode, AdminMFASetting, AdminSession,
+    AdminWebAuthnCredential, ClientPortalUser,
 )
 from panel.routes.common import (
     client_portal_required, current_admin, current_session, login_required,
@@ -26,6 +28,10 @@ from panel.services.mfa import (
 from panel.services.sessions import (
     SESSION_TOKEN_KEY, create_session, list_sessions, mark_step_up,
     revoke_other_sessions, revoke_session,
+)
+from panel.services.webauthn import (
+    COSE_ES256, COSE_RS256, WebAuthnError, b64url_decode, b64url_encode,
+    new_challenge as webauthn_new_challenge, verify_assertion, verify_registration,
 )
 
 bp = Blueprint('auth', __name__)
@@ -64,6 +70,13 @@ def _mfa_setting(admin_id) -> AdminMFASetting:
 def _mfa_confirmed(admin_id) -> bool:
     setting = AdminMFASetting.query.filter_by(admin_id=admin_id).first()
     return bool(setting and setting.enabled and setting.confirmed_at and setting.totp_secret)
+
+
+def _mfa_configured(admin_id) -> bool:
+    """True when the account has at least one usable factor (TOTP or a passkey)."""
+    if _mfa_confirmed(admin_id):
+        return True
+    return AdminWebAuthnCredential.query.filter_by(admin_id=admin_id).first() is not None
 
 
 def _qr_data_uri(text: str) -> str:
@@ -218,14 +231,14 @@ def login():
                 # MFA gate: a superadmin without a confirmed factor must enrol
                 # before a session is granted; a confirmed factor must be
                 # presented. Only then is admin_id written to the cookie.
-                if mfa_required_for(admin) and not _mfa_confirmed(admin.id):
+                if mfa_required_for(admin) and not _mfa_configured(admin.id):
                     _pending_start(admin, enrolled=False)
                     _audit('auth.login.mfa_enrollment_required', admin)
                     db.session.commit()
                     dest = url_for('auth.mfa_setup_page')
                     return (jsonify({"success": True, "mfa_enrollment_required": True, "redirect": dest})
                             if request.is_json else redirect(dest))
-                if _mfa_confirmed(admin.id):
+                if _mfa_configured(admin.id):
                     _pending_start(admin, enrolled=True)
                     _audit('auth.login.mfa_required', admin)
                     db.session.commit()
@@ -264,9 +277,12 @@ def mfa_challenge():
     admin = _pending_admin()
     if not admin:
         return redirect(url_for('auth.login'))
-    if not _mfa_confirmed(admin.id):
+    if not _mfa_configured(admin.id):
         return redirect(url_for('auth.mfa_setup_page'))
-    return render_template('mfa.html', error=None)
+    return render_template(
+        'mfa.html', error=None,
+        passkey=AdminWebAuthnCredential.query.filter_by(admin_id=admin.id).first() is not None,
+    )
 
 
 @bp.route('/mfa/verify', methods=['POST'])
@@ -398,7 +414,197 @@ def api_revoke_other_sessions():
     return jsonify({"success": True, "revoked": count})
 
 
+@bp.route('/security')
+@login_required
+def security_page():
+    """Authenticated page for passkey registration and session management."""
+    return render_template('security.html')
+
+
+# ── WebAuthn / passkeys ──────────────────────────────────────────────────────
+
+WEBAUTHN_CHALLENGE_TTL_SECONDS = 300
+
+
+def _webauthn_rp_id() -> str:
+    configured = (os.environ.get('EVE_WEBAUTHN_RP_ID') or '').strip()
+    return configured or (request.host or 'localhost').split(':')[0]
+
+
+def _webauthn_origin() -> str:
+    configured = (os.environ.get('EVE_WEBAUTHN_ORIGIN') or '').strip()
+    return configured or request.host_url.rstrip('/')
+
+
+def _webauthn_challenge_start(kind: str) -> str:
+    challenge = webauthn_new_challenge()
+    session['webauthn_challenge'] = {
+        'value': challenge, 'at': datetime.utcnow().isoformat(), 'kind': kind,
+    }
+    return challenge
+
+
+def _webauthn_challenge_read(kind: str):
+    data = session.pop('webauthn_challenge', None)
+    if not isinstance(data, dict) or data.get('kind') != kind:
+        return None
+    try:
+        started = datetime.fromisoformat(str(data.get('at')))
+    except (TypeError, ValueError):
+        return None
+    if (datetime.utcnow() - started).total_seconds() > WEBAUTHN_CHALLENGE_TTL_SECONDS:
+        return None
+    return str(data.get('value') or '') or None
+
+
+def _admin_credentials(admin_id):
+    return (AdminWebAuthnCredential.query
+            .filter_by(admin_id=admin_id)
+            .order_by(AdminWebAuthnCredential.id.asc())
+            .all())
+
+
+@bp.route('/api/webauthn/register/begin', methods=['POST'])
+@login_required
+def webauthn_register_begin():
+    admin = current_admin()
+    challenge = _webauthn_challenge_start('register')
+    exclude = [{'type': 'public-key', 'id': row.credential_id} for row in _admin_credentials(admin.id)]
+    return jsonify({'success': True, 'publicKey': {
+        'challenge': challenge,
+        'rp': {'name': 'Eve', 'id': _webauthn_rp_id()},
+        'user': {
+            'id': b64url_encode(str(admin.id).encode('utf-8')),
+            'name': admin.username,
+            'displayName': admin.username,
+        },
+        'pubKeyCredParams': [{'type': 'public-key', 'alg': alg} for alg in (COSE_ES256, COSE_RS256)],
+        'timeout': 60000,
+        'attestation': 'none',
+        'authenticatorSelection': {'residentKey': 'preferred', 'userVerification': 'preferred'},
+        'excludeCredentials': exclude,
+    }})
+
+
+@bp.route('/api/webauthn/register/complete', methods=['POST'])
+@limiter.limit("20 per minute")
+@login_required
+def webauthn_register_complete():
+    admin = current_admin()
+    data = request.get_json(silent=True) or {}
+    challenge = _webauthn_challenge_read('register')
+    if not challenge:
+        return jsonify({'success': False, 'error': 'Registration challenge expired'}), 400
+    response = data.get('response') or {}
+    try:
+        verified = verify_registration(
+            client_data_json=b64url_decode(response.get('clientDataJSON')),
+            attestation_object=b64url_decode(response.get('attestationObject')),
+            expected_challenge=challenge, rp_id=_webauthn_rp_id(), origin=_webauthn_origin(),
+        )
+    except WebAuthnError as exc:
+        _audit('auth.webauthn.register_failed', admin, meta={'error': str(exc)[:120]})
+        db.session.commit()
+        return jsonify({'success': False, 'error': f'Registration rejected: {exc}'}), 400
+    credential_id = b64url_encode(verified['credential_id'])
+    if AdminWebAuthnCredential.query.filter_by(credential_id=credential_id).first():
+        return jsonify({'success': False, 'error': 'Credential is already registered'}), 409
+    transports = data.get('transports') or response.get('transports') or []
+    row = AdminWebAuthnCredential(
+        admin_id=admin.id,
+        credential_id=credential_id,
+        public_key_pem=verified['public_key_pem'],
+        alg=verified['alg'],
+        sign_count=verified['sign_count'],
+        aaguid=verified['aaguid'],
+        name=str(data.get('name') or 'Passkey')[:120],
+        transports=','.join(str(item)[:16] for item in list(transports)[:5]) or None,
+    )
+    db.session.add(row)
+    _audit('auth.webauthn.registered', admin, meta={'alg': verified['alg']})
+    db.session.commit()
+    return jsonify({'success': True, 'credential': row.to_safe_dict()})
+
+
+@bp.route('/api/webauthn/login/begin', methods=['POST'])
+def webauthn_login_begin():
+    admin = _pending_admin()
+    if not admin:
+        return jsonify({'success': False, 'error': 'No pending authentication'}), 401
+    credentials = _admin_credentials(admin.id)
+    if not credentials:
+        return jsonify({'success': False, 'error': 'No passkey is registered for this account'}), 404
+    challenge = _webauthn_challenge_start('login')
+    return jsonify({'success': True, 'publicKey': {
+        'challenge': challenge,
+        'rpId': _webauthn_rp_id(),
+        'timeout': 60000,
+        'userVerification': 'preferred',
+        'allowCredentials': [{'type': 'public-key', 'id': row.credential_id} for row in credentials],
+    }})
+
+
+@bp.route('/api/webauthn/login/complete', methods=['POST'])
+@limiter.limit("20 per minute")
+def webauthn_login_complete():
+    admin = _pending_admin()
+    if not admin:
+        return jsonify({'success': False, 'error': 'No pending authentication'}), 401
+    data = request.get_json(silent=True) or {}
+    challenge = _webauthn_challenge_read('login')
+    if not challenge:
+        return jsonify({'success': False, 'error': 'Authentication challenge expired'}), 400
+    credential_id = str(data.get('id') or data.get('rawId') or '').strip()
+    row = AdminWebAuthnCredential.query.filter_by(
+        admin_id=admin.id, credential_id=credential_id,
+    ).first()
+    if row is None:
+        return jsonify({'success': False, 'error': 'Unknown credential'}), 404
+    response = data.get('response') or {}
+    try:
+        new_count = verify_assertion(
+            client_data_json=b64url_decode(response.get('clientDataJSON')),
+            authenticator_data=b64url_decode(response.get('authenticatorData')),
+            signature=b64url_decode(response.get('signature')),
+            public_key_pem=row.public_key_pem, alg=row.alg,
+            expected_challenge=challenge, rp_id=_webauthn_rp_id(), origin=_webauthn_origin(),
+            stored_sign_count=row.sign_count or 0,
+        )
+    except WebAuthnError as exc:
+        _audit('auth.webauthn.login_failed', admin, meta={'error': str(exc)[:120]})
+        db.session.commit()
+        return jsonify({'success': False, 'error': f'Authentication rejected: {exc}'}), 401
+    row.sign_count = new_count
+    row.last_used_at = datetime.utcnow()
+    _establish_session(admin, mfa_verified=True, commit=False)
+    _audit('auth.webauthn.success', admin)
+    db.session.commit()
+    return jsonify({'success': True, 'redirect': url_for('pages.dashboard')})
+
+
+@bp.route('/api/webauthn/credentials', methods=['GET'])
+@login_required
+def webauthn_list_credentials():
+    admin = current_admin()
+    return jsonify({'success': True,
+                    'credentials': [row.to_safe_dict() for row in _admin_credentials(admin.id)]})
+
+
+@bp.route('/api/webauthn/credentials/<int:credential_row_id>', methods=['DELETE'])
+@login_required
+def webauthn_delete_credential(credential_row_id):
+    admin = current_admin()
+    row = db.session.get(AdminWebAuthnCredential, credential_row_id)
+    if row is None or row.admin_id != admin.id:
+        return jsonify({'success': False, 'error': 'Credential not found'}), 404
+    db.session.delete(row)
+    _audit('auth.webauthn.removed', admin, meta={'credential_row_id': credential_row_id})
+    db.session.commit()
+    return jsonify({'success': True})
+
+
 # ── Client Portal ─────────────────────────────────────────────────────────────
+
 
 @bp.route('/client-login')
 def client_login_page():

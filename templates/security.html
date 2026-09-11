@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security settings</title>
+    <style nonce="{{ csp_nonce }}">
+        body { font-family: system-ui, sans-serif; background:#0f172a; color:#f8fafc; margin:0; padding:32px; }
+        h1 { font-size:1.3rem; } h2 { font-size:1rem; margin-top:28px; }
+        button { padding:10px 14px; border:0; border-radius:8px; background:#6366f1; color:#fff; cursor:pointer; }
+        button.secondary { background:#334155; } button.link { background:none; color:#f87171; padding:2px 6px; }
+        table { width:100%; border-collapse:collapse; font-size:.85rem; margin-top:10px; }
+        th, td { text-align:left; padding:8px 6px; border-bottom:1px solid #334155; }
+        .muted { color:#94a3b8; font-size:.8rem; }
+        .error { background:#7f1d1d; padding:10px; border-radius:8px; margin-top:10px; display:none; }
+    </style>
+</head>
+<body>
+    <h1>Security settings</h1>
+    <p class="muted">Manage passkeys and signed-in sessions. Passkeys are an alternative second factor to the authenticator app.</p>
+    <p id="page-error" class="error"></p>
+
+    <h2>Passkeys</h2>
+    <button type="button" id="register-passkey">Register a passkey</button>
+    <table><thead><tr><th>Name</th><th>Added</th><th>Last used</th><th></th></tr></thead>
+    <tbody id="credential-rows"></tbody></table>
+
+    <h2>Active sessions</h2>
+    <button type="button" id="revoke-others" class="secondary">Sign out all other sessions</button>
+    <table><thead><tr><th>IP</th><th>Device</th><th>Created</th><th>Last seen</th><th>Expires</th><th></th></tr></thead>
+    <tbody id="session-rows"></tbody></table>
+
+    <script nonce="{{ csp_nonce }}">
+        function b64urlToBuf(value) {
+            let s = String(value).replace(/-/g, '+').replace(/_/g, '/');
+            s += '='.repeat((4 - (s.length % 4)) % 4);
+            const binary = atob(s);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return bytes.buffer;
+        }
+        function bufToB64url(buffer) {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+        function fail(message) {
+            const node = document.getElementById('page-error');
+            node.textContent = message;
+            node.style.display = 'block';
+        }
+        async function loadCredentials() {
+            const response = await fetch('/api/webauthn/credentials');
+            const data = await response.json();
+            const body = document.getElementById('credential-rows');
+            body.innerHTML = '';
+            (data.credentials || []).forEach((item) => {
+                const row = document.createElement('tr');
+                [item.name || 'Passkey', item.created_at || '', item.last_used_at || 'never'].forEach((text) => {
+                    const cell = document.createElement('td');
+                    cell.textContent = text;
+                    row.appendChild(cell);
+                });
+                const cell = document.createElement('td');
+                const button = document.createElement('button');
+                button.className = 'link';
+                button.textContent = 'Remove';
+                button.addEventListener('click', async () => {
+                    await fetch('/api/webauthn/credentials/' + item.id, { method: 'DELETE' });
+                    loadCredentials();
+                });
+                cell.appendChild(button);
+                row.appendChild(cell);
+                body.appendChild(row);
+            });
+        }
+        async function loadSessions() {
+            const response = await fetch('/api/sessions');
+            const data = await response.json();
+            const body = document.getElementById('session-rows');
+            body.innerHTML = '';
+            (data.sessions || []).forEach((item) => {
+                const row = document.createElement('tr');
+                [item.ip || '-', (item.user_agent || '-').slice(0, 60), item.created_at || '',
+                 item.last_seen_at || '', item.expires_at || ''].forEach((text) => {
+                    const cell = document.createElement('td');
+                    cell.textContent = text;
+                    row.appendChild(cell);
+                });
+                const cell = document.createElement('td');
+                if (item.current) { cell.textContent = 'this device'; }
+                else {
+                    const button = document.createElement('button');
+                    button.className = 'link';
+                    button.textContent = 'Revoke';
+                    button.addEventListener('click', async () => {
+                        await fetch('/api/sessions/' + item.id + '/revoke', { method: 'POST' });
+                        loadSessions();
+                    });
+                    cell.appendChild(button);
+                }
+                row.appendChild(cell);
+                body.appendChild(row);
+            });
+        }
+        document.getElementById('register-passkey').addEventListener('click', async () => {
+            try {
+                const begin = await fetch('/api/webauthn/register/begin', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                });
+                const options = await begin.json();
+                if (!options.success) { fail(options.error || 'Could not start registration'); return; }
+                const pk = options.publicKey;
+                const credential = await navigator.credentials.create({ publicKey: {
+                    challenge: b64urlToBuf(pk.challenge),
+                    rp: pk.rp,
+                    user: { id: b64urlToBuf(pk.user.id), name: pk.user.name, displayName: pk.user.displayName },
+                    pubKeyCredParams: pk.pubKeyCredParams,
+                    timeout: pk.timeout,
+                    attestation: pk.attestation,
+                    authenticatorSelection: pk.authenticatorSelection,
+                    excludeCredentials: (pk.excludeCredentials || []).map((item) => ({
+                        type: item.type, id: b64urlToBuf(item.id),
+                    })),
+                }});
+                const payload = {
+                    id: bufToB64url(credential.rawId),
+                    name: 'Passkey',
+                    response: {
+                        clientDataJSON: bufToB64url(credential.response.clientDataJSON),
+                        attestationObject: bufToB64url(credential.response.attestationObject),
+                    },
+                };
+                const done = await fetch('/api/webauthn/register/complete', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const result = await done.json();
+                if (!result.success) { fail(result.error || 'Registration failed'); return; }
+                loadCredentials();
+            } catch (err) {
+                fail('Passkey registration was cancelled or is unsupported in this browser.');
+            }
+        });
+        document.getElementById('revoke-others').addEventListener('click', async () => {
+            await fetch('/api/sessions/revoke-others', { method: 'POST' });
+            loadSessions();
+        });
+        loadCredentials();
+        loadSessions();
+    </script>
+</body>
+</html>
