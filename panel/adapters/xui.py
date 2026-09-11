@@ -649,7 +649,7 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
     client in zero inbounds. Returns (ok, err, status, info).
     """
     # Deferred import: lives in app.py (module-level import would be circular)
-    from app import _json_field, _ss_password, get_reseller_access_maps, _has_client_access, is_inbound_accessible, clone_cached_client_into_inbound, remove_cached_client, fetch_and_update_server_data
+    from app import _json_field, _ss_password, get_reseller_access_maps, _has_client_access, is_inbound_accessible, clone_cached_client_into_inbound, remove_cached_client, fetch_and_update_server_data, app
     mode = (mode or 'set').lower()
     if mode not in ('set', 'add', 'remove'):
         mode = 'set'
