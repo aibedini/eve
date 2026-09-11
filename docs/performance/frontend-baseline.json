@@ -1,0 +1,112 @@
+{
+  "html_login": {
+    "path": "/login",
+    "status": 200,
+    "content_type": "text/html",
+    "html_bytes": 12039,
+    "gzip_bytes": 2934,
+    "cache_control": null,
+    "assets": [
+      {
+        "path": "/static/fonts/fonts.css",
+        "status": 200,
+        "bytes": 1645,
+        "cache_control": "no-cache",
+        "etag": true,
+        "versioned": false
+      }
+    ],
+    "asset_count": 1,
+    "asset_bytes": 1645,
+    "total_bytes": 13684,
+    "immutable_assets": 0,
+    "unversioned_assets": 1
+  },
+  "html_dashboard": {
+    "path": "/",
+    "status": 200,
+    "content_type": "text/html",
+    "html_bytes": 503869,
+    "gzip_bytes": 100513,
+    "cache_control": "private, no-store, no-cache, must-revalidate, max-age=0",
+    "assets": [
+      {
+        "path": "/static/fonts/fonts.css",
+        "status": 200,
+        "bytes": 1645,
+        "cache_control": "no-cache",
+        "etag": true,
+        "versioned": false
+      },
+      {
+        "path": "/static/style.css",
+        "status": 200,
+        "bytes": 137235,
+        "cache_control": "no-cache",
+        "etag": true,
+        "versioned": false
+      },
+      {
+        "path": "/static/jquery-3.6.0.min.js",
+        "status": 200,
+        "bytes": 89503,
+        "cache_control": "no-cache",
+        "etag": true,
+        "versioned": false
+      },
+      {
+        "path": "/static/persian-date.min.js",
+        "status": 200,
+        "bytes": 36963,
+        "cache_control": "no-cache",
+        "etag": true,
+        "versioned": false
+      },
+      {
+        "path": "/static/jalalidatepicker.min.css",
+        "status": 200,
+        "bytes": 7980,
+        "cache_control": "no-cache",
+        "etag": true,
+        "versioned": false
+      },
+      {
+        "path": "/static/jalalidatepicker.min.js",
+        "status": 200,
+        "bytes": 19868,
+        "cache_control": "no-cache",
+        "etag": true,
+        "versioned": false
+      }
+    ],
+    "asset_count": 6,
+    "asset_bytes": 293194,
+    "total_bytes": 797063,
+    "immutable_assets": 0,
+    "unversioned_assets": 6
+  },
+  "api_refresh": {
+    "path": "/api/refresh",
+    "status": 200,
+    "content_type": "application/json",
+    "html_bytes": 8231586,
+    "gzip_bytes": 770459,
+    "cache_control": "private, no-store, no-cache, must-revalidate, max-age=0"
+  },
+  "meta": {
+    "generated_at": "2026-09-11T20:05:25.134537Z",
+    "app_version": "2.5.130",
+    "git_sha": "39b7729",
+    "sizes": {
+      "servers": 12,
+      "inbounds_per_server": 30,
+      "clients_per_inbound": 50,
+      "transactions": 5000,
+      "payments": 3000,
+      "bank_cards": 10,
+      "ownerships": 4000,
+      "packages": 30
+    },
+    "gzip_available_in_process": false
+  }
+}

@@ -80,7 +80,7 @@ except ModuleNotFoundError:
     else:
         raise
 from datetime import datetime, timedelta, timezone
-from functools import wraps
+from functools import lru_cache, wraps
 import copy
 try:
     from zoneinfo import ZoneInfo, available_timezones
@@ -113,7 +113,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.131"
+APP_VERSION = "2.5.132"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -720,6 +720,57 @@ else:
         app.logger.warning('flask-compress not installed; HTTP responses will not be gzipped (large /api/refresh payloads stay uncompressed).')
     except Exception:
         pass
+def _env_int_or(name, default):
+    """Non-negative integer from the environment, falling back to the default."""
+    raw = (os.environ.get(name) or '').strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return int(default)
+    return value if value >= 0 else int(default)
+
+
+# --- Static asset delivery -------------------------------------------------
+# Without a version, a browser must revalidate every stylesheet and script on
+# every page load, and asking for a long max-age instead would keep a stale file
+# after an upgrade. Templates keep calling url_for('static', ...); the defaults
+# hook below appends a content-derived ?v=, which lets the response be cached
+# immutably and changes whenever the file changes.
+STATIC_IMMUTABLE_SECONDS = _env_int_or('EVE_STATIC_IMMUTABLE_SECONDS', 31536000)
+STATIC_LONG_LIVED_SECONDS = _env_int_or('EVE_STATIC_LONG_LIVED_SECONDS', 604800)
+_VERSIONED_STATIC_SUFFIXES = (
+    '.css', '.js', '.mjs', '.map', '.svg', '.json', '.webmanifest',
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.avif',
+)
+_LONG_LIVED_STATIC_SUFFIXES = (
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.avif', '.svg',
+)
+
+
+@lru_cache(maxsize=512)
+def _static_asset_version(filename: str):
+    """mtime+size fingerprint for one static file (None when it is missing)."""
+    try:
+        stat = os.stat(os.path.join(app.static_folder or '', filename or ''))
+    except OSError:
+        return None
+    return '%x%x' % (int(stat.st_mtime), stat.st_size)
+
+
+@app.url_defaults
+def _versioned_static_url(endpoint, values):
+    if endpoint != 'static' or 'v' in values:
+        return
+    filename = values.get('filename')
+    if not filename:
+        return
+    version = _static_asset_version(filename)
+    if version:
+        values['v'] = version
+
+
 # Trust one proxy hop (nginx SSL termination) so Flask sees correct scheme/host.
 # TrustedProxyMiddleware runs first: it records the real client address and drops
 # forwarded headers entirely when the direct peer is not an allowed proxy, so a
@@ -1022,6 +1073,35 @@ def add_security_headers(response):
             directives.append('upgrade-insecure-requests')
         response.headers.setdefault('Content-Security-Policy', '; '.join(directives))
     return response
+
+
+@app.after_request
+def add_static_cache_headers(response):
+    """Cache fingerprinted static assets; keep unversioned CSS/JS revalidating.
+
+    A versioned URL is immutable by construction (the version is mtime+size), so
+    it can be cached for a year. Fonts and images requested without a version
+    (e.g. the relative URLs inside fonts.css) are content-stable and get a week;
+    CSS/JS without a version keep Flask's revalidation policy so an upgrade is
+    picked up on the next page load.
+    """
+    try:
+        if request.endpoint != 'static' or request.method != 'GET':
+            return response
+        if response.status_code not in (200, 304):
+            return response
+        suffix = os.path.splitext(request.path or '')[1].lower()
+        if request.args.get('v') and suffix in _VERSIONED_STATIC_SUFFIXES:
+            response.headers['Cache-Control'] = (
+                'public, max-age=%d, immutable' % STATIC_IMMUTABLE_SECONDS)
+        elif suffix in _LONG_LIVED_STATIC_SUFFIXES:
+            response.headers['Cache-Control'] = (
+                'public, max-age=%d' % STATIC_LONG_LIVED_SECONDS)
+    except Exception:
+        pass
+    return response
+
+
 # Pool policy lives in panel/core/db_pool.py: dialected defaults, environment
 # overrides and an audit of the expected worker demand (workers x pool+overflow).
 from panel.core.db_pool import audit as _db_pool_audit

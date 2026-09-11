@@ -1,0 +1,112 @@
+{
+  "html_login": {
+    "path": "/login",
+    "status": 200,
+    "content_type": "text/html",
+    "html_bytes": 12053,
+    "gzip_bytes": 2948,
+    "cache_control": null,
+    "assets": [
+      {
+        "path": "/static/fonts/fonts.css?v=6a59abec66d",
+        "status": 200,
+        "bytes": 1645,
+        "cache_control": "public, max-age=31536000, immutable",
+        "etag": true,
+        "versioned": true
+      }
+    ],
+    "asset_count": 1,
+    "asset_bytes": 1645,
+    "total_bytes": 13698,
+    "immutable_assets": 1,
+    "unversioned_assets": 0
+  },
+  "html_dashboard": {
+    "path": "/",
+    "status": 200,
+    "content_type": "text/html",
+    "html_bytes": 503976,
+    "gzip_bytes": 100585,
+    "cache_control": "private, no-store, no-cache, must-revalidate, max-age=0",
+    "assets": [
+      {
+        "path": "/static/fonts/fonts.css?v=6a59abec66d",
+        "status": 200,
+        "bytes": 1645,
+        "cache_control": "public, max-age=31536000, immutable",
+        "etag": true,
+        "versioned": true
+      },
+      {
+        "path": "/static/style.css?v=6a9fd5d021813",
+        "status": 200,
+        "bytes": 137235,
+        "cache_control": "public, max-age=31536000, immutable",
+        "etag": true,
+        "versioned": true
+      },
+      {
+        "path": "/static/jquery-3.6.0.min.js?v=6a59abec15d9f",
+        "status": 200,
+        "bytes": 89503,
+        "cache_control": "public, max-age=31536000, immutable",
+        "etag": true,
+        "versioned": true
+      },
+      {
+        "path": "/static/persian-date.min.js?v=6a59abec9063",
+        "status": 200,
+        "bytes": 36963,
+        "cache_control": "public, max-age=31536000, immutable",
+        "etag": true,
+        "versioned": true
+      },
+      {
+        "path": "/static/jalalidatepicker.min.css?v=6a59abec1f2c",
+        "status": 200,
+        "bytes": 7980,
+        "cache_control": "public, max-age=31536000, immutable",
+        "etag": true,
+        "versioned": true
+      },
+      {
+        "path": "/static/jalalidatepicker.min.js?v=6a59abec4d9c",
+        "status": 200,
+        "bytes": 19868,
+        "cache_control": "public, max-age=31536000, immutable",
+        "etag": true,
+        "versioned": true
+      }
+    ],
+    "asset_count": 6,
+    "asset_bytes": 293194,
+    "total_bytes": 797170,
+    "immutable_assets": 6,
+    "unversioned_assets": 0
+  },
+  "api_refresh": {
+    "path": "/api/refresh",
+    "status": 200,
+    "content_type": "application/json",
+    "html_bytes": 8231586,
+    "gzip_bytes": 770309,
+    "cache_control": "private, no-store, no-cache, must-revalidate, max-age=0"
+  },
+  "meta": {
+    "generated_at": "2026-09-11T20:24:44.398564Z",
+    "app_version": "2.5.132",
+    "git_sha": "87f4cac",
+    "sizes": {
+      "servers": 12,
+      "inbounds_per_server": 30,
+      "clients_per_inbound": 50,
+      "transactions": 5000,
+      "payments": 3000,
+      "bank_cards": 10,
+      "ownerships": 4000,
+      "packages": 30
+    },
+    "gzip_available_in_process": false
+  }
+}
