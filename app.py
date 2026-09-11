@@ -104,7 +104,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, quote, urlencode, unquote
 from jdatetime import datetime as jdatetime_class
-from sqlalchemy import or_, and_, func, text, inspect, case, update
+from sqlalchemy import or_, and_, func, text, inspect, case, event, update
 from sqlalchemy.exc import (
     DisconnectionError,
     IntegrityError,
@@ -113,7 +113,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.129"
+APP_VERSION = "2.5.130"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -1238,27 +1238,88 @@ def _normalize_timezone_name(value: str | None) -> str | None:
     return None
 
 
+# SystemSetting values (calendar, timezone, expiry thresholds) are read through
+# db.session.get() on the hot path -- once per rendered row. SQLAlchemy's identity
+# map only holds instances weakly, so the loaded row is collected as soon as the
+# helper returns and the next call re-SELECTs it; a 20-row list used to issue 40
+# needless SELECTs. This per-session memo keeps one strong reference per key for
+# the session lifetime (one request, or one background job cycle). Any commit or
+# rollback clears it so a setting written in the same request is visible at once.
+SETTINGS_MEMO_KEY = 'eve_system_setting_memo'
+
+
+def _current_db_session():
+    """The real Session behind db.session (the scoped_session proxy does not
+    forward attributes such as .info or .expire_on_commit)."""
+    session = db.session
+    return session() if callable(session) else session
+
+
+def _settings_memo():
+    try:
+        info = _current_db_session().info
+    except Exception:  # no session (e.g. bare tooling) -- no memo, stay correct
+        return None
+    memo = info.get(SETTINGS_MEMO_KEY)
+    if memo is None:
+        memo = {}
+        info[SETTINGS_MEMO_KEY] = memo
+    return memo
+
+
+def _clear_settings_memo(*_args, **_kwargs):
+    try:
+        _current_db_session().info.pop(SETTINGS_MEMO_KEY, None)
+    except Exception:
+        pass
+
+
+event.listen(db.session, 'after_commit', _clear_settings_memo)
+event.listen(db.session, 'after_rollback', _clear_settings_memo)
+
+
 def _get_or_create_system_setting(key: str, default_value: str | None = None) -> str | None:
     """Fetch a SystemSetting value; optionally create with default if missing.
 
     Keep this safe for request-time usage; only writes when the row is missing.
+    Reads are memoized per session (see SETTINGS_MEMO_KEY) because the identity
+    map is weak and this helper is called per rendered row.
     """
+    memo = _settings_memo()
+    if memo is not None and key in memo:
+        return memo[key]
     setting = db.session.get(SystemSetting, key)
     if setting:
+        if memo is not None:
+            memo[key] = setting.value
         return setting.value
     if default_value is None:
         return None
+    value = str(default_value)
+    session = _current_db_session()
+    previous_expire = session.expire_on_commit
     try:
-        setting = SystemSetting(key=key, value=str(default_value))
-        db.session.add(setting)
-        db.session.commit()
+        # Creating a missing default used to expire every object in the session,
+        # so the first render after an upgrade re-SELECTed every row it had just
+        # loaded. This commit inserts one row and changes nothing else, so it is
+        # safe not to expire the rest of the session.
+        session.expire_on_commit = False
+        session.add(SystemSetting(key=key, value=value))
+        session.commit()
     except Exception:
         # Don't fail the request if we can't persist the default.
         try:
-            db.session.rollback()
+            session.rollback()
         except Exception:
             pass
-    return str(default_value)
+    finally:
+        session.expire_on_commit = previous_expire
+    # Re-read the memo: the commit above cleared it, so the dict captured at the
+    # start of this call is no longer the one stored on the session.
+    memo = _settings_memo()
+    if memo is not None:
+        memo[key] = value
+    return value
 
 
 # Conditional template blocks: {if_<name>}...{/if_<name>}

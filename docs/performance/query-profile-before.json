@@ -1,0 +1,161 @@
+{
+  "generated_at": "2026-09-11T19:28:23.740186Z",
+  "app_version": "2.5.129",
+  "git_sha": "74b8ad5",
+  "sizes": {
+    "servers": 12,
+    "inbounds_per_server": 30,
+    "clients_per_inbound": 50,
+    "transactions": 5000,
+    "payments": 3000,
+    "bank_cards": 10,
+    "ownerships": 4000,
+    "packages": 30
+  },
+  "database_url_scheme": "sqlite",
+  "scenarios": {
+    "html_login": {
+      "description": "public login page render",
+      "status": 200,
+      "sql_statements": 5,
+      "repeated": [
+        {
+          "count": 3,
+          "statement": "SELECT system_settings.\"key\" AS system_settings_key, system_settings.value AS system_settings_value FROM system_settings WHERE system_settings.\"key\" = ?"
+        }
+      ]
+    },
+    "html_dashboard": {
+      "description": "dashboard render with a populated snapshot",
+      "status": 200,
+      "sql_statements": 11,
+      "repeated": [
+        {
+          "count": 3,
+          "statement": "SELECT system_configs.\"key\" AS system_configs_key, system_configs.value AS system_configs_value FROM system_configs WHERE system_configs.\"key\" = ?"
+        },
+        {
+          "count": 3,
+          "statement": "SELECT system_settings.\"key\" AS system_settings_key, system_settings.value AS system_settings_value FROM system_settings WHERE system_settings.\"key\" = ?"
+        }
+      ]
+    },
+    "api_permissions": {
+      "description": "trivial authenticated API",
+      "status": 200,
+      "sql_statements": 3,
+      "repeated": [
+        {
+          "count": 2,
+          "statement": "SELECT admin_permissions.id AS admin_permissions_id, admin_permissions.admin_id AS admin_permissions_admin_id, admin_permissions.permission AS admin_permissions"
+        }
+      ]
+    },
+    "api_refresh_superadmin": {
+      "description": "serialize the shared snapshot",
+      "status": 200,
+      "sql_statements": 1,
+      "repeated": []
+    },
+    "api_refresh_superadmin_unchanged": {
+      "description": "poll a known revision (delta sync)",
+      "status": 200,
+      "sql_statements": 1,
+      "repeated": []
+    },
+    "api_refresh_superadmin_delta": {
+      "description": "one changed inbound since the known revision",
+      "status": 200,
+      "sql_statements": 1,
+      "repeated": []
+    },
+    "snapshot_delta_sync_hinted": {
+      "description": "re-hash one server block after a change (no HTTP)",
+      "status": 200,
+      "sql_statements": 0,
+      "repeated": []
+    },
+    "snapshot_delta_sync_unhinted": {
+      "description": "re-hash the whole snapshot after a change (no HTTP)",
+      "status": 200,
+      "sql_statements": 0,
+      "repeated": []
+    },
+    "api_refresh_reseller": {
+      "description": "deepcopy + per-client filter for a reseller",
+      "status": 200,
+      "sql_statements": 3,
+      "repeated": []
+    },
+    "api_transactions_page": {
+      "description": "paginated transaction list",
+      "status": 200,
+      "sql_statements": 65,
+      "repeated": [
+        {
+          "count": 40,
+          "statement": "SELECT system_settings.\"key\" AS system_settings_key, system_settings.value AS system_settings_value FROM system_settings WHERE system_settings.\"key\" = ?"
+        },
+        {
+          "count": 11,
+          "statement": "SELECT servers.id AS servers_id, servers.name AS servers_name, servers.host AS servers_host, servers.username AS servers_username, servers.password AS servers_p"
+        },
+        {
+          "count": 10,
+          "statement": "SELECT bank_cards.id AS bank_cards_id, bank_cards.label AS bank_cards_label, bank_cards.bank_name AS bank_cards_bank_name, bank_cards.owner_name AS bank_cards_o"
+        }
+      ]
+    },
+    "api_transactions_search": {
+      "description": "filtered transaction list",
+      "status": 200,
+      "sql_statements": 66,
+      "repeated": [
+        {
+          "count": 40,
+          "statement": "SELECT system_settings.\"key\" AS system_settings_key, system_settings.value AS system_settings_value FROM system_settings WHERE system_settings.\"key\" = ?"
+        },
+        {
+          "count": 12,
+          "statement": "SELECT servers.id AS servers_id, servers.name AS servers_name, servers.host AS servers_host, servers.username AS servers_username, servers.password AS servers_p"
+        },
+        {
+          "count": 10,
+          "statement": "SELECT bank_cards.id AS bank_cards_id, bank_cards.label AS bank_cards_label, bank_cards.bank_name AS bank_cards_bank_name, bank_cards.owner_name AS bank_cards_o"
+        }
+      ]
+    },
+    "api_payments_page": {
+      "description": "payments + transactions page",
+      "status": 200,
+      "sql_statements": 86,
+      "repeated": [
+        {
+          "count": 80,
+          "statement": "SELECT system_settings.\"key\" AS system_settings_key, system_settings.value AS system_settings_value FROM system_settings WHERE system_settings.\"key\" = ?"
+        }
+      ]
+    },
+    "api_finance_stats": {
+      "description": "finance aggregates",
+      "status": 200,
+      "sql_statements": 16,
+      "repeated": [
+        {
+          "count": 8,
+          "statement": "SELECT coalesce(sum(transactions.amount), ?) AS coalesce_1 FROM transactions WHERE transactions.id IN (SELECT transactions.id FROM transactions WHERE transactio"
+        },
+        {
+          "count": 4,
+          "statement": "SELECT coalesce(sum(payments.amount), ?) AS coalesce_1 FROM payments WHERE payments.id IN (SELECT payments.id FROM payments WHERE payments.amount > ?) AND payme"
+        }
+      ]
+    },
+    "api_bank_cards": {
+      "description": "bank card list",
+      "status": 200,
+      "sql_statements": 2,
+      "repeated": []
+    }
+  }
+}

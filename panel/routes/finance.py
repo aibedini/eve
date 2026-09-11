@@ -157,7 +157,13 @@ def get_transactions():
     per_page = request.args.get('limit', 20, type=int)
     per_page = max(1, min(per_page, 100))
 
-    pagination = query.order_by(Transaction.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    # tx.to_dict() reads the admin, server and card relationships; without eager
+    # loading each row costs three extra SELECTs (20 rows -> 60 statements).
+    pagination = query.options(
+        joinedload(Transaction.admin),
+        joinedload(Transaction.card),
+        joinedload(Transaction.server),
+    ).order_by(Transaction.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
     transactions = pagination.items
 
     # Fallback logic for old transactions (missing server_id)
@@ -544,6 +550,7 @@ def get_payments():
         receipts_list = receipt_query.options(
             joinedload(ManualReceipt.admin),
             joinedload(ManualReceipt.card),
+            joinedload(ManualReceipt.reviewer),
         ).order_by(ManualReceipt.deposit_at.desc()).limit(fetch_limit).all()
 
     # Map payments
