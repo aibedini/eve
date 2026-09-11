@@ -126,6 +126,12 @@ def doctor_summary():
     }
 
     try:
+        from panel.core.db_pool import pool_summary
+        checks['db_pool'] = {'state': 'ok', **pool_summary(db.engine)}
+    except Exception as exc:
+        checks['db_pool'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.core.panel_limits import panel_metrics
         checks['panel_limits'] = {'state': 'ok', **panel_metrics()}
     except Exception as exc:

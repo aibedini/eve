@@ -1,0 +1,29 @@
+{
+  "iterations": 200,
+  "pool_size": 5,
+  "max_overflow": 5,
+  "pool_timeout": 10,
+  "pool_recycle": 1800,
+  "pooled_connects": 1,
+  "pooled_ms": 64.8,
+  "unpooled_connects": 200,
+  "unpooled_ms": 236.9,
+  "worker_demand": [
+    {
+      "workers": 1,
+      "expected_max_connections": 10
+    },
+    {
+      "workers": 2,
+      "expected_max_connections": 20
+    },
+    {
+      "workers": 4,
+      "expected_max_connections": 40
+    },
+    {
+      "workers": 8,
+      "expected_max_connections": 80
+    }
+  ]
+}

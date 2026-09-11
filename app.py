@@ -105,10 +105,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, quote, urlencode, unquote
 from jdatetime import datetime as jdatetime_class
 from sqlalchemy import or_, and_, func, text, inspect, case, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.125"
+APP_VERSION = "2.5.126"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -824,6 +824,24 @@ def too_many_requests(e):
     return e
 
 
+@app.errorhandler(SQLAlchemyTimeoutError)
+def database_pool_timeout(e):
+    """Pool exhaustion is backpressure, not a server bug: answer 503 + Retry-After."""
+    app.logger.warning('Database connection pool exhausted: %s', e)
+    retry_after = 2
+    if _want_json():
+        response = jsonify({
+            'success': False,
+            'error': 'Server is busy; please retry in a moment.',
+            'retry_after': retry_after,
+        })
+        response.headers['Retry-After'] = str(retry_after)
+        return response, 503
+    response = make_response('Server is busy; please retry in a moment.', 503)
+    response.headers['Retry-After'] = str(retry_after)
+    return response
+
+
 @app.errorhandler(500)
 def internal_server_error(e):
     app.logger.exception('Unhandled request error', exc_info=e)
@@ -980,13 +998,20 @@ def add_security_headers(response):
             directives.append('upgrade-insecure-requests')
         response.headers.setdefault('Content-Security-Policy', '; '.join(directives))
     return response
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_recycle': 1800,
-    'pool_pre_ping': True,
-    'pool_size': 15,
-    'max_overflow': 5,
-    'pool_timeout': 10,
-}
+# Pool policy lives in panel/core/db_pool.py: dialected defaults, environment
+# overrides and an audit of the expected worker demand (workers x pool+overflow).
+from panel.core.db_pool import audit as _db_pool_audit
+from panel.core.db_pool import engine_options as _db_pool_engine_options
+
+_pool_options = _db_pool_engine_options(db_url)
+try:
+    _db_pool_audit_info = _db_pool_audit(db_url, options=_pool_options)
+    app.logger.info('Database pool: %s', _db_pool_audit_info)
+    if _db_pool_audit_info.get('warning'):
+        app.logger.warning('%s', _db_pool_audit_info['warning'])
+except Exception:
+    _db_pool_audit_info = {}
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = _pool_options
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 app.config.update(
