@@ -1,0 +1,141 @@
+{
+  "generated_at": "2026-09-11T14:36:57.170777Z",
+  "app_version": "2.5.120",
+  "git_sha": "2ba12b8",
+  "python": "3.11.6",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "repeat": 7,
+  "warmup": 2,
+  "sizes": {
+    "servers": 12,
+    "inbounds_per_server": 30,
+    "clients_per_inbound": 50,
+    "transactions": 5000,
+    "payments": 3000,
+    "bank_cards": 10,
+    "ownerships": 4000,
+    "packages": 30
+  },
+  "scenarios": {
+    "html_login": {
+      "description": "public login page render",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 16.871,
+      "p50_ms": 16.575,
+      "p95_ms": 19.183,
+      "min_ms": 15.406,
+      "max_ms": 19.183,
+      "response_bytes": 12039,
+      "sql_statements": 5
+    },
+    "html_dashboard": {
+      "description": "dashboard render with a populated snapshot",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 34.258,
+      "p50_ms": 34.539,
+      "p95_ms": 35.807,
+      "min_ms": 32.346,
+      "max_ms": 35.807,
+      "response_bytes": 524007,
+      "sql_statements": 11
+    },
+    "api_permissions": {
+      "description": "trivial authenticated API",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 10.853,
+      "p50_ms": 10.543,
+      "p95_ms": 12.346,
+      "min_ms": 9.546,
+      "max_ms": 12.346,
+      "response_bytes": 313,
+      "sql_statements": 3
+    },
+    "api_refresh_superadmin": {
+      "description": "serialize the shared snapshot",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 539.888,
+      "p50_ms": 538.56,
+      "p95_ms": 559.291,
+      "min_ms": 513.579,
+      "max_ms": 559.291,
+      "response_bytes": 8231471,
+      "sql_statements": 1
+    },
+    "api_refresh_reseller": {
+      "description": "deepcopy + per-client filter for a reseller",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 2085.041,
+      "p50_ms": 2040.471,
+      "p95_ms": 2373.869,
+      "min_ms": 1841.837,
+      "max_ms": 2373.869,
+      "response_bytes": 162515,
+      "sql_statements": 3
+    },
+    "api_transactions_page": {
+      "description": "paginated transaction list",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 226.495,
+      "p50_ms": 225.32,
+      "p95_ms": 234.751,
+      "min_ms": 219.243,
+      "max_ms": 234.751,
+      "response_bytes": 10556,
+      "sql_statements": 65
+    },
+    "api_transactions_search": {
+      "description": "filtered transaction list",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 296.63,
+      "p50_ms": 293.406,
+      "p95_ms": 319.06,
+      "min_ms": 289.087,
+      "max_ms": 319.06,
+      "response_bytes": 10609,
+      "sql_statements": 66
+    },
+    "api_payments_page": {
+      "description": "payments + transactions page",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 381.354,
+      "p50_ms": 380.655,
+      "p95_ms": 391.408,
+      "min_ms": 369.55,
+      "max_ms": 391.408,
+      "response_bytes": 9766,
+      "sql_statements": 86
+    },
+    "api_finance_stats": {
+      "description": "finance aggregates",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 148.168,
+      "p50_ms": 148.336,
+      "p95_ms": 168.009,
+      "min_ms": 133.079,
+      "max_ms": 168.009,
+      "response_bytes": 542,
+      "sql_statements": 16
+    },
+    "api_bank_cards": {
+      "description": "bank card list",
+      "status": 200,
+      "repeat": 7,
+      "mean_ms": 6.813,
+      "p50_ms": 7.02,
+      "p95_ms": 8.63,
+      "min_ms": 4.872,
+      "max_ms": 8.63,
+      "response_bytes": 2988,
+      "sql_statements": 2
+    }
+  }
+}
