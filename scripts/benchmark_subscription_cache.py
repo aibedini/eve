@@ -94,12 +94,20 @@ def _measure_locked(requests, keys, delay, stampede, ttl):
     lock = threading.Lock()
 
     def burst():
+        # Model the real caller: check the cache before claiming the render. A
+        # thread that starts after the leader finished must reuse the stored
+        # value instead of rendering a second copy.
+        if subscription_cache.get(stampede_key) is not None:
+            return
         if subscription_cache.begin(stampede_key):
             try:
-                value = _panel_read(stampede_key, delay)
-                with lock:
-                    renders['count'] += 1
-                subscription_cache.set(stampede_key, value, ttl=ttl, variant='fast')
+                # Re-check after claiming the render: another caller may have
+                # filled the key between our get() and begin().
+                if subscription_cache.get(stampede_key) is None:
+                    value = _panel_read(stampede_key, delay)
+                    with lock:
+                        renders['count'] += 1
+                    subscription_cache.set(stampede_key, value, ttl=ttl, variant='fast')
             finally:
                 subscription_cache.end(stampede_key)
             return
