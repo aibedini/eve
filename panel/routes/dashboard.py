@@ -1,10 +1,12 @@
 """Dashboard data API routes (extracted from app.py)."""
 import copy
+import json
 import os
+import threading
 import time
 from datetime import datetime
 
-from flask import Blueprint, jsonify, make_response, request, session
+from flask import Blueprint, Response, jsonify, make_response, request, session, stream_with_context
 
 from panel.core import snapshot_delta
 from panel.extensions import db, limiter
@@ -12,6 +14,62 @@ from panel.models import Admin, ClientOwnership, Server
 from panel.routes.common import login_required
 
 bp = Blueprint('dashboard', __name__)
+
+SSE_ENABLED_ENV = 'EVE_SSE_ENABLED'
+SSE_MAX_STREAMS_ENV = 'EVE_SSE_MAX_STREAMS'
+SSE_MAX_SECONDS_ENV = 'EVE_SSE_MAX_SECONDS'
+SSE_TICK_ENV = 'EVE_SSE_TICK_SECONDS'
+SSE_HEARTBEAT_ENV = 'EVE_SSE_HEARTBEAT_SECONDS'
+
+_stream_state = {'active': 0}
+_stream_lock = threading.Lock()
+
+
+def _env_flag(name) -> bool:
+    return (os.environ.get(name) or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _env_number(name, default, minimum):
+    raw = (os.environ.get(name) or '').strip()
+    try:
+        return max(minimum, float(raw)) if raw else default
+    except ValueError:
+        return default
+
+
+def sse_enabled() -> bool:
+    """Live updates are opt-in: every stream holds a worker thread until it ends."""
+    return _env_flag(SSE_ENABLED_ENV)
+
+
+def sse_limits() -> dict:
+    return {
+        'enabled': sse_enabled(),
+        'max_streams': int(_env_number(SSE_MAX_STREAMS_ENV, 8, 1)),
+        'max_seconds': int(_env_number(SSE_MAX_SECONDS_ENV, 120, 1)),
+        'tick_seconds': _env_number(SSE_TICK_ENV, 1.0, 0.01),
+        'heartbeat_seconds': _env_number(SSE_HEARTBEAT_ENV, 20.0, 0.05),
+    }
+
+
+def _stream_slot_available(limit) -> bool:
+    with _stream_lock:
+        return _stream_state['active'] < limit
+
+
+def _acquire_stream_slot() -> None:
+    with _stream_lock:
+        _stream_state['active'] += 1
+
+
+def _release_stream_slot() -> None:
+    with _stream_lock:
+        _stream_state['active'] = max(0, _stream_state['active'] - 1)
+
+
+def sse_event(event, payload) -> str:
+    return 'event: %s' % event + '\n' + 'data: %s' % json.dumps(
+        payload, ensure_ascii=False, default=str) + '\n\n'
 
 
 def _request_since():
@@ -23,6 +81,84 @@ def _request_since():
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+@bp.route('/api/refresh/stream')
+@login_required
+def api_refresh_stream():
+    """Server-sent events: tell the client the moment the snapshot changes.
+
+    The stream carries only a nudge (event "changed"); the client then calls
+    /api/refresh with its revision, so the delta/full decision and the merge stay
+    in one place. Off unless EVE_SSE_ENABLED=1, because with gunicorn sync workers
+    every open stream occupies a thread until EVE_SSE_MAX_SECONDS, and EVE_SSE_MAX_STREAMS
+    bounds how many this process will hold.
+    """
+    from app import GLOBAL_SERVER_DATA, load_snapshot_from_redis  # deferred: app state
+
+    if not sse_enabled():
+        return jsonify({'success': False, 'error': 'Live updates are disabled'}), 404
+
+    limits = sse_limits()
+    if not _stream_slot_available(limits['max_streams']):
+        return jsonify({
+            'success': False,
+            'error': 'Too many live update streams; falling back to polling',
+        }), 503
+
+    since = _request_since()
+    _acquire_stream_slot()
+
+    def generate():
+        client_revision = since
+        deadline = time.monotonic() + limits['max_seconds']
+        try:
+            yield 'retry: 3000' + '\n\n'
+            yield sse_event('hello', {
+                'revision': snapshot_delta.current_revision(GLOBAL_SERVER_DATA),
+                'last_update': GLOBAL_SERVER_DATA.get('last_update'),
+                'tick_seconds': limits['tick_seconds'],
+                'max_seconds': limits['max_seconds'],
+            })
+            if client_revision is None:
+                # A client without a revision bootstraps over HTTP; start the
+                # stream at "now" so connecting does not trigger a redundant fetch.
+                client_revision = snapshot_delta.current_revision(GLOBAL_SERVER_DATA)
+            last_heartbeat = time.monotonic()
+            ticks_since_hydrate = 0
+            while time.monotonic() < deadline:
+                ticks_since_hydrate += 1
+                if ticks_since_hydrate >= 5:
+                    # Multi-worker: pick up a snapshot another worker published, so
+                    # this stream does not miss external changes.
+                    ticks_since_hydrate = 0
+                    try:
+                        load_snapshot_from_redis()
+                    except Exception:
+                        pass
+                sync = snapshot_delta.build_sync(GLOBAL_SERVER_DATA, client_revision)
+                if sync['mode'] == 'unchanged':
+                    if (time.monotonic() - last_heartbeat) >= limits['heartbeat_seconds']:
+                        yield ': keep-alive' + '\n\n'
+                        last_heartbeat = time.monotonic()
+                else:
+                    client_revision = sync['revision']
+                    yield sse_event('changed', {
+                        'mode': sync['mode'],
+                        'revision': sync['revision'],
+                        'last_update': sync.get('last_update'),
+                    })
+                    last_heartbeat = time.monotonic()
+                time.sleep(limits['tick_seconds'])
+            yield sse_event('bye', {'reason': 'max_lifetime'})
+        finally:
+            _release_stream_slot()
+
+    response = Response(stream_with_context(generate()), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['X-Accel-Buffering'] = 'no'   # nginx must not buffer the stream
+    response.headers['Connection'] = 'keep-alive'
+    return response
 
 
 @bp.route('/api/refresh')

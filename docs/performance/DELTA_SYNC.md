@@ -79,6 +79,11 @@ counts show no regression in the comparison against `baseline-2.5.120.json`.
 - A client that never sends `since` (older dashboards, third-party callers) keeps
   the old cost.
 
+## Live updates
+
+Phase 12 adds an opt-in SSE stream that nudges the client as soon as the revision
+moves, so an idle dashboard stops polling entirely. See `SSE.md`.
+
 ## Tests
 
 `tests/test_snapshot_delta.py`: revision/full/delta/unchanged decisions, removed

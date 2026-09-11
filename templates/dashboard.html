@@ -2340,6 +2340,7 @@
             refreshData(true, { mode: 'full', poll: true }).finally(() => {
                 hideLoading();
                 prefetchAllLastUsers();
+                startLiveUpdates();
             });
         });
         const globalSearchInput = document.getElementById('global-search-input');
@@ -2398,11 +2399,46 @@
         }
     }
 
+    const SSE_ENABLED = {{ (sse_enabled|default(false))|tojson }};
+    let liveUpdates = null;
+
+    // Live updates: the server pushes a "changed" nudge, the HTTP path does the
+    // delta/full decision and the merge. Only available when the operator turned
+    // EVE_SSE_ENABLED on; otherwise the auto-refresh interval is the only source.
+    function startLiveUpdates() {
+        if (!SSE_ENABLED || typeof window.EventSource === 'undefined' || liveUpdates) return;
+        try {
+            const streamUrl = (snapshotRevision === null)
+                ? '/api/refresh/stream'
+                : '/api/refresh/stream?since=' + encodeURIComponent(snapshotRevision);
+            liveUpdates = new EventSource(streamUrl);
+        } catch (error) {
+            liveUpdates = null;
+            return;
+        }
+        liveUpdates.addEventListener('changed', function () {
+            refreshData(true, { mode: 'cache', poll: false });
+        });
+        liveUpdates.onerror = function () {
+            // EventSource reconnects on its own; the polling interval stays as a
+            // safety net when the operator enabled it.
+        };
+    }
+
+    function stopLiveUpdates() {
+        if (liveUpdates) {
+            liveUpdates.close();
+            liveUpdates = null;
+        }
+    }
+
     function startAutoRefresh() {
         stopAutoRefresh();
         const interval = parseInt(document.getElementById('refresh-interval').value) * 1000;
+        // With live updates the interval is only a safety net, so keep it slow.
+        const effective = SSE_ENABLED ? Math.max(interval, 30000) : interval;
         // Auto refresh should be lightweight: fetch cached payload only.
-        autoRefreshInterval = setInterval(() => refreshData(true, { mode: 'cache', poll: false }), interval);
+        autoRefreshInterval = setInterval(() => refreshData(true, { mode: 'cache', poll: false }), effective);
     }
 
     function stopAutoRefresh() {

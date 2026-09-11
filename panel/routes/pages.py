@@ -40,6 +40,8 @@ def dashboard():
     # Get active bank cards for payment forms
     bank_cards = BankCard.query.filter_by(is_active=True).all()
 
+    from panel.routes.dashboard import sse_enabled  # deferred: avoids an import cycle
+
     return render_template('dashboard.html',
                          servers=servers,
                          server_count=len(servers),
@@ -51,7 +53,8 @@ def dashboard():
                          base_cost_day=user_cost_day,
                          base_cost_gb=user_cost_gb,
                          base_cost_day_unlimited=user_cost_day_unlimited,
-                         bank_cards=bank_cards)
+                         bank_cards=bank_cards,
+                         sse_enabled=sse_enabled())
 
 @bp.route('/servers')
 @login_required
