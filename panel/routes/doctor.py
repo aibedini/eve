@@ -179,6 +179,14 @@ def doctor_summary():
         checks['panel_limits'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.core import http_metrics
+        metrics = http_metrics.snapshot(limit=10)
+        state = 'warning' if (metrics.get('error_rate') or 0) > 0.05 else 'ok'
+        checks['http_metrics'] = {'state': state, **metrics}
+    except Exception as exc:
+        checks['http_metrics'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.jobs.schedulers import worker_inventory
         info = worker_inventory()
         failed = sorted(

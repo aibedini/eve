@@ -113,7 +113,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.137"
+APP_VERSION = "2.5.138"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -678,10 +678,29 @@ def _maybe_migrate_server_passwords() -> None:
                 pass
 
 
+# --- Request correlation ---------------------------------------------------
+# Every response carries X-Request-ID so an operator can match a user report to
+# the server log line, and the metrics hook below can attribute the request to
+# an endpoint. An inbound id is only honoured when it is a short safe token, so
+# a crafted header cannot reach the logs or the response verbatim.
+from panel.core import http_metrics  # noqa: E402
+
+_REQUEST_ID_SAFE = re.compile(r'[^A-Za-z0-9._:-]+')
+
+
+def _request_id_from(value, fallback):
+    text = str(value or '').strip()[:64]
+    text = _REQUEST_ID_SAFE.sub('', text)
+    return text or fallback
+
+
 def _security_per_request_setup():
     # CSP nonce for inline <script> blocks that cannot be moved yet.
     # Keep stable per request.
     g.csp_nonce = secrets.token_urlsafe(16)
+    g.request_id = _request_id_from(
+        request.headers.get('X-Request-ID'), secrets.token_hex(8))
+    g.request_started = time.perf_counter()
     _maybe_migrate_server_passwords()
 
     # Reject cross-site browser mutations for session-authenticated users.
@@ -880,9 +899,14 @@ def too_many_requests(e):
     return e
 
 
+def _request_id():
+    return getattr(g, 'request_id', None) or '-'
+
+
 def _service_unavailable(message, retry_after=2):
     """503 + Retry-After in whatever shape the caller understands."""
-    payload = {'success': False, 'error': message, 'retry_after': retry_after}
+    payload = {'success': False, 'error': message, 'retry_after': retry_after,
+               'request_id': _request_id()}
     response = make_response(jsonify(payload) if _want_json() else message, 503)
     response.headers['Retry-After'] = str(retry_after)
     return response
@@ -919,9 +943,11 @@ def database_connection_error(e):
 
 @app.errorhandler(500)
 def internal_server_error(e):
-    app.logger.exception('Unhandled request error', exc_info=e)
+    app.logger.exception('Unhandled request error [request_id=%s]', _request_id(),
+                         exc_info=e)
     if _want_json():
-        return jsonify({'success': False, 'error': 'Internal server error.'}), 500
+        return jsonify({'success': False, 'error': 'Internal server error.',
+                        'request_id': _request_id()}), 500
     return e
 
 
@@ -1082,6 +1108,21 @@ def add_security_headers(response):
         if is_upload_path(request.path):
             for header, value in serve_policy(request.path).items():
                 response.headers[header] = value
+    except Exception:
+        pass
+
+    # Request correlation header and the metrics sample. Both run for every
+    # response (error handlers included), so the doctor snapshot sees the real
+    # mix of statuses, and a user-reported id can be found in the logs.
+    try:
+        response.headers.setdefault('X-Request-ID', _request_id())
+    except Exception:
+        pass
+    try:
+        started = getattr(g, 'request_started', None)
+        duration_ms = ((time.perf_counter() - started) * 1000.0) if started else 0.0
+        http_metrics.observe(request.endpoint, request.method,
+                             response.status_code, duration_ms)
     except Exception:
         pass
     return response
