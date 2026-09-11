@@ -34,13 +34,23 @@ jobs:
           pip install "pytest>=8,<10"
       - name: Run focused unit tests
         run: |
-          pytest -q \
+          set +e
+          pytest -q --tb=short \
             tests/test_security_hardening.py \
             tests/test_wallet_ledger.py \
             tests/test_backup_policy.py \
             tests/test_ci_guards.py \
             tests/test_package_visibility.py \
-            tests/test_finance_filters.py
+            tests/test_finance_filters.py > pytest-unit.log 2>&1
+          status=$?
+          tail -n 40 pytest-unit.log
+          if [ "$status" -ne 0 ]; then
+            # Surface the tail as a check-run annotation so a collection error
+            # is diagnosable from the API even without admin log access.
+            summary=$(tail -n 25 pytest-unit.log | tr '\n' '|' | cut -c1-900)
+            echo "::error title=pytest failed ($status)::$summary"
+          fi
+          exit $status
 
   integration-tests:
     name: Integration tests
@@ -58,4 +68,13 @@ jobs:
           pip install --require-hashes -r requirements.lock
           pip install "pytest>=8,<10"
       - name: Run full test suite
-        run: pytest -q
+        run: |
+          set +e
+          pytest -q --tb=short > pytest-all.log 2>&1
+          status=$?
+          tail -n 40 pytest-all.log
+          if [ "$status" -ne 0 ]; then
+            summary=$(tail -n 25 pytest-all.log | tr '\n' '|' | cut -c1-900)
+            echo "::error title=pytest failed ($status)::$summary"
+          fi
+          exit $status
