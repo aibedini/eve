@@ -298,6 +298,21 @@ class RenewEnableTests(unittest.TestCase):
         self.assertTrue(payload['verify']['ok'], payload['verify'])
         self.assertEqual(payload['verify']['observed']['totalGB'], 35 * GB)
 
+        # 1b. Phase 2: the response carries the canonical state and revision, so the
+        # browser can patch its card and search index without waiting for a poll.
+        self.assertTrue(payload['mutation']['verified'], payload['mutation'])
+        self.assertEqual(payload['mutation']['operation'], 'renew')
+        state = payload['client_state']
+        self.assertIsNotNone(state, payload)
+        self.assertEqual(state['email'], 'bob')
+        self.assertEqual(state['uuid'], 'uuid-bob-1')
+        self.assertEqual(state['total_bytes'], 35 * GB)
+        self.assertEqual(state['used_up'], 25 * GB)
+        self.assertEqual(state['remaining_bytes'], 10 * GB)
+        self.assertTrue(state['enable'])
+        self.assertEqual(state['inbound_id'], 1)
+        self.assertIsNotNone(state['service_state'])
+
         # 2. The shared cache holds the new state immediately.
         cached = GLOBAL_SERVER_DATA['inbounds'][0]['clients'][0]
         self.assertEqual(cached['totalGB'], 35 * GB)
@@ -673,10 +688,12 @@ class RedisSnapshotRevisionTests(unittest.TestCase):
 
     def test_a_write_through_miss_is_reported_and_requests_a_targeted_repair(self):
         """The panel write is authoritative; a cache miss must converge, not stall."""
+        _revisions = iter([4])
         with (
             mock.patch.object(refresh_jobs, 'bump_server_revision', return_value=5),
-            # Read once before the bump and once for the report.
-            mock.patch.object(refresh_jobs, 'get_server_revision', side_effect=[4, 5]),
+            # 4 before the bump, then 5 afterwards (extra calls keep returning 5).
+            mock.patch.object(refresh_jobs, 'get_server_revision',
+                              side_effect=lambda *_: next(_revisions, 5)),
             mock.patch.object(refresh_jobs, 'enqueue_refresh_job') as repair,
             mock.patch.object(refresh_jobs, 'serialized_server_snapshot_write') as serialized,
             mock.patch.object(app_module, '_get_dashboard_status_thresholds', return_value={}),

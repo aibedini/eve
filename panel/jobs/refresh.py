@@ -49,6 +49,7 @@ from panel.core.redis_client import (
 )
 from panel.core.runtime_files import runtime_path
 from panel.security import outbound_tls_verify, panel_tls_verify
+from panel.services.client_state import ClientMutationResult, normalize_client_state
 from panel.extensions import db
 from panel.models import Admin, ClientOwnership, Server
 from panel.services.backup import _run_telegram_backup
@@ -2010,17 +2011,24 @@ def _iter_cached_client_copies(server_id, email, client_uuid=None):
 
 def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                         comment=None, total_gb_bytes=None, expiry_ts=None,
-                        enable=None, up=None, down=None, publish=True):
+                        enable=None, up=None, down=None, publish=True,
+                        operation=None, verified_state=None, inbound_id=None):
     """Write-through: update every cached copy of a client after a panel write.
 
-    Returns True when a cached row was updated. A miss is not a silent success:
-    the panel write is authoritative, so the caller gets ``False``, a structured
-    ``cache_patch=miss`` line is logged, and a targeted single-server refresh is
-    queued so the snapshot converges without waiting for the next cycle.
+    Returns a `ClientMutationResult` (truthy when a cached row was updated, so the
+    old boolean callers keep working). A miss is not a silent success: the caller
+    gets ``changed=False``, a structured ``cache_patch=miss`` line is logged, and a
+    targeted single-server refresh is queued so the snapshot converges.
+
+    Pass ``verified_state`` (the client object read back from the panel) when the
+    caller verified the write; the result then carries the canonical state even if
+    this worker's cache had no matching row.
     """
     from app import _get_dashboard_status_thresholds, _get_panel_ui_lang, app, format_bytes  # deferred: app-level helper, avoids circular import
     changed = False
+    operation = operation or ('rotate' if new_email else 'update')
     revision_before = get_server_revision(server_id) if publish else None
+    patched_row = None
     if publish:
         # The panel mutation is authoritative even if this worker's local cache
         # has no matching row.  Invalidate stale refreshes before best-effort RAM sync.
@@ -2053,6 +2061,7 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                     cd['down_formatted'] = format_bytes(int(down))
                 _recompute_cached_client(cd, thresholds, lang)
                 changed = True
+                patched_row = cd
             if changed:
                 _recompute_cached_server_stats(server_id)
                 snapshot_delta.mark_dirty(server_ids=[server_id])
@@ -2071,7 +2080,11 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             "patch_cached_client failed (server_id=%s, email=%s): %s",
             server_id, email, exc, exc_info=True,
         )
-        return False
+        return ClientMutationResult(
+            server_id=server_id, email=new_email or email, operation=operation,
+            client_id=client_uuid, verified=bool(verified_state), changed=False,
+            client_state=(verified_state if verified_state else None),
+        )
     if publish:
         _report_cache_patch(server_id, email, client_uuid, revision_before, changed)
         if not changed:
@@ -2080,7 +2093,18 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             # refresh cannot overwrite the panel write -- but the browser would keep
             # the old row until the next cycle. Repair just this server now.
             _request_targeted_cache_repair(server_id, email)
-    return changed
+    if patched_row is not None:
+        state = normalize_client_state(row=patched_row, inbound_id=inbound_id)
+    elif verified_state:
+        state = verified_state
+    else:
+        state = None
+    return ClientMutationResult(
+        server_id=server_id, email=new_email or email, operation=operation,
+        client_id=client_uuid, verified=bool(verified_state), changed=changed,
+        client_state=state,
+        server_revision=(get_server_revision(server_id) if publish else 0),
+    )
 
 
 def _report_cache_patch(server_id, email, client_uuid, revision_before, changed):

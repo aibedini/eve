@@ -30,6 +30,7 @@ from panel.services.client_operations import (
     begin_client_operation, complete_client_operation, fail_client_operation,
     install_client_operation_response_guard, mark_client_operation_applied,
 )
+from panel.services.client_state import verified_state_from_panel
 
 bp = Blueprint('clients', __name__)
 
@@ -1959,6 +1960,7 @@ def renew_client(server_id, inbound_id, email):
                                     thresholds=_get_dashboard_status_thresholds(),
                                     lang=_get_panel_ui_lang()
                                 )
+                                verify["observed"]["service_state"] = v_state.get('key')
                                 verify["observed"]["service_state_label"] = v_state.get('label')
                                 verify["observed"]["service_state_emoji"] = v_state.get('emoji')
                                 verify["observed"]["service_state_tag"] = v_state.get('tag')
@@ -2173,9 +2175,31 @@ def renew_client(server_id, inbound_id, email):
                 # Write through before cancelling stale warnings. A depletion worker
                 # may already have classified this account and must see the renewed
                 # state during its final pre-dispatch validation.
+                #
+                # The panel was read back above, so the canonical state travels with
+                # the write-through: the browser can patch the card and its search
+                # index from this response instead of waiting for a poll (Phase 3).
+                mutation = None
+                verified_state = None
+                if verify.get('ok'):
+                    _observed = verify.get('observed') or {}
+                    _verified_raw = dict(target_client or {})
+                    _verified_raw.update({
+                        'email': email,
+                        'enable': bool(_observed.get('enable', True)),
+                        'totalGB': int(_observed.get('totalGB') or 0),
+                        'expiryTime': int(_observed.get('expiryTime') or 0),
+                    })
+                    verified_state = verified_state_from_panel(
+                        _verified_raw,
+                        up=int(_observed.get('up') or 0),
+                        down=int(_observed.get('down') or 0),
+                        service_state=_observed.get('service_state'),
+                        inbound_id=inbound_id,
+                    )
                 cache_sync = False
                 try:
-                    cache_sync = patch_cached_client(
+                    mutation = patch_cached_client(
                         server_id, email,
                         client_uuid=str(target_client.get('id')) if target_client and target_client.get('id') else None,
                         total_gb_bytes=int(target_client.get('totalGB') or 0),
@@ -2183,7 +2207,11 @@ def renew_client(server_id, inbound_id, email):
                         enable=True,
                         comment=target_client.get('comment'),
                         up=(0 if reset_traffic else None),
-                        down=(0 if reset_traffic else None))
+                        down=(0 if reset_traffic else None),
+                        operation='renew',
+                        verified_state=verified_state,
+                        inbound_id=inbound_id)
+                    cache_sync = bool(mutation)
                 except Exception:
                     app.logger.warning(
                         "Renew cache sync failed (trace=%s, server_id=%s, email=%s)",
@@ -2236,6 +2264,12 @@ def renew_client(server_id, inbound_id, email):
                     "was_reactivated": _was_disabled,
                     "cache_sync": bool(cache_sync),
                 }
+                if mutation is not None:
+                    # The canonical post-mutation state (null when the panel was not
+                    # read back) plus the revision it landed at, for the browser.
+                    _mutation_payload = mutation.to_payload()
+                    completed_payload["mutation"] = _mutation_payload
+                    completed_payload["client_state"] = _mutation_payload["client_state"]
                 if user.role == 'reseller':
                     completed_payload['remaining_credit'] = user.credit
                 complete_client_operation(client_operation, completed_payload, transaction_record)
@@ -2808,16 +2842,26 @@ def verify_renew_client(server_id, inbound_id, email):
                                'partially_applied' if applied_count else 'not_applied')
 
         cache_sync = None
+        mutation = None
         if verify.get('ok'):
             try:
-                cache_sync = patch_cached_client(
+                mutation = patch_cached_client(
                     server_id, email,
                     client_uuid=str(v_client.get('id')) if v_client.get('id') else None,
                     total_gb_bytes=verify['observed']['totalGB'],
                     expiry_ts=verify['observed']['expiryTime'],
                     enable=verify['observed']['enable'],
                     comment=v_client.get('comment'),
+                    operation='verify',
+                    verified_state=verified_state_from_panel(
+                        v_client,
+                        up=int(verify['observed'].get('up') or 0),
+                        down=int(verify['observed'].get('down') or 0),
+                        service_state=verify['observed'].get('service_state'),
+                        inbound_id=inbound_id),
+                    inbound_id=inbound_id,
                 )
+                cache_sync = bool(mutation)
             except Exception:
                 cache_sync = False
                 app.logger.warning(
@@ -2825,8 +2869,11 @@ def verify_renew_client(server_id, inbound_id, email):
                     trace_id, server_id, email, exc_info=True,
                 )
 
-        payload = {'success': True, 'verify': verify, 'cache_sync': cache_sync,
+        payload = {'success': True, 'verify': verify, 'cache_sync': bool(cache_sync),
                    'timing': {'login_ms': login_ms, 'verify_fetch_ms': verify_fetch_ms}}
+        if mutation is not None:
+            payload['mutation'] = mutation.to_payload()
+            payload['client_state'] = payload['mutation']['client_state']
         if verify.get('ok') and completed_result:
             payload.update({
                 'copy_text': completed_result.get('copy_text') or '',
