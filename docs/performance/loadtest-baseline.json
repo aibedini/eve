@@ -1,0 +1,98 @@
+{
+  "generated_at": "2026-09-12T00:02:57.820904Z",
+  "app_version": "2.5.139",
+  "git_sha": "bfaea6e",
+  "python": "3.11.6",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "target": "in-process wsgi",
+  "target_rate": 50,
+  "duration_seconds": 10,
+  "workers": 8,
+  "dataset": {
+    "servers": 12,
+    "inbounds_per_server": 30,
+    "clients_per_inbound": 50,
+    "transactions": 5000,
+    "payments": 3000,
+    "bank_cards": 10,
+    "ownerships": 4000,
+    "packages": 30
+  },
+  "concurrency": {
+    "process_role": "combined",
+    "panel_concurrency": 12,
+    "refresh_workers": 5,
+    "fetch_wait_seconds": 10.0,
+    "db_pool": {
+      "dialect": "sqlite",
+      "pool_size": 5,
+      "max_overflow": 5,
+      "expected_max_connections": 10
+    }
+  },
+  "wall_seconds": 10.15,
+  "total_requests": 424,
+  "achieved_rps": 41.8,
+  "errors": 0,
+  "error_rate": 0.0,
+  "rejected": 0,
+  "rejected_rate": 0.0,
+  "scenarios": {
+    "html_login": {
+      "requests": 106,
+      "rps": 10.4,
+      "p50_ms": 14.54,
+      "p95_ms": 33.66,
+      "p99_ms": 229.61,
+      "mean_ms": 22.65,
+      "max_ms": 324.9,
+      "errors": 0,
+      "rejected": 0,
+      "status_counts": {
+        "200": 106
+      }
+    },
+    "api_refresh_delta": {
+      "requests": 106,
+      "rps": 10.4,
+      "p50_ms": 5.75,
+      "p95_ms": 15.79,
+      "p99_ms": 32.43,
+      "mean_ms": 7.62,
+      "max_ms": 102.71,
+      "errors": 0,
+      "rejected": 0,
+      "status_counts": {
+        "200": 106
+      }
+    },
+    "static_style": {
+      "requests": 106,
+      "rps": 10.4,
+      "p50_ms": 3.68,
+      "p95_ms": 1359.77,
+      "p99_ms": 1834.13,
+      "mean_ms": 124.05,
+      "max_ms": 1877.67,
+      "errors": 0,
+      "rejected": 0,
+      "status_counts": {
+        "200": 106
+      }
+    },
+    "api_permissions": {
+      "requests": 106,
+      "rps": 10.4,
+      "p50_ms": 8.47,
+      "p95_ms": 20.04,
+      "p99_ms": 78.99,
+      "mean_ms": 11.92,
+      "max_ms": 142.43,
+      "errors": 0,
+      "rejected": 0,
+      "status_counts": {
+        "200": 106
+      }
+    }
+  }
+}
