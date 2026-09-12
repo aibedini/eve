@@ -8,7 +8,7 @@ from datetime import datetime
 
 from flask import Blueprint, Response, jsonify, make_response, request, session, stream_with_context
 
-from panel.core import refresh_policy, snapshot_delta
+from panel.core import client_events, refresh_policy, snapshot_delta
 from panel.extensions import db, limiter
 from panel.models import Admin, ClientOwnership, Server
 from panel.routes.common import login_required
@@ -111,6 +111,9 @@ def api_refresh_stream():
 
     def generate():
         client_revision = since
+        # Client-level events are tracked separately: they must be replayed even when
+        # the viewer's snapshot revision already moved past them.
+        previous_revision = client_revision if client_revision is not None else 0
         deadline = time.monotonic() + limits['max_seconds']
         try:
             yield 'retry: 3000' + '\n\n'
@@ -140,6 +143,14 @@ def api_refresh_stream():
                     except Exception:
                         pass
                 sync = snapshot_delta.build_sync(GLOBAL_SERVER_DATA, client_revision)
+                # Phase 9: hand over the individual clients that moved, with their
+                # verified state, so a second tab can patch one card instead of fetching
+                # a delta. Drained on every tick (a client event can land while the
+                # snapshot itself looks unchanged), and the revision nudge below stays
+                # the fallback for anything without a state.
+                for event in client_events.since(previous_revision):
+                    yield sse_event('client.changed', event)
+                    last_heartbeat = time.monotonic()
                 if sync['mode'] == 'unchanged':
                     if (time.monotonic() - last_heartbeat) >= limits['heartbeat_seconds']:
                         yield ': keep-alive' + '\n\n'
@@ -152,6 +163,8 @@ def api_refresh_stream():
                         'last_update': sync.get('last_update'),
                     })
                     last_heartbeat = time.monotonic()
+                if client_revision and client_revision > previous_revision:
+                    previous_revision = client_revision
                 time.sleep(limits['tick_seconds'])
             yield sse_event('bye', {'reason': 'max_lifetime'})
         finally:

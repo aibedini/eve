@@ -2399,6 +2399,31 @@
         liveUpdates.addEventListener('changed', function () {
             refreshData(true, { mode: 'cache', poll: false });
         });
+        // Phase 9 fast path: the stream names the client that moved and carries its
+        // verified state, so this tab patches one card and does not wait for the nudge
+        // to fetch a delta. Without a state (an unverified write) it still asks the
+        // HTTP path, which keeps the delta/full decision in one place.
+        liveUpdates.addEventListener('client.changed', function (message) {
+            let event = null;
+            try {
+                event = JSON.parse(message.data || '{}');
+            } catch (error) {
+                event = null;
+            }
+            if (!event || !event.server_id) {
+                refreshData(true, { mode: 'cache', poll: false });
+                return;
+            }
+            if (typeof event.revision === 'number' && event.revision > 0) {
+                snapshotRevision = Math.max(snapshotRevision || 0, event.revision);
+            }
+            if (!event.client_state) {
+                refreshData(true, { mode: 'cache', poll: false });
+                return;
+            }
+            applyClientMutation({ mutation: event, client_state: event.client_state },
+                                { serverId: event.server_id, email: event.email });
+        });
         liveUpdates.onerror = function () {
             // EventSource reconnects on its own; the polling interval stays as a
             // safety net when the operator enabled it.

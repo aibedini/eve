@@ -12,7 +12,7 @@ os.environ["FLASK_ENV"] = "development"
 os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
 
 from app import Admin, GLOBAL_SERVER_DATA, app, db  # noqa: E402
-from panel.core import snapshot_delta  # noqa: E402
+from panel.core import client_events, snapshot_delta  # noqa: E402
 from panel.routes import dashboard as dashboard_routes  # noqa: E402
 
 SSE_ENV_VARS = (
@@ -157,6 +157,32 @@ class SseStreamTests(unittest.TestCase):
         self.assertIn(b"event: changed", body)
         payload = body.split(b"event: changed")[1].split(b"data: ", 1)[1].split(b"\n", 1)[0]
         self.assertEqual(json.loads(payload)["mode"], "delta")
+
+    def test_a_client_change_is_streamed_with_its_state(self):
+        """Phase 9: another tab patches one card instead of fetching a delta."""
+        self._seed_snapshot()
+        client_events.reset()
+        self.addCleanup(client_events.reset)
+        first = snapshot_delta.sync(GLOBAL_SERVER_DATA)
+        GLOBAL_SERVER_DATA["inbounds"][0]["clients"][0]["up"] = 42
+        GLOBAL_SERVER_DATA["last_update"] = "t3"
+        snapshot_delta.mark_dirty(server_ids=[1])
+        revision = snapshot_delta.current_revision(GLOBAL_SERVER_DATA, force=True)
+        client_events.record(1, client_id="uuid-1", email="c1@test", revision=revision,
+                             operation="renew",
+                             client_state={"email": "c1@test", "total_bytes": 35 * 1024 ** 3})
+
+        response = self.client.get(
+            "/api/refresh/stream?since=%d" % first["revision"], buffered=True)
+        body = response.get_data()
+        self.assertIn(b"event: client.changed", body)
+        payload = body.split(b"event: client.changed")[1].split(b"data: ", 1)[1].split(b"\n", 1)[0]
+        event = json.loads(payload)
+        self.assertEqual(event["server_id"], 1)
+        self.assertEqual(event["email"], "c1@test")
+        self.assertEqual(event["client_id"], "uuid-1")
+        self.assertEqual(event["revision"], revision)
+        self.assertEqual(event["client_state"]["total_bytes"], 35 * 1024 ** 3)
 
     def test_connecting_without_a_revision_does_not_announce_the_current_state(self):
         self._seed_snapshot()

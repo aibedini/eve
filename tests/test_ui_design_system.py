@@ -444,6 +444,17 @@ class MutationResponseWiringTests(unittest.TestCase):
         # The renew success path and the re-check path.
         self.assertGreaterEqual(self.dashboard.count("applyClientMutation(data,"), 2)
 
+    def test_the_sse_fast_path_patches_one_client(self):
+        """Phase 9: another tab applies the streamed client instead of a delta fetch."""
+        match = re.search(r"liveUpdates\.addEventListener\('client\.changed'.*?\n        \}\);",
+                          self.dashboard, re.S)
+        self.assertIsNotNone(match, "the dashboard does not listen for client.changed")
+        listener = match.group(0)
+        self.assertIn("client_state", listener)
+        self.assertIn("applyClientMutation(", listener)
+        # Without a verified state it falls back to the revision-driven HTTP path.
+        self.assertIn("refreshData(true, { mode: 'cache', poll: false });", listener)
+
 
 class ClientStoreFunnelTests(unittest.TestCase):
     """Phase 8: one normalized store feeds cards, search, filters and counters.

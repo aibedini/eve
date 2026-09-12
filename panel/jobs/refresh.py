@@ -47,6 +47,7 @@ from panel.core.redis_client import (
     publish_snapshot_to_redis,
     serialized_server_snapshot_write,
 )
+from panel.core import client_events
 from panel.core.runtime_files import runtime_path
 from panel.security import outbound_tls_verify, panel_tls_verify
 from panel.services.client_state import ClientMutationResult, normalize_client_state
@@ -2159,6 +2160,16 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                 GLOBAL_SERVER_DATA, force=True) or 0)
         except Exception:
             snapshot_revision = 0
+    if publish:
+        # Phase 9: leave a client-level trace so the SSE stream can hand the other tabs
+        # this one client (with its verified state) instead of making them fetch a delta.
+        client_events.record(
+            server_id, client_id=client_uuid, email=new_email or email,
+            revision=snapshot_revision, operation=operation,
+            # `state` is already None unless a patched row or a verified read exists,
+            # so an unverified write never travels as adoptable state.
+            client_state=state,
+            deleted=False)
     return ClientMutationResult(
         server_id=server_id, email=new_email or email, operation=operation,
         client_id=client_uuid, verified=bool(verified_state), changed=changed,
@@ -2166,7 +2177,6 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
         server_revision=(get_server_revision(server_id) if publish else 0),
         snapshot_revision=snapshot_revision,
     )
-
 
 def _report_cache_patch(server_id, email, client_uuid, revision_before, changed):
     """Structured write-through outcome. Never logs a credential or a token.
