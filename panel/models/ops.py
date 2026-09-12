@@ -366,7 +366,13 @@ class MonitorMessageLog(db.Model):
 
 
 class AuditLog(db.Model):
-    """Durable audit trail for sensitive panel and bot actions."""
+    """Durable, tamper-evident audit trail for sensitive panel and bot actions.
+
+    Each row carries a hash of its own content plus the previous row's hash
+    (prev_hash), so an edit or a deletion breaks the chain and is reported by
+    panel.services.audit.verify_chain(). Rows written before the chain existed
+    have NULL hashes and are reported as legacy by the verifier.
+    """
     __tablename__ = 'audit_logs'
     id = db.Column(db.Integer, primary_key=True)
     actor_type = db.Column(db.String(16), nullable=False, default='system')  # admin | system | customer
@@ -375,6 +381,11 @@ class AuditLog(db.Model):
     target_type = db.Column(db.String(32), nullable=True)
     target_id = db.Column(db.String(64), nullable=True)
     meta_json = db.Column(db.Text, nullable=True)
+    request_id = db.Column(db.String(64), nullable=True)
+    source_ip = db.Column(db.String(64), nullable=True)
+    user_agent = db.Column(db.String(200), nullable=True)
+    prev_hash = db.Column(db.String(64), nullable=True)
+    entry_hash = db.Column(db.String(64), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 

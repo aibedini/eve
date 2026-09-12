@@ -179,6 +179,14 @@ def doctor_summary():
         checks['panel_limits'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.services import audit as _audit
+        chain = _audit.verify_chain(limit=2000)
+        checks['audit_chain'] = {
+            'state': 'ok' if chain.get('ok') else 'warning', **chain}
+    except Exception as exc:
+        checks['audit_chain'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.core import http_metrics
         metrics = http_metrics.snapshot(limit=10)
         state = 'warning' if (metrics.get('error_rate') or 0) > 0.05 else 'ok'

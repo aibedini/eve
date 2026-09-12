@@ -113,7 +113,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.5.141"
+APP_VERSION = "2.5.142"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -3936,33 +3936,13 @@ def _telegram_bot_manageable_by(user, bot) -> bool:
 
 
 def _log_audit(action, target=None, actor=None, meta=None) -> None:
-    """Best-effort audit row. Never raises and never commits — the caller's
-    transaction carries the row."""
-    try:
-        target_type = None
-        target_id = None
-        if isinstance(target, tuple):
-            target_type, target_id = target
-        elif target is not None:
-            target_type = target.__class__.__name__
-            target_id = getattr(target, 'id', None)
-        actor_type = 'system'
-        actor_admin_id = None
-        if isinstance(actor, Admin):
-            actor_type = 'admin'
-            actor_admin_id = actor.id
-        elif isinstance(actor, str) and actor in ('admin', 'system', 'customer'):
-            actor_type = actor
-        db.session.add(AuditLog(
-            actor_type=actor_type,
-            actor_admin_id=actor_admin_id,
-            action=str(action)[:64],
-            target_type=str(target_type)[:32] if target_type else None,
-            target_id=str(target_id)[:64] if target_id not in (None, '') else None,
-            meta_json=json.dumps(meta, ensure_ascii=False, default=str) if meta else None,
-        ))
-    except Exception:
-        pass
+    """Best-effort, hash-chained audit row.
+
+    Never raises and never commits: the caller's transaction carries the row.
+    panel.services.audit owns the chain and the request enrichment.
+    """
+    from panel.services import audit as _audit  # deferred: avoids an import cycle
+    _audit.record(action, target=target, actor=actor, meta=meta)
 
 
 def _requested_telegram_bot():

@@ -10,13 +10,13 @@ from werkzeug.utils import secure_filename
 
 from panel.extensions import db
 from panel.models import (
-    Admin, ClientOperation, ClientOwnership, PriceTier, RenewalEvent, Server, SystemConfig,
-    Transaction, UsageCounterState, UsageDaily, UsageHourly,
+    Admin, AuditLog, ClientOperation, ClientOwnership, PriceTier, RenewalEvent, Server,
+    SystemConfig, Transaction, UsageCounterState, UsageDaily, UsageHourly,
     announcement_servers,
 )
 from panel.routes.common import (
-    current_admin, current_permissions, login_required, permission_required,
-    step_up_required, superadmin_required, user_management_required,
+    current_admin, current_permissions, login_required, paginate_query,
+    permission_required, step_up_required, superadmin_required, user_management_required,
 )
 from panel.security import InsecurePanelTransportError, enforce_panel_transport
 from panel.services.client_operations import resolve_client_operation
@@ -67,6 +67,43 @@ def reconcile_client_operation(operation_id):
         return jsonify({'success': False, 'error': error}), 409
     return jsonify({'success': True, 'operation': _client_operation_payload(operation)})
 
+
+@bp.route('/api/audit-log', methods=['GET'])
+@permission_required('settings.read')
+def list_audit_log():
+    """Paginated view of the tamper-evident audit trail.
+
+    Filters: action, actor_admin_id, target_type, since/until (ISO 8601).
+    Entries carry their chain hashes so an operator can verify a row outside the
+    panel; /api/doctor reports whether the chain still verifies end to end.
+    """
+    from panel.services import audit as audit_service
+    query = AuditLog.query
+    action = (request.args.get("action") or "").strip()
+    if action:
+        query = query.filter(AuditLog.action == action[:64])
+    actor_id = request.args.get("actor_admin_id", type=int)
+    if actor_id is not None:
+        query = query.filter(AuditLog.actor_admin_id == actor_id)
+    target_type = (request.args.get("target_type") or "").strip()
+    if target_type:
+        query = query.filter(AuditLog.target_type == target_type[:32])
+    for name, operator in (("since", "ge"), ("until", "le")):
+        raw = (request.args.get(name) or "").strip()
+        if not raw:
+            continue
+        try:
+            moment = datetime.fromisoformat(raw.replace("Z", ""))
+        except ValueError:
+            return jsonify({'success': False,
+                            'error': 'Invalid %s timestamp' % name}), 400
+        column = AuditLog.created_at
+        query = query.filter(column >= moment if operator == "ge" else column <= moment)
+    rows, meta = paginate_query(query.order_by(AuditLog.id.desc()),
+                                default=100, maximum=500)
+    return jsonify({'success': True,
+                    'entries': [audit_service.row_to_dict(row) for row in rows],
+                    **meta})
 
 @bp.route('/api/admins', methods=['GET'])
 @permission_required('admins.read')
