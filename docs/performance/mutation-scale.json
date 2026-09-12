@@ -1,0 +1,150 @@
+{
+  "mode": "full",
+  "clients_per_server": 25,
+  "scales": [
+    10,
+    50,
+    100
+  ],
+  "watch_limit": 20,
+  "rows": [
+    {
+      "servers": 10,
+      "clients": 250,
+      "mutation_p95_ms": 11.925,
+      "mutation_mean_ms": 4.246,
+      "mutation_cpu_p95_ms": 15.625,
+      "delta_mode": "delta",
+      "delta_bytes": 17707,
+      "full_inbounds_bytes": 175252,
+      "cache_read_full_p95_ms": 41.402,
+      "cache_read_full_bytes": 166263,
+      "cache_read_delta_p95_ms": 11.901,
+      "cache_read_delta_bytes": 21111,
+      "redis_ops_per_mutation": {
+        "get": 5,
+        "pipeline": 3,
+        "incr": 2,
+        "expire": 2,
+        "execute": 3,
+        "set": 4,
+        "watch": 1,
+        "multi": 1,
+        "eval": 1,
+        "lpush": 2,
+        "ltrim": 2
+      },
+      "redis_ops_total_per_mutation": 26,
+      "outbound_http_calls_per_cache_read": 0,
+      "xui_requests_per_minute_watched": 300,
+      "xui_requests_per_minute_unwatched": 10,
+      "naive_all_servers_every_2s_per_minute": 300,
+      "python_peak_kb": 7075.2,
+      "process_peak_rss_kb": null
+    },
+    {
+      "servers": 50,
+      "clients": 1250,
+      "mutation_p95_ms": 9.574,
+      "mutation_mean_ms": 6.272,
+      "mutation_cpu_p95_ms": 15.625,
+      "delta_mode": "delta",
+      "delta_bytes": 17708,
+      "full_inbounds_bytes": 875972,
+      "cache_read_full_p95_ms": 93.998,
+      "cache_read_full_bytes": 828308,
+      "cache_read_delta_p95_ms": 9.898,
+      "cache_read_delta_bytes": 38036,
+      "redis_ops_per_mutation": {
+        "get": 5,
+        "pipeline": 3,
+        "incr": 2,
+        "expire": 2,
+        "execute": 3,
+        "set": 4,
+        "watch": 1,
+        "multi": 1,
+        "eval": 1,
+        "lpush": 2,
+        "ltrim": 2
+      },
+      "redis_ops_total_per_mutation": 26,
+      "outbound_http_calls_per_cache_read": 0,
+      "xui_requests_per_minute_watched": 630,
+      "xui_requests_per_minute_unwatched": 50,
+      "naive_all_servers_every_2s_per_minute": 1500,
+      "python_peak_kb": 1548.0,
+      "process_peak_rss_kb": null
+    },
+    {
+      "servers": 100,
+      "clients": 2500,
+      "mutation_p95_ms": 10.585,
+      "mutation_mean_ms": 7.598,
+      "mutation_cpu_p95_ms": 15.625,
+      "delta_mode": "delta",
+      "delta_bytes": 17708,
+      "full_inbounds_bytes": 1751872,
+      "cache_read_full_p95_ms": 158.867,
+      "cache_read_full_bytes": 1655860,
+      "cache_read_delta_p95_ms": 10.812,
+      "cache_read_delta_bytes": 59188,
+      "redis_ops_per_mutation": {
+        "get": 5,
+        "pipeline": 3,
+        "incr": 2,
+        "expire": 2,
+        "execute": 3,
+        "set": 4,
+        "watch": 1,
+        "multi": 1,
+        "eval": 1,
+        "lpush": 2,
+        "ltrim": 2
+      },
+      "redis_ops_total_per_mutation": 26,
+      "outbound_http_calls_per_cache_read": 0,
+      "xui_requests_per_minute_watched": 680,
+      "xui_requests_per_minute_unwatched": 100,
+      "naive_all_servers_every_2s_per_minute": 3000,
+      "python_peak_kb": 3108.1,
+      "process_peak_rss_kb": null
+    }
+  ],
+  "verdicts": {
+    "mutation_is_flat": {
+      "p95_ratio_last_over_first": 0.888,
+      "panels_ratio": 10.0,
+      "tolerance": 2.0,
+      "passed": true
+    },
+    "delta_is_one_block": {
+      "bytes_ratio_last_over_first": 1.0,
+      "tolerance": 2.0,
+      "passed": true
+    },
+    "full_snapshot_grows_with_the_install": {
+      "bytes_ratio_last_over_first": 9.996,
+      "minimum": 4.0,
+      "passed": true
+    },
+    "redis_ops_are_constant": {
+      "totals_per_scale": [
+        26
+      ],
+      "passed": true
+    },
+    "cache_read_makes_no_panel_call": {
+      "worst_outbound_http_calls": 0,
+      "maximum": 0,
+      "passed": true
+    },
+    "per_server_polling_is_bounded": {
+      "worst_watched_polls_per_minute": 680,
+      "naive_all_servers_every_2s": 3000,
+      "oversized_scales_below_naive": true,
+      "passed": true
+    }
+  },
+  "passed": true
+}
