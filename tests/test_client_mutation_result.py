@@ -81,10 +81,13 @@ class ClientMutationResultTests(unittest.TestCase):
     def test_verified_state_travels_with_the_operation(self):
         result = ClientMutationResult(server_id=7, email='bob', operation='renew',
                                       client_id='uuid-bob', changed=True, verified=True,
-                                      client_state=self._state(), server_revision=42)
+                                      client_state=self._state(), server_revision=42,
+                                      snapshot_revision=1042)
         payload = result.to_payload()
         self.assertTrue(payload['verified'])
         self.assertEqual(payload['server_revision'], 42)
+        # The browser's poll cursor is a snapshot revision, not the per-server counter.
+        self.assertEqual(payload['snapshot_revision'], 1042)
         self.assertEqual(payload['operation'], 'renew')
         self.assertEqual(payload['client_state']['total_bytes'], 35 * GB)
         self.assertEqual(payload['client_state']['remaining_bytes'], 10 * GB)

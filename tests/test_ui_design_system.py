@@ -412,5 +412,38 @@ class ActionIconTests(unittest.TestCase):
         self.assertEqual(offenders, [], "action icons must stay outline: %s" % offenders)
 
 
+class MutationResponseWiringTests(unittest.TestCase):
+    """Phase 3: the dashboard adopts the verified state a mutation response carries.
+
+    Without this the card and the search index only change on the next poll, which is
+    the "subscription link is new, dashboard is old" complaint.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dashboard = _read(DASHBOARD_HTML)
+        match = re.search(r"function applyClientMutation\(.*?\n    \}", cls.dashboard, re.S)
+        cls.helper = match.group(0) if match else ""
+
+    def test_the_adoption_helper_exists(self):
+        self.assertTrue(self.helper, "applyClientMutation() is missing from the dashboard")
+
+    def test_the_helper_reads_the_canonical_contract(self):
+        for field in ("client_state", "mutation", "server_revision", "deleted"):
+            self.assertIn(field, self.helper, field)
+        for field in ("total_bytes", "expiry_time", "used_up", "used_down"):
+            self.assertIn(field, self.helper, field)
+
+    def test_it_keeps_the_delta_cursor_in_step(self):
+        self.assertIn("snapshotRevision", self.helper)
+
+    def test_an_unverified_payload_is_not_adopted(self):
+        self.assertIn("if (!state) return false;", self.helper)
+
+    def test_both_renew_paths_adopt_the_response(self):
+        # The renew success path and the re-check path.
+        self.assertGreaterEqual(self.dashboard.count("applyClientMutation(data,"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

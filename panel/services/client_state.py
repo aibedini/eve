@@ -19,10 +19,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-#: The fields every normalized client state carries.
+#: The fields every normalized client state carries. The last three are purely
+#: presentational: they let a mutation response repaint the status badge instead of
+#: blanking it until the next refresh.
 CLIENT_STATE_FIELDS = (
     'uuid', 'email', 'enable', 'total_bytes', 'used_up', 'used_down',
     'remaining_bytes', 'expiry_time', 'service_state', 'inbound_id',
+    'service_state_label', 'service_state_emoji', 'service_state_tag',
 )
 
 
@@ -34,7 +37,9 @@ def _as_int(value, default=0):
 
 
 def normalize_client_state(*, raw=None, row=None, service_state=None, inbound_id=None,
-                           used_up=None, used_down=None, remaining_bytes=None):
+                           used_up=None, used_down=None, remaining_bytes=None,
+                           service_state_label=None, service_state_emoji=None,
+                           service_state_tag=None):
     """Return the canonical client shape from a cached row and/or a raw client.
 
     `row` is a cached display row (it carries usage and the computed service
@@ -78,6 +83,12 @@ def normalize_client_state(*, raw=None, row=None, service_state=None, inbound_id
                           else row.get('service_state')),
         'inbound_id': (inbound_id if inbound_id is not None
                        else row.get('inbound_id')),
+        'service_state_label': (service_state_label if service_state_label is not None
+                                else row.get('service_state_label')),
+        'service_state_emoji': (service_state_emoji if service_state_emoji is not None
+                                else row.get('service_state_emoji')),
+        'service_state_tag': (service_state_tag if service_state_tag is not None
+                              else row.get('service_state_tag')),
     }
 
 
@@ -98,6 +109,10 @@ class ClientMutationResult:
     client_state: dict | None = None
     server_revision: int = 0
     changed: bool = False
+    #: The snapshot (delta-sync) revision this mutation landed at. The browser's poll
+    #: cursor is a snapshot revision, not the per-server counter, so this is what it
+    #: advances to.
+    snapshot_revision: int = 0
 
     def __bool__(self) -> bool:
         return bool(self.changed)
@@ -114,14 +129,20 @@ class ClientMutationResult:
             'deleted': bool(self.deleted),
             'changed': bool(self.changed),
             'server_revision': self.server_revision,
+            'snapshot_revision': self.snapshot_revision,
             'client_state': adoptable,
         }
 
 
-def verified_state_from_panel(raw, *, up=0, down=0, service_state=None, inbound_id=None) -> dict:
+def verified_state_from_panel(raw, *, up=0, down=0, service_state=None, inbound_id=None,
+                              service_state_label=None, service_state_emoji=None,
+                              service_state_tag=None) -> dict:
     """Normalize a client object read back from the panel after a write."""
     return normalize_client_state(
         raw=raw, service_state=service_state, inbound_id=inbound_id,
+        service_state_label=service_state_label,
+        service_state_emoji=service_state_emoji,
+        service_state_tag=service_state_tag,
         used_up=up, used_down=down,
         remaining_bytes=(max(_as_int(raw.get('totalGB'), 0) - (up + down), 0)
                          if _as_int(raw.get('totalGB'), 0) > 0 else -1),

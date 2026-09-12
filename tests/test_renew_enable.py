@@ -302,6 +302,8 @@ class RenewEnableTests(unittest.TestCase):
         # browser can patch its card and search index without waiting for a poll.
         self.assertTrue(payload['mutation']['verified'], payload['mutation'])
         self.assertEqual(payload['mutation']['operation'], 'renew')
+        self.assertGreaterEqual(payload['mutation']['snapshot_revision'], 1,
+                                'the browser needs the snapshot revision as its cursor')
         state = payload['client_state']
         self.assertIsNotNone(state, payload)
         self.assertEqual(state['email'], 'bob')

@@ -2195,6 +2195,9 @@ def renew_client(server_id, inbound_id, email):
                         up=int(_observed.get('up') or 0),
                         down=int(_observed.get('down') or 0),
                         service_state=_observed.get('service_state'),
+                        service_state_label=_observed.get('service_state_label'),
+                        service_state_emoji=_observed.get('service_state_emoji'),
+                        service_state_tag=_observed.get('service_state_tag'),
                         inbound_id=inbound_id,
                     )
                 cache_sync = False
@@ -2858,6 +2861,9 @@ def verify_renew_client(server_id, inbound_id, email):
                         up=int(verify['observed'].get('up') or 0),
                         down=int(verify['observed'].get('down') or 0),
                         service_state=verify['observed'].get('service_state'),
+                        service_state_label=verify['observed'].get('service_state_label'),
+                        service_state_emoji=verify['observed'].get('service_state_emoji'),
+                        service_state_tag=verify['observed'].get('service_state_tag'),
                         inbound_id=inbound_id),
                     inbound_id=inbound_id,
                 )

@@ -2873,6 +2873,45 @@
         return changed;
     }
 
+    // Phase 3: adopt the canonical state a mutation response carries, so the card and
+    // the search index change the moment X-UI confirms the write -- no poll and no
+    // manual refresh. The server only sends client_state when it read the panel back
+    // (or the operation was a delete), so an unverified write never becomes UI state
+    // here; without a state the caller keeps its normal refresh path.
+    function applyClientMutation(data, fallback = {}) {
+        if (!data || typeof data !== 'object') return false;
+        const mutation = data.mutation || null;
+        const state = data.client_state || null;
+        const serverId = (mutation && mutation.server_id) || fallback.serverId;
+        const email = (mutation && mutation.email) || (state && state.email) || fallback.email;
+        const inboundId = (state && state.inbound_id != null) ? state.inbound_id : fallback.inboundId;
+
+        // Keep the delta-sync cursor in step with the snapshot revision the mutation
+        // landed at, so the next poll asks for what changed after it instead of
+        // replaying. (`server_revision` is a per-server counter and is not a cursor.)
+        if (mutation && typeof mutation.snapshot_revision === 'number' && mutation.snapshot_revision > 0) {
+            snapshotRevision = Math.max(snapshotRevision || 0, mutation.snapshot_revision);
+        }
+        if (!serverId || !email) return false;
+
+        if (mutation && mutation.deleted) {
+            removeLocalClient(serverId, inboundId, email);
+            return true;
+        }
+        if (!state) return false;
+
+        return patchLocalClient(serverId, inboundId, email, {
+            enable: state.enable,
+            totalGB: state.total_bytes,
+            expiryTimestamp: state.expiry_time,
+            up: state.used_up,
+            down: state.used_down,
+            service_state_label: state.service_state_label,
+            service_state_emoji: state.service_state_emoji,
+            service_state_tag: state.service_state_tag,
+        }, { render: true });
+    }
+
     function getLocalClientRef(serverId, inboundId, email) {
         const sid = parseInt(serverId);
         const iid = String(inboundId);
@@ -4866,6 +4905,8 @@
             const data = await resp.json();
             if (data && data.success && data.verify) {
                 renderRenewApiStatus(data);
+                // Phase 3: a verified re-check carries the canonical state too.
+                applyClientMutation(data, { serverId, inboundId, email });
                 if (data.verify.ok) {
                     const successText = (typeof data.copy_text === 'string' && data.copy_text.trim())
                         ? data.copy_text
@@ -5028,6 +5069,8 @@
                     lastRenewContext = null;
                 }
                 renderRenewApiStatus(data);
+                // Phase 3: adopt the verified state from the mutation response now.
+                applyClientMutation(data, { serverId, inboundId, email });
 
                 const fallbackVolLabel = (finalVolume === null) ? '—' : `${finalVolume}GB`;
                 const renewIsFa = (document.documentElement.lang || 'en') === 'fa';

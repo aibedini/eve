@@ -2099,11 +2099,21 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
         state = verified_state
     else:
         state = None
+    # The browser's cursor is a snapshot revision; publish the one this mutation
+    # landed at so the next poll asks for changes after it.
+    snapshot_revision = 0
+    if changed and publish:
+        try:
+            snapshot_revision = int(snapshot_delta.current_revision(
+                GLOBAL_SERVER_DATA, force=True) or 0)
+        except Exception:
+            snapshot_revision = 0
     return ClientMutationResult(
         server_id=server_id, email=new_email or email, operation=operation,
         client_id=client_uuid, verified=bool(verified_state), changed=changed,
         client_state=state,
         server_revision=(get_server_revision(server_id) if publish else 0),
+        snapshot_revision=snapshot_revision,
     )
 
 
