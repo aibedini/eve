@@ -458,10 +458,28 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
         def _commit_snapshot():
             """Publish the current (possibly partial) state to GLOBAL_SERVER_DATA
             so the dashboard renders servers as they finish instead of blocking on
-            the slowest panel. Cheap relative to the network fetches it follows."""
+            the slowest panel. Cheap relative to the network fetches it follows.
+
+            A server whose revision moved while this cycle was in flight is taken from
+            the live snapshot: this cycle's copy of it is stale, and publishing the
+            cycle's view would revert an operator's edit (the fetch result is already
+            discarded by ``_apply_result`` for the same reason).
+            """
+            with GLOBAL_REFRESH_LOCK:
+                live_by_server = defaultdict(list)
+                for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                    try:
+                        live_sid = int(inbound.get('server_id', -1))
+                    except Exception:
+                        continue
+                    if live_sid > 0:
+                        live_by_server[live_sid].append(inbound)
             flat = []
             for _sid in server_order:
-                flat.extend(new_by_server.get(_sid, []))
+                if get_server_revision(_sid) != refresh_revisions.get(_sid, 0):
+                    flat.extend(live_by_server.get(_sid, []))
+                else:
+                    flat.extend(new_by_server.get(_sid, []))
             statuses = [status_map.get(_sid) or {"server_id": _sid, "success": False, "error": "No data"}
                         for _sid in server_order]
             stats = _recompute_global_stats_from_server_statuses(statuses)

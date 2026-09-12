@@ -158,6 +158,25 @@ def _record_history(revision, changed, removed, last_update):
     return record
 
 
+def touch(snapshot=None, reason='client_event'):
+    """Force a new revision for a change the snapshot data itself cannot fingerprint.
+
+    A mutation can be authoritative without being mergeable into this worker's cache
+    (a cache miss on a renamed or newly created client). Nothing in ``inbounds``
+    changed here, so ``sync`` would keep the old revision and a viewer's cursor would
+    never pass the client-level event recorded for it. Recording an empty history entry
+    keeps the delta machinery consistent: a viewer asking from the previous revision
+    gets a delta with no blocks (it already patches the client from the event).
+    """
+    last_update = snapshot.get('last_update') if isinstance(snapshot, dict) else None
+    with _lock:
+        revision = _next_revision()
+        _state['revision'] = revision
+        _record_history(revision, [], [], last_update)
+        _state['dirty'] = False
+        return revision
+
+
 def _redis_history():
     client = _redis()
     if client is None:

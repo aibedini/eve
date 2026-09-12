@@ -2161,12 +2161,22 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
     # The browser's cursor is a snapshot revision; publish the one this mutation
     # landed at so the next poll asks for changes after it.
     snapshot_revision = 0
-    if changed and publish:
+    if publish:
         try:
             snapshot_revision = int(snapshot_delta.current_revision(
                 GLOBAL_SERVER_DATA, force=True) or 0)
         except Exception:
             snapshot_revision = 0
+        if not changed:
+            # A miss this worker could not merge (an empty cache, a renamed or
+            # newly-created client): nothing in its snapshot moved, so force a revision
+            # or a viewer's cursor would never reach the event recorded below and the
+            # other tabs would keep the stale row until a full refresh.
+            try:
+                snapshot_revision = int(snapshot_delta.touch(GLOBAL_SERVER_DATA)
+                                        or snapshot_revision)
+            except Exception:
+                pass
     if publish:
         # Phase 9: leave a client-level trace so the SSE stream can hand the other tabs
         # this one client (with its verified state) instead of making them fetch a delta.
@@ -2358,6 +2368,19 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
     except Exception as exc:
         app.logger.debug("remove_cached_client failed: %s", exc)
         return False
+    if removed and publish:
+        # Phase 9 fast path for a delete: the other tabs must drop that one card, not
+        # discover the removal through a snapshot delta on their next poll.
+        snapshot_revision = 0
+        try:
+            snapshot_revision = int(snapshot_delta.current_revision(
+                GLOBAL_SERVER_DATA, force=True) or 0)
+        except Exception:
+            snapshot_revision = 0
+        client_events.record(
+            server_id, client_id=client_uuid, email=email,
+            revision=snapshot_revision, operation='delete',
+            client_state=None, deleted=True)
     return removed
 
 

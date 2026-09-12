@@ -254,11 +254,18 @@ def _redis_server_revision_key(server_id: int) -> str:
     return f'{REDIS_SERVER_REVISION_PREFIX}{int(server_id)}'
 
 
+# Per-process fallback revision. Without Redis there is no shared snapshot either, so a
+# mutation only has to invalidate *this* process's in-flight refresh -- and the guard
+# used to be a no-op there (both sides read 0), which let a refresh that started before
+# an edit overwrite the edit.
+_LOCAL_SERVER_REVISIONS = defaultdict(int)
+
+
 def get_server_revision(server_id: int) -> int:
-    """Return the shared mutation revision for one server (zero without Redis)."""
+    """Return the shared mutation revision for one server (local without Redis)."""
     client = get_redis()
     if client is None:
-        return 0
+        return int(_LOCAL_SERVER_REVISIONS.get(int(server_id), 0))
     try:
         raw = client.get(_redis_server_revision_key(server_id))
         return int(raw or 0)
@@ -270,7 +277,9 @@ def bump_server_revision(server_id: int) -> int:
     """Mark an authoritative panel/cache mutation for stale-refresh detection."""
     client = get_redis()
     if client is None:
-        return 0
+        sid = int(server_id)
+        _LOCAL_SERVER_REVISIONS[sid] = int(_LOCAL_SERVER_REVISIONS.get(sid, 0)) + 1
+        return _LOCAL_SERVER_REVISIONS[sid]
     try:
         key = _redis_server_revision_key(server_id)
         pipe = client.pipeline()

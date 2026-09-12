@@ -41,7 +41,8 @@ jobs:
             tests/test_backup_policy.py \
             tests/test_ci_guards.py \
             tests/test_package_visibility.py \
-            tests/test_finance_filters.py > pytest-unit.log 2>&1
+            tests/test_finance_filters.py \
+            tests/test_regression_matrix.py > pytest-unit.log 2>&1
           status=$?
           tail -n 40 pytest-unit.log
           if [ "$status" -ne 0 ]; then
