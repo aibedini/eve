@@ -134,11 +134,25 @@ def doctor_summary():
     try:
         from app import GLOBAL_SERVER_DATA  # deferred: app-level state
         from panel.core import refresh_policy
+        server_states = refresh_policy.server_states()
         checks['refresh_policy'] = {
             'state': 'ok',
             **refresh_policy.status(
                 snapshot_age=refresh_policy.snapshot_age_seconds(
                     GLOBAL_SERVER_DATA.get('last_update'))),
+            # Phase 10: per-server cadence, so "why is panel 3 behind?" is answerable
+            # without reading the process memory of the fetcher worker.
+            'servers': server_states,
+            'servers_tracked': len(server_states),
+            'servers_due': sum(1 for row in server_states.values() if row.get('due')),
+            'server_intervals': {
+                'active_seconds': refresh_policy.server_active_seconds(),
+                'idle_seconds': refresh_policy.server_idle_seconds(),
+                'active_ttl_seconds': refresh_policy.server_active_ttl(),
+                'backoff_base_seconds': refresh_policy.server_backoff_base(),
+                'backoff_max_seconds': refresh_policy.server_backoff_max(),
+                'watch_limit': refresh_policy.server_watch_limit(),
+            },
         }
     except Exception as exc:
         checks['refresh_policy'] = {'state': 'unknown', 'error': str(exc)[:200]}

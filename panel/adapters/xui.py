@@ -822,6 +822,13 @@ def _reconcile_client_inbounds(user, server, email, client_uuid, target_inbound_
         if added or removed:
             # Panel state changed regardless of whether a local cached row exists.
             bump_server_revision(server.id)
+            # Phase 10: this membership write happened outside the cached-client
+            # helpers, so mark the panel hot here too.
+            try:
+                from panel.core import refresh_policy
+                refresh_policy.note_server_activity(server.id)
+            except Exception:
+                pass
         if native_membership_used:
             fetch_and_update_server_data(server.id)
         else:

@@ -30,7 +30,7 @@ from panel.adapters.xui import (
     v3_reset_client,
     v3_update_client,
 )
-from panel.core import panel_limits, snapshot_delta, subscription_cache
+from panel.core import panel_limits, refresh_policy, snapshot_delta, subscription_cache
 from panel.core.redis_client import (
     fetch_guard,
     GLOBAL_REFRESH_LOCK,
@@ -2081,6 +2081,13 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
         # The panel mutation is authoritative even if this worker's local cache
         # has no matching row.  Invalidate stale refreshes before best-effort RAM sync.
         bump_server_revision(server_id)
+        # Phase 10: an Eve write is the strongest signal that this panel is worth
+        # polling at the per-server active cadence (an external change to it is
+        # exactly what the operator is about to look at).
+        try:
+            refresh_policy.note_server_activity(server_id)
+        except Exception:
+            pass
     try:
         write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
         with write_context:
@@ -2233,6 +2240,10 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
 
         if publish:
             bump_server_revision(server_id)
+            try:
+                refresh_policy.note_server_activity(server_id)
+            except Exception:
+                pass
         write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
         with write_context:
             thresholds = _get_dashboard_status_thresholds()
@@ -2297,6 +2308,12 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
     try:
         if publish:
             bump_server_revision(server_id)
+            # Phase 10: a mutation marks the panel hot, so an external change landing
+            # right after the write shows up in seconds instead of a cycle later.
+            try:
+                refresh_policy.note_server_activity(server_id)
+            except Exception:
+                pass
         write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
         with write_context:
             try:
@@ -2352,6 +2369,10 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
     try:
         if publish:
             bump_server_revision(server_id)
+            try:
+                refresh_policy.note_server_activity(server_id)
+            except Exception:
+                pass
         write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
         with write_context:
             try:

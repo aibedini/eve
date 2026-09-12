@@ -248,6 +248,12 @@ def background_data_fetcher():
     current activity level (active/recent/idle), otherwise sleep in short slices so
     dashboard activity is noticed promptly. Idle panels are polled far less often
     while the maximum staleness still bounds data age. See panel/core/refresh_policy.py.
+
+    Phase 10: the cycle cadence above is only half of the policy -- inside a cycle the
+    file's per-server cadence decides which panels are actually due, so one watched
+    server is polled every couple of seconds without re-fetching the whole install, and
+    the loop also wakes for the earliest scheduled panel instead of waiting out a whole
+    cycle.
     """
     from app import GLOBAL_SERVER_DATA, app  # deferred: app-level helper, avoids circular import
     ensure_background_threads_started()
@@ -263,13 +269,23 @@ def background_data_fetcher():
                 snapshot_age = refresh_policy.snapshot_age_seconds(
                     GLOBAL_SERVER_DATA.get('last_update'))
                 should_fetch, _reason = refresh_policy.should_fetch_now(snapshot_age)
+                due_in = refresh_policy.next_server_due_in()
+                if due_in is not None:
+                    # Once panels are tracked the per-server cadence is the authority;
+                    # the cycle-level staleness above is only the bootstrap path. Using
+                    # both here would spin the loop, because a cycle may legitimately
+                    # defer every panel it was woken for.
+                    should_fetch = due_in <= 0
                 if should_fetch:
                     # fetch_and_update_global_data owns the fetch guard (and skips
                     # the cycle when a manual refresh is already fetching), so this
                     # loop never holds the shared snapshot lock across network I/O.
-                    fetch_and_update_global_data(force=False)
+                    fetch_and_update_global_data(force=False, periodic=True)
                     continue
                 interval = refresh_policy.next_interval(snapshot_age)
+                if due_in is not None:
+                    # Wake for the earliest due panel; never spin on a ~0 remainder.
+                    interval = min(interval, max(0.25, due_in))
             # Sleep a bounded slice: a request (local event or shared Redis
             # timestamp) makes the next evaluation switch to the active cadence.
             refresh_policy.wait_for_interval(
@@ -301,22 +317,29 @@ def snapshot_reader_worker():
 
 
 def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_callback=None,
-                                 wait_seconds: float = 0.0) -> bool:
+                                 wait_seconds: float = 0.0, periodic: bool = False) -> bool:
     """Fetch the enabled panels and update the shared snapshot.
 
     The panel I/O runs WITHOUT GLOBAL_REFRESH_LOCK: the lock only covers the short
     in-memory commits, so a reader is never blocked for the duration of a fan-out.
     GLOBAL_FETCH_LOCK still guarantees one fan-out at a time; when another fetch
     holds it, the call returns False immediately (or waits up to wait_seconds).
+
+    ``periodic=True`` marks the automatic loop's cycle, the only caller that honours
+    the per-server cadence (``panel/core/refresh_policy.py``). A manual refresh, a
+    targeted repair, and the usage-rollup warm-up always fetch what they ask for --
+    operator intent outranks the poll schedule.
     """
     with fetch_guard(wait_seconds) as owns_fetch:
         if not owns_fetch:
             return False
-        _fetch_and_update_global_data_inner(force, server_ids, progress_callback)
+        _fetch_and_update_global_data_inner(
+            force, server_ids, progress_callback, periodic=periodic)
         return True
 
 
-def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_callback=None):
+def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_callback=None,
+                                        periodic=False):
     """Body of fetch_and_update_global_data; the caller owns the fetch guard."""
     from app import _utc_iso_now, app, fetch_worker, get_server_password, process_inbounds  # deferred: app-level helper, avoids circular import
     try:
@@ -336,13 +359,36 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
 
         now_ts = time.time()
         skipped_ids = set()
+        deferred_ids = set()
+        if not server_ids:
+            # A targeted fetch is a subset; only the full set may prune the schedule.
+            refresh_policy.retain_servers(int(s.id) for s in servers)
         if not force:
             for s in servers:
                 try:
-                    if _backoff_should_skip(int(s.id), now_ts):
-                        skipped_ids.add(int(s.id))
+                    sid = int(s.id)
+                except (TypeError, ValueError):
+                    continue
+                if periodic and not server_ids and not refresh_policy.server_due(sid, now=now_ts):
+                    # Polled recently enough for its own cadence (Phase 10).
+                    deferred_ids.add(sid)
+                    continue
+                try:
+                    if _backoff_should_skip(sid, now_ts):
+                        skipped_ids.add(sid)
+                        # Mirror the fetch layer's backoff window so this panel is not
+                        # immediately "due" again in a cycle that would only skip it.
+                        refresh_policy.defer_server_until(
+                            sid, (_backoff_get(sid) or {}).get('next_allowed_at'))
                 except Exception:
                     continue
+
+        if servers and not skipped_ids and all(
+                int(s.id) in deferred_ids for s in servers):
+            # Every enabled panel was polled recently enough for its own cadence:
+            # publishing here would only fake a fresh snapshot and hide the panel
+            # whose turn it actually is.
+            return
 
         server_dicts = [{
             'id': s.id, 'name': s.name, 'host': s.host,
@@ -353,7 +399,8 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
             'api_token': s.api_token,
             'panel_type': s.panel_type, 'sub_port': s.sub_port,
             'sub_path': s.sub_path, 'json_path': s.json_path
-        } for s in servers if int(s.id) not in skipped_ids]
+        } for s in servers
+            if int(s.id) not in skipped_ids and int(s.id) not in deferred_ids]
         refresh_revisions = {
             int(s['id']): get_server_revision(int(s['id'])) for s in server_dicts
         }
@@ -431,10 +478,14 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                     'Discarded stale background refresh for server %s after a concurrent mutation',
                     sid,
                 )
+                # The panel answered; only this snapshot copy is stale. Reschedule the
+                # next poll so the loop does not treat the panel as still in flight.
+                refresh_policy.note_server_result(sid, True)
                 return False
             _, inbounds, online_index, status_payload, status_error, error, detected_type = res
             if error:
                 _backoff_record_failure(sid, error)
+                refresh_policy.note_server_result(sid, False)
                 st = status_map.get(sid) or {"server_id": sid}
                 # Keep cached stats if present to avoid UI dropping counts.
                 if isinstance(st.get('stats'), dict) and st.get('stats'):
@@ -457,6 +508,7 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 return True  # keep existing inbounds block (if any)
 
             _backoff_record_success(sid)
+            refresh_policy.note_server_result(sid, True)
             srv = servers_by_id.get(sid)
             if srv is not None and persist_detected_panel_type(srv, detected_type):
                 app.logger.info("Detected panel type for server %s as %s", sid, detected_type)

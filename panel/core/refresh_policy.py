@@ -129,6 +129,7 @@ def reset_state() -> None:
         _last_recorded = 0.0
         _remote_cache['at'] = 0.0
         _remote_cache['value'] = None
+        _servers.clear()
         _wake.clear()
 
 
@@ -256,3 +257,234 @@ def status(snapshot_age=None, now=None) -> dict:
         },
         'max_staleness_seconds': max_staleness(),
     }
+
+
+# ── Per-server adaptive polling (Phase 10) ───────────────────────────────────
+# The cadence above decides how often the fetcher wakes; this decides whether it is a
+# given panel's turn. External X-UI changes reach Eve only through this loop (the panel
+# has no webhook), so the per-server interval is what bounds that latency -- without
+# hammering a panel that is down. A server the operator just looked at or that an Eve
+# mutation touched is polled every couple of seconds; an untouched one far less often;
+# a failing one backs off exponentially. State is per process (the fetcher role owns
+# the loop); the shared activity timestamp above still drives the cycle cadence.
+
+SERVER_POLL_ACTIVE_TTL_DEFAULT = 120     # how long a server stays "active"
+SERVER_POLL_BACKOFF_BASE_DEFAULT = 5
+SERVER_POLL_BACKOFF_MAX_DEFAULT = 300
+
+_servers = {}
+
+
+def server_active_seconds() -> float:
+    """Target interval for a server with recent activity (1-3s by design)."""
+    return float(_env_int('EVE_SERVER_POLL_ACTIVE_SECONDS', 2, minimum=1))
+
+
+def server_idle_seconds() -> float:
+    """Target interval for a server nobody is watching."""
+    return float(_env_int('EVE_SERVER_POLL_IDLE_SECONDS', 45, minimum=1))
+
+
+def server_active_ttl() -> float:
+    return float(_env_int('EVE_SERVER_POLL_ACTIVE_TTL_SECONDS',
+                          SERVER_POLL_ACTIVE_TTL_DEFAULT, minimum=5))
+
+
+def server_backoff_base() -> float:
+    return float(_env_int('EVE_SERVER_POLL_BACKOFF_BASE_SECONDS',
+                          SERVER_POLL_BACKOFF_BASE_DEFAULT, minimum=1))
+
+
+def server_backoff_max() -> float:
+    return float(_env_int('EVE_SERVER_POLL_BACKOFF_MAX_SECONDS',
+                          SERVER_POLL_BACKOFF_MAX_DEFAULT, minimum=1))
+
+
+def _server_state(server_id):
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        return None
+    state = _servers.get(sid)
+    if state is None:
+        state = {'next_due': 0.0, 'failures': 0, 'active_until': 0.0}
+        _servers[sid] = state
+    return state
+
+
+def note_server_activity(server_id, *, now=None, ttl=None) -> None:
+    """Mark a server as worth watching (the operator looked at it, or Eve wrote to it).
+
+    A panel that just became interesting is pulled in to the active wait as well: a
+    panel coming on screen (or just mutated) must not sit out a remaining idle window
+    of up to ``EVE_SERVER_POLL_IDLE_SECONDS`` before its first fast poll. A panel in
+    backoff keeps its window -- a watch mark is not a reason to retry a failing panel.
+    """
+    state = _server_state(server_id)
+    if state is None:
+        return
+    moment = time.time() if now is None else float(now)
+    window = server_active_ttl() if ttl is None else max(0.0, float(ttl))
+    with _lock:
+        state['active_until'] = max(state.get('active_until') or 0.0, moment + window)
+        if not state.get('failures'):
+            soonest = moment + server_active_seconds()
+            scheduled = float(state.get('next_due') or 0.0)
+            if scheduled and scheduled > soonest:
+                state['next_due'] = soonest
+
+
+def server_interval(server_id, *, now=None) -> float:
+    """The interval this server's next poll is measured against."""
+    state = _server_state(server_id)
+    if state is None:
+        return server_idle_seconds()
+    moment = time.time() if now is None else float(now)
+    if state.get('failures'):
+        delay = server_backoff_base() * (2 ** (state['failures'] - 1))
+        return min(server_backoff_max(), delay)
+    if (state.get('active_until') or 0.0) > moment:
+        return server_active_seconds()
+    return server_idle_seconds()
+
+
+def server_due(server_id, *, now=None) -> bool:
+    """True when it is this panel's turn (a server never seen before is always due)."""
+    state = _server_state(server_id)
+    if state is None or not state.get('next_due'):
+        return True
+    moment = time.time() if now is None else float(now)
+    return moment >= float(state['next_due'])
+
+
+def note_server_result(server_id, ok, *, now=None) -> float:
+    """Record one poll's outcome and schedule the next one; returns the interval used."""
+    state = _server_state(server_id)
+    if state is None:
+        return 0.0
+    moment = time.time() if now is None else float(now)
+    if ok:
+        state['failures'] = 0
+    else:
+        state['failures'] = int(state.get('failures') or 0) + 1
+    interval = server_interval(server_id, now=moment)
+    state['next_due'] = moment + interval
+    return interval
+
+
+def next_server_due_in(*, now=None):
+    """Seconds until the earliest scheduled poll, or None when nothing is tracked."""
+    if not _servers:
+        return None
+    moment = time.time() if now is None else float(now)
+    soonest = min(float(state.get('next_due') or 0.0) for state in _servers.values())
+    return max(0.0, soonest - moment)
+
+
+def reset_server_state() -> None:
+    with _lock:
+        _servers.clear()
+
+
+def _coerce_server_id(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def server_watch_limit() -> int:
+    """How many servers one open dashboard may hold on the fast cadence."""
+    return _env_int('EVE_SERVER_POLL_WATCH_LIMIT', 20, minimum=1)
+
+
+def note_watched_servers(server_ids, *, now=None, limit=None) -> list:
+    """Mark the servers a browser says it is rendering as worth watching.
+
+    The dashboard declares what is on screen on every poll, so the fast cadence
+    follows the operator's attention instead of the whole install, and it expires on
+    its own when the tab closes (nothing renews the mark). The declared set is capped
+    so one open tab cannot pin a hundred-server install to a two-second fan-out.
+    """
+    if isinstance(server_ids, str):
+        raw_values = server_ids.split(',')
+    elif server_ids is None:
+        raw_values = []
+    else:
+        try:
+            raw_values = list(server_ids)
+        except TypeError:
+            raw_values = [server_ids]
+    cap = server_watch_limit() if limit is None else max(1, int(limit))
+    marked = []
+    for value in raw_values:
+        if len(marked) >= cap:
+            break
+        sid = _coerce_server_id(value)
+        if sid is None or sid in marked:
+            continue
+        note_server_activity(sid, now=now)
+        marked.append(sid)
+    return marked
+
+
+def defer_server_until(server_id, until) -> None:
+    """Push a server's next poll to a wall-clock time; never pulls it earlier.
+
+    The fetch layer owns its own backoff table (``panel/jobs/refresh.py``); mirroring
+    the window here keeps the loop from waking for a panel it would only skip again.
+    """
+    state = _server_state(server_id)
+    if state is None:
+        return
+    try:
+        target = float(until)
+    except (TypeError, ValueError):
+        return
+    with _lock:
+        state['next_due'] = max(float(state.get('next_due') or 0.0), target)
+
+
+def retain_servers(server_ids) -> None:
+    """Forget servers that are no longer part of the enabled set.
+
+    Without this a deleted or disabled panel would stay "due" forever and the loop
+    would keep waking for a fetch that has nothing to do.
+    """
+    keep = set()
+    for value in server_ids or ():
+        sid = _coerce_server_id(value)
+        if sid is not None:
+            keep.add(sid)
+    with _lock:
+        for sid in list(_servers):
+            if sid not in keep:
+                _servers.pop(sid, None)
+
+
+def server_due_in(server_id, *, now=None):
+    """Seconds until this server's next poll (negative/zero == due now)."""
+    state = _server_state(server_id)
+    if state is None or not state.get('next_due'):
+        return 0.0
+    moment = time.time() if now is None else float(now)
+    return float(state['next_due']) - moment
+
+
+def server_states(*, now=None) -> dict:
+    """Per-server cadence snapshot: diagnostics, the doctor page, and tests."""
+    moment = time.time() if now is None else float(now)
+    with _lock:
+        items = sorted(_servers.items())
+    rows = {}
+    for sid, state in items:
+        active_until = float(state.get('active_until') or 0.0)
+        rows[str(sid)] = {
+            'interval_seconds': round(server_interval(sid, now=moment), 3),
+            'due': server_due(sid, now=moment),
+            'due_in_seconds': round(max(0.0, server_due_in(sid, now=moment)), 3),
+            'failures': int(state.get('failures') or 0),
+            'active': active_until > moment,
+            'active_for_seconds': round(max(0.0, active_until - moment), 1),
+        }
+    return rows

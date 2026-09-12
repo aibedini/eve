@@ -107,6 +107,11 @@ def api_refresh_stream():
         }), 503
 
     since = _request_since()
+    # Phase 10: an open stream keeps the panels it renders on the per-server active
+    # cadence (a stream-driven tab polls /api/refresh rarely, so the mark has to be
+    # renewed here). Bounded by the same watch cap.
+    watched_servers = refresh_policy.note_watched_servers(
+        request.args.get('servers') or request.args.get('server_ids'))
     _acquire_stream_slot()
 
     def generate():
@@ -133,6 +138,9 @@ def api_refresh_stream():
                 # A connected viewer counts as activity, but only once per minute
                 # so a forgotten tab cannot pin the fetcher to the fast cadence.
                 refresh_policy.record_activity(throttle_seconds=60.0)
+                # The per-server marks are shorter lived than the stream's own
+                # connection, so renew the declared panels on every tick.
+                refresh_policy.note_watched_servers(watched_servers)
                 ticks_since_hydrate += 1
                 if ticks_since_hydrate >= 5:
                     # Multi-worker: pick up a snapshot another worker published, so
@@ -209,6 +217,22 @@ def api_refresh():
     enqueue = request.args.get('enqueue')
     enqueue = _parse_bool(enqueue) if enqueue is not None else (mode in ('full', 'status'))
     wait_timeout = 2.0
+
+    # Phase 10: the browser declares which panels it is rendering (`?servers=1,2,3`),
+    # and a request that targets one panel marks exactly that one. Both feed the
+    # per-server poll cadence, so external X-UI changes surface in seconds for the
+    # panels on screen while the rest of the install keeps its idle cadence. The
+    # declaration is capped (EVE_SERVER_POLL_WATCH_LIMIT) and self-expiring: nothing
+    # renews it once the tab stops polling.
+    watched_servers = refresh_policy.note_watched_servers(
+        request.args.get('servers') or request.args.get('server_ids'))
+    if server_id not in (None, ''):
+        refresh_policy.note_server_activity(server_id)
+        try:
+            if int(server_id) not in watched_servers:
+                watched_servers.append(int(server_id))
+        except (TypeError, ValueError):
+            pass
 
     job = None
     if enqueue and mode in ('full', 'status'):

@@ -2388,9 +2388,15 @@
     function startLiveUpdates() {
         if (!SSE_ENABLED || typeof window.EventSource === 'undefined' || liveUpdates) return;
         try {
-            const streamUrl = (snapshotRevision === null)
-                ? '/api/refresh/stream'
-                : '/api/refresh/stream?since=' + encodeURIComponent(snapshotRevision);
+            const streamParams = new URLSearchParams();
+            if (snapshotRevision !== null) streamParams.set('since', String(snapshotRevision));
+            // Phase 10: the stream renews the watch marks while it is open, so a tab
+            // driven by live updates (which polls rarely) still keeps the panels it
+            // renders on the per-server active cadence.
+            const streamWatched = watchedServerIds();
+            if (streamWatched.length) streamParams.set('servers', streamWatched.join(','));
+            const streamQuery = streamParams.toString();
+            const streamUrl = '/api/refresh/stream' + (streamQuery ? '?' + streamQuery : '');
             liveUpdates = new EventSource(streamUrl);
         } catch (error) {
             liveUpdates = null;
@@ -3282,6 +3288,18 @@
         clientStoreChanged();
     }
 
+    // Phase 10: the panels whose rows are on screen right now. Sent with every poll so
+    // the server-side scheduler knows what the operator is actually watching.
+    function watchedServerIds() {
+        const seen = new Set();
+        (Array.isArray(allInboundsData) ? allInboundsData : []).forEach((row) => {
+            const sid = row && row.server_id;
+            if (sid === null || sid === undefined || sid === '') return;
+            seen.add(String(sid));
+        });
+        return Array.from(seen).slice(0, 50);
+    }
+
     async function refreshData(isSilent = false, options = {}) {
         const refreshBtn = document.querySelector('.header-controls .btn-primary');
 
@@ -3316,6 +3334,13 @@
             if (mode) params.set('mode', mode);
             if (enqueue) params.set('enqueue', '1');
             if (serverId !== null && serverId !== '' && serverId !== undefined) params.set('server_id', String(serverId));
+            // Phase 10: tell the server which panels this tab is rendering, so the
+            // fetcher polls exactly those at the per-server active cadence (external
+            // X-UI changes show up in seconds) and everything else stays on the idle
+            // cadence. The server caps the list and the mark expires on its own when
+            // this tab stops polling.
+            const watched = watchedServerIds();
+            if (!serverId && watched.length) params.set('servers', watched.join(','));
             // Silent polls ask for a delta; an explicit refresh always takes a
             // full snapshot so the operator's click cannot be answered with a
             // stale revision.
