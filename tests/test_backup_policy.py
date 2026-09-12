@@ -99,6 +99,120 @@ class BackupPolicyTests(unittest.TestCase):
         self.assertFalse(os.path.exists(captured['path']))
         self.assertEqual(os.listdir(self.spool), [])
 
+    def test_deleted_when_telegram_refuses_the_upload(self):
+        """Telegram answered, but without a confirmed document: still delete."""
+        payload = b'x' * 32
+        captured = {}
+
+        def refuse(token, chat_id, file_path, caption, proxies=None, document_name=None):
+            captured['path'] = file_path
+            return mock.Mock(status_code=400)
+
+        refused = ({'ok': False, 'description': 'Bad Request: chat not found'}, None)
+        with mock.patch.object(backup_service, '_telegram_send_document', side_effect=refuse), \
+                mock.patch.object(backup_service, '_safe_response_json', return_value=refused):
+            ok, err = backup_service._send_xui_backup_to_telegram(
+                self._server(), payload, '.db', 'bot-token', 'chat', None, datetime.utcnow())
+        self.assertFalse(ok)
+        self.assertIn('Refused', err)
+        self.assertFalse(os.path.exists(captured['path']))
+        self.assertEqual(os.listdir(self.spool), [])
+
+    def test_deleted_after_timeout(self):
+        import requests
+
+        payload = b'x' * 32
+        captured = {}
+
+        def timeout(token, chat_id, file_path, caption, proxies=None, document_name=None):
+            captured['path'] = file_path
+            raise requests.exceptions.ReadTimeout(
+                'HTTPSConnectionPool: Read timed out (url=/bot123456:SECRET-TOKEN/sendDocument)')
+
+        with mock.patch.object(backup_service, '_telegram_send_document', side_effect=timeout):
+            ok, err = backup_service._send_xui_backup_to_telegram(
+                self._server(), payload, '.db', '123456:SECRET-TOKEN', 'chat', None, datetime.utcnow())
+        self.assertFalse(ok)
+        self.assertIn('Read timed out', err)
+        self.assertNotIn('SECRET-TOKEN', err)
+        self.assertFalse(os.path.exists(captured['path']))
+        self.assertEqual(os.listdir(self.spool), [])
+
+    def test_deleted_after_cancellation(self):
+        """Cancellation is a BaseException: the finally cleanup must still run."""
+        import asyncio
+
+        payload = b'x' * 32
+        captured = {}
+
+        def cancelled(token, chat_id, file_path, caption, proxies=None, document_name=None):
+            captured['path'] = file_path
+            raise asyncio.CancelledError()
+
+        with mock.patch.object(backup_service, '_telegram_send_document', side_effect=cancelled):
+            with self.assertRaises(asyncio.CancelledError):
+                backup_service._send_xui_backup_to_telegram(
+                    self._server(), payload, '.db', 'bot-token', 'chat', None, datetime.utcnow())
+        self.assertFalse(os.path.exists(captured['path']))
+        self.assertEqual(os.listdir(self.spool), [])
+
+    def test_cleanup_failure_is_reported_as_a_security_error(self):
+        """A file that survives cleanup is a security event, not a silent no-op."""
+        payload = b'x' * 32
+        captured = {}
+        real_unlink = os.unlink
+
+        def fake_send(token, chat_id, file_path, caption, proxies=None, document_name=None):
+            captured['path'] = file_path
+            return mock.Mock(status_code=200)
+
+        def refusing_unlink(path, *args, **kwargs):
+            if os.path.dirname(str(path)) == self.spool:
+                raise PermissionError(13, 'Permission denied')
+            return real_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(backup_service, '_telegram_send_document', side_effect=fake_send), \
+                mock.patch.object(backup_service, '_safe_response_json', return_value=(_ok_document(), None)), \
+                mock.patch('app._log_audit') as audit_mock, \
+                mock.patch('os.unlink', side_effect=refusing_unlink):
+            with self.assertLogs('eve.security', level='ERROR') as logs:
+                ok, err = backup_service._send_xui_backup_to_telegram(
+                    self._server(), payload, '.db', 'bot-token', 'chat', None, datetime.utcnow())
+
+        self.assertTrue(ok, err)  # the upload itself succeeded
+        self.assertTrue(os.path.exists(captured['path']))  # ... and the file really survived
+        joined = '\n'.join(logs.output)
+        self.assertIn('[security]', joined)
+        self.assertIn('could not be deleted', joined)
+        self.assertNotIn(self.spool, joined)      # never the directory
+        self.assertNotIn('bot-token', joined)     # never a credential
+        self.assertNotIn(payload.decode('utf-8', 'ignore'), joined)  # never the content
+        self.assertEqual(audit_mock.call_args[0][0], 'xui_backup_spool_cleanup_failed')
+
+    def test_a_missing_spool_file_is_not_a_failure(self):
+        missing = os.path.join(self.spool, '2147483647-absent.db')
+        with self.assertNoLogs('eve.security', level='ERROR'):
+            self.assertFalse(backup_service._unlink_quietly(missing))
+            self.assertFalse(backup_service._unlink_quietly(None))
+
+    def test_startup_janitor_removes_orphan_spool_files(self):
+        """init_backup_tmp_dir sweeps files left behind by an abrupt crash."""
+        backup_service._xui_backup_spool_dir()
+        orphan = os.path.join(self.spool, f'{os.getpid()}-orphan.db')
+        with open(orphan, 'wb') as handle:
+            handle.write(b'x')
+        past = time.time() - 3600
+        os.utime(orphan, (past, past))
+
+        previous = backup_service.TELEGRAM_BACKUP_TMP_DIR
+        try:
+            backup_service.init_backup_tmp_dir(app_module.app)
+        finally:
+            backup_service.TELEGRAM_BACKUP_TMP_DIR = previous
+
+        self.assertFalse(os.path.exists(orphan))
+        self.assertEqual(os.listdir(self.spool), [])
+
     def test_telegram_success_requires_document_metadata(self):
         self.assertFalse(backup_service._telegram_document_delivered(None))
         self.assertFalse(backup_service._telegram_document_delivered({'ok': True}))
@@ -220,6 +334,45 @@ class TelegramBackupPipelineTests(unittest.TestCase):
         self.assertEqual(captured['data'], payload)
         self.assertFalse(captured['data'].startswith(BACKUP_MAGIC))
         self.assertFalse(os.path.exists(captured['path']))
+        self.assertEqual(os.listdir(self.spool), [])
+
+    def test_a_retry_downloads_a_fresh_backup_and_never_reuses_the_old_file(self):
+        """No X-UI payload is retained: every attempt re-downloads from the panel."""
+        payloads = [b'first-attempt' + b'a' * 32, b'second-attempt' + b'b' * 32]
+        fetch_calls = []
+        upload_paths = []
+        attempt = {'n': 0}
+
+        def fake_fetch(session_obj, server):
+            fetch_calls.append(server.id)
+            return payloads[min(len(fetch_calls) - 1, len(payloads) - 1)], '.db', None
+
+        def fake_send(token, chat_id, file_path, caption, proxies=None, document_name=None):
+            upload_paths.append(file_path)
+            attempt['n'] += 1
+            if attempt['n'] == 1:
+                raise ConnectionError('first attempt failed')
+            return mock.Mock(status_code=200)
+
+        settings = {
+            'enabled': True, 'send_panel_backup': False,
+            'bot_token': 'tok', 'chat_id': 'chat',
+        }
+        with mock.patch.object(backup_service, '_get_telegram_backup_settings', return_value=settings), \
+                mock.patch.object(backup_service, '_telegram_backup_route_proxies', return_value=({}, None)), \
+                mock.patch.object(backup_service, 'get_xui_session', return_value=(mock.Mock(), None)), \
+                mock.patch.object(backup_service, '_fetch_xui_backup', side_effect=fake_fetch), \
+                mock.patch.object(backup_service, '_telegram_send_document', side_effect=fake_send), \
+                mock.patch.object(backup_service, '_safe_response_json', return_value=(_ok_document(), None)):
+            first = backup_service._run_telegram_backup(trigger='manual')
+            self.assertFalse(first['success'], first)
+            self.assertEqual(os.listdir(self.spool), [])  # nothing retained for the retry
+            second = backup_service._run_telegram_backup(trigger='manual')
+
+        self.assertTrue(second['success'], second)
+        self.assertEqual(len(fetch_calls), 2)  # a fresh download on every attempt
+        self.assertEqual(len(upload_paths), 2)
+        self.assertNotEqual(upload_paths[0], upload_paths[1])  # a new file, not the old one
         self.assertEqual(os.listdir(self.spool), [])
 
 if __name__ == '__main__':

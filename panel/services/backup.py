@@ -11,6 +11,7 @@ never at module level (see panel/models/_helpers.py).
 
 import base64
 import json
+import logging
 import os
 import re
 import secrets
@@ -34,6 +35,7 @@ except Exception:
     ZoneInfo = None
 
 from panel.adapters.xui import _safe_response_json, get_xui_session
+from panel.core.logging_config import get_logger
 from panel.extensions import db
 from panel.models import Server, SystemSetting, TelegramEgressProfile
 from panel.security import (
@@ -44,6 +46,25 @@ from telegram_diagnostics import redact_connection_error
 
 TELEGRAM_BACKUP_TMP_DIR = None
 TELEGRAM_BACKUP_LOCK = threading.Lock()
+
+_SECURITY_LOGGER_NAME = 'eve.security'
+
+
+def _security_logger() -> logging.Logger:
+    """Return the security-reporting channel, guaranteed to be enabled.
+
+    ``panel.migrate`` runs Alembic inside this process and ``alembic/env.py``
+    calls ``logging.config.fileConfig`` with its default
+    ``disable_existing_loggers``, which disables every logger that already
+    exists at that moment -- this module's own logger and ``app.logger`` among
+    them (the production entrypoint avoids this by migrating in a separate
+    process first). A security report must not be dropped by that, so the
+    channel is re-enabled before it is used.
+    """
+    channel = get_logger(_SECURITY_LOGGER_NAME)
+    if channel.disabled:
+        channel.disabled = False
+    return channel
 
 
 def init_backup_tmp_dir(flask_app):
@@ -75,7 +96,9 @@ def _telegram_backup_tmp_dir() -> str:
 # artifact Eve re-uploads; it is intentionally NOT encrypted by Eve. It only
 # exists as a 0600 file inside a RAM-backed 0700 spool directory for the
 # duration of one Telegram upload, then is unlinked in a finally block on both
-# success and failure. A retry always downloads a fresh copy from the panel.
+# success and failure. A retry always downloads a fresh copy from the panel. A
+# cleanup that cannot remove the file is logged and audited as a security error
+# (action `xui_backup_spool_cleanup_failed`) instead of being swallowed.
 XUI_BACKUP_SPOOL_DIR = (os.environ.get('EVE_XUI_BACKUP_DIR') or '').strip() or '/run/eve/xui-backup'
 XUI_BACKUP_STALE_SECONDS = max(60, int(os.environ.get('EVE_XUI_BACKUP_STALE_SECONDS') or 300))
 
@@ -103,15 +126,51 @@ def _xui_backup_spool_dir() -> str:
     return base
 
 
-def _unlink_quietly(path: str | None) -> bool:
-    """Best-effort unlink; returns True when a file was actually removed."""
+def _spool_display_name(path: str | None) -> str:
+    """Basename only: a spool name is random and never carries content."""
     try:
-        if path and os.path.exists(path):
-            os.unlink(path)
-            return True
-    except OSError:
-        pass
-    return False
+        return os.path.basename(path or '') or 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def _report_spool_cleanup_failure(path: str | None, exc: OSError) -> None:
+    """Report a transient backup file that survived its ``finally`` cleanup.
+
+    This is a security event: the policy is that no X-UI backup ever remains on
+    the Eve host (docs/security/BACKUP_POLICY.md). Only the random basename and
+    the error class are reported -- never the directory, the payload, a token or
+    any other credential.
+    """
+    detail = f'{type(exc).__name__}: {exc.strerror or str(exc) or "unknown error"}'
+    name = _spool_display_name(path)
+    channel = _security_logger()
+    channel.error('[security] transient backup file could not be deleted (%s): %s', name, detail)
+    try:
+        from app import _log_audit  # deferred: services never import app at module level
+        _log_audit('xui_backup_spool_cleanup_failed', meta={'file': name, 'error': detail})
+    except Exception:
+        channel.debug('[security] could not queue an audit row for a spool cleanup failure',
+                      exc_info=True)
+
+
+def _unlink_quietly(path: str | None) -> bool:
+    """Remove a transient file; True only when a file was actually removed.
+
+    A missing file is not a failure. Any other failure is reported as a security
+    event instead of being swallowed, because a transient backup that survives
+    cleanup violates docs/security/BACKUP_POLICY.md.
+    """
+    if not path:
+        return False
+    try:
+        os.unlink(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        _report_spool_cleanup_failure(path, exc)
+        return False
 
 
 def _xui_backup_spool_file(payload: bytes, ext: str) -> str:
