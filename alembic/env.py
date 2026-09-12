@@ -18,7 +18,19 @@ from panel.core.db_pool import alembic_engine_options
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # A migration must never reconfigure (or disable) application logging.
+    # panel.migrate runs Alembic INSIDE the app process, where the root logger is
+    # already configured by panel.core.logging_config; re-applying alembic.ini
+    # there would run fileConfig with its default disable_existing_loggers=True,
+    # which switches off every logger that already exists -- app.logger and every
+    # module logger imported before the migration among them, silently dropping
+    # their records for the rest of the process lifetime. Only a standalone
+    # `alembic` CLI, where nothing has configured logging yet, applies alembic.ini,
+    # and even then it leaves pre-existing loggers enabled.
+    import logging
+
+    if not logging.getLogger().handlers:
+        fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def _resolve_url() -> str:
