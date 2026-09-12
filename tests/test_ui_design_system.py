@@ -359,5 +359,58 @@ class CountryFlagTests(unittest.TestCase):
                             "static/flags/4x3/%s.svg is missing" % code)
 
 
+class ActionIconTests(unittest.TestCase):
+    """A `fill: currentColor` on `.action-btn svg` destroys every outline icon.
+
+    The legacy monitor rows declared a bare `.action-btn` (40px, then 48px) and a
+    `fill: currentColor` icon rule AFTER the base component, so the cascade won and
+    the panel's stroke-only SVGs became solid blobs at the wrong size.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.css = _read(STYLE_CSS)
+
+    @staticmethod
+    def _rules(css):
+        """(selector, body) for every rule, including rules nested in @media."""
+        code = RE_COMMENT.sub("", css)
+        return [(selector.strip(), body) for selector, body in
+                re.findall(r"([^{}]+)\{([^{}]*)\}", code)]
+
+    def test_no_action_button_rule_fills_its_icon(self):
+        offenders = []
+        for selector, body in self._rules(self.css):
+            if ".action-btn svg" not in selector:
+                continue
+            fill = re.search(r"fill\s*:\s*([^;]+)", body)
+            if fill and fill.group(1).strip() != "none":
+                offenders.append((selector[:70], fill.group(0).strip()))
+        self.assertEqual(offenders, [], "an action icon is filled: %s" % offenders)
+
+    def test_the_outline_utility_covers_action_buttons(self):
+        self.assertIn(".eve-icon-outline", self.css)
+        utility = [body for selector, body in self._rules(self.css)
+                   if ".eve-icon-outline" in selector and ".action-btn svg" in selector]
+        self.assertTrue(utility, "the outline rule must cover .action-btn svg")
+        self.assertIn("fill: none", utility[0])
+
+    def test_only_the_base_component_targets_a_bare_action_button(self):
+        bare = [(selector, body) for selector, body in self._rules(self.css) if selector == ".action-btn"]
+        self.assertEqual(len(bare), 1, "bare .action-btn rules: %s" % [s for s, _ in bare])
+        self.assertNotIn("flex: 1", bare[0][1], "a global flex:1 stretches every action button")
+
+    def test_every_template_action_icon_is_outline(self):
+        offenders = []
+        for name in sorted(os.listdir(os.path.join(REPO_ROOT, "templates"))):
+            if not name.endswith(".html"):
+                continue
+            text = _read(os.path.join(REPO_ROOT, "templates", name))
+            for match in re.finditer(r'class="[^"]*action-btn[^"]*"(.{0,220}?)<svg([^>]*)>', text, re.S):
+                if 'fill="none"' not in match.group(2):
+                    offenders.append("%s: %s" % (name, match.group(2).strip()[:70]))
+        self.assertEqual(offenders, [], "action icons must stay outline: %s" % offenders)
+
+
 if __name__ == "__main__":
     unittest.main()

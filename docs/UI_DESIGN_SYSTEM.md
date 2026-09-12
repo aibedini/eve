@@ -152,6 +152,14 @@ stand-in for the red Disabled state.
 
 * Icons are inline `<svg>` (font icons and icon fonts are not used), sized by
   `.btn-icon svg` and `.action-icon svg`, so they inherit the surrounding text colour.
+* Outline icons are stroke-only: the project ships them with `fill="none"` and
+  `stroke="currentColor"`, and `.eve-icon-outline` (which also covers `.action-btn svg`)
+  pins `fill: none; stroke: currentColor`. A stylesheet rule that sets
+  `fill: currentColor` beats the SVG's own attribute, so the icon renders as a solid
+  blob — that regression already happened once when a legacy monitor rule
+  (`width: 48px; ... fill: currentColor`) was left written as a bare `.action-btn`
+  further down the file, where it re-sized and re-filled every action button in the
+  panel. Page-specific button styles must be scoped to that page's container.
 * Icon-only controls keep a text label or tooltip for accessibility.
 * Country flags in panel-provided names are the `.country-flag` badge over the
   self-hosted `static/flags/4x3/` SVG set, rendered by `EveFlags.html()` or by

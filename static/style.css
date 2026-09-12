@@ -651,7 +651,6 @@ body {
 .btn-sms svg {
     width: 16px;
     height: 16px;
-    fill: currentColor;
 }
 
 .btn-danger svg,
@@ -1965,6 +1964,17 @@ html[data-theme="light"] .package-price {
 .action-btn.success:hover { background: var(--success); }
 .action-btn.warning:hover { background: var(--warning); }
 .action-btn.renew:hover { background: #8b5cf6; }
+
+/* Outline icons (the Lucide/Feather-style stroke SVGs the templates ship with
+   `fill="none" stroke="currentColor"`). The fill must stay `none`: a rule that
+   sets `fill: currentColor` wins over the SVG attribute and turns every outline
+   icon into a solid blob, which is exactly how the action icons were destroyed
+   once before. Reuse this class for any new outline icon. */
+.eve-icon-outline,
+.action-btn svg {
+    fill: none;
+    stroke: currentColor;
+}
 .action-btn.wallet-action:hover,
 .action-btn.wallet-action:focus-visible,
 .action-btn.wallet-action:active {
@@ -4490,7 +4500,7 @@ html[data-theme="light"] .server-icon {
         max-width: 80px;
     }
     
-    .action-btn {
+    .clients-table .action-btn {
         width: 22px;
         height: 22px;
     }
@@ -4726,7 +4736,9 @@ html[data-theme="light"] .server-icon {
         align-items: center;
     }
     
-    .action-btn {
+    /* Scoped to the dashboard action row: a bare `.action-btn` here re-sized every
+       action button in the panel on small screens. */
+    .action-buttons .action-btn {
         width: 36px !important;
         height: 36px !important;
         min-width: 36px;
@@ -4735,7 +4747,6 @@ html[data-theme="light"] .server-icon {
         flex: 0 0 36px;
         border-radius: 8px;
     }
-    
     .header-actions {
         width: 100%;
         gap: 6px;
@@ -5230,7 +5241,10 @@ html[data-theme="light"] .server-icon {
     gap: 12px;
 }
 
-.action-btn {
+/* Monitor compact row: scoped to its own container. These rules were global and,
+   coming later in the file than the base `.action-btn`, they re-sized every
+   action button in the panel (40px/48px) and filled its outline icon. */
+.monitor-compact-row .action-btn {
     width: 40px;
     height: 40px;
     border-radius: 8px;
@@ -5242,32 +5256,31 @@ html[data-theme="light"] .server-icon {
     cursor: pointer;
 }
 
-.action-btn:hover {
+.monitor-compact-row .action-btn:hover {
     transform: scale(1.05);
 }
 
-.action-btn svg {
+.monitor-compact-row .action-btn svg {
     width: 20px;
     height: 20px;
-    fill: currentColor;
 }
 
-.action-btn.btn-whatsapp { 
+.monitor-compact-row .action-btn.btn-whatsapp { 
     background: rgba(31, 157, 85, 0.2); 
     color: #4ade80; 
     border: 1px solid rgba(31, 157, 85, 0.3);
 }
-.action-btn.btn-whatsapp:hover { 
+.monitor-compact-row .action-btn.btn-whatsapp:hover { 
     background: rgba(31, 157, 85, 0.3); 
     color: #ffffff;
 }
 
-.action-btn.btn-sms { 
+.monitor-compact-row .action-btn.btn-sms { 
     background: rgba(51, 65, 85, 0.5); 
     color: #cbd5e1; 
     border: 1px solid rgba(71, 85, 105, 0.5);
 }
-.action-btn.btn-sms:hover { 
+.monitor-compact-row .action-btn.btn-sms:hover { 
     background: rgba(51, 65, 85, 0.8); 
     color: #ffffff;
 }
@@ -5295,7 +5308,7 @@ html[data-theme="light"] .server-icon {
         width: 100%;
         gap: 12px;
     }
-    .action-btn {
+    .compact-actions .action-btn {
         flex: 1;
         height: 48px; /* Larger tap target for mobile */
         border-radius: 10px;
@@ -5449,7 +5462,9 @@ html[data-theme="light"] .server-icon {
     gap: 12px;
 }
 
-.action-btn {
+/* Monitor simple row: scoped to its own container for the same reason as the
+   compact row above. */
+.monitor-simple-row .action-btn {
     width: 48px;
     height: 48px;
     border-radius: 12px;
@@ -5462,34 +5477,33 @@ html[data-theme="light"] .server-icon {
     flex-shrink: 0;
 }
 
-.action-btn svg {
+.monitor-simple-row .action-btn svg {
     width: 24px;
     height: 24px;
-    fill: currentColor;
 }
 
-.action-btn:active {
+.monitor-simple-row .action-btn:active {
     transform: scale(0.95);
 }
 
-.action-btn.btn-whatsapp { 
+.monitor-simple-row .action-btn.btn-whatsapp { 
     background: rgba(31, 157, 85, 0.15); 
     color: #4ade80; 
     border: 1px solid rgba(31, 157, 85, 0.3);
 }
-.action-btn.btn-whatsapp:hover { 
+.monitor-simple-row .action-btn.btn-whatsapp:hover { 
     background: #1f9d55; 
     border-color: #1f9d55;
     color: white;
     box-shadow: 0 4px 12px rgba(31, 157, 85, 0.3);
 }
 
-.action-btn.btn-sms { 
+.monitor-simple-row .action-btn.btn-sms { 
     background: rgba(51, 65, 85, 0.4); 
     color: #cbd5e1; 
     border: 1px solid rgba(71, 85, 105, 0.4);
 }
-.action-btn.btn-sms:hover { 
+.monitor-simple-row .action-btn.btn-sms:hover { 
     background: #475569; 
     border-color: #475569;
     color: white;
@@ -5582,10 +5596,9 @@ html[data-theme="light"] .server-icon {
     box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
 }
 
-/* Icons are naturally white because color is set to white */
+/* Icons inherit the button colour through the outline rule above. */
 .monitor-action-btn.whatsapp svg,
 .monitor-action-btn.sms svg {
-    fill: currentColor;
     width: 20px;
     height: 20px;
 }

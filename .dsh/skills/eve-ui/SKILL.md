@@ -48,7 +48,14 @@ Therefore:
 ## 3. Component vocabulary (canonical markup)
 
 Buttons: `.btn` plus `.btn-primary`, `.btn-secondary`, `.btn-success`, `.btn-danger`,
-`.btn-outline`; sizes `.btn-icon`, `.btn-block`.
+`.btn-outline`; sizes `.btn-icon`, `.btn-block`. Table/card action buttons use
+`.action-btn` (28px, base). Outline icons keep their stroke look through
+`.eve-icon-outline` (also applied to `.action-btn svg`): `fill: none; stroke:
+currentColor`. Never put `fill: currentColor` on an outline icon — it wins over the
+SVG's own `fill="none"` attribute and turns the icon into a solid blob. A rule for a
+page-specific button belongs under that page's container (`.monitor-compact-row
+.action-btn`), never as a bare `.action-btn` later in the stylesheet: the cascade
+would re-size and re-fill every action button in the panel.
 
 Form fields:
 
