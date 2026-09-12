@@ -45,12 +45,16 @@ relative link does not resolve.
 - [Performance baseline](performance/BASELINE.md) - performance/BASELINE.md
 - [Database connection pool](performance/DB_POOL.md) - performance/DB_POOL.md
 - [Delta sync for /api/refresh](performance/DELTA_SYNC.md) - performance/DELTA_SYNC.md
+- [Latency SLOs: mutation -> cache -> UI](performance/LATENCY_SLO.md) - performance/LATENCY_SLO.md
 - [Load test](performance/LOAD_TEST.md) - performance/LOAD_TEST.md
+- [Mutation scale: O(1) in the number of panels](performance/MUTATION_SCALE.md) - performance/MUTATION_SCALE.md
 - [Bounded, coalesced panel access](performance/PANEL_LIMITS.md) - performance/PANEL_LIMITS.md
 - [Per-server snapshot cache](performance/PER_SERVER_CACHE.md) - performance/PER_SERVER_CACHE.md
 - [Hot-path query budget](performance/QUERY_OPTIMIZATION.md) - performance/QUERY_OPTIMIZATION.md
 - [Scoped refresh locks](performance/REFRESH_LOCK.md) - performance/REFRESH_LOCK.md
+- [Mutation / cache / UI regression suite](performance/REGRESSION_SUITE.md) - performance/REGRESSION_SUITE.md
 - [Reseller refresh projection](performance/SERIALIZATION.md) - performance/SERIALIZATION.md
+- [Per-server adaptive polling](performance/SERVER_POLLING.md) - performance/SERVER_POLLING.md
 - [Live updates over server-sent events](performance/SSE.md) - performance/SSE.md
 - [Static asset delivery](performance/STATIC_ASSETS.md) - performance/STATIC_ASSETS.md
 - [Subscription response cache](performance/SUBSCRIPTION_CACHE.md) - performance/SUBSCRIPTION_CACHE.md

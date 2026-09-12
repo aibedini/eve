@@ -115,7 +115,11 @@ def main(argv=None):
     parser.add_argument('--delay', type=float, default=None)
     args = parser.parse_args(argv)
     callers = args.callers or (4 if args.quick else 20)
-    delay = args.delay or (0.02 if args.quick else 0.05)
+    # The coalescing window is the leader's sleep: every follower must reach
+    # `coalesce()` while the leader is still in flight. A 20 ms window is fine on an
+    # idle machine and flaky on a loaded CI runner (a follower that arrives late
+    # legitimately becomes a second leader), so quick mode uses a wider window.
+    delay = args.delay or (0.15 if args.quick else 0.05)
     result = {'callers': callers, 'delay_seconds': delay}
     result.update(measure_uncodalesced(callers, delay))
     result.update(measure_coalescing(callers, delay))
