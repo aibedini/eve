@@ -272,6 +272,31 @@ stand-in for the red Disabled state.
 * Recovering a damaged block by decoding it the wrong way; a bad byte-order decode can
   look valid while poisoning every rule (see the structure guard tests).
 
+## Enforcement
+
+The contract is executable, not aspirational:
+
+* `tests/test_ui_design_system.py` guards the stylesheet (valid UTF-8 with no NUL bytes,
+  no stray non-ASCII left by a bad decode, balanced braces, the token and component
+  vocabulary), the skill in both discovery roots, this document, and the UI rule in every
+  agent instruction file.
+* `scripts/ui_design_audit.py` counts the drift the templates still carry: inline
+  `style="..."` attributes, hardcoded hex colours, inline `color:` / `font-size:`,
+  `style.display` toggles, bare checkboxes and emoji. `tests/ui_design_baseline.json`
+  records the count per template, and the guard test fails any file that goes above its
+  recorded number. Run `python scripts/ui_design_audit.py --check` before committing a UI
+  change; after a real cleanup rerun `python scripts/ui_design_audit.py
+  --write-baseline` (the backlog may shrink, never grow).
+* Every inline colour that spelled a token exactly has been migrated with
+  `python scripts/ui_design_audit.py --fix-colors --apply`. That migration is
+  property-aware: a surface token is never mapped onto a `color:`, and a permanently
+  dark surface (a dialog with a white hairline border, a code block, the fixed navy
+  announcement overlay) keeps its own colours, because the text tokens invert in the
+  light theme and would make that text unreadable.
+* The remaining backlog is measured rather than hidden. The tool prints it per template,
+  which is what makes an incremental cleanup reviewable: pick a page, move its styles
+  into the stylesheet section for that page, and lower its baseline.
+
 ## Change Workflow
 
 1. Read the [eve-ui skill](../.agents/skills/eve-ui/SKILL.md) and this document.
@@ -279,7 +304,8 @@ stand-in for the red Disabled state.
    (`grep -n "^\\.<area>-" static/style.css`) and reuse or extend them.
 3. Implement with tokens and the documented markup; add CSS in the existing section for
    the page rather than at the end of the file.
-4. Run the page's tests plus [the guard tests](../tests/test_ui_design_system.py).
+4. Run the page's tests plus [the guard tests](../tests/test_ui_design_system.py) and
+   `python scripts/ui_design_audit.py --check`.
 5. Bump `APP_VERSION` and describe the change honestly in the commit.
 
 ## Agent Rule

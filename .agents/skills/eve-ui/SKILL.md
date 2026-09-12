@@ -125,6 +125,17 @@ Text helpers: `.field-note` (block hint under a control), `.field-note-ok`
    character outside the allowlist appears, if braces stop balancing, or if this skill
    drifts from the stylesheet.
 8. After a UI change run the page tests plus `tests/test_ui_design_system.py`.
+9. Do not add to the drift. `scripts/ui_design_audit.py` counts the inline styles,
+   hardcoded colours, `style.display` toggles, bare checkboxes and emoji in
+   `templates/`, and `tests/ui_design_baseline.json` records the per-file ceiling.
+   Run `python scripts/ui_design_audit.py --check` before committing a UI change (the
+   guard test runs the same comparison): a file may go below its baseline, never above
+   it. When you clean a page, rerun `python scripts/ui_design_audit.py
+   --write-baseline` to lock the improvement in. Inline colours that spell a token
+   exactly can be migrated with
+   `python scripts/ui_design_audit.py --fix-colors --apply`; the tool leaves a fixed
+   dark surface (a dialog with a white hairline border, a code block) alone, because
+   the text tokens invert in the light theme.
 
 ## 5. Server page specifics
 

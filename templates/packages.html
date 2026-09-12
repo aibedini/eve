@@ -577,7 +577,7 @@ function renderPackages(body) {
             <div class="pkg-meta">
                 ${ownerBadge}
                 <span class="scope-badge ${scopeClass}">${scopeLabel}</span>
-                ${p.show_on_sub ? '<span class="scope-badge" style="background:rgba(34,197,94,0.18); color:#22c55e; border:1px solid rgba(34,197,94,0.35);" title="Visible on customer subscription page">🌐 Sub</span>' : ''}
+                ${p.show_on_sub ? '<span class="scope-badge" style="background:rgba(34,197,94,0.18); color: var(--success); border:1px solid rgba(34,197,94,0.35);" title="Visible on customer subscription page">🌐 Sub</span>' : ''}
                 ${p.show_on_create === false ? '<span class="scope-badge" style="background:rgba(251,191,36,0.15); color:#fbbf24; border:1px solid rgba(251,191,36,0.35);" title="Hidden on creation surfaces">Renew only</span>' : ''}
                 ${p.show_on_renew === false ? '<span class="scope-badge" style="background:rgba(251,191,36,0.15); color:#fbbf24; border:1px solid rgba(251,191,36,0.35);" title="Hidden on renewal surfaces">Create only</span>' : ''}
                 <div class="pkg-price">${Number(p.price).toLocaleString()} T</div>

@@ -591,7 +591,7 @@ async function loadTrafficCheck() {
         const res = await fetch(url);
         const d   = await res.json();
         if (!d.success) {
-            results.innerHTML = `<div style="color:#ef4444;padding:20px 0;">Error: ${esc(d.error || 'Unknown error')}</div>`;
+            results.innerHTML = `<div style="color: var(--danger);padding:20px 0;">Error: ${esc(d.error || 'Unknown error')}</div>`;
             return;
         }
         _tcData = d;
@@ -634,7 +634,7 @@ async function loadTrafficCheck() {
 
         tcRender();
     } catch(e) {
-        results.innerHTML = `<div style="color:#ef4444;padding:20px 0;">Network error: ${esc(e.message)}</div>`;
+        results.innerHTML = `<div style="color: var(--danger);padding:20px 0;">Network error: ${esc(e.message)}</div>`;
     } finally {
         if (runBtn) {
             runBtn.disabled = false;
@@ -711,7 +711,7 @@ function tcRender() {
                 const statusBadge = c.status === 'deleted'
                     ? `<span style="font-size:.68rem;padding:1px 6px;border-radius:8px;background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3);white-space:nowrap;">${tcT('Deleted', 'حذف‌شده')}</span>`
                     : c.status === 'disabled'
-                    ? `<span style="font-size:.68rem;padding:1px 6px;border-radius:8px;background:rgba(148,163,184,.12);color:#94a3b8;border:1px solid rgba(148,163,184,.25);white-space:nowrap;">${tcT('Disabled', 'غیرفعال')}</span>`
+                    ? `<span style="font-size:.68rem;padding:1px 6px;border-radius:8px;background:rgba(148,163,184,.12);color: var(--text-secondary);border:1px solid rgba(148,163,184,.25);white-space:nowrap;">${tcT('Disabled', 'غیرفعال')}</span>`
                     : '';
                 return `
                 <div class="tc-client-row">
@@ -719,7 +719,7 @@ function tcRender() {
                     <div class="tc-inbound-stats">
                         <span class="tc-badge-dl">↓ ${fmtBytes(c.download)}</span>
                         <span class="tc-badge-ul">↑ ${fmtBytes(c.upload)}</span>
-                        <span style="color:#f59e0b;font-weight:600;">${fmtBytes(c.total)}</span>
+                        <span style="color: var(--warning);font-weight:600;">${fmtBytes(c.total)}</span>
                         ${c.remaining != null && c.remaining >= 0 ? `<span style="color:#10b981;font-weight:600;" title="Remaining">⬇ ${fmtBytes(c.remaining)}</span>` : ''}
                     </div>
                 </div>`;
@@ -734,7 +734,7 @@ function tcRender() {
                 <div class="tc-inbound-stats">
                     <span class="tc-badge-dl">↓ ${fmtBytes(ib.download)}</span>
                     <span class="tc-badge-ul">↑ ${fmtBytes(ib.upload)}</span>
-                    <span style="color:#f59e0b;font-weight:600;">${fmtBytes(ib.total)}</span>
+                    <span style="color: var(--warning);font-weight:600;">${fmtBytes(ib.total)}</span>
                     ${ib.remaining ? `<span style="color:#10b981;font-weight:600;" title="Remaining traffic">⬇ ${esc(ib.remaining)}</span>` : ''}
                     <span class="tc-pct">${pct}%</span>
                     ${toggleBtn}

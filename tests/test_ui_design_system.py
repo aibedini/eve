@@ -249,5 +249,57 @@ class AgentUiRuleTests(unittest.TestCase):
             self.assertIn("Do not introduce a parallel visual system", text, name)
 
 
+class DesignSystemRatchetTests(unittest.TestCase):
+    """The templates predate the contract, so the drift may not grow.
+
+    `scripts/ui_design_audit.py` counts the inline styles, hardcoded colours,
+    `style.display` toggles, bare checkboxes and emoji per template. The counts
+    recorded in `tests/ui_design_baseline.json` are the ceiling: a change may
+    lower them (rerun the tool with --write-baseline) but never raise them.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "ui_design_audit", os.path.join(REPO_ROOT, "scripts", "ui_design_audit.py"))
+        cls.audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.audit)
+        cls.counts = cls.audit.scan_templates()
+
+    def test_the_audit_tool_and_baseline_exist(self):
+        self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, "scripts", "ui_design_audit.py")))
+        self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, "tests",
+                                                    "ui_design_baseline.json")))
+
+    def test_no_template_exceeds_the_recorded_baseline(self):
+        problems = self.audit.check(self.counts)
+        self.assertEqual(problems, [], "design-system drift grew:\n" + "\n".join(problems))
+
+    def test_the_safe_token_migration_is_fully_applied(self):
+        """No inline colour still spells a value that is exactly a token."""
+        leftovers = {}
+        for name in sorted(os.listdir(os.path.join(REPO_ROOT, "templates"))):
+            if not name.endswith(".html"):
+                continue
+            text = _read(os.path.join(REPO_ROOT, "templates", name))
+            remaining = self.audit.remaining_token_migrations(text)
+            if remaining:
+                leftovers[name] = remaining
+        self.assertEqual(leftovers, {}, "run: python scripts/ui_design_audit.py "
+                                        "--fix-colors --apply (%s)" % leftovers)
+
+    def test_the_tool_only_migrates_themes_safe_values(self):
+        style, changes, _ = self.audit.tokenize_inline_style("color:#ef4444;font-size:0.8rem")
+        self.assertEqual(style, "color: var(--danger);font-size:0.8rem")
+        self.assertEqual(len(changes), 1)
+        # A fixed dark surface keeps its ink: --text-secondary flips in the light theme.
+        _, changes, skipped = self.audit.tokenize_inline_style("color:#94a3b8",
+                                                              allow_theme_tokens=False)
+        self.assertEqual(changes, [])
+        self.assertEqual(len(skipped), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

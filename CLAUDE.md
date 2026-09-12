@@ -31,4 +31,7 @@ For every user-facing UI change, read and follow `.agents/skills/eve-ui/SKILL.md
 `docs/UI_DESIGN_SYSTEM.md`. Do not introduce a parallel visual system.
 `tests/test_ui_design_system.py` guards the stylesheet encoding, the non-ASCII
 allowlist and brace balance, the component classes, the skill and the doc.
+Existing template drift is measured by `scripts/ui_design_audit.py` against
+`tests/ui_design_baseline.json`; `python scripts/ui_design_audit.py --check` must
+pass, and a page may go below its baseline but never above it.
 

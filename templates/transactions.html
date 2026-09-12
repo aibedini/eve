@@ -456,7 +456,7 @@
         } catch (error) {
             console.error(error);
             countLabel.textContent = 'Unable to load transactions';
-            tbody.innerHTML = `<tr><td colspan="${columnSpan}" style="text-align:center; color:#ef4444; padding:20px;">${error.message || 'Unknown error'}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${columnSpan}" style="text-align:center; color: var(--danger); padding:20px;">${error.message || 'Unknown error'}</td></tr>`;
         }
     };
 

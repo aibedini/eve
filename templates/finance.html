@@ -1101,7 +1101,7 @@
         </div>
         <form id="payment-form">
             <input type="hidden" id="payment-id">
-            <div id="payment-error" class="muted-note" style="color:#ef4444; display:none; margin-bottom:8px;"> </div>
+            <div id="payment-error" class="muted-note" style="color: var(--danger); display:none; margin-bottom:8px;"> </div>
             <div class="modal-body">
                 <div class="form-group">
                     <label>Entry Type</label>
@@ -1179,7 +1179,7 @@
 <div id="delete-modal" class="modal-overlay hidden">
     <div class="modal" style="max-width: 500px;">
         <div class="modal-header">
-            <h3 style="color: #ef4444; display: flex; align-items: center; gap: 10px;">
+            <h3 style="color: var(--danger); display: flex; align-items: center; gap: 10px;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="10"></circle>
                     <line x1="12" y1="8" x2="12" y2="12"></line>
@@ -1221,7 +1221,7 @@
         </div>
         <div class="form-actions">
             <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">Cancel</button>
-            <button type="button" class="btn" style="background: #ef4444; color: white;" id="confirm-delete-btn" onclick="confirmDelete()">
+            <button type="button" class="btn" style="background: var(--danger); color: white;" id="confirm-delete-btn" onclick="confirmDelete()">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
                     <polyline points="3 6 5 6 21 6"></polyline>
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -1834,7 +1834,7 @@
             if (countLabel) countLabel.textContent = `${totalItems} payments found.`;
         } catch (error) {
             console.error(error);
-            if (tbody) tbody.innerHTML = `<tr><td colspan="${columnSpan}" style="text-align: center; color: #ef4444; padding: 20px;">${error.message}</td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="${columnSpan}" style="text-align: center; color: var(--danger); padding: 20px;">${error.message}</td></tr>`;
             if (countLabel) countLabel.textContent = 'Unable to load payments';
         }
     };

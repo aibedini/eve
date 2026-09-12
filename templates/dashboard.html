@@ -3699,7 +3699,7 @@
                 </div>
             </div>
             <div class="inbound-meta-compact">
-                <span class="meta-tag"><span class="label">Clients:</span> <span class="value">${totalCount}</span><span style="color:#64748b;margin:0 2px;">/</span><span class="value" style="color:#4ade80;">${activeCount}</span></span>
+                <span class="meta-tag"><span class="label">Clients:</span> <span class="value">${totalCount}</span><span style="color: var(--secondary);margin:0 2px;">/</span><span class="value" style="color:#4ade80;">${activeCount}</span></span>
                 <span class="meta-tag"><span class="label">Inbounds:</span> <span class="value">${serverInbounds.length}</span></span>
             </div>
             ${clientsSectionHtml}
@@ -3788,7 +3788,7 @@
                 <div class="inbound-meta-compact">
                     <span class="meta-tag"><span class="label">Network:</span> <span class="value">${inbound.network}</span></span>
                     <span class="meta-tag"><span class="label">Security:</span> <span class="value">${inbound.security}</span></span>
-                    <span class="meta-tag"><span class="label">Clients:</span> <span class="value">${inbound.client_count}</span><span style="color:#64748b;margin:0 2px;">/</span><span class="value" style="color:#4ade80;" title="Active clients">${inbound.active_count ?? inbound.clients.filter(c=>c.enable).length}</span></span>
+                    <span class="meta-tag"><span class="label">Clients:</span> <span class="value">${inbound.client_count}</span><span style="color: var(--secondary);margin:0 2px;">/</span><span class="value" style="color:#4ade80;" title="Active clients">${inbound.active_count ?? inbound.clients.filter(c=>c.enable).length}</span></span>
                     <span class="meta-tag traffic"><span class="label">Traffic:</span> <span class="up">↑${inbound.total_up}</span> <span class="down">↓${inbound.total_down}</span></span>
                     ${inbound.remaining_total ? `<span class="meta-tag"><span class="label">Remaining:</span> <span class="value" style="color:#10b981;font-weight:600;">${inbound.remaining_total}</span></span>` : ''}
                 </div>
@@ -5323,7 +5323,7 @@
                 updateAddPriceDisplay();
             }
         } catch (e) {
-            container.innerHTML = '<div style="grid-column: span 2; color: #ef4444; text-align: center;">Error loading packages</div>';
+            container.innerHTML = '<div style="grid-column: span 2; color: var(--danger); text-align: center;">Error loading packages</div>';
             selectedPackageId = null;
         }
     }
@@ -5397,7 +5397,7 @@
                 refreshRenewPriceDisplay();
             }
         } catch (e) {
-            container.innerHTML = '<div style="grid-column: span 2; color: #ef4444; text-align: center;">Error loading packages</div>';
+            container.innerHTML = '<div style="grid-column: span 2; color: var(--danger); text-align: center;">Error loading packages</div>';
             selectedRenewPackageId = null;
         }
     }
@@ -6767,15 +6767,15 @@ Connection links
             const stateDot = !isHidden ? _serverStateDot(server.xray_state) : '';
             const ptBadge = _panelTypeBadge(server.panel_type);
             const fetchingBadge = (!isHidden && !server.xray_version && !server.panel_status_error)
-                ? `<span id="srv-fetching-${server.id}" style="font-size:0.7rem;color:#94a3b8;">fetching…</span>`
+                ? `<span id="srv-fetching-${server.id}" style="font-size:0.7rem;color: var(--text-secondary);">fetching…</span>`
                 : '';
             const errBadge = (!isHidden && server.panel_status_error)
-                ? `<span style="font-size:0.7rem;color:#ef4444;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;" title="${escapeHtml(server.panel_status_error)}">⚠ ${escapeHtml(server.panel_status_error)}</span>`
+                ? `<span style="font-size:0.7rem;color: var(--danger);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;" title="${escapeHtml(server.panel_status_error)}">⚠ ${escapeHtml(server.panel_status_error)}</span>`
                 : '';
             const hiddenBadge = isHidden
-                ? `<span style="background:rgba(148,163,184,0.15);color:#64748b;border-radius:4px;padding:1px 6px;font-size:0.7rem;">hidden</span>`
+                ? `<span style="background:rgba(148,163,184,0.15);color: var(--secondary);border-radius:4px;padding:1px 6px;font-size:0.7rem;">hidden</span>`
                 : '';
-            const idBadge = `<span style="background:rgba(148,163,184,0.1);color:#64748b;border-radius:4px;padding:1px 6px;font-size:0.7rem;font-family:monospace;">#${server.id}</span>`;
+            const idBadge = `<span style="background:rgba(148,163,184,0.1);color: var(--secondary);border-radius:4px;padding:1px 6px;font-size:0.7rem;font-family:monospace;">#${server.id}</span>`;
 
             const meta = [idBadge, ptBadge, xrayBadge, xuiBadge, stateDot, fetchingBadge, errBadge, hiddenBadge].filter(Boolean).join(' ');
 

@@ -68,5 +68,10 @@ applying — and a wrong byte-order decode of that block leaves stray non-ASCII
 characters that silently kill the recovered rules while the file still looks valid).
 `tests/test_ui_design_system.py` guards the encoding, the non-ASCII allowlist, the
 brace balance, the component classes, the skill (in both locations), the design-system
-document and the rule in these agent instruction files.
+document and the rule in these agent instruction files. The templates still carry
+measured drift (inline `style="..."`, hardcoded colours, `style.display`, bare
+checkboxes, emoji): `scripts/ui_design_audit.py` counts it per template,
+`tests/ui_design_baseline.json` is the ceiling, and `python
+scripts/ui_design_audit.py --check` must pass. A page may go below its baseline (rerun
+the tool with `--write-baseline`), never above it.
 

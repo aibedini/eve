@@ -1,0 +1,252 @@
+{
+  "rules": {
+    "bare_checkbox": "input[type=checkbox] without the project checkbox/toggle markup",
+    "emoji": "emoji used as UI chrome",
+    "hardcoded_colors": "hex colour inside an inline style",
+    "inline_styles": "style=\"...\" attributes (the stylesheet should carry the style)",
+    "inline_text_ink": "inline color:/font-size: on text",
+    "style_display": "el.style.display toggling (.hidden is the project way)"
+  },
+  "templates": {
+    "admins.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 2,
+      "inline_styles": 38,
+      "inline_text_ink": 14,
+      "style_display": 3
+    },
+    "bank_cards.html": {
+      "bare_checkbox": 1,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 5,
+      "inline_text_ink": 2,
+      "style_display": 2
+    },
+    "base.html": {
+      "bare_checkbox": 0,
+      "emoji": 1,
+      "hardcoded_colors": 1,
+      "inline_styles": 8,
+      "inline_text_ink": 4,
+      "style_display": 1
+    },
+    "bnqo_link_detail.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 5,
+      "inline_text_ink": 0,
+      "style_display": 0
+    },
+    "bnqo_links.html": {
+      "bare_checkbox": 0,
+      "emoji": 1,
+      "hardcoded_colors": 0,
+      "inline_styles": 2,
+      "inline_text_ink": 0,
+      "style_display": 0
+    },
+    "change_password_client.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 3,
+      "inline_text_ink": 0,
+      "style_display": 4
+    },
+    "client_portal.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 1,
+      "inline_text_ink": 0,
+      "style_display": 0
+    },
+    "custom_subscriptions.html": {
+      "bare_checkbox": 3,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 3,
+      "inline_text_ink": 0,
+      "style_display": 0
+    },
+    "dashboard.html": {
+      "bare_checkbox": 3,
+      "emoji": 37,
+      "hardcoded_colors": 55,
+      "inline_styles": 448,
+      "inline_text_ink": 183,
+      "style_display": 66
+    },
+    "error.html": {
+      "bare_checkbox": 0,
+      "emoji": 1,
+      "hardcoded_colors": 0,
+      "inline_styles": 0,
+      "inline_text_ink": 0,
+      "style_display": 0
+    },
+    "finance.html": {
+      "bare_checkbox": 0,
+      "emoji": 13,
+      "hardcoded_colors": 10,
+      "inline_styles": 106,
+      "inline_text_ink": 49,
+      "style_display": 23
+    },
+    "login.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 2,
+      "inline_text_ink": 0,
+      "style_display": 4
+    },
+    "merger.html": {
+      "bare_checkbox": 1,
+      "emoji": 1,
+      "hardcoded_colors": 1,
+      "inline_styles": 9,
+      "inline_text_ink": 3,
+      "style_display": 4
+    },
+    "mfa.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 1,
+      "inline_text_ink": 0,
+      "style_display": 1
+    },
+    "mfa_setup.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 1,
+      "inline_styles": 1,
+      "inline_text_ink": 0,
+      "style_display": 0
+    },
+    "monitor.html": {
+      "bare_checkbox": 1,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 18,
+      "inline_text_ink": 3,
+      "style_display": 0
+    },
+    "packages.html": {
+      "bare_checkbox": 3,
+      "emoji": 7,
+      "hardcoded_colors": 3,
+      "inline_styles": 42,
+      "inline_text_ink": 21,
+      "style_display": 10
+    },
+    "pulse.html": {
+      "bare_checkbox": 1,
+      "emoji": 1,
+      "hardcoded_colors": 0,
+      "inline_styles": 1,
+      "inline_text_ink": 0,
+      "style_display": 2
+    },
+    "receipts.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 9,
+      "inline_text_ink": 3,
+      "style_display": 0
+    },
+    "reseller_packages.html": {
+      "bare_checkbox": 0,
+      "emoji": 4,
+      "hardcoded_colors": 1,
+      "inline_styles": 9,
+      "inline_text_ink": 4,
+      "style_display": 5
+    },
+    "reseller_telegram_bot.html": {
+      "bare_checkbox": 7,
+      "emoji": 2,
+      "hardcoded_colors": 0,
+      "inline_styles": 27,
+      "inline_text_ink": 7,
+      "style_display": 11
+    },
+    "royalty.html": {
+      "bare_checkbox": 1,
+      "emoji": 1,
+      "hardcoded_colors": 3,
+      "inline_styles": 81,
+      "inline_text_ink": 30,
+      "style_display": 13
+    },
+    "security.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 0,
+      "inline_styles": 0,
+      "inline_text_ink": 0,
+      "style_display": 1
+    },
+    "servers.html": {
+      "bare_checkbox": 0,
+      "emoji": 5,
+      "hardcoded_colors": 0,
+      "inline_styles": 7,
+      "inline_text_ink": 0,
+      "style_display": 0
+    },
+    "settings.html": {
+      "bare_checkbox": 17,
+      "emoji": 39,
+      "hardcoded_colors": 16,
+      "inline_styles": 385,
+      "inline_text_ink": 121,
+      "style_display": 92
+    },
+    "sub_manager.html": {
+      "bare_checkbox": 12,
+      "emoji": 17,
+      "hardcoded_colors": 14,
+      "inline_styles": 194,
+      "inline_text_ink": 74,
+      "style_display": 25
+    },
+    "subscription.html": {
+      "bare_checkbox": 0,
+      "emoji": 12,
+      "hardcoded_colors": 17,
+      "inline_styles": 77,
+      "inline_text_ink": 32,
+      "style_display": 11
+    },
+    "telegram_operations.html": {
+      "bare_checkbox": 0,
+      "emoji": 1,
+      "hardcoded_colors": 0,
+      "inline_styles": 2,
+      "inline_text_ink": 0,
+      "style_display": 0
+    },
+    "traffic_check.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 7,
+      "inline_styles": 33,
+      "inline_text_ink": 19,
+      "style_display": 3
+    },
+    "transactions.html": {
+      "bare_checkbox": 0,
+      "emoji": 0,
+      "hardcoded_colors": 1,
+      "inline_styles": 28,
+      "inline_text_ink": 14,
+      "style_display": 0
+    }
+  }
+}

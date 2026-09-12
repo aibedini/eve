@@ -177,7 +177,7 @@
                     <label>Low Volume Threshold (GB)</label>
                     <div style="display:flex;align-items:center;gap:10px;">
                         <input type="number" id="general-low-volume-gb" class="form-input" min="0.01" max="1024" step="0.01" value="1" oninput="updateLowVolumeHint()" style="max-width:160px;">
-                        <span id="low-volume-hint" style="font-size:0.82rem;color:#94a3b8;white-space:nowrap;"></span>
+                        <span id="low-volume-hint" style="font-size:0.82rem;color: var(--text-secondary);white-space:nowrap;"></span>
                     </div>
                     <small class="text-secondary">{{ 'کاربرانی که حجم باقی‌مانده‌شان کمتر از این مقدار باشد با «حجم رو به اتمام است» مشخص می‌شوند — مثال: 0.2 = 200 MB' if panel_lang == 'fa' else 'Clients with less remaining volume are marked as “Low Volume” — example: 0.2 = 200 MB.' }}</small>
                 </div>
@@ -1175,7 +1175,7 @@
                     <div style="display:flex; gap:10px; align-items:flex-start;">
                         <span style="font-size:1.25rem; line-height:1.2;">⚠️</span>
                         <div style="font-size:0.85rem; line-height:1.65;">
-                            <strong style="color:#f59e0b;">OpenWA is an UNOFFICIAL gateway and breaks WhatsApp's Terms of Service. The connected number can be banned.</strong>
+                            <strong style="color: var(--warning);">OpenWA is an UNOFFICIAL gateway and breaks WhatsApp's Terms of Service. The connected number can be banned.</strong>
                             <ul style="margin:8px 0 0; padding-inline-start:18px;">
                                 <li><strong>Use a dedicated number</strong> — never your personal number or your main business line. If it gets banned, you don't lose your real account.</li>
                                 <li><strong>Warm up a new number</strong> gradually over 1–2 weeks; keep early volume very low and use it like a normal person first.</li>
@@ -1726,7 +1726,7 @@
                             <span id="sms-scan-current" class="text-secondary" style="font-size:0.8rem;"></span>
                         </div>
                         <div style="background:rgba(148,163,184,0.18);border-radius:6px;height:8px;margin:10px 0 8px;overflow:hidden;">
-                            <div id="sms-scan-bar" style="height:100%;width:0%;background:#6366f1;transition:width .3s;"></div>
+                            <div id="sms-scan-bar" style="height:100%;width:0%;background: var(--primary);transition:width .3s;"></div>
                         </div>
                         <div id="sms-scan-counts" class="text-secondary" style="font-size:0.82rem;display:flex;gap:14px;flex-wrap:wrap;"></div>
                     </div>
@@ -1742,7 +1742,7 @@
                     <div style="overflow-x:auto;border:1px solid var(--border-color,#2a2a3a);border-radius:8px;">
                         <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
                             <thead>
-                                <tr style="text-align:start;color:var(--text-secondary,#94a3b8);">
+                                <tr style="text-align:start;color: var(--text-secondary);">
                                     <th style="padding:8px 10px;text-align:start;">Time</th>
                                     <th style="padding:8px 10px;text-align:start;">User</th>
                                     <th style="padding:8px 10px;text-align:start;">Server</th>
@@ -1820,13 +1820,13 @@
                         Refresh
                     </button>
                 </div>
-                <div id="ssl-status-panel" style="padding:10px 14px;border-radius:8px;font-size:0.875rem;display:flex;align-items:center;gap:8px;background:#1e293b;color:#94a3b8;">
+                <div id="ssl-status-panel" style="padding:10px 14px;border-radius:8px;font-size:0.875rem;display:flex;align-items:center;gap:8px;background: var(--bg-card);color: var(--text-secondary);">
                     Loading…
                 </div>
                 <div id="ssl-paths-display" style="margin-top:10px;display:none;">
-                    <div style="font-size:0.8rem;color:#64748b;line-height:1.8;">
-                        <div>📄 Cert: <span id="ssl-cert-path-display" style="color:#94a3b8;font-family:monospace;"></span></div>
-                        <div>🔑 Key: <span id="ssl-key-path-display" style="color:#94a3b8;font-family:monospace;"></span></div>
+                    <div style="font-size:0.8rem;color: var(--secondary);line-height:1.8;">
+                        <div>📄 Cert: <span id="ssl-cert-path-display" style="color: var(--text-secondary);font-family:monospace;"></span></div>
+                        <div>🔑 Key: <span id="ssl-key-path-display" style="color: var(--text-secondary);font-family:monospace;"></span></div>
                     </div>
                 </div>
 
@@ -1836,7 +1836,7 @@
                         <strong style="font-size:0.9rem;">Where is HTTPS coming from?</strong>
                         <button class="btn btn-secondary" style="padding:5px 10px;" onclick="diagnoseSSL()">Diagnose</button>
                     </div>
-                    <div id="ssl-diagnose-panel" style="padding:12px 14px; border-radius:8px; font-size:0.85rem; background:#1e293b; color:#94a3b8;">
+                    <div id="ssl-diagnose-panel" style="padding:12px 14px; border-radius:8px; font-size:0.85rem; background: var(--bg-card); color: var(--text-secondary);">
                         Click <em>Diagnose</em> to detect whether SSL is served by this server, a CDN (Cloudflare), or not at all.
                     </div>
                 </div>
@@ -1873,7 +1873,7 @@
                 </div>
                 <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
                     <div style="flex:1;min-width:200px;">
-                        <label style="font-size:0.85rem;color:#94a3b8;margin-bottom:4px;display:block;">eve-ssl-bundle.zip</label>
+                        <label style="font-size:0.85rem;color: var(--text-secondary);margin-bottom:4px;display:block;">eve-ssl-bundle.zip</label>
                         <input type="file" id="ssl-zip-input" accept=".zip" class="form-control" style="padding:6px;">
                     </div>
                     <button class="btn btn-primary" onclick="uploadSSL()" style="white-space:nowrap;">
@@ -5942,7 +5942,7 @@
         if (Array.isArray(job.states_enabled) && job.states_enabled.length) {
             parts.unshift(`States <strong>${job.states_enabled.map(s => SMS_STATE_LABELS[s] || s).join(' → ')}</strong>`);
         }
-        if (job.stopped) parts.push(`<span style="color:#f59e0b;">Stopped: ${escapeHtml(job.stopped)}</span>`);
+        if (job.stopped) parts.push(`<span style="color: var(--warning);">Stopped: ${escapeHtml(job.stopped)}</span>`);
         document.getElementById('sms-scan-counts').innerHTML = parts.join('');
         _setSmsRunBtn(running);
     }
@@ -6173,7 +6173,7 @@
                     ? `${row.priority}${row.priority_level ? ` L${row.priority_level}` : ''}${row.queue_position ? ` #${row.queue_position}` : ''}`
                     : '';
                 const taskRef = row.request_id
-                    ? `<div style="font-size:10px;color:var(--text-secondary,#94a3b8);margin-top:2px;">${escapeHtml(priorityTxt)}${priorityTxt ? ' · ' : ''}${escapeHtml(row.request_id)}${row.gateway_job_id ? ` / job ${escapeHtml(row.gateway_job_id)}` : ''}${row.sent_to ? ` · verified ${escapeHtml(row.sent_to)}` : ''}</div>`
+                    ? `<div style="font-size:10px;color: var(--text-secondary);margin-top:2px;">${escapeHtml(priorityTxt)}${priorityTxt ? ' · ' : ''}${escapeHtml(row.request_id)}${row.gateway_job_id ? ` / job ${escapeHtml(row.gateway_job_id)}` : ''}${row.sent_to ? ` · verified ${escapeHtml(row.sent_to)}` : ''}</div>`
                     : '';
                 const segmentText = row.segment_count
                     ? `${Number(row.segment_count)} × ${escapeHtml(row.message_encoding || 'SMS')}`
@@ -6555,7 +6555,7 @@
 
                 // Show elapsed time so user knows it's not frozen
                 const elapsed = Math.round((Date.now() - _snapPollStarted) / 1000);
-                const elapsedStr = elapsed > 5 ? ` <span style="color:#64748b;font-size:0.78rem;">(${elapsed}s)</span>` : '';
+                const elapsedStr = elapsed > 5 ? ` <span style="color: var(--secondary);font-size:0.78rem;">(${elapsed}s)</span>` : '';
                 if (resultEl) {
                     resultEl.style.color = 'var(--text-secondary)';
                     resultEl.innerHTML = `⏳ ${msg || 'Working…'}${elapsedStr}${progressLine}`;
@@ -6727,7 +6727,7 @@
         try {
             const res = await fetch('/api/settings/overview');
             const d = await res.json();
-            if (!d.success) { container.innerHTML = `<p style="color:#ef4444">${d.error || 'Failed to load'}</p>`; return; }
+            if (!d.success) { container.innerHTML = `<p style="color: var(--danger)">${d.error || 'Failed to load'}</p>`; return; }
 
             // SSL expiry warning
             let sslExpirySub = '';
@@ -6736,14 +6736,14 @@
                 const daysLeft = Math.ceil((expDate - Date.now()) / 86400000);
                 const expStr = fmtDate(d.ssl_expiry);
                 if (daysLeft < 0) {
-                    sslExpirySub = `<span style="color:#ef4444">⚠ Expired ${Math.abs(daysLeft)} days ago</span>`;
+                    sslExpirySub = `<span style="color: var(--danger)">⚠ Expired ${Math.abs(daysLeft)} days ago</span>`;
                 } else if (daysLeft < 30) {
-                    sslExpirySub = `<span style="color:#f59e0b">⚠ Expires in ${daysLeft} days (${expStr})</span>`;
+                    sslExpirySub = `<span style="color: var(--warning)">⚠ Expires in ${daysLeft} days (${expStr})</span>`;
                 } else {
-                    sslExpirySub = `<span style="color:#22c55e">Valid until ${expStr}</span>`;
+                    sslExpirySub = `<span style="color: var(--success)">Valid until ${expStr}</span>`;
                 }
             } else if (d.ssl_type === 'none') {
-                sslExpirySub = '<span style="color:#94a3b8">No certificate configured</span>';
+                sslExpirySub = '<span style="color: var(--text-secondary)">No certificate configured</span>';
             }
 
             let versionBadge;
@@ -6830,12 +6830,12 @@
                         const agoStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago/60)}h ago`;
                         return `<div class="overview-card-value" style="font-size:0.95rem">${EveDate.formatTime(sd)}</div>
                     <div class="overview-card-sub">${agoStr} &nbsp;·&nbsp; ${(d.total_snapshots||0).toLocaleString()} rows</div>`;
-                    })() : `<div class="overview-card-value" style="font-size:0.95rem;color:#94a3b8">—</div>
+                    })() : `<div class="overview-card-value" style="font-size:0.95rem;color: var(--text-secondary)">—</div>
                     <div class="overview-card-sub">No usage rollups yet</div>`}
                 </div>
             </div>`;
         } catch (e) {
-            container.innerHTML = `<p style="color:#ef4444">Error: ${e.message}</p>`;
+            container.innerHTML = `<p style="color: var(--danger)">Error: ${e.message}</p>`;
         }
     }
 
@@ -6932,7 +6932,7 @@
                     <span style="font-size:1.2rem;line-height:1;">${s.icon}</span>
                     <div style="flex:1;">
                         <div style="font-weight:700;color:${s.col};margin-bottom:4px;">${escapeHtml(d.title)}</div>
-                        <div style="font-size:0.82rem;line-height:1.6;color:#94a3b8;">${escapeHtml(d.detail)}</div>
+                        <div style="font-size:0.82rem;line-height:1.6;color: var(--text-secondary);">${escapeHtml(d.detail)}</div>
                         <div style="margin-top:8px;">
                             ${chip(d.edge_https ? 'Browser: HTTPS' : 'Browser: HTTP', d.edge_https)}
                             ${chip(d.behind_cdn ? ('CDN: ' + (d.cdn || 'yes')) : 'No CDN', d.behind_cdn)}
@@ -7527,7 +7527,7 @@
                 const ok   = r.success;
                 const icon = ok ? '✅' : '❌';
                 const clr  = ok ? '#22c55e' : '#ef4444';
-                const err  = !ok && r.error ? `<span style="color:#94a3b8;font-size:.78rem;"> — ${r.error}</span>` : '';
+                const err  = !ok && r.error ? `<span style="color: var(--text-secondary);font-size:.78rem;"> — ${r.error}</span>` : '';
                 return `<div style="display:flex;align-items:baseline;gap:5px;">
                     <span>${icon}</span>
                     <span style="color:${clr};font-weight:600;">${r.server_name || 'Server'}</span>${err}
@@ -8716,7 +8716,7 @@
         ).join('');
         return `
         <div class="form-group" id="account-msg-reseller-group" style="margin-top:14px;">
-            <label>Assign to Reseller <small style="color:#64748b;">(leave Global for everyone)</small></label>
+            <label>Assign to Reseller <small style="color: var(--secondary);">(leave Global for everyone)</small></label>
             <select id="account-message-template-owner" class="form-select">
                 <option value="">🌐 Global — all users</option>
                 ${opts}
@@ -9149,12 +9149,12 @@
         try {
             const res = await fetch(`/api/traffic-check?period=${_tcPeriod}`);
             const d = await res.json();
-            if (!d.success) { body.innerHTML = `<p style="color:#ef4444">Error: ${escapeHtml(d.error)}</p>`; return; }
+            if (!d.success) { body.innerHTML = `<p style="color: var(--danger)">Error: ${escapeHtml(d.error)}</p>`; return; }
             _tcData = d;
             label.textContent = `${jalaliFromUtcIso(d.from)} ← → ${jalaliFromUtcIso(d.to)}`;
             tcRender();
         } catch(e) {
-            body.innerHTML = `<p style="color:#ef4444">Network error: ${escapeHtml(e.message)}</p>`;
+            body.innerHTML = `<p style="color: var(--danger)">Network error: ${escapeHtml(e.message)}</p>`;
         }
     }
 
@@ -9187,7 +9187,7 @@
                     <div class="tc-inbound-meta">
                         <span style="color:#60a5fa;">DL ${fmtTcBytes(ib.download)}</span>
                         <span style="color:#a78bfa;">UL ${fmtTcBytes(ib.upload)}</span>
-                        <span style="color:#f59e0b;font-weight:600;">${fmtTcBytes(ib.total)}</span>
+                        <span style="color: var(--warning);font-weight:600;">${fmtTcBytes(ib.total)}</span>
                         <span style="color:var(--text-secondary);font-size:0.78rem;">${ib.clients} client${ib.clients !== 1 ? 's' : ''}</span>
                     </div>
                     <div class="tc-bar-wrap" title="${ibPct}%"><div class="tc-bar" style="width:${ibPct}%"></div></div>

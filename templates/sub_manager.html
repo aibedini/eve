@@ -1233,8 +1233,8 @@
         <div id="fm-setup-banner" style="display:none;flex-shrink:0;margin:10px 20px 0;padding:12px 14px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:10px;font-size:.85rem;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                <strong style="color:#ef4444;">Upload directory error</strong>
-                <button onclick="runFmSetup()" style="margin-left:auto;padding:4px 10px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:6px;color:#ef4444;cursor:pointer;font-size:.78rem;font-family:inherit;">Fix Setup</button>
+                <strong style="color: var(--danger);">Upload directory error</strong>
+                <button onclick="runFmSetup()" style="margin-left:auto;padding:4px 10px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:6px;color: var(--danger);cursor:pointer;font-size:.78rem;font-family:inherit;">Fix Setup</button>
             </div>
             <div id="fm-setup-error-text" style="color:#fca5a5;white-space:pre-wrap;word-break:break-all;line-height:1.5;"></div>
         </div>
@@ -1719,7 +1719,7 @@
                         <span title="Drag to reorder" style="color:var(--text-secondary);cursor:grab;flex-shrink:0;padding:2px 4px;">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="5" x2="9" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/></svg>
                         </span>
-                        <div class="server-icon" style="overflow:hidden; border-radius: 10px; background: linear-gradient(135deg, #6366f1, #8b5cf6); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                        <div class="server-icon" style="overflow:hidden; border-radius: 10px; background: linear-gradient(135deg, var(--primary), #8b5cf6); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
                             ${app.icon_url
                                 ? `<img src="${app.icon_url}" alt="${app.name}" style="width:40px;height:40px;object-fit:contain;border-radius:10px;" onerror="this.style.display='none';this.parentElement.innerHTML='<span style=\\'font-size:20px;font-weight:bold;color:white;\\'>${(app.name||'?')[0].toUpperCase()}</span>'">`
                                 : `<span style="font-size:20px;font-weight:bold;color:white;">${(app.name||'?')[0].toUpperCase()}</span>`
@@ -2141,10 +2141,10 @@
                 <span>Errors <strong>${failed}</strong></span><span>Remaining <strong>${remaining}</strong></span>
             </div>
             ${skipped ? `<div style="margin-top:.45rem;font-size:.76rem;">Skipped: ${skipped}</div>` : ''}
-            ${blocked ? `<div style="margin-top:.35rem;font-size:.76rem;color:#f59e0b;">Blocked (rate/cap): <strong>${blocked}</strong></div>` : ''}
+            ${blocked ? `<div style="margin-top:.35rem;font-size:.76rem;color: var(--warning);">Blocked (rate/cap): <strong>${blocked}</strong></div>` : ''}
             <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;">
                 ${failed && isSms ? `<button type="button" class="btn btn-secondary ann-view-failures" onclick="openAnnouncementFailuresModal(${a.id})">View ${failed} failed ${failed === 1 ? 'delivery' : 'deliveries'}</button>` : ''}
-                ${blocked && isSms ? `<button type="button" class="btn btn-warning ann-send-now" onclick="sendNowAnnouncementBlocked(${a.id})" style="background:#f59e0b;color:#1e1e2e;border:none;">Send Now ${blocked} blocked</button>` : ''}
+                ${blocked && isSms ? `<button type="button" class="btn btn-warning ann-send-now" onclick="sendNowAnnouncementBlocked(${a.id})" style="background: var(--warning);color:#1e1e2e;border:none;">Send Now ${blocked} blocked</button>` : ''}
             </div>
         </div>`;
     }
