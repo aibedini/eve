@@ -600,16 +600,52 @@ class RedisSnapshotRevisionTests(unittest.TestCase):
     def test_cache_patch_bumps_revision_even_when_local_row_is_missing(self):
         with (
             mock.patch.object(refresh_jobs, 'bump_server_revision') as bump,
+            mock.patch.object(refresh_jobs, 'get_server_revision', return_value=4),
+            mock.patch.object(refresh_jobs, 'enqueue_refresh_job') as repair,
             mock.patch.object(refresh_jobs, 'serialized_server_snapshot_write') as serialized,
             mock.patch.object(app_module, '_get_dashboard_status_thresholds', return_value={}),
             mock.patch.object(app_module, '_get_panel_ui_lang', return_value='en'),
         ):
             serialized.return_value = redis_cache.contextmanager(lambda: (yield))()
             with app_module.app.app_context():
-                changed = refresh_jobs.patch_cached_client(77, 'missing@example', enable=True)
+                changed = refresh_jobs.patch_cached_client(77, 'missing@example', enable=True,
+                                                           client_uuid='uuid-9')
 
         self.assertFalse(changed)
         bump.assert_called_once_with(77)
+        repair.assert_called_once_with(mode='full', server_id=77, force=True)
+
+    def test_a_write_through_miss_is_reported_and_requests_a_targeted_repair(self):
+        """The panel write is authoritative; a cache miss must converge, not stall."""
+        with (
+            mock.patch.object(refresh_jobs, 'bump_server_revision', return_value=5),
+            # Read once before the bump and once for the report.
+            mock.patch.object(refresh_jobs, 'get_server_revision', side_effect=[4, 5]),
+            mock.patch.object(refresh_jobs, 'enqueue_refresh_job') as repair,
+            mock.patch.object(refresh_jobs, 'serialized_server_snapshot_write') as serialized,
+            mock.patch.object(app_module, '_get_dashboard_status_thresholds', return_value={}),
+            mock.patch.object(app_module, '_get_panel_ui_lang', return_value='en'),
+        ):
+            serialized.return_value = redis_cache.contextmanager(lambda: (yield))()
+            with app_module.app.app_context():
+                with self.assertLogs('eve.cache', level='INFO') as logs:
+                    changed = refresh_jobs.patch_cached_client(
+                        77, 'ended@example', client_uuid='uuid-9', total_gb_bytes=35 * 1024 ** 3)
+
+        self.assertFalse(changed)
+        repair.assert_called_once_with(mode='full', server_id=77, force=True)
+        patch_lines = [line for line in logs.output if 'cache_patch=' in line]
+        self.assertTrue(patch_lines, logs.output)
+        self.assertIn('cache_patch=miss', patch_lines[0])
+        self.assertIn('server_id=77', patch_lines[0])
+        self.assertIn('email=ended@example', patch_lines[0])
+        self.assertIn('client_uuid=uuid-9', patch_lines[0])
+        self.assertIn('old_revision=4', patch_lines[0])
+        self.assertIn('new_revision=5', patch_lines[0])
+        # Never a credential, token or cookie, even on the reporting path.
+        for line in logs.output:
+            self.assertNotIn('token', line.lower())
+            self.assertNotIn('password', line.lower())
 
     def test_cache_patch_enters_serialized_server_write_cycle(self):
         original = dict(redis_cache.GLOBAL_SERVER_DATA)
@@ -635,6 +671,8 @@ class RedisSnapshotRevisionTests(unittest.TestCase):
             })
             with (
                 mock.patch.object(refresh_jobs, 'bump_server_revision'),
+                mock.patch.object(refresh_jobs, 'get_server_revision', return_value=0),
+                mock.patch.object(refresh_jobs, 'enqueue_refresh_job') as repair,
                 mock.patch.object(refresh_jobs, 'serialized_server_snapshot_write',
                                   return_value=LatestSnapshotContext()) as serialized,
                 mock.patch.object(refresh_jobs, 'publish_snapshot_to_redis', return_value=True),
@@ -650,6 +688,8 @@ class RedisSnapshotRevisionTests(unittest.TestCase):
         self.assertTrue(changed)
         serialized.assert_called_once_with(7)
         self.assertTrue(latest['clients'][0]['raw_client']['enable'])
+        # A hit needs no repair fetch: the browser gets the new revision immediately.
+        repair.assert_not_called()
 
     def test_publish_discards_refresh_result_when_server_revision_changed(self):
         client = mock.Mock()

@@ -2011,9 +2011,16 @@ def _iter_cached_client_copies(server_id, email, client_uuid=None):
 def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                         comment=None, total_gb_bytes=None, expiry_ts=None,
                         enable=None, up=None, down=None, publish=True):
-    """Write-through: update every cached copy of a client after a panel write."""
+    """Write-through: update every cached copy of a client after a panel write.
+
+    Returns True when a cached row was updated. A miss is not a silent success:
+    the panel write is authoritative, so the caller gets ``False``, a structured
+    ``cache_patch=miss`` line is logged, and a targeted single-server refresh is
+    queued so the snapshot converges without waiting for the next cycle.
+    """
     from app import _get_dashboard_status_thresholds, _get_panel_ui_lang, app, format_bytes  # deferred: app-level helper, avoids circular import
     changed = False
+    revision_before = get_server_revision(server_id) if publish else None
     if publish:
         # The panel mutation is authoritative even if this worker's local cache
         # has no matching row.  Invalidate stale refreshes before best-effort RAM sync.
@@ -2065,7 +2072,48 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             server_id, email, exc, exc_info=True,
         )
         return False
+    if publish:
+        _report_cache_patch(server_id, email, client_uuid, revision_before, changed)
+        if not changed:
+            # Nothing local matched (empty/stale snapshot, renamed mailbox, a client
+            # an inbound does not carry yet). The revision already moved, so a stale
+            # refresh cannot overwrite the panel write -- but the browser would keep
+            # the old row until the next cycle. Repair just this server now.
+            _request_targeted_cache_repair(server_id, email)
     return changed
+
+
+def _report_cache_patch(server_id, email, client_uuid, revision_before, changed):
+    """Structured write-through outcome. Never logs a credential or a token.
+
+    Uses the resilient channel: an in-process Alembic migration disables the
+    loggers that already exist, and this report must survive it.
+    """
+    try:
+        from panel.core.logging_config import get_resilient_logger
+        get_resilient_logger('eve.cache').info(
+            "cache_patch=%s server_id=%s email=%s client_uuid=%s old_revision=%s new_revision=%s",
+            'hit' if changed else 'miss', server_id, email, (client_uuid or '-'),
+            revision_before, get_server_revision(server_id),
+        )
+    except Exception:
+        pass
+
+
+def _request_targeted_cache_repair(server_id, email):
+    """Queue a single-server refresh after a write-through miss."""
+    from app import app
+    try:
+        enqueue_refresh_job(mode='full', server_id=server_id, force=True)
+        app.logger.warning(
+            "cache repair queued after a write-through miss (server_id=%s, email=%s)",
+            server_id, email,
+        )
+    except Exception as exc:
+        app.logger.warning(
+            "cache repair could not be queued (server_id=%s, email=%s): %s",
+            server_id, email, exc,
+        )
 
 
 def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):

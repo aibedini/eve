@@ -35,7 +35,7 @@ except Exception:
     ZoneInfo = None
 
 from panel.adapters.xui import _safe_response_json, get_xui_session
-from panel.core.logging_config import get_logger
+from panel.core.logging_config import get_resilient_logger
 from panel.extensions import db
 from panel.models import Server, SystemSetting, TelegramEgressProfile
 from panel.security import (
@@ -53,18 +53,11 @@ _SECURITY_LOGGER_NAME = 'eve.security'
 def _security_logger() -> logging.Logger:
     """Return the security-reporting channel, guaranteed to be enabled.
 
-    ``panel.migrate`` runs Alembic inside this process and ``alembic/env.py``
-    calls ``logging.config.fileConfig`` with its default
-    ``disable_existing_loggers``, which disables every logger that already
-    exists at that moment -- this module's own logger and ``app.logger`` among
-    them (the production entrypoint avoids this by migrating in a separate
-    process first). A security report must not be dropped by that, so the
-    channel is re-enabled before it is used.
+    The channel is re-enabled because an in-process Alembic migration disables
+    every logger that already exists (see ``get_resilient_logger``); a security
+    report must not be dropped by that.
     """
-    channel = get_logger(_SECURITY_LOGGER_NAME)
-    if channel.disabled:
-        channel.disabled = False
-    return channel
+    return get_resilient_logger(_SECURITY_LOGGER_NAME)
 
 
 def init_backup_tmp_dir(flask_app):

@@ -122,3 +122,20 @@ def _integrate_flask(app, fmt):
 def get_logger(name):
     """Return a logger that participates in the central configuration."""
     return logging.getLogger(name)
+
+
+def get_resilient_logger(name):
+    """Return a logger that survives the in-process Alembic logging setup.
+
+    ``panel.migrate`` runs Alembic inside this process, and ``alembic/env.py``
+    calls ``logging.config.fileConfig`` with its default
+    ``disable_existing_loggers``, which disables every logger that already exists
+    at that moment -- ``app.logger`` and the early module loggers among them. The
+    production entrypoint avoids this by migrating in a separate process first,
+    but dev and tests do not. Operational reports that must never be dropped (for
+    example a security or cache-repair report) use this channel.
+    """
+    logger = logging.getLogger(name)
+    if logger.disabled:
+        logger.disabled = False
+    return logger
