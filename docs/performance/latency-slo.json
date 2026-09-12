@@ -1,0 +1,50 @@
+{
+  "mode": "full",
+  "clients_in_snapshot": 200,
+  "mutation_iterations": 120,
+  "slos": {
+    "mutation_cache_commit_ms": {
+      "p95_ms": 23.541,
+      "budget_ms": 100.0,
+      "passed": true,
+      "samples": 120,
+      "mean_ms": 14.037,
+      "max_ms": 41.727
+    },
+    "browser_visible_ms": {
+      "p95_ms": 23.636,
+      "budget_ms": 300.0,
+      "passed": true,
+      "samples": 120,
+      "mean_ms": 14.083,
+      "max_ms": 41.772
+    },
+    "cache_read_ms": {
+      "p95_ms": 20.626,
+      "budget_ms": 50.0,
+      "passed": true,
+      "samples": 120,
+      "mean_ms": 13.317,
+      "max_ms": 30.531
+    },
+    "other_tabs_ms": {
+      "p95_ms": 50.779,
+      "budget_ms": 1000.0,
+      "passed": true,
+      "samples": 8,
+      "mean_ms": 22.436,
+      "max_ms": 50.779
+    },
+    "external_xui_ms": {
+      "p95_ms": 2038.282,
+      "budget_ms": 3000.0,
+      "passed": true,
+      "samples": 5,
+      "mean_ms": 2022.815,
+      "max_ms": 2038.282
+    }
+  },
+  "passed": true,
+  "snapshot_revision": "2026-09-12T13:29:42.928089",
+  "refresh_activity_level": "active"
+}
