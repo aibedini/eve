@@ -11,13 +11,38 @@ on:
 permissions:
   contents: read
   packages: write
+  # Required for the SBOM and provenance attestations built below.
+  id-token: write
+  attestations: write
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # An image is only published when the release invariants hold: version format,
+  # hash-pinned dependencies, wired scanners, non-root image, private disclosure
+  # policy and no tracked secret file. On a v* tag the stricter profile also
+  # requires the changelog and release notes to name the version being released.
+  release-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Release readiness check
+        run: |
+          set -e
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            python3 scripts/release_check.py --profile release
+          else
+            python3 scripts/release_check.py --profile ci
+          fi
+
   publish:
+    needs: [release-guard]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -53,6 +78,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Attach a signed SBOM and build provenance to the pushed image so a
+          # deployment can verify what it runs (gh attestation verify).
+          sbom: true
+          provenance: true
 
       - name: Build offline image tar
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
