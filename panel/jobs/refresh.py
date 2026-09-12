@@ -1759,6 +1759,9 @@ def _fetch_and_update_server_data_inner(server_id: int):
         # - Recompute aggregate stats
         existing_inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
         new_block = list(processed or [])
+        # Phase 6: a panel read is authoritative for configuration AND telemetry, so
+        # the freshly read block carries both freshness stamps.
+        _stamp_snapshot_rows(new_block, config=True, telemetry=True)
 
         # Find the first occurrence index of this server in the existing list (if any)
         first_idx = None
@@ -1837,7 +1840,8 @@ def _fetch_and_update_server_data_inner(server_id: int):
 # slow per-server panel re-fetch. The background fetcher reconciles on its next
 # cycle, so any small drift here is self-healing.
 
-def _recompute_cached_client(cd, thresholds=None, lang=None):
+def _recompute_cached_client(cd, thresholds=None, lang=None, *,
+                             config_changed=False, telemetry_changed=False):
     """Recompute a processed client's derived display fields from its raw_client.
     Mirrors process_inbounds() so a patched row matches a full fetch."""
     from app import _compute_client_service_state, _get_dashboard_status_thresholds, _get_panel_ui_lang, format_bytes_gb_tb, format_remaining_days  # deferred: app-level helper, avoids circular import
@@ -1900,6 +1904,38 @@ def _recompute_cached_client(cd, thresholds=None, lang=None):
     cd['comment'] = (raw.get('comment') or '').strip()
     cd['email'] = raw.get('email', cd.get('email'))
     cd['id'] = raw.get('id', cd.get('id'))
+
+    # Phase 6: configuration state and telemetry state age independently. A renew
+    # must be visible without waiting for a traffic poll, so the two layers carry
+    # their own freshness stamp instead of one shared "last update".
+    _stamp = datetime.utcnow().isoformat()
+    if config_changed:
+        cd['config_updated_at'] = _stamp
+    if telemetry_changed:
+        cd['telemetry_updated_at'] = _stamp
+
+
+def _stamp_snapshot_rows(block, *, config=False, telemetry=False):
+    """Stamp the freshness of a freshly read inbound block.
+
+    A panel read is authoritative for both layers, so it stamps both; a
+    write-through stamps only what it actually wrote. See `_recompute_cached_client`.
+    """
+    stamp = datetime.utcnow().isoformat()
+    for inbound in block or []:
+        if not isinstance(inbound, dict):
+            continue
+        if config:
+            inbound['config_updated_at'] = stamp
+        if telemetry:
+            inbound['telemetry_updated_at'] = stamp
+        for client in (inbound.get('clients') or []):
+            if not isinstance(client, dict):
+                continue
+            if config:
+                client['config_updated_at'] = stamp
+            if telemetry:
+                client['telemetry_updated_at'] = stamp
 
 
 def _recompute_cached_server_stats(server_id):
@@ -2059,7 +2095,11 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                 if down is not None:
                     cd['down'] = int(down)
                     cd['down_formatted'] = format_bytes(int(down))
-                _recompute_cached_client(cd, thresholds, lang)
+                _recompute_cached_client(
+                    cd, thresholds, lang,
+                    config_changed=any(value is not None for value in (
+                        comment, total_gb_bytes, expiry_ts, enable, new_email)),
+                    telemetry_changed=(up is not None or down is not None))
                 changed = True
                 patched_row = cd
             if changed:
@@ -2206,7 +2246,7 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
                     'down_formatted': format_bytes(0),
                     'raw_client': raw,
                 }
-                _recompute_cached_client(cached, thresholds, lang)
+                _recompute_cached_client(cached, thresholds, lang, config_changed=True)
                 clients.append(cached)
                 ib['client_count'] = len(clients)
                 if raw.get('enable', True):

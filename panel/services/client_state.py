@@ -26,6 +26,7 @@ CLIENT_STATE_FIELDS = (
     'uuid', 'email', 'enable', 'total_bytes', 'used_up', 'used_down',
     'remaining_bytes', 'expiry_time', 'service_state', 'inbound_id',
     'service_state_label', 'service_state_emoji', 'service_state_tag',
+    'config_updated_at', 'telemetry_updated_at',
 )
 
 
@@ -89,6 +90,10 @@ def normalize_client_state(*, raw=None, row=None, service_state=None, inbound_id
                                 else row.get('service_state_emoji')),
         'service_state_tag': (service_state_tag if service_state_tag is not None
                               else row.get('service_state_tag')),
+        # Phase 6: configuration and telemetry age independently; the UI can see which
+        # layer a value came from instead of trusting one shared "last update".
+        'config_updated_at': row.get('config_updated_at'),
+        'telemetry_updated_at': row.get('telemetry_updated_at'),
     }
 
 
