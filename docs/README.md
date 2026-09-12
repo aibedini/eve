@@ -12,6 +12,7 @@ relative link does not resolve.
 | Day-two operations | [OPERATIONS_RUNBOOK.md](OPERATIONS_RUNBOOK.md) |
 | Releasing | [RELEASE_SECURITY.md](RELEASE_SECURITY.md) |
 | BNQO control plane | [bnqo/README.md](bnqo/README.md) |
+| UI and design system | [UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md) |
 
 ## Start here
 
@@ -96,6 +97,11 @@ relative link does not resolve.
 
 - [Release security](RELEASE_SECURITY.md) - RELEASE_SECURITY.md
 - [Telegram Sales and Support Roadmap](TELEGRAM_ROADMAP.md) - TELEGRAM_ROADMAP.md
+
+## UI design system
+
+- [Eve UI design system](UI_DESIGN_SYSTEM.md) - the design-system reference: tokens, theming, components, mobile/RTL, motion, accessibility, anti-patterns
+- [the eve-ui agent skill](../.agents/skills/eve-ui/SKILL.md) - the operational contract loaded before any UI change
 
 ## Repository-level documents
 

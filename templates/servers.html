@@ -44,6 +44,7 @@
             <div class="form-group">
                 <label>Password</label>
                 <input type="password" id="server-password" placeholder="Password">
+                <small id="server-password-hint" class="field-note field-note-ok hidden">✓ A password is already saved. Type a new one to replace it, or leave empty to keep it.</small>
             </div>
             
             <div style="display: flex; gap: 10px;">
@@ -71,24 +72,21 @@
             </div>
 
             <div class="form-group">
-                <label>API Token <small style="color:var(--text-secondary); font-weight:normal;">(3x-ui v3+ — Settings → Security → API Token)</small></label>
+                <label>API Token <small class="label-note">(3x-ui v3+ — Settings → Security → API Token)</small></label>
                 <input type="password" id="server-api-token" placeholder="Paste token for v3 panels; leave empty for older panels">
-                <small id="server-api-token-hint" style="display:none; color:#4ade80; font-size:0.78rem;">✓ A token is already saved. Type a new one to replace it, or leave empty to keep it.</small>
-                <small id="server-api-token-clear-hint" style="display:none; color:#f59e0b; font-size:0.78rem;">The saved token will be removed when you save.</small>
-                <button type="button" class="btn btn-secondary" id="server-api-token-clear" style="display:none; margin-top:8px;" onclick="clearServerApiToken()">Remove saved API token</button>
+                <small id="server-api-token-hint" class="field-note field-note-ok hidden">✓ A token is already saved. Type a new one to replace it, or leave empty to keep it.</small>
+                <small id="server-api-token-clear-hint" class="field-note field-note-warn hidden">The saved token will be removed when you save.</small>
+                <button type="button" class="btn btn-secondary btn-icon hidden" id="server-api-token-clear" style="margin-top:8px;" onclick="clearServerApiToken()">Remove saved API token</button>
             </div>
 
             <div class="form-group">
-                <small id="server-password-hint" style="display:none; color:#4ade80; font-size:0.78rem;">✓ A password is already saved. Type a new one to replace it, or leave empty to keep it.</small>
-            </div>
-
-            <div class="form-group">
-                <label class="form-toggle-item" style="cursor: pointer; display:flex; gap:8px; align-items:center;">
+                <label class="checkbox-label" for="server-allow-insecure">
                     <input type="checkbox" id="server-allow-insecure">
+                    <span class="checkmark"></span>
                     <span>Allow insecure connection</span>
                 </label>
-                <small style="color:var(--text-secondary); font-size:0.78rem;">Allows plaintext HTTP or HTTPS without certificate verification for this server only.</small>
-                <small id="server-allow-insecure-warning" style="display:none; color:#f59e0b; font-size:0.78rem; font-weight:600;">Warning: Panel credentials will be sent over plaintext HTTP.</small>
+                <small class="field-note">Allows plaintext HTTP or HTTPS without certificate verification for this server only.</small>
+                <small id="server-allow-insecure-warning" class="field-note field-note-warn field-note-strong hidden">Warning: Panel credentials will be sent over plaintext HTTP.</small>
             </div>
 
             <label class="form-group form-toggle-item" style="cursor: pointer;">
@@ -242,7 +240,7 @@
             }
             if (server.allow_insecure) {
                 const plaintextHost = /^http:\/\//i.test(server.host || '');
-                const insecureBadge = createBadge(plaintextHost ? '⚠ HTTP' : '⚠ TLS Unverified', 'badge inactive');
+                const insecureBadge = createBadge(plaintextHost ? '⚠ HTTP' : '⚠ TLS Unverified', 'badge warning');
                 insecureBadge.title = plaintextHost
                     ? 'Plaintext HTTP is allowed for this server (Allow insecure connection).'
                     : 'TLS certificate verification is disabled for this server (Allow insecure connection).';
@@ -518,16 +516,16 @@
     function updateInsecureUi() {
         const warning = document.getElementById('server-allow-insecure-warning');
         const checked = document.getElementById('server-allow-insecure').checked;
-        warning.style.display = (hostUsesPlaintext() && checked) ? 'block' : 'none';
+        warning.classList.toggle('hidden', !(hostUsesPlaintext() && checked));
     }
 
     function clearServerApiToken() {
         if (!confirm('Remove the saved API token for this server?')) return;
         clearApiTokenRequested = true;
         document.getElementById('server-api-token').value = '';
-        document.getElementById('server-api-token-hint').style.display = 'none';
-        document.getElementById('server-api-token-clear-hint').style.display = 'block';
-        document.getElementById('server-api-token-clear').style.display = 'none';
+        document.getElementById('server-api-token-hint').classList.add('hidden');
+        document.getElementById('server-api-token-clear-hint').classList.remove('hidden');
+        document.getElementById('server-api-token-clear').classList.add('hidden');
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -548,10 +546,10 @@
         document.getElementById('server-sub-port').value = '';
         document.getElementById('server-panel-type').value = 'auto';
         document.getElementById('server-api-token').value = '';
-        document.getElementById('server-api-token-hint').style.display = 'none';
-        document.getElementById('server-api-token-clear-hint').style.display = 'none';
-        document.getElementById('server-api-token-clear').style.display = 'none';
-        document.getElementById('server-password-hint').style.display = 'none';
+        document.getElementById('server-api-token-hint').classList.add('hidden');
+        document.getElementById('server-api-token-clear-hint').classList.add('hidden');
+        document.getElementById('server-api-token-clear').classList.add('hidden');
+        document.getElementById('server-password-hint').classList.add('hidden');
         document.getElementById('server-allow-insecure').checked = false;
         clearApiTokenRequested = false;
 
@@ -575,7 +573,7 @@
         document.getElementById('server-username').value = server.username;
         // Never prefill password (not returned by API); only set if user enters a new one.
         document.getElementById('server-password').value = '';
-        document.getElementById('server-password-hint').style.display = server.has_password ? 'block' : 'none';
+        document.getElementById('server-password-hint').classList.toggle('hidden', !server.has_password);
         
         // پر کردن مقادیر جدید
         document.getElementById('server-sub-path').value = server.sub_path || '/sub/';
@@ -583,9 +581,9 @@
         document.getElementById('server-sub-port').value = server.sub_port || '';
         document.getElementById('server-panel-type').value = server.panel_type || 'auto';
         document.getElementById('server-api-token').value = '';
-        document.getElementById('server-api-token-hint').style.display = server.has_api_token ? 'block' : 'none';
-        document.getElementById('server-api-token-clear').style.display = server.has_api_token ? 'inline-block' : 'none';
-        document.getElementById('server-api-token-clear-hint').style.display = 'none';
+        document.getElementById('server-api-token-hint').classList.toggle('hidden', !server.has_api_token);
+        document.getElementById('server-api-token-clear').classList.toggle('hidden', !server.has_api_token);
+        document.getElementById('server-api-token-clear-hint').classList.add('hidden');
         clearApiTokenRequested = false;
         document.getElementById('server-allow-insecure').checked = !!server.allow_insecure;
         updateInsecureUi();

@@ -47,3 +47,26 @@ The former `app.py` monolith (34.7k lines) is now modularized into the `panel/` 
 - `alembic/` — Alembic scaffolding. The baseline revision adopts existing databases (stamped, never replayed). **Every new schema change must be an Alembic revision** (`alembic revision --autogenerate`), never a runtime ALTER.
 - Dependency direction is one-way: `core` <- `models` <- `services`/`adapters` <- `routes`/`jobs`. Code inside `panel/` must never import `app` at module level; use deferred in-function imports (see `panel/models/_helpers.py`) for unavoidable reverse dependencies — this also keeps `patch('app.X')` in tests working.
 - `app.py` re-exports all extracted symbols, so existing `from app import X` callers (workers, tests) keep working. Migrate remaining callers to `panel.*` imports incrementally; keep the surface until tests are updated.
+
+## UI Changes (mandatory)
+
+For every user-facing UI change, read and follow `.agents/skills/eve-ui/SKILL.md`
+(mirrored at `.dsh/skills/eve-ui/SKILL.md`) and the design-system reference in
+`docs/UI_DESIGN_SYSTEM.md`. `static/style.css` and `templates/base.html` remain the
+implementation source of truth. Do not introduce a parallel visual system. The skill
+documents the single stylesheet
+(`static/style.css`), the `:root` tokens and `html[data-theme="light"]` overrides,
+the component vocabulary (`.btn*`, `.form-group`, `.form-select`,
+`.checkbox-label` + `.checkmark`, `.toggle-switch` + `.slider`, `.badge` variants,
+`.modal*`, `.field-note*`, `.label-note`, `.hidden`) and the rules that keep a UI
+change consistent: use tokens (never a hardcoded colour), use `.hidden` instead of
+`style.display`, use the project checkbox/toggle components instead of a bare
+`input[type=checkbox]` inside a `.form-group`, keep inline scripts behind the CSP
+`nonce`, and keep `static/style.css` valid UTF-8 (never append to it with a shell
+redirect: a previous `>>` wrote ~28 KB of it as UTF-16LE and those rules stopped
+applying — and a wrong byte-order decode of that block leaves stray non-ASCII
+characters that silently kill the recovered rules while the file still looks valid).
+`tests/test_ui_design_system.py` guards the encoding, the non-ASCII allowlist, the
+brace balance, the component classes, the skill (in both locations), the design-system
+document and the rule in these agent instruction files.
+

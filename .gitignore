@@ -38,7 +38,13 @@ venv.bak/
 # Local AI/IDE tooling
 .claude/
 .codex/
-.agents/
+.agents/*
+# Exception: the committed design-system skill so every agent can read it.
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/eve-ui/
+.agents/skills/eve-ui/*
+!.agents/skills/eve-ui/SKILL.md
 .idea/
 .vscode/
 *.swp

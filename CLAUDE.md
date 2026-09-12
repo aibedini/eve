@@ -22,3 +22,13 @@ The mandatory repository-wide code-intelligence policy is in `AGENTS.md` and `do
 ## Modular structure
 
 The code lives in the `panel/` package (models, services, adapters, routes as blueprints, jobs, migrate); `app.py` is the thin app core plus a compatibility re-export surface. Schema changes go through Alembic revisions (`alembic/`); migrations run via the single file-locked `panel.migrate` runner. See `AGENTS.md` → "Modular Structure" for the full conventions (dependency direction, deferred imports, blueprint endpoints).
+
+## UI changes
+
+For every user-facing UI change, read and follow `.agents/skills/eve-ui/SKILL.md`
+(mirrored at `.dsh/skills/eve-ui/SKILL.md`). `static/style.css` and
+`templates/base.html` remain the implementation source of truth; the full reference is
+`docs/UI_DESIGN_SYSTEM.md`. Do not introduce a parallel visual system.
+`tests/test_ui_design_system.py` guards the stylesheet encoding, the non-ASCII
+allowlist and brace balance, the component classes, the skill and the doc.
+

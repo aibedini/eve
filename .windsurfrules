@@ -1,1 +1,2 @@
 Follow `AGENTS.md` and `docs/AI_CODEBASE_MEMORY.md`. For every coding task, use `codebase-memory-mcp` first for symbol discovery, call/data-flow tracing, exact snippets, coverage checks, and change impact. Use raw grep or broad file reads only for the documented fallback cases.
+For every user-facing UI change, read and follow `.agents/skills/eve-ui/SKILL.md` (mirrored at `.dsh/skills/eve-ui/SKILL.md`) and `docs/UI_DESIGN_SYSTEM.md`. `static/style.css` and `templates/base.html` remain the implementation source of truth. Do not introduce a parallel visual system.
