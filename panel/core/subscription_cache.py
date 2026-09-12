@@ -40,6 +40,8 @@ _counters = {
     'invalidations': 0,
     'stampede_waits': 0,
     'stampede_fills': 0,
+    'stale_served': 0,
+    'prewarmed': 0,
 }
 MAX_KEY_PART = 200
 
@@ -69,6 +71,11 @@ def max_entries() -> int:
 
 def wait_seconds() -> float:
     return float(_env_int('EVE_SUBSCRIPTION_CACHE_WAIT_SECONDS', 5, minimum=0))
+
+
+def prewarm_limit() -> int:
+    """How many subscriptions one server's background pre-warm may fill per pass."""
+    return _env_int('EVE_SUBSCRIPTION_PREWARM_LIMIT', 5, minimum=0)
 
 
 def make_key(server_id, sub_id, variant: str = 'full') -> str:
@@ -118,6 +125,26 @@ def set(key, value, *, ttl=None, variant='full'):
             _entries.popitem(last=False)
             _counters['evictions'] += 1
     return True
+
+
+def peek_stale(key):
+    """Return an EXPIRED stored response, or None while it is still fresh.
+
+    Stale-while-revalidate: the public subscription path answers from here instead
+    of making a VPN client wait on an X-UI read, and a background refresh replaces
+    the entry. Unlike `get()` this neither drops the entry nor counts a hit, so it
+    must be consulted before `get()` (which removes an expired entry).
+    """
+    now = time.time()
+    with _lock:
+        entry = _entries.get(key)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if expires_at > now:
+            return None
+        _counters['stale_served'] += 1
+        return value
 
 
 def invalidate_server(server_id) -> int:

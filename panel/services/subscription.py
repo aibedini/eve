@@ -21,6 +21,7 @@ from panel.adapters.xui import (
     get_xui_session,
     server_is_v3,
 )
+from panel.core import subscription_cache
 from panel.core.redis_client import GLOBAL_SERVER_DATA
 
 
@@ -998,3 +999,103 @@ def find_client(inbounds, inbound_id, email):
             if client.get('email') == email:
                 return client, inbound
     return None, None
+
+
+# ── Phase 7: request-free rendering + background pre-warm ────────────────────
+# The public subscription path must not read X-UI. `render_fast_subscription` is the
+# one renderer shared by the request path and the background reconciler;
+# `warm_subscription_cache` fills the response cache off-request so a VPN client is
+# answered from memory (and a stale entry can be refreshed without blocking it).
+
+def render_fast_subscription(server, sub_id, *, session_obj=None):
+    """Render the v2rayNG config-only response for one subscription.
+
+    Deliberately request-free: the background reconciler pre-warms the response
+    cache with it (`warm_subscription_cache`), so a public request that finds the
+    entry touches no X-UI at all, and a stale entry can be refreshed off-request.
+
+    `session_obj` lets a caller that already authenticated (the public route) reuse
+    its session instead of logging in again.
+
+    Returns ``(body, status, headers)`` or ``None`` when the panel has nothing usable.
+    """
+    normalized_sub_id = str(sub_id or '').strip()
+    if not normalized_sub_id:
+        return None
+    if any(c in normalized_sub_id for c in ('/', '\\', '?', '#', '@', ':', '..')):
+        return None
+
+    if session_obj is None:
+        session_obj, login_error = get_xui_session(server)
+        if login_error or not session_obj:
+            return None
+
+    configs = fetch_authoritative_subscription_configs(
+        server, normalized_sub_id, session_obj=session_obj)
+    if not configs:
+        return None
+    configs = sort_subscription_configs(configs, server, sub_id=normalized_sub_id)
+    email = find_subscription_client_email(
+        server, normalized_sub_id, session_obj=session_obj)
+    configs = ensure_subscription_identity(configs, email)
+    profile_metadata = fetch_subscription_profile_metadata(server, session_obj=session_obj)
+
+    blob = '\n'.join(configs)
+    encoded_blob = base64.b64encode(blob.encode('utf-8')).decode('ascii')
+    title_raw = build_subscription_profile_title(
+        profile_metadata.get('sub_title'), server.name)
+    title = base64.b64encode(title_raw.encode('utf-8')).decode('ascii')
+    return encoded_blob, 200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Profile-Title': f'base64:{title}',
+        'Profile-Update-Interval': profile_metadata.get('update_interval', '24'),
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+    }
+
+
+def warm_subscription_cache(server, *, limit=None):
+    """Pre-fill the fast subscription responses for one server's known sub ids.
+
+    Called by the reconciler after a panel read: with the entries warm, a public
+    subscription request is answered entirely from the cache. An id is only read when
+    its entry is missing or expired, so the cost is bounded by the cache TTL, and at
+    most `limit` ids are filled per pass.
+    """
+    if not subscription_cache.enabled():
+        return 0
+    server_id = getattr(server, 'id', None)
+    if server_id is None:
+        return 0
+    budget = limit if limit is not None else subscription_cache.prewarm_limit()
+    if budget <= 0:
+        return 0
+
+    sub_ids = []
+    seen = set()
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        try:
+            if int(inbound.get('server_id', -1)) != int(server_id):
+                continue
+        except (TypeError, ValueError):
+            continue
+        for client in (inbound.get('clients') or []):
+            raw = client.get('raw_client') if isinstance(client, dict) else None
+            sub_id = str((raw or {}).get('subId') or '').strip()
+            if sub_id and sub_id not in seen:
+                seen.add(sub_id)
+                sub_ids.append(sub_id)
+
+    warmed = 0
+    for sub_id in sub_ids:
+        if warmed >= budget:
+            break
+        key = subscription_cache.make_key(server_id, sub_id, 'fast')
+        if subscription_cache.get(key) is not None:
+            continue
+        rendered = render_fast_subscription(server, sub_id)
+        if not rendered:
+            continue
+        if subscription_cache.set(key, rendered, variant='fast'):
+            warmed += 1
+    return warmed

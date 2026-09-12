@@ -18,6 +18,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 import app as app_module  # noqa: E402
 import panel.core.redis_client as redis_cache  # noqa: E402
 import panel.jobs.refresh as refresh_jobs  # noqa: E402
+from app import db  # noqa: E402
 
 GB = 1024 ** 3
 
@@ -32,12 +33,15 @@ def _row():
 class FreshnessStampTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # The display helpers the recompute uses resolve panel language/config.
+        # The display helpers the recompute uses resolve panel language/config, and a
+        # suite that ran before this one may have dropped the tables.
         cls.ctx = app_module.app.app_context()
         cls.ctx.push()
+        db.create_all()
 
     @classmethod
     def tearDownClass(cls):
+        db.session.remove()
         cls.ctx.pop()
 
     def setUp(self):

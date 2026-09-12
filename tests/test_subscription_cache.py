@@ -16,6 +16,7 @@ os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
 from app import Server, app, db  # noqa: E402
 from panel.core import subscription_cache  # noqa: E402
 from panel.routes import subscription_pages as sp  # noqa: E402
+from panel.services import subscription as subscription_service  # noqa: E402
 
 SERVER_ID = 9401
 SUB_ID = 'sub-1'
@@ -141,16 +142,26 @@ class SubscriptionRouteCacheTests(unittest.TestCase):
             mock.patch.object(sp, '_subscription_statistics_settings',
                               return_value={'enabled': False}),
             mock.patch.object(sp, 'get_xui_session', side_effect=fake_session),
-            mock.patch.object(sp, 'fetch_authoritative_subscription_configs',
-                              side_effect=fake_configs),
-            mock.patch.object(sp, 'sort_subscription_configs',
-                              side_effect=lambda configs, *a, **k: configs),
-            mock.patch.object(sp, 'find_subscription_client_email', return_value='e@test'),
             mock.patch.object(sp, 'ensure_subscription_identity',
                               side_effect=lambda configs, email: configs),
             mock.patch.object(sp, 'fetch_subscription_profile_metadata',
                               return_value={'sub_title': 'T', 'update_interval': '24'}),
             mock.patch.object(sp, 'build_subscription_profile_title', return_value='T'),
+            # The shared renderer lives in the subscription service (Phase 7), so the
+            # panel helpers it calls are the ones patched there.
+            mock.patch.object(subscription_service, 'get_xui_session', side_effect=fake_session),
+            mock.patch.object(subscription_service, 'fetch_authoritative_subscription_configs',
+                              side_effect=fake_configs),
+            mock.patch.object(subscription_service, 'sort_subscription_configs',
+                              side_effect=lambda configs, *a, **k: configs),
+            mock.patch.object(subscription_service, 'find_subscription_client_email',
+                              return_value='e@test'),
+            mock.patch.object(subscription_service, 'ensure_subscription_identity',
+                              side_effect=lambda configs, email: configs),
+            mock.patch.object(subscription_service, 'fetch_subscription_profile_metadata',
+                              return_value={'sub_title': 'T', 'update_interval': '24'}),
+            mock.patch.object(subscription_service, 'build_subscription_profile_title',
+                              return_value='T'),
         ]
         for patcher in self._patches:
             patcher.start()
@@ -199,6 +210,64 @@ class SubscriptionRouteCacheTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(subscription_cache.metrics()['stores'], 0)
 
+    # ── Phase 7: the request path must not read X-UI ─────────────────────────────
+
+    def test_a_stale_entry_is_served_without_reading_the_panel(self):
+        """Stale-while-revalidate: the client is answered, the panel read is off-path."""
+        self._get()  # warm the cache
+        self.assertEqual(self.calls['configs'], 1)
+        cache_key = subscription_cache.make_key(SERVER_ID, SUB_ID, 'fast')
+        body, status, headers = subscription_cache.get(cache_key)
+        subscription_cache.set(cache_key, (body, status, headers), ttl=0)  # expire it
+
+        with mock.patch.object(sp, '_spawn_subscription_refresh') as refresh:
+            response = self._get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get('X-Eve-Cache'), 'stale')
+        self.assertEqual(self.calls['configs'], 1, 'the request path read the panel')
+        refresh.assert_called_once()
+        self.assertEqual(subscription_cache.metrics()['stale_served'], 1)
+
+    def test_the_background_refresh_replaces_the_stale_entry(self):
+        self._get()
+        cache_key = subscription_cache.make_key(SERVER_ID, SUB_ID, 'fast')
+        body, status, headers = subscription_cache.get(cache_key)
+        subscription_cache.set(cache_key, (body, status, headers), ttl=0)
+
+        self.assertTrue(sp._spawn_subscription_refresh(SERVER_ID, SUB_ID, cache_key, 'fast'))
+        for _ in range(50):
+            if subscription_cache.get(cache_key) is not None:
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(subscription_cache.get(cache_key),
+                             'the background refresh did not refill the cache')
+        self.assertEqual(self._get().headers.get('X-Eve-Cache'), 'hit')
+
+    def test_the_pre_warmed_cache_answers_a_burst_with_zero_panel_reads(self):
+        """The reconciler fills the cache; public requests then touch no X-UI."""
+        from panel.core.redis_client import GLOBAL_SERVER_DATA
+        original = list(GLOBAL_SERVER_DATA.get('inbounds') or [])
+        GLOBAL_SERVER_DATA['inbounds'] = [{
+            'server_id': SERVER_ID, 'id': 1, 'protocol': 'vless',
+            'clients': [{'email': 'bob', 'raw_client': {'email': 'bob', 'subId': SUB_ID}}],
+        }]
+        try:
+            warmed = subscription_service.warm_subscription_cache(
+                db.session.get(Server, SERVER_ID), limit=5)
+        finally:
+            GLOBAL_SERVER_DATA['inbounds'] = original
+
+        self.assertEqual(warmed, 1)
+        self.assertEqual(self.calls['configs'], 1, 'the pre-warm reads the panel once')
+
+        for _ in range(100):
+            response = self._get()
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers.get('X-Eve-Cache'), 'hit')
+        self.assertEqual(self.calls['configs'], 1, 'a request read the panel')
+        self.assertEqual(self.calls['session'], 1)
+
 
 class SubscriptionCacheScriptTests(unittest.TestCase):
     def test_quick_script_writes_a_valid_result(self):
@@ -223,3 +292,4 @@ class SubscriptionCacheScriptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

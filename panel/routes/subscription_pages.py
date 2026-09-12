@@ -2,6 +2,7 @@
 import base64
 import json
 import re
+import threading
 from datetime import datetime, timedelta
 from urllib.parse import quote, urlparse
 
@@ -35,12 +36,10 @@ from panel.services.subscription import (
     build_subscription_configs,
     clone_subscription_config_with_name,
     ensure_subscription_identity,
-    fetch_authoritative_subscription_configs,
     fetch_subscription_last_connection,
     fetch_subscription_profile_metadata,
-    find_subscription_client_email,
+    render_fast_subscription,
     render_subscription_statistics_name,
-    sort_subscription_configs,
 )
 
 bp = Blueprint('subscription_pages', __name__)
@@ -413,6 +412,42 @@ def _build_subscription_statistics_values(
     }
 
 
+def _spawn_subscription_refresh(server_id, sub_id, cache_key, variant):
+    """Refresh one cached subscription off the request path, single-flight.
+
+    The public request that noticed the stale entry is answered immediately; the
+    panel read happens here, so an X-UI outage or latency can never block a VPN
+    client, and a burst of stale hits still triggers exactly one refresh.
+    """
+    if not subscription_cache.enabled() or variant != 'fast':
+        return False
+    if not subscription_cache.begin(cache_key):
+        return False
+
+    def _work():
+        from app import app  # deferred: app-level helper, avoids circular import
+        from panel.models import Server as _Server
+        try:
+            # The request's Server instance belongs to the request session, so the
+            # background pass loads its own inside this context.
+            with app.app_context():
+                try:
+                    server = db.session.get(_Server, int(server_id))
+                    if server is not None:
+                        rendered = render_fast_subscription(server, sub_id)
+                        if rendered:
+                            subscription_cache.set(cache_key, rendered, variant=variant)
+                finally:
+                    db.session.remove()
+        except Exception:
+            pass
+        finally:
+            subscription_cache.end(cache_key)
+
+    threading.Thread(target=_work, name='eve-subscription-refresh', daemon=True).start()
+    return True
+
+
 @bp.route('/s/<int:server_id>/<sub_id>')
 def client_subscription(server_id, sub_id):
     from app import _compute_client_service_state, _get_dashboard_status_thresholds, _get_or_create_system_setting, app, format_bytes, format_remaining_days  # deferred: app-level helper, avoids circular import
@@ -449,6 +484,8 @@ def client_subscription(server_id, sub_id):
         cache_key = subscription_cache.make_key(
             server_id, normalized_sub_id,
             cache_variant + (':html' if wants_html_view else ''))
+        # Read the stale copy first: get() removes an expired entry.
+        stale_entry = subscription_cache.peek_stale(cache_key)
         cached = subscription_cache.get(cache_key)
         if cached is None:
             if subscription_cache.in_flight(cache_key):
@@ -456,6 +493,14 @@ def client_subscription(server_id, sub_id):
                 cached = subscription_cache.get(cache_key)
             if cached is None:
                 subscription_cache.note_miss()
+                # Stale-while-revalidate: a VPN client must never wait on X-UI. If a
+                # previous body exists, answer with it and refresh off-request
+                # (single-flight, so a burst still causes one panel read at most).
+                if stale_entry is not None:
+                    _spawn_subscription_refresh(server_id, normalized_sub_id,
+                                                cache_key, cache_variant)
+                    body, status, headers = stale_entry
+                    return body, status, {**headers, 'X-Eve-Cache': 'stale'}
         if cached is not None:
             body, status, headers = cached
             return body, status, {**headers, 'X-Eve-Cache': 'hit'}
@@ -474,50 +519,14 @@ def client_subscription(server_id, sub_id):
                 return response
 
     if fast_variant:
+        # One shared renderer for the request path and the background pre-warm; the
+        # route hands over the session it just authenticated.
         fast_session, fast_login_error = get_xui_session(server)
         if not fast_login_error and fast_session:
-            fast_configs = fetch_authoritative_subscription_configs(
-                server,
-                normalized_sub_id,
-                session_obj=fast_session,
-            )
-            if fast_configs:
-                fast_configs = sort_subscription_configs(
-                    fast_configs,
-                    server,
-                    sub_id=normalized_sub_id,
-                )
-                fast_email = find_subscription_client_email(
-                    server,
-                    normalized_sub_id,
-                    session_obj=fast_session,
-                )
-                fast_configs = ensure_subscription_identity(
-                    fast_configs,
-                    fast_email,
-                )
-                profile_metadata = fetch_subscription_profile_metadata(
-                    server,
-                    session_obj=fast_session,
-                )
-                fast_blob = '\n'.join(fast_configs)
-                encoded_fast_blob = base64.b64encode(
-                    fast_blob.encode('utf-8')
-                ).decode('ascii')
-                profile_title_raw = build_subscription_profile_title(
-                    profile_metadata.get('sub_title'),
-                    server.name,
-                )
-                profile_title = base64.b64encode(
-                    profile_title_raw.encode('utf-8')
-                ).decode('ascii')
-                return encoded_fast_blob, 200, {
-                    'Content-Type': 'text/plain; charset=utf-8',
-                    'Profile-Title': f'base64:{profile_title}',
-                    'Profile-Update-Interval': profile_metadata.get('update_interval', '24'),
-                    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-                    'Pragma': 'no-cache',
-                }
+            fast_response = render_fast_subscription(
+                server, normalized_sub_id, session_obj=fast_session)
+            if fast_response:
+                return fast_response
 
     live_session, live_inbounds, target_client, target_inbound, live_error = (
         _fetch_live_subscription_context(server, normalized_sub_id)

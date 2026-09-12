@@ -1833,6 +1833,17 @@ def _fetch_and_update_server_data_inner(server_id: int):
         GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(statuses)
         GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
 
+        # Phase 7: this reconciler is the right place to keep the public subscription
+        # responses warm, so a VPN client request is answered from the cache and never
+        # touches X-UI. Each id is only read when its entry is missing/expired and the
+        # pass is capped (`EVE_SUBSCRIPTION_PREWARM_LIMIT`), so the extra panel calls
+        # are bounded by the cache TTL. A failure here must never break the fetch.
+        try:
+            from panel.services.subscription import warm_subscription_cache
+            warm_subscription_cache(server)
+        except Exception:
+            pass
+
 
 # ── Write-through cache ──────────────────────────────────────────────────────
 # After any successful panel write we mutate GLOBAL_SERVER_DATA directly (and
