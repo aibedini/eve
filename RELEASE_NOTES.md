@@ -1,5 +1,27 @@
-# Eve - Xui Manager v2.5.0
+# Eve - Xui Manager v2.6.0
 
+## [2.6.0] - 2026-09-12
+
+A **production-hardening** release: thirty-two phases of security, correctness and
+performance work. Every performance change has a measured before/after artifact
+under `docs/performance/`, and every phase shipped with its own tests and
+documentation.
+
+Highlights:
+- 🛡️ **Security** — PostgreSQL transport policy and health facts, upload validation with sandboxed serving, a tamper-evident hash-chained audit trail with `/api/audit-log`, an enforceable GMweb gateway contract, request correlation (`X-Request-ID`) with in-process HTTP metrics, and a release guard that gates image publishing with signed SBOM and provenance.
+- ⚡ **Performance** — subscription response cache (20x on client polls), the finance N+1 removal (65 to 6 statements on the transaction list), the reseller refresh projection (1.76 s to 0.29 s), fingerprinted immutable static assets, and one bounded pagination contract for list endpoints.
+- 🩺 **Operations** — a worker inventory in `/api/doctor` with fail-safe singleton claims, bounded and resumable data retention through the durable migration ledger, a repeatable load test, and a documentation index plus operations runbook.
+
+Upgrade notes:
+- Data retention is **on by default** for operational logs. Run `python -m panel.services.retention --dry-run` first; set `retention_days_<policy>=0` to keep any table forever.
+- The only schema change is the additive audit-chain migration; the panel migrates automatically on start.
+- No configuration is required to upgrade. Review `docs/security/` and `docs/performance/` for the new environment knobs and the measured numbers.
+
+فارسی:
+- 🛡️ **امنیت** — سیاست انتقال PostgreSQL، اعتبارسنجی محتوای آپلود با سرو سندباکسشده، رد ممیزی زنجیرهٔ هش دستنخورده با `/api/audit-log`، قرارداد اجرایی GMweb، رهگیری درخواست (`X-Request-ID`) با معیارهای HTTP، و گارد انتشار با SBOM و provenance امضاشده.
+- ⚡ **کارایی** — کش پاسخ اشتراک (۲۰ برابر)، حذف N+1 در مالی (۶۵ به ۶ کوئری)، projection ریسلر (۱.۷۶s به ۰.۲۹s)، داراییهای استاتیک نسخهدار و immutable، و یک قرارداد صفحهبندی کراندار.
+- 🩺 **عملیات** — فهرست workerها در `/api/doctor` با claim سینگلتون fail-safe، نگهداشت دادهٔ کراندار و قابلازسرگیری، لود تست تکرارپذیر، و فهرست مستندات بههمراه رانبوک عملیاتی.
+- ⚠️ نگهداشت داده برای لاگهای عملیاتی **بهصورت پیشفرض فعال** است؛ پیش از ارتقا `python -m panel.services.retention --dry-run` را اجرا کن و برای نگهداشتن هر جدول `retention_days_<policy>=0` بگذار.
 ## [2.5.0] - 2026-07-18
 
 A major **Telegram sales & support** release: reseller-owned bots with full lifecycle, customer notifications, controlled trials, fraud/audit controls, and a rule-based **promo engine**.

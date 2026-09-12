@@ -2,6 +2,38 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.6.0] - 2026-09-12
+
+A production-hardening release: thirty-two phases of security, correctness and
+performance work, each with its own tests and, where performance changed, a
+measured before/after artifact under `docs/performance/`.
+
+### Security
+- **PostgreSQL transport policy**: `sslmode` and certificate material are applied to every engine (Alembic included), the startup audit and `/api/doctor` warn about plaintext remote links, and transient connection failures answer 503 + `Retry-After` instead of 500 (`docs/security/POSTGRESQL.md`).
+- **Upload hardening**: editor media and app files are validated by magic bytes and declared image dimensions, and anything served from `/static/uploads/` or `/static/app-files/` is sandboxed and forced to download unless it is a raster image (`docs/security/UPLOADS.md`).
+- **Tamper-evident audit trail**: every sensitive action appends a hash-chained row with request id, source address and user agent; `verify_chain()` reports edits and deletions, `/api/audit-log` exposes a paginated view, and `/api/doctor` reports the chain (`docs/security/AUDIT_LOG.md`).
+- **GMweb contract**: endpoint paths, headers and retry policy come from `shared/eve-gmweb-contract-v1.json`; the gateway URL is validated (http(s), no credentials, no query) and plaintext remote transport warns (`docs/GMWEB_CONTRACT.md`).
+- **Request correlation and metrics**: every response carries `X-Request-ID`, JSON error payloads include it, and in-process per-endpoint counters feed `/api/doctor` (`docs/operations/OBSERVABILITY.md`).
+- **Release guard**: `scripts/release_check.py` gates image publishing on version format, hash-pinned dependencies, wired scanners, a non-root image and the disclosure policy; the published image carries a signed SBOM and provenance (`docs/RELEASE_SECURITY.md`).
+- **Network, certificate, header, RBAC, MFA and financial-privacy hardening** from the earlier phases of the program remain documented under `docs/security/`.
+
+### Performance
+- **Subscription response cache**: a bounded LRU plus TTL cache with single-flight coalescing in front of `/s/<server>/<sub>`; measured 400 polls over 20 keys from 400 panel reads / 8.2 s to 20 reads / 0.41 s (`docs/performance/SUBSCRIPTION_CACHE.md`).
+- **Hot-path query budget**: the finance lists stopped re-reading settings per row and now eager-load their relationships; `GET /api/transactions` went from 65 to 6 statements and `GET /api/payments` from 86 to 8 (`docs/performance/QUERY_OPTIMIZATION.md`).
+- **Reseller refresh projection**: `/api/refresh` derives the reseller view with per-inbound shallow copies instead of a deep copy of the snapshot; 1.76 s to 0.29 s with an identical payload (`docs/performance/SERIALIZATION.md`).
+- **Static asset delivery**: `url_for` appends a content fingerprint so versioned assets are cached immutably; 0/6 to 6/6 dashboard assets (`docs/performance/STATIC_ASSETS.md`).
+- **Bounded list responses**: one pagination contract (`limit`/`offset`, `total`, `has_more`) with a server-side ceiling; the BNQO link inventory dropped from 1000 rows / 289 KB to 200 rows / 58 KB per request (`docs/performance/API_PAGINATION.md`).
+- **Load test and baselines**: a repeatable fixed-rate load generator plus the baseline harness, delta sync, SSE, panel limits, database pool, adaptive refresh and per-server cache measurements, each with a JSON artifact.
+
+### Operations
+- **Worker inventory**: every background worker start is recorded and reported by `/api/doctor`; a lock file that cannot be created fails open with a recorded reason instead of silently disabling the worker (`docs/operations/WORKERS.md`).
+- **Data retention**: bounded, resumable policies prune operational logs and expired sessions through the `system_migrations` ledger, with a dry run and per-policy windows (`docs/operations/RETENTION.md`).
+- **Documentation index and runbook**: `docs/README.md` lists every document and `docs/OPERATIONS_RUNBOOK.md` walks the day-two tasks; a test keeps both complete and link-clean.
+
+### Operator notes
+- Retention is enabled by default for operational logs (`health_logs` 90 d, `monitor_message_log` 90 d, `whatsapp_bot_log` 30 d, `sms_send_log` 180 d, `bnqo_jobs` 30 d, `admin_sessions` 30 d past expiry). Run `python -m panel.services.retention --dry-run` before upgrading, and set `retention_days_<policy>` to `0` to keep a table forever.
+- The only schema change in this release is the additive audit-chain migration (`a1b2c3d4e5f6`); existing rows keep working and are reported as legacy by the chain verifier.
+- New environment knobs are documented with each feature (`EVE_DB_SSLMODE`, `EVE_SUBSCRIPTION_CACHE_*`, `EVE_STATIC_*`, `EVE_PANEL_*`, `EVE_DB_POOL_*`).
 ## [2.5.85] - 2026-08-26
 
 ### Added
