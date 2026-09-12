@@ -31,11 +31,24 @@ jobs:
           TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # A tag is often pushed seconds after the commit it points at, so the
+          # newest run for this commit can still be in progress. Reading "no
+          # conclusion yet" as not-green refused a release whose Tests and
+          # Security runs both finished green a minute later. Poll instead, with
+          # a bounded budget (40 x 15s = 10 minutes per workflow).
           for wf in security.yml tests.yml; do
-            conclusion=$(gh api \
-              "repos/${{ github.repository }}/actions/workflows/${wf}/runs?head_sha=${TARGET_SHA}&per_page=1" \
-              --jq '.workflow_runs[0].conclusion // "missing"')
-            echo "${wf}: ${conclusion}"
+            conclusion="pending"
+            for attempt in $(seq 1 40); do
+              conclusion=$(gh api \
+                "repos/${{ github.repository }}/actions/workflows/${wf}/runs?head_sha=${TARGET_SHA}&per_page=1" \
+                --jq '.workflow_runs[0].conclusion // "pending"')
+              echo "${wf}: ${conclusion} (attempt ${attempt})"
+              case "${conclusion}" in
+                success|failure|cancelled|timed_out|action_required|neutral|skipped)
+                  break ;;
+              esac
+              sleep 15
+            done
             if [ "${conclusion}" != "success" ]; then
               echo "Refusing to build a release: ${wf} is '${conclusion}' for ${TARGET_SHA}" >&2
               exit 1

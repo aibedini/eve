@@ -15,6 +15,14 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  # A branch push and its tag start seconds apart for the same commit and would
+  # otherwise race on the same sha-<commit> image tag and on BuildKit startup;
+  # one of the two runs already failed with a BuildKit DeadlineExceeded. Runs
+  # queue instead of cancelling, so a tag build can never cancel a branch build.
+  group: docker-publish
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
