@@ -268,6 +268,62 @@ class RenewEnableTests(unittest.TestCase):
         # detection must receive the live authenticated session.
         app_module.server_is_v3.assert_called_with(self.server, self.session_obj)
 
+    def test_volume_ended_renew_propagates_without_a_manual_refresh(self):
+        """Phase 1 regression: the reported "subscription new / dashboard old" bug.
+
+        A 25GB account that has used all 25GB is renewed by +10GB; without any full
+        refresh the mutation response, the shared cache, the delta the dashboard and
+        the search index consume, and a plain reload must all show 35GB/active.
+        """
+        from panel.core import snapshot_delta
+
+        past = int(time.time() * 1000) - DAY_MS
+        raw = _raw_client(expiry=past, total=25 * GB, enable=False)
+        row = _cached_client_row(self.server.id, raw, up=25 * GB, down=0)
+        GLOBAL_SERVER_DATA['inbounds'] = [_cached_inbound(self.server.id, [row])]
+        snapshot_delta.sync(GLOBAL_SERVER_DATA, force=True)
+        revision_before = snapshot_delta.current_revision(GLOBAL_SERVER_DATA)
+
+        refresh_jobs._recompute_cached_client(row)
+        self.assertEqual(row['remaining_bytes'], 0)
+        self.assertEqual(row['volume_status'], 'suspended')
+
+        with mock.patch.object(refresh_jobs, 'enqueue_refresh_job') as repair:
+            resp = self._renew(mode='custom', days=30, volume=10, free=True)
+        payload = resp.get_json()
+        self.assertEqual(resp.status_code, 200, payload)
+
+        # 1. The mutation response is authoritative: the panel was read back.
+        self.assertTrue(payload['success'], payload)
+        self.assertTrue(payload['verify']['ok'], payload['verify'])
+        self.assertEqual(payload['verify']['observed']['totalGB'], 35 * GB)
+
+        # 2. The shared cache holds the new state immediately.
+        cached = GLOBAL_SERVER_DATA['inbounds'][0]['clients'][0]
+        self.assertEqual(cached['totalGB'], 35 * GB)
+        self.assertTrue(cached['raw_client']['enable'])
+        self.assertEqual(cached['remaining_bytes'], 10 * GB)
+        self.assertNotEqual(cached['volume_status'], 'suspended')
+
+        # 3/4/5. The delta that the dashboard and the search index consume carries it.
+        delta = self.client.get(f'/api/refresh?since={revision_before}').get_json()
+        self.assertEqual(delta['sync']['mode'], 'delta', delta.get('sync'))
+        renewed = next(c for ib in delta['inbounds'] for c in ib.get('clients', [])
+                       if c.get('email') == 'bob')
+        self.assertEqual(renewed['totalGB'], 35 * GB)
+        self.assertTrue(renewed['raw_client']['enable'])
+        self.assertNotEqual(renewed['volume_status'], 'suspended')
+
+        # 6. The write-through hit, so nothing waited on a repair fetch.
+        repair.assert_not_called()
+
+        # 7. A page reload (a full read) sees the same state.
+        full = self.client.get('/api/refresh').get_json()
+        reloaded = next(c for ib in full['inbounds'] for c in ib.get('clients', [])
+                        if c.get('email') == 'bob')
+        self.assertEqual(reloaded['totalGB'], 35 * GB)
+        self.assertNotEqual(reloaded['volume_status'], 'suspended')
+
     def test_completed_renew_operation_replays_without_second_panel_write(self):
         future = int(time.time() * 1000) + DAY_MS
         self._seed_cache(_raw_client(expiry=future, total=5 * GB, enable=True))
