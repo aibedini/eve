@@ -57,6 +57,7 @@ from panel.routes.templates_api import (
     DEFAULT_ROYALTY_INFO_SMS_TEMPLATE,
     ROYALTY_INFO_SMS_TEMPLATE_TYPE,
 )
+from panel.services import gmweb_contract
 from panel.services.backup import _get_system_setting_value, _parse_int
 from panel.services.billing import _recommendation_template_vars, _template_wants_recommendation
 
@@ -2412,6 +2413,35 @@ def _gmweb_sms_priority(message_kind: str) -> str:
     raise ValueError(f'unmapped_sms_message_kind:{kind or "empty"}')
 
 
+# A gateway misconfiguration should be visible once, not on every send.
+_GMWEB_WARNED = set()
+
+
+def _gmweb_warn(reason: str) -> None:
+    text = str(reason or '').strip()
+    if not text or text in _GMWEB_WARNED:
+        return
+    _GMWEB_WARNED.add(text)
+    try:
+        from app import app  # deferred: app-level object
+        app.logger.warning('[GMweb] %s', text)
+    except Exception:
+        pass
+
+
+def _gmweb_base(cfg: dict) -> tuple:
+    """(base_url, reason) for the configured gateway, contract-validated.
+
+    The URL is checked once here instead of trusting whatever was saved: a
+    non-http(s) scheme, an embedded credential or a malformed host must never
+    receive the bearer key.
+    """
+    result = gmweb_contract.validate_base_url(cfg.get('base_url'))
+    if result.get('warning'):
+        _gmweb_warn(result['warning'])
+    return result.get('base'), result.get('reason')
+
+
 def _get_gmweb_send_capacity(cfg: dict | None = None) -> dict:
     """Read selected gateway lane occupancy and free announcement capacity."""
     cfg = _get_sms_provider_settings(cfg=cfg)
@@ -2420,15 +2450,15 @@ def _get_gmweb_send_capacity(cfg: dict | None = None) -> dict:
         'provider': cfg.get('provider', 'gmweb'),
         'priorities': {}, 'announcement': {},
     }
-    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    base, base_reason = _gmweb_base(cfg)
     api_key = (cfg.get('api_key') or '').strip()
     if not base or not api_key:
-        out['reason'] = 'gateway_not_configured'
+        out['reason'] = base_reason or 'gateway_not_configured'
         return out
     try:
         resp = requests.get(
-            f'{base}/send/capacity',
-            headers={'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'},
+            f"{base}{gmweb_contract.endpoint_path('send_capacity')}",
+            headers=gmweb_contract.request_headers(api_key),
             timeout=min(int(cfg.get('timeout_seconds') or 15), 5),
         )
         out['status_code'] = resp.status_code
@@ -2479,10 +2509,10 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
         'recipient_evidence': None, 'conversation_url': None,
         **_sms_segment_info(text),
     }
-    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    base, base_reason = _gmweb_base(cfg)
     api_key = (cfg.get('api_key') or '').strip()
     if not base or not api_key:
-        out['reason'] = 'gateway_not_configured'
+        out['reason'] = base_reason or 'gateway_not_configured'
         return out
     canonical_priority = str(priority or '').strip().lower()
     if canonical_priority not in GMWEB_SMS_PRIORITY_LEVELS:
@@ -2491,18 +2521,12 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     out['priority'] = canonical_priority
     out['priority_level'] = GMWEB_SMS_PRIORITY_LEVELS[canonical_priority]
     payload = {'to': to, 'text': text, 'priority': canonical_priority}
-    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
-    if idempotency_key:
-        # HTTP headers must be latin-1. Emails can contain emoji (e.g. 📶plus300…)
-        # and the key embeds the email, so strip any non-latin-1 chars — otherwise
-        # requests raises UnicodeEncodeError and the send silently fails. Stable
-        # transform (same input → same key) keeps retry de-duplication intact.
-        safe_key = str(idempotency_key).encode('latin-1', 'ignore').decode('latin-1') or 'k'
-        headers['Idempotency-Key'] = safe_key
+    headers = gmweb_contract.request_headers(
+        api_key, json_body=True, idempotency_key=idempotency_key)
     for network_attempt in range(2 if idempotency_key else 1):
         try:
             resp = requests.post(
-                f"{base}/send",
+                f"{base}{gmweb_contract.endpoint_path('send')}",
                 json=payload,
                 headers=headers,
                 timeout=int(cfg.get('timeout_seconds') or 15),
@@ -2566,6 +2590,12 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
                         out['retry_after_seconds'] = max(1, int(raw_retry)) if raw_retry else None
                     except (TypeError, ValueError):
                         pass
+                if resp.status_code >= 500 and network_attempt == 0 and idempotency_key:
+                    # A 5xx is ambiguous: the gateway may have queued the send
+                    # before failing. The contract allows one retry when an
+                    # idempotency key is present, which makes it converge.
+                    out['reason'] = None
+                    continue
             return out
         except Exception as exc:
             out['reason'] = f'gateway_error: {exc}'
@@ -2590,22 +2620,19 @@ def _cancel_sms_via_gmweb(reference: str, cfg: dict | None = None) -> dict:
         'ok': False, 'cancelled': False, 'reason': None, 'status_code': None,
         'status': None, 'state': None, 'terminal': None, 'successful': None,
     }
-    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    base, base_reason = _gmweb_base(cfg)
     api_key = (cfg.get('api_key') or '').strip()
     ref = (reference or '').strip()
     if not base or not api_key:
-        out['reason'] = 'gateway_not_configured'
+        out['reason'] = base_reason or 'gateway_not_configured'
         return out
     if not ref:
         out['reason'] = 'missing_reference'
         return out
     try:
         resp = requests.post(
-            f"{base}/send/cancel/{quote(ref, safe='')}",
-            headers={
-                'Authorization': f'Bearer {api_key}',
-                'Accept': 'application/json',
-            },
+            f"{base}{gmweb_contract.endpoint_path('send_cancel', requestId=ref)}",
+            headers=gmweb_contract.request_headers(api_key),
             timeout=min(int(cfg.get('timeout_seconds') or 15), 5),
         )
         out['status_code'] = resp.status_code
@@ -3764,7 +3791,7 @@ def _sms_status_endpoint(base_url: str, row) -> str:
             return status_url
         status_url = ''
     if not status_url and row.request_id:
-        status_url = f'/send/status/{row.request_id}'
+        status_url = gmweb_contract.endpoint_path('send_status', requestId=row.request_id)
     return f"{base_url.rstrip('/')}/{status_url.lstrip('/')}"
 
 

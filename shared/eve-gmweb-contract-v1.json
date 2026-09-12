@@ -11,11 +11,52 @@
     "ingressRatePerMinute": 30,
     "ingressRatePerHour": 1000
   },
+  "transport": {
+    "schemes": ["http", "https"],
+    "recommendedScheme": "https",
+    "plaintextWarnHosts": "non-local",
+    "authHeader": "Authorization: Bearer <projectKey>",
+    "idempotencyHeader": "Idempotency-Key",
+    "acceptHeader": "application/json",
+    "contentType": "application/json",
+    "timeoutSeconds": { "default": 15, "min": 3, "max": 90, "statusPollMax": 5 },
+    "retry": {
+      "attempts": 2,
+      "onlyWithIdempotencyKey": true,
+      "retriesOn": ["timeout", "connection_error", "5xx"]
+    }
+  },
   "endpoints": [
-    { "method": "GET", "path": "/ready", "scope": "sms.capacity" },
-    { "method": "POST", "path": "/send", "scope": "sms.send" },
-    { "method": "GET", "path": "/send/status/{requestId}", "scope": "sms.status" },
-    { "method": "POST", "path": "/send/cancel/{requestId}", "scope": "sms.cancel" },
-    { "method": "GET", "path": "/send/capacity", "scope": "sms.capacity" }
-  ]
+    { "key": "ready", "method": "GET", "path": "/ready", "scope": "sms.capacity" },
+    { "key": "send", "method": "POST", "path": "/send", "scope": "sms.send" },
+    { "key": "send_status", "method": "GET", "path": "/send/status/{requestId}", "scope": "sms.status" },
+    { "key": "send_cancel", "method": "POST", "path": "/send/cancel/{requestId}", "scope": "sms.cancel" },
+    { "key": "send_capacity", "method": "GET", "path": "/send/capacity", "scope": "sms.capacity" }
+  ],
+  "sendRequest": {
+    "required": ["to", "text", "priority"],
+    "priorityLanes": { "critical": 1, "expired": 3, "expiring": 6, "announcement": 10 }
+  },
+  "sendResponse": {
+    "acceptedStatus": [200, 202],
+    "fields": {
+      "requestId": "string",
+      "jobId": "string|integer",
+      "status": "sent|completed|unverified|failed|cancelled|duplicate_suppressed",
+      "statusUrl": "string (relative to the gateway origin)",
+      "terminal": "boolean",
+      "successful": "boolean",
+      "retryAfterSeconds": "integer"
+    },
+    "terminalStatuses": ["sent", "completed", "unverified", "failed", "cancelled"]
+  },
+  "capacityResponse": {
+    "required": ["announcement"],
+    "announcementFields": ["limit", "pending", "available", "recommendedBatchSize"]
+  },
+  "errorResponse": {
+    "fields": ["error", "message", "reason", "limits", "used"],
+    "rateLimitStatus": 429,
+    "retryAfterHeader": "Retry-After"
+  }
 }
