@@ -17,18 +17,32 @@ The project uses the `2.x.y` version scheme. `APP_VERSION` in `app.py` is the si
 - Warn the user before required maintenance that it may take time and that the panel may be slower or briefly unavailable.
 - Before creating an update backup, prune stale `${APP_DIR}.bak.*` directories. Retain at most two backups afterward.
 
-## Codebase Memory (mandatory graph-first workflow)
+## Codebase Memory Policy
 
-This repository uses `codebase-memory-mcp` v0.10+ as its primary code-intelligence layer for every coding task, regardless of the model or agent (Codex, Claude, Gemini, Qwen, Kimi, DeepSeek through an MCP-capable client, Copilot, Cursor, Cline, Windsurf, OpenCode, and similar tools). Read `docs/AI_CODEBASE_MEMORY.md` for the complete shared contract.
+This repository uses `codebase-memory-mcp` v0.10+ as its code-intelligence layer, regardless of the model or agent (Codex, Claude, Gemini, Qwen, Kimi, DeepSeek through an MCP-capable client, Copilot, Cursor, Cline, Windsurf, OpenCode, and similar tools). It answers **structure** questions — where a symbol lives, what calls it, what a change touches. It is not a source of truth: the current source and the tests are the final authority. Reasoning about **why** a decision was made (for example why an X-UI backup must be deleted after a verified Telegram send, `docs/security/BACKUP_POLICY.md`) belongs in this file or another policy document, never in the graph.
 
-- At the start of a coding task or after context compaction, call `list_projects`, then `index_status` for this repository. If the project is absent or stale, call `index_repository` before structural exploration.
-- Use graph tools before filesystem search: `search_graph` for symbols/routes, `trace_path` for callers/callees/data flow, `get_code_snippet` for exact source, `query_graph` for multi-hop questions, `get_architecture` for broad structure, and `search_code` for graph-augmented text search.
-- Before editing a symbol, inspect its exact source and trace material inbound/outbound impact. Do not infer a complete impact surface from a filename search.
-- Use `check_index_coverage` for every material source path relied upon. If coverage is partial, stale, skipped, or unknown, inspect only the reported gaps with targeted source reads or `rg`.
-- Raw `rg`, globbing, and file reads are fallbacks for string literals, error messages, configuration/non-code files, generated/vendor assets, or verified graph coverage gaps. They are not the default discovery workflow.
-- After code changes, run `detect_changes` to review affected symbols and risk, run the relevant tests, then refresh the graph with `index_repository` when the watcher has not already brought the index current.
-- For negative or exhaustive claims (dead code, no callers, full impact), paginate all relevant graph results and state any remaining coverage limitation.
-- If the MCP frontend is unavailable, use CLI mode rather than abandoning the graph: `codebase-memory-mcp cli <tool> '<json-args>'`.
+Use it for every task that needs to understand the codebase: architecture, finding an implementation, checking dependencies, tracing a flow, or a change that spans several files. It is **not** required for a small, fully localized change — a typo, one label, one colour, a version bump — where the graph costs more time and tokens than it saves.
+
+### The workflow
+
+1. `index_status` (after `list_projects`) to establish graph state.
+2. `detect_changes` to see the current blast radius and risk before reading code.
+3. If the project is missing, stale, or its coverage is partial, `index_repository` before structural exploration.
+4. Discover with the graph first: `search_graph` for symbols and routes, `get_code_snippet` for exact source, `query_graph` for multi-hop questions, `trace_path` for callers/callees/data flow, `get_architecture` for broad structure, `search_code` for graph-augmented text search, and `check_index_coverage` for every material path.
+5. Before editing, confirm the graph's answer against reality: read the exact symbol with `get_code_snippet` and open the related files directly. Never edit from a graph result alone.
+6. After the change, run `detect_changes` again and the relevant tests, then let the watcher or `index_repository` bring the index current.
+
+### Graph output is never committed
+
+`index_repository` may write `.codebase-memory/artifact.json` and `.codebase-memory/graph.db.zst` into the checkout. Both are machine-local caches that record the local checkout path, and the database is a multi-megabyte binary. `.gitignore` excludes `.codebase-memory/`; every developer builds their own index (see the "Local index" section of `docs/AI_CODEBASE_MEMORY.md`). Never commit, force-add, or review-request those files.
+
+### Evidence discipline
+
+- Use graph tools before filesystem search. Raw `rg`, globbing, and file reads are fallbacks for string literals, error messages, configuration/non-code files, generated/vendor assets, or verified coverage gaps.
+- A truncated graph result is not a complete result; check pagination. A clean coverage response means no recorded gap, not proof that every dynamic behavior is modeled.
+- For negative or exhaustive claims (dead code, no callers, full impact), paginate all relevant results and state the remaining coverage limitation.
+- Do not infer a complete impact surface from a filename search.
+- If the MCP frontend is unavailable, use CLI mode instead of abandoning the graph: `codebase-memory-mcp cli <tool> '<json-args>'`.
 - When delegating, pass the project name, index generation/freshness, qualified symbols, traces, coverage findings, and unresolved questions to the child agent.
 - `graphify-out/` is legacy reference material only. Do not run Graphify for routine work unless Codebase Memory is unavailable and the fallback is explicitly noted.
 

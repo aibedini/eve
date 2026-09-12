@@ -81,6 +81,12 @@ uv.lock
 .mypy_cache/
 graphify-out/
 
+# Codebase Memory output: the artifact names the machine-local checkout path in its
+# `project` field and the graph database is an 8 MB binary, so both are local caches,
+# not shared sources. Every developer builds their own index (see
+# docs/AI_CODEBASE_MEMORY.md). Never commit this directory.
+.codebase-memory/
+
 # Local/user-provided assets
 attached_assets/
 

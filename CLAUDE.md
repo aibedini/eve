@@ -17,7 +17,7 @@ Version scheme: `2.x.y` (single source of truth: `APP_VERSION` in `app.py`).
 
 ## Codebase Memory
 
-The mandatory repository-wide code-intelligence policy is in `AGENTS.md` and `docs/AI_CODEBASE_MEMORY.md`. For every coding task, use `codebase-memory-mcp` v0.10+ first: verify/index the project, discover and trace through graph tools, check coverage before relying on results, and run `detect_changes` after edits. Use raw grep/read only for non-code content, literals, or verified coverage gaps. `graphify-out/` is legacy fallback material, not the routine workflow.
+The repository-wide code-intelligence policy is in `AGENTS.md` and `docs/AI_CODEBASE_MEMORY.md`. For every task that needs to understand the codebase, use `codebase-memory-mcp` v0.10+ first: `index_status`, `detect_changes`, `index_repository` when the graph is stale, then discover and trace through the graph tools, and confirm the graph against the real source with `get_code_snippet` and direct file reads before editing. The graph is an aid — the current source and the tests are the final authority — and a small fully localized change does not need it. Use raw grep/read only for non-code content, literals, or verified coverage gaps. `.codebase-memory/` output is a machine-local cache: it is git-ignored and must never be committed. `graphify-out/` is legacy fallback material, not the routine workflow.
 
 ## Modular structure
 

@@ -58,7 +58,22 @@ Pin 0.10.8 or newer: 0.10.7 is deprecated because its postinstall fetches a rele
 
 A profile with `patchReload: live` picks the row up with no restart, and the tools register as `mcp__codebase-memory__<tool>`. DSH 0.1.5-rc.1 has no MCP settings page — Settings → Plugins configures only the host-plane cards — so the patch file is the supported surface. On Windows the npm shim is a `.cmd`, which the bundled MCP client resolves through `cross-spawn`; the absolute path avoids depending on the DSH process `PATH`.
 
-The project identifier is derived from the absolute checkout path with the separators folded to dashes (`C:/Users/mahna/navideve/eve` → `C-Users-mahna-navideve-eve`). Run `list_projects` on a new machine and use the name it reports.
+The project identifier is derived from the absolute checkout path with the separators folded to dashes. Run `list_projects` first and use the name it reports; the examples below write it as `<project>` because the name is machine-local.
+
+## Local index (never committed)
+
+The graph is a per-machine cache, not a repository artifact:
+
+* The index lives in the tool's own cache directory (`~/.cache/codebase-memory-mcp/<project>.db` on Linux/macOS, the equivalent under `%USERPROFILE%` on Windows), keyed by the checkout path.
+* `index_repository` may also write a compressed copy plus an `artifact.json` into the repository's `.codebase-memory/` directory. Both name the machine-local checkout path in their `project` field and the database is a multi-megabyte binary, so **that directory is ignored by `.gitignore` and must never be committed**.
+* Every developer builds their own index on first use:
+  ```text
+  codebase-memory-mcp cli index_repository '{"repo_path":"<absolute path to your checkout>"}'
+  ```
+* A fresh clone therefore starts with no graph. That is expected: run `list_projects`, and if the project is absent or stale, run `index_repository` before the first structural query.
+* Sharing an index between machines is out of band (copy the compressed artifact), never a Git commit.
+
+The graph holds structure — where a symbol lives and what it calls. It does not hold project decisions. Why a backup file must be deleted after a verified Telegram send belongs in a policy document such as `docs/security/BACKUP_POLICY.md`, not in the graph.
 
 ## CLI fallback
 
@@ -66,8 +81,8 @@ If a client cannot expose MCP tools, keep the same workflow through the installe
 
 ```text
 codebase-memory-mcp cli list_projects '{}'
-codebase-memory-mcp cli index_status '{"project":"C-Users-mahna-navideve-eve"}'
-codebase-memory-mcp cli search_graph '{"project":"C-Users-mahna-navideve-eve","name_pattern":".*Handler.*"}'
+codebase-memory-mcp cli index_status '{"project":"<project>"}'
+codebase-memory-mcp cli search_graph '{"project":"<project>","name_pattern":".*Handler.*"}'
 ```
 
 Do not silently fall back to broad recursive file loading. If Codebase Memory is unavailable, state that limitation and keep fallback reads narrowly scoped.
