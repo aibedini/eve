@@ -635,6 +635,32 @@ def run_scheduler():
                 except Exception as _ce:
                     app.logger.error("Backup retention error: %s", _ce)
 
+                # Data retention: prune operational logs once a day, in bounded
+                # batches, resuming through the system_migrations ledger.
+                try:
+                    from panel.services import retention as _retention
+                    last_retention = _parse_iso_datetime(
+                        _get_system_setting_value('retention_last_run', ''))
+                    if ((not last_retention) or
+                            (datetime.utcnow() - last_retention) >= timedelta(hours=24)):
+                        summary = _retention.run(batch_size=500, max_batches=20)
+                        _set_system_setting_value('retention_last_run',
+                                                  datetime.utcnow().isoformat())
+                        db.session.commit()
+                        deleted = int(summary.get('deleted') or 0)
+                        if deleted:
+                            app.logger.info("[Retention] Deleted %s expired row(s): %s",
+                                            deleted, sorted(
+                                                name for name, item in
+                                                (summary.get('policies') or {}).items()
+                                                if item.get('deleted')))
+                except Exception as _re:
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        pass
+                    app.logger.error("Data retention error: %s", _re)
+
                 # Telegram backups
                 tg_enabled = _parse_bool(_get_system_setting_value('telegram_backup_enabled', 'false'))
                 if tg_enabled:

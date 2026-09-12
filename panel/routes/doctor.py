@@ -179,6 +179,12 @@ def doctor_summary():
         checks['panel_limits'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.services import retention as _retention
+        checks['retention'] = {'state': 'ok', **_retention.status()}
+    except Exception as exc:
+        checks['retention'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.services import audit as _audit
         chain = _audit.verify_chain(limit=2000)
         checks['audit_chain'] = {
