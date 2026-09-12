@@ -16,6 +16,18 @@
 
 ---
 
+## 📚 Documentation
+
+The full documentation map is [`docs/README.md`](docs/README.md). The most useful
+entry points:
+
+- [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md) — day-two operations: health checks, retention, audit, performance evidence.
+- [`docs/security/THREAT_MODEL.md`](docs/security/THREAT_MODEL.md) and [`SECURITY.md`](SECURITY.md) — security model and disclosure policy.
+- [`docs/performance/BASELINE.md`](docs/performance/BASELINE.md) — what was measured and how to reproduce it.
+- [`docs/RELEASE_SECURITY.md`](docs/RELEASE_SECURITY.md) — the release checklist and image attestation.
+
+---
+
 ## 🚀 Installation (One-Command)
 
 Run on your Ubuntu/Debian server:
