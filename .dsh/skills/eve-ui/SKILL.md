@@ -91,6 +91,15 @@ Modals: `.modal-overlay.hidden` wrapper, `.modal` / `.modal-sm` / `.modal-lg` /
 Cards and tables: `.stat-card`, `.server-card`, `.package-card`, `.inbound-card`;
 `.monitor-table`, `.clients-table`, `.filter-item`, `.search-input`.
 
+Country flags: `.country-flag` (a badge holding the self-hosted SVG from
+`static/flags/4x3/`). Panel names arrive with regional-indicator emoji (for example
+"🇩🇪 Germany-01") and Windows draws those as the two letters `DE`, so the emoji must
+never be the rendered flag. Render such a name with `EveFlags.html(name)` in a
+template string, or let `static/name-flags.js` (loaded by `base.html`, and also by
+the standalone `subscription.html`) rewrite it in the DOM; it keeps up with rows
+rendered later and leaves `<option>` content or anything marked with the no-flags
+class alone.
+
 Text helpers: `.field-note` (block hint under a control), `.field-note-ok`
 (`--success`), `.field-note-warn` (`--warning`), `.field-note-strong`, `.label-note`
 (inline note inside a label). Utilities: `.hidden`; secondary text always uses

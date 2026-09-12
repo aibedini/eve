@@ -2966,6 +2966,32 @@ html[data-theme="light"] .package-price {
     font-weight: normal;
 }
 
+/* Country flag badge for a panel-provided name (for example a German server
+   called "Germany-01" behind its flag emoji). The badge is always the
+   self-hosted SVG from static/flags/4x3/ -- never the regional indicator emoji,
+   which Windows draws as two letters. Rendered by static/name-flags.js
+   (window.EveFlags). */
+.country-flag {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: -0.12em;
+    margin-inline-end: 3px;
+}
+
+.country-flag img {
+    display: block;
+    width: 1.22em;
+    height: 0.92em;
+    border-radius: 2px;
+    object-fit: cover;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+/* A flag whose asset is missing disappears rather than degrading to letters. */
+.country-flag.country-flag-missing {
+    display: none;
+}
+
 .form-select {
     cursor: pointer;
     appearance: none;

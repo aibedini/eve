@@ -16,6 +16,11 @@ SERVERS_HTML = os.path.join(REPO_ROOT, "templates", "servers.html")
 SKILL = os.path.join(REPO_ROOT, ".agents", "skills", "eve-ui", "SKILL.md")
 SKILL_MIRROR = os.path.join(REPO_ROOT, ".dsh", "skills", "eve-ui", "SKILL.md")
 DESIGN_DOC = os.path.join(REPO_ROOT, "docs", "UI_DESIGN_SYSTEM.md")
+NAME_FLAGS_JS = os.path.join(REPO_ROOT, "static", "name-flags.js")
+FLAGS_DIR = os.path.join(REPO_ROOT, "static", "flags", "4x3")
+BASE_HTML = os.path.join(REPO_ROOT, "templates", "base.html")
+SUBSCRIPTION_HTML = os.path.join(REPO_ROOT, "templates", "subscription.html")
+DASHBOARD_HTML = os.path.join(REPO_ROOT, "templates", "dashboard.html")
 AGENT_RULE_FILES = (
     "AGENTS.md", "CLAUDE.md", "GEMINI.md", "QWEN.md",
     ".github/copilot-instructions.md", ".cursor/rules/codebase-memory.mdc",
@@ -299,6 +304,59 @@ class DesignSystemRatchetTests(unittest.TestCase):
                                                               allow_theme_tokens=False)
         self.assertEqual(changes, [])
         self.assertEqual(len(skipped), 1)
+
+
+class CountryFlagTests(unittest.TestCase):
+    """Panel names carry flag emoji; the flag must never render as letters.
+
+    Windows has no glyphs for a regional indicator pair, so "🇩🇪" is drawn as "DE"
+    and an inbound remark reads like a country code instead of a flag. The shared
+    component renders the self-hosted SVG instead, on every platform.
+    """
+
+    def setUp(self):
+        self.script = _read(NAME_FLAGS_JS)
+        self.css = _read(STYLE_CSS)
+        self.base = _read(BASE_HTML)
+        self.subscription = _read(SUBSCRIPTION_HTML)
+        self.dashboard = _read(DASHBOARD_HTML)
+
+    def test_the_component_is_loaded_wherever_panel_names_appear(self):
+        self.assertIn("name-flags.js", self.base, "base.html must load it before page scripts")
+        self.assertIn("flags/4x3/", self.base, "the flag asset base must be passed to the component")
+        self.assertIn("name-flags.js", self.subscription,
+                      "the standalone subscription page must load it too")
+
+    def test_the_local_svg_is_the_only_flag_source(self):
+        self.assertIn(".country-flag", self.css)
+        self.assertIn("/static/flags/4x3/", self.script)
+        self.assertIn(".svg", self.script)
+
+    def test_the_versioned_static_url_keeps_its_query_after_the_file(self):
+        # Flask stamps static URLs as "/static/flags/4x3/?v=<hash>". Appending the
+        # code to that raw base requests "/static/flags/4x3/?v=...de.svg", which
+        # 404s, so the flag silently fell back to the emoji (the letters on
+        # Windows). The code and ".svg" must come before the query.
+        self.assertIn("indexOf('?')", self.script)
+        self.assertIn(".svg' + query", self.script)
+
+    def test_the_emoji_is_never_the_rendered_fallback(self):
+        # The old markup kept the emoji in the DOM and swapped to it whenever the
+        # image was hidden or failed, which is exactly how "DE" reached the screen.
+        self.assertNotIn("ib-country-flag-native", self.dashboard)
+        self.assertNotIn("country-flag-missing img", self.css)
+        self.assertIn("country-flag-missing", self.css, "a missing asset hides the badge")
+        self.assertNotIn("flag-fallback", self.script)
+
+    def test_the_dashboard_uses_the_shared_component(self):
+        self.assertIn("EveFlags.html(", self.dashboard)
+        self.assertNotIn("_regionalFlagCode", self.dashboard)
+
+    def test_the_reported_country_flags_exist(self):
+        # The codes from the report: Iran, US, Turkey, Latvia, UAE, Netherlands, Sweden.
+        for code in ("ir", "us", "tr", "lv", "ae", "nl", "se"):
+            self.assertTrue(os.path.isfile(os.path.join(FLAGS_DIR, "%s.svg" % code)),
+                            "static/flags/4x3/%s.svg is missing" % code)
 
 
 if __name__ == "__main__":

@@ -1419,23 +1419,6 @@
         text-overflow: ellipsis;
         white-space: nowrap;
     }
-    .ib-country-flag {
-        display: inline-flex;
-        align-items: center;
-        vertical-align: -0.12em;
-        margin-inline-end: 3px;
-    }
-    .ib-country-flag img {
-        display: block;
-        width: 1.22em;
-        height: 0.92em;
-        border-radius: 2px;
-        object-fit: cover;
-        box-shadow: 0 0 0 1px rgba(255,255,255,.12);
-    }
-    .ib-country-flag-native { display: none; }
-    .ib-country-flag.flag-fallback img { display: none; }
-    .ib-country-flag.flag-fallback .ib-country-flag-native { display: inline; }
     .inbound-name-line .ib-proto-dot {
         flex-shrink: 0;
         width: 6px;
@@ -1514,9 +1497,6 @@
     }
 
     @media (max-width: 860px) {
-        /* Mobile emoji fonts already render regional indicators correctly. */
-        .ib-country-flag img { display: none; }
-        .ib-country-flag .ib-country-flag-native { display: inline; }
         .renew-success-actions {
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
@@ -3419,32 +3399,13 @@
     // so it keeps working for collapsed cards whose rows aren't in the DOM.
     const _cardRowData = new Map();   // key -> { items, buildRow, keyOf, objOf, enableOf }
     const ROW_BATCH = 60;             // client rows appended per scroll step
-    const INBOUND_FLAG_ASSET_BASE = {{ url_for('static', filename='flags/4x3/') | tojson }};
 
-    function _regionalFlagCode(flag) {
-        const points = Array.from(flag || '', ch => ch.codePointAt(0));
-        if (points.length !== 2 || points.some(cp => cp < 0x1F1E6 || cp > 0x1F1FF)) return '';
-        return points.map(cp => String.fromCharCode(97 + cp - 0x1F1E6)).join('');
-    }
-
+    // Inbound remarks carry the panel's country flags. The shared component
+    // (static/name-flags.js, loaded from base.html) renders the self-hosted SVG
+    // flag badge, so Windows shows the flag instead of the two letters.
     function renderInboundName(name) {
-        const safe = escapeHtml(String(name || ''));
-        return safe.replace(/[\u{1F1E6}-\u{1F1FF}]{2}/gu, flag => {
-            const code = _regionalFlagCode(flag);
-            if (!code) return flag;
-            return `<span class="ib-country-flag" title="${code.toUpperCase()}">` +
-                `<span class="ib-country-flag-native" aria-hidden="true">${flag}</span>` +
-                `<img src="${INBOUND_FLAG_ASSET_BASE}${code}.svg" alt="${flag}" decoding="async">` +
-                `</span>`;
-        });
+        return EveFlags.html(name);
     }
-
-    document.addEventListener('error', event => {
-        const image = event.target;
-        if (image instanceof HTMLImageElement && image.closest('.ib-country-flag')) {
-            image.closest('.ib-country-flag').classList.add('flag-fallback');
-        }
-    }, true);
 
     function _v3ClientRowHtml(client, ibs, sid, cardKey) {
         const firstIbId = ibs[0]?.id || client.inbound_id || '';

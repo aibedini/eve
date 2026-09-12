@@ -153,6 +153,12 @@ stand-in for the red Disabled state.
 * Icons are inline `<svg>` (font icons and icon fonts are not used), sized by
   `.btn-icon svg` and `.action-icon svg`, so they inherit the surrounding text colour.
 * Icon-only controls keep a text label or tooltip for accessibility.
+* Country flags in panel-provided names are the `.country-flag` badge over the
+  self-hosted `static/flags/4x3/` SVG set, rendered by `EveFlags.html()` or by
+  `static/name-flags.js` (loaded by `base.html` and by the standalone subscription
+  page). The regional-indicator emoji is never the rendered flag: Windows draws it as
+  the two letters, which reads as a country code rather than a flag, so a missing asset
+  hides the badge instead of falling back to those letters.
 * Unicode glyphs appear only where the stylesheet already uses them (for example the
   disclosure triangle and the box-drawing comment separators).
 

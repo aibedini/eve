@@ -9,6 +9,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='phosphor/phosphor-regular.css') }}">
+    <!-- Flag badges for panel-provided names: this page is standalone (it does not
+         extend base.html), so the shared component is loaded here as well. -->
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='name-flags.js') }}"
+            data-flag-base="{{ url_for('static', filename='flags/4x3/') }}"></script>
     <style nonce="{{ csp_nonce }}">
         body { background-color: #0B1121; color: #e2e8f0; }
         .glass-effect {

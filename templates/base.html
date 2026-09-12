@@ -19,6 +19,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="{{ url_for('static', filename='jquery-3.6.0.min.js') }}"></script>
+    <!-- Flag badges for panel-provided names: loaded before any page script so
+         window.EveFlags is available while a page renders its rows. -->
+    <script src="{{ url_for('static', filename='name-flags.js') }}"
+            data-flag-base="{{ url_for('static', filename='flags/4x3/') }}"></script>
     <script nonce="{{ csp_nonce }}">
         function formatNumberInput(input) {
             let value = input.value.replace(/,/g, '').replace(/\D/g, '');
