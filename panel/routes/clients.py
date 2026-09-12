@@ -25,7 +25,7 @@ from panel.models import (
     Server, ServiceOwnership, Transaction, VolumeRulePreset,
 )
 from panel.routes.common import admin_is_superadmin, login_required, permission_required
-from panel.security import outbound_tls_verify
+from panel.security import outbound_tls_verify, panel_tls_verify
 from panel.services.client_operations import (
     begin_client_operation, complete_client_operation, fail_client_operation,
     install_client_operation_response_guard, mark_client_operation_applied,
@@ -3313,7 +3313,7 @@ def add_client(server_id, inbound_id):
                     sub_url,
                     headers={'User-Agent': 'v2rayng'},
                     timeout=(2, 3),
-                    verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'),
+                    verify=panel_tls_verify(server),
                     allow_redirects=False
                 )
                 if sub_resp.status_code == 200:

@@ -48,7 +48,7 @@ from panel.core.redis_client import (
     serialized_server_snapshot_write,
 )
 from panel.core.runtime_files import runtime_path
-from panel.security import outbound_tls_verify
+from panel.security import outbound_tls_verify, panel_tls_verify
 from panel.extensions import db
 from panel.models import Admin, ClientOwnership, Server
 from panel.services.backup import _run_telegram_backup
@@ -1368,7 +1368,8 @@ def _check_server_reachable(server: 'Server', timeout_sec: float = 2.0):
     try:
         base, webpath = extract_base_and_webpath(server.host)
         url = f"{base}{webpath}/login"
-        resp = requests.get(url, timeout=timeout_sec, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), allow_redirects=True)
+        resp = requests.get(url, timeout=timeout_sec,
+                            verify=panel_tls_verify(server), allow_redirects=True)
         return (resp.status_code < 500), None
     except Exception as e:
         return False, str(e)

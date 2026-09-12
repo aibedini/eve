@@ -1,6 +1,6 @@
 """Security primitives shared by routes, jobs, services, and adapters."""
 
-from .tls import outbound_tls_verify
+from .tls import outbound_tls_verify, panel_tls_verify
 from .network import (
     InsecurePanelTransportError, TrustedProxyMiddleware, allow_insecure_panel,
     client_ip, enforce_panel_transport, inspect_panel_url, is_loopback_host,
@@ -20,7 +20,7 @@ __all__ = [
     'encrypt_backup_file', 'encrypt_secret', 'is_encrypted',
     'hash_bearer_token', 'is_hashed_bearer_token',
     'keyring',
-    'outbound_tls_verify',
+    'outbound_tls_verify', 'panel_tls_verify',
     'InsecurePanelTransportError', 'TrustedProxyMiddleware',
     'allow_insecure_panel', 'client_ip', 'enforce_panel_transport',
     'inspect_panel_url', 'is_loopback_host', 'limiter_client_key',

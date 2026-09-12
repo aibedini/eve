@@ -74,6 +74,21 @@
                 <label>API Token <small style="color:var(--text-secondary); font-weight:normal;">(3x-ui v3+ — Settings → Security → API Token)</small></label>
                 <input type="password" id="server-api-token" placeholder="Paste token for v3 panels; leave empty for older panels">
                 <small id="server-api-token-hint" style="display:none; color:#4ade80; font-size:0.78rem;">✓ A token is already saved. Type a new one to replace it, or leave empty to keep it.</small>
+                <small id="server-api-token-clear-hint" style="display:none; color:#f59e0b; font-size:0.78rem;">The saved token will be removed when you save.</small>
+                <button type="button" class="btn btn-secondary" id="server-api-token-clear" style="display:none; margin-top:8px;" onclick="clearServerApiToken()">Remove saved API token</button>
+            </div>
+
+            <div class="form-group">
+                <small id="server-password-hint" style="display:none; color:#4ade80; font-size:0.78rem;">✓ A password is already saved. Type a new one to replace it, or leave empty to keep it.</small>
+            </div>
+
+            <div class="form-group">
+                <label class="form-toggle-item" style="cursor: pointer; display:flex; gap:8px; align-items:center;">
+                    <input type="checkbox" id="server-allow-insecure">
+                    <span>Allow insecure connection</span>
+                </label>
+                <small style="color:var(--text-secondary); font-size:0.78rem;">Allows plaintext HTTP or HTTPS without certificate verification for this server only.</small>
+                <small id="server-allow-insecure-warning" style="display:none; color:#f59e0b; font-size:0.78rem; font-weight:600;">Warning: Panel credentials will be sent over plaintext HTTP.</small>
             </div>
 
             <label class="form-group form-toggle-item" style="cursor: pointer;">
@@ -224,6 +239,14 @@
                 const v3b = createBadge('🔑 v3 (Token)', 'badge active');
                 v3b.title = 'Authenticated with a 3x-ui v3+ API token (Bearer)';
                 badges.appendChild(v3b);
+            }
+            if (server.allow_insecure) {
+                const plaintextHost = /^http:\/\//i.test(server.host || '');
+                const insecureBadge = createBadge(plaintextHost ? '⚠ HTTP' : '⚠ TLS Unverified', 'badge inactive');
+                insecureBadge.title = plaintextHost
+                    ? 'Plaintext HTTP is allowed for this server (Allow insecure connection).'
+                    : 'TLS certificate verification is disabled for this server (Allow insecure connection).';
+                badges.appendChild(insecureBadge);
             }
 
             const statusMeta = document.createElement('div');
@@ -486,6 +509,32 @@
         }
     }
     
+    let clearApiTokenRequested = false;
+
+    function hostUsesPlaintext() {
+        return /^http:\/\//i.test((document.getElementById('server-host').value || '').trim());
+    }
+
+    function updateInsecureUi() {
+        const warning = document.getElementById('server-allow-insecure-warning');
+        const checked = document.getElementById('server-allow-insecure').checked;
+        warning.style.display = (hostUsesPlaintext() && checked) ? 'block' : 'none';
+    }
+
+    function clearServerApiToken() {
+        if (!confirm('Remove the saved API token for this server?')) return;
+        clearApiTokenRequested = true;
+        document.getElementById('server-api-token').value = '';
+        document.getElementById('server-api-token-hint').style.display = 'none';
+        document.getElementById('server-api-token-clear-hint').style.display = 'block';
+        document.getElementById('server-api-token-clear').style.display = 'none';
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('server-host').addEventListener('input', updateInsecureUi);
+        document.getElementById('server-allow-insecure').addEventListener('change', updateInsecureUi);
+    });
+
     function openAddServerModal() {
         document.getElementById('edit-server-id').value = '';
         document.getElementById('server-name').value = '';
@@ -500,8 +549,14 @@
         document.getElementById('server-panel-type').value = 'auto';
         document.getElementById('server-api-token').value = '';
         document.getElementById('server-api-token-hint').style.display = 'none';
+        document.getElementById('server-api-token-clear-hint').style.display = 'none';
+        document.getElementById('server-api-token-clear').style.display = 'none';
+        document.getElementById('server-password-hint').style.display = 'none';
+        document.getElementById('server-allow-insecure').checked = false;
+        clearApiTokenRequested = false;
 
         document.getElementById('server-enabled').checked = true;
+        updateInsecureUi();
         document.getElementById('modal-title').textContent = 'Add Server';
         document.getElementById('server-modal').classList.remove('hidden');
     }
@@ -520,6 +575,7 @@
         document.getElementById('server-username').value = server.username;
         // Never prefill password (not returned by API); only set if user enters a new one.
         document.getElementById('server-password').value = '';
+        document.getElementById('server-password-hint').style.display = server.has_password ? 'block' : 'none';
         
         // پر کردن مقادیر جدید
         document.getElementById('server-sub-path').value = server.sub_path || '/sub/';
@@ -528,6 +584,11 @@
         document.getElementById('server-panel-type').value = server.panel_type || 'auto';
         document.getElementById('server-api-token').value = '';
         document.getElementById('server-api-token-hint').style.display = server.has_api_token ? 'block' : 'none';
+        document.getElementById('server-api-token-clear').style.display = server.has_api_token ? 'inline-block' : 'none';
+        document.getElementById('server-api-token-clear-hint').style.display = 'none';
+        clearApiTokenRequested = false;
+        document.getElementById('server-allow-insecure').checked = !!server.allow_insecure;
+        updateInsecureUi();
 
         document.getElementById('server-enabled').checked = server.enabled;
         document.getElementById('modal-title').textContent = 'Edit Server';
@@ -550,6 +611,11 @@
             showToast('Please fill in all fields', 'error');
             return;
         }
+        const allowInsecure = document.getElementById('server-allow-insecure').checked;
+        if (hostUsesPlaintext() && !allowInsecure) {
+            showToast('This server uses plaintext HTTP. Enable "Allow insecure connection" to continue.', 'error');
+            return;
+        }
         
         const data = {
             name,
@@ -559,8 +625,10 @@
             panel_type,
             sub_path,
             json_path,
-            sub_port: sub_port ? parseInt(sub_port) : null
+            sub_port: sub_port ? parseInt(sub_port) : null,
+            allow_insecure: allowInsecure
         };
+        if (clearApiTokenRequested) data.clear_api_token = true;
         // Only send password when creating, or when user explicitly sets a new password.
         if (!id || password) {
             data.password = password;

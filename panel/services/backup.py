@@ -37,8 +37,8 @@ from panel.adapters.xui import _safe_response_json, get_xui_session
 from panel.extensions import db
 from panel.models import Server, SystemSetting, TelegramEgressProfile
 from panel.security import (
-    encrypt_backup_file, outbound_tls_verify, protect_system_setting,
-    reveal_system_setting,
+    InsecurePanelTransportError, encrypt_backup_file, outbound_tls_verify,
+    panel_tls_verify, protect_system_setting, reveal_system_setting,
 )
 from telegram_diagnostics import redact_connection_error
 
@@ -984,6 +984,16 @@ def _collect_backup_endpoints(panel_type: str) -> list[tuple[str, str]]:
 
 def _fetch_xui_backup(session_obj: requests.Session, server: 'Server') -> tuple[bytes | None, str | None, str | None]:
     from app import build_panel_url
+    from panel.security import enforce_panel_transport, panel_tls_verify
+    # The backup must obey the same per-server transport policy as every other
+    # X-UI operation: an opted-in server is downloadable, a plaintext server that
+    # did not opt in is refused here even if a session object was supplied.
+    try:
+        enforce_panel_transport(getattr(server, 'host', '') or '',
+                                allow_insecure=bool(getattr(server, 'allow_insecure', False)))
+    except InsecurePanelTransportError as exc:
+        return None, None, str(exc)
+    verify = panel_tls_verify(server)
     endpoints = _collect_backup_endpoints(getattr(server, 'panel_type', 'auto'))
     errors = []
     for method, template in endpoints:
@@ -992,9 +1002,9 @@ def _fetch_xui_backup(session_obj: requests.Session, server: 'Server') -> tuple[
             continue
         try:
             if method == 'POST':
-                resp = session_obj.post(full_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=15)
+                resp = session_obj.post(full_url, verify=verify, timeout=15)
             else:
-                resp = session_obj.get(full_url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=15)
+                resp = session_obj.get(full_url, verify=verify, timeout=15)
         except Exception as exc:
             errors.append(f"{method} {template}: {exc}")
             continue

@@ -39,19 +39,60 @@ Configuration:
 If a request arrives with forwarding headers from an untrusted peer, the app
 logs one warning naming the peer so a misconfigured proxy is visible.
 
+## Per-server insecure opt-in (Allow insecure connection)
+
+Some operators run a panel that only speaks plaintext HTTP or presents a
+self-signed/expired certificate. That must not require disabling verification
+for the whole panel, so the exception is **per server**:
+
+- `Server.allow_insecure` is a NOT NULL boolean defaulting to `false` (migration
+  `c9d8e7f6a5b4`); every existing server keeps full verification;
+- `panel_tls_verify(server)` is the single place that decides the `requests`
+  `verify` value: `False` only for a server whose flag is on, otherwise `True` or
+  the configured `EVE_XUI_CA_BUNDLE`;
+- `enforce_panel_transport(url, allow_insecure=...)` refuses plaintext for every
+  server that did not opt in, and accepts it for the one that did;
+- the flag travels with the session: `get_xui_session()` pins the policy on the
+  `requests.Session`, and every X-UI request (login, token auth, inbounds,
+  onlines, status, clients, renew/reset, capability probes, connection test, the
+  X-UI database backup and the subscription fetch) reads it back through
+  `session_tls_verify()`. No caller hardcodes the value;
+- `session_tls_verify()` is why the backup cannot disagree with the rest of the
+  flow: the X-UI database download uses the same helper and refuses a plaintext
+  panel that did not opt in;
+- `EVE_ALLOW_INSECURE_PANEL=1` is deprecated. It still works as a process-wide
+  fallback for callers without a server object, but an explicit per-server
+  decision always wins, and the app logs one warning when the fallback is used.
+
+Changing `host`, `username`, `password`, `api_token`, `allow_insecure` or
+`panel_type` drops every X-UI session, capability and cookie cache for that
+server, and the cached session key includes the transport policy, so flipping the
+flag can never reuse a session that was built under the other policy. Turning the
+flag **off** while the stored host is plaintext is refused: it would leave a
+server that can never connect.
+
+Enabling or disabling the flag writes an `AuditLog` row (`server.allow_insecure`)
+with the old and new value and the host; passwords and tokens never appear in the
+row or in any log line. `Server.to_dict()` exposes `allow_insecure` and
+`has_password` metadata only.
+
 ## Outbound TLS
 
-Certificate verification is never disabled. `outbound_tls_verify()` returns
-`True` (platform trust store) or a purpose-specific PEM bundle for private PKI:
+Certificate verification is never disabled globally and no caller hardcodes the
+value (an opted-in server goes through `panel_tls_verify()` only).
+`outbound_tls_verify()` returns `True` (platform trust store) or a
+purpose-specific PEM bundle for private PKI:
 
 - `EVE_XUI_CA_BUNDLE` for X-UI panels,
 - `EVE_WHATSAPP_CA_BUNDLE` for the WhatsApp gateway,
 - `EVE_OUTBOUND_CA_BUNDLE` as the shared fallback.
 
 Every `requests.<method>` call in the application passes a timeout, and no call
-disables verification. `tests/test_network_hardening.py` parses the application
-sources and fails if a `verify=False`, an `ssl.CERT_NONE`/unverified context, or
-a `requests.*` call without a timeout is introduced.
+has a literal `verify=False`. `tests/test_network_hardening.py` parses the
+application sources and fails if a literal `verify=False`, an
+`ssl.CERT_NONE`/unverified context, or a `requests.*` call without a timeout is
+introduced; `tests/test_allow_insecure_server.py` covers the per-server matrix,
+the isolation between two servers and the cache invalidation.
 
 ## Panel transport (plaintext credentials)
 
@@ -66,8 +107,9 @@ plaintext. `enforce_panel_transport()` classifies a configured panel URL:
 The policy is enforced twice: when a server is created or its host is updated
 (HTTP 400 with an actionable message) and again in the X-UI adapter before a
 credential-bearing session is built, so a row edited directly in the database
-cannot leak the password either. `EVE_ALLOW_INSECURE_PANEL=1` explicitly
-re-enables plaintext panel access for a trusted LAN deployment.
+cannot leak the password either. A server whose operator enabled **Allow insecure
+connection** is the only exception (see above); `EVE_ALLOW_INSECURE_PANEL=1` is the
+deprecated process-wide fallback.
 
 The existing http-to-https self-heal still runs from the connection test: a
 panel that only answers over TLS is upgraded to `https://` and then passes the

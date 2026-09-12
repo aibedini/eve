@@ -114,6 +114,11 @@ class Server(db.Model):
     # Optional 3x-ui v3+ API token (Bearer). When absent, capability-detected v3
     # panels use cookie login + CSRF with the same /panel/api/clients/* endpoints.
     api_token = db.Column(db.String(255), nullable=True)
+    # Per-server transport opt-in. True allows plaintext http:// for THIS panel
+    # and skips certificate verification for THIS panel only; every other server
+    # keeps full verification. Never a process-wide switch.
+    allow_insecure = db.Column(db.Boolean, nullable=False, default=False,
+                               server_default=db.text("false"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -130,6 +135,9 @@ class Server(db.Model):
             'sub_port': self.sub_port,
             'subscription_inbound_order': self.subscription_inbound_order or '[]',
             'has_api_token': bool((self.api_token or '').strip()),
+            # Metadata only: the password itself is never returned to the UI.
+            'has_password': bool((self.password or '').strip()),
+            'allow_insecure': bool(self.allow_insecure),
             'supports_v3_clients': bool(_server_is_v3(self)),
             'created_at': self.created_at.isoformat() if self.created_at else None
         }

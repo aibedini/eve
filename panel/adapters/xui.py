@@ -10,6 +10,7 @@ import json
 import re
 import secrets
 import time
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import requests
@@ -23,6 +24,7 @@ from panel.core.redis_client import (
 from panel.extensions import db
 from panel.security import (
     InsecurePanelTransportError, enforce_panel_transport, outbound_tls_verify,
+    panel_tls_verify,
 )
 from panel.models import (
     Admin,
@@ -37,6 +39,45 @@ XUI_SESSION_CACHE = {}  # server_id -> {'session': requests.Session, 'expiry': f
 XUI_SESSION_TTL = 600  # 10 minutes cache
 XUI_CAPABILITY_CACHE = {}  # server_id -> {'v3_clients': bool, 'expiry': float}
 XUI_CAPABILITY_TTL = 600
+
+
+def session_tls_verify(session_obj, server=None):
+    """The TLS policy one X-UI request must use.
+
+    get_xui_session()/get_xui_cookie_session() pin the per-server policy on the
+    requests.Session, so a request that passes an explicit verify= must ask this
+    helper: hardcoding a value would keep verifying an allow_insecure panel while
+    the rest of the flow skipped it (or the other way round).
+    """
+    if server is not None:
+        return panel_tls_verify(server)
+    verify = getattr(session_obj, "verify", None)
+    if verify is None:
+        return outbound_tls_verify("EVE_XUI_CA_BUNDLE")
+    return verify
+
+
+def invalidate_xui_caches(server_id=None, host=None, username=None) -> None:
+    """Drop every X-UI session/capability/cookie cache for one server.
+
+    Called whenever host, username, password, api_token, allow_insecure or
+    panel_type changes, so a session built under the old security or auth policy
+    is never reused (an allow_insecure flip must not keep a verified/unverified
+    session alive).
+    """
+    if server_id is not None:
+        XUI_SESSION_CACHE.pop(server_id, None)
+        XUI_CAPABILITY_CACHE.pop(server_id, None)
+    host_key = str(host or "").strip()
+    user_key = str(username or "").strip()
+    if not host_key:
+        return
+    prefixes = ("%s|%s" % (host_key, user_key),) if user_key else ()
+    for key in list(XUI_COOKIE_SESSION_CACHE):
+        text = str(key)
+        if text == host_key or text.startswith(host_key + "|") or any(
+                text.startswith(prefix) for prefix in prefixes):
+            XUI_COOKIE_SESSION_CACHE.pop(key, None)
 
 def extract_base_and_webpath(host_url):
     """Extract base URL and webpath from panel URL.
@@ -138,7 +179,7 @@ def _probe_v3_client_api(server, session_obj, *, force=False) -> bool:
     url = f"{base}{webpath}/panel/api/clients/get/__eve_capability_probe__"
     supported = False
     try:
-        resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=(3, 8),
+        resp = session_obj.get(url, verify=session_tls_verify(session_obj), timeout=(3, 8),
                                headers={'Accept': 'application/json'})
         payload, parse_error = _safe_response_json(resp)
         supported = (
@@ -191,7 +232,7 @@ def _v3_post(server, session_obj, path, json_body=None, *, timeout=(3, 20)):
         resp = session_obj.post(
             url,
             json=(json_body if json_body is not None else {}),
-            verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'),
+            verify=session_tls_verify(session_obj),
             timeout=timeout,
         )
     except Exception as e:
@@ -244,7 +285,7 @@ def _v3_get(server, session_obj, path, *, timeout=(3, 20)):
                 'Cache-Control': 'no-store, no-cache, max-age=0',
                 'Pragma': 'no-cache',
             },
-            verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'),
+            verify=session_tls_verify(session_obj),
             timeout=timeout,
         )
     except Exception as e:
@@ -543,7 +584,7 @@ def _push_full_inbound(server, session_obj, inbound_obj, settings_dict):
         if not up_url:
             continue
         try:
-            resp = session_obj.post(up_url, json=update_data, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=(3, 20))
+            resp = session_obj.post(up_url, json=update_data, verify=session_tls_verify(session_obj), timeout=(3, 20))
         except Exception as exc:
             errors.append(str(exc))
             continue
@@ -829,7 +870,8 @@ def _autoupgrade_http_to_https(server):
 
     def _reaches(b):
         try:
-            r = requests.get(f"{b}{probe_path}", timeout=6, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), allow_redirects=False)
+            r = requests.get(f"{b}{probe_path}", timeout=6,
+                             verify=panel_tls_verify(server), allow_redirects=False)
             return r.status_code < 500
         except Exception:
             return False
@@ -901,9 +943,12 @@ def _fetch_csrf_token(session_obj, base, webpath):
 def get_xui_session(server):
     # Deferred import: lives in app.py (module-level import would be circular)
     from app import app, get_server_password
-    # Never build a credential-bearing session for a plaintext remote panel.
+    # Never build a credential-bearing session for a plaintext remote panel
+    # unless this server opted in.
+    allow_insecure = bool(getattr(server, 'allow_insecure', False))
     try:
-        enforce_panel_transport(getattr(server, 'host', '') or '')
+        enforce_panel_transport(getattr(server, 'host', '') or '',
+                                allow_insecure=allow_insecure)
     except InsecurePanelTransportError as exc:
         return None, str(exc)
     # Current auth identity: the token for v3, or '' for cookie-login panels.
@@ -912,7 +957,9 @@ def get_xui_session(server):
     # — which the v3 panel rejects with 403. This is per-worker, so the cache
     # self-heals on the next call in each gunicorn worker.
     _api_token = get_server_api_token(server)
-    _auth_key = _api_token or ''
+    # The transport policy is part of the identity: flipping allow_insecure must
+    # never reuse a session that was built (and probed) under the other policy.
+    _auth_key = "%s|%s" % (_api_token or '', 'insecure' if allow_insecure else 'verified')
 
     # Try to reuse session from cache
     now = time.time()
@@ -926,8 +973,9 @@ def get_xui_session(server):
     session_obj = requests.Session()
     session_obj.trust_env = False
     session_obj.proxies = {'http': None, 'https': None}
-    # Apply the same trust policy to redirects and calls that inherit Session.verify.
-    session_obj.verify = outbound_tls_verify('EVE_XUI_CA_BUNDLE')
+    # The per-server policy applies to redirects and every call that inherits
+    # Session.verify; session_tls_verify() reads it back for explicit verify=.
+    session_obj.verify = panel_tls_verify(server)
 
     # ── 3x-ui v3+ : authenticate with the API token (Bearer) ──
     # The token bypasses the v3 login CSRF guard and never expires, so we attach
@@ -1116,17 +1164,17 @@ def fetch_inbounds(session_obj, host, panel_type='auto', *, force_fresh=False):
             # Request strategy per panel flavor
             if '/xui/' in ep_l and 'api' in ep_l:
                 resp = session_obj.get(url, headers=request_headers, params=request_params,
-                                       verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                                       verify=session_tls_verify(session_obj), timeout=timeout_sec)
                 if resp.status_code == 405:
                     resp = session_obj.post(url, headers=request_headers, params=request_params,
-                                            verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                                            verify=session_tls_verify(session_obj), timeout=timeout_sec)
             elif '/xui/' in ep_l:
                 resp = session_obj.post(url, json={"page": 1, "limit": 100},
                                         headers=request_headers, params=request_params,
-                                        verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                                        verify=session_tls_verify(session_obj), timeout=timeout_sec)
             else:
                 resp = session_obj.get(url, headers=request_headers, params=request_params,
-                                       verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                                       verify=session_tls_verify(session_obj), timeout=timeout_sec)
 
             if resp.status_code != 200:
                 last_error = f"HTTP {resp.status_code} from {ep}"
@@ -1153,7 +1201,8 @@ def fetch_inbounds(session_obj, host, panel_type='auto', *, force_fresh=False):
 XUI_COOKIE_SESSION_CACHE = {}  # cache_key -> {'session': requests.Session, 'expiry': float}
 
 
-def get_xui_cookie_session(host, username, password, panel_type='auto', cache_key=None):
+def get_xui_cookie_session(host, username, password, panel_type='auto', cache_key=None,
+                           allow_insecure=False):
     """Return a COOKIE-authenticated session (username/password login).
 
     v3 panels are normally accessed with a Bearer API token, but some panel
@@ -1164,11 +1213,14 @@ def get_xui_cookie_session(host, username, password, panel_type='auto', cache_ke
     if not username or not password:
         return None
     try:
-        enforce_panel_transport(host)
+        enforce_panel_transport(host, allow_insecure=bool(allow_insecure))
     except InsecurePanelTransportError:
         return None
     now = time.time()
-    ck = cache_key or f"{host}|{username}"
+    # The transport policy is part of the cache identity: a session built under
+    # one policy must never be reused after the flag flips.
+    policy_key = 'insecure' if allow_insecure else 'verified'
+    ck = cache_key or f"{host}|{username}|{policy_key}"
     cached = XUI_COOKIE_SESSION_CACHE.get(ck)
     if cached and now < cached['expiry']:
         return cached['session']
@@ -1183,7 +1235,9 @@ def get_xui_cookie_session(host, username, password, panel_type='auto', cache_ke
         s = requests.Session()
         s.trust_env = False
         s.proxies = {'http': None, 'https': None}
-        s.verify = outbound_tls_verify('EVE_XUI_CA_BUNDLE')
+        # Host-only callers have no server row; express the same per-server policy
+        # so the verify value still comes from the one central helper.
+        s.verify = panel_tls_verify(SimpleNamespace(allow_insecure=allow_insecure))
         creds = {"username": username, "password": password}
         # v3.3.1+ CSRF guard: pin a token before the login POST so both /login and
         # the later /panel/inbound/onlines POST (made through this same session)
@@ -1251,9 +1305,9 @@ def fetch_onlines(session_obj, host, panel_type='auto'):
             try:
                 url = ep if ep.startswith('http') else f"{base}{webpath}{ep}"
                 if method == 'POST':
-                    resp = session_obj.post(url, json={}, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                    resp = session_obj.post(url, json={}, verify=session_tls_verify(session_obj), timeout=timeout_sec)
                 else:
-                    resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec)
+                    resp = session_obj.get(url, verify=session_tls_verify(session_obj), timeout=timeout_sec)
 
                 last_status = resp.status_code
                 try:
@@ -1453,7 +1507,7 @@ def fetch_server_status(session_obj, host, panel_type='auto'):
     for ep, detected_type in deduped:
         try:
             url = ep if ep.startswith('http') else f"{base}{webpath}{ep}"
-            resp = session_obj.get(url, verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'), timeout=timeout_sec, allow_redirects=False)
+            resp = session_obj.get(url, verify=session_tls_verify(session_obj), timeout=timeout_sec, allow_redirects=False)
 
             # Redirect usually means session expired -> redirected to login page
             if resp.status_code in (301, 302, 303, 307, 308):
@@ -1504,10 +1558,15 @@ def fetch_server_status(session_obj, host, panel_type='auto'):
     return None, last_error or 'Failed to fetch status', 'auto'
 
 
-def fetch_direct_link_from_subscription(sub_url: str, fallback_func=None, fallback_args=None) -> str:
+def fetch_direct_link_from_subscription(sub_url: str, fallback_func=None, fallback_args=None,
+                                        server=None) -> str:
     """
     Fetch the direct config link from the upstream X-UI subscription endpoint.
     Returns the first config line, or falls back to manual generation if fetch fails.
+
+    ``server`` is optional: when given, the subscription endpoint inherits that
+    panel transport policy (an allow_insecure panel may expose it over plaintext or
+    with a self-signed certificate).
     """
     direct_link = None
     try:
@@ -1515,7 +1574,7 @@ def fetch_direct_link_from_subscription(sub_url: str, fallback_func=None, fallba
             sub_url, 
             headers={'User-Agent': 'v2rayng'}, 
             timeout=5, 
-            verify=outbound_tls_verify('EVE_XUI_CA_BUNDLE'),
+            verify=panel_tls_verify(server),
             allow_redirects=False
         )
         if resp.status_code == 200:

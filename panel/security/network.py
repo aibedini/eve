@@ -11,9 +11,13 @@ client address on the WSGI environ, strips forged forwarding headers, and must
 wrap Werkzeug ProxyFix from the outside so stripping happens first.
 
 Panel transport: X-UI credentials must not cross the network in plaintext.
-http:// is accepted for a loopback panel or when the operator explicitly sets
-EVE_ALLOW_INSECURE_PANEL=1; every other plaintext panel URL is refused with an
-actionable error instead of quietly sending the password in the clear.
+http:// is accepted for a loopback panel or when the operator explicitly opted
+in per server (Server.allow_insecure); every other plaintext panel URL is refused
+with an actionable error instead of quietly sending the password in the clear.
+
+The legacy process-wide EVE_ALLOW_INSECURE_PANEL flag is deprecated and kept only
+as a fallback for callers that have no server object; a per-server decision always
+wins, so enabling one insecure server never relaxes the policy for the others.
 
 EVE_TRUSTED_PROXIES overrides the default peer policy with a comma-separated
 list of IPs/CIDRs, or * to trust every peer (the pre-hardening behaviour).
@@ -52,8 +56,26 @@ def _env_flag(name: str) -> bool:
     return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+_env_fallback_warned = False
+
+
+def _warn_env_fallback_once() -> None:
+    global _env_fallback_warned
+    if _env_fallback_warned:
+        return
+    _env_fallback_warned = True
+    logger.warning(
+        "%s is deprecated: enable Allow insecure connection on the individual "
+        "server instead. The variable is still honoured as a process-wide "
+        "fallback for callers without a server object.", INSECURE_PANEL_ENV)
+
+
 def allow_insecure_panel() -> bool:
-    """True when the operator explicitly allowed plaintext panel credentials."""
+    """Deprecated process-wide fallback for plaintext panel credentials.
+
+    The per-server Server.allow_insecure flag is the source of truth; this exists
+    only for call sites that have no server object.
+    """
     return _env_flag(INSECURE_PANEL_ENV)
 
 
@@ -225,11 +247,17 @@ def enforce_panel_transport(url, *, allow_insecure=None) -> dict:
         )
     if info["scheme"] == "https":
         return info
-    allowed = allow_insecure_panel() if allow_insecure is None else bool(allow_insecure)
+    if allow_insecure is None:
+        allowed = allow_insecure_panel()
+        if allowed:
+            _warn_env_fallback_once()
+    else:
+        allowed = bool(allow_insecure)
     if info["loopback"] or allowed:
         return info
     raise InsecurePanelTransportError(
         "Refusing to send panel credentials over plaintext HTTP to "
-        f"{info['host'] or 'a remote host'}. Use https:// for this server, or set "
-        f"{INSECURE_PANEL_ENV}=1 to explicitly allow plaintext panel access."
+        f"{info['host'] or 'a remote host'}. Use https:// for this server, or "
+        "enable Allow insecure connection on this server to accept plaintext "
+        f"panel access ({INSECURE_PANEL_ENV} is deprecated)."
     )

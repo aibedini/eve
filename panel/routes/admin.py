@@ -24,6 +24,15 @@ from panel.services.client_operations import resolve_client_operation
 bp = Blueprint('admin', __name__)
 
 
+def _as_bool(value, default=False) -> bool:
+    """Tolerant boolean for JSON payloads: "true"/"1"/true all mean true."""
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _client_operation_payload(operation):
     return {
         'id': operation.id,
@@ -583,10 +592,12 @@ def add_server():
     if not server_password:
         return jsonify({"success": False, "error": "Password is required"}), 400
     _api_token = (data.get('api_token') or '').strip()
-    # Refuse to store a remote plaintext URL: the panel password is sent over it.
+    allow_insecure = _as_bool(data.get('allow_insecure'), False)
+    # Refuse to store a remote plaintext URL unless THIS server opted in: the
+    # panel password is sent over it. The decision is per server, never global.
     host = sanitize_html(data.get('host') or '')
     try:
-        enforce_panel_transport(host)
+        enforce_panel_transport(host, allow_insecure=allow_insecure)
     except InsecurePanelTransportError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     server = Server(
@@ -599,48 +610,96 @@ def add_server():
         json_path=data.get('json_path', '/json/'),
         sub_port=data.get('sub_port'),
         api_token=encrypt_server_password(_api_token) if _api_token else None,
+        allow_insecure=allow_insecure,
     )
     db.session.add(server)
     db.session.commit()
-    return jsonify({"success": True, "id": server.id})
+    if allow_insecure:
+        from app import _log_audit
+        server_obj = db.session.get(Server, server.id)
+        _log_audit('server.allow_insecure', server_obj,
+                   actor=db.session.get(Admin, session.get('admin_id')),
+                   meta={'old': False, 'new': True, 'host': host, 'created': True})
+        db.session.commit()
+    return jsonify({"success": True, "id": server.id,
+                    "allow_insecure": bool(server.allow_insecure)})
 
 @bp.route('/api/servers/<int:server_id>', methods=['PUT'])
 @permission_required('servers.write')
 def update_server(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
-        XUI_CAPABILITY_CACHE, XUI_SESSION_CACHE, encrypt_server_password, sanitize_html,
+        _log_audit, encrypt_server_password, sanitize_html,
     )
+    from panel.adapters.xui import invalidate_xui_caches
     server = Server.query.get_or_404(server_id)
     data = request.json
-    server.name = sanitize_html(data.get('name', server.name))
-    if 'host' in data:
-        new_host = sanitize_html(data.get('host') or '')
+    old_host = server.host
+    old_username = server.username
+    old_allow_insecure = bool(server.allow_insecure)
+    old_panel_type = server.panel_type
+    old_password_hash = server.password
+    old_api_token = server.api_token
+    server.name = sanitize_html(data.get("name", server.name))
+    new_allow_insecure = _as_bool(data.get("allow_insecure"), old_allow_insecure)
+    new_host = old_host
+    if "host" in data:
+        new_host = sanitize_html(data.get("host") or "")
         try:
-            enforce_panel_transport(new_host)
+            enforce_panel_transport(new_host, allow_insecure=new_allow_insecure)
         except InsecurePanelTransportError as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
-        server.host = new_host
-    server.username = sanitize_html(data.get('username', server.username))
-    if 'password' in data:
-        new_password = (data.get('password') or '').strip()
+    if new_allow_insecure != old_allow_insecure and not new_allow_insecure:
+        # Turning the opt-in off for a plaintext panel would leave a server that
+        # can never connect: refuse until the host is https (or loopback).
+        try:
+            enforce_panel_transport(new_host, allow_insecure=False)
+        except InsecurePanelTransportError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+    server.host = new_host
+    server.username = sanitize_html(data.get("username", server.username))
+    if "password" in data:
+        new_password = (data.get("password") or "").strip()
+        # Empty means keep the stored password: a plain edit must never clear it.
         if new_password:
             server.password = encrypt_server_password(new_password)
-    server.panel_type = data.get('panel_type', server.panel_type)
-    server.sub_path = data.get('sub_path', server.sub_path)
-    server.json_path = data.get('json_path', server.json_path)
-    server.sub_port = data.get('sub_port', server.sub_port)
-    server.enabled = data.get('enabled', server.enabled)
-    if 'hidden' in data:
-        server.hidden = bool(data['hidden'])
-    if 'api_token' in data:
-        _tok = (data.get('api_token') or '').strip()
-        # Non-empty → set/replace; explicit empty string → clear it.
-        server.api_token = encrypt_server_password(_tok) if _tok else None
+    server.allow_insecure = new_allow_insecure
+    server.panel_type = data.get("panel_type", server.panel_type)
+    server.sub_path = data.get("sub_path", server.sub_path)
+    server.json_path = data.get("json_path", server.json_path)
+    server.sub_port = data.get("sub_port", server.sub_port)
+    server.enabled = data.get("enabled", server.enabled)
+    if "hidden" in data:
+        server.hidden = bool(data["hidden"])
+    if _as_bool(data.get("clear_api_token"), False):
+        # Explicit removal only: an empty token field keeps the saved token.
+        server.api_token = None
+    elif "api_token" in data:
+        _tok = (data.get("api_token") or "").strip()
+        if _tok:
+            server.api_token = encrypt_server_password(_tok)
     db.session.commit()
-    # Token change alters auth — drop any cached session so the next call re-auths.
-    XUI_SESSION_CACHE.pop(server_id, None)
-    XUI_CAPABILITY_CACHE.pop(server_id, None)
-    return jsonify({"success": True})
+    security_fields_changed = (
+        old_host != server.host
+        or old_username != server.username
+        or old_password_hash != server.password
+        or (old_api_token or "") != (server.api_token or "")
+        or old_allow_insecure != bool(server.allow_insecure)
+        or old_panel_type != server.panel_type
+    )
+    if security_fields_changed:
+        # A session/capability cache built under the previous host, credentials
+        # or transport policy must never be reused.
+        invalidate_xui_caches(server_id=server.id, host=server.host,
+                              username=server.username)
+    if old_allow_insecure != bool(server.allow_insecure):
+        _log_audit(
+            "server.allow_insecure", server,
+            actor=db.session.get(Admin, session.get("admin_id")),
+            meta={"old": old_allow_insecure, "new": bool(server.allow_insecure),
+                  "host": server.host},
+        )
+        db.session.commit()
+    return jsonify({"success": True, "allow_insecure": bool(server.allow_insecure)})
 
 
 @bp.route('/api/servers/<int:server_id>/hidden', methods=['POST'])
