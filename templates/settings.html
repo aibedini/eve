@@ -7494,6 +7494,18 @@
         btn.innerHTML = 'Running...';
         btn.disabled = true;
 
+        // A previous run may still have a polling timer alive after a network
+        // interruption.  Give every click a generation so an old poller cannot
+        // overwrite the stage text of the new run.
+        const pollState = window.__telegramBackupPollState || {generation: 0, timer: null};
+        pollState.generation += 1;
+        const pollGeneration = pollState.generation;
+        if (pollState.timer) {
+            clearInterval(pollState.timer);
+            pollState.timer = null;
+        }
+        window.__telegramBackupPollState = pollState;
+
         const wrap   = document.getElementById('telegram-backup-progress');
         const bar    = document.getElementById('telegram-backup-progress-bar');
         const text   = document.getElementById('telegram-backup-progress-text');
@@ -7525,23 +7537,24 @@
 
         function stageToHuman(stage) {
             const s = (stage || '').toString();
-            if (!s || s === 'starting') return 'Starting...';
-            if (s === 'queued')           return 'Queued, waiting to start...';
-            if (s === 'loading_settings') return 'Loading settings...';
-            if (s === 'building_proxy')   return 'Connecting to Telegram...';
-            if (s === 'fetching_servers') return 'Fetching server list...';
-            if (s.startsWith('xui_login:'))           return `Logging into ${s.split(':').slice(1).join(':')}...`;
-            if (s.startsWith('xui_download_backup:')) return `Downloading backup from ${s.split(':').slice(1).join(':')}...`;
-            if (s.startsWith('telegram_upload:'))     return `Uploading to Telegram: ${s.split(':').slice(1).join(':')}...`;
-            if (s.startsWith('server_done:'))         return `Done: ${s.split(':').slice(1).join(':')}`;
-            if (s.startsWith('xui_failed:'))          return `X-UI error: ${s.split(':').slice(1).join(':')}`;
-            if (s.startsWith('telegram_failed:'))     return `Telegram error: ${s.split(':').slice(1).join(':')}`;
-            if (s === 'panel_backup_create') return 'Creating panel backup...';
-            if (s === 'panel_backup_upload') return 'Uploading panel backup to Telegram...';
-            if (s === 'panel_backup_done')   return 'Panel backup sent';
-            if (s === 'panel_backup_failed') return 'Panel backup failed';
-            if (s === 'done')  return 'Completed';
-            if (s === 'error') return 'Failed';
+            if (!s || s === 'starting') return 'Starting: preparing the backup job...';
+            if (s === 'queued')           return 'Queued: waiting for the backup worker...';
+            if (s === 'loading_settings') return 'Step 1/5: loading Telegram backup settings...';
+            if (s === 'building_proxy')   return 'Step 2/5: preparing the Telegram route...';
+            if (s === 'checking_proxy')   return 'Step 3/5: checking proxy reachability...';
+            if (s === 'fetching_servers') return 'Step 4/5: loading enabled X-UI servers...';
+            if (s.startsWith('xui_login:'))           return `Step 4/5: logging into X-UI — ${s.split(':').slice(1).join(':')}...`;
+            if (s.startsWith('xui_download_backup:')) return `Step 4/5: downloading the database backup — ${s.split(':').slice(1).join(':')}...`;
+            if (s.startsWith('telegram_upload:'))     return `Step 5/5: uploading the backup to Telegram — ${s.split(':').slice(1).join(':')}...`;
+            if (s.startsWith('server_done:'))         return `Finished: ${s.split(':').slice(1).join(':')}`;
+            if (s.startsWith('xui_failed:'))          return `X-UI failed: ${s.split(':').slice(1).join(':')} — see the detailed error below.`;
+            if (s.startsWith('telegram_failed:'))     return `Telegram upload failed: ${s.split(':').slice(1).join(':')} — see the detailed error below.`;
+            if (s === 'panel_backup_create') return 'Step 4/5: creating the Eve panel backup...';
+            if (s === 'panel_backup_upload') return 'Step 5/5: uploading the Eve panel backup to Telegram...';
+            if (s === 'panel_backup_done')   return 'Finished: Eve panel backup sent to Telegram.';
+            if (s === 'panel_backup_failed') return 'Eve panel backup failed — see the detailed error below.';
+            if (s === 'done')  return 'Completed: all backup tasks have finished.';
+            if (s === 'error') return 'Failed: the backup worker stopped with an error.';
             return s;
         }
 
@@ -7566,9 +7579,11 @@
             jobId = startData.job_id;
 
             async function poll() {
+                if (pollGeneration !== pollState.generation) return;
                 try {
                     const res  = await fetch(`/api/telegram-backup/job/${jobId}`, {
-                        headers: {'Accept': 'application/json'}
+                        headers: {'Accept': 'application/json', 'Cache-Control': 'no-cache'},
+                        cache: 'no-store'
                     });
                     const data = await readTelegramBackupJson(res);
                     pollErrors = 0;
@@ -7595,6 +7610,7 @@
                     if (job.state === 'done' || job.state === 'error') {
                         clearInterval(pollTimer);
                         pollTimer = null;
+                        if (pollGeneration === pollState.generation) pollState.timer = null;
 
                         const done = job.success_count || 0;
                         const all  = job.total || total || 0;
@@ -7628,6 +7644,7 @@
                         }
                     }
                 } catch (e) {
+                    if (pollGeneration !== pollState.generation) return;
                     pollErrors++;
                     if (pollErrors >= 5) {
                         clearInterval(pollTimer);
@@ -7635,12 +7652,13 @@
                         setProgress(false);
                         showToast(`Lost connection to backup job: ${e.message || e}`, 'error', 8000);
                     } else {
-                        setProgress(true, 0, 0, 'Checking status...');
+                        setProgress(true, 0, 0, `Checking status (attempt ${pollErrors}/5): ${e.message || e}`);
                     }
                 }
             }
 
             pollTimer = setInterval(poll, 1500);
+            pollState.timer = pollTimer;
             await poll();
         } catch (e) {
             showToast('Network error: ' + (e.message || e), 'error', 6000);

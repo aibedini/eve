@@ -1942,6 +1942,7 @@ def telegram_backup_now():
 
 @bp.route('/api/telegram-backup/job/<job_id>', methods=['GET'])
 @permission_required('telegram.write')
+@limiter.exempt
 def telegram_backup_job_status(job_id):
     from app import (  # deferred: app-level helper, avoids circular import
         TELEGRAM_BACKUP_JOBS_LOCK, _load_telegram_backup_jobs_locked, _summarize_telegram_backup_job,
@@ -1950,7 +1951,14 @@ def telegram_backup_job_status(job_id):
         job = _load_telegram_backup_jobs_locked().get(job_id)
         if not job:
             return jsonify({'success': False, 'error': 'Job not found'}), 404
-        return jsonify({'success': True, 'job': _summarize_telegram_backup_job(job)})
+        response = jsonify({'success': True, 'job': _summarize_telegram_backup_job(job)})
+        # Job state is persisted in a shared temp file and polled while the
+        # worker is running.  Intermediaries must never replay an older status
+        # response, otherwise the UI can remain on a stale "Checking status".
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
 
 def _xray_runtime_status_payload():
     """Report only the local Eve Xray runtime; never expose configuration URIs."""
@@ -2046,4 +2054,3 @@ def telegram_xray_runtime_install():
         session.get('admin_id'), client_ip(),
     )
     return jsonify({'success': True, 'state': 'installing'}), 202
-
