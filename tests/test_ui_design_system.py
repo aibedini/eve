@@ -445,5 +445,47 @@ class MutationResponseWiringTests(unittest.TestCase):
         self.assertGreaterEqual(self.dashboard.count("applyClientMutation(data,"), 2)
 
 
+class ClientStoreFunnelTests(unittest.TestCase):
+    """Phase 8: one normalized store feeds cards, search, filters and counters.
+
+    Before this, a local enable/disable patched the store and invalidated the search
+    index but left the per-inbound counters (which the card badge renders) at their
+    old values until the next poll, so the card and the search disagreed.
+    """
+
+    MUTATORS = ("patchLocalClient", "removeLocalClient", "applySnapshotFull",
+                "applySnapshotDelta")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dashboard = _read(DASHBOARD_HTML)
+
+    def _body(self, name):
+        match = re.search(r"function %s\(.*?\n    \}" % name, self.dashboard, re.S)
+        self.assertIsNotNone(match, "missing from the dashboard: %s()" % name)
+        return match.group(0)
+
+    def test_every_store_mutator_funnels_through_client_store_changed(self):
+        for name in self.MUTATORS:
+            self.assertIn("clientStoreChanged(", self._body(name), name)
+
+    def test_the_funnel_invalidates_search_recomputes_counters_and_renders(self):
+        body = self._body("clientStoreChanged")
+        self.assertIn("invalidateClientSearchIndex()", body)
+        self.assertIn("recomputeLocalCounters()", body)
+        self.assertIn("applyFilters()", body)
+
+    def test_the_counter_recompute_mirrors_the_backend(self):
+        # Same derivation as panel/jobs/refresh.py::_recompute_cached_server_stats.
+        body = self._body("recomputeLocalCounters")
+        self.assertIn("client_count = clients.length", body)
+        self.assertIn("active_count = clients.filter", body)
+
+    def test_the_mutators_do_not_render_behind_the_funnel(self):
+        for name in ("patchLocalClient", "removeLocalClient"):
+            self.assertNotIn("applyFilters();", self._body(name),
+                             "%s renders without going through the funnel" % name)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2578,7 +2578,8 @@
 
         allInboundsData = merge(allInboundsData);
         inboundsData = allInboundsData;
-        invalidateClientSearchIndex();
+        // One store: refresh the search index and the counters for this block too.
+        clientStoreChanged({ render: false });
     }
 
     function getCachedInboundsForServer(serverId) {
@@ -2692,12 +2693,34 @@
         onInboundSelected();
     }
 
+    // Phase 8: the store is the single source of truth for the visible card, the search
+    // index, the filters and the counters. Every path that mutates it funnels through
+    // here, so no view keeps a second copy of the state that can drift.
+    function clientStoreChanged(options = {}) {
+        invalidateClientSearchIndex();
+        recomputeLocalCounters();
+        const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render'))
+            ? Boolean(options.render)
+            : true;
+        if (shouldRender) applyFilters();
+    }
+
+    // Per-inbound counters are derived from the store the same way the backend derives
+    // them (`_recompute_cached_server_stats`), so enabling, disabling or deleting one
+    // client never leaves a stale count on the card.
+    function recomputeLocalCounters() {
+        for (const inbound of (allInboundsData || [])) {
+            const clients = Array.isArray(inbound.clients) ? inbound.clients : [];
+            inbound.client_count = clients.length;
+            inbound.active_count = clients.filter(c => c && Boolean(c.enable ?? true)).length;
+        }
+    }
+
     function patchLocalClient(serverId, inboundId, email, patch, options = {}) {
         const sid = parseInt(serverId);
         const iid = String(inboundId);
         const em = String(email || '').toLowerCase();
         if (!Number.isFinite(sid) || !em) return false;
-        invalidateClientSearchIndex();
 
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render')) ? Boolean(options.render) : true;
 
@@ -2869,7 +2892,7 @@
             // No break: keep going so every inbound copy of a v3 client is patched.
         }
 
-        if (changed && shouldRender) applyFilters();
+        if (changed) clientStoreChanged({ render: shouldRender });
         return changed;
     }
 
@@ -3009,11 +3032,11 @@
         const sid = parseInt(serverId);
         const em = String(email || '').toLowerCase();
         if (!Number.isFinite(sid) || !em) return false;
-        invalidateClientSearchIndex();
 
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render')) ? Boolean(options.render) : true;
 
-        // Remove every copy (a v3 client is deleted from all its inbounds).
+        // Remove every copy (a v3 client is deleted from all its inbounds). The
+        // counters are recomputed from the store by clientStoreChanged().
         let changed = false;
         for (const inbound of (allInboundsData || [])) {
             if (parseInt(inbound?.server_id) !== sid) continue;
@@ -3021,12 +3044,11 @@
             const idx = inbound.clients.findIndex(c => String(c?.email || '').toLowerCase() === em);
             if (idx >= 0) {
                 inbound.clients.splice(idx, 1);
-                inbound.client_count = inbound.clients.length;
                 changed = true;
             }
         }
 
-        if (changed && shouldRender) applyFilters();
+        if (changed) clientStoreChanged({ render: shouldRender });
         return changed;
     }
 
@@ -3197,13 +3219,14 @@
     // Apply a full snapshot payload (first load or an explicit refresh).
     function applySnapshotFull(data) {
         allInboundsData = data.inbounds || [];
-        invalidateClientSearchIndex();
         inboundsData = allInboundsData;
         serverStatuses = data.servers || [];
         // Clear pending servers since we have full data
         pendingServers = [];
         updateStats(data.stats, serverStatuses.length);
-        applyFilters();
+        // The store changed: the funnel invalidates the search index, recomputes the
+        // per-inbound counters and re-renders (Phase 8).
+        clientStoreChanged();
     }
 
     // Merge a delta payload: replace changed inbounds in place, drop removed ones,
@@ -3227,11 +3250,11 @@
             }
         });
         allInboundsData = next;
-        invalidateClientSearchIndex();
         inboundsData = allInboundsData;
         serverStatuses = data.servers || [];
         updateStats(data.stats, serverStatuses.length);
-        applyFilters();
+        // Same funnel as a full snapshot: one store drives cards/search/filters/counters.
+        clientStoreChanged();
     }
 
     async function refreshData(isSilent = false, options = {}) {
