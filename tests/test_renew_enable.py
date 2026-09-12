@@ -341,6 +341,50 @@ class RenewEnableTests(unittest.TestCase):
         self.assertEqual(reloaded['totalGB'], 35 * GB)
         self.assertNotEqual(reloaded['volume_status'], 'suspended')
 
+    def test_a_cold_cache_renew_still_returns_the_new_state_and_queues_a_repair(self):
+        """Phase 4, worst case: nothing cached at all.
+
+        The panel read-back still travels with the response, so the card updates
+        immediately, while a targeted repair is queued for consistency.
+        """
+        from panel.services.client_state import normalize_client_state  # noqa: F401
+
+        past = int(time.time() * 1000) - DAY_MS
+        panel_client = _raw_client(expiry=past, total=25 * GB, enable=False)
+        GLOBAL_SERVER_DATA['inbounds'] = []  # cold cache: no row to patch
+
+        def with_stats(raw):
+            inbound = _panel_inbounds(raw, self.server.id)[0]
+            inbound['clientStats'] = [{'email': raw['email'], 'up': 25 * GB, 'down': 0}]
+            return [inbound]
+
+        def cold_fetch(*_args, **_kwargs):
+            if not self.v3_update.call_args:
+                return with_stats(panel_client), None, '3x-ui'
+            sent = dict(self.v3_update.call_args[0][3])
+            sent['enable'] = True
+            return with_stats(sent), None, '3x-ui'
+
+        with mock.patch.object(app_module, 'fetch_inbounds', side_effect=cold_fetch), \
+                mock.patch.object(refresh_jobs, 'enqueue_refresh_job') as repair:
+            resp = self._renew(mode='custom', days=30, volume=10, free=True)
+        payload = resp.get_json()
+        self.assertEqual(resp.status_code, 200, payload)
+        self.assertTrue(payload['success'], payload)
+
+        # User-visible layer: the response carries the verified canonical state even
+        # though this worker had no cached row to patch.
+        self.assertEqual(payload['mutation']['changed'], False, payload['mutation'])
+        self.assertTrue(payload['mutation']['verified'], payload['mutation'])
+        state = payload['client_state']
+        self.assertIsNotNone(state, payload)
+        self.assertEqual(state['total_bytes'], 35 * GB)
+        self.assertEqual(state['remaining_bytes'], 10 * GB)
+        self.assertTrue(state['enable'])
+
+        # Consistency layer: a targeted repair for that server only.
+        repair.assert_called_once_with(mode='full', server_id=self.server.id, force=True)
+
     def test_completed_renew_operation_replays_without_second_panel_write(self):
         future = int(time.time() * 1000) + DAY_MS
         self._seed_cache(_raw_client(expiry=future, total=5 * GB, enable=True))
@@ -721,6 +765,41 @@ class RedisSnapshotRevisionTests(unittest.TestCase):
         for line in logs.output:
             self.assertNotIn('token', line.lower())
             self.assertNotIn('password', line.lower())
+
+    def test_a_write_through_miss_still_returns_the_verified_state(self):
+        """Phase 4: the two layers. The caller can update the UI from the result, and
+        the snapshot is repaired in the background for everything else."""
+        from panel.services.client_state import normalize_client_state
+
+        verified = normalize_client_state(
+            raw={'id': 'uuid-bob-1', 'email': 'bob', 'enable': True, 'totalGB': 35 * GB,
+                 'expiryTime': 1_800_000_000_000},
+            used_up=25 * GB, used_down=0, inbound_id=1, service_state='active')
+
+        _revisions = iter([])
+        with (
+            mock.patch.object(refresh_jobs, 'bump_server_revision', return_value=5),
+            mock.patch.object(refresh_jobs, 'get_server_revision',
+                              side_effect=lambda *_: next(_revisions, 5)),
+            mock.patch.object(refresh_jobs, 'enqueue_refresh_job') as repair,
+            mock.patch.object(refresh_jobs, 'serialized_server_snapshot_write') as serialized,
+            mock.patch.object(app_module, '_get_dashboard_status_thresholds', return_value={}),
+            mock.patch.object(app_module, '_get_panel_ui_lang', return_value='en'),
+        ):
+            serialized.return_value = redis_cache.contextmanager(lambda: (yield))()
+            with app_module.app.app_context():
+                result = refresh_jobs.patch_cached_client(
+                    77, 'bob', operation='renew', verified_state=verified, inbound_id=1)
+
+        self.assertFalse(bool(result), 'the cache missed')
+        repair.assert_called_once_with(mode='full', server_id=77, force=True)
+        payload = result.to_payload()
+        self.assertFalse(payload['changed'])
+        self.assertTrue(payload['verified'])
+        self.assertEqual(payload['operation'], 'renew')
+        self.assertEqual(payload['client_state']['total_bytes'], 35 * GB)
+        self.assertEqual(payload['client_state']['remaining_bytes'], 10 * GB)
+        self.assertTrue(payload['client_state']['enable'])
 
     def test_cache_patch_enters_serialized_server_write_cycle(self):
         original = dict(redis_cache.GLOBAL_SERVER_DATA)
