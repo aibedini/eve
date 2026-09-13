@@ -29,31 +29,41 @@ FLAG_ENV = 'EVE_USAGE_RECOMMENDATION_V5'
 FLAG_SETTING_KEY = 'usage_recommendation_v5'
 MODES = ('off', 'shadow', 'on')
 
+# Activation (RFP sections 54-58): v5 is the model that answers by default. The flag is the
+# rollback path - `off` restores usage-fit-v4 exactly, `shadow` compares both without changing
+# the answer - and an explicit operator setting beats the built-in default.
+DEFAULT_MODE = 'on'
 
-def _coerce_mode(value):
+
+def _coerce_mode(value, default=DEFAULT_MODE):
     raw = str(value or '').strip().lower()
     if raw in ('1', 'true', 'yes', 'on', 'enabled'):
         return 'on'
     if raw in ('shadow', 'compare', 'dry_run'):
         return 'shadow'
-    if raw in ('0', 'false', 'no', 'off', 'disabled', ''):
+    if raw in ('0', 'false', 'no', 'off', 'disabled'):
         return 'off'
-    return 'off'
+    return default
 
 
 def recommendation_mode() -> str:
-    """The rollout stage: off / shadow / on (environment first, then the system setting)."""
-    mode = _coerce_mode(os.environ.get(FLAG_ENV))
-    if mode != 'off':
-        return mode
+    """The rollout stage: off / shadow / on.
+
+    An explicit environment value wins (it is the operator's emergency switch); otherwise the
+    ``usage_recommendation_v5`` system setting decides, so the stage can also be changed from
+    the panel without a restart; otherwise the model is active by default.
+    """
+    raw_env = (os.environ.get(FLAG_ENV) or '').strip()
+    if raw_env:
+        return _coerce_mode(raw_env)
     try:
         from panel.models import SystemSetting
         row = SystemSetting.query.filter_by(key=FLAG_SETTING_KEY).first()
-        if row is not None:
+        if row is not None and str(row.value or '').strip():
             return _coerce_mode(row.value)
     except Exception:
         pass
-    return 'off'
+    return DEFAULT_MODE
 
 
 def _legacy_source(basis: str) -> str:

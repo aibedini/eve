@@ -60,6 +60,11 @@ relative link does not resolve.
 - [Subscription response cache](performance/SUBSCRIPTION_CACHE.md) - performance/SUBSCRIPTION_CACHE.md
 - [Usage intelligence: performance budgets and indexes](performance/USAGE_INTELLIGENCE_PERF.md) - performance/USAGE_INTELLIGENCE_PERF.md
 
+## Architecture decisions and internals
+
+- [Usage intelligence: telemetry, business events and derived analytics](architecture/USAGE_INTELLIGENCE.md) - architecture/USAGE_INTELLIGENCE.md
+- [ADR-0011: Renewal events are business facts, not inferred usage-counter resets](architecture/adr/0011-renewal-events-are-business-facts.md) - architecture/adr/0011-renewal-events-are-business-facts.md
+
 ## Operations
 
 - [Operations runbook](OPERATIONS_RUNBOOK.md) - OPERATIONS_RUNBOOK.md

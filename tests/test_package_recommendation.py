@@ -14,6 +14,9 @@ _DB_FILE.close()
 os.environ['DATABASE_URL'] = f"sqlite:///{_DB_FILE.name.replace(os.sep, '/')}"
 os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
+# These tests pin the legacy usage-fit-v4 model (it stays in the tree as the rollback path for
+# one release, RFP section 57). The v5 model has its own suites under test_usage_intelligence_*.
+os.environ['EVE_USAGE_RECOMMENDATION_V5'] = 'off'
 
 from panel.services.usage_intelligence import latest_cycle_boundary  # noqa: E402
 

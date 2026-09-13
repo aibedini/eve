@@ -202,19 +202,37 @@ class RecommendationModeTests(unittest.TestCase):
 
     def test_the_mode_comes_from_the_environment(self):
         for raw, expected in (('1', 'on'), ('on', 'on'), ('shadow', 'shadow'),
-                              ('0', 'off'), ('', 'off'), ('nonsense', 'off')):
+                              ('0', 'off'), ('off', 'off'), ('nonsense', 'on')):
             with mock.patch.dict(os.environ, {recommendation_module.FLAG_ENV: raw}):
                 self.assertEqual(recommendation_module.recommendation_mode(), expected,
                                  raw)
 
-    def test_the_mode_falls_back_to_the_system_setting(self):
+    def test_v5_is_the_default_when_nothing_is_configured(self):
+        """Activation (RFP section 57): the model answers unless an operator says otherwise."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(recommendation_module.FLAG_ENV, None)
+            with mock.patch('panel.models.SystemSetting') as setting:
+                setting.query.filter_by.return_value.first.return_value = None
+                self.assertEqual(recommendation_module.recommendation_mode(), 'on')
+
+    def test_the_system_setting_can_roll_back_without_a_restart(self):
+        class _Row:
+            value = 'off'
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(recommendation_module.FLAG_ENV, None)
+            with mock.patch('panel.models.SystemSetting') as setting:
+                setting.query.filter_by.return_value.first.return_value = _Row()
+                self.assertEqual(recommendation_module.recommendation_mode(), 'off')
+
+    def test_an_explicit_environment_value_beats_the_setting(self):
         class _Row:
             value = 'on'
 
         with mock.patch.dict(os.environ, {recommendation_module.FLAG_ENV: 'off'}):
             with mock.patch('panel.models.SystemSetting') as setting:
                 setting.query.filter_by.return_value.first.return_value = _Row()
-                self.assertEqual(recommendation_module.recommendation_mode(), 'on')
+                self.assertEqual(recommendation_module.recommendation_mode(), 'off')
 
     def test_off_keeps_answering_with_v4(self):
         with v5_mode('off'):
