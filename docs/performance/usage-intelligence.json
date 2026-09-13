@@ -1,0 +1,49 @@
+{
+  "mode": "full",
+  "accounts": 16000,
+  "days_per_account": 31,
+  "usage_daily_rows": 496000,
+  "seed_seconds": 73.93,
+  "samples": 40,
+  "latency_ms": {
+    "mean": 15.526,
+    "p50": 15.206,
+    "p95": 20.909,
+    "max": 24.271
+  },
+  "queries_per_recommendation": 3,
+  "outbound_http_calls": 0,
+  "query_plans": {
+    "latest_verified_renewal": "SEARCH renewal_events USING INDEX ix_renewal_events_server_sub_verified_renewed (server_id=? AND sub_id=? AND verified=?)",
+    "usage_since_cycle": "SEARCH usage_daily USING INDEX sqlite_autoindex_usage_daily_1 (server_id=? AND sub_id=? AND usage_date>?)",
+    "rolling_31d": "SEARCH usage_daily USING INDEX sqlite_autoindex_usage_daily_1 (server_id=? AND sub_id=? AND usage_date>?)"
+  },
+  "full_scans": {
+    "latest_verified_renewal": false,
+    "usage_since_cycle": false,
+    "rolling_31d": false
+  },
+  "payload_basis": "rolling_history",
+  "verdicts": {
+    "latency_within_budget": {
+      "p95_ms": 20.909,
+      "budget_ms": 50.0,
+      "passed": true
+    },
+    "query_budget": {
+      "queries": 3,
+      "budget": 6,
+      "passed": true
+    },
+    "no_panel_calls": {
+      "outbound_http_calls": 0,
+      "maximum": 0,
+      "passed": true
+    },
+    "indexed_reads": {
+      "full_scans": {},
+      "passed": true
+    }
+  },
+  "passed": true
+}

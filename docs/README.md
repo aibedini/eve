@@ -58,6 +58,7 @@ relative link does not resolve.
 - [Live updates over server-sent events](performance/SSE.md) - performance/SSE.md
 - [Static asset delivery](performance/STATIC_ASSETS.md) - performance/STATIC_ASSETS.md
 - [Subscription response cache](performance/SUBSCRIPTION_CACHE.md) - performance/SUBSCRIPTION_CACHE.md
+- [Usage intelligence: performance budgets and indexes](performance/USAGE_INTELLIGENCE_PERF.md) - performance/USAGE_INTELLIGENCE_PERF.md
 
 ## Operations
 

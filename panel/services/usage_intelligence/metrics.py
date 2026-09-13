@@ -20,6 +20,19 @@ from panel.services.usage_intelligence.schemas import (
 BYTES_PER_GB = float(1024 ** 3)
 MAX_DAILY_ROWS = 400
 
+# The daily rollup is keyed by a Tehran calendar day (RFP section 30). The collector owns
+# that rule in panel/jobs/schedulers.py, which imports this package - so the constant is
+# mirrored here rather than imported: Iran has used a fixed +03:30 offset with no DST since
+# 2022, and both sides must agree on which day a row belongs to.
+TEHRAN_OFFSET = timedelta(hours=3, minutes=30)
+
+
+def tehran_date(value):
+    """The Tehran calendar day a naive-UTC timestamp belongs to."""
+    if not isinstance(value, datetime):
+        return None
+    return (value + TEHRAN_OFFSET).date()
+
 
 def _as_int(value, default=0):
     try:
@@ -69,14 +82,22 @@ def load_state(server_id, sub_id):
 def load_daily_rows(server_id, sub_id, *, since=None, until=None, limit=MAX_DAILY_ROWS):
     """UsageDaily rows for one account inside a half-open observed-time window.
 
-    Filtered per account (the unique ``(server_id, sub_id, usage_date)`` key) and bounded by
-    ``limit``: never a full-table scan, never the whole history.
+    Filtered per account on the unique ``(server_id, sub_id, usage_date)`` key, with the day
+    bound pushed into the indexed column (RFP section 30) and a precise in-memory filter on
+    the row's own observation timestamps afterwards. Bounded by ``limit``: never a full-table
+    scan, never the whole history.
     """
     try:
         query = UsageDaily.query.filter_by(server_id=int(server_id), sub_id=str(sub_id))
         if since is not None:
+            start_date = tehran_date(since)
+            if start_date is not None:
+                query = query.filter(UsageDaily.usage_date >= start_date)
             query = query.filter(UsageDaily.last_observed_at >= since)
         if until is not None:
+            end_date = tehran_date(until)
+            if end_date is not None:
+                query = query.filter(UsageDaily.usage_date <= end_date)
             query = query.filter(UsageDaily.last_observed_at < until)
         return (query.order_by(UsageDaily.usage_date.asc()).limit(limit).all())
     except Exception:
