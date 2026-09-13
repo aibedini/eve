@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.6.57"
+APP_VERSION = "2.6.58"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -169,6 +169,9 @@ from panel.core.redis_client import (  # noqa: F401
     get_server_revision,
     bump_server_revision,
 )
+
+# Telegram egress policy: the one place that decides which routes a bot may use.
+from panel import telegram_egress as egress_policy  # noqa: E402
 
 # Ownership cache: pre-loaded from DB, used by enrich_inbounds_with_ownership.
 # Avoids a per-request DB query with thousands of emails in IN clause.
@@ -4586,15 +4589,18 @@ def _telegram_bot_api_client(bot: TelegramBotInstance):
                 f'{row.proxy_type}://{row.host}:{row.port}', _telegram_proxy_mapping(row),
             ))
     direct = TelegramRoute('direct')
-    if bot.connection_mode == 'direct_only':
+    # The egress policy decides the MAXIMUM route set; the transport below may only
+    # order what the policy allowed. Building the list from the mode here is what
+    # used to hide the decision, so the policy is passed explicitly and the list is
+    # a faithful superset of every route the policy could permit.
+    policy = egress_policy.normalize_policy(bot.connection_mode)
+    if egress_policy.normalize_policy(policy) == egress_policy.DIRECT_ONLY:
         routes = [direct]
-    elif bot.connection_mode == 'proxy_first':
+    else:
         routes.append(direct)
-    elif bot.connection_mode == 'auto':
-        routes.insert(0, direct)
     if not routes:
         raise ValueError('No usable Telegram route is configured')
-    return TelegramBotApi(token, routes)
+    return TelegramBotApi(token, routes, policy=policy)
 
 
 def _telegram_bot_attempt(token: str, route_name: str, proxies=None, proxy=None) -> dict:
@@ -4703,14 +4709,17 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
         order = [('egress', row) for row in egress_rows]
     elif route == 'direct':
         order = [('direct', None)]
-    elif bot.connection_mode == 'direct_only':
-        order = [('direct', None)]
-    elif bot.connection_mode == 'proxy_only':
-        order = managed_rows
-    elif bot.connection_mode == 'proxy_first':
-        order = managed_rows + [('direct', None)]
     else:
-        order = [('direct', None)] + managed_rows
+        # The diagnostic probe follows the SAME policy as the runtime, so a test
+        # can never report "reachable" through a route the bot is forbidden to use.
+        policy = egress_policy.normalize_policy(bot.connection_mode)
+        decision = egress_policy.decide(policy, has_managed=bool(managed_rows))
+        order = []
+        for name in decision.allowed:
+            if name == egress_policy.DIRECT_ROUTE:
+                order.append(('direct', None))
+            else:
+                order.extend(managed_rows)
 
     for kind, endpoint in order:
         if kind == 'direct':
@@ -5047,9 +5056,12 @@ def _save_telegram_bot_settings(bot: TelegramBotInstance, data: dict):
     default_language = str(data.get('default_language') or bot.default_language or 'fa').strip().lower()
     if default_language not in languages:
         return jsonify({'success': False, 'error': 'Default language must be enabled'}), 400
-    connection_mode = str(data.get('connection_mode') or bot.connection_mode or 'proxy_first').strip().lower()
-    if connection_mode not in ('auto', 'direct_only', 'proxy_first', 'proxy_only'):
-        return jsonify({'success': False, 'error': 'Invalid connection mode'}), 400
+    connection_mode = str(data.get('connection_mode') or bot.connection_mode or 'proxy_first').strip()
+    if not egress_policy.is_valid_policy(connection_mode):
+        return jsonify({'success': False, 'error': 'Invalid egress policy'}), 400
+    # Store the canonical policy name; the legacy mode names keep being accepted so
+    # existing clients and rows keep working, and are migrated on save.
+    connection_mode = egress_policy.normalize_policy(connection_mode)
     support_group_enabled = bool(data.get('support_group_enabled', bot.support_group_enabled))
     support_group_chat_id = data.get('support_group_chat_id')
     if support_group_chat_id in (None, ''):

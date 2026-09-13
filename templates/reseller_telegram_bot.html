@@ -53,10 +53,12 @@
                 <div class="form-group">
                     <label for="rtb-connection-mode">Connection mode</label>
                     <select id="rtb-connection-mode" class="form-input">
-                        <option value="proxy_first">Proxy first</option>
-                        <option value="auto">Auto</option>
-                        <option value="direct_only">Direct only</option>
-                        <option value="proxy_only">Proxy only</option>
+                        <option value="PROXY_PREFERRED">Proxy preferred (direct fallback allowed)</option>
+                        <option value="DIRECT_PREFERRED">Direct preferred (proxy as backup)</option>
+                        <option value="DIRECT_ONLY">Direct only</option>
+                        <option value="PROXY_REQUIRED">Proxy required (no direct fallback)</option>
+                        <option value="PANEL_ACCOUNT_REQUIRED">Panel account required (no direct fallback)</option>
+                        <option value="NEVER_DIRECT">Never direct</option>
                     </select>
                 </div>
                 <div class="form-group" style="display:flex; gap:24px;">

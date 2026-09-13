@@ -92,17 +92,16 @@ POLICY_LABELS = {
 def normalize_policy(value) -> str:
     """Accept a policy name or a legacy connection mode; return a valid policy.
 
-    An unknown value is a configuration error, not a reason to guess: the caller
-    validates user input with :func:`is_valid_policy` and the runtime falls back to
-    the strictest sane default only for rows that predate this vocabulary.
+    An unknown value is a configuration error, not permission. It normalizes to
+    PROXY_REQUIRED: direct traffic is only ever allowed when a RECOGNIZED policy
+    says so, so a corrupted row or a bad API call cannot silently widen egress.
+    Callers validate user input with :func:`is_valid_policy` and reject it first.
     """
     text = str(value or "").strip()
-    if not text:
-        return PROXY_PREFERRED
     upper = text.upper()
     if upper in EGRESS_POLICIES:
         return upper
-    return _LEGACY_MAP.get(text.lower(), PROXY_PREFERRED)
+    return _LEGACY_MAP.get(text.lower(), PROXY_REQUIRED)
 
 
 def is_valid_policy(value) -> bool:

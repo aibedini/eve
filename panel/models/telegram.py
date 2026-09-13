@@ -20,7 +20,10 @@ class TelegramBotInstance(db.Model):
     enabled_languages_json = db.Column(db.Text, nullable=False, default='["fa","en"]')
     copy_overrides_json = db.Column(db.Text, nullable=False, default='')
     default_language = db.Column(db.String(12), nullable=False, default='fa')
-    connection_mode = db.Column(db.String(24), nullable=False, default='proxy_first')
+    # Telegram egress policy (see panel/telegram_egress.py). The legacy mode names
+    # (auto / direct_only / proxy_first / proxy_only) are still accepted and mapped
+    # on save; the column is 40 chars so a policy name fits whole.
+    connection_mode = db.Column(db.String(40), nullable=False, default='proxy_first')
     transport_mode = db.Column(db.String(24), nullable=False, default='polling')
     support_group_enabled = db.Column(db.Boolean, nullable=False, default=False)
     support_group_chat_id = db.Column(db.BigInteger, nullable=True)

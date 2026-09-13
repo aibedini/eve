@@ -918,7 +918,7 @@
                         <button type="button" class="tgb-preset" data-preset="foreign" onclick="applyTelegramBotPreset('foreign')"><strong>Foreign server</strong><span>Direct connection only</span></button>
                         <button type="button" class="tgb-preset" data-preset="custom" onclick="applyTelegramBotPreset('custom')"><strong>Custom</strong><span>Set routing manually</span></button>
                     </div>
-                    <div class="form-group tgb-mode-select"><label for="tgb-connection-mode">Connection mode</label><select id="tgb-connection-mode" class="form-select" onchange="markTelegramBotPresetCustom()"><option value="auto">Auto (direct, then managed routes)</option><option value="direct_only">Direct only</option><option value="proxy_first">Managed routes first, then direct</option><option value="proxy_only">Managed routes only</option></select><div id="tgb-proxy-warning" class="tgb-inline-warning" style="display:none;">This mode needs an enabled Xray route or proxy. Add or enable one before testing.</div></div>
+                    <div class="form-group tgb-mode-select"><label for="tgb-connection-mode">Connection mode</label><select id="tgb-connection-mode" class="form-select" onchange="markTelegramBotPresetCustom()"><option value="DIRECT_PREFERRED">Direct preferred (proxy as backup)</option><option value="DIRECT_ONLY">Direct only</option><option value="PROXY_PREFERRED">Proxy preferred (direct fallback allowed)</option><option value="PROXY_REQUIRED">Proxy required (no direct fallback)</option><option value="PANEL_ACCOUNT_REQUIRED">Panel account required (no direct fallback)</option><option value="NEVER_DIRECT">Never direct</option></select><div id="tgb-proxy-warning" class="tgb-inline-warning" style="display:none;">This policy needs an enabled Xray route or proxy. Add or enable one before testing.</div></div>
                     <div id="tgb-route-order" class="tgb-route-order" aria-live="polite"><strong>Effective failover order</strong><span>Loading routes…</span></div>
                 </section>
 
@@ -4390,8 +4390,12 @@
     }
 
     function updateTelegramProxyWarning() {
+        // Which policy actually NEEDS a managed route: everything except the two
+        // that allow direct. Keeping this list aligned with panel/telegram_egress.py
+        // is what makes the warning honest instead of decorative.
         const mode = document.getElementById('tgb-connection-mode').value;
-        const needsManagedRoute = mode === 'proxy_first' || mode === 'proxy_only';
+        const needsManagedRoute = mode !== 'DIRECT_ONLY' && mode !== 'DIRECT_PREFERRED'
+            && mode !== 'direct_only' && mode !== 'auto';
         const hasEnabledManagedRoute = telegramBotProxies.some(proxy => proxy.enabled !== false)
             || telegramBotEgressProfiles.some(profile => profile.enabled !== false);
         document.getElementById('tgb-proxy-warning').style.display = needsManagedRoute && !hasEnabledManagedRoute ? '' : 'none';
@@ -4414,11 +4418,20 @@
             })),
         ].sort((a, b) => a.priority - b.priority || a.rank - b.rank || a.id - b.id);
         const direct = {kind: 'Direct', name: 'Telegram API'};
+        // Mirrors panel/telegram_egress.decide(): the preview must never show a
+        // route the policy forbids, or the operator would be told the wrong thing.
         const mode = modeSelect.value;
+        const legacy = {auto: 'DIRECT_PREFERRED', direct_only: 'DIRECT_ONLY',
+                        proxy_first: 'PROXY_PREFERRED', proxy_only: 'PROXY_REQUIRED'};
+        const policy = legacy[mode] || mode;
+        const forbidsDirect = policy === 'NEVER_DIRECT' || policy === 'PROXY_REQUIRED'
+            || policy === 'PANEL_ACCOUNT_REQUIRED';
         let routes = managed;
-        if (mode === 'direct_only') routes = [direct];
-        else if (mode === 'auto') routes = [direct, ...managed];
-        else if (mode === 'proxy_first') routes = [...managed, direct];
+        if (policy === 'DIRECT_ONLY') routes = [direct];
+        else if (policy === 'DIRECT_PREFERRED') routes = [direct, ...managed];
+        else if (forbidsDirect) routes = managed;
+        else routes = [...managed, direct];  // PROXY_PREFERRED
+        if (forbidsDirect && !managed.length) routes = [];
 
         box.replaceChildren();
         const title = document.createElement('strong');

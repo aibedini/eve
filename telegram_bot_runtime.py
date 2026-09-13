@@ -14,6 +14,8 @@ from requests.adapters import HTTPAdapter
 
 from telegram_diagnostics import classify_telegram_connection_error, redact_connection_error
 
+from panel import telegram_egress as egress_policy
+
 
 API_ROOT = "https://api.telegram.org"
 _TRANSPORT_LOCAL = threading.local()
@@ -53,6 +55,22 @@ class TelegramApiError(RuntimeError):
         self.retry_after = max(0, int(retry_after or 0))
 
 
+class TelegramEgressUnavailable(TelegramApiError):
+    """No route the EGRESS POLICY permits is usable right now.
+
+    Distinct from a transport failure on purpose: this is not "Telegram said no",
+    it is "policy forbids the only route that would work". A caller must treat it
+    as a retryable dependency outage and must never widen the route set to work
+    around it -- that is the silent downgrade this class exists to prevent.
+    """
+
+    def __init__(self, message: str, *, policy: str = '', attempts: int = 0):
+        super().__init__(message, retryable=True)
+        self.policy = policy
+        self.attempts = int(attempts or 0)
+        self.code = 'egress_unavailable'
+
+
 CHAT_ACCESS_ERROR_HINTS = (
     "chat not found",
     "bot is not a member",
@@ -71,19 +89,67 @@ def is_chat_access_error(exc: BaseException) -> bool:
 class TelegramBotApi:
     """Bot API client with ordered route failover and no token logging."""
 
-    def __init__(self, token: str, routes: list[TelegramRoute]):
+    def __init__(self, token: str, routes: list[TelegramRoute], policy: str | None = None):
         self._token = token
         self._routes = routes or [TelegramRoute("direct")]
         self._session = _pooled_session()
         self._route_state = _route_state(hashlib.sha256(token.encode()).hexdigest()[:20])
+        # The egress policy is evaluated ONCE, here, into an allowed route set.
+        # `_ordered_routes()` may reorder what the policy allowed; it may never
+        # add to it, which is what makes "proxy required" mean required even while
+        # the proxy is cooling down.
+        self._policy = egress_policy.normalize_policy(policy) if policy else None
+        self._allowed_routes = self._apply_policy(self._routes)
+
+    def _apply_policy(self, routes: list[TelegramRoute]) -> list[TelegramRoute]:
+        """Reduce the configured routes to the set the egress policy permits.
+
+        Called once at construction. When no policy is supplied the transport
+        keeps its historical behaviour, which is only safe for callers that pass a
+        route list they already restricted themselves.
+        """
+        if not self._policy:
+            return list(routes)
+        has_managed = any(route.name != egress_policy.DIRECT_ROUTE for route in routes)
+        decision = egress_policy.decide(self._policy, has_managed=has_managed)
+        if not decision.usable:
+            return []
+        allowed = []
+        for name in decision.allowed:
+            if name == egress_policy.DIRECT_ROUTE:
+                for route in routes:
+                    if route.name == egress_policy.DIRECT_ROUTE:
+                        allowed.append(route)
+            else:
+                allowed.extend(
+                    route for route in routes
+                    if route.name != egress_policy.DIRECT_ROUTE
+                )
+        return allowed
+
+    @property
+    def policy(self) -> str | None:
+        return self._policy
+
+    def can_send(self) -> bool:
+        """False when the policy leaves no route (a dependency outage, not a bug)."""
+        return bool(self._allowed_routes)
 
     def _ordered_routes(self) -> list[TelegramRoute]:
+        """Order the ALLOWED routes by health; never widen the allowed set.
+
+        A cooldown is an availability fact. If every allowed route is cooling down
+        they are still returned (in configured order) rather than falling through
+        to a route the policy forbade -- the caller may pay one connect timeout,
+        which is the correct price for never silently downgrading egress.
+        """
         now = time.monotonic()
         cooldowns = self._route_state["cooldowns"]
-        active = [route for route in self._routes if float(cooldowns.get(route.name, 0)) <= now]
-        routes = active or list(self._routes)
+        routes = self._allowed_routes
+        active = [route for route in routes if float(cooldowns.get(route.name, 0)) <= now]
+        candidates = active or list(routes)
         preferred = self._route_state.get("preferred")
-        return sorted(routes, key=lambda route: route.name != preferred)
+        return sorted(candidates, key=lambda route: route.name != preferred)
 
     def _route_succeeded(self, route: TelegramRoute):
         self._route_state["preferred"] = route.name
@@ -113,11 +179,17 @@ class TelegramBotApi:
 
     def call(self, method: str, payload: dict[str, Any] | None = None,
              *, long_poll_timeout: int = 0) -> tuple[Any, str]:
+        candidates = self._ordered_routes()
+        if not candidates:
+            raise TelegramEgressUnavailable(
+                f"egress policy {self._policy} permits no usable route",
+                policy=self._policy or '',
+            )
         errors: list[str] = []
         connect_timeout = 4
         read_timeout = max(15, int(long_poll_timeout) + 10)
         url = f"{API_ROOT}/bot{self._token}/{method}"
-        for route in self._ordered_routes():
+        for route in candidates:
             started = time.perf_counter()
             try:
                 response = self._post_with_transient_retry(
@@ -148,6 +220,11 @@ class TelegramBotApi:
                     )
                 self._route_failed(route)
                 errors.append(f"{route.name}: {safe}")
+            except TelegramEgressUnavailable:
+                # Policy, not transport: re-raise untouched. Treating it as a route
+                # failure is how a caller would conclude "this route is unhealthy"
+                # and start hunting for a replacement the policy forbade anyway.
+                raise
             except TelegramApiError as exc:
                 if not exc.retryable:
                     raise
@@ -158,6 +235,11 @@ class TelegramBotApi:
                 elapsed = max(1, int((time.perf_counter() - started) * 1000))
                 _code, safe = classify_telegram_connection_error(exc, (self._token,))
                 errors.append(f"{route.name} ({elapsed} ms): {safe}")
+        if self._policy:
+            raise TelegramEgressUnavailable(
+                '; '.join(errors) or 'No Telegram route is available',
+                policy=self._policy, attempts=len(candidates),
+            )
         raise TelegramApiError("; ".join(errors) or "No Telegram route is available")
 
     def get_updates(self, offset: int, *, timeout: int = 25):
@@ -231,9 +313,15 @@ class TelegramBotApi:
             raise TelegramApiError("Attachment is empty", retryable=False)
         method = "sendPhoto" if as_photo else "sendDocument"
         field = "photo" if as_photo else "document"
+        candidates = self._ordered_routes()
+        if not candidates:
+            raise TelegramEgressUnavailable(
+                f"egress policy {self._policy} permits no usable route",
+                policy=self._policy or '',
+            )
         url = f"{API_ROOT}/bot{self._token}/{method}"
         errors: list[str] = []
-        for route in self._ordered_routes():
+        for route in candidates:
             try:
                 data = {"chat_id": int(chat_id)}
                 if caption:
@@ -265,6 +353,8 @@ class TelegramBotApi:
                     raise TelegramApiError(safe, retryable=False)
                 self._route_failed(route)
                 errors.append(f"{route.name}: {safe}")
+            except TelegramEgressUnavailable:
+                raise
             except TelegramApiError as exc:
                 if not exc.retryable:
                     raise
@@ -274,6 +364,11 @@ class TelegramBotApi:
                 self._route_failed(route)
                 _code, safe = classify_telegram_connection_error(exc, (self._token,))
                 errors.append(f"{route.name}: {safe}")
+        if self._policy:
+            raise TelegramEgressUnavailable(
+                '; '.join(errors) or 'No Telegram route is available',
+                policy=self._policy, attempts=len(candidates),
+            )
         raise TelegramApiError("; ".join(errors) or "No Telegram route is available")
 
     def download_file(self, file_id: str, *, max_bytes: int = 20 * 1024 * 1024):
@@ -283,6 +378,11 @@ class TelegramBotApi:
         if not file_path or file_path.startswith('/') or '..' in file_path.split('/'):
             raise TelegramApiError("Telegram returned an invalid file path", retryable=False)
         routes = sorted(self._ordered_routes(), key=lambda route: route.name != route_name)
+        if not routes:
+            raise TelegramEgressUnavailable(
+                f"egress policy {self._policy} permits no usable route",
+                policy=self._policy or '',
+            )
         url = f"{API_ROOT}/file/bot{self._token}/{file_path}"
         errors: list[str] = []
         for route in routes:
