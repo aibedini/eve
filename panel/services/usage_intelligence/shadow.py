@@ -12,11 +12,18 @@ The logs deliberately carry only ids and numbers: no email, no phone, no subscri
 (RFP sections 41-42). Activation and removal are separate steps.
 """
 import threading
+from collections import deque
 from datetime import datetime
 
 from panel.core.logging_config import get_resilient_logger
 
 logger = get_resilient_logger('eve.usage')
+
+# Extreme differences are worth an operator's attention before activation (RFP section 56):
+# a package change is normal, but a package change *and* a forecast that moved by more than
+# this much usually means one of the two models is reading different evidence.
+EXTREME_FORECAST_DELTA_PERCENT = 100.0
+MAX_EXTREME_CASES = 25
 
 _lock = threading.Lock()
 _counters = {
@@ -26,15 +33,18 @@ _counters = {
     'strong_trend': 0,
     'early_exhaustion': 0,
     'v5_unavailable': 0,
+    'extreme_cases': 0,
     'forecast_delta_sum': 0.0,
     'forecast_delta_max': 0.0,
 }
+_extremes = deque(maxlen=MAX_EXTREME_CASES)
 
 
 def reset_shadow_metrics() -> None:
     with _lock:
         for key in _counters:
             _counters[key] = 0.0 if key.endswith('_sum') or key.endswith('_max') else 0
+        _extremes.clear()
 
 
 def shadow_metrics() -> dict:
@@ -52,7 +62,15 @@ def shadow_metrics() -> dict:
         'strong_trend_count': snapshot['strong_trend'],
         'early_exhaustion_count': snapshot['early_exhaustion'],
         'v5_unavailable': snapshot['v5_unavailable'],
+        'extreme_cases': snapshot['extreme_cases'],
     }
+
+
+def extreme_cases(limit=MAX_EXTREME_CASES) -> list:
+    """The most recent comparisons that moved both the package and the forecast far."""
+    with _lock:
+        items = list(_extremes)
+    return items[-max(1, int(limit)):][::-1]
 
 
 def _forecast_delta_percent(v4, v5):
@@ -79,6 +97,8 @@ def record_shadow_comparison(server_id, sub_id, v4, v5, *, account=None) -> dict
         != bool(((v5 or {}).get('recommendation') or {}).get('capacity_limited')))
     trend_state = ((v5 or {}).get('trend') or {}).get('state')
     early_exhaustion = bool(((v5 or {}).get('signals') or {}).get('early_exhaustion'))
+    extreme = bool(not v5_missing and package_changed and delta is not None
+                   and delta >= EXTREME_FORECAST_DELTA_PERCENT)
 
     with _lock:
         _counters['comparisons'] += 1
@@ -95,6 +115,19 @@ def record_shadow_comparison(server_id, sub_id, v4, v5, *, account=None) -> dict
         if delta is not None:
             _counters['forecast_delta_sum'] += delta
             _counters['forecast_delta_max'] = max(_counters['forecast_delta_max'], delta)
+        if extreme:
+            _counters['extreme_cases'] += 1
+            _extremes.append({
+                'at': datetime.utcnow().isoformat(),
+                'server_id': int(server_id) if server_id is not None else None,
+                'account': 'redacted',
+                'v4_forecast': (v4 or {}).get('projected_31d_gb'),
+                'v5_forecast': ((v5 or {}).get('forecast') or {}).get('projected_31d_gb'),
+                'v4_package': (v4 or {}).get('package_id'),
+                'v5_package': ((v5 or {}).get('recommendation') or {}).get('package_id'),
+                'forecast_delta_percent': round(delta, 2),
+                'trend_state': trend_state,
+            })
 
     try:
         logger.info(
@@ -127,4 +160,5 @@ def record_shadow_comparison(server_id, sub_id, v4, v5, *, account=None) -> dict
         'trend_state': trend_state,
         'early_exhaustion': early_exhaustion,
         'capacity_limited_delta': capacity_delta,
+        'extreme': extreme,
     }

@@ -41,6 +41,7 @@ from panel.services.usage_intelligence.recommendation import (  # noqa: F401
     recommendation_mode,
 )
 from panel.services.usage_intelligence.shadow import (  # noqa: F401
+    extreme_cases,
     record_shadow_comparison,
     reset_shadow_metrics,
     shadow_metrics,
@@ -104,6 +105,7 @@ __all__ = [
     'assess_data_confidence',
     'build_recommendation_v5',
     'recommendation_mode',
+    'extreme_cases',
     'record_shadow_comparison',
     'reset_shadow_metrics',
     'shadow_metrics',
