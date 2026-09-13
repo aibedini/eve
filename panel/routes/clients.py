@@ -31,8 +31,23 @@ from panel.services.client_operations import (
     install_client_operation_response_guard, mark_client_operation_applied,
 )
 from panel.services.client_state import verified_state_from_panel
+from panel.services.usage_intelligence import record_verified_renewal
 
 bp = Blueprint('clients', __name__)
+
+# Sources the renew endpoint may declare for the business event it records. The
+# default is the explicit operator/API renewal; an automation may pass its own.
+_RENEWAL_SOURCES = ('explicit_renew', 'admin_reset', 'telegram_renew', 'api_mutation')
+
+
+def _renewal_source_from_payload(data) -> str:
+    """Which path performed this renewal, as the business-event vocabulary spells it."""
+    requested = ''
+    try:
+        requested = str((data or {}).get('source') or '').strip().lower()
+    except Exception:
+        requested = ''
+    return requested if requested in _RENEWAL_SOURCES else 'explicit_renew'
 
 
 @bp.route('/api/clients/search')
@@ -1711,6 +1726,19 @@ def renew_client(server_id, inbound_id, email):
         # Check if client was disabled before we re-enable it (for notification)
         _was_disabled = not target_client.get('enable', True)
 
+        # Before-state for the business event (RFP section 4/9): captured before the
+        # renewal overwrites the panel values below.
+        _previous_expiry_ms = 0
+        try:
+            _previous_expiry_ms = int(target_client.get('expiryTime') or 0)
+        except (TypeError, ValueError):
+            _previous_expiry_ms = 0
+        _previous_volume_limit_bytes = int(current_total_bytes or 0)
+        _previous_remaining_bytes = None
+        if _previous_volume_limit_bytes > 0:
+            _previous_remaining_bytes = max(
+                _previous_volume_limit_bytes - int(used_bytes or 0), 0)
+
         # Update client — always re-enable so disabled-due-to-traffic clients go active immediately
         target_client['expiryTime'] = new_expiry
         target_client['totalGB'] = new_volume
@@ -2201,6 +2229,45 @@ def renew_client(server_id, inbound_id, email):
                         inbound_id=inbound_id,
                     )
                 cache_sync = False
+                # Business fact (RFP sections 6-9): the panel write was read back and
+                # matched, so this renewal is authoritative. It is recorded here -
+                # after verification, before the operation commit - so a failed panel
+                # write or read-back can never create a cycle boundary, and a rolled
+                # over quota is stored as granted + carried_over instead of one number.
+                renewal_event = None
+                if verify.get('ok'):
+                    try:
+                        _granted_volume_bytes = None
+                        if reset_traffic:
+                            # The traffic counters restart: the whole new cap is granted.
+                            _granted_volume_bytes = int(new_volume or 0)
+                        elif volume_provided and volume_gb_to_add > 0:
+                            _granted_volume_bytes = int(round(volume_gb_to_add * 1024 ** 3))
+                        elif not volume_provided:
+                            _granted_volume_bytes = 0
+                        renewal_event = record_verified_renewal(
+                            server_id=server_id,
+                            sub_id=final_id or (target_client.get('id') or ''),
+                            operation_id=operation_key,
+                            email=email,
+                            client_uuid=(str(target_client.get('id'))
+                                         if target_client.get('id') else None),
+                            source=_renewal_source_from_payload(data),
+                            days=int(round(days_to_add or 0)),
+                            previous_volume_limit_bytes=_previous_volume_limit_bytes,
+                            new_volume_limit_bytes=int(new_volume or 0),
+                            previous_remaining_bytes=_previous_remaining_bytes,
+                            granted_volume_bytes=_granted_volume_bytes,
+                            traffic_reset=bool(reset_traffic),
+                            previous_expiry_ms=_previous_expiry_ms,
+                            new_expiry_ms=int(new_expiry or 0),
+                        )
+                    except Exception:
+                        renewal_event = None
+                        app.logger.warning(
+                            "Renewal event could not be recorded (trace=%s, server_id=%s)",
+                            renewal_trace_id, server_id, exc_info=True,
+                        )
                 try:
                     mutation = patch_cached_client(
                         server_id, email,
@@ -2273,6 +2340,9 @@ def renew_client(server_id, inbound_id, email):
                     _mutation_payload = mutation.to_payload()
                     completed_payload["mutation"] = _mutation_payload
                     completed_payload["client_state"] = _mutation_payload["client_state"]
+                if renewal_event is not None:
+                    # The business fact this request created (redacted: no email).
+                    completed_payload["renewal_event"] = renewal_event.to_dict()
                 if user.role == 'reseller':
                     completed_payload['remaining_credit'] = user.credit
                 complete_client_operation(client_operation, completed_payload, transaction_record)
