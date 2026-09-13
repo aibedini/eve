@@ -71,6 +71,7 @@ relative link does not resolve.
 - [Observability: request correlation and HTTP metrics](operations/OBSERVABILITY.md) - operations/OBSERVABILITY.md
 - [Data retention](operations/RETENTION.md) - operations/RETENTION.md
 - [Build identity and verifiable deploys](operations/BUILD_IDENTITY.md) - operations/BUILD_IDENTITY.md
+- [Visual regression: the Subscription page](operations/VISUAL_REGRESSION.md) - operations/VISUAL_REGRESSION.md
 - [Background workers](operations/WORKERS.md) - operations/WORKERS.md
 
 ## GMweb and SMS gateway
