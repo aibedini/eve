@@ -1,23 +1,16 @@
-"""Evidence for the intermittent Subscription layout bug: the static version is not an identity.
+"""The static version is a content identity, and only a matching version is immutable.
 
-The subscription page depends on four static stylesheets (tailwind.generated.css, style.css,
-fonts.css, phosphor-regular.css); when one of them arrives from a different build than the HTML
-the layout collapses and bare SVGs render huge. This file pins down *why* that can happen with
-the current asset pipeline, as executable evidence rather than a theory:
+This is the fix for the intermittent Subscription layout bug: the version is now the sha256 of
+the file's bytes, so every node computes the same key for the same stylesheet, and ``immutable``
+is granted only when the requested key equals the file's current content hash - a stale or
+unknown key revalidates instead of pinning new bytes under an old name.
 
-1. the cache key is an ``mtime+size`` fingerprint, so the same bytes can carry two different
-   keys (every deploy, every node) and two different byte streams of the same size can share
-   one key;
-2. Flask's static route ignores the query string, so a *stale* ``?v=`` still returns whatever
-   bytes are on disk - and the response is still marked ``immutable, max-age=31536000``, which
-   lets a browser or CDN keep the new bytes under the old key.
-
-The fix (content-hashed identity, and ``immutable`` only when the requested version matches the
-file's current content) lands in the following commits; these tests will flip from documenting
-the weakness to enforcing the guarantee.
+The earlier version of this file documented the weakness (mtime+size fingerprint, immutable for
+any ``?v=``); the assertions below are the guarantee that replaced it.
 """
 import os
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -31,7 +24,7 @@ from app import STATIC_IMMUTABLE_SECONDS, _static_asset_version, app  # noqa: E4
 
 
 class StaticVersionIdentityTests(unittest.TestCase):
-    """The fingerprint's properties, against a scratch static folder."""
+    """The fingerprint identifies content, not a timestamp."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -40,45 +33,60 @@ class StaticVersionIdentityTests(unittest.TestCase):
         self._patch = mock.patch.object(app, '_static_folder', self.folder)
         self._patch.start()
         self.addCleanup(self._patch.stop)
-        self.addCleanup(_static_asset_version.cache_clear)
 
-    def _write(self, name, payload):
+    def _write(self, name, payload, mtime=None):
         path = os.path.join(self.folder, name)
         with open(path, 'wb') as handle:
             handle.write(payload)
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
         return path
 
-    def test_the_same_bytes_get_a_new_version_when_only_the_mtime_moves(self):
-        path = self._write('same.css', b'body{color:red}')
-        _static_asset_version.cache_clear()
-        first = _static_asset_version('same.css')
-        os.utime(path, (2_000_000_000, 2_000_000_000))
-        _static_asset_version.cache_clear()
-        second = _static_asset_version('same.css')
-        self.assertNotEqual(first, second)
-        # Same bytes, two cache keys: every node/deploy can produce its own key for identical
-        # content, which is what makes a browser hold a stale stylesheet under a new-looking
-        # name (or adopt new bytes under an old one).
-        with open(path, 'rb') as handle:
-            self.assertEqual(handle.read(), b'body{color:red}')
+    def test_the_same_bytes_keep_one_version_whatever_the_mtime_says(self):
+        first = self._write('same.css', b'body{color:red}')
+        version_one = _static_asset_version('same.css')
+        os.utime(first, (2_000_000_000, 2_000_000_000))
+        self.assertEqual(_static_asset_version('same.css'), version_one)
+        # A deploy that rewrites the same bytes (or a node whose checkout timestamps differ)
+        # therefore keeps every cache valid instead of invalidating it for no reason.
+        self.assertRegex(version_one, r'^[0-9a-f]{16}$')
 
-    def test_two_different_stylesheets_of_the_same_size_share_one_version(self):
-        payload_a = b'a{width:24px}'
-        payload_b = b'b{width:99px}'
-        self.assertEqual(len(payload_a), len(payload_b))
-        path_a = self._write('a.css', payload_a)
-        path_b = self._write('b.css', payload_b)
+    def test_different_stylesheets_of_the_same_size_get_different_versions(self):
         stamp = 1_900_000_000
-        os.utime(path_a, (stamp, stamp))
-        os.utime(path_b, (stamp, stamp))
-        _static_asset_version.cache_clear()
-        # The fingerprint is mtime+size, so identical mtime and size yield identical versions
-        # for *different* stylesheets: the key is not a content identity.
-        self.assertEqual(_static_asset_version('a.css'), _static_asset_version('b.css'))
+        self._write('a.css', b'a{width:24px}', mtime=stamp)
+        self._write('b.css', b'b{width:99px}', mtime=stamp)
+        self.assertNotEqual(_static_asset_version('a.css'), _static_asset_version('b.css'))
+
+    def test_a_replaced_file_changes_its_version_inside_the_running_process(self):
+        path = self._write('live.css', b'.x{width:1px}')
+        before = _static_asset_version('live.css')
+        time.sleep(0.01)
+        with open(path, 'wb') as handle:
+            handle.write(b'.x{width:2px}')
+        self.assertNotEqual(_static_asset_version('live.css'), before)
+
+    def test_a_missing_or_directory_entry_has_no_version(self):
+        self.assertIsNone(_static_asset_version('nope.css'))
+        os.makedirs(os.path.join(self.folder, 'sub'), exist_ok=True)
+        self.assertIsNone(_static_asset_version('sub'))   # empty: nothing to version
+
+    def test_a_grouped_directory_gets_a_content_version(self):
+        """flags/ URLs are built from a directory, so the group needs a version too."""
+        group = os.path.join(self.folder, 'flags')
+        os.makedirs(group, exist_ok=True)
+        with open(os.path.join(group, 'de.svg'), 'wb') as handle:
+            handle.write(b'<svg id="de"/>')
+        first = _static_asset_version('flags')
+        self.assertRegex(first or '', r'^[0-9a-f]{16}$')
+        # A child's content change and a freshly deployed directory both move the key.
+        time.sleep(0.01)
+        with open(os.path.join(group, 'de.svg'), 'wb') as handle:
+            handle.write(b'<svg id="de2"/>')
+        self.assertNotEqual(_static_asset_version('flags'), first)
 
 
 class StaleVersionQueryTests(unittest.TestCase):
-    """The served bytes are not bound to the requested version (the skew window)."""
+    """The served bytes are still the file's, but a stale key can never be pinned."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -87,44 +95,56 @@ class StaleVersionQueryTests(unittest.TestCase):
         self._patch = mock.patch.object(app, '_static_folder', self.folder)
         self._patch.start()
         self.addCleanup(self._patch.stop)
-        self.addCleanup(_static_asset_version.cache_clear)
         self.client = app.test_client()
 
     def _write(self, payload):
         path = os.path.join(self.folder, 'probe.css')
         with open(path, 'wb') as handle:
             handle.write(payload)
-        _static_asset_version.cache_clear()
         return path
 
-    def test_a_stale_version_returns_the_new_bytes_as_immutable(self):
+    def test_the_matching_version_is_immutable(self):
         self._write(b'.probe{width:24px}')
-        stale_version = _static_asset_version('probe.css')
-        first = self.client.get('/static/probe.css?v=' + stale_version)
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.get_data(), b'.probe{width:24px}')
-
-        # The deploy replaces the stylesheet; the browser (or a CDN edge) still asks for the
-        # version it has cached from the previous build.
-        self._write(b'.probe{width:96px}')
-        second = self.client.get('/static/probe.css?v=' + stale_version)
-        self.assertEqual(second.status_code, 200)
-        # The answer is the NEW stylesheet under the OLD cache key ...
-        self.assertEqual(second.get_data(), b'.probe{width:96px}')
-        # ... and it is marked immutable for a year, so the new bytes are now pinned to the old
-        # key in every cache on the path. That is the mechanism behind "sometimes the page
-        # renders with the old stylesheet and sometimes with the new one".
+        version = _static_asset_version('probe.css')
+        response = self.client.get('/static/probe.css?v=' + version)
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            second.headers.get('Cache-Control'),
+            response.headers.get('Cache-Control'),
             'public, max-age=%d, immutable' % STATIC_IMMUTABLE_SECONDS)
+        self.assertIsNone(response.headers.get('X-Eve-Stale-Asset-Version'))
 
-    def test_the_version_query_is_not_validated_against_the_file(self):
+    def test_a_stale_version_revalidates_instead_of_being_pinned(self):
+        path = self._write(b'.probe{width:24px}')
+        stale_version = _static_asset_version('probe.css')
+        with open(path, 'wb') as handle:
+            handle.write(b'.probe{width:96px}')
+        response = self.client.get('/static/probe.css?v=' + stale_version)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_data(), b'.probe{width:96px}')
+        # The bytes are still served (Flask ignores the query string), but no cache may pin
+        # them under the stale key: the response must revalidate every time.
+        cache_control = response.headers.get('Cache-Control') or ''
+        self.assertNotIn('immutable', cache_control)
+        self.assertIn('must-revalidate', cache_control)
+        self.assertEqual(response.headers.get('X-Eve-Stale-Asset-Version'), '1')
+
+    def test_an_unknown_version_is_not_treated_as_fingerprinted(self):
         self._write(b'.probe{width:24px}')
         response = self.client.get('/static/probe.css?v=whatever')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_data(), b'.probe{width:24px}')
-        # No 404/redirect and no revalidation: any value is accepted and cached immutably.
+        self.assertNotIn('immutable', response.headers.get('Cache-Control') or '')
+        self.assertEqual(response.headers.get('X-Eve-Stale-Asset-Version'), '1')
+
+    def test_the_current_version_still_matches_what_the_templates_emit(self):
+        from flask import url_for
+        self._write(b'.probe{width:24px}')
+        with app.test_request_context('/'):
+            url = url_for('static', filename='probe.css')
+        version = url.split('v=', 1)[1]
+        response = self.client.get(url)
         self.assertIn('immutable', response.headers.get('Cache-Control') or '')
+        self.assertIsNone(response.headers.get('X-Eve-Stale-Asset-Version'))
+        _ = version
 
 
 if __name__ == '__main__':

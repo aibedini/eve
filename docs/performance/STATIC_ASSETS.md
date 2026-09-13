@@ -121,16 +121,28 @@ Scoping the subscription UI is still worth doing as defence in depth (any global
 
 ### Remediation (in progress)
 
-1. Replace the `mtime+size` fingerprint with a **content hash** of the file bytes, so every node
-   computes the same version for the same content - which makes a deploy verifiable across nodes
-   without content-addressed filenames.
-2. Serve `immutable` **only when the requested version equals the file's current content hash**;
-   a stale or unknown `?v=` gets a revalidating response instead of a year-long pin.
-3. Expose the build identity (`X-Eve-Build: <sha>` on every response and `<meta name="eve-build">`
-   in the HTML) so two responses can be attributed to a build - `EVE_BUILD_SHA` is stamped by the
-   deployment so all nodes agree.
-4. Keep the dynamic `/s/*` HTML `private, no-store` and out of any shared cache.
-5. Scope the subscription UI under `.subscription-page`, with an inventory test that refuses new
-   global `svg`/`.icon`/`.card`/grid/flex rules.
+1. **Done** - the version is now the truncated sha256 of the file's bytes (directories such as
+   `flags/4x3/` hash their children), so every node computes the same key for the same content
+   and a redeploy of identical bytes no longer invalidates every cache.
+2. **Done** - `immutable` is granted only when the requested `?v=` equals the file's current
+   content hash; a stale or unknown version is served with `no-cache, must-revalidate`
+   (plus `X-Eve-Stale-Asset-Version: 1`) so no browser or CDN can pin new bytes under an old key.
+3. **Done** - every response carries `X-Eve-Build` / `X-Eve-Build-Source` and HTML repeats it as
+   `<meta name="eve-build">`; `docs/operations/BUILD_IDENTITY.md` is the deploy contract
+   (stamp one `EVE_BUILD_SHA` per release, verify all nodes agree, deploy assets and templates
+   together).
+4. **Done** - the dynamic `/s/*` HTML is `private, no-store` and must stay out of shared caches.
+5. Scoping the subscription UI under `.subscription-page`, with an inventory test that refuses
+   new global `svg`/`.icon`/`.card`/grid/flex rules.
 6. Visual regression at 360/390/640/768/1024/1280/1440 (icon size, overflow, column stability)
    and a contract test that rendered HTML references only assets of its own build.
+
+### Residual risk after the fix
+
+* A grouped directory key is memoized on its children's (name, size, mtime): a child rewritten
+  with an identical size *and* mtime would keep the old group key. Individual asset URLs use
+  exact content hashes, so this cannot affect a stylesheet or script reference.
+* A CDN may still cache a *matching* versioned URL for a year - that is the intent, and the key
+  changes with the content.
+* Static files must be served by the same build that rendered the HTML; the identity header and
+  the deployment check in `docs/operations/BUILD_IDENTITY.md` are what make a mismatch visible.

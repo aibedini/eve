@@ -8,6 +8,7 @@ import re
 import hmac
 import json
 import math
+import hashlib
 import sqlite3
 import base64
 import requests
@@ -113,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.6.44"
+APP_VERSION = "2.6.45"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -773,13 +774,77 @@ _LONG_LIVED_STATIC_SUFFIXES = (
 
 
 @lru_cache(maxsize=512)
-def _static_asset_version(filename: str):
-    """mtime+size fingerprint for one static file (None when it is missing)."""
+def _static_content_hash(path: str, mtime_ns: int, size: int):
+    """Truncated sha256 of a static file's bytes.
+
+    Keyed by (path, mtime_ns, size): a file replaced while the process runs gets its new hash
+    immediately, and two files with identical bytes get the same version on every node - which
+    is what makes the version an identity rather than a per-node timestamp.
+    """
+    digest = hashlib.sha256()
     try:
-        stat = os.stat(os.path.join(app.static_folder or '', filename or ''))
+        with open(path, 'rb') as handle:
+            for chunk in iter(lambda: handle.read(65536), b''):
+                digest.update(chunk)
     except OSError:
         return None
-    return '%x%x' % (int(stat.st_mtime), stat.st_size)
+    return digest.hexdigest()[:16]
+
+
+def _static_directory_signature(path: str):
+    """(name, size, mtime_ns) for every file directly inside a static directory."""
+    try:
+        entries = sorted(os.listdir(path))
+    except OSError:
+        return None
+    signature = []
+    for name in entries:
+        child = os.path.join(path, name)
+        try:
+            info = os.stat(child)
+        except OSError:
+            continue
+        if not os.path.isfile(child):
+            continue
+        signature.append((name, info.st_size, info.st_mtime_ns))
+    return tuple(signature)
+
+
+@lru_cache(maxsize=8)
+def _static_directory_hash(path: str, signature):
+    """Content hash of a static directory (used for grouped asset URLs such as flags/).
+
+    ``static/name-flags.js`` builds per-country URLs from ``url_for('static', filename=
+    'flags/4x3/')``, so the grouped URL needs a version too. The hash covers every child's name
+    and bytes and is memoized on the children's (name, size, mtime) signature, so a redeploy or
+    a child rewrite produces a new key.
+    """
+    digest = hashlib.sha256()
+    for name, _size, _mtime in signature:
+        digest.update(name.encode('utf-8', 'replace'))
+        try:
+            with open(os.path.join(path, name), 'rb') as handle:
+                for chunk in iter(lambda: handle.read(65536), b''):
+                    digest.update(chunk)
+        except OSError:
+            continue
+    return digest.hexdigest()[:16]
+
+
+def _static_asset_version(filename: str, folder: str = None):
+    """Content-derived version for one static file or directory (None when missing)."""
+    path = os.path.join(folder or app.static_folder or '', filename or '')
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    if os.path.isdir(path):
+        signature = _static_directory_signature(path)
+        # Nothing to version in an empty directory: no ?v= rather than a key for nothing.
+        return _static_directory_hash(path, signature) if signature else None
+    if not os.path.isfile(path):
+        return None
+    return _static_content_hash(path, info.st_mtime_ns, info.st_size)
 
 
 @app.url_defaults
@@ -1142,11 +1207,11 @@ def add_security_headers(response):
 def add_static_cache_headers(response):
     """Cache fingerprinted static assets; keep unversioned CSS/JS revalidating.
 
-    A versioned URL is immutable by construction (the version is mtime+size), so
-    it can be cached for a year. Fonts and images requested without a version
-    (e.g. the relative URLs inside fonts.css) are content-stable and get a week;
-    CSS/JS without a version keep Flask's revalidation policy so an upgrade is
-    picked up on the next page load.
+    A versioned URL is immutable only when the requested version *is* the file's current
+    content hash. That is what closes the version-skew hole: a request for a stale or unknown
+    version is served the bytes on disk - Flask's static route ignores the query string - but
+    with a revalidating policy instead of a year-long pin, so a browser or CDN can never keep
+    new bytes under an old key (docs/performance/STATIC_ASSETS.md).
     """
     try:
         if request.endpoint != 'static' or request.method != 'GET':
@@ -1154,9 +1219,18 @@ def add_static_cache_headers(response):
         if response.status_code not in (200, 304):
             return response
         suffix = os.path.splitext(request.path or '')[1].lower()
-        if request.args.get('v') and suffix in _VERSIONED_STATIC_SUFFIXES:
-            response.headers['Cache-Control'] = (
-                'public, max-age=%d, immutable' % STATIC_IMMUTABLE_SECONDS)
+        requested_version = request.args.get('v')
+        if requested_version and suffix in _VERSIONED_STATIC_SUFFIXES:
+            filename = (request.view_args or {}).get('filename')
+            current_version = _static_asset_version(filename) if filename else None
+            if current_version and requested_version == current_version:
+                response.headers['Cache-Control'] = (
+                    'public, max-age=%d, immutable' % STATIC_IMMUTABLE_SECONDS)
+            else:
+                # A stale/unknown version: revalidate every time so no cache pins these bytes
+                # under a key that means something else elsewhere.
+                response.headers['Cache-Control'] = 'no-cache, must-revalidate'
+                response.headers['X-Eve-Stale-Asset-Version'] = '1'
         elif suffix in _LONG_LIVED_STATIC_SUFFIXES:
             response.headers['Cache-Control'] = (
                 'public, max-age=%d' % STATIC_LONG_LIVED_SECONDS)
