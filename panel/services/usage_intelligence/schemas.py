@@ -256,6 +256,9 @@ class PackageChoice:
     package_price: int = 0
     capacity_limited: bool = False
     capacity_shortfall_gb: float = 0.0
+    unlimited: bool = False
+    required_gb: float = 0.0
+    reason: str = ''
 
     def to_dict(self) -> dict:
         return asdict(self)

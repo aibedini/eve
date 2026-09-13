@@ -32,11 +32,16 @@ from panel.services.usage_intelligence.events import (  # noqa: F401
     record_renewal_event,
     record_verified_renewal,
 )
+from panel.services.usage_intelligence.packages import (  # noqa: F401
+    required_for,
+    select_packages,
+)
 from panel.services.usage_intelligence.schemas import (  # noqa: F401
     MODEL_VERSION,
     ConfidenceMetrics,
     CycleMetrics,
     ForecastMetrics,
+    PackageChoice,
     Signals,
     TrendMetrics,
     WindowMetrics,
@@ -77,4 +82,7 @@ __all__ = [
     'detect_trend',
     'trend_thresholds_for',
     'trend_weight',
+    'PackageChoice',
+    'required_for',
+    'select_packages',
 ]
