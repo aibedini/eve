@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "consumer": "eve",
   "projectKeyDefaults": {
     "scopes": [
@@ -115,18 +115,25 @@
     "fields": {
       "requestId": "string",
       "jobId": "string|integer",
-      "status": "sent|completed|unverified|failed|cancelled|duplicate_suppressed",
+      "status": "sent|completed|unverified|failed|cancelled|superseded|duplicate_suppressed",
       "statusUrl": "string (relative to the gateway origin)",
       "terminal": "boolean",
       "successful": "boolean",
-      "retryAfterSeconds": "integer"
+      "retryAfterSeconds": "integer",
+      "superseded": "boolean - a lifecycle invalidation made this notification stale"
     },
     "terminalStatuses": [
       "sent",
       "completed",
       "unverified",
       "failed",
-      "cancelled"
+      "cancelled",
+      "superseded"
+    ],
+    "nonBillableTerminalStatuses": [
+      "cancelled",
+      "superseded",
+      "suppressed"
     ]
   },
   "capacityResponse": {
@@ -194,6 +201,52 @@
       "alreadyTerminal": 0
     }
   },
+  "gateway": {
+    "description": "Android device bridge (transport=android, pull mode). Authenticated with the gateway device key.",
+    "pull": {
+      "method": "GET",
+      "path": "/gateway/pull",
+      "taskFields": ["requestId", "to", "text", "priority", "meta"],
+      "metaIsNullForLegacySends": true,
+      "revokedTasksAreNeverOffered": true
+    },
+    "validate": {
+      "method": "POST",
+      "path": "/gateway/validate",
+      "request": { "requestId": "string" },
+      "validResponse": { "valid": true, "status": "valid", "reason": null },
+      "supersededResponse": { "valid": false, "status": "superseded", "reason": "renewed" },
+      "terminalResponse": { "valid": false, "status": "terminal", "reason": "sent" },
+      "unknownIdResponse": { "valid": true, "status": "valid", "reason": null, "known": false },
+      "leaksTaskMetadata": false,
+      "calledBefore": "submitting the task to the modem"
+    },
+    "ack": {
+      "method": "POST",
+      "path": "/gateway/ack",
+      "outcomes": ["sent", "failed", "superseded"],
+      "legacyBodySupported": "{requestId, ok} - outcome is derived from ok when omitted",
+      "supersededSemantics": [
+        "terminal",
+        "not successful",
+        "not billable",
+        "not retryable",
+        "not a gateway/device failure"
+      ],
+      "lateRealSendIsAuditedAs": "sent_after_revocation"
+    }
+  },
+  "lifecycleMetrics": [
+    "sms_invalidations_total",
+    "sms_jobs_superseded_total",
+    "sms_inflight_revoked_total",
+    "sms_sent_after_revocation_total",
+    "sms_validation_requests_total",
+    "sms_validation_invalid_total",
+    "sms_stale_generation_rejections_total",
+    "sms_queue_removal_failures_total"
+  ],
+  "metricsEndpoint": "GET /admin/overview (master token) -> metrics",
   "errorResponse": {
     "fields": [
       "error",

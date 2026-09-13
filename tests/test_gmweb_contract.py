@@ -96,10 +96,20 @@ class FakeGateway:
 
 
 class ContractFileTests(unittest.TestCase):
+    def test_the_lifecycle_metric_names_are_declared(self):
+        """The gateway publishes these; EVE's dashboards read them by exact name."""
+        metrics = gmweb_contract.load_contract()["lifecycleMetrics"]
+        self.assertIn("sms_invalidations_total", metrics)
+        self.assertIn("sms_stale_generation_rejections_total", metrics)
+        self.assertIn("sms_sent_after_revocation_total", metrics)
+
     def test_the_contract_declares_the_version_scopes_and_endpoints(self):
         contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
         self.assertEqual(contract["consumer"], "eve")
-        self.assertEqual(contract["version"], 2)
+        # v3 adds the Android-bridge block and the lifecycle metric names on top
+        # of the v2 invalidation surface; the consumer reads paths from the file,
+        # so the only thing that must move is this expectation.
+        self.assertEqual(contract["version"], 3)
         self.assertEqual(contract["projectKeyDefaults"]["scopes"],
                          ["sms.send", "sms.status", "sms.cancel", "sms.capacity",
                           "sms.invalidate"])
@@ -122,7 +132,7 @@ class ContractFileTests(unittest.TestCase):
             self.assertNotIn(literal, source, literal)
 
     def test_declared_scopes_are_exposed_by_the_module(self):
-        self.assertEqual(gmweb_contract.contract_version(), 2)
+        self.assertEqual(gmweb_contract.contract_version(), 3)
         self.assertEqual(gmweb_contract.declared_scopes(),
                          ["sms.send", "sms.status", "sms.cancel", "sms.capacity",
                           "sms.invalidate"])

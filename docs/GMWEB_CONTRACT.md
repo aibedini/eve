@@ -1,7 +1,9 @@
 # GMweb gateway contract
 
 The consumer side of the SMS gateway integration is defined by
-`shared/eve-gmweb-contract-v1.json` (contract version 2).
+`shared/eve-gmweb-contract-v1.json` (contract version 3). The file is
+byte-identical to the gateway's own copy of the same name, so the two sides
+cannot drift silently.
 `panel/services/gmweb_contract.py` is the only code that reads it, so endpoint
 paths, URL rules and request headers cannot drift from the declaration: a
 mismatch fails `tests/test_gmweb_contract.py` instead of failing a send in
@@ -145,12 +147,35 @@ stays on the configured gateway origin; otherwise it falls back to the declared
 `/send/status/{requestId}` path. That keeps a compromised or mistaken gateway
 response from turning the status worker into a general-purpose URL fetcher.
 
+## Revocation is durable on the gateway side
+
+The gateway does not merely delete a queued row. A revoked task becomes
+**superseded**: terminal, not successful, not billable, not retryable, and not
+counted as a gateway failure. The Android bridge answers `status:"superseded"`
+from `POST /gateway/validate` before the modem is ever touched, so a reminder
+that a renewal invalidated cannot be delivered by a device that was mid-download
+when the invalidation landed.
+
+The one thing physics forbids is un-sending: if a revoked task reports a *real*
+submission, the physical outcome wins and the gateway records
+`sent_after_revocation` instead of pretending it was cancelled. EVE treats that
+row as sent, which is the honest reading.
+
+Observable counters (declared as `lifecycleMetrics`, exposed by
+`GET /admin/overview` with the master token): `sms_invalidations_total`,
+`sms_jobs_superseded_total`, `sms_inflight_revoked_total`,
+`sms_sent_after_revocation_total`, `sms_validation_requests_total`,
+`sms_validation_invalid_total`, `sms_stale_generation_rejections_total`,
+`sms_queue_removal_failures_total`. The last one — stale-generation rejections —
+is the signal that a renewal's invalidation arrived out of order, which is
+should-never-happen rather than routine.
+
 ## Verification
 
 `tests/test_gmweb_contract.py` runs the real client functions against a local
 fake gateway and asserts the wire contract:
 
-* the contract file declares version 2, the five scopes and the six endpoints,
+* the contract file declares version 3, the five scopes and the six endpoints,
   and `messaging.py` no longer hardcodes any of the paths;
 * URL validation accepts https and local http, warns on remote http, and refuses
   non-http schemes, credentials, missing hosts and query/fragment URLs;
