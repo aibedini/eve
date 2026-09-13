@@ -22,7 +22,7 @@ BYTES_PER_GB = float(1024 ** 3)
 
 
 def build_current_cycle(server_id, sub_id, *, now=None, live_usage=None,
-                        boundary=None, daily_rows=None) -> CycleMetrics:
+                        boundary=None, daily_rows=None, evidence=None) -> CycleMetrics:
     """Metrics for the cycle that started at the latest verified boundary."""
     moment = now or datetime.utcnow()
     if boundary is None:
@@ -41,7 +41,8 @@ def build_current_cycle(server_id, sub_id, *, now=None, live_usage=None,
     effective_days = max(elapsed_days, MIN_EFFECTIVE_ELAPSED_DAYS)
 
     usage = usage_metrics.cycle_usage(
-        server_id, sub_id, boundary, live_usage=live_usage, daily_rows=daily_rows)
+        server_id, sub_id, boundary, live_usage=live_usage, daily_rows=daily_rows,
+        evidence=evidence)
     usage_bytes = max(0, int(usage.get('usage_bytes') or 0))
 
     rate = (usage_bytes / BYTES_PER_GB) / effective_days if effective_days > 0 else 0.0
@@ -65,16 +66,18 @@ def build_current_cycle(server_id, sub_id, *, now=None, live_usage=None,
 
 
 def build_rolling_window(server_id, sub_id, *, now=None, window_days=ROLLING_WINDOW_DAYS,
-                         live_usage=None) -> WindowMetrics:
+                         live_usage=None, evidence=None) -> WindowMetrics:
     """The rolling window: kept as evidence, no longer the only basis (section 13)."""
     return usage_metrics.load_rolling_window(
-        server_id, sub_id, now=now, window_days=window_days, live_usage=live_usage)
+        server_id, sub_id, now=now, window_days=window_days, live_usage=live_usage,
+        evidence=evidence)
 
 
-def build_historical_baseline(server_id, sub_id, *, cycle_start, window_days=ROLLING_WINDOW_DAYS
-                              ) -> WindowMetrics:
+def build_historical_baseline(server_id, sub_id, *, cycle_start, window_days=ROLLING_WINDOW_DAYS,
+                              evidence=None) -> WindowMetrics:
     """The 31 days before the cycle started, when there is a cycle to compare with."""
     if cycle_start is None:
         return WindowMetrics(available=False, label='baseline')
     return usage_metrics.load_baseline_window(
-        server_id, sub_id, cycle_start=cycle_start, window_days=window_days)
+        server_id, sub_id, cycle_start=cycle_start, window_days=window_days,
+        evidence=evidence)
