@@ -331,13 +331,21 @@
             inset-block-start: auto !important;
             inset-inline-start: 50% !important;
             transform: translateX(-50%) !important;
-            width: 100% !important;
+            width: min(100%, 32rem) !important;
             max-width: 32rem !important;
+            box-sizing: border-box !important;
             display: grid !important;
             grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
             align-items: end !important;
             z-index: 40 !important;
         }
+        @media (min-width: 640px) {
+            .subscription-page .subscription-bottom-nav {
+                inset-block-end: 16px !important;
+                border-radius: 20px;
+            }
+        }
+        .subscription-page { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important; }
     </style>
     {% if active_online_chat_script %}
     {{ active_online_chat_script | safe }}
@@ -407,7 +415,7 @@
         {% set has_support = support.whatsapp or support.telegram %}
         <div id="sec-renew" class="bg-card rounded-lg border border-border shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]{% if needs_renewal %} renew-highlight{% endif %}">
             <!-- Header row — always visible, acts as toggle when collapsed -->
-            <button type="button" id="renew-toggle-btn" onclick="toggleRenewSection()"
+            <button type="button" id="renew-toggle-btn" aria-expanded="{{ 'true' if needs_renewal else 'false' }}" onclick="toggleRenewSection()"
                     style="width:100%; display:flex; align-items:center; justify-content:space-between; padding:16px 20px; background:none; border:none; cursor:pointer; gap:10px;">
                 <span style="display:flex; align-items:center; gap:8px; font-weight:600; color:{% if needs_renewal %}#a5b4fc{% else %}rgba(255,255,255,0.85){% endif %}; font-size:0.95rem;">
                     <svg xmlns="http://www.w3.org/2000/svg" style="width:18px;height:18px;flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z"/></svg>
@@ -417,7 +425,7 @@
             </button>
 
             <!-- Collapsible body -->
-            <div id="renew-body" style="overflow:hidden; transition:max-height .35s cubic-bezier(0.4,0,0.2,1); max-height:{% if needs_renewal %}2000px{% else %}0{% endif %};">
+            <div id="renew-body" data-open="{{ 'true' if needs_renewal else 'false' }}" style="overflow:hidden; transition:max-height .35s cubic-bezier(0.4,0,0.2,1); max-height:{% if needs_renewal %}2000px{% else %}0{% endif %};">
                 <div style="padding:0 20px 20px; border-top:1px solid rgba(255,255,255,0.06);">
                     <p style="font-size:0.78rem; color:rgba(148,163,184,0.85); margin:12px 0 14px;">
                         {% if has_support %}
@@ -1312,10 +1320,21 @@
         function toggleRenewSection(forceOpen) {
             const body  = document.getElementById('renew-body');
             const arrow = document.getElementById('renew-arrow');
+            const button = document.getElementById('renew-toggle-btn');
             if (!body) return;
-            const isOpen = body.style.maxHeight !== '0px' && body.style.maxHeight !== '';
+            const isOpen = body.dataset.open === 'true';
             const open = (forceOpen !== undefined) ? forceOpen : !isOpen;
-            body.style.maxHeight  = open ? (body.scrollHeight + 40) + 'px' : '0px';
+            body.dataset.open = open ? 'true' : 'false';
+            if (button) button.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) {
+                requestAnimationFrame(() => {
+                    if (body.dataset.open === 'true') {
+                        body.style.maxHeight = body.scrollHeight + 'px';
+                    }
+                });
+            } else {
+                body.style.maxHeight = '0px';
+            }
             if (arrow) arrow.style.transform = open ? 'rotate(180deg)' : 'rotate(0deg)';
         }
 
@@ -1324,7 +1343,7 @@
             if (!el) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
             // Open accordion first (so scrollHeight is correct), then scroll.
             toggleRenewSection(true);
-            setTimeout(() => pwaScrollTo('sec-renew'), 40);
+            requestAnimationFrame(() => requestAnimationFrame(() => pwaScrollTo('sec-renew')));
         }
 
         function pwaOpenConfig() {
