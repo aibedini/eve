@@ -163,6 +163,12 @@ def rows_in_window(rows, *, since=None, until=None):
     return selected
 
 
+def daily_totals(rows, *, since=None, until=None):
+    """Per-day usage in GB for the rows in a window (robust bounds + variance)."""
+    return [_row_total(row) / BYTES_PER_GB
+            for row in rows_in_window(rows, since=since, until=until)]
+
+
 def window_metrics(rows, evidence, *, since=None, until=None, window_days=31,
                    live_usage=None, label='', include_live=True) -> WindowMetrics:
     """A bounded window's rate and 31-day projection, from already-loaded evidence."""

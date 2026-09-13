@@ -247,6 +247,68 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
                                                packages: list[dict], *,
                                                terminal: bool = False,
                                                live_usage: dict | None = None) -> dict | None:
+    """Dispatch between usage-fit-v5 and the v4 fallback (RFP sections 54-57).
+
+    ``EVE_USAGE_RECOMMENDATION_V5`` (or the ``usage_recommendation_v5`` system setting)
+    selects off / shadow / on. Shadow computes v5 beside v4, logs the comparison without
+    PII, and still answers with v4, so the model can be validated on production traffic
+    before it decides anything. When v5 has nothing to recommend (no usage evidence at all)
+    the v4 path answers, which keeps the "zero usage" policy in one place.
+    """
+    from panel.services.usage_intelligence.recommendation import (
+        build_recommendation_v5, recommendation_mode,
+    )
+    mode = recommendation_mode()
+    if mode == 'on':
+        try:
+            result = build_recommendation_v5(
+                server_id, sub_id, packages, live_usage=live_usage, terminal=terminal)
+        except Exception as exc:
+            from app import app  # deferred: Flask instance lives in app.py
+            app.logger.warning('usage-fit-v5 failed; falling back to v4: %s', exc)
+            result = None
+        if result is not None:
+            return result
+        return _build_recommendation_v4(
+            server_id, sub_id, packages, terminal=terminal, live_usage=live_usage)
+
+    v4 = _build_recommendation_v4(
+        server_id, sub_id, packages, terminal=terminal, live_usage=live_usage)
+    if mode == 'shadow':
+        _shadow_compare_v5(server_id, sub_id, packages, v4,
+                           live_usage=live_usage, terminal=terminal)
+    return v4
+
+
+def _shadow_compare_v5(server_id, sub_id, packages, v4, *, live_usage=None,
+                       terminal=False):
+    """Log the v4/v5 difference for validation, without PII and without raising."""
+    try:
+        from app import app  # deferred: Flask instance lives in app.py
+        from panel.services.usage_intelligence.recommendation import (
+            build_recommendation_v5,
+        )
+        v5 = build_recommendation_v5(
+            server_id, sub_id, packages, live_usage=live_usage, terminal=terminal)
+    except Exception as exc:
+        try:
+            from app import app
+            app.logger.warning('usage-fit-v5 shadow evaluation failed: %s', exc)
+        except Exception:
+            pass
+        return None
+    try:
+        from panel.services.usage_intelligence.shadow import record_shadow_comparison
+        record_shadow_comparison(server_id, sub_id, v4, v5)
+    except Exception:
+        pass
+    return v5
+
+
+def _build_recommendation_v4(server_id: int, sub_id: str,
+                             packages: list[dict], *,
+                             terminal: bool = False,
+                             live_usage: dict | None = None) -> dict | None:
     """Build an explainable, uncertainty-aware 31-day usage recommendation.
 
     Daily deltas from the last 31 days are the authoritative rate evidence.
@@ -403,8 +465,13 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
         'basis_days': round(basis_days, 1),
         'covered_days': covered_dates,
         'confidence': confidence,
+        # v5 exposes confidence as {data, behavior_stability}; this label keeps existing
+        # templates working during the transition (RFP section 25).
+        'confidence_label': confidence,
         'safety_margin_percent': int(round(safety_margin * 100)),
         'source': source,
+        'forecast_basis': ('rolling_history' if source == 'last_31_days'
+                           else 'live_fallback'),
         'fast_cycle': bool(source == 'live_counter' and terminal and basis_days <= 7),
         'capacity_limited': capacity_limited,
         'capacity_shortfall_gb': round(max(0.0, projected_31d_gb - selected_volume), 1) if capacity_limited else 0,

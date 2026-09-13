@@ -36,6 +36,20 @@ from panel.services.usage_intelligence.packages import (  # noqa: F401
     required_for,
     select_packages,
 )
+from panel.services.usage_intelligence.recommendation import (  # noqa: F401
+    build_recommendation_v5,
+    recommendation_mode,
+)
+from panel.services.usage_intelligence.shadow import (  # noqa: F401
+    record_shadow_comparison,
+    reset_shadow_metrics,
+    shadow_metrics,
+)
+from panel.services.usage_intelligence.confidence import (  # noqa: F401
+    assess_behavior_stability,
+    assess_confidence,
+    assess_data_confidence,
+)
 from panel.services.usage_intelligence.schemas import (  # noqa: F401
     MODEL_VERSION,
     ConfidenceMetrics,
@@ -85,4 +99,12 @@ __all__ = [
     'PackageChoice',
     'required_for',
     'select_packages',
+    'assess_behavior_stability',
+    'assess_confidence',
+    'assess_data_confidence',
+    'build_recommendation_v5',
+    'recommendation_mode',
+    'record_shadow_comparison',
+    'reset_shadow_metrics',
+    'shadow_metrics',
 ]

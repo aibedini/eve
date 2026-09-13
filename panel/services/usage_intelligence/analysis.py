@@ -60,6 +60,9 @@ class UsageContext:
     baseline: WindowMetrics = field(default_factory=WindowMetrics)
     signals: Signals = field(default_factory=Signals)
     queries: int = 0
+    cycle_daily_gb: tuple = ()
+    rolling_daily_gb: tuple = ()
+    baseline_daily_gb: tuple = ()
 
     @property
     def has_cycle(self) -> bool:
@@ -99,6 +102,31 @@ def estimate_expected_duration_days(boundary, *, fallback=ROLLING_WINDOW_DAYS):
     return float(fallback) if fallback else None
 
 
+def available_volume_bytes(boundary):
+    """The volume this cycle actually offers: granted + carried over (RFP section 9).
+
+    A renewal that carries 10GB over a 50GB purchase offers 60GB of usable quota while the
+    panel cap may read 100GB (Eve keeps the used counters). Exhaustion must be measured
+    against what was available, never against a number that already includes spent traffic.
+    """
+    if boundary is None:
+        return None
+    granted = getattr(boundary, 'granted_volume_bytes', None)
+    carried = getattr(boundary, 'carried_over_bytes', None)
+    new_limit = getattr(boundary, 'new_volume_limit_bytes', None)
+    try:
+        if granted is not None and int(granted) > 0:
+            return int(granted) + max(0, int(carried or 0))
+    except (TypeError, ValueError):
+        pass
+    try:
+        if new_limit:
+            return int(new_limit)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def _exhaustion_signals(cycle: CycleMetrics, boundary, *, expected_days,
                         limit_bytes) -> dict:
     """Has the quota run out well before its expected duration? (RFP sections 16, 29)."""
@@ -108,8 +136,8 @@ def _exhaustion_signals(cycle: CycleMetrics, boundary, *, expected_days,
     limit = None
     if limit_bytes:
         limit = int(limit_bytes)
-    elif boundary is not None and getattr(boundary, 'new_volume_limit_bytes', None):
-        limit = int(boundary.new_volume_limit_bytes)
+    else:
+        limit = available_volume_bytes(boundary)
     unlimited = bool(getattr(boundary, 'is_unlimited_volume', False)) or limit == 0
     if unlimited or not limit or limit <= 0:
         return signals
@@ -173,6 +201,12 @@ def load_usage_context(server_id, sub_id, *, now=None, live_usage=None,
         telemetry_age_seconds=age,
         expected_duration_days=(round(expected_days, 2) if expected_days else None),
     )
+    cycle_series = usage_metrics.daily_totals(evidence.rows, since=cycle.started_at) \
+        if cycle.available else []
+    rolling_series = usage_metrics.daily_totals(evidence.rows, since=rolling_start)
+    baseline_series = (usage_metrics.daily_totals(evidence.rows, since=baseline_start,
+                                                  until=cycle_start)
+                       if cycle.available else [])
     return UsageContext(
         server_id=int(server_id),
         sub_id=str(sub_id),
@@ -183,4 +217,7 @@ def load_usage_context(server_id, sub_id, *, now=None, live_usage=None,
         baseline=baseline,
         signals=signals,
         queries=int(counter['count']),
+        cycle_daily_gb=tuple(cycle_series),
+        rolling_daily_gb=tuple(rolling_series),
+        baseline_daily_gb=tuple(baseline_series),
     )
