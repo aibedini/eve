@@ -18,6 +18,13 @@ from panel.services.usage_intelligence.cycles import (  # noqa: F401
     build_historical_baseline,
     build_rolling_window,
 )
+from panel.services.usage_intelligence.forecast import (  # noqa: F401
+    daily_series_stats,
+    forecast_usage,
+    robust_cap,
+    robust_rate,
+    safety_margin_for,
+)
 from panel.services.usage_intelligence.events import (  # noqa: F401
     has_recent_cycle_boundary,
     latest_cycle_boundary,
@@ -61,7 +68,12 @@ __all__ = [
     'record_inferred_reset',
     'record_renewal_event',
     'record_verified_renewal',
+    'daily_series_stats',
     'describe_state',
+    'forecast_usage',
+    'robust_cap',
+    'robust_rate',
+    'safety_margin_for',
     'detect_trend',
     'trend_thresholds_for',
     'trend_weight',
