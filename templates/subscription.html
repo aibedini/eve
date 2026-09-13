@@ -122,7 +122,7 @@
             background: #fff; border-radius: 14px; padding: 14px;
             display: flex; justify-content: center; align-items: center; min-height: 260px;
         }
-        #qr-code-box canvas, #qr-code-box img { width: 240px !important; height: 240px !important; }
+        .subscription-page #qr-code-box canvas, .subscription-page #qr-code-box img { width: 240px !important; height: 240px !important; }
         .qr-value-preview { direction:ltr; text-align:left; max-height:70px; overflow:auto; }
         /* Renewal package cards (minimal square, like app selection) */
         .pkg-renew-grid {
@@ -245,8 +245,8 @@
         }
         .pwa-nav-item:hover { color: rgba(226,232,240,0.95); }
         .pwa-nav-item.active { color: #818cf8; font-weight: 700; transform: scale(1.18); }
-        .pwa-nav-item svg { width: 21px; height: 21px; flex-shrink: 0; transition: stroke-width .25s ease; }
-        .pwa-nav-item.active svg { stroke-width: 2.5; }
+        .subscription-page .pwa-nav-item svg { width: 21px; height: 21px; flex-shrink: 0; transition: stroke-width .25s ease; }
+        .subscription-page .pwa-nav-item.active svg { stroke-width: 2.5; }
         /* Reliable scroll landing under the (top-free) layout */
         #sec-usage, #sec-renew, #sec-faq, #sec-config { scroll-margin-top: 14px; }
         .pwa-nav-fab {
@@ -261,7 +261,7 @@
             border: 3px solid #0B1121; transition: transform .15s;
         }
         .pwa-nav-fab:hover .fab-circle { transform: scale(1.06); }
-        .pwa-nav-fab .fab-circle svg { width: 25px; height: 25px; color: #fff; }
+        .subscription-page .pwa-nav-fab .fab-circle svg { width: 25px; height: 25px; color: #fff; }
         .pwa-nav-fab span { font-size: 10px; color: #a5b4fc; font-weight: 700; }
 
         /* ── Support bottom sheet ────────────────────────────────────────── */
@@ -299,15 +299,35 @@
         }
         .ann-btn:hover { background: rgba(99,102,241,0.32); border-color: rgba(99,102,241,0.6); color: #c7d2fe; }
         /* Announcement media (images / videos) stay within container */
-        .ann-media img, .ann-media video {
+        .subscription-page .ann-media img, .subscription-page .ann-media video {
             max-width: 100%; border-radius: 10px; margin-top: 10px; display: block;
         }
+    </style>
+    <style nonce="{{ csp_nonce }}">
+        /* Subscription icon geometry is owned by this page, scoped under .subscription-page.
+           A bare <svg> with no width/height and no utility class falls back to the replaced
+           element's intrinsic size (300x150 in browsers) - which is exactly how "the Support
+           and QR icons became huge" looks. A global rule must never be the thing that sizes
+           them, and no other page's stylesheet may reach these selectors. Width/height only:
+           the page's SVGs declare their own fill/stroke as attributes (the brand glyphs are
+           solid `fill="currentColor"`), so forcing fill:none here would erase them. */
+        .subscription-page .pwa-nav-item svg { width: 22px; height: 22px; }
+        .subscription-page .pwa-nav-fab svg,
+        .subscription-page .fab-circle svg { width: 22px; height: 22px; }
+        .subscription-page .renew-ch-btn svg,
+        .subscription-page .pwa-sheet-btn svg { width: 18px; height: 18px; }
+        .subscription-page #support-sheet svg { width: 18px; height: 18px; }
+        .subscription-page #toast > svg { width: 16px; height: 16px; }
+        .subscription-page #qr-modal svg,
+        .subscription-page .qr-modal-box > svg { width: 20px; height: 20px; }
+        .subscription-page .app-store-btn svg,
+        .subscription-page .store-btn svg { width: 18px; height: 18px; }
     </style>
     {% if active_online_chat_script %}
     {{ active_online_chat_script | safe }}
     {% endif %}
 </head>
-<body class="min-h-screen flex justify-center items-start pt-10 pb-10 px-4 bg-bg font-sans">
+<body class="subscription-page min-h-screen flex justify-center items-start pt-10 pb-10 px-4 bg-bg font-sans">
 
     <div class="w-full max-w-lg space-y-6">
         

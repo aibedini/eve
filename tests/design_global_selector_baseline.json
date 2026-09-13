@@ -1,0 +1,142 @@
+[
+  {
+    "file": "static/style.css",
+    "selector": ".action-icon svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".btn svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".btn-danger svg, .btn-success svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".btn-icon svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".btn-whatsapp .icon, .btn-sms .icon, .btn-danger .icon, .btn-success .icon"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".btn-whatsapp svg, .btn-sms svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".card-grid"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".col-account"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".col-actions"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".col-status"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".country-flag img"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".eve-icon-outline, .action-btn svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".header-controls .btn svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".monitor-action-btn.whatsapp svg, .monitor-action-btn.sms svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".monitor-action-buttons .action-btn.monitor-action-btn svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".monitor-action-buttons .action-btn.monitor-action-btn svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".monitor-compact-row .action-btn svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".monitor-simple-row .action-btn svg"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".qr-body img"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".qr-item img"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".qr-item img"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".qr-item img"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".qr-item img"
+  },
+  {
+    "file": "static/style.css",
+    "selector": ".server-info .panel-type"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".container"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".container"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".container"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".container"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".container"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".container"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".flex"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".flex-1"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": ".grid"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": "audio,canvas,embed,iframe,img,object,svg,video"
+  },
+  {
+    "file": "static/tailwind.generated.css",
+    "selector": "img,video"
+  }
+]
