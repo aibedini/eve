@@ -13,6 +13,11 @@ The RFP's architectural rule, enforced by this package's layout:
 The analytics modules are pure functions over dataclasses so they can be unit tested
 without Flask, the database or a panel (RFP sections 63-65).
 """
+from panel.services.usage_intelligence.cycles import (  # noqa: F401
+    build_current_cycle,
+    build_historical_baseline,
+    build_rolling_window,
+)
 from panel.services.usage_intelligence.events import (  # noqa: F401
     has_recent_cycle_boundary,
     latest_cycle_boundary,
@@ -20,10 +25,33 @@ from panel.services.usage_intelligence.events import (  # noqa: F401
     record_renewal_event,
     record_verified_renewal,
 )
+from panel.services.usage_intelligence.schemas import (  # noqa: F401
+    MODEL_VERSION,
+    ConfidenceMetrics,
+    CycleMetrics,
+    ForecastMetrics,
+    Signals,
+    TrendMetrics,
+    WindowMetrics,
+    classify_trend,
+    maturity_for,
+)
 
 __all__ = [
+    'MODEL_VERSION',
+    'ConfidenceMetrics',
+    'CycleMetrics',
+    'ForecastMetrics',
+    'Signals',
+    'TrendMetrics',
+    'WindowMetrics',
+    'build_current_cycle',
+    'build_historical_baseline',
+    'build_rolling_window',
+    'classify_trend',
     'has_recent_cycle_boundary',
     'latest_cycle_boundary',
+    'maturity_for',
     'record_inferred_reset',
     'record_renewal_event',
     'record_verified_renewal',
