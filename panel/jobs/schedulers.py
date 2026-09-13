@@ -54,7 +54,6 @@ from panel.models import (
     HealthLog,
     PulseRun,
     PulseTemplate,
-    RenewalEvent,
     Server,
     SystemMigration,
     SystemSetting,
@@ -63,6 +62,7 @@ from panel.models import (
     UsageHourly,
     get_pulse_settings,
 )
+from panel.services.usage_intelligence import record_inferred_reset
 from panel.services.backup import (
     TELEGRAM_BACKUP_DEFAULT_INTERVAL_MINUTES,
     TELEGRAM_BACKUP_MAX_INTERVAL_MINUTES,
@@ -1130,25 +1130,34 @@ def _usage_delta(current, previous):
     return current - previous if current >= previous else current
 
 
-def _renewal_from_counter_reset(point, now):
+def _inferred_reset_from_counter(point, now):
+    """Record a counter decrease as telemetry, never as a renewal (RFP section 33).
+
+    A counter can move for reasons that are not a commercial renewal at all (one inbound
+    reset, the canonical inbound changing, a panel restart). The collector therefore
+    records an unverified ``inferred_reset`` signal, which the analytics layer ignores as
+    a cycle boundary - only the explicit, verified mutation path opens a cycle. The
+    business-event writer also skips the signal when a verified renewal was recorded
+    moments ago, so one real renewal does not become two events.
+    """
     client = point.get('client') or {}
     try:
         expiry_ts = int(client.get('expiryTimestamp') or client.get('expiryTime') or 0)
     except (TypeError, ValueError):
         expiry_ts = 0
-    days = None
-    unlimited_time = False
+    new_expiry_at = None
+    unlimited_time = expiry_ts == 0
     if expiry_ts > 0:
-        days = max((datetime.utcfromtimestamp(expiry_ts / 1000) - now).days, 0)
-    elif expiry_ts < 0:
-        days = max(int(round(abs(expiry_ts) / 86400000.0)), 0)
-    else:
-        unlimited_time = True
-    return RenewalEvent(
-        server_id=point['server_id'], sub_id=point['sub_id'], renewed_at=now,
-        volume_bytes=point['volume_limit_bytes'], days=days,
+        new_expiry_at = datetime.utcfromtimestamp(expiry_ts / 1000)
+    return record_inferred_reset(
+        server_id=point['server_id'],
+        sub_id=point['sub_id'],
+        client_uuid=str(point.get('client_uuid') or client.get('id') or '') or None,
+        volume_bytes=point['volume_limit_bytes'],
+        new_expiry_at=new_expiry_at,
         is_unlimited_volume=(point['volume_limit_bytes'] is None),
         is_unlimited_time=unlimited_time,
+        renewed_at=now,
     )
 
 
@@ -1175,7 +1184,7 @@ def _collect_usage_rollups():
     states = {(r.server_id, r.sub_id): r for r in UsageCounterState.query.all()}
     hourly = {(r.server_id, r.sub_id): r for r in UsageHourly.query.filter_by(bucket_at=bucket_at).all()}
     daily = {(r.server_id, r.sub_id): r for r in UsageDaily.query.filter_by(usage_date=usage_date).all()}
-    renewal_count = 0
+    reset_signal_count = 0
 
     for key, point in points.items():
         state = states.get(key)
@@ -1196,8 +1205,10 @@ def _collect_usage_rollups():
             delta_down = _usage_delta(point['download_bytes'], state.download_bytes)
             opening_up, opening_down = state.upload_bytes, state.download_bytes
             if point['total_bytes'] < int(state.total_bytes or 0) and int(state.total_bytes or 0) > 0:
-                db.session.add(_renewal_from_counter_reset(point, now))
-                renewal_count += 1
+                # Telemetry signal only: an explicit verified renewal is what opens a
+                # recommendation cycle (RFP sections 5 and 33).
+                if _inferred_reset_from_counter(point, now) is not None:
+                    reset_signal_count += 1
 
         hour = hourly.get(key)
         if hour is None:
@@ -1253,7 +1264,7 @@ def _collect_usage_rollups():
     UsageDaily.query.filter(UsageDaily.usage_date < usage_date - timedelta(days=_USAGE_DAILY_RETENTION_DAYS)).delete(synchronize_session=False)
     UsageCounterState.query.filter(UsageCounterState.observed_at < now - timedelta(days=30)).delete(synchronize_session=False)
     db.session.commit()
-    app.logger.info('[UsageRollup] updated accounts=%s renewals=%s', len(points), renewal_count)
+    app.logger.info('[UsageRollup] updated accounts=%s inferred_resets=%s', len(points), reset_signal_count)
     return True
 
 

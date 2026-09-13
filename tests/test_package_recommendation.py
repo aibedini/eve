@@ -15,6 +15,8 @@ os.environ['DATABASE_URL'] = f"sqlite:///{_DB_FILE.name.replace(os.sep, '/')}"
 os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
+from panel.services.usage_intelligence import latest_cycle_boundary  # noqa: E402
+
 from app import (  # noqa: E402
     Admin,
     BankCard,
@@ -2227,7 +2229,58 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertEqual(recommendation['package_id'], 1)
         self.assertEqual(recommendation['model_version'], 'usage-fit-v4')
 
-    def test_daily_history_is_not_divided_by_a_false_short_renewal_cycle(self):
+    def test_an_unverified_counter_reset_does_not_create_a_current_cycle(self):
+        """RFP 47.A - a counter decrease is telemetry, not a cycle boundary.
+
+        The collector's inferred reset is in the table, yet the recommendation must not
+        treat it as the start of a new cycle: it keeps using the daily history.
+        """
+        server, total_bytes, now = self._seed_daily_history_scenario(
+            renewed_at=datetime.utcnow() - timedelta(days=4),
+            event_type='inferred_reset', source='counter_reset', verified=False)
+
+        self.assertIsNone(latest_cycle_boundary(server.id, 'screenshot-account'))
+
+        recommendation = _build_subscription_package_recommendation(
+            server.id, 'screenshot-account', PACKAGES,
+            live_usage={'total_bytes': total_bytes, 'observed_at': now},
+        )
+        self.assertIsNotNone(recommendation)
+        self.assertEqual(recommendation['source'], 'last_31_days')
+        self.assertEqual(recommendation['basis_days'], 10.0)
+        self.assertAlmostEqual(recommendation['average_daily_gb'], 1.92, places=2)
+        self.assertAlmostEqual(recommendation['projected_31d_gb'], 59.5, places=1)
+
+    def test_a_verified_explicit_renewal_creates_a_current_cycle(self):
+        """RFP 47.B - the verified mutation event IS the current cycle boundary.
+
+        The model contract asserted here is the one the analytics layer reads; the
+        usage-fit-v4 fallback still answers from the daily history until v5 is enabled,
+        which is why the v4 fields are asserted as unchanged.
+        """
+        server, total_bytes, now = self._seed_daily_history_scenario(
+            renewed_at=datetime.utcnow() - timedelta(days=4),
+            event_type='renewal', source='explicit_renew', verified=True,
+            operation_id='op-cycle-b')
+
+        boundary = latest_cycle_boundary(server.id, 'screenshot-account')
+        self.assertIsNotNone(boundary)
+        self.assertTrue(boundary.is_cycle_boundary)
+        self.assertEqual(boundary.operation_id, 'op-cycle-b')
+        self.assertAlmostEqual(
+            (datetime.utcnow() - boundary.renewed_at).total_seconds() / 86400.0, 4.0,
+            places=1)
+
+        recommendation = _build_subscription_package_recommendation(
+            server.id, 'screenshot-account', PACKAGES,
+            live_usage={'total_bytes': total_bytes, 'observed_at': now},
+        )
+        self.assertIsNotNone(recommendation)
+        self.assertEqual(recommendation['model_version'], 'usage-fit-v4')
+
+    def _seed_daily_history_scenario(self, *, renewed_at, event_type, source, verified,
+                                     operation_id=None):
+        """Ten days of daily evidence plus one renewal-ish event for the account."""
         server = Server(
             name='Recommendation Daily Evidence',
             host='https://recommendation-daily.test', username='u', password='p',
@@ -2253,7 +2306,8 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         db.session.add_all(rows + [
             RenewalEvent(
                 server_id=server.id, sub_id='screenshot-account',
-                renewed_at=now - timedelta(days=4),
+                renewed_at=renewed_at, event_type=event_type, source=source,
+                verified=verified, operation_id=operation_id,
             ),
             UsageCounterState(
                 server_id=server.id, sub_id='screenshot-account',
@@ -2262,18 +2316,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             ),
         ])
         db.session.commit()
-
-        recommendation = _build_subscription_package_recommendation(
-            server.id, 'screenshot-account', PACKAGES,
-            live_usage={'total_bytes': total_bytes, 'observed_at': now},
-        )
-
-        self.assertIsNotNone(recommendation)
-        self.assertEqual(recommendation['model_version'], 'usage-fit-v4')
-        self.assertEqual(recommendation['source'], 'last_31_days')
-        self.assertEqual(recommendation['basis_days'], 10.0)
-        self.assertAlmostEqual(recommendation['average_daily_gb'], 1.92, places=2)
-        self.assertAlmostEqual(recommendation['projected_31d_gb'], 59.5, places=1)
+        return server, total_bytes, now
 
     def test_daily_history_endpoint_pages_to_older_rows(self):
         server = Server(

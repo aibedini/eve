@@ -113,7 +113,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.6.29"
+APP_VERSION = "2.6.30"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -5148,7 +5148,7 @@ from panel.jobs.schedulers import (  # noqa: F401
     _coerce_usage_datetime,
     _usage_account_points,
     _usage_delta,
-    _renewal_from_counter_reset,
+    _inferred_reset_from_counter,
     _collect_usage_rollups,
     _take_usage_snapshots,
     _legacy_usage_table_name,
