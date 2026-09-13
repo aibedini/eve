@@ -31,6 +31,20 @@ TREND_THRESHOLDS = (
     ('strong_increase', None),
 )
 
+# A short cycle is noisy evidence, so its thresholds are wider before it may claim a
+# behaviour change (RFP section 15: "confidence-aware" thresholds for early cycles).
+TREND_THRESHOLDS_EARLY = (
+    ('strong_decrease', 0.60),
+    ('decreasing', 0.80),
+    ('stable', 1.25),
+    ('increasing', 1.60),
+    ('strong_increase', None),
+)
+# A short cycle is noisy evidence, so its thresholds are wider before it may claim a
+# behaviour change (RFP section 15: "confidence-aware" thresholds for early cycles). The
+# threshold widens for anything under five days; from five days the standard table applies.
+EARLY_MATURITY = ('insufficient', 'very_early', 'early')
+
 # Exhaustion severity (RFP section 29) by cycle_days / expected_duration.
 EXHAUSTION_CRITICAL_RATIO = 0.35
 EXHAUSTION_HIGH_RATIO = 0.60
@@ -75,7 +89,12 @@ def maturity_for(elapsed_days: float) -> str:
     return 'mature'
 
 
-def classify_trend(ratio) -> str:
+def trend_thresholds_for(maturity: str):
+    """The threshold table a cycle of this maturity is judged against."""
+    return TREND_THRESHOLDS_EARLY if maturity in EARLY_MATURITY else TREND_THRESHOLDS
+
+
+def classify_trend(ratio, *, maturity: str = 'mature') -> str:
     """Ratio of the current cycle rate to the rolling rate (RFP section 15)."""
     if ratio is None:
         return 'unknown'
@@ -83,7 +102,7 @@ def classify_trend(ratio) -> str:
         value = float(ratio)
     except (TypeError, ValueError):
         return 'unknown'
-    for name, limit in TREND_THRESHOLDS:
+    for name, limit in trend_thresholds_for(maturity):
         if limit is None or value < limit:
             return name
     return 'strong_increase'

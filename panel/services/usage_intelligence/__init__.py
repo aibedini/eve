@@ -35,6 +35,12 @@ from panel.services.usage_intelligence.schemas import (  # noqa: F401
     WindowMetrics,
     classify_trend,
     maturity_for,
+    trend_thresholds_for,
+)
+from panel.services.usage_intelligence.trend import (  # noqa: F401
+    describe_state,
+    detect_trend,
+    trend_weight,
 )
 
 __all__ = [
@@ -55,4 +61,8 @@ __all__ = [
     'record_inferred_reset',
     'record_renewal_event',
     'record_verified_renewal',
+    'describe_state',
+    'detect_trend',
+    'trend_thresholds_for',
+    'trend_weight',
 ]
