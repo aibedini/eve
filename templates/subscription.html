@@ -322,6 +322,22 @@
         .subscription-page .qr-modal-box > svg { width: 20px; height: 20px; }
         .subscription-page .app-store-btn svg,
         .subscription-page .store-btn svg { width: 18px; height: 18px; }
+        /* Keep the standalone subscription navigation out of normal document flow.
+           Some deployed Tailwind builds do not retain the generic .pwa-nav rule;
+           without this scoped fallback the five controls render as loose icons. */
+        .subscription-page .subscription-bottom-nav {
+            position: fixed !important;
+            inset-block-end: 0 !important;
+            inset-block-start: auto !important;
+            inset-inline-start: 50% !important;
+            transform: translateX(-50%) !important;
+            width: 100% !important;
+            max-width: 32rem !important;
+            display: grid !important;
+            grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+            align-items: end !important;
+            z-index: 40 !important;
+        }
     </style>
     {% if active_online_chat_script %}
     {{ active_online_chat_script | safe }}
@@ -389,7 +405,6 @@
         {% set needs_renewal = state_tag in ('low', 'soon', 'expired', 'ended') %}
 
         {% set has_support = support.whatsapp or support.telegram %}
-        {% if sub_packages and sub_packages|length %}
         <div id="sec-renew" class="bg-card rounded-lg border border-border shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]{% if needs_renewal %} renew-highlight{% endif %}">
             <!-- Header row — always visible, acts as toggle when collapsed -->
             <button type="button" id="renew-toggle-btn" onclick="toggleRenewSection()"
@@ -496,7 +511,6 @@
                 </div>
             </div>
         </div>
-        {% endif %}
 
         {% if backup_configs and backup_configs|length %}
         {% for bc in backup_configs %}
@@ -904,7 +918,7 @@
     </div>
 
     <!-- PWA bottom navigation -->
-    <nav class="pwa-nav" style="direction: {{ 'rtl' if is_fa else 'ltr' }};">
+    <nav class="pwa-nav subscription-bottom-nav" style="direction: {{ 'rtl' if is_fa else 'ltr' }};">
         <button type="button" class="pwa-nav-item" data-section="sec-guide" onclick="pwaScrollTo('sec-guide')">
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
             <span>{{ 'آموزش و اتصال' if is_fa else 'Guide' }}</span>
