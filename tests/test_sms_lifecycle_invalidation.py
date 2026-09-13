@@ -843,6 +843,32 @@ class OutboxRetryTests(_AppContextTestCase):
         self.assertEqual(status["events"][0]["generation"], 1)
 
     # 10 -- create/renew confirmations are never invalidated.
+
+    def test_invalidation_is_routed_to_the_gmweb_connection(self):
+        "A custom_http relay has no notification ledger to revoke from."
+        cfg = {
+            "provider": "custom_http",
+            "providers": {
+                "gmweb": {"base_url": "https://gw.test",
+                          "api_key": "k"},
+                "custom_http": {"base_url": "https://relay.test",
+                                "api_key": "k2"},
+            },
+        }
+        self.assertEqual(
+            messaging._invalidation_provider("custom_http", cfg), "gmweb")
+        self.assertEqual(
+            messaging._invalidation_provider("gmweb", cfg), "gmweb")
+        # GMweb unconfigured: keep the caller provider so the outbox records a
+        # configuration error instead of posting into the void.
+        bare = {
+            "provider": "custom_http",
+            "providers": {"gmweb": {"base_url": "",
+                          "api_key": ""}},
+        }
+        self.assertEqual(
+            messaging._invalidation_provider("custom_http", bare), "custom_http")
+
     def test_transactional_confirmation_metadata_cannot_be_invalidated(self):
         meta = messaging._transactional_notification_meta(
             "eve:1:uuid-bob", "renew")

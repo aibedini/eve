@@ -536,7 +536,12 @@ def attempt_outbox_event(event_or_id) -> dict:
         _commit_quietly()
         return {'ok': False, 'terminal': False, 'reason': 'gateway_not_configured'}
 
-    provider_cfg = _get_sms_provider_settings(_provider_for_service(cfg, row), cfg)
+    # Lifecycle invalidation is a GMweb-gateway capability: a generic custom_http
+    # relay has no notification ledger to revoke from, so the call is routed to the
+    # GMweb connection even when the service's reminders went out through another
+    # provider.
+    provider_cfg = _get_sms_provider_settings(
+        messaging._invalidation_provider(_provider_for_service(cfg, row), cfg), cfg)
     response = messaging._invalidate_notifications_via_gmweb(payload, provider_cfg)
     status_code = response.get('status_code')
     if response.get('ok'):

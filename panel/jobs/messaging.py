@@ -2702,6 +2702,24 @@ def _stable_sms_idempotency_key(service_key: str, generation, notification_kind:
     return f"eve:{kind}:{gen}:{digest}"[:200]
 
 
+def _invalidation_provider(provider: str | None, cfg: dict) -> str:
+    """Which gateway connection can carry a lifecycle invalidation.
+
+    Only the GMweb gateway implements ``POST /send/invalidate``; a
+    ``custom_http`` provider is a generic SMS relay with no notification
+    ledger, so an invalidation sent there would be a guaranteed 404. Route it to
+    the GMweb connection instead, and fall back to the caller's provider only
+    when GMweb is not configured -- the outbox then records
+    ``gateway_not_configured`` and keeps retrying rather than dropping the
+    invalidation."""
+    providers = cfg.get('providers') if isinstance(cfg.get('providers'), dict) else {}
+    gmweb = providers.get('gmweb') if isinstance(providers.get('gmweb'), dict) else {}
+    if (gmweb.get('base_url') or '').strip() and (gmweb.get('api_key') or '').strip():
+        return 'gmweb'
+    name = str(provider or '').strip().lower()
+    return name if name in ('gmweb', 'custom_http') else 'gmweb'
+
+
 def _invalidate_notifications_via_gmweb(payload: dict, cfg: dict | None = None) -> dict:
     """POST one lifecycle invalidation to the GMweb gateway.
 
