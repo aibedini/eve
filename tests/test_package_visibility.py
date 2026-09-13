@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 _DB_FILE = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 _DB_FILE.close()
@@ -162,6 +163,63 @@ class PackageVisibilityTests(unittest.TestCase):
         names = {p['name'] for p in _build_sub_page_packages(None)}
         self.assertIn('normal', names)
         self.assertNotIn('create-only', names)
+
+    def test_reseller_without_override_inherits_published_allowed_packages(self):
+        reseller = Admin(
+            username='vis-test-reseller-inherit', role='reseller',
+            sub_shown_package_ids='[]',
+        )
+        reseller.set_password('StrongVisibilityPassword123!')
+        db.session.add(reseller)
+        db.session.flush()
+
+        self._package('published-global', scope='global', show_on_sub=True)
+        self._package('unpublished-global', scope='global', show_on_sub=False)
+        self._package(
+            'published-assigned', scope='assigned', show_on_sub=True,
+            assigned_reseller_ids=f'[{reseller.id}]',
+        )
+        self._package(
+            'foreign-assigned', scope='assigned', show_on_sub=True,
+            assigned_reseller_ids='[]',
+        )
+        self._package(
+            'create-only', scope='global', show_on_sub=True,
+            show_on_renew=False,
+        )
+        db.session.commit()
+
+        names = {p['name'] for p in _build_sub_page_packages(reseller)}
+        self.assertEqual({'published-global', 'published-assigned'}, names)
+
+    def test_reseller_override_replaces_inherited_package_selection(self):
+        reseller = Admin(
+            username='vis-test-reseller-override', role='reseller',
+            sub_shown_package_ids='[]',
+        )
+        reseller.set_password('StrongVisibilityPassword123!')
+        db.session.add(reseller)
+        db.session.flush()
+
+        selected = self._package(
+            'selected-unpublished', scope='global', show_on_sub=False,
+        )
+        self._package('published-not-selected', scope='global', show_on_sub=True)
+        db.session.flush()
+        reseller.sub_shown_package_ids = f'[{selected.id}]'
+        db.session.commit()
+
+        names = {p['name'] for p in _build_sub_page_packages(reseller)}
+        self.assertEqual({'selected-unpublished'}, names)
+
+    def test_sub_page_package_query_failure_is_logged_and_propagated(self):
+        failing_query = SimpleNamespace(
+            filter_by=mock.Mock(side_effect=RuntimeError('package query failed')),
+        )
+        with mock.patch.object(Package, 'query', failing_query):
+            with self.assertLogs('panel.services.billing', level='ERROR'):
+                with self.assertRaisesRegex(RuntimeError, 'package query failed'):
+                    _build_sub_page_packages(None)
 
 
 if __name__ == '__main__':

@@ -1,4 +1,5 @@
 """Billing pricing and subscription-package recommendation cluster (extracted from app.py)."""
+import logging
 from datetime import datetime, timedelta
 
 from flask import session
@@ -16,6 +17,8 @@ from panel.models import (
     UsageCounterState,
     UsageDaily,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_reseller_price(user, base_price=None, package=None, cost_type=None):
@@ -63,13 +66,16 @@ def _build_sub_page_packages(owner) -> list[dict]:
 
     - Reseller-owned account: global + packages assigned to that reseller +
       the reseller's own packages, each priced with the reseller's pricing.
+      An empty reseller selection inherits published packages; a non-empty
+      selection is the reseller's explicit override.
     - No reseller (system/admin-managed): only global packages, standard price.
     """
     import json as _j
     try:
         pkgs = Package.query.filter_by(enabled=True).order_by(Package.display_order, Package.id).all()
     except Exception:
-        return []
+        logger.exception("Failed to load subscription-page packages")
+        raise
 
     is_reseller = bool(owner and getattr(owner, 'role', None) == 'reseller')
 
@@ -104,7 +110,16 @@ def _build_sub_page_packages(owner) -> list[dict]:
                     visible = owner.id in ids
                 else:
                     visible = False
-                if not visible or p.id not in shown_ids:
+                if not visible:
+                    continue
+                # An empty list means the reseller has not configured an
+                # override yet. Inherit packages published by the admin until
+                # the reseller explicitly selects a custom set.
+                if shown_ids:
+                    visible = p.id in shown_ids
+                else:
+                    visible = bool(getattr(p, 'show_on_sub', False))
+                if not visible:
                     continue
                 price = calculate_reseller_price(owner, package=p)
         else:

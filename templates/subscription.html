@@ -130,6 +130,10 @@
             grid-template-columns: repeat(2, minmax(0, 1fr)); /* mobile: 2 per row */
             gap: 12px;
         }
+        .pkg-renew-empty {
+            grid-column: 1 / -1; margin: 0; padding: 16px;
+            text-align: center; font-size: 0.78rem; opacity: 0.8;
+        }
         @media (min-width: 640px) {
             .pkg-renew-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } /* desktop: 3 per row */
         }
@@ -327,9 +331,10 @@
            without this scoped fallback the five controls render as loose icons. */
         .subscription-page .subscription-bottom-nav {
             position: fixed !important;
-            inset-block-end: 0 !important;
-            inset-block-start: auto !important;
-            inset-inline-start: 50% !important;
+            left: 50% !important;
+            right: auto !important;
+            bottom: 0 !important;
+            top: auto !important;
             transform: translateX(-50%) !important;
             width: min(100%, 32rem) !important;
             max-width: 32rem !important;
@@ -341,8 +346,8 @@
         }
         @media (min-width: 640px) {
             .subscription-page .subscription-bottom-nav {
-                inset-block-end: 16px !important;
-                border-radius: 20px;
+                bottom: 0 !important;
+                border-radius: 20px 20px 0 0;
             }
         }
         .subscription-page { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important; }
@@ -465,6 +470,10 @@
                             <span class="pkg-renew-cta">{{ 'درخواست تمدید' if is_fa else 'Request Renewal' }}</span>
                             {% endif %}
                         </div>
+                        {% else %}
+                        <p class="pkg-renew-empty">
+                            {{ 'هنوز پکیج تمدیدی منتشر نشده است.' if is_fa else 'No renewal package has been published yet.' }}
+                        </p>
                         {% endfor %}
                     </div>
                     {% if renewal_recommendation %}
