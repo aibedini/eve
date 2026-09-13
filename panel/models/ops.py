@@ -452,6 +452,13 @@ class SmsSendLog(db.Model):
     lifecycle_event_id = db.Column(db.String(128), nullable=True)
     invalidated_at = db.Column(db.DateTime, nullable=True, index=True)
     invalidation_reason = db.Column(db.String(64), nullable=True)
+    # What the gateway itself recorded about a revocation: its terminal outcome
+    # (sent | superseded | cancelled), the reason the consumer gave, and when. The
+    # gateway keeps a revoked reminder queryable as `superseded` instead of
+    # deleting it, so this is what stops the panel showing it as still queued.
+    gateway_outcome = db.Column(db.String(24), nullable=True)
+    revocation_reason = db.Column(db.String(120), nullable=True)
+    revoked_at = db.Column(db.String(64), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -516,6 +523,9 @@ class SmsSendLog(db.Model):
                 self.invalidated_at.isoformat() + 'Z'
                 if self.invalidated_at else None),
             'invalidation_reason': self.invalidation_reason,
+            'gateway_outcome': self.gateway_outcome,
+            'revocation_reason': self.revocation_reason,
+            'revoked_at': self.revoked_at,
             # Stored as naive UTC (datetime.utcnow). Emit an explicit 'Z' so the
             # browser parses it as UTC and can convert to the viewer's timezone
             # (Asia/Tehran) instead of mis-reading it as local time.

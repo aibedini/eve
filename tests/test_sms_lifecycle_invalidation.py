@@ -918,6 +918,94 @@ class OutboxRetryTests(_AppContextTestCase):
         self.assertTrue(logged[-1].service_key)
 
 
+class GatewaySupersededReconciliationTests(_AppContextTestCase):
+    "The gateway revokes a queued reminder as 'superseded', not by deleting it."
+
+    def setUp(self):
+        _push_app_context(self)
+        _drop_session()
+        SmsSendLog.query.delete()
+        db.session.commit()
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        try:
+            SmsSendLog.query.delete()
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        _drop_session()
+
+    def _row(self, status='queued', request_id='send_1', service_key='eve:1:uuid-bob'):
+        row = SmsSendLog(
+            email='bob', server_id=1, state='ended', recipient='0912***567',
+            status=status, request_id=request_id, gateway_provider='gmweb',
+            service_key=service_key, lifecycle_generation=17,
+            terminal=False,
+        )
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    # The exact body GMweb 0.19 returns for a reminder a renewal superseded.
+    def test_a_superseded_reminder_becomes_terminal_and_non_billable(self):
+        row = self._row()
+        body = {
+            'ok': True, 'requestId': 'send_1', 'status': 'superseded',
+            'state': 'superseded', 'superseded': True, 'terminal': True,
+            'successful': False, 'outcome': 'superseded',
+            'revocationReason': 'renewed', 'revokedAt': '2026-09-13T21:00:00.000Z',
+            'serviceKey': 'eve:1:uuid-bob', 'notificationKind': 'volume_ended',
+            'generation': 17, 'requiresValidation': True,
+        }
+        resp = mock.Mock(status_code=200, content=b'{}')
+        resp.json.return_value = body
+        with mock.patch.object(messaging.requests, 'get', return_value=resp), \
+             mock.patch.object(messaging, '_get_sms_runtime_settings',
+                               return_value=dict(SMS_BASE_CFG)), \
+             mock.patch.object(messaging, '_sms_status_endpoint',
+                               return_value='http://gw.local/send/status/send_1'):
+            changed = messaging._refresh_pending_sms_statuses()
+        self.assertGreaterEqual(changed, 1)
+        db.session.expire_all()
+        row = SmsSendLog.query.filter_by(request_id='send_1').one()
+        self.assertEqual(row.status, 'superseded')
+        self.assertTrue(row.terminal)
+        self.assertFalse(row.successful)
+        self.assertEqual(row.gateway_outcome, 'superseded')
+        self.assertEqual(row.revocation_reason, 'renewed')
+        self.assertEqual(row.invalidation_reason, 'renewed')
+        self.assertIsNotNone(row.invalidated_at)
+        self.assertEqual(row.revoked_at, '2026-09-13T21:00:00.000Z')
+
+    def test_a_superseded_row_is_never_offered_for_cancellation_again(self):
+        self._row(status='superseded', request_id='send_2')
+        with mock.patch.object(messaging, '_cancel_sms_via_gmweb') as cancel:
+            result = messaging._cancel_pending_sms_for_account(
+                1, 'bob', reason='renew_success')
+        cancel.assert_not_called()
+        self.assertEqual(result['gateway_cancelled'], 0)
+
+    def test_a_delivered_send_is_still_counted_as_success(self):
+        self._row()
+        body = {'ok': True, 'requestId': 'send_1', 'status': 'sent',
+                'state': 'completed', 'terminal': True, 'successful': True,
+                'outcome': 'sent', 'sentAt': '2026-09-13T20:00:00.000Z'}
+        resp = mock.Mock(status_code=200, content=b'{}')
+        resp.json.return_value = body
+        with mock.patch.object(messaging.requests, 'get', return_value=resp), \
+             mock.patch.object(messaging, '_get_sms_runtime_settings',
+                               return_value=dict(SMS_BASE_CFG)), \
+             mock.patch.object(messaging, '_sms_status_endpoint',
+                               return_value='http://gw.local/send/status/send_1'):
+            messaging._refresh_pending_sms_statuses()
+        db.session.expire_all()
+        row = SmsSendLog.query.filter_by(request_id='send_1').one()
+        self.assertEqual(row.status, 'sent')
+        self.assertTrue(row.successful)
+        self.assertIsNone(row.invalidated_at)
+
+
 if __name__ == "__main__":
     unittest.main()
 

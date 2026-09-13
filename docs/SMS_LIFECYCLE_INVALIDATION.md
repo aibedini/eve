@@ -261,6 +261,36 @@ So the four questions have direct answers:
 
 No SMS body is duplicated into these columns or into the structured logs.
 
+## 8b. What the gateway reports back
+
+The gateway does not delete a revoked reminder. It marks the row terminal as
+`superseded` — never delivered, never billable, never retried — and keeps it
+queryable, so `GET /send/status/{requestId}` answers:
+
+```json
+{
+  "status": "superseded",
+  "state": "superseded",
+  "superseded": true,
+  "terminal": true,
+  "successful": false,
+  "outcome": "superseded",
+  "revocationReason": "renewed",
+  "revokedAt": "2026-09-13T21:00:00.000Z"
+}
+```
+
+EVE's status poller treats `superseded` / `revoked` / `suppressed` as terminal and
+non-successful, records the gateway's own verdict in `gateway_outcome`,
+`revocation_reason` and `revoked_at`, and stamps `invalidated_at` so the send log
+shows *revoked by a renewal* instead of a reminder stuck on `queued` for ever.
+Nothing about a superseded row counts toward the daily or hourly segment budget.
+
+The one outcome physics forbids is un-sending: if a revoked task reports a real
+submission, the gateway records `sent_after_revocation` and reports it as sent.
+EVE reads that as sent, which is the honest reading of what the customer
+received.
+
 ## 9. What is deliberately unchanged
 
 * `#nosms` / `#nopm` opt-out semantics and the reseller-ownership rules;

@@ -2904,7 +2904,9 @@ def _cancel_pending_sms_for_account(server_id, email: str, *, reason: str = 'cli
             func.lower(SmsSendLog.email) == email_l,
             SmsSendLog.request_id.isnot(None),
             or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
-            ~SmsSendLog.status.in_(('failed', 'skipped', 'cancelled', 'delivered', 'completed')),
+            ~SmsSendLog.status.in_(
+                ('failed', 'skipped', 'cancelled', 'delivered', 'completed',
+                 'superseded', 'revoked', 'suppressed')),
         )
         if state_filter:
             q = q.filter(func.lower(SmsSendLog.state).in_(state_filter))
@@ -3469,7 +3471,13 @@ def _sms_depletion_state_still_valid(server_id, email: str, expected_state: str,
                                      cfg: dict, *, service_key: str | None = None,
                                      expected_generation=None,
                                      last_lifecycle_change_at=None) -> tuple[bool, str]:
-    """placeholder"""
+    """Fail closed when a queued depletion candidate no longer matches live state.
+
+    A scan may spend minutes behind pacing or the GMweb queue, and during that
+    wait the customer can renew. The real body of this function lives further down
+    this module (next to the classifier helpers it uses); this stub exists only so
+    the helpers above can be defined in a readable order.
+    """
 
 
 _SNAPSHOT_REFRESHABLE_REASONS = (
@@ -3480,7 +3488,8 @@ _SNAPSHOT_REFRESHABLE_REASONS = (
 
 
 def _lifecycle_audit(service_key, generation, correlation_id, observed_at,
-                     last_change_at, idempotency_key=None) -> dict:
+                     last_change_at, idempotency_key=None, gateway_outcome=None,
+                     revocation_reason=None, revoked_at=None) -> dict:
     """The audit bundle written next to every scan attempt.
 
     Deliberately carries no SMS body: the operator needs to know WHICH lifecycle
@@ -3493,6 +3502,10 @@ def _lifecycle_audit(service_key, generation, correlation_id, observed_at,
         'lastLifecycleChangeAt': (
             last_change_at if isinstance(last_change_at, datetime) else None),
         'idempotencyKey': idempotency_key,
+        # Gateway verdict for a revoked reminder (see _refresh_pending_sms_statuses).
+        'gatewayOutcome': gateway_outcome,
+        'revocationReason': revocation_reason,
+        'revokedAt': revoked_at,
     }
 
 
@@ -4310,6 +4323,12 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
                              if lifecycle.get('idempotencyKey') else None),
             candidate_observed_at=_observed_at,
             last_lifecycle_change_at=_changed_at,
+            gateway_outcome=(str(lifecycle.get('gatewayOutcome'))[:24]
+                             if lifecycle.get('gatewayOutcome') else None),
+            revocation_reason=(str(lifecycle.get('revocationReason'))[:120]
+                               if lifecycle.get('revocationReason') else None),
+            revoked_at=(str(lifecycle.get('revokedAt'))[:64]
+                        if lifecycle.get('revokedAt') else None),
         )
         db.session.add(row)
         db.session.commit()
@@ -4398,8 +4417,30 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 or gateway_state == 'unverified'
                 or verification_status == 'manual_review_required'
             )
+            # A lifecycle invalidation does not delete a queued reminder: the
+            # gateway marks it terminal as "superseded" (never delivered, never
+            # billable, never retried) and keeps the row queryable. Treating that
+            # as an unknown status would leave the panel showing a reminder as
+            # still queued after the renewal that revoked it.
+            superseded = bool(data.get('superseded')) or gateway_status in (
+                'superseded', 'suppressed') or gateway_state in ('superseded', 'revoked')
+            superseded_reason = data.get('revocationReason')
             if gateway_status:
                 row.status = 'manual_review' if manual_review else gateway_status[:16]
+            if superseded:
+                row.terminal = True
+                row.successful = False
+                row.invalidated_at = row.invalidated_at or datetime.utcnow()
+                row.invalidation_reason = (
+                    str(superseded_reason)[:64] if superseded_reason else 'superseded')
+                if not row.reason:
+                    row.reason = 'superseded_by_renewal'
+            if data.get('outcome') is not None:
+                row.gateway_outcome = str(data['outcome'])[:24]
+            if superseded_reason is not None:
+                row.revocation_reason = str(superseded_reason)[:120]
+            if data.get('revokedAt') is not None:
+                row.revoked_at = str(data['revokedAt'])[:64]
             if data.get('state') is not None:
                 row.gateway_state = str(data['state'])[:32]
             row.stage = str(data['stage'])[:64] if data.get('stage') is not None else None
