@@ -113,7 +113,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.6.43"
+APP_VERSION = "2.6.44"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -684,6 +684,10 @@ def _maybe_migrate_server_passwords() -> None:
 # an endpoint. An inbound id is only honoured when it is a short safe token, so
 # a crafted header cannot reach the logs or the response verbatim.
 from panel.core import http_metrics  # noqa: E402
+from panel.core.build_identity import (  # noqa: E402
+    build_headers as _build_headers,
+    build_sha as _build_sha,
+)
 
 _REQUEST_ID_SAFE = re.compile(r'[^A-Za-z0-9._:-]+')
 
@@ -804,7 +808,7 @@ app.before_request(_security_per_request_setup)
 
 @app.context_processor
 def inject_csp_nonce():
-    return {'csp_nonce': getattr(g, 'csp_nonce', '')}
+    return {'csp_nonce': getattr(g, 'csp_nonce', ''), 'eve_build_sha': _build_sha(APP_VERSION)}
 
 _session_secret = (os.environ.get('SESSION_SECRET') or '').strip()
 if not _session_secret:
@@ -956,6 +960,12 @@ def add_security_headers(response):
     # Baseline security headers (the CSP below still allows the inline handlers
     # and styles the current templates rely on).
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    # Which build answered this request. A version-skew symptom (a stylesheet from
+    # one build with HTML from another) is diagnosable only when two responses can
+    # be attributed to builds; EVE_BUILD_SHA is stamped by the deployment so every
+    # node of one release agrees. See docs/performance/STATIC_ASSETS.md.
+    for header, value in _build_headers(APP_VERSION).items():
+        response.headers.setdefault(header, value)
     response.headers.setdefault('Referrer-Policy', 'same-origin')
     response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
     response.headers.setdefault('X-Permitted-Cross-Domain-Policies', 'none')

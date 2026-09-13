@@ -70,6 +70,7 @@ relative link does not resolve.
 - [Operations runbook](OPERATIONS_RUNBOOK.md) - OPERATIONS_RUNBOOK.md
 - [Observability: request correlation and HTTP metrics](operations/OBSERVABILITY.md) - operations/OBSERVABILITY.md
 - [Data retention](operations/RETENTION.md) - operations/RETENTION.md
+- [Build identity and verifiable deploys](operations/BUILD_IDENTITY.md) - operations/BUILD_IDENTITY.md
 - [Background workers](operations/WORKERS.md) - operations/WORKERS.md
 
 ## GMweb and SMS gateway
