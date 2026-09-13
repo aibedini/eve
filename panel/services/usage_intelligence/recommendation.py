@@ -14,6 +14,7 @@ import os
 
 from panel.services.usage_intelligence import analysis
 from panel.services.usage_intelligence.confidence import assess_confidence
+from panel.services.usage_intelligence.copy import build_explanation
 from panel.services.usage_intelligence.forecast import forecast_usage, safety_margin_for
 from panel.services.usage_intelligence.packages import select_packages
 from panel.services.usage_intelligence.schemas import (
@@ -144,5 +145,19 @@ def build_recommendation_v5(server_id, sub_id, packages, *, live_usage=None, now
                       'rolling': round(forecast.blend[1], 2)},
         },
     }
+    # Why this package, in the customer's language(s) - computed here so the template only
+    # picks a language and prints (RFP sections 26-27).
+    payload['explanation'] = build_explanation(
+        trend_state=trend.state,
+        cycle_daily_gb=(cycle.average_daily_gb if cycle.available else 0.0),
+        rolling_daily_gb=(rolling.average_daily_gb if rolling.available else 0.0),
+        change_percent=trend.change_percent,
+        forecast_gb=forecast.projected_31d_gb,
+        data_confidence=confidence.data,
+        cycle_available=cycle.available,
+        maturity=cycle.maturity,
+        early_exhaustion=context.signals.early_exhaustion,
+        expected_duration_days=context.signals.expected_duration_days,
+    )
     _ = terminal  # kept for call-site compatibility; exhaustion now comes from evidence
     return payload
