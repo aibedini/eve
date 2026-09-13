@@ -15,6 +15,14 @@ This module caches the rendered response (body, status, headers) per
   change a subscription's credentials;
 * counters for diagnostics.
 
+Browser HTML is deliberately excluded from this response cache. The subscription
+page contains inline style/script blocks protected by a per-request CSP nonce. If
+rendered HTML from request A is reused on request B, the cached body still carries
+nonce A while the fresh CSP response header authorizes nonce B; the browser then
+blocks the whole page-local CSS/JS. That failure makes the PWA nav fall into normal
+flow, exposes normally-hidden QR/support sheets, and disables renewal interactions.
+Only machine-readable subscription responses are safe to reuse here.
+
 Configuration:
 
 * EVE_SUBSCRIPTION_CACHE_ENABLED (default 1)
@@ -54,9 +62,52 @@ def _env_int(name, default, minimum=0):
         return default
 
 
-def enabled() -> bool:
+def _configured_enabled() -> bool:
     return (os.environ.get('EVE_SUBSCRIPTION_CACHE_ENABLED') or '1').strip().lower() not in (
         '0', 'false', 'no', 'off')
+
+
+def _browser_html_request() -> bool:
+    """True when the current request is the human-facing subscription page.
+
+    Keep this classification aligned with client_subscription(): a normal browser
+    advertises an HTML Accept header and a Mozilla UA. ``?view=1`` is an explicit
+    request for the HTML representation and must bypass the cache even for curl or
+    an embedded webview whose UA does not look like a desktop browser.
+
+    Import Flask lazily so cache workers and unit tests can use this module outside
+    a request context without coupling the core cache to app initialization.
+    """
+    try:
+        from flask import has_request_context, request
+        if not has_request_context():
+            return False
+
+        wants_html_view = str(request.args.get('view', '')).strip().lower() in (
+            '1', 'true', 'yes')
+        if wants_html_view:
+            return True
+
+        user_agent = (request.headers.get('User-Agent') or '').lower()
+        accept = (request.headers.get('Accept') or '').lower()
+        accept_prefers_html = (
+            'text/html' in accept or 'application/xhtml+xml' in accept)
+        return accept_prefers_html and 'mozilla' in user_agent
+    except Exception:
+        # Cache availability must never make subscription delivery fail. If request
+        # inspection itself is unavailable, preserve the configured machine-client
+        # cache behaviour.
+        return False
+
+
+def enabled() -> bool:
+    """Whether the response cache may be used for the current call.
+
+    The configured cache remains enabled for VPN clients and background pre-warm,
+    but human-facing HTML is request-specific because of its CSP nonce and is
+    therefore never read from or written to this cache.
+    """
+    return _configured_enabled() and not _browser_html_request()
 
 
 def ttl_seconds(variant: str = 'full') -> int:
@@ -202,7 +253,9 @@ def metrics() -> dict:
         'entries': size,
         'in_flight': in_flight_count,
         'hit_rate': round(snapshot['hits'] / total_lookups, 4),
-        'enabled': enabled(),
+        # Report the configured feature state, not the intentional per-request
+        # browser bypass used to keep CSP nonces coherent.
+        'enabled': _configured_enabled(),
         'ttl_seconds': {'full': ttl_seconds('full'), 'fast': ttl_seconds('fast')},
         'max_entries': max_entries(),
     })
