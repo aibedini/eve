@@ -266,6 +266,11 @@ def _build_subscription_package_recommendation(server_id: int, sub_id: str,
         except Exception as exc:
             from app import app  # deferred: Flask instance lives in app.py
             app.logger.warning('usage-fit-v5 failed; falling back to v4: %s', exc)
+            try:
+                from panel.services.usage_intelligence.observability import observe
+                observe(server_id=server_id, account=sub_id, error=exc)
+            except Exception:
+                pass
             result = None
         if result is not None:
             return result

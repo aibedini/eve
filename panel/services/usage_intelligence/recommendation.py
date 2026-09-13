@@ -11,11 +11,13 @@ Rollout is explicit (RFP sections 54-58): ``EVE_USAGE_RECOMMENDATION_V5`` (or th
 be computed alongside v4 and compared before anybody sees it.
 """
 import os
+import time
 
 from panel.services.usage_intelligence import analysis
 from panel.services.usage_intelligence.confidence import assess_confidence
 from panel.services.usage_intelligence.copy import build_explanation
 from panel.services.usage_intelligence.forecast import forecast_usage, safety_margin_for
+from panel.services.usage_intelligence.observability import observe as observe_recommendation
 from panel.services.usage_intelligence.packages import select_packages
 from panel.services.usage_intelligence.schemas import (
     MODEL_VERSION,
@@ -69,6 +71,7 @@ def build_recommendation_v5(server_id, sub_id, packages, *, live_usage=None, now
     """The usage-fit-v5 payload, or None when there is nothing to recommend."""
     if not packages:
         return None
+    started = time.perf_counter()
     if context is None:
         context = analysis.load_usage_context(
             server_id, sub_id, now=now, live_usage=live_usage, rolling_days=rolling_days)
@@ -160,4 +163,17 @@ def build_recommendation_v5(server_id, sub_id, packages, *, live_usage=None, now
         expected_duration_days=context.signals.expected_duration_days,
     )
     _ = terminal  # kept for call-site compatibility; exhaustion now comes from evidence
+    # One structured, PII-free line per recommendation plus the aggregate counters the
+    # doctor endpoint exposes (RFP sections 43-44).
+    observe_recommendation(
+        latency_ms=(time.perf_counter() - started) * 1000.0,
+        payload=payload,
+        account=sub_id,
+        basis=forecast.basis,
+        trend_state=trend.state,
+        early_exhaustion=context.signals.early_exhaustion,
+        stale_telemetry=context.signals.telemetry_stale,
+        capacity_limited=recommended.capacity_limited,
+        server_id=server_id,
+    )
     return payload

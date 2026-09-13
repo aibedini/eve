@@ -158,6 +158,18 @@ def doctor_summary():
         checks['refresh_policy'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.services.usage_intelligence import observability, shadow
+        from panel.services.usage_intelligence.recommendation import recommendation_mode
+        checks['usage_intelligence'] = {
+            'state': 'ok',
+            'mode': recommendation_mode(),
+            **observability.snapshot(),
+            'shadow': shadow.shadow_metrics(),
+        }
+    except Exception as exc:
+        checks['usage_intelligence'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.core.db_pool import pool_summary
         checks['db_pool'] = {'state': 'ok', **pool_summary(db.engine)}
     except Exception as exc:

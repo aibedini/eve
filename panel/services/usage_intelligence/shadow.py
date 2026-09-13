@@ -112,6 +112,11 @@ def record_shadow_comparison(server_id, sub_id, v4, v5, *, account=None) -> dict
         )
     except Exception:
         pass
+    try:
+        from panel.services.usage_intelligence.observability import note_shadow_comparison
+        note_shadow_comparison()
+    except Exception:
+        pass
 
     return {
         'at': datetime.utcnow().isoformat(),
