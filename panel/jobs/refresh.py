@@ -437,6 +437,52 @@ def _bulk_progress_update(job_id: str, *, processed_delta: int = 1,
             _save_bulk_jobs_locked()
 
 
+def _note_bulk_lifecycle_change(server_id, email: str, event_type: str) -> None:
+    """Advance the notification lifecycle for a successful bulk repair action.
+
+    `add_days` / `add_volume` / `volume_policy` / `volume_multiplier` restore time
+    or quota exactly like a renewal does, so an existing depletion reminder is
+    false afterwards. There is no panel read-back on this path, so the change is
+    recorded best-effort and can never turn a successful repair into a failure.
+    """
+    try:
+        from panel.services import lifecycle as lifecycle_service
+        # Resolve the durable identity from the shared snapshot so a bulk repair
+        # advances the SAME generation a renewal of that service would; the
+        # email remains only the fallback.
+        identity = None
+        try:
+            from panel.core.redis_client import GLOBAL_SERVER_DATA
+            sid = int(server_id)
+            email_l = (email or '').strip().lower()
+            for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+                try:
+                    if int(inbound.get('server_id', -1)) != sid:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                for cached in (inbound.get('clients') or []):
+                    if (cached.get('email') or '').strip().lower() != email_l:
+                        continue
+                    identity = lifecycle_service.resolve_client_uuid(cached)
+                    if identity:
+                        break
+                if identity:
+                    break
+        except Exception:
+            identity = None
+        lifecycle_service.note_service_lifecycle_change(
+            server_id=server_id, client_uuid=identity, client_email=email,
+            event_type=event_type, reason=f'bulk_{event_type}',
+        )
+    except Exception:
+        try:
+            from app import app  # deferred: Flask instance lives in app.py
+            app.logger.exception('[lifecycle] bulk %s note failed', event_type)
+        except Exception:
+            pass
+
+
 def _run_bulk_job(job_id: str):
     from app import CLIENT_RESET_FALLBACKS, CLIENT_UPDATE_FALLBACKS, _bytes_to_gb_float, _clear_message_cooldown, _delete_client_core, _fetch_client_snapshot, _has_client_access, _json_field, _normalize_volume_policy_rules, _post_client_update, _reset_client_traffic_core, _toggle_client_core, _utc_iso_now, _wt_patch_cache, app, build_panel_url, collect_endpoint_templates, ensure_reseller_allowed_for_assignment, format_remaining_days  # deferred: app-level helper, avoids circular import
     with BULK_JOBS_LOCK:
@@ -1113,14 +1159,22 @@ def _run_bulk_job(job_id: str):
                     ok, err, _status = _apply_client_limit_delta(user, server, inbound_id, email, days_delta=delta, volume_gb_delta=None)
                     if ok:
                         _clear_message_cooldown(email, server_id)
+                        _note_bulk_lifecycle_change(server_id, email, 'extension')
                 elif action == 'add_volume':
                     delta = data.get('volume_gb_delta')
                     ok, err, _status = _apply_client_limit_delta(user, server, inbound_id, email, days_delta=None, volume_gb_delta=delta)
+                    if ok:
+                        _note_bulk_lifecycle_change(server_id, email, 'volume_add')
                 elif action == 'volume_policy':
                     ok, err, _status, report_row = _apply_client_volume_policy(user, server, inbound_id, email, data.get('volume_rules'))
                     skipped = bool(ok and _status == 204)
+                    if ok and not skipped:
+                        _note_bulk_lifecycle_change(server_id, email, 'volume_reset')
                 elif action == 'volume_multiplier':
                     ok, err, _status, report_row = _apply_client_volume_multiplier(user, server, inbound_id, email, data)
+                    skipped = bool(ok and _status == 204)
+                    if ok and not skipped:
+                        _note_bulk_lifecycle_change(server_id, email, 'volume_reset')
                     skipped = bool(ok and _status == 204)
                 elif action == 'set_start_after_use':
                     snap, snap_err = _fetch_client_snapshot(user, server, inbound_id, email)

@@ -31,6 +31,7 @@ from panel.services.client_operations import (
     install_client_operation_response_guard, mark_client_operation_applied,
 )
 from panel.services.client_state import verified_state_from_panel
+from panel.services import lifecycle as lifecycle_service
 from panel.services.usage_intelligence import record_verified_renewal
 
 bp = Blueprint('clients', __name__)
@@ -38,6 +39,67 @@ bp = Blueprint('clients', __name__)
 # Sources the renew endpoint may declare for the business event it records. The
 # default is the explicit operator/API renewal; an automation may pass its own.
 _RENEWAL_SOURCES = ('explicit_renew', 'admin_reset', 'telegram_renew', 'api_mutation')
+
+
+def _cached_client_uuid(server_id, email: str):
+    """Best-effort stable identity for an email-addressed cached client.
+
+    Four legacy mutation paths (traffic reset, superadmin edit, bulk repair)
+    address a client by email only. Before falling back to the email as the
+    service identity, look the UUID up in the shared snapshot so those paths
+    advance the SAME generation as a renewal of the same service."""
+    from panel.core.redis_client import GLOBAL_SERVER_DATA  # deferred: shared snapshot
+
+    email_l = (email or '').strip().lower()
+    if not email_l:
+        return None
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+            try:
+                if int(inbound.get('server_id', -1)) != sid:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            for client in (inbound.get('clients') or []):
+                if (client.get('email') or '').strip().lower() != email_l:
+                    continue
+                identity = lifecycle_service.resolve_client_uuid(client)
+                if identity:
+                    return identity
+    except Exception:
+        return None
+    return None
+
+
+def _note_restoration(server, email: str, event_type: str, operation_id=None) -> None:
+    """Advance the lifecycle generation after a non-renewal restoration.
+
+    Used by the traffic-reset-with-new-cap, the superadmin edit and the bulk
+    repair actions: each of them can make an existing depletion reminder false,
+    and each of them has no verified read-back, so the consequence is logged
+    rather than raised -- a lifecycle bookkeeping problem must never fail the
+    operator's change."""
+    try:
+        lifecycle_service.note_service_lifecycle_change(
+            server_id=getattr(server, 'id', server),
+            client_uuid=_cached_client_uuid(getattr(server, 'id', server), email),
+            client_email=email,
+            event_type=event_type,
+            operation_id=operation_id,
+        )
+    except Exception:
+        try:
+            from app import app  # deferred: Flask instance lives in app.py
+            app.logger.exception(
+                "[lifecycle] %s note failed (server=%s)", event_type,
+                getattr(server, 'id', server),
+            )
+        except Exception:
+            pass
 
 
 def _renewal_source_from_payload(data) -> str:
@@ -309,6 +371,11 @@ def reset_client_traffic(server_id, inbound_id):
                     transaction_record = log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
             patch_cached_client(server.id, email, up=0, down=0,
                                 total_gb_bytes=(volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None))
+            if volume_gb > 0:
+                # A reset that also RAISES the cap restores quota, so an existing
+                # 'volume ended' reminder is now false. A bare counter reset grants
+                # nothing and must NOT suppress a legitimate alert.
+                _note_restoration(server, email, 'volume_reset', operation_key)
             response = {"success": True}
             if user.role == 'reseller':
                 response["remaining_credit"] = user.credit
@@ -370,6 +437,10 @@ def reset_client_traffic(server_id, inbound_id):
 
                 patch_cached_client(server.id, email, up=0, down=0,
                                     total_gb_bytes=(volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None))
+                if volume_gb > 0:
+                    # Same rule as the v3 branch: only a reset that also raises the
+                    # cap restores quota.
+                    _note_restoration(server, email, 'volume_reset', operation_key)
                 response = {"success": True}
                 if user.role == 'reseller':
                     response["remaining_credit"] = user.credit
@@ -621,6 +692,16 @@ def edit_client(server_id, inbound_id, email):
                 app.logger.warning(
                     "Edit cache sync failed (server_id=%s, email=%s)",
                     server_id, email, exc_info=True,
+                )
+
+            # A superadmin edit can raise the cap or push the expiry out with no
+            # accounting and no read-back. When it does, an existing depletion
+            # reminder is now false, so the lifecycle generation advances here too.
+            # Opening the edit modal without changing these fields must NOT count.
+            if user.is_superadmin and (new_total_gb is not None or new_expiry_time is not None):
+                _note_restoration(
+                    server, email,
+                    'extension' if new_expiry_time is not None else 'volume_reset',
                 )
 
             return jsonify({"success": True, "cache_sync": bool(cache_sync)})
@@ -2290,8 +2371,20 @@ def renew_client(server_id, inbound_id, email):
 
                 # SMS automation (GMweb) — non-reseller-owned accounts only; runs
                 # in a background thread so it never delays the renew response.
+                # The renewal succeeded on the panel and was read back, so the
+                # service's notification lifecycle advances from HERE -- never
+                # before. That single call advances the durable generation, records
+                # a durable invalidation-outbox event, asks the gateway to revoke
+                # older reminders, and resets the local cooldowns (below).
+                _renewed_identity = (verify.get('observed') or {}).get('id') \
+                    or target_client.get('id')
                 _fire_cancel_stale_account_sms(
                     server.id, email, reason='renew_success',
+                    client=target_client,
+                    client_uuid=(str(_renewed_identity) if _renewed_identity else None),
+                    event_type='renewal',
+                    operation_id=operation_key,
+                    correlation_id=renewal_trace_id,
                 )
                 _fire_automation_sms('renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
                                      DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,

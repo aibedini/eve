@@ -2592,14 +2592,21 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         captured = {}
 
         class FakeThread:
-            def __init__(self, target, daemon=False):
+            def __init__(self, target, daemon=False, name=None, **kwargs):
                 captured['target'] = target
                 captured['daemon'] = daemon
+                captured['name'] = name
 
             def start(self):
                 captured['started'] = True
 
+        # The renew hook now does two things off the request path: advance the
+        # durable lifecycle generation (and enqueue its invalidation) and then run
+        # the best-effort per-message cancel. The handler is stubbed here so this
+        # test keeps pinning the threading contract and the cancel call alone.
         with patch('panel.jobs.messaging.threading.Thread', FakeThread), \
+                patch('panel.jobs.messaging.lifecycle_service'
+                      '.handle_successful_service_lifecycle_change') as lifecycle, \
                 patch('panel.jobs.messaging._cancel_stale_account_sms') as cancel:
             result = _fire_cancel_stale_account_sms(
                 12, 'stale-user', reason='renew_success',
@@ -2609,10 +2616,18 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
         self.assertTrue(captured['started'])
         self.assertTrue(captured['daemon'])
         cancel.assert_not_called()
+        lifecycle.assert_not_called()
 
-        with patch('panel.jobs.messaging._cancel_stale_account_sms') as cancel:
+        with patch('panel.jobs.messaging.lifecycle_service'
+                   '.handle_successful_service_lifecycle_change') as lifecycle, \
+                patch('panel.jobs.messaging._cancel_stale_account_sms') as cancel:
             captured['target']()
             cancel.assert_called_once_with(12, 'stale-user', reason='renew_success')
+            lifecycle.assert_called_once()
+            kwargs = lifecycle.call_args.kwargs
+            self.assertEqual(kwargs['server_id'], 12)
+            self.assertEqual(kwargs['event_type'], 'renewal')
+            self.assertEqual(kwargs['reason'], 'renew_success')
 
     def test_sms_scan_stops_before_sending_when_gateway_unpaired(self):
         for key, value in (

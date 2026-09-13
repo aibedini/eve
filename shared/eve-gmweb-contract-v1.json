@@ -1,44 +1,117 @@
 {
-  "version": 1,
+  "version": 2,
   "consumer": "eve",
   "projectKeyDefaults": {
     "scopes": [
       "sms.send",
       "sms.status",
       "sms.cancel",
-      "sms.capacity"
+      "sms.capacity",
+      "sms.invalidate"
     ],
     "ingressRatePerMinute": 30,
     "ingressRatePerHour": 1000
   },
   "transport": {
-    "schemes": ["http", "https"],
+    "schemes": [
+      "http",
+      "https"
+    ],
     "recommendedScheme": "https",
     "plaintextWarnHosts": "non-local",
     "authHeader": "Authorization: Bearer <projectKey>",
     "idempotencyHeader": "Idempotency-Key",
     "acceptHeader": "application/json",
     "contentType": "application/json",
-    "timeoutSeconds": { "default": 15, "min": 3, "max": 90, "statusPollMax": 5 },
+    "timeoutSeconds": {
+      "default": 15,
+      "min": 3,
+      "max": 90,
+      "statusPollMax": 5
+    },
     "retry": {
       "attempts": 2,
       "onlyWithIdempotencyKey": true,
-      "retriesOn": ["timeout", "connection_error", "5xx"]
+      "retriesOn": [
+        "timeout",
+        "connection_error",
+        "5xx"
+      ]
     }
   },
   "endpoints": [
-    { "key": "ready", "method": "GET", "path": "/ready", "scope": "sms.capacity" },
-    { "key": "send", "method": "POST", "path": "/send", "scope": "sms.send" },
-    { "key": "send_status", "method": "GET", "path": "/send/status/{requestId}", "scope": "sms.status" },
-    { "key": "send_cancel", "method": "POST", "path": "/send/cancel/{requestId}", "scope": "sms.cancel" },
-    { "key": "send_capacity", "method": "GET", "path": "/send/capacity", "scope": "sms.capacity" }
+    {
+      "key": "ready",
+      "method": "GET",
+      "path": "/ready",
+      "scope": "sms.capacity"
+    },
+    {
+      "key": "send",
+      "method": "POST",
+      "path": "/send",
+      "scope": "sms.send"
+    },
+    {
+      "key": "send_status",
+      "method": "GET",
+      "path": "/send/status/{requestId}",
+      "scope": "sms.status"
+    },
+    {
+      "key": "send_cancel",
+      "method": "POST",
+      "path": "/send/cancel/{requestId}",
+      "scope": "sms.cancel"
+    },
+    {
+      "key": "send_capacity",
+      "method": "GET",
+      "path": "/send/capacity",
+      "scope": "sms.capacity"
+    },
+    {
+      "key": "post_invalidate",
+      "method": "POST",
+      "path": "/send/invalidate",
+      "scope": "sms.invalidate"
+    }
   ],
   "sendRequest": {
-    "required": ["to", "text", "priority"],
-    "priorityLanes": { "critical": 1, "expired": 3, "expiring": 6, "announcement": 10 }
+    "required": [
+      "to",
+      "text",
+      "priority"
+    ],
+    "priorityLanes": {
+      "critical": 1,
+      "expired": 3,
+      "expiring": 6,
+      "announcement": 10
+    },
+    "meta": {
+      "description": "Optional consumer notification identity. The gateway stores it with the queued message so a later lifecycle invalidation can revoke exactly this reminder.",
+      "fields": {
+        "source": "string (max 32) - consumer key, 'eve'",
+        "serviceKey": "string (max 200) - 'eve:<serverId>:<clientUuid>'",
+        "notificationKind": "near_expiry|low_volume|expired|volume_ended|created|renew",
+        "generation": "integer >= 0 - the service lifecycle generation this message was computed from",
+        "correlationId": "string (max 64)",
+        "requiresValidation": "boolean - true for every automated depletion reminder, false for transactional created/renew confirmations"
+      },
+      "invalidationEligibleKinds": [
+        "near_expiry",
+        "low_volume",
+        "expired",
+        "volume_ended"
+      ]
+    }
   },
   "sendResponse": {
-    "acceptedStatus": [200, 202],
+    "acceptedStatus": [
+      200,
+      202
+    ],
     "fields": {
       "requestId": "string",
       "jobId": "string|integer",
@@ -48,14 +121,87 @@
       "successful": "boolean",
       "retryAfterSeconds": "integer"
     },
-    "terminalStatuses": ["sent", "completed", "unverified", "failed", "cancelled"]
+    "terminalStatuses": [
+      "sent",
+      "completed",
+      "unverified",
+      "failed",
+      "cancelled"
+    ]
   },
   "capacityResponse": {
-    "required": ["announcement"],
-    "announcementFields": ["limit", "pending", "available", "recommendedBatchSize"]
+    "required": [
+      "announcement"
+    ],
+    "announcementFields": [
+      "limit",
+      "pending",
+      "available",
+      "recommendedBatchSize"
+    ]
+  },
+  "invalidationRequest": {
+    "required": [
+      "source",
+      "serviceKey"
+    ],
+    "fields": {
+      "source": "string (max 32)",
+      "serviceKey": "string (max 200)",
+      "currentGeneration": "integer >= 0 - the generation the renewal committed",
+      "invalidateKinds": [
+        "near_expiry",
+        "low_volume",
+        "expired",
+        "volume_ended"
+      ],
+      "reason": "string (max 64) - e.g. renewed",
+      "correlationId": "string (max 64)",
+      "eventId": "string (max 200) - stable id for this lifecycle transition; the request is idempotent on it"
+    },
+    "semantics": [
+      "Cancels every not-yet-started send whose meta.source and meta.serviceKey match and whose meta.notificationKind is in invalidateKinds (all kinds when the list is empty).",
+      "A send that already started is revoked (signalled to stop), not deleted; nothing can recall an SMS the phone already delivered.",
+      "currentGeneration is a monotonic per-service watermark: a request carrying a generation lower than one already recorded is refused with 409 stale_generation, so a delayed invalidation can never cancel a newer lifecycle's reminder.",
+      "Repeating the same eventId replays the original response and changes nothing."
+    ]
+  },
+  "invalidationResponse": {
+    "acceptedStatus": [
+      200
+    ],
+    "ok": true,
+    "fields": {
+      "ok": "boolean",
+      "currentGeneration": "integer",
+      "cancelledPending": "integer",
+      "revokedActive": "integer",
+      "revokedInflight": "integer",
+      "alreadyTerminal": "integer",
+      "matched": "integer",
+      "replayed": "boolean"
+    },
+    "conflictStatus": 409,
+    "conflictErrors": [
+      "stale_generation"
+    ],
+    "example": {
+      "ok": true,
+      "currentGeneration": 18,
+      "cancelledPending": 2,
+      "revokedActive": 1,
+      "revokedInflight": 1,
+      "alreadyTerminal": 0
+    }
   },
   "errorResponse": {
-    "fields": ["error", "message", "reason", "limits", "used"],
+    "fields": [
+      "error",
+      "message",
+      "reason",
+      "limits",
+      "used"
+    ],
     "rateLimitStatus": 429,
     "retryAfterHeader": "Retry-After"
   }

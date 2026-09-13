@@ -39,6 +39,7 @@ from panel.jobs.messaging import (
     telegram_depletion_worker,
     whatsapp_bot_worker,
 )
+from panel.services.lifecycle import invalidation_outbox_worker
 from panel.jobs.refresh import (
     _backoff_get,
     _backoff_record_failure,
@@ -2153,6 +2154,12 @@ def ensure_background_threads_started():
 
     # Singleton: reconcile queued GMweb tasks and persist their terminal status.
     _start_worker('sms_status_worker', sms_status_worker, singleton=True)
+
+    # Singleton: drain the durable lifecycle-invalidation outbox. A renewal that
+    # could not reach the SMS gateway leaves a row in the database, so this loop
+    # finishes the job after any transient outage -- and after a process restart.
+    _start_worker('lifecycle_invalidation_worker', invalidation_outbox_worker,
+                  singleton=True)
 
     # Singleton: pulse health-check queue worker (web-triggered + scheduled probes).
     _start_worker('pulse_scheduler', pulse_scheduler_worker, singleton=True)

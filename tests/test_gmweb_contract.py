@@ -99,12 +99,13 @@ class ContractFileTests(unittest.TestCase):
     def test_the_contract_declares_the_version_scopes_and_endpoints(self):
         contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
         self.assertEqual(contract["consumer"], "eve")
-        self.assertEqual(contract["version"], 1)
+        self.assertEqual(contract["version"], 2)
         self.assertEqual(contract["projectKeyDefaults"]["scopes"],
-                         ["sms.send", "sms.status", "sms.cancel", "sms.capacity"])
+                         ["sms.send", "sms.status", "sms.cancel", "sms.capacity",
+                          "sms.invalidate"])
         keys = {entry["key"] for entry in contract["endpoints"]}
         self.assertEqual(keys, {"ready", "send", "send_status", "send_cancel",
-                                "send_capacity"})
+                                "send_capacity", "post_invalidate"})
         for entry in contract["endpoints"]:
             self.assertIn(entry["scope"], contract["projectKeyDefaults"]["scopes"])
         self.assertEqual(contract["transport"]["idempotencyHeader"], "Idempotency-Key")
@@ -121,9 +122,39 @@ class ContractFileTests(unittest.TestCase):
             self.assertNotIn(literal, source, literal)
 
     def test_declared_scopes_are_exposed_by_the_module(self):
-        self.assertEqual(gmweb_contract.contract_version(), 1)
+        self.assertEqual(gmweb_contract.contract_version(), 2)
         self.assertEqual(gmweb_contract.declared_scopes(),
-                         ["sms.send", "sms.status", "sms.cancel", "sms.capacity"])
+                         ["sms.send", "sms.status", "sms.cancel", "sms.capacity",
+                          "sms.invalidate"])
+
+    def test_the_invalidation_endpoint_is_declared_with_its_scope(self):
+        entry = next(item for item in gmweb_contract.load_contract()["endpoints"]
+                     if item["key"] == "post_invalidate")
+        self.assertEqual(entry["method"], "POST")
+        self.assertEqual(entry["path"], "/send/invalidate")
+        self.assertEqual(entry["scope"], "sms.invalidate")
+        self.assertEqual(gmweb_contract.endpoint_path("post_invalidate"),
+                         "/send/invalidate")
+
+    def test_the_send_payload_meta_block_is_declared(self):
+        meta = gmweb_contract.load_contract()["sendRequest"]["meta"]
+        self.assertEqual(
+            set(meta["fields"]),
+            {"source", "serviceKey", "notificationKind", "generation",
+             "correlationId", "requiresValidation"})
+        self.assertEqual(meta["invalidationEligibleKinds"],
+                         ["near_expiry", "low_volume", "expired", "volume_ended"])
+
+    def test_the_invalidation_contract_declares_idempotency_and_its_counts(self):
+        request = gmweb_contract.load_contract()["invalidationRequest"]
+        self.assertEqual(request["required"], ["source", "serviceKey"])
+        response = gmweb_contract.load_contract()["invalidationResponse"]
+        self.assertEqual(response["example"]["currentGeneration"], 18)
+        self.assertEqual(
+            set(response["fields"]),
+            {"ok", "currentGeneration", "cancelledPending", "revokedActive",
+             "revokedInflight", "alreadyTerminal", "matched", "replayed"})
+        self.assertIn("eventId", request["fields"])
 
 
 class BaseUrlTests(unittest.TestCase):

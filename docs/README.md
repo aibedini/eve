@@ -77,6 +77,7 @@ relative link does not resolve.
 ## GMweb and SMS gateway
 
 - [GMweb gateway contract](GMWEB_CONTRACT.md) - GMWEB_CONTRACT.md
+- [SMS lifecycle: renewal vs depletion-reminder consistency](SMS_LIFECYCLE_INVALIDATION.md) - SMS_LIFECYCLE_INVALIDATION.md
 - [📨 SMS Gateway — Delivery-Confirmation Integration Spec](SMS_GATEWAY_DELIVERY_SPEC.md) - SMS_GATEWAY_DELIVERY_SPEC.md
 
 ## BNQO control plane

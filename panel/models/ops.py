@@ -440,6 +440,18 @@ class SmsSendLog(db.Model):
     message_encoding = db.Column(db.String(16))
     unit_count = db.Column(db.Integer)
     character_count = db.Column(db.Integer)
+    # Lifecycle-generation audit. These are what let an operator answer "was this
+    # SMS created before or after the renewal, and did the renewal revoke it?"
+    # without storing the SMS body anywhere else.
+    service_key = db.Column(db.String(255), nullable=True, index=True)
+    lifecycle_generation = db.Column(db.Integer, nullable=True)
+    correlation_id = db.Column(db.String(64), nullable=True, index=True)
+    idempotency_key = db.Column(db.String(200), nullable=True)
+    candidate_observed_at = db.Column(db.DateTime, nullable=True)
+    last_lifecycle_change_at = db.Column(db.DateTime, nullable=True)
+    lifecycle_event_id = db.Column(db.String(128), nullable=True)
+    invalidated_at = db.Column(db.DateTime, nullable=True, index=True)
+    invalidation_reason = db.Column(db.String(64), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -489,11 +501,157 @@ class SmsSendLog(db.Model):
             'message_encoding': self.message_encoding,
             'unit_count': self.unit_count,
             'character_count': self.character_count,
+            'service_key': self.service_key,
+            'lifecycle_generation': self.lifecycle_generation,
+            'correlation_id': self.correlation_id,
+            'idempotency_key': self.idempotency_key,
+            'candidate_observed_at': (
+                self.candidate_observed_at.isoformat() + 'Z'
+                if self.candidate_observed_at else None),
+            'last_lifecycle_change_at': (
+                self.last_lifecycle_change_at.isoformat() + 'Z'
+                if self.last_lifecycle_change_at else None),
+            'lifecycle_event_id': self.lifecycle_event_id,
+            'invalidated_at': (
+                self.invalidated_at.isoformat() + 'Z'
+                if self.invalidated_at else None),
+            'invalidation_reason': self.invalidation_reason,
             # Stored as naive UTC (datetime.utcnow). Emit an explicit 'Z' so the
             # browser parses it as UTC and can convert to the viewer's timezone
             # (Asia/Tehran) instead of mis-reading it as local time.
             'created_at': (self.created_at.isoformat() + 'Z') if self.created_at else None,
             'updated_at': (self.updated_at.isoformat() + 'Z') if self.updated_at else None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Service lifecycle generation + notification invalidation outbox.
+#
+# A depletion reminder (near_expiry / low_volume / expired / volume_ended) is a
+# claim about the service's CURRENT state. The moment the service is renewed or
+# extended that claim is false, even though the message may already sit in the
+# SMS gateway's queue. The generation below is the durable, cross-worker
+# watermark that makes 'this reminder is stale' decidable: every lifecycle
+# change that restores time or quota advances it, and every reminder carries the
+# generation it was computed from.
+#
+# The state lives in the database (not Redis, not process memory) because the
+# worker that renews and the worker that scans are usually different processes.
+# ---------------------------------------------------------------------------
+SERVICE_LIFECYCLE_EVENT_TYPES = ('renewal', 'extension', 'volume_add', 'volume_reset')
+SERVICE_INVALIDATION_STATUSES = ('pending', 'sent', 'failed')
+# Bounded retry schedule for a failed GMweb invalidation call, in seconds. After
+# the last delay the event keeps being retried on the slow lane instead of being
+# dropped, because a stale reminder must never be silently abandoned.
+SERVICE_INVALIDATION_BACKOFF_SECONDS = (5, 30, 120, 600, 1800, 3600, 10800)
+
+
+class ServiceLifecycleState(db.Model):
+    """Durable per-service notification lifecycle generation.
+
+    ``service_key`` is the canonical ``eve:<serverId>:<clientUuid>`` identity
+    (see :mod:`panel.services.lifecycle`). ``generation`` is monotonic: it only
+    ever increases, and it increases only after a lifecycle change actually
+    succeeded on the panel."""
+    __tablename__ = 'service_lifecycle_states'
+    __table_args__ = (
+        db.UniqueConstraint('service_key', name='uq_service_lifecycle_service_key'),
+        db.Index('ix_service_lifecycle_identity', 'server_id', 'client_uuid'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    service_key = db.Column(db.String(255), nullable=False, index=True)
+    server_id = db.Column(db.Integer, nullable=False, index=True)
+    client_uuid = db.Column(db.String(100), nullable=True)
+    client_email = db.Column(db.String(255), nullable=True, index=True)
+    generation = db.Column(db.Integer, nullable=False, default=0)
+    last_lifecycle_change_at = db.Column(db.DateTime, nullable=True, index=True)
+    last_renewed_at = db.Column(db.DateTime, nullable=True)
+    last_event_type = db.Column(db.String(32), nullable=True)
+    last_operation_id = db.Column(db.String(128), nullable=True)
+    last_correlation_id = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    def to_dict(self):
+        return {
+            'service_key': self.service_key,
+            'server_id': self.server_id,
+            'client_uuid': self.client_uuid,
+            'generation': int(self.generation or 0),
+            'last_lifecycle_change_at': (
+                self.last_lifecycle_change_at.isoformat() + 'Z'
+                if self.last_lifecycle_change_at else None),
+            'last_renewed_at': (
+                self.last_renewed_at.isoformat() + 'Z'
+                if self.last_renewed_at else None),
+            'last_event_type': self.last_event_type,
+            'last_correlation_id': self.last_correlation_id,
+        }
+
+
+class ServiceNotificationOutbox(db.Model):
+    """Durable invalidation outbox: one row per lifecycle change that must be
+    mirrored to the SMS gateway.
+
+    The row is committed together with the generation bump, so a renewal that
+    succeeds can never lose its invalidation -- not to a gateway timeout, not to
+    a process restart. A background worker retries with bounded backoff and the
+    ``attempt_count``/``next_attempt_at`` columns are the resumable cursor."""
+    __tablename__ = 'service_notification_outbox'
+    __table_args__ = (
+        db.UniqueConstraint('event_id', name='uq_service_outbox_event_id'),
+        db.Index('ix_service_outbox_due', 'status', 'next_attempt_at'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.String(128), nullable=False)
+    service_key = db.Column(db.String(255), nullable=False, index=True)
+    server_id = db.Column(db.Integer, nullable=False, default=0, index=True)
+    client_uuid = db.Column(db.String(100), nullable=True)
+    generation = db.Column(db.Integer, nullable=False, default=0)
+    reason = db.Column(db.String(64), nullable=True)
+    correlation_id = db.Column(db.String(64), nullable=True)
+    invalidate_kinds = db.Column(db.String(255), nullable=False, default='')
+    status = db.Column(db.String(16), nullable=False, default='pending', index=True)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    next_attempt_at = db.Column(db.DateTime, nullable=True, index=True)
+    last_attempt_at = db.Column(db.DateTime, nullable=True)
+    last_error = db.Column(db.String(255), nullable=True)
+    last_status_code = db.Column(db.Integer, nullable=True)
+    cancelled_pending = db.Column(db.Integer, nullable=True)
+    revoked_active = db.Column(db.Integer, nullable=True)
+    revoked_inflight = db.Column(db.Integer, nullable=True)
+    already_terminal = db.Column(db.Integer, nullable=True)
+    response_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    def kinds(self) -> list:
+        return [k for k in (self.invalidate_kinds or '').split(',') if k]
+
+    def to_dict(self):
+        return {
+            'event_id': self.event_id,
+            'service_key': self.service_key,
+            'server_id': self.server_id,
+            'generation': int(self.generation or 0),
+            'reason': self.reason,
+            'correlation_id': self.correlation_id,
+            'invalidate_kinds': self.kinds(),
+            'status': self.status,
+            'attempt_count': int(self.attempt_count or 0),
+            'next_attempt_at': (
+                self.next_attempt_at.isoformat() + 'Z'
+                if self.next_attempt_at else None),
+            'last_attempt_at': (
+                self.last_attempt_at.isoformat() + 'Z'
+                if self.last_attempt_at else None),
+            'last_error': self.last_error,
+            'last_status_code': self.last_status_code,
+            'cancelled_pending': self.cancelled_pending,
+            'revoked_active': self.revoked_active,
+            'revoked_inflight': self.revoked_inflight,
+            'already_terminal': self.already_terminal,
+            'created_at': (self.created_at.isoformat() + 'Z') if self.created_at else None,
         }
 
 

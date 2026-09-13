@@ -3,7 +3,9 @@
 Depletion scans, quiet-hours/pace accounting, opt-out handling, transactional
 sends, and the long-running bot worker loops for all three channels.
 """
+import hashlib
 import json
+import logging
 import math
 import random
 import re
@@ -58,6 +60,8 @@ from panel.routes.templates_api import (
     ROYALTY_INFO_SMS_TEMPLATE_TYPE,
 )
 from panel.services import gmweb_contract
+from panel.services import lifecycle as lifecycle_service
+from panel.services.lifecycle import flush_invalidation_outbox
 from panel.services.backup import _get_system_setting_value, _parse_int
 from panel.services.billing import _recommendation_template_vars, _template_wants_recommendation
 
@@ -2488,14 +2492,19 @@ def _get_gmweb_send_capacity(cfg: dict | None = None) -> dict:
 
 
 def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: str | None = None,
-                        idempotency_key: str | None = None) -> dict:
+                        idempotency_key: str | None = None, meta: dict | None = None) -> dict:
     """POST a single SMS to the GMweb-API gateway. The gateway queues it and
     returns 200/202 with a stable requestId. Delivery is tracked separately by
     the SMS status worker; legacy gateways without requestId remain supported.
 
     ``priority`` must be one of Eve's four canonical lanes. ``idempotency_key``,
     when reused across a retry of the SAME logical message, lets GMweb return the
-    original request safely after a lost response."""
+    original request safely after a lost response.
+
+    ``meta`` is the notification identity the gateway stores with the queued
+    message: ``{source, serviceKey, notificationKind, generation, correlationId,
+    requiresValidation}``. It is what lets a later lifecycle invalidation find and
+    revoke exactly this reminder, for exactly this service."""
     cfg = _get_sms_provider_settings(cfg=cfg)
     out = {
         'sent': False, 'reason': None, 'status_code': None,
@@ -2521,6 +2530,9 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     out['priority'] = canonical_priority
     out['priority_level'] = GMWEB_SMS_PRIORITY_LEVELS[canonical_priority]
     payload = {'to': to, 'text': text, 'priority': canonical_priority}
+    notification_meta = _notification_meta(meta)
+    if notification_meta:
+        payload['meta'] = notification_meta
     headers = gmweb_contract.request_headers(
         api_key, json_body=True, idempotency_key=idempotency_key)
     for network_attempt in range(2 if idempotency_key else 1):
@@ -2605,6 +2617,145 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     return out
 
 
+
+
+def _notification_meta(meta: dict | None) -> dict:
+    """Whitelist + bound the notification identity sent to the gateway.
+
+    The gateway stores this with the queued message and matches lifecycle
+    invalidations against it, so only the declared contract fields may cross the
+    boundary -- never a free-form dict and never message content. Nothing here
+    is trusted from an inbound request: every value is produced by EVE from its
+    own durable state."""
+    if not isinstance(meta, dict):
+        return {}
+    out = {}
+    source = str(meta.get('source') or 'eve').strip()
+    if source:
+        out['source'] = source[:32]
+    service_key = str(meta.get('serviceKey') or '').strip()
+    if service_key:
+        out['serviceKey'] = service_key[:200]
+    kind = str(meta.get('notificationKind') or '').strip()
+    if kind:
+        out['notificationKind'] = kind[:48]
+    generation = meta.get('generation')
+    if generation is not None:
+        try:
+            out['generation'] = max(0, int(generation))
+        except (TypeError, ValueError):
+            pass
+    correlation = str(meta.get('correlationId') or '').strip()
+    if correlation:
+        out['correlationId'] = correlation[:64]
+    out['requiresValidation'] = bool(meta.get('requiresValidation', True))
+    return out
+
+
+def _log_warning(message: str, *args, **kwargs) -> None:
+    """Best-effort module warning: never let logging break a scan."""
+    try:
+        logging.getLogger(__name__).warning(message, *args, **kwargs)
+    except Exception:
+        pass
+
+
+def _sms_idempotency_key(service_key, generation, notification_kind, cd_hours) -> str:
+    """Stable Idempotency-Key for one depletion reminder (window-scoped)."""
+    try:
+        window = int(cd_hours or 24) * 3600
+    except (TypeError, ValueError):
+        window = 86400
+    return _stable_sms_idempotency_key(service_key, generation, notification_kind, window)
+
+
+def _stable_sms_idempotency_key(service_key: str, generation, notification_kind: str,
+                                window_seconds: int) -> str:
+    """Deterministic Idempotency-Key for one depletion reminder.
+
+    The key must be identical across every retry of the SAME logical message,
+    otherwise a network blip texts the customer twice. It must also differ
+    between two legitimate reminders, otherwise a service would be silenced
+    for ever after its first notification. Both hold here because the key
+    carries identity + generation + kind + the cooldown window bucket:
+
+        eve:<serviceKey>:<generation>:<notificationKind>:<window>
+
+    The window bucket follows the existing per-state cooldown rule, so the
+    next allowed reminder lands in a different bucket and is not deduped."""
+    try:
+        window = int(window_seconds) or 0
+    except (TypeError, ValueError):
+        window = 0
+    if window <= 0:
+        window = 86400
+    bucket = int(time.time() // window)
+    try:
+        gen = int(generation or 0)
+    except (TypeError, ValueError):
+        gen = 0
+    kind = str(notification_kind or 'unknown').strip().lower() or 'unknown'
+    raw = f"eve:{service_key}:{gen}:{kind}:{bucket}"
+    if len(raw) <= 200:
+        return raw
+    digest = hashlib.sha256(raw.encode('utf-8')).hexdigest()[:32]
+    return f"eve:{kind}:{gen}:{digest}"[:200]
+
+
+def _invalidate_notifications_via_gmweb(payload: dict, cfg: dict | None = None) -> dict:
+    """POST one lifecycle invalidation to the GMweb gateway.
+
+    Contract: ``POST /send/invalidate`` (see ``shared/eve-gmweb-contract-v1.json``).
+    EVE asks the gateway to revoke every not-yet-started reminder that carries the
+    same ``meta.serviceKey`` while the service generation is still older than
+    ``currentGeneration``. The request is idempotent on ``eventId``.
+
+    This function only moves bytes and classifies the outcome: every non-2xx,
+    timeout, malformed body and transport error is returned as
+    ``{'ok': False, 'reason': ...}`` so the durable outbox keeps the event and
+    retries it. It never raises and never decides to drop an invalidation.
+    """
+    cfg = _get_sms_provider_settings(cfg=cfg)
+    out = {'ok': False, 'reason': None, 'status_code': None, 'body': None,
+           'retry_after_seconds': None}
+    base, base_reason = _gmweb_base(cfg)
+    api_key = (cfg.get('api_key') or '').strip()
+    if not base or not api_key:
+        out['reason'] = base_reason or 'gateway_not_configured'
+        return out
+    if not isinstance(payload, dict):
+        out['reason'] = 'invalid_invalidate_payload'
+        return out
+    try:
+        resp = requests.post(
+            f"{base}{gmweb_contract.endpoint_path('post_invalidate')}",
+            json=payload,
+            headers=gmweb_contract.request_headers(api_key, json_body=True),
+            timeout=int(cfg.get('timeout_seconds') or 15),
+        )
+        out['status_code'] = resp.status_code
+        try:
+            body = resp.json() if resp.content else {}
+        except (TypeError, ValueError):
+            body = {}
+        out['body'] = body if isinstance(body, dict) else {}
+        if resp.status_code in (200, 202):
+            out['ok'] = True
+            return out
+        out['reason'] = _sms_gmweb_error_reason(resp)
+        if resp.status_code == 409 and isinstance(body, dict) and body.get('error'):
+            # A stale generation is a lost race, not a failure: the newer
+            # lifecycle already owns the service, so this invalidation is moot.
+            out['reason'] = str(body.get('error'))[:120]
+        try:
+            raw_retry = resp.headers.get('Retry-After')
+            out['retry_after_seconds'] = max(1, int(raw_retry)) if raw_retry else None
+        except (TypeError, ValueError):
+            pass
+        return out
+    except Exception as exc:
+        out['reason'] = f'gateway_error: {exc}'[:255]
+        return out
 
 
 def _cancel_sms_via_gmweb(reference: str, cfg: dict | None = None) -> dict:
@@ -2805,18 +2956,63 @@ def _cancel_stale_account_sms(server_id, email: str, *, reason: str) -> dict:
     )
 
 
-def _fire_cancel_stale_account_sms(server_id, email: str, *, reason: str) -> None:
-    """Cancel stale gateway messages outside the operator-facing request.
+def _fire_cancel_stale_account_sms(server_id, email: str, *, reason: str,
+                                   client_uuid=None, event_type='renewal',
+                                   operation_id=None, correlation_id=None,
+                                   client=None) -> None:
+    """Mirror a successful renewal into the notification lifecycle. Async.
 
-    Gateway cancellation can require one HTTP request per queued message. The
-    renewed cache state and the dispatch-time depletion guard already prevent
-    stale Eve messages from being sent, so these best-effort remote calls must
-    not add multiple gateway timeouts to the renewal response.
+    This is the single chokepoint every successful renewal path reaches, and it
+    does the whole post-renewal notification job:
+
+    1. advance the DURABLE service generation (the cross-worker barrier that stops
+       another worker from submitting a reminder classified before the renewal);
+    2. record the invalidation in the durable outbox and commit it with the
+       generation, so a gateway outage or a process restart cannot lose it;
+    3. ask the gateway immediately to revoke already-queued old reminders, in
+       parallel with the best-effort per-message cancel below;
+    4. best-effort local cancel of the specific rows EVE still owns.
+
+    It runs off the request path on purpose: the customer's renewal must never
+    depend on the SMS gateway being reachable, and gateway cancellation costs one
+    HTTP request per queued message. Note the ordering guarantee -- this is only
+    ever called AFTER the panel write was verified, so a failed renewal can never
+    suppress a legitimate depletion reminder.
     """
     from app import app  # deferred: Flask instance lives in app.py
 
+    identity = client_uuid
+    if not identity and isinstance(client, dict):
+        identity = lifecycle_service.resolve_client_uuid(client)
+    if not identity:
+        # Fallback identity when a path only knows the email (bulk repair jobs).
+        # The email is a weak identity, which is exactly why it is the *fallback*
+        # and not the primary key.
+        identity = lifecycle_service.client_uuid_from_email(email)
+
     def _worker():
         with app.app_context():
+            try:
+                lifecycle_result = lifecycle_service.handle_successful_service_lifecycle_change(
+                    server_id=server_id,
+                    client_uuid=identity,
+                    client_email=email,
+                    event_type=event_type,
+                    operation_id=operation_id,
+                    correlation_id=correlation_id,
+                    reason=reason,
+                )
+                if lifecycle_result.get('error'):
+                    app.logger.error(
+                        '[lifecycle] generation advance failed for %s: %s',
+                        lifecycle_result.get('service_key'),
+                        lifecycle_result.get('error'),
+                    )
+            except Exception:
+                app.logger.exception(
+                    '[lifecycle] asynchronous lifecycle change failed for %s/%s',
+                    server_id, email,
+                )
             try:
                 _cancel_stale_account_sms(server_id, email, reason=reason)
             except Exception:
@@ -2825,7 +3021,8 @@ def _fire_cancel_stale_account_sms(server_id, email: str, *, reason: str) -> Non
                     server_id, email,
                 )
 
-    threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_worker, daemon=True,
+                     name='eve-renew-lifecycle').start()
 
 
 def _sms_accepted_status(send_result: dict) -> str:
@@ -2895,9 +3092,20 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                     sid_norm = None
                 email_l = (email or '').strip().lower()
 
-                def _log(recipient, status, reason, gateway_result=None):
+                def _log(recipient, status, reason, gateway_result=None, lifecycle=None):
                     _sms_log_row(None, email_l, sid_norm, server_name, event_name,
-                                 recipient, status, reason, gateway_result)
+                                 recipient, status, reason, gateway_result, lifecycle)
+
+                # The notification identity this confirmation belongs to. The
+                # generation is read (not advanced) here: the renewal itself already
+                # advanced it on the request path.
+                service_key = lifecycle_service.service_key_for_client(
+                    sid_norm, None, email=email)
+                generation_state = lifecycle_service.generation_state(service_key)
+                audit = _lifecycle_audit(
+                    service_key, generation_state.get('generation'),
+                    lifecycle_service.new_correlation_id(), None,
+                    generation_state.get('last_lifecycle_change_at'))
 
                 cfg = _get_sms_runtime_settings()
                 ok, reason = _sms_should_send(event_name, server_id, email, cfg)
@@ -2960,16 +3168,25 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 # paid gets their confirmation next, ahead of any running bulk scan.
                 # Stable idempotency key per fire so a network-retry can't double-send.
                 idem = f"tx-{event_name}-{sid_norm}-{email_l}-{int(time.time())}"
+                # requiresValidation=False: a create/renew confirmation is
+                # transactional and is NEVER revoked by a lifecycle invalidation.
+                tx_meta = _transactional_notification_meta(
+                    service_key, event_name, correlation_id=audit.get('correlationId'))
                 res = _send_sms_via_gmweb(
                     recipient, text, cfg,
-                    priority=_gmweb_sms_priority(event_name), idempotency_key=idem)
+                    priority=_gmweb_sms_priority(event_name), idempotency_key=idem,
+                    meta=tx_meta)
+                audit = _lifecycle_audit(
+                    service_key, audit.get('generation'),
+                    tx_meta.get('correlationId'), None, audit.get('lastLifecycleChangeAt'),
+                    idempotency_key=idem)
                 if res.get('sent'):
-                    _log(recipient, _sms_accepted_status(res), None, res)
+                    _log(recipient, _sms_accepted_status(res), None, res, audit)
                 elif res.get('manual_review'):
-                    _log(recipient, 'manual_review', 'unverified_manual_review', res)
+                    _log(recipient, 'manual_review', 'unverified_manual_review', res, audit)
                 else:
                     _sms_refund_daily_segments(segments)
-                    _log(recipient, 'failed', res.get('reason'), res)
+                    _log(recipient, 'failed', res.get('reason'), res, audit)
             except Exception:
                 app.logger.exception('[sms-automation] send failed')
     threading.Thread(target=_worker, daemon=True).start()
@@ -3129,30 +3346,57 @@ def _classify_monitor_status(*, enabled: bool, total_bytes: int, remaining_bytes
     return status
 
 
-def _sms_depletion_state_still_valid(server_id, email: str, expected_state: str,
-                                     cfg: dict) -> tuple[bool, str]:
-    """Fail closed when a queued depletion candidate no longer matches live state.
+def _client_snapshot_times(client: dict) -> tuple:
+    """(config_updated_at, telemetry_updated_at) for one cached client row.
 
-    A scan may spend minutes behind pacing or the GMweb queue. During that wait the
-    customer can renew. Reload the shared snapshot and recompute the exact state
-    immediately before handing the message to the external gateway. If the account
-    disappeared or duplicate cached copies disagree, suppress the stale warning.
-    """
-    from app import format_remaining_days  # deferred compatibility export
+    The refresh pipeline stamps both when it writes a row (see
+    ``panel/jobs/refresh.py``); a renewal patch stamps only the config side, a
+    traffic poll only the telemetry side. Either timestamp is a lower bound for
+    \"when did EVE last see this service at all\", which is what the stale-
+    snapshot guard needs."""
+    config_at = telemetry_at = None
+    if not isinstance(client, dict):
+        return config_at, telemetry_at
+    for key, target in (('config_updated_at', 'config'), ('telemetry_updated_at', 'telemetry')):
+        raw = client.get(key)
+        if not raw:
+            continue
+        try:
+            moment = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+        except (TypeError, ValueError):
+            moment = None
+        if moment is None:
+            continue
+        if moment.tzinfo is not None:
+            moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+        if target == 'config':
+            config_at = moment
+        else:
+            telemetry_at = moment
+    return config_at, telemetry_at
 
-    try:
-        load_snapshot_from_redis()
-    except Exception:
-        pass
+
+def _snapshot_observation_time(client: dict):
+    """The freshest moment EVE observed this client, or None when unknown."""
+    config_at, telemetry_at = _client_snapshot_times(client)
+    candidates = [t for t in (config_at, telemetry_at) if t is not None]
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def _cached_snapshot_clients(server_id, email: str):
+    """Every cached copy of (server_id, email) with its observation time.
+
+    A v3 client attached to several inbounds appears more than once on purpose:
+    the existing fail-closed recheck already treats disagreeing copies as
+    \"cannot prove the state\"."""
     try:
         sid = int(server_id)
     except (TypeError, ValueError):
         sid = server_id
     email_l = (email or '').strip().lower()
-    warning_days = int(cfg.get('depletion_expiry_days', 3))
-    warning_gb = float(cfg.get('depletion_volume_gb', 2.0))
-    observed_states = []
-
+    found = []
     for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
         try:
             if int(inbound.get('server_id', -1)) != int(sid):
@@ -3163,30 +3407,223 @@ def _sms_depletion_state_still_valid(server_id, email: str, expected_state: str,
         for client in (inbound.get('clients') or []):
             if (client.get('email') or '').strip().lower() != email_l:
                 continue
-            total_bytes = int(client.get('totalGB') or 0)
-            try:
-                used = int(client.get('up') or 0) + int(client.get('down') or 0)
-            except (TypeError, ValueError):
-                used = 0
-            remaining_bytes = client.get('remaining_bytes')
-            if remaining_bytes is None or remaining_bytes == -1:
-                remaining_bytes = max(total_bytes - used, 0) if total_bytes > 0 else None
-            remaining_gb = (
-                float(remaining_bytes) / (1024 ** 3)
-                if remaining_bytes is not None else None
-            )
-            expiry_ts = int(client.get('expiryTimestamp') or 0)
-            status = _classify_monitor_status(
-                enabled=bool(client.get('enable', True)),
-                total_bytes=total_bytes,
-                remaining_bytes=remaining_bytes,
-                remaining_gb=remaining_gb,
-                expiry_ts=expiry_ts,
-                expiry_info=format_remaining_days(expiry_ts),
-                warning_days=warning_days,
-                warning_gb=warning_gb,
-            )
-            observed_states.append(SMS_MONITOR_TAG_TO_STATE.get(status or ''))
+            found.append(client)
+    return found
+
+
+def _snapshot_is_fresh_for_candidate(server_id, email: str, last_change_at):
+    """Can this snapshot still prove the service is depleted?
+
+    A snapshot observed at or before the last successful lifecycle change simply
+    cannot: it was taken when the pre-renewal state was true. This is the RACE B
+    guard -- even with every queued job cancelled correctly, a worker reading a
+    stale cache would otherwise invent a brand-new \'volume ended\' reminder for a
+    service the customer already renewed.
+
+    Returns (fresh, observed_at, reason). Unknown timestamps fail closed.
+    """
+    if last_change_at is None:
+        clients = _cached_snapshot_clients(server_id, email)
+        observed = None
+        for client in clients:
+            moment = _snapshot_observation_time(client)
+            if moment is not None and (observed is None or moment > observed):
+                observed = moment
+        return True, observed, ''
+    clients = _cached_snapshot_clients(server_id, email)
+    if not clients:
+        return False, None, 'snapshot_missing_recheck'
+    newest = None
+    for client in clients:
+        moment = _snapshot_observation_time(client)
+        if moment is None:
+            # No observation stamp at all: the row predates the stamping or came
+            # from an un-refreshed cache. It cannot prove a post-renewal state.
+            return False, None, 'snapshot_time_unknown_recheck'
+        if newest is None or moment > newest:
+            newest = moment
+    if newest is None or newest <= last_change_at:
+        return False, newest, 'snapshot_predates_lifecycle_change'
+    return True, newest, ''
+
+
+def _sms_depletion_state_still_valid(server_id, email: str, expected_state: str,
+                                     cfg: dict, *, service_key: str | None = None,
+                                     expected_generation=None,
+                                     last_lifecycle_change_at=None) -> tuple[bool, str]:
+    """placeholder"""
+
+
+_SNAPSHOT_REFRESHABLE_REASONS = (
+    'snapshot_predates_lifecycle_change',
+    'snapshot_time_unknown_recheck',
+    'snapshot_missing_recheck',
+)
+
+
+def _lifecycle_audit(service_key, generation, correlation_id, observed_at,
+                     last_change_at, idempotency_key=None) -> dict:
+    """The audit bundle written next to every scan attempt.
+
+    Deliberately carries no SMS body: the operator needs to know WHICH lifecycle
+    a message belonged to, not what it said."""
+    return {
+        'serviceKey': service_key,
+        'generation': generation,
+        'correlationId': correlation_id,
+        'observedAt': observed_at if isinstance(observed_at, datetime) else None,
+        'lastLifecycleChangeAt': (
+            last_change_at if isinstance(last_change_at, datetime) else None),
+        'idempotencyKey': idempotency_key,
+    }
+
+
+def _depletion_notification_meta(service_key, generation, notification_kind, *,
+                                 correlation_id=None, last_change_at=None) -> dict:
+    """The contract meta block for an automated depletion reminder.
+
+    ``requiresValidation`` is True: this message is a claim about live state and
+    may be revoked by a renewal. Transactional created/renew confirmations set it
+    to False so an invalidation can never cancel them."""
+    return {
+        'source': 'eve',
+        'serviceKey': service_key,
+        'notificationKind': notification_kind,
+        'generation': generation,
+        'correlationId': correlation_id or lifecycle_service.new_correlation_id(),
+        'requiresValidation': True,
+    }
+
+
+def _transactional_notification_meta(service_key, event_name, generation=None,
+                                      correlation_id=None) -> dict:
+    """The contract meta block for a create/renew confirmation.
+
+    ``requiresValidation`` is False and the kind is ``created``/``renew``, which
+    keeps the message OUT of every lifecycle invalidation: a customer who just
+    paid must still receive the confirmation that their renewal worked."""
+    return {
+        'source': 'eve',
+        'serviceKey': service_key,
+        'notificationKind': lifecycle_service.sms_notification_kind(event_name),
+        'generation': generation,
+        'correlationId': correlation_id or lifecycle_service.new_correlation_id(),
+        'requiresValidation': False,
+    }
+
+
+def _targeted_candidate_refresh(server_id, email: str) -> tuple[bool, object]:
+    """One read-only panel read for ONE client, when the cache is too old.
+
+    The depletion scan classifies thousands of rows from the shared snapshot;
+    refreshing the whole panel for each of them is not affordable. This runs only
+    for a candidate that is about to be sent and whose cached copy cannot prove a
+    post-renewal state, and it touches a single server.
+
+    Returns (refreshed, observed_at). A failure returns (False, None) and the
+    caller then skips the message -- a missed reminder beats a wrong one."""
+    try:
+        from app import fetch_and_update_global_data  # deferred: app-level helper
+    except Exception:
+        return False, None
+    try:
+        fetched = fetch_and_update_global_data(force=True, server_ids=[int(server_id)])
+    except Exception:
+        _log_warning('[sms-scan] targeted refresh failed for %s', server_id,
+                     exc_info=True)
+        return False, None
+    if not fetched:
+        return False, None
+    observed = None
+    for client in _cached_snapshot_clients(server_id, email):
+        moment = _snapshot_observation_time(client)
+        if moment is not None and (observed is None or moment > observed):
+            observed = moment
+    return (observed is not None), observed
+
+
+def _classify_cached_client_state(client: dict, cfg: dict):
+    """Monitor status tag for one cached client row -> SMS state (or None).
+
+    One implementation shared by the scan and the pre-send recheck so the two
+    can never disagree about what \"depleted\" means."""
+    from app import format_remaining_days  # deferred compatibility export
+    total_bytes = int(client.get('totalGB') or 0)
+    try:
+        used = int(client.get('up') or 0) + int(client.get('down') or 0)
+    except (TypeError, ValueError):
+        used = 0
+    remaining_bytes = client.get('remaining_bytes')
+    if remaining_bytes is None or remaining_bytes == -1:
+        remaining_bytes = max(total_bytes - used, 0) if total_bytes > 0 else None
+    remaining_gb = (
+        float(remaining_bytes) / (1024 ** 3)
+        if remaining_bytes is not None else None
+    )
+    expiry_ts = int(client.get('expiryTimestamp') or 0)
+    status = _classify_monitor_status(
+        enabled=bool(client.get('enable', True)),
+        total_bytes=total_bytes,
+        remaining_bytes=remaining_bytes,
+        remaining_gb=remaining_gb,
+        expiry_ts=expiry_ts,
+        expiry_info=format_remaining_days(expiry_ts),
+        warning_days=int(cfg.get('depletion_expiry_days', 3)),
+        warning_gb=float(cfg.get('depletion_volume_gb', 2.0)),
+    )
+    return SMS_MONITOR_TAG_TO_STATE.get(status or '')
+
+
+def _sms_depletion_state_still_valid(server_id, email: str, expected_state: str,
+                                     cfg: dict, *, service_key: str | None = None,
+                                     expected_generation=None,
+                                     last_lifecycle_change_at=None) -> tuple[bool, str]:
+    """Fail closed when a queued depletion candidate no longer matches live state.
+
+    A scan may spend minutes behind pacing or the GMweb queue, and during that
+    wait the customer can renew. Three independent barriers run here, in order:
+
+    1. GENERATION BARRIER (durable, cross-worker). Re-read the service's
+       generation straight from the database. If it moved since the candidate
+       was classified, the candidate describes a lifecycle that no longer
+       exists -- drop it. This holds even when a DIFFERENT process performed the
+       renewal, which is exactly the gunicorn-worker-A/B case.
+    2. SNAPSHOT-AGE BARRIER. A snapshot observed at or before the last
+       successful lifecycle change cannot prove the service is depleted, so it
+       is never accepted as evidence.
+    3. STATE RECHECK. Reload the shared snapshot and recompute the exact state;
+       if the account disappeared or duplicate cached copies disagree, suppress.
+
+    Returns (ok, reason). The caller decides what to do when only the snapshot
+    is too old (it may retry with a targeted refresh); this never sends on doubt."""
+    try:
+        load_snapshot_from_redis()
+    except Exception:
+        pass
+
+    if service_key:
+        try:
+            from panel.services import lifecycle as lifecycle_service
+            current = lifecycle_service.generation_state(service_key)
+        except Exception:
+            current = None
+        if current is not None:
+            live_generation = current.get('generation')
+            if expected_generation is None and live_generation is not None:
+                return False, 'generation_unknown_recheck'
+            if (expected_generation is not None and live_generation is not None
+                    and int(live_generation) != int(expected_generation)):
+                return False, 'generation_changed_recheck'
+            changed_at = (current.get('last_lifecycle_change_at')
+                          or last_lifecycle_change_at)
+            fresh, _observed, fresh_reason = _snapshot_is_fresh_for_candidate(
+                server_id, email, changed_at)
+            if not fresh:
+                return False, fresh_reason
+
+    observed_states = []
+    for client in _cached_snapshot_clients(server_id, email):
+        observed_states.append(_classify_cached_client_state(client, cfg))
 
     if not observed_states:
         return False, 'account_missing_recheck'
@@ -3279,7 +3716,10 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
 
     inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
     seen = set()
-    candidates = []   # (sid_norm, email, email_l, server_name, state, recipient, mvars)
+    # Each candidate carries the notification identity it was classified from:
+    # (sid_norm, email, email_l, server_name, state, recipient, mvars, comment,
+    #  service_key, observed_generation, observed_at)
+    candidates = []
     total_clients = 0
 
     # Pass 1 — classify and collect everyone eligible (matching an enabled state +
@@ -3359,6 +3799,11 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             if not recipient:
                 continue
 
+            # The canonical, durable service identity. Centralised in the lifecycle
+            # service so the renewal side and this scan can never disagree.
+            service_key = lifecycle_service.service_key_for_client(
+                sid_norm, client, email=email)
+
             expiry_date = None
             if expiry_ts and expiry_ts > 0:
                 try:
@@ -3374,17 +3819,31 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 '_sub_id': client.get('subId') or client.get('id') or '',
             }
             candidates.append((sid_norm, email, email_l, server_name, state, recipient, mvars,
-                               client.get('comment') or ''))
+                               client.get('comment') or '', service_key, None,
+                               _snapshot_observation_time(client)))
 
     # Send priority: volume-running-out → time-running-out → volume-ended →
     # fully-expired. Within a state, original (scan) order is preserved.
     candidates.sort(key=lambda c: priority_map.get(c[4], 99))
 
+    # One batched read of the durable generations for exactly the candidates that
+    # survived the cheap scan — never for every dashboard row (no N+1, no
+    # full-panel refresh per client).
+    try:
+        generations = lifecycle_service.generations_for_keys(
+            [c[8] for c in candidates if c[8]])
+    except Exception:
+        generations = {}
+
     _sms_scan_set(total_clients=total_clients, candidates=len(candidates))
 
     sent = 0
     # Pass 2 — cooldown gate + rate-limit + send + log per candidate.
-    for (sid_norm, email, email_l, server_name, state, recipient, mvars, queued_comment) in candidates:
+    for (sid_norm, email, email_l, server_name, state, recipient, mvars, queued_comment,
+         service_key, observed_generation, observed_at) in candidates:
+        lifecycle = generations.get(service_key) or {}
+        expected_generation = lifecycle.get('generation')
+        last_change_at = lifecycle.get('last_lifecycle_change_at')
         if _sms_scan_cancelled():
             _sms_scan_set(state='stopped', stopped='cancelled', finished_at=_utc_iso_now(), current=None)
             return {'scanned': total_clients, 'sent': sent, 'stopped': 'cancelled'}
@@ -3451,22 +3910,46 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
                          'skipped', 'opted_out_recheck', segment_info)
             continue
+        # FINAL consistency guard, for this candidate only: durable generation,
+        # snapshot age, then live state. Nothing is sent on doubt.
         state_valid, state_reason = _sms_depletion_state_still_valid(
-            sid_norm, email, state, cfg,
+            sid_norm, email, state, cfg, service_key=service_key,
+            expected_generation=expected_generation,
+            last_lifecycle_change_at=last_change_at,
         )
         if not state_valid:
-            _sms_refund_daily_segments(segments)
-            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
-                         'skipped', state_reason, segment_info)
-            continue
+            if state_reason in _SNAPSHOT_REFRESHABLE_REASONS:
+                # The cached copy is merely too old to prove anything. Try one
+                # targeted, read-only panel read for THIS client before giving up;
+                # never a full-panel fan-out.
+                refreshed, observed_at = _targeted_candidate_refresh(
+                    sid_norm, email)
+                if refreshed:
+                    state_valid, state_reason = _sms_depletion_state_still_valid(
+                        sid_norm, email, state, cfg, service_key=service_key,
+                        expected_generation=expected_generation,
+                        last_lifecycle_change_at=last_change_at,
+                    )
+            if not state_valid:
+                _sms_refund_daily_segments(segments)
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                             'skipped', state_reason, segment_info,
+                             _lifecycle_audit(service_key, expected_generation,
+                                              None, observed_at, last_change_at))
+                continue
 
-        # Same idempotency key for the send and its 429-retry so the retry can't
-        # double-send. Scoped to this scan run (jid) so a later scan re-sends fresh.
-        scan_idem = f"scan-{jid}-{state}-{sid_norm}-{email_l}"
+        # Stable Idempotency-Key: identical across every retry of THIS logical
+        # message (including the 429 retry below), different for the next window.
+        notification_kind = lifecycle_service.sms_notification_kind(state)
+        scan_idem = _sms_idempotency_key(
+            service_key, expected_generation, notification_kind, cd_hours)
         gmweb_priority = _gmweb_sms_priority(state)
+        sms_meta = _depletion_notification_meta(
+            service_key, expected_generation, notification_kind,
+            last_change_at=last_change_at)
         res = _send_sms_via_gmweb(
             recipient, text_msg, cfg, priority=gmweb_priority,
-            idempotency_key=scan_idem)
+            idempotency_key=scan_idem, meta=sms_meta)
         # Gateway rate-limited: back off once and retry. If still limited, stop the
         # whole run rather than hammering it with the rest of the batch (the next
         # scheduled scan resumes where this left off).
@@ -3478,16 +3961,20 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                              'skipped', 'opted_out_recheck', segment_info)
                 continue
             state_valid, state_reason = _sms_depletion_state_still_valid(
-                sid_norm, email, state, cfg,
+                sid_norm, email, state, cfg, service_key=service_key,
+                expected_generation=expected_generation,
+                last_lifecycle_change_at=last_change_at,
             )
             if not state_valid:
                 _sms_refund_daily_segments(segments)
                 _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
-                             'skipped', state_reason, segment_info)
+                             'skipped', state_reason, segment_info,
+                             _lifecycle_audit(service_key, expected_generation,
+                                              None, observed_at, last_change_at))
                 continue
             res = _send_sms_via_gmweb(
                 recipient, text_msg, cfg, priority=gmweb_priority,
-                idempotency_key=scan_idem)
+                idempotency_key=scan_idem, meta=sms_meta)
             if (not res.get('sent')) and res.get('status_code') == 429:
                 _sms_refund_daily_segments(segments)
                 SMS_LAST_SEND_TS[0] = time.time()
@@ -3511,15 +3998,28 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 ps[state] = int(ps.get(state, 0) or 0) + 1
                 SMS_SCAN_JOB['per_state'] = ps
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
-                         _sms_accepted_status(res), None, res)
+                         _sms_accepted_status(res), None, res,
+                         _lifecycle_audit(service_key, expected_generation,
+                                          sms_meta.get('correlationId'),
+                                          observed_at, last_change_at,
+                                          idempotency_key=scan_idem))
         elif res.get('manual_review'):
             _sms_scan_inc('failed')
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
-                         'manual_review', 'unverified_manual_review', res)
+                         'manual_review', 'unverified_manual_review', res,
+                         _lifecycle_audit(service_key, expected_generation,
+                                          sms_meta.get('correlationId'),
+                                          observed_at, last_change_at,
+                                          idempotency_key=scan_idem))
         else:
             _sms_refund_daily_segments(segments)
             _sms_scan_inc('failed')
-            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed', res.get('reason'), res)
+            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'failed',
+                         res.get('reason'), res,
+                         _lifecycle_audit(service_key, expected_generation,
+                                          sms_meta.get('correlationId'),
+                                          observed_at, last_change_at,
+                                          idempotency_key=scan_idem))
 
     _sms_scan_set(state='done', finished_at=_utc_iso_now(), current=None)
     return {'scanned': total_clients, 'sent': sent, 'candidates': len(candidates)}
@@ -3717,10 +4217,23 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
 
 
 def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, status, reason,
-                 gateway_result: dict | None = None):
-    """Persist one audit row for the SMS send-log history. Best-effort."""
+                 gateway_result: dict | None = None, lifecycle: dict | None = None):
+    """Persist one audit row for the SMS send-log history. Best-effort.
+
+    ``lifecycle`` carries the notification identity the message was created from
+    (``serviceKey``, ``generation``, ``correlationId``, ``idempotencyKey``,
+    ``observedAt``, ``lastLifecycleChangeAt``). Persisting it is what lets an
+    operator answer, after a customer complaint, whether this SMS was created
+    before or after the renewal that supposedly answered it."""
     try:
         gateway_result = gateway_result or {}
+        lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
+        _observed_at = lifecycle.get('observedAt')
+        if _observed_at is not None and not isinstance(_observed_at, datetime):
+            _observed_at = None
+        _changed_at = lifecycle.get('lastLifecycleChangeAt')
+        if _changed_at is not None and not isinstance(_changed_at, datetime):
+            _changed_at = None
         row = SmsSendLog(
             email=email_l, server_id=(sid_norm or 0), server_name=(server_name or '')[:255],
             state=state, recipient=_mask_mobile(recipient), status=status,
@@ -3769,6 +4282,16 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
                         if gateway_result.get('sms_units') is not None else None),
             character_count=(int(gateway_result.get('sms_characters'))
                              if gateway_result.get('sms_characters') is not None else None),
+            service_key=(str(lifecycle.get('serviceKey'))[:255]
+                         if lifecycle.get('serviceKey') else None),
+            lifecycle_generation=(int(lifecycle.get('generation'))
+                                  if lifecycle.get('generation') is not None else None),
+            correlation_id=(str(lifecycle.get('correlationId'))[:64]
+                            if lifecycle.get('correlationId') else None),
+            idempotency_key=(str(lifecycle.get('idempotencyKey'))[:200]
+                             if lifecycle.get('idempotencyKey') else None),
+            candidate_observed_at=_observed_at,
+            last_lifecycle_change_at=_changed_at,
         )
         db.session.add(row)
         db.session.commit()
@@ -3980,6 +4503,12 @@ def sms_status_worker():
         pending = False
         try:
             with app.app_context():
+                # Safety net for the lifecycle-invalidation outbox. Its own singleton
+                # worker is the primary drain; this keeps a failed renewal
+                # invalidation moving even when that singleton was not elected or a
+                # process restarted mid-retry. flush_invalidation_outbox only picks
+                # up rows whose backoff has elapsed, so a double drain is a no-op.
+                flush_invalidation_outbox(limit=10)
                 pending = SmsSendLog.query.filter(
                     SmsSendLog.request_id.isnot(None),
                     or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
@@ -4078,6 +4607,8 @@ def sms_bot_worker():
     while True:
         try:
             with app.app_context():
+                # Finish any lifecycle invalidation a renewal could not deliver.
+                flush_invalidation_outbox(limit=20)
                 # First drain anything parked during quiet hours (if the window ended).
                 flushed = _flush_pending_sms()
                 if flushed:
