@@ -883,18 +883,119 @@ class UsageDaily(db.Model):
         return int(self.closing_upload_bytes or 0) + int(self.closing_download_bytes or 0)
 
 
+# Business-event vocabulary (RenewalEvent v2). Kept next to the model so the
+# analytics layer, the collector and the tests share one contract.
+RENEWAL_EVENT_TYPES = (
+    'renewal',
+    'quota_topup',
+    'traffic_reset',
+    'package_change',
+    'expiry_extension',
+    'inferred_reset',
+)
+RENEWAL_EVENT_SOURCES = (
+    'explicit_renew',
+    'admin_reset',
+    'telegram_renew',
+    'api_mutation',
+    'counter_reset',
+    'inferred',
+    'migration',
+)
+# Only a verified event of one of these types starts a recommendation cycle.
+# A quota top-up adds volume to the current cycle; it does not restart it.
+CYCLE_BOUNDARY_EVENT_TYPES = ('renewal', 'package_change')
+
+
 class RenewalEvent(db.Model):
-    """Detected renewal event for a subscription."""
+    """Business fact: what happened to a customer's commercial cycle (v2).
+
+    The three layers are kept apart on purpose:
+
+    * telemetry (``UsageCounterState`` / ``UsageHourly`` / ``UsageDaily``) answers
+      "how much traffic was used?";
+    * this table answers "when did the paid cycle restart, and on what terms?";
+    * analytics (``panel/services/usage_intelligence``) combines both and never
+      guesses one from the other.
+
+    A raw counter decrease is therefore **not** a renewal: the collector records it as
+    ``event_type='inferred_reset'`` / ``source='counter_reset'`` / ``verified=False``.
+    Only a row with ``verified=True`` and an ``event_type`` in
+    ``CYCLE_BOUNDARY_EVENT_TYPES`` may start a recommendation cycle - verified becomes
+    true only after the panel write has been read back and matched.
+    """
     __tablename__ = 'renewal_events'
     id = db.Column(db.Integer, primary_key=True)
     server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=False, index=True)
     sub_id = db.Column(db.String(128), nullable=False, index=True)
+    client_uuid = db.Column(db.String(64), nullable=True)
+    client_email_snapshot = db.Column(db.String(255), nullable=True)
+    # Fail-safe defaults: a row that forgets to pass an event_type becomes an
+    # unverified telemetry reset, never an authoritative cycle boundary.
+    event_type = db.Column(db.String(32), nullable=False,
+                           default='inferred_reset', server_default='inferred_reset')
+    source = db.Column(db.String(32), nullable=False,
+                       default='inferred', server_default='inferred')
     renewed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     volume_bytes = db.Column(db.BigInteger, nullable=True)
     days = db.Column(db.Integer, nullable=True)
+    previous_volume_limit_bytes = db.Column(db.BigInteger, nullable=True)
+    new_volume_limit_bytes = db.Column(db.BigInteger, nullable=True)
+    previous_remaining_bytes = db.Column(db.BigInteger, nullable=True)
+    carried_over_bytes = db.Column(db.BigInteger, nullable=True)
+    granted_volume_bytes = db.Column(db.BigInteger, nullable=True)
+    previous_expiry_at = db.Column(db.DateTime, nullable=True)
+    new_expiry_at = db.Column(db.DateTime, nullable=True)
+    traffic_reset = db.Column(db.Boolean, nullable=False,
+                              default=False, server_default=db.text('false'))
     is_unlimited_volume = db.Column(db.Boolean, default=False)
     is_unlimited_time = db.Column(db.Boolean, default=False)
+    operation_id = db.Column(db.String(64), nullable=True, index=True)
+    verified = db.Column(db.Boolean, nullable=False,
+                         default=False, server_default=db.text('false'))
+    verified_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     __table_args__ = (
         db.Index('ix_renewal_events_server_sub', 'server_id', 'sub_id'),
+        # Latest authoritative boundary per account: an indexed lookup, never a scan.
+        db.Index('ix_renewal_events_server_sub_renewed', 'server_id', 'sub_id', 'renewed_at'),
+        db.Index('ix_renewal_events_server_sub_verified_renewed',
+                 'server_id', 'sub_id', 'verified', 'renewed_at'),
+        # One event per operation and type: a retried renewal cannot open a second cycle.
+        db.UniqueConstraint('operation_id', 'event_type',
+                            name='uq_renewal_events_operation_type'),
     )
+
+    @property
+    def is_cycle_boundary(self) -> bool:
+        """True when analytics may treat this event as the start of a new cycle."""
+        return bool(self.verified) and self.event_type in CYCLE_BOUNDARY_EVENT_TYPES
+
+    def to_dict(self, *, redact: bool = True) -> dict:
+        """Analytics/debug view; the email snapshot is PII and stays out by default."""
+        return {
+            'id': self.id,
+            'server_id': self.server_id,
+            'sub_id': self.sub_id,
+            'client_uuid': self.client_uuid if not redact else None,
+            'client_email': None if redact else self.client_email_snapshot,
+            'event_type': self.event_type,
+            'source': self.source,
+            'renewed_at': self.renewed_at.isoformat() if self.renewed_at else None,
+            'volume_bytes': self.volume_bytes,
+            'days': self.days,
+            'previous_volume_limit_bytes': self.previous_volume_limit_bytes,
+            'new_volume_limit_bytes': self.new_volume_limit_bytes,
+            'previous_remaining_bytes': self.previous_remaining_bytes,
+            'carried_over_bytes': self.carried_over_bytes,
+            'granted_volume_bytes': self.granted_volume_bytes,
+            'previous_expiry_at': self.previous_expiry_at.isoformat() if self.previous_expiry_at else None,
+            'new_expiry_at': self.new_expiry_at.isoformat() if self.new_expiry_at else None,
+            'traffic_reset': bool(self.traffic_reset),
+            'is_unlimited_volume': bool(self.is_unlimited_volume),
+            'is_unlimited_time': bool(self.is_unlimited_time),
+            'operation_id': self.operation_id,
+            'verified': bool(self.verified),
+            'verified_at': self.verified_at.isoformat() if self.verified_at else None,
+        }

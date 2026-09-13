@@ -265,6 +265,28 @@ def _legacy_column_catchup():
         ('download_bytes', 'INTEGER DEFAULT 10000000'),
         ('upload_bytes', 'INTEGER DEFAULT 2000000'),
     ])
+    # RenewalEvent v2 (usage intelligence): business-event vocabulary, rollover
+    # accounting, idempotency link and the verified flag. Fail-safe defaults keep a
+    # pre-v2 row an unverified inferred reset; alembic revision b8d2e3f4a5c6 owns the
+    # indexes and the unique (operation_id, event_type) constraint.
+    _migrate_add_columns('renewal_events', [
+        ('client_uuid', 'VARCHAR(64)'),
+        ('client_email_snapshot', 'VARCHAR(255)'),
+        ('event_type', "VARCHAR(32) DEFAULT 'inferred_reset'"),
+        ('source', "VARCHAR(32) DEFAULT 'inferred'"),
+        ('previous_volume_limit_bytes', 'BIGINT'),
+        ('new_volume_limit_bytes', 'BIGINT'),
+        ('previous_remaining_bytes', 'BIGINT'),
+        ('carried_over_bytes', 'BIGINT'),
+        ('granted_volume_bytes', 'BIGINT'),
+        ('previous_expiry_at', 'DATETIME'),
+        ('new_expiry_at', 'DATETIME'),
+        ('traffic_reset', 'BOOLEAN DEFAULT FALSE'),
+        ('operation_id', 'VARCHAR(64)'),
+        ('verified', 'BOOLEAN DEFAULT FALSE'),
+        ('verified_at', 'DATETIME'),
+        ('created_at', 'DATETIME'),
+    ])
 
     # Ensure announcements columns exist — each in its own try so one failure
     # doesn't prevent the others from running.
