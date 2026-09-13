@@ -10,6 +10,7 @@ never at module level (see panel/models/_helpers.py).
 """
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -29,6 +30,8 @@ import requests
 from jdatetime import datetime as jdatetime_class
 from werkzeug.utils import secure_filename
 
+from panel.core.advisory_lock import lock_is_cross_process, resource_lock
+
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -45,7 +48,16 @@ from panel.security import (
 from telegram_diagnostics import redact_connection_error
 
 TELEGRAM_BACKUP_TMP_DIR = None
+# Process-local fast path only. Correctness for "one X-UI backup per server"
+# comes from the PostgreSQL advisory lock taken in `_xui_backup_critical_section`
+# below: a `threading.Lock` serialises one interpreter, while Eve runs several
+# gunicorn workers plus dedicated worker processes.
 TELEGRAM_BACKUP_LOCK = threading.Lock()
+
+
+def _xui_backup_resource(server_id) -> str:
+    """Advisory-lock resource name: one X-UI backup per server, not per install."""
+    return f'xui_backup:{int(server_id)}'
 
 _SECURITY_LOGGER_NAME = 'eve.security'
 
@@ -1144,6 +1156,131 @@ def _send_eve_backup_to_telegram(panel_file_path: str, token: str, chat_id: str,
 
 
 
+
+
+@contextlib.contextmanager
+def _xui_backup_critical_section(server):
+    """Hold the cross-process "one X-UI backup per server" lock, or yield None.
+
+    A duplicate request coalesces: the caller records ALREADY_RUNNING and does
+    not touch the panel, so 20 concurrent triggers for one server produce one
+    download while 20 triggers for 20 different servers still run in parallel.
+
+    The lock is a PostgreSQL advisory lock held on a dedicated connection (the
+    database releases it if this process dies or its connection drops), and it
+    degrades to a per-process lock on SQLite, which the caller logs as a reduced
+    guarantee instead of assuming protection it does not have."""
+    resource = _xui_backup_resource(server.id)
+    with resource_lock(resource) as owner:
+        if owner is None:
+            yield None
+            return
+        try:
+            yield owner
+        finally:
+            _audit_lock_released(server, owner)
+
+
+def _audit_lock_scope(server) -> None:
+    """Record that the X-UI backup lock is only process-local on this engine.
+
+    Services never import app at module level (panel/models/_helpers.py), so the
+    audit helper is resolved here. A failure to audit must not fail a backup.
+    """
+    resource = _xui_backup_resource(server.id)
+    try:
+        from app import _log_audit  # deferred: avoids an import cycle
+        _log_audit('xui_backup_lock_process_local', ('Server', server.id),
+                   meta={'resource': resource})
+    except Exception:
+        _security_logger().warning(
+            '[security] X-UI backup lock is process-local for %s (no advisory locks)',
+            resource)
+
+
+def _audit_lock_released(server, owner) -> None:
+    """Audit one completed X-UI backup critical section. Best-effort."""
+    resource = _xui_backup_resource(server.id)
+    try:
+        from app import _log_audit  # deferred: avoids an import cycle
+        _log_audit(
+            'xui_backup_lock_released',
+            ('Server', server.id),
+            meta={'resource': resource, 'holder': owner,
+                  'cross_process': lock_is_cross_process()},
+        )
+    except Exception:
+        pass
+
+
+def _run_xui_backup_for_server(server, results, processed_items, total_items,
+                               progress_cb, token, chat_id, proxies, now) -> int:
+    """One server's X-UI download -> Telegram -> unlink, under the server lock.
+
+    Split out of `_run_telegram_backup` so the caller can hold the advisory lock
+    in a `with` block around exactly this work, and so the (frozen) backup policy
+    stays readable: fresh download, transient spool, confirmed upload, immediate
+    unlink, and a fresh download again on any retry.
+    """
+    if progress_cb:
+        try:
+            progress_cb({'stage': f"xui_login:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
+        except Exception:
+            pass
+
+    session_obj, error = get_xui_session(server)
+    if error:
+        safe_error = redact_connection_error(error, (token,))
+        results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Connection Failed: {safe_error}"})
+        _progress_step(progress_cb, f"xui_failed:{server.name}", total_items, processed_items + 1, results)
+        return processed_items + 1
+
+    if progress_cb:
+        try:
+            progress_cb({'stage': f"xui_download_backup:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
+        except Exception:
+            pass
+
+    payload, ext, err = _fetch_xui_backup(session_obj, server)
+    if err or not payload:
+        safe_error = redact_connection_error(err or 'Empty response', (token,))
+        results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Backup Download Failed: {safe_error}"})
+        _progress_step(progress_cb, f"xui_failed:{server.name}", total_items, processed_items + 1, results)
+        return processed_items + 1
+
+    if progress_cb:
+        try:
+            progress_cb({'stage': f"telegram_upload:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
+        except Exception:
+            pass
+
+    # Transient X-UI backup: never encrypted, never persisted; a fresh
+    # download happens for every retry attempt.
+    server_ok, upload_error = _send_xui_backup_to_telegram(
+        server, payload, ext, token, chat_id, proxies, now,
+    )
+    if server_ok:
+        results.append({'server_id': server.id, 'server_name': server.name, 'success': True})
+    else:
+        results.append({'server_id': server.id, 'server_name': server.name, 'success': False,
+                        'error': f"X-UI Backup Upload Failed: {upload_error}"})
+
+    stage_name = f"server_done:{server.name}" if server_ok else f"telegram_failed:{server.name}"
+    _progress_step(progress_cb, stage_name, total_items, processed_items + 1, results)
+    return processed_items + 1
+
+
+def _progress_step(progress_cb, stage, total, processed, results) -> None:
+    """Best-effort progress report; a broken callback never fails a backup."""
+    if not progress_cb:
+        return
+    try:
+        progress_cb({'stage': stage, 'progress': {'total': total, 'processed': processed},
+                     'results': list(results)})
+    except Exception:
+        pass
+
+
 def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
     from app import BACKUP_DIR
     if not TELEGRAM_BACKUP_LOCK.acquire(blocking=False):
@@ -1215,66 +1352,34 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
         processed_items = 0
 
         for server in servers:
-            if progress_cb:
-                try:
-                    progress_cb({'stage': f"xui_login:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
-                except Exception:
-                    pass
+            # One X-UI backup per server across EVERY Eve process, held for exactly
+            # this server's critical section so different servers still run in
+            # parallel. A second trigger for the same server coalesces instead of
+            # downloading the panel database again.
+            with _xui_backup_critical_section(server) as lock_owner:
+                if lock_owner is None:
+                    results.append({
+                        'server_id': server.id, 'server_name': server.name,
+                        'success': False, 'coalesced': True,
+                        'error': 'ALREADY_RUNNING: a backup for this server is already in progress',
+                    })
+                    processed_items += 1
+                    if progress_cb:
+                        try:
+                            progress_cb({'stage': f"xui_already_running:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
+                        except Exception:
+                            pass
+                    continue
 
-            session_obj, error = get_xui_session(server)
-            if error:
-                safe_error = redact_connection_error(error, (token,))
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Connection Failed: {safe_error}"})
-                processed_items += 1
-                if progress_cb:
-                    try:
-                        progress_cb({'stage': f"xui_failed:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
-                    except Exception:
-                        pass
-                continue
+                if not lock_is_cross_process():
+                    # SQLite has no advisory locks; say so instead of implying a
+                    # guarantee this deployment cannot provide.
+                    _audit_lock_scope(server)
 
-            if progress_cb:
-                try:
-                    progress_cb({'stage': f"xui_download_backup:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
-                except Exception:
-                    pass
-
-            payload, ext, err = _fetch_xui_backup(session_obj, server)
-            if err or not payload:
-                safe_error = redact_connection_error(err or 'Empty response', (token,))
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Backup Download Failed: {safe_error}"})
-                processed_items += 1
-                if progress_cb:
-                    try:
-                        progress_cb({'stage': f"xui_failed:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
-                    except Exception:
-                        pass
-                continue
-
-            if progress_cb:
-                try:
-                    progress_cb({'stage': f"telegram_upload:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}})
-                except Exception:
-                    pass
-
-            # Transient X-UI backup: never encrypted, never persisted; a fresh
-            # download happens for every retry attempt.
-            server_ok, upload_error = _send_xui_backup_to_telegram(
-                server, payload, ext, token, chat_id, proxies, now,
-            )
-            if server_ok:
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': True})
-            else:
-                results.append({'server_id': server.id, 'server_name': server.name, 'success': False,
-                                'error': f"X-UI Backup Upload Failed: {upload_error}"})
-
-            processed_items += 1
-            if progress_cb:
-                try:
-                    stage_name = f"server_done:{server.name}" if server_ok else f"telegram_failed:{server.name}"
-                    progress_cb({'stage': stage_name, 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
-                except Exception:
-                    pass
+                processed_items = _run_xui_backup_for_server(
+                    server, results, processed_items, total_items, progress_cb,
+                    token, chat_id, proxies, now,
+                )
 
         if send_panel_backup:
             panel_label = 'Panel Backup'
