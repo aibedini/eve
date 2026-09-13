@@ -87,3 +87,50 @@ missing file has none, an explicit `v` is respected, the env parser tolerates
 garbage, versioned assets are immutable, unversioned CSS revalidates, unversioned
 fonts get the week, 404s do not get the immutable policy, and the rendered
 dashboard actually contains versioned asset URLs.
+
+## Intermittent layout corruption: the version is not an identity (investigation)
+
+A subscription page that renders correctly most of the time and with collapsed columns and
+oversized SVG icons the rest of the time points at the stylesheets it loads
+(`tailwind.generated.css`, `style.css`, `fonts.css`, `phosphor-regular.css`): a bare `<svg>`
+with no utility CSS takes its intrinsic size, and grid/flex utilities that never arrive leave
+the columns stacked. The page's own `.pkg-*` rules are inline in the HTML, so they cannot skew;
+the *static* stylesheets can.
+
+The dynamic HTML is already safe: `/s/<server>/<token>` answers
+`Cache-Control: no-store, no-cache, must-revalidate, max-age=0`. The weak half is the asset
+identity, and `tests/test_static_version_identity.py` proves it with executable evidence:
+
+1. **The fingerprint is `mtime+size`, not content.** The same bytes get a different `?v=` as
+   soon as the mtime moves (every deploy, and every node independently), and two *different*
+   stylesheets written with the same size and the same mtime share one `?v=`. The key therefore
+   does not identify the bytes: a node can advertise a key that means something else on another
+   node, a CDN can hold different content under the same-looking key, and a rollback can
+   reintroduce an old file under a key a browser has already cached with newer content.
+2. **The served bytes are not bound to the requested version.** Flask's static route ignores the
+   query string, and the response hook marks *any* `?v=` on a versionable suffix as
+   `public, max-age=31536000, immutable` - even `?v=whatever`. A request for a stale version is
+   answered with the *current* bytes and pinned in every cache on the path for a year. That is
+   how one browser (or CDN edge, or tab) pairs an old stylesheet with a new page while the next
+   load pairs the new one.
+
+The cascade is not the cause: with a fixed pair of stylesheets the rendering is deterministic,
+which is why an "it changes between loads" symptom is attributed to *which* stylesheet arrived.
+Scoping the subscription UI is still worth doing as defence in depth (any global rule change in
+`style.css` can reach it) and is tracked separately.
+
+### Remediation (in progress)
+
+1. Replace the `mtime+size` fingerprint with a **content hash** of the file bytes, so every node
+   computes the same version for the same content - which makes a deploy verifiable across nodes
+   without content-addressed filenames.
+2. Serve `immutable` **only when the requested version equals the file's current content hash**;
+   a stale or unknown `?v=` gets a revalidating response instead of a year-long pin.
+3. Expose the build identity (`X-Eve-Build: <sha>` on every response and `<meta name="eve-build">`
+   in the HTML) so two responses can be attributed to a build - `EVE_BUILD_SHA` is stamped by the
+   deployment so all nodes agree.
+4. Keep the dynamic `/s/*` HTML `private, no-store` and out of any shared cache.
+5. Scope the subscription UI under `.subscription-page`, with an inventory test that refuses new
+   global `svg`/`.icon`/`.card`/grid/flex rules.
+6. Visual regression at 360/390/640/768/1024/1280/1440 (icon size, overflow, column stability)
+   and a contract test that rendered HTML references only assets of its own build.
