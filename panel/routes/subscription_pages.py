@@ -624,7 +624,7 @@ def client_subscription(server_id, sub_id):
         'Profile-Update-Interval': profile_metadata.get('update_interval', '24'),
         'Content-Type': 'text/plain; charset=utf-8',
         'Profile-Title': f"base64:{_profile_title_b64}",
-        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Cache-Control': 'private, no-store, no-cache, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
     }
 
@@ -1042,7 +1042,11 @@ def client_subscription(server_id, sub_id):
     # The subscription page must be LIVE (status/usage/expiry) — never let a
     # browser or proxy serve a stale cached copy.
     _resp = make_response(_sub_html)
-    _resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    # This page is tokenized and private: a shared cache (CDN, WCDN, proxy) must never store it,
+    # which is also why an intermittent layout problem on this page cannot come from a stale
+    # HTML copy at an edge. See docs/performance/STATIC_ASSETS.md.
+    _resp.headers['Cache-Control'] = (
+        'private, no-store, no-cache, must-revalidate, max-age=0')
     _resp.headers['Pragma'] = 'no-cache'
     _resp.headers['Expires'] = '0'
     return _resp

@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.6.45"
+APP_VERSION = "2.6.46"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -1074,9 +1074,13 @@ def add_security_headers(response):
     # manager page AND the VPN-app config. Force no-store on EVERY /s/ response
     # (all branches/return paths) so neither the browser nor the CDN (WCDN) serves
     # a stale copy. Covers the "mobile shows disabled, desktop active" cache bug.
+    # `private` is part of it on purpose: the page is tokenized, so a shared cache
+    # must not store it even transiently, and that also rules out an edge copy as the
+    # cause of an intermittent layout problem (see docs/performance/STATIC_ASSETS.md).
     try:
         if request.path.startswith('/s/') or request.path.startswith('/cs/'):
-            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            response.headers['Cache-Control'] = (
+                'private, no-store, no-cache, must-revalidate, max-age=0')
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
     except Exception:
@@ -1198,6 +1202,30 @@ def add_security_headers(response):
         duration_ms = ((time.perf_counter() - started) * 1000.0) if started else 0.0
         http_metrics.observe(request.endpoint, request.method,
                              response.status_code, duration_ms)
+    except Exception:
+        pass
+    return response
+
+
+@app.after_request
+def force_private_subscription_cache(response):
+    """Tokenized subscription responses are always private, whichever branch built them.
+
+    The success page, the configuration body and the error paths each set their own headers, and
+    a shared cache must never store any of them - so the rule is enforced once, here, instead of
+    being repeated (and eventually forgotten) at every return statement.
+    """
+    try:
+        endpoint = request.endpoint or ''
+        path = request.path or ''
+        if not (endpoint.startswith('subscription_pages.') or path.startswith('/s/')):
+            return response
+        current = response.headers.get('Cache-Control') or ''
+        if 'private' in current:
+            return response
+        response.headers['Cache-Control'] = (
+            'private, ' + current if current
+            else 'private, no-store, no-cache, must-revalidate, max-age=0')
     except Exception:
         pass
     return response

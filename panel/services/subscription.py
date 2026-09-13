@@ -1049,7 +1049,7 @@ def render_fast_subscription(server, sub_id, *, session_obj=None):
         'Content-Type': 'text/plain; charset=utf-8',
         'Profile-Title': f'base64:{title}',
         'Profile-Update-Interval': profile_metadata.get('update_interval', '24'),
-        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Cache-Control': 'private, no-store, no-cache, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
     }
 
