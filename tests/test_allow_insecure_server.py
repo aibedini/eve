@@ -17,6 +17,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///" + _DB_FILE.name.replace(os.se
 os.environ["FLASK_ENV"] = "development"
 os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
 
+import app as app_module  # noqa: E402
 from app import Admin, app, db  # noqa: E402
 from panel.models import AuditLog, Server  # noqa: E402
 from panel.security import (  # noqa: E402
@@ -302,6 +303,45 @@ class SessionPolicyTests(unittest.TestCase):
                                      "auth_key": "|insecure"}
         xui.invalidate_xui_caches(server_id=11, host=server.host)
         self.assertNotIn(11, xui.XUI_SESSION_CACHE)
+
+
+    def test_the_fetcher_receives_the_per_server_transport_policy(self):
+        """The policy has to travel INTO the fetcher, or an allowed panel is refused.
+
+        A regression test for a silent production failure: the periodic fan-out built
+        its server dict without `allow_insecure`, fetch_worker turned that dict into a
+        SimpleNamespace, and the transport guard read the missing attribute as False --
+        so every plaintext panel whose operator had explicitly allowed it failed with
+        "Refusing to send panel credentials over plaintext HTTP" on every cycle, and
+        the panel never refreshed.
+        """
+        import inspect
+        from panel.jobs import schedulers
+        # Both dict builders -- the progressive publish pass and the periodic
+        # fan-out -- hand their dict to fetch_worker, and each one without the flag
+        # is the bug coming back.
+        self.assertIn("'allow_insecure':",
+                      inspect.getsource(schedulers._run_snapshot_with_progress))
+        self.assertIn("'allow_insecure':",
+                      inspect.getsource(
+                          schedulers._fetch_and_update_global_data_inner))
+
+    def test_fetch_worker_reads_the_policy_off_the_dict_it_is_given(self):
+        from panel.adapters import xui
+        seen = {}
+
+        def fake_session(server_obj):
+            seen['allow_insecure'] = getattr(server_obj, 'allow_insecure', None)
+            return None, 'stop-here'
+
+        server_dict = {'id': 12, 'name': 'plain', 'host': 'http://31.14.115.171:2053',
+                       'username': 'u', 'password': 'p', 'api_token': None,
+                       'panel_type': 'sanaei', 'sub_port': None, 'sub_path': '/',
+                       'json_path': '/', 'allow_insecure': True}
+        with mock.patch.object(app_module, 'get_xui_session', fake_session):
+            result = app_module.fetch_worker(server_dict)
+        self.assertTrue(seen['allow_insecure'])
+        self.assertEqual(result[5], 'stop-here')
 
 
 class BackupTransportTests(unittest.TestCase):

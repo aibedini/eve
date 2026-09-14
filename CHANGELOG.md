@@ -2,6 +2,11 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.2] - 2026-09-14
+
+### Fixed
+- **The periodic fetcher dropped the per-server transport policy.** Both server dicts the fetch pipeline builds (`_run_snapshot_with_progress` and the periodic fan-out in `_fetch_and_update_global_data_inner`) were handed to `fetch_worker` without `allow_insecure`, and the transport guard reads that attribute off the dict-derived object: a plaintext panel whose operator had explicitly allowed it therefore failed EVERY cycle with "Refusing to send panel credentials over plaintext HTTP", so the panel never refreshed and its data aged silently. Found while verifying the new transition detector on production, where six of eight panels were affected. Regression tests assert the flag travels into the fetcher and that `fetch_worker` reads it off the dict it is given (`tests/test_allow_insecure_server.py`).
+
 ## [2.7.1] - 2026-09-14
 
 ### Fixed

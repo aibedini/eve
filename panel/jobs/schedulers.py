@@ -129,6 +129,10 @@ def _run_snapshot_with_progress():
                         'api_token': srv.api_token,  # v3 Bearer auth (else cookie login → 403)
                         'panel_type': srv.panel_type, 'sub_port': srv.sub_port,
                         'sub_path': srv.sub_path, 'json_path': srv.json_path,
+                        # The transport policy is per server, and the fetcher reads it off
+                        # the dict it is handed: leaving it out silently refused every
+                        # plaintext panel whose operator had explicitly allowed it.
+                        'allow_insecure': bool(getattr(srv, 'allow_insecure', False)),
                     }
                     srv_id, inbounds, online_index, status_payload, status_error, error, detected_type = fetch_worker(srv_dict)
                     if get_server_revision(srv.id) != revision_before:
@@ -401,7 +405,10 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
             # Without it server_is_v3() is False → cookie login → 403 on v3.
             'api_token': s.api_token,
             'panel_type': s.panel_type, 'sub_port': s.sub_port,
-            'sub_path': s.sub_path, 'json_path': s.json_path
+            'sub_path': s.sub_path, 'json_path': s.json_path,
+            # See above: the per-server transport policy has to travel WITH the server
+            # into fetch_worker, or an allowed plaintext panel is refused anyway.
+            'allow_insecure': bool(getattr(s, 'allow_insecure', False)),
         } for s in servers
             if int(s.id) not in skipped_ids and int(s.id) not in deferred_ids]
         refresh_revisions = {
