@@ -2,6 +2,12 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.6] - 2026-09-14
+
+### Fixed
+- **A renewal could not revoke a reminder that had already reached the gateway.** Live acceptance proved it: the production project key lacks the `sms.invalidate` scope, so `/send/invalidate` answered `HTTP 403 project_scope_denied`, the queued depletion reminder stayed deliverable, and the phone pulled it and submitted it after the customer had renewed (`status: sent`). A scope refusal is permanent, so a denied service invalidation now degrades into cancelling the individual sends EVE dispatched for that service (`/send/cancel/{reference}`, scope `sms.cancel`), which the key does have, and stamps them `invalidated_at = renewal_cancel_fallback` in the audit log. Regression test: `test_a_scope_denied_invalidation_falls_back_to_cancelling_known_sends`.
+- **Operator action still required**: grant `sms.invalidate` to the EVE project key at the GMweb deployment (its default scope set already includes it; the key was created with an explicit list that omitted it). Until then the fallback cancels per send, which cannot cover a reminder EVE has no request id for.
+
 ## [2.7.5] - 2026-09-14
 
 ### Fixed

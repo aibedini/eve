@@ -467,5 +467,53 @@ class PipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(coverage['stale'], 0)
 
 
+    def test_a_scope_denied_invalidation_falls_back_to_cancelling_known_sends(self):
+        """Production finding: the gateway key lacked sms.invalidate (HTTP 403).
+
+        The reminder then stayed deliverable and the phone submitted it after a
+        renewal. A scope refusal is permanent, so EVE must degrade to cancelling the
+        individual sends it knows about (sms.cancel) instead of giving up.
+        """
+        from panel.models import ServiceNotificationOutbox, SmsSendLog
+        from panel.services import lifecycle
+        from panel.jobs import messaging
+        key = lifecycle.make_service_key(SERVER_ID, self.uuid)
+        generation = lifecycle.handle_successful_service_lifecycle_change(
+            server_id=SERVER_ID, client_uuid=self.uuid, client_email=self.email,
+            event_type='renewal', operation_id='scope-arm', dispatch=False,
+        commit=True)
+        db.session.add(SmsSendLog(email=self.email, server_id=SERVER_ID,
+                                  state='expired', recipient='+989000000000',
+                                  status='sent', request_id='send_canary_1',
+                                  service_key=key, lifecycle_generation=1,
+                                  gateway_provider='gmweb', created_at=datetime.utcnow()))
+        db.session.commit()
+        row = ServiceNotificationOutbox.query.filter_by(service_key=key).one()
+        denied = {'ok': False, 'status_code': 403,
+                  'reason': 'http_403: project_scope_denied; response={"requiredScope":"sms.invalidate"}'}
+        cancelled = []
+
+        def fake_cancel(reference, cfg=None):
+            cancelled.append(reference)
+            return {'ok': True, 'cancelled': True, 'state': 'cancelled'}
+
+        sms_cfg = {'enabled': True, 'base_url': 'https://gmweb.test', 'api_key': 'k',
+                   'provider': 'gmweb'}
+        with mock.patch.object(app_module, '_get_sms_runtime_settings',
+                               lambda: sms_cfg), \
+                mock.patch.object(app_module, '_get_sms_provider_settings',
+                                  lambda provider=None, cfg=None: sms_cfg), \
+                mock.patch.object(messaging, '_invalidate_notifications_via_gmweb',
+                                  lambda *a, **k: denied), \
+                mock.patch.object(messaging, '_cancel_sms_via_gmweb', fake_cancel):
+            result = lifecycle.attempt_outbox_event(row)
+        self.assertEqual(cancelled, ['send_canary_1'], result)
+        self.assertEqual(result['cancel_fallback']['cancelled'], 1, result)
+        db.session.expire_all()
+        log = SmsSendLog.query.filter_by(request_id='send_canary_1').one()
+        self.assertIsNotNone(log.invalidated_at)
+        self.assertEqual(log.invalidation_reason, 'renewal_cancel_fallback')
+
+
 if __name__ == '__main__':
     unittest.main()

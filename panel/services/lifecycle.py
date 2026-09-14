@@ -752,10 +752,78 @@ def attempt_outbox_event(event_or_id) -> dict:
     reason = response.get('reason') or 'invalidation_failed'
     _mark_outbox_failed(row, reason, now, status_code=status_code)
     _commit_quietly()
+    result = {'ok': False, 'terminal': False, 'reason': reason}
+    # A gateway that refuses the invalidation ON SCOPE GROUNDS will refuse it forever,
+    # so the reminders it just declined to revoke are cancelled individually instead.
+    if status_code == 403 or 'project_scope_denied' in str(reason):
+        fallback = _cancel_known_sends(row, provider_cfg, now)
+        result['cancel_fallback'] = fallback
+        if fallback.get('attempted'):
+            logger.warning(
+                '[lifecycle] gateway denied service invalidation for %s (%s); '
+                'cancelled %s of %s known send(s) individually',
+                row.service_key, reason, fallback.get('cancelled'),
+                fallback.get('attempted'))
     logger.warning(
         '[lifecycle] invalidation retry scheduled for %s (attempt %s): %s',
         row.service_key, row.attempt_count, reason)
-    return {'ok': False, 'terminal': False, 'reason': reason}
+    return result
+
+
+#: How far back the per-send cancel fallback looks for dispatched reminders.
+CANCEL_FALLBACK_LOOKBACK_MINUTES = 180
+
+
+def _cancel_known_sends(row, provider_cfg, now) -> dict:
+    """Fallback revocation: cancel the individual gateway sends we know about.
+
+    /send/invalidate is the atomic, generation-aware revocation, but it requires the
+    'sms.invalidate' scope on the gateway project key. Production proved what happens
+    when that scope is missing: the invalidation answers HTTP 403
+    project_scope_denied, the queued reminder stays deliverable, and the customer's
+    phone submits a message about a service that was renewed minutes earlier.
+
+    Every reminder EVE dispatched carries its gateway request id on the audit row, and
+    /send/cancel/{reference} needs only the 'sms.cancel' scope. Cancelling them one by
+    one is cruder than invalidating the whole service and it is strictly better than
+    leaving a stale SMS deliverable, so a scope-denied invalidation degrades into it
+    instead of giving up.
+    """
+    from panel.jobs import messaging  # deferred: owns the HTTP client
+    cutoff = now - timedelta(minutes=CANCEL_FALLBACK_LOOKBACK_MINUTES)
+    try:
+        rows = (SmsSendLog.query
+                .filter(SmsSendLog.service_key == row.service_key,
+                        SmsSendLog.request_id.isnot(None),
+                        SmsSendLog.created_at >= cutoff)
+                .order_by(SmsSendLog.id.desc())
+                .limit(20)
+                .all())
+    except Exception:
+        return {'attempted': 0}
+    results = []
+    for entry in rows:
+        if getattr(entry, 'invalidated_at', None) is not None:
+            continue
+        try:
+            out = messaging._cancel_sms_via_gmweb(str(entry.request_id), provider_cfg)
+        except Exception as exc:
+            results.append({'request_id': str(entry.request_id),
+                            'ok': False, 'reason': ('%s' % exc)[:80]})
+            continue
+        cancelled = bool(out.get('cancelled'))
+        results.append({'request_id': str(entry.request_id), 'ok': bool(out.get('ok')),
+                        'cancelled': cancelled,
+                        'state': out.get('state') or out.get('status'),
+                        'reason': out.get('reason')})
+        if cancelled:
+            entry.invalidated_at = now
+            entry.invalidation_reason = 'renewal_cancel_fallback'
+            entry.updated_at = now
+    _commit_quietly()
+    return {'attempted': len(results),
+            'cancelled': sum(1 for item in results if item.get('cancelled')),
+            'results': results}
 
 
 def _provider_for_service(cfg: dict, row) -> str:
