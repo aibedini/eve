@@ -30,7 +30,11 @@ import requests
 from jdatetime import datetime as jdatetime_class
 from werkzeug.utils import secure_filename
 
-from panel.core.advisory_lock import lock_is_cross_process, resource_lock
+from panel.core.advisory_lock import (
+    lock_is_cross_process,
+    resource_lock_attempt,
+    still_held,
+)
 
 try:
     from zoneinfo import ZoneInfo
@@ -1160,25 +1164,33 @@ def _send_eve_backup_to_telegram(panel_file_path: str, token: str, chat_id: str,
 
 @contextlib.contextmanager
 def _xui_backup_critical_section(server):
-    """Hold the cross-process "one X-UI backup per server" lock, or yield None.
+    """Hold the cross-process "one X-UI backup per server" lock.
 
-    A duplicate request coalesces: the caller records ALREADY_RUNNING and does
-    not touch the panel, so 20 concurrent triggers for one server produce one
-    download while 20 triggers for 20 different servers still run in parallel.
+    Yields a :class:`LockAttempt` so the caller can tell the three facts apart:
 
-    The lock is a PostgreSQL advisory lock held on a dedicated connection (the
-    database releases it if this process dies or its connection drops), and it
+    * ACQUIRED          go ahead;
+    * CONTENDED         another worker holds this server: coalesce (ALREADY_RUNNING);
+    * LOCK_UNAVAILABLE  the lock backend itself failed (database down, pool
+                        exhausted): report a DEPENDENCY failure, never a phantom
+                        concurrent backup.
+
+    A duplicate request coalesces: the caller records ALREADY_RUNNING and does not
+    touch the panel, so 20 concurrent triggers for one server produce one download
+    while 20 triggers for 20 different servers still run in parallel.
+
+    The lock is a PostgreSQL advisory lock held on a dedicated connection; it
     degrades to a per-process lock on SQLite, which the caller logs as a reduced
-    guarantee instead of assuming protection it does not have."""
+    guarantee instead of assuming protection it does not have.
+    """
     resource = _xui_backup_resource(server.id)
-    with resource_lock(resource) as owner:
-        if owner is None:
-            yield None
+    with resource_lock_attempt(resource) as attempt:
+        if not attempt.acquired:
+            yield attempt
             return
         try:
-            yield owner
+            yield attempt
         finally:
-            _audit_lock_released(server, owner)
+            _audit_lock_released(server, attempt.owner)
 
 
 def _audit_lock_scope(server) -> None:
@@ -1213,8 +1225,27 @@ def _audit_lock_released(server, owner) -> None:
         pass
 
 
+def _lock_guard_for(server, attempt):
+    """A callable that re-confirms lock ownership, or None on SQLite."""
+    if not attempt.cross_process:
+        # No advisory locks on this engine: the guard has nothing to prove.
+        return None
+    resource = _xui_backup_resource(server.id)
+
+    def _guard():
+        try:
+            with db.engine.connect() as conn:
+                return bool(still_held(conn, resource))
+        except Exception:
+            # Cannot prove ownership: fail closed.
+            return False
+
+    return _guard
+
+
 def _run_xui_backup_for_server(server, results, processed_items, total_items,
-                               progress_cb, token, chat_id, proxies, now) -> int:
+                               progress_cb, token, chat_id, proxies, now,
+                               lock_guard=None) -> int:
     """One server's X-UI download -> Telegram -> unlink, under the server lock.
 
     Split out of `_run_telegram_backup` so the caller can hold the advisory lock
@@ -1246,6 +1277,27 @@ def _run_xui_backup_for_server(server, results, processed_items, total_items,
         safe_error = redact_connection_error(err or 'Empty response', (token,))
         results.append({'server_id': server.id, 'server_name': server.name, 'success': False, 'error': f"X-UI Backup Download Failed: {safe_error}"})
         _progress_step(progress_cb, f"xui_failed:{server.name}", total_items, processed_items + 1, results)
+        return processed_items + 1
+
+    # OWNERSHIP GUARD. A session-level advisory lock disappears with its
+    # CONNECTION, and the connection can die while this process keeps running --
+    # process death is covered, connection death is not. Before the upload (the
+    # expensive half, and the one that would duplicate a delivered backup) the
+    # lock is re-confirmed against pg_locks; if ownership cannot be proven the
+    # run aborts instead of uploading unguarded.
+    if lock_guard is not None and not lock_guard():
+        results.append({
+            'server_id': server.id, 'server_name': server.name,
+            'success': False, 'outcome': 'FAILED_DEPENDENCY',
+            'error': ('xui_backup_lock_lost: the backup lock was lost before '
+
+                      'upload; the panel will be read again on the next run'),
+        })
+        _security_logger().error(
+            '[security] X-UI backup lock lost before upload for server %s',
+            server.id)
+        _progress_step(progress_cb, f"xui_lock_lost:{server.name}", total_items,
+                       processed_items + 1, results)
         return processed_items + 1
 
     if progress_cb:
@@ -1356,22 +1408,40 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
             # this server's critical section so different servers still run in
             # parallel. A second trigger for the same server coalesces instead of
             # downloading the panel database again.
-            with _xui_backup_critical_section(server) as lock_owner:
-                if lock_owner is None:
-                    results.append({
-                        'server_id': server.id, 'server_name': server.name,
-                        'success': False, 'coalesced': True,
-                        'error': 'ALREADY_RUNNING: a backup for this server is already in progress',
-                    })
+            with _xui_backup_critical_section(server) as attempt:
+                if not attempt.acquired:
+                    # Two DIFFERENT outcomes, never merged: a busy server is normal
+                    # and coalesces, a broken lock backend is a dependency failure.
+                    if attempt.state == 'CONTENDED':
+                        results.append({
+                            'server_id': server.id, 'server_name': server.name,
+                            'success': False, 'coalesced': True,
+                            'outcome': 'ALREADY_RUNNING',
+                            'error': ('ALREADY_RUNNING: a backup for this server is '
+                                      'already in progress'),
+                        })
+                        stage = f"xui_already_running:{server.name}"
+                    else:
+                        results.append({
+                            'server_id': server.id, 'server_name': server.name,
+                            'success': False, 'coalesced': False,
+                            'outcome': 'FAILED_DEPENDENCY',
+                            'error': ('xui_backup_lock_unavailable: %s'
+                                      % (attempt.reason or 'lock backend error')),
+                        })
+                        stage = f"xui_lock_unavailable:{server.name}"
+                        _security_logger().error(
+                            '[security] X-UI backup lock unavailable for server %s: %s',
+                            server.id, attempt.reason or 'unknown')
                     processed_items += 1
                     if progress_cb:
                         try:
-                            progress_cb({'stage': f"xui_already_running:{server.name}", 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
+                            progress_cb({'stage': stage, 'progress': {'total': total_items, 'processed': processed_items}, 'results': list(results)})
                         except Exception:
                             pass
                     continue
 
-                if not lock_is_cross_process():
+                if not attempt.cross_process:
                     # SQLite has no advisory locks; say so instead of implying a
                     # guarantee this deployment cannot provide.
                     _audit_lock_scope(server)
@@ -1379,6 +1449,7 @@ def _run_telegram_backup(trigger: str = 'scheduled', progress_cb=None) -> dict:
                 processed_items = _run_xui_backup_for_server(
                     server, results, processed_items, total_items, progress_cb,
                     token, chat_id, proxies, now,
+                    lock_guard=_lock_guard_for(server, attempt),
                 )
 
         if send_panel_backup:

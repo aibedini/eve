@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.6.59"
+APP_VERSION = "2.6.60"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -4035,7 +4035,11 @@ def _cleanup_old_backups(days: int) -> dict:
 def _central_telegram_bot(create=False):
     bot = TelegramBotInstance.query.filter_by(scope_key='system').first()
     if bot is None and create:
-        bot = TelegramBotInstance(scope_key='system', owner_type='system')
+        bot = TelegramBotInstance(
+            scope_key='system', owner_type='system',
+            # Secure by default: a brand-new bot starts on the strict policy and
+            # only an explicit choice widens it.
+            connection_mode=egress_policy.DEFAULT_POLICY)
         db.session.add(bot)
         db.session.commit()
     return bot
@@ -4703,23 +4707,53 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
         ),
     )
     attempts = []
+    # The egress policy is the CEILING for every diagnostic too. Probing a route the
+    # policy forbids would let `POST /api/settings/telegram-bots/test`
+    # {"route":"direct"} open direct Telegram traffic for a NEVER_DIRECT bot -- the
+    # exact bypass this policy exists to close -- and a test must never report
+    # "reachable" through a route the bot is not allowed to use.
+    policy = egress_policy.normalize_policy(bot.connection_mode)
+    decision = egress_policy.decide(policy, has_managed=bool(managed_rows))
+    allowed_direct = egress_policy.DIRECT_ROUTE in decision.allowed
+    allowed_managed = 'managed' in decision.allowed
+
+    def _forbidden(reason_code, wanted):
+        return {
+            'success': False,
+            'policy_forbidden': True,
+            'policy': policy,
+            'reason': reason_code,
+            'route': wanted,
+            'attempts': [],
+            'error': ('Egress policy %s forbids the %s route; no network attempt was made'
+                      % (policy, wanted)),
+        }
+
+    order = []
+    forbidden = None
     if only_proxy_id is not None:
-        order = [('proxy', row) for row in proxy_rows]
+        if not allowed_managed:
+            forbidden = _forbidden('policy_forbids_managed_route', 'proxy')
+        else:
+            order = [('proxy', row) for row in proxy_rows if row.id == only_proxy_id]
     elif only_egress_id is not None:
-        order = [('egress', row) for row in egress_rows]
+        if not allowed_managed:
+            forbidden = _forbidden('policy_forbids_managed_route', 'egress')
+        else:
+            order = [('egress', row) for row in egress_rows if row.id == only_egress_id]
     elif route == 'direct':
-        order = [('direct', None)]
+        if not allowed_direct:
+            forbidden = _forbidden('policy_forbids_direct', 'direct')
+        else:
+            order = [('direct', None)]
     else:
-        # The diagnostic probe follows the SAME policy as the runtime, so a test
-        # can never report "reachable" through a route the bot is forbidden to use.
-        policy = egress_policy.normalize_policy(bot.connection_mode)
-        decision = egress_policy.decide(policy, has_managed=bool(managed_rows))
-        order = []
         for name in decision.allowed:
             if name == egress_policy.DIRECT_ROUTE:
                 order.append(('direct', None))
             else:
                 order.extend(managed_rows)
+    if forbidden is not None:
+        return forbidden
 
     for kind, endpoint in order:
         if kind == 'direct':
@@ -4776,7 +4810,7 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
             bot.last_test_error = None
             bot.last_test_at = now
             db.session.commit()
-            return {**result, 'attempts': attempts}
+            return {**result, 'attempts': attempts, 'policy': policy}
 
     bot.last_test_status = 'failed'
     bot.last_test_route = attempts[-1].get('route') if attempts else None
@@ -4784,7 +4818,8 @@ def _telegram_bot_diagnostic(bot: TelegramBotInstance, route='configured', only_
     bot.last_test_error = attempts[-1].get('error') if attempts else 'No usable route configured'
     bot.last_test_at = datetime.utcnow()
     db.session.commit()
-    result = {'success': False, 'error': bot.last_test_error, 'attempts': attempts}
+    result = {'success': False, 'error': bot.last_test_error, 'attempts': attempts,
+              'policy': policy}
     if only_egress_id is not None and any(
             attempt.get('error_code') == 'route_outbound_closed' for attempt in attempts):
         result['runtime_hint'] = (
@@ -5056,7 +5091,9 @@ def _save_telegram_bot_settings(bot: TelegramBotInstance, data: dict):
     default_language = str(data.get('default_language') or bot.default_language or 'fa').strip().lower()
     if default_language not in languages:
         return jsonify({'success': False, 'error': 'Default language must be enabled'}), 400
-    connection_mode = str(data.get('connection_mode') or bot.connection_mode or 'proxy_first').strip()
+    connection_mode = str(
+        data.get('connection_mode') or bot.connection_mode
+        or egress_policy.DEFAULT_POLICY).strip()
     if not egress_policy.is_valid_policy(connection_mode):
         return jsonify({'success': False, 'error': 'Invalid egress policy'}), 400
     # Store the canonical policy name; the legacy mode names keep being accepted so

@@ -23,6 +23,11 @@ class TelegramBotInstance(db.Model):
     # Telegram egress policy (see panel/telegram_egress.py). The legacy mode names
     # (auto / direct_only / proxy_first / proxy_only) are still accepted and mapped
     # on save; the column is 40 chars so a policy name fits whole.
+    #
+    # The row default stays 'proxy_first' on purpose: it is the historical value, and
+    # changing it would silently reinterpret rows that already exist. A NEW bot is
+    # made strict by the create/save path, which falls back to
+    # `egress_policy.DEFAULT_POLICY` (PROXY_REQUIRED) instead of this column default.
     connection_mode = db.Column(db.String(40), nullable=False, default='proxy_first')
     transport_mode = db.Column(db.String(24), nullable=False, default='polling')
     support_group_enabled = db.Column(db.Boolean, nullable=False, default=False)

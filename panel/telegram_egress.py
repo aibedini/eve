@@ -79,6 +79,13 @@ _LEGACY_MAP = {
 
 # Display order for the admin dropdown (managed-first to legacy-fallback to
 # never-direct), which is also the order of increasing egress strictness.
+# Default for a NEW bot: the strict policy. An operator who genuinely wants a
+# direct fallback must choose PROXY_PREFERRED explicitly, so a fresh install never
+# starts with an accidental permission it never made a decision about. Existing
+# rows keep their legacy mode (mapped to what it actually did) until they are
+# saved, which is why this is a UI/API default and not a migration rewrite.
+DEFAULT_POLICY = PROXY_REQUIRED
+
 POLICY_LABELS = {
     DIRECT_ONLY: "Direct only",
     PROXY_PREFERRED: "Proxy preferred (direct fallback allowed)",

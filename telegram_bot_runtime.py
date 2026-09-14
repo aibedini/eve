@@ -415,6 +415,11 @@ class TelegramBotApi:
             except requests.RequestException as exc:
                 self._route_failed(route)
                 errors.append(f"{route.name}: {redact_connection_error(exc, (self._token,))}")
+        if self._policy:
+            raise TelegramEgressUnavailable(
+                '; '.join(errors) or 'Could not download Telegram file',
+                policy=self._policy, attempts=len(routes),
+            )
         raise TelegramApiError('; '.join(errors) or 'Could not download Telegram file')
 
     def answer_callback(self, callback_query_id: str, text: str = "", **extra):

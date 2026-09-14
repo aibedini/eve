@@ -41,6 +41,7 @@ class _FakeConnection:
     def __init__(self, acquire_result=True, fail_on_unlock=False):
         self.statements = []
         self.closed = False
+        self.invalidated = False
         self._acquire_result = acquire_result
         self._fail_on_unlock = fail_on_unlock
 
@@ -52,6 +53,11 @@ class _FakeConnection:
         if "advisory_unlock" in text and self._fail_on_unlock:
             raise RuntimeError('connection lost before unlock')
         return mock.Mock(scalar=lambda: True)
+
+    def invalidate(self):
+        # SQLAlchemy's Connection.invalidate(): discard the physical session.
+        self.invalidated = True
+        self.closed = True
 
     def close(self):
         self.closed = True
@@ -106,13 +112,49 @@ class AdvisoryLockPostgresSemanticsTests(unittest.TestCase):
         # unlock must be swallowed, never mask the caller's own error, and never
         # leave the in-process lock held.
         engine = _FakeEngine(connection=_FakeConnection(fail_on_unlock=True))
-        with self.assertRaises(RuntimeError):
-            with advisory_lock.resource_lock('xui_backup:7', engine=engine):
-                raise RuntimeError('backup exploded')
+        # assertLogs also keeps the expected warning out of the test report.
+        with self.assertLogs('panel.core.advisory_lock', level='WARNING'):
+            with self.assertRaises(RuntimeError):
+                with advisory_lock.resource_lock('xui_backup:7', engine=engine):
+                    raise RuntimeError('backup exploded')
+        # CRITICAL: a failed unlock must INVALIDATE the physical connection. A
+        # plain close() can return the same PostgreSQL session to the pool with the
+        # advisory lock still held, and the pool would hand that locked session to
+        # unrelated work.
+        self.assertTrue(engine._connection.invalidated)
         self.assertTrue(engine._connection.closed)
         again = _FakeEngine()
         with advisory_lock.resource_lock('xui_backup:7', engine=again) as owner:
             self.assertIsNotNone(owner)
+
+    def test_contended_and_unavailable_are_different_outcomes(self):
+        # "another worker holds it" and "the lock backend is down" must not collapse
+        # into one falsy value: the first coalesces, the second is a dependency
+        # failure an operator has to see.
+        contended_engine = _FakeEngine(
+            connection=_FakeConnection(acquire_result=False))
+        with advisory_lock.resource_lock_attempt('xui_backup:9',
+                                                engine=contended_engine) as attempt:
+            self.assertEqual(attempt.state, advisory_lock.CONTENDED)
+            self.assertFalse(attempt.acquired)
+            self.assertEqual(attempt.reason, 'advisory_lock_held_elsewhere')
+
+        class _Broken(_FakeEngine):
+            def connect(self):
+                raise RuntimeError('database is down')
+
+        with advisory_lock.resource_lock_attempt('xui_backup:10',
+                                                engine=_Broken()) as attempt:
+            self.assertEqual(attempt.state, advisory_lock.LOCK_UNAVAILABLE)
+            self.assertFalse(attempt.acquired)
+            self.assertIn('lock_backend_error', attempt.reason or '')
+
+        ok_engine = _FakeEngine()
+        with advisory_lock.resource_lock_attempt('xui_backup:11',
+                                                engine=ok_engine) as attempt:
+            self.assertEqual(attempt.state, advisory_lock.ACQUIRED)
+            self.assertTrue(attempt.acquired)
+            self.assertTrue(attempt.cross_process)
 
     def test_a_connect_failure_is_reported_as_not_acquired(self):
         class _Broken(_FakeEngine):

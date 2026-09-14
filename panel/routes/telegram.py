@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from werkzeug.utils import secure_filename
 
+from panel import telegram_egress as egress_policy
 from panel.adapters.xui import _safe_response_json
 from panel.extensions import db, limiter
 from panel.security import client_ip
@@ -1211,6 +1212,8 @@ def create_telegram_bot():
         display_name=display_name,
         enabled=enabled,
         transport_mode='polling',
+        # Secure by default: strict egress until the owner explicitly widens it.
+        connection_mode=egress_policy.DEFAULT_POLICY,
     )
     if token:
         if _telegram_bot_token_conflict(bot, token=token):
@@ -1411,7 +1414,13 @@ def test_telegram_bot_settings():
     route = str((request.get_json(silent=True) or {}).get('route') or 'configured').strip().lower()
     if route not in ('direct', 'configured'):
         return jsonify({'success': False, 'error': 'Invalid diagnostic route'}), 400
-    return jsonify(_telegram_bot_diagnostic(bot, route=route))
+    result = _telegram_bot_diagnostic(bot, route=route)
+    # A probe the egress policy refuses is an authorization answer, not a failed
+    # test: 403 with zero network attempts, so a client cannot use the diagnostic
+    # to open a route the bot is forbidden to use.
+    if result.get('policy_forbidden'):
+        return jsonify(result), 403
+    return jsonify(result)
 
 
 def _telegram_test_user_id(value):
