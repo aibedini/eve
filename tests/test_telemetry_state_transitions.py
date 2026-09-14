@@ -402,6 +402,30 @@ class DepletionEventDeliveryTests(unittest.TestCase):
         self.assertEqual(meta["notificationKind"], "volume_ended")
         self.assertTrue(meta["requiresValidation"])
 
+    def test_a_row_deleted_mid_delivery_is_reported_not_raised(self):
+        # What an out-of-band delete (retention pruning, an operator cleanup, a test
+        # harness) leaves behind: the worker session still holds the instance while the
+        # row is gone, so the next attribute access on the expired instance raises
+        # ObjectDeletedError. Reading event.event_id inside the error handler turned a
+        # HANDLED delivery failure into a traceback in the worker log.
+        from sqlalchemy import text as _sql_text
+        event_id = self.event.event_id
+        db.session.commit()   # expire the instance, as any commit in the worker does
+        db.session.execute(
+            _sql_text("DELETE FROM service_notification_events WHERE event_id = :e"),
+            {"e": event_id})
+        db.session.commit()
+        with mock.patch.object(telemetry_state, "claim_events", lambda **_k: [self.event]), \
+             mock.patch.object(self.messaging, "_get_sms_runtime_settings",
+                               lambda: {"enabled": True}), \
+             mock.patch.object(self.messaging, "_get_monitor_settings_cached",
+                               lambda _cfg: {"templates": {}}), \
+             mock.patch.object(self.messaging, "_deliver_depletion_event",
+                               side_effect=RuntimeError("boom")):
+            result = self.messaging.run_depletion_event_outbox(limit=1)
+        self.assertEqual(result["claimed"], 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["sent"], 0)
 
 if __name__ == '__main__':
     unittest.main()

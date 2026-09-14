@@ -4042,14 +4042,23 @@ def run_depletion_event_outbox(limit: int = 10, *, job_id: str | None = None,
         cooldown_hours = cfg.get('cooldown_hours') or {}
         shadow = depletion_pipeline.shadow_mode()
         for event in events:
+            # Identify the row for the log line WITHOUT trusting the ORM instance. A
+            # leased row can be deleted out of band (retention pruning, an operator
+            # cleanup) and the attribute access that would reload it raises
+            # ObjectDeletedError -- reading event.event_id inside the error handler is
+            # what turned a HANDLED delivery failure into a traceback in the worker log.
+            try:
+                label = '%s (%s)' % (event.event_id, event.service_key)
+            except Exception:
+                label = '<event row unavailable>'
             try:
                 outcome, stop = _deliver_depletion_event(
                     event, cfg=cfg, templates=templates,
                     cooldown_hours=cooldown_hours, job_id=job_id, shadow=shadow)
             except Exception:
                 db.session.rollback()
-                _log_warning('[sms-events] delivery failed for %s',
-                             event.event_id, exc_info=True)
+                _log_warning('[sms-events] delivery failed for %s', label,
+                             exc_info=True)
                 outcome, stop = 'failed', False
             result[outcome] = int(result.get(outcome) or 0) + 1
             if stop:

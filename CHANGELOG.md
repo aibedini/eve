@@ -2,6 +2,14 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.1] - 2026-09-14
+
+### Fixed
+- **Delivery worker crashed its own error handler.** A leased notification row can be deleted out of band (retention pruning, an operator cleanup); the worker then raised `ObjectDeletedError` while reading `event.event_id` to LOG the failure, so a handled delivery failure surfaced as a traceback in the background log. The log label is now read defensively and the failure is reported as `failed` without touching the vanished instance. Found by the live production proof, reproduced in `tests/test_telemetry_state_transitions.py::DepletionEventDeliveryTests::test_a_row_deleted_mid_delivery_is_reported_not_raised`.
+
+### Deployment notes
+- Running migrations as `root` against an evemgr-owned lock file in `/tmp` fails with `PermissionError` on hosts with `fs.protected_regular=2`; run `python -m panel.migrate` as the service user (`sudo -u evemgr ...`), which is what the units expect.
+
 ## [2.7.0] - 2026-09-14
 
 Real-time telemetry, dashboard sync and the depletion-notification pipeline. The
