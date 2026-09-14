@@ -441,5 +441,31 @@ class PipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(ServiceNotificationEvent.query.one().status, 'retry')
 
 
+    def test_panel_coverage_hydrates_the_shared_snapshot_first(self):
+        """Coverage must describe the install, not this process's empty memory.
+
+        The doctor page is served by a web process while the snapshot is written by
+        the fetcher; reading GLOBAL_SERVER_DATA without hydrating first reported every
+        panel as stale with unknown reachability.
+        """
+        from panel.services import depletion_pipeline
+        self._fetch()          # a real fetch: the snapshot now holds the panel
+        snapshot = list(GLOBAL_SERVER_DATA.get('inbounds') or [])
+        statuses = list(GLOBAL_SERVER_DATA.get('servers_status') or [])
+        GLOBAL_SERVER_DATA['inbounds'] = []
+        GLOBAL_SERVER_DATA['servers_status'] = []
+
+        def hydrate(*_a, **_k):
+            GLOBAL_SERVER_DATA['inbounds'] = snapshot
+            GLOBAL_SERVER_DATA['servers_status'] = statuses
+            return True
+
+        with mock.patch('panel.core.redis_client.load_snapshot_from_redis', hydrate):
+            coverage = depletion_pipeline.panel_coverage()
+        self.assertEqual(coverage['enabled'], 1)
+        self.assertEqual(coverage['covered'], 1, coverage)
+        self.assertEqual(coverage['stale'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()

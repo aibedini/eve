@@ -2,6 +2,11 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.5] - 2026-09-14
+
+### Fixed
+- **Panel coverage described the wrong process's memory.** The new coverage table read `GLOBAL_SERVER_DATA` without hydrating it from Redis first, so the web process serving `/doctor/summary` reported every panel as stale with unknown reachability while the fetcher was happily recording 11,757 services. Found by running the doctor on production minutes after 2.7.4 shipped; coverage now hydrates first, and freshness comes from the panel's own read stamp (`reachable_checked_at`) with the newest client telemetry stamp as the fallback -- the per-client stamp is only refreshed when a row is rebuilt, so on its own it made a perfectly healthy install look stale. Regression test: `test_panel_coverage_hydrates_the_shared_snapshot_first`.
+
 ## [2.7.4] - 2026-09-14
 
 Final acceptance + production hardening for the depletion-notification pipeline.

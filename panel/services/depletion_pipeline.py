@@ -276,8 +276,16 @@ def panel_coverage(*, now=None, max_age_seconds=None) -> dict:
     A panel that is enabled but not fresh is NOT covered, and that is the whole
     point: one unreachable panel must not be hidden behind a healthy average.
     """
-    from panel.core.redis_client import GLOBAL_SERVER_DATA
+    from panel.core.redis_client import GLOBAL_SERVER_DATA, load_snapshot_from_redis
     from panel.models import Server
+    # Hydrate from the shared snapshot FIRST. The web process that serves the doctor
+    # page reads GLOBAL_SERVER_DATA from its own memory, and the fetcher is another
+    # process: without this the coverage table reported every panel as stale with an
+    # unknown reachability, which is a misleading answer to "is telemetry flowing?".
+    try:
+        load_snapshot_from_redis()
+    except Exception:
+        logger.debug('[telemetry] snapshot hydrate for coverage failed', exc_info=True)
     limit = int(max_age_seconds or PANEL_FRESH_SECONDS)
     moment = now or datetime.utcnow()
     rows = {}
@@ -292,7 +300,7 @@ def panel_coverage(*, now=None, max_age_seconds=None) -> dict:
             'secure_transport': str(server.host or '').lower().startswith('https://'),
             'allow_insecure': bool(getattr(server, 'allow_insecure', False)),
             'reachable': None, 'error': None, 'telemetry_age_seconds': None,
-            'fresh': False, 'covered': False,
+            'read_age_seconds': None, 'fresh': False, 'covered': False,
         }
     statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
     for status in statuses:
@@ -304,6 +312,15 @@ def panel_coverage(*, now=None, max_age_seconds=None) -> dict:
         rows[sid]['reachable'] = bool(status.get('success'))
         error = status.get('error') or status.get('reachable_error') or ''
         rows[sid]['error'] = (str(error)[:160] or None)
+        # When was this panel last READ? The fetch records it per panel on every
+        # applied result, which is a better freshness signal than the per-client
+        # telemetry stamp (that one is only refreshed when the row is rebuilt).
+        for key in ('reachable_checked_at', 'panel_status_checked_at'):
+            age = _age_seconds(status.get(key), now=moment)
+            if age is None:
+                continue
+            if rows[sid]['read_age_seconds'] is None or age < rows[sid]['read_age_seconds']:
+                rows[sid]['read_age_seconds'] = round(age, 1)
     newest = {}
     for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
         sid = _as_int((inbound or {}).get('server_id'), None)
@@ -321,7 +338,13 @@ def panel_coverage(*, now=None, max_age_seconds=None) -> dict:
     for sid, row in rows.items():
         age = newest.get(sid)
         row['telemetry_age_seconds'] = (round(age, 1) if age is not None else None)
-        row['fresh'] = age is not None and age <= limit
+        # Fresh means "read recently", from whichever signal exists: the panel's own
+        # read stamp, or the newest client row in its block.
+        candidates = [value for value in (row['read_age_seconds'],
+                                          row['telemetry_age_seconds'])
+                      if value is not None]
+        best = min(candidates) if candidates else None
+        row['fresh'] = best is not None and best <= limit
         row['covered'] = bool(row['fresh'] and row['reachable'] is not False)
     enabled_count = len(rows)
     covered = sum(1 for row in rows.values() if row['covered'])
