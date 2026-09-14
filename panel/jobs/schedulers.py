@@ -323,6 +323,43 @@ def snapshot_reader_worker():
         time.sleep(10)
 
 
+def _record_fetch_transitions(server_id, inbounds):
+    """Turn one fresh panel read into durable state transitions.
+
+    This is the whole point of the pipeline: the read that just happened is the
+    authoritative observation, so the transition is computed HERE, in the same moment
+    the dashboard copy is produced -- not by a scan that may run half an hour later
+    from a snapshot that has moved on.
+
+    `inbounds` is the processed block list `process_inbounds()` returned, i.e. the
+    exact rows the snapshot is about to hold. Passing the INBOUND list (not a
+    hand-built wrapper) is what keeps this honest: the same rows feed the dashboard
+    and the ledger, so the two cannot describe different states.
+
+    Bookkeeping never blocks the snapshot. A ledger failure is logged and the fetch
+    result is still published; the reconciliation pass repairs the gap on its next
+    run.
+    """
+    from app import app  # deferred: app-level helper, avoids circular import
+    if not depletion_pipeline.detection_enabled():
+        return
+    try:
+        observations = depletion_pipeline.observations_from_inbounds(
+            inbounds or [], server_id=server_id)
+        if not observations:
+            return
+        counts = telemetry_state.record_observations(
+            server_id, observations, source='transition')
+        if counts.get('events_created') or counts.get('errors'):
+            app.logger.info(
+                '[telemetry] server %s: %s transition(s), %s notification(s) queued, %s error(s)',
+                server_id, counts.get('transitions'), counts.get('events_created'),
+                counts.get('errors'))
+    except Exception:
+        app.logger.warning(
+            '[telemetry] transition recording failed for server %s', server_id,
+            exc_info=True)
+
 def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_callback=None,
                                  wait_seconds: float = 0.0, periodic: bool = False) -> bool:
     """Fetch the enabled panels and update the shared snapshot.
@@ -465,34 +502,6 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
         servers_by_id = {int(s.id): s for s in servers}
         server_order = [int(s.id) for s in servers]
 
-        def _record_transitions(sid, processed):
-            """Turn one fresh panel read into durable state transitions.
-
-            This is the whole point of the pipeline: the read that just happened is
-            the authoritative observation, so the transition is computed HERE, in the
-            same moment the dashboard's copy is produced -- not by a scan that may run
-            half an hour later from a snapshot that has moved on. Bookkeeping never
-            blocks the snapshot: a ledger failure is logged and the fetch result is
-            still published, and the reconciliation scan repairs the gap.
-            """
-            if not depletion_pipeline.detection_enabled():
-                return
-            try:
-                observations = depletion_pipeline.observations_from_inbounds(
-                    [{'server_id': sid, 'clients': processed or []}], server_id=sid)
-                if not observations:
-                    return
-                counts = telemetry_state.record_observations(
-                    sid, observations, source='transition')
-                if counts.get('events_created'):
-                    app.logger.info(
-                        '[telemetry] server %s: %s transition(s), %s notification(s) queued',
-                        sid, counts.get('transitions'), counts.get('events_created'))
-            except Exception:
-                app.logger.warning(
-                    '[telemetry] transition recording failed for server %s', sid,
-                    exc_info=True)
-
         def _commit_snapshot():
             """Publish the current (possibly partial) state to GLOBAL_SERVER_DATA
             so the dashboard renders servers as they finish instead of blocking on
@@ -583,7 +592,7 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 inbounds = []
             processed, stats = process_inbounds(inbounds, srv, admin_user, '*', {}, online_index=online_index)
             new_by_server[sid] = list(processed or [])
-            _record_transitions(sid, processed)
+            _record_fetch_transitions(sid, processed)
 
             st = status_map.get(sid) or {"server_id": sid}
             status_payload = status_payload or {}

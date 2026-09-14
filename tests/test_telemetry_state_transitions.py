@@ -245,6 +245,78 @@ class TelemetryTransitionTests(unittest.TestCase):
                     os.environ.pop('EVE_DEPLETION_EVENT_PIPELINE', None)
 
 
+class FetchPipelineWiringTests(unittest.TestCase):
+    """The wiring itself: the processed inbound block must reach the ledger.
+
+    Every other test in this file calls the pipeline directly, and that is exactly how
+    a broken call shape survived them: `_record_fetch_transitions` used to wrap the
+    processed INBOUND list as if it were the client list, so it found no emails and
+    recorded nothing -- green unit tests, an empty ledger in production. These tests
+    drive the real helper with the real shape `process_inbounds()` returns.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ctx = app_module.app.app_context()
+        cls.ctx.push()
+        db.create_all()
+
+    @classmethod
+    def tearDownClass(cls):
+        db.session.remove()
+        db.drop_all()
+        cls.ctx.pop()
+
+    def setUp(self):
+        from panel.jobs import schedulers
+        self.schedulers = schedulers
+        ServiceNotificationEvent.query.delete()
+        ServiceObservedState.query.delete()
+        db.session.commit()
+        os.environ.pop("EVE_DEPLETION_EVENT_PIPELINE", None)
+
+    def _client(self, email, state, remaining_gb, client_uuid):
+        return {
+            "email": email, "id": client_uuid, "raw_client": {"id": client_uuid,
+                                                            "email": email,
+                                                            "totalGB": 10 * GB,
+                                                            "expiryTime": 0},
+            "totalGB": 10 * GB, "up": int((10 - remaining_gb) * GB), "down": 0,
+            "remaining_bytes": int(remaining_gb * GB), "expiryTimestamp": 0,
+            "service_state": state, "service_state_tag": "ok",
+        }
+
+    def test_a_processed_inbound_block_reaches_the_ledger(self):
+        block = {"server_id": 5, "server_name": "srv", "clients": [
+            self._client("a@example.com", "volume_ended", 0, "uuid-a"),
+            self._client("b@example.com", "active", 4, "uuid-b"),
+        ]}
+        self.schedulers._record_fetch_transitions(5, [block])
+        rows = {row.client_email: row for row in ServiceObservedState.query.all()}
+        self.assertEqual(sorted(rows), ["a@example.com", "b@example.com"])
+        self.assertEqual(rows["a@example.com"].last_state, "volume_ended")
+        # First sighting of each service is a baseline: it records, and stays silent.
+        self.assertEqual(ServiceNotificationEvent.query.count(), 0)
+
+    def test_the_end_to_end_hook_creates_one_event_when_the_state_flips(self):
+        block = {"server_id": 5, "server_name": "srv", "clients": [
+            self._client("a@example.com", "active", 2, "uuid-a")]}
+        self.schedulers._record_fetch_transitions(5, [block])
+        block["clients"][0]["remaining_bytes"] = 0
+        block["clients"][0]["service_state"] = "volume_ended"
+        self.schedulers._record_fetch_transitions(5, [block])
+        events = ServiceNotificationEvent.query.all()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].state, "volume_ended")
+        self.assertEqual(events[0].service_key, "eve:5:uuid-a")
+        self.assertEqual(events[0].source, "transition")
+
+    def test_a_raised_ledger_failure_does_not_escape_the_fetch_path(self):
+        with mock.patch.object(telemetry_state, "record_observations",
+                               side_effect=RuntimeError("boom")):
+            self.schedulers._record_fetch_transitions(5, [{"server_id": 5, "clients": [
+                self._client("a@example.com", "volume_ended", 0, "uuid-a")]}])
+
 class WatchPropagationTests(unittest.TestCase):
     """The dashboard is served by a WEB process; the loop is another process."""
 

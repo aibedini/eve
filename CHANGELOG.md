@@ -2,6 +2,11 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.3] - 2026-09-14
+
+### Fixed
+- **The transition hook was called with the wrong shape, so the ledger stayed empty on a live install.** `_record_fetch_transitions` wrapped the processed INBOUND list as if it were the client list (`{'clients': processed}`), so it looked for an email on an inbound, found none and recorded nothing -- while every unit test passed, because they exercise the pipeline directly rather than the wiring. Caught by the production verification (a successful panel fetch that produced zero ledger rows), not by CI. The helper is now a module-level, testable function that receives the block list `process_inbounds()` returned, and three tests in `tests/test_telemetry_state_transitions.py::FetchPipelineWiringTests` drive that exact shape: a processed block must reach the ledger, a state flip through the hook must create exactly one event, and a ledger failure must not escape the fetch path.
+
 ## [2.7.2] - 2026-09-14
 
 ### Fixed
