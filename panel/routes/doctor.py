@@ -164,9 +164,13 @@ def doctor_summary():
         # after a missed reminder: is the detector running in this install, and is
         # anything stuck in the outbox? Counters only -- never a phone number,
         # an email address or a message body.
+        status = depletion_pipeline.status()
         checks['telemetry_pipeline'] = {
-            'state': 'ok',
-            **depletion_pipeline.status(),
+            # The pipeline reports its OWN state: partial coverage (one panel refused
+            # by the transport policy, a missing worker heartbeat, an exhausted retry
+            # ladder) must not sit under a green "ok".
+            'state': status.pop('state', 'ok'),
+            **status,
             'fetch_sequence': fetch_sequence.status(),
             'watch_marks': refresh_policy.server_watch_marks(),
         }

@@ -4080,8 +4080,13 @@ def depletion_event_worker(interval_seconds: int = 5) -> None:
     while True:
         try:
             with app.app_context():
+                # Heartbeat FIRST, then the drain: a worker that dies mid-drain is
+                # still detectable, and an idle worker (nothing due) must look alive.
+                depletion_pipeline.note_worker_heartbeat()
                 result = run_depletion_event_outbox(limit=10,
                                                     triggered_by='worker')
+                if result.get('claimed'):
+                    depletion_pipeline.note_delivery()
                 if result.get('sent') or result.get('shadowed'):
                     app.logger.info(
                         '[sms-events] sent=%s shadowed=%s claimed=%s',
@@ -4135,6 +4140,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         if cfg.get('enabled') and any(state_enabled.values()):
             drained = run_depletion_event_outbox(limit=25, job_id=job_id,
                                                  triggered_by=triggered_by)
+        depletion_pipeline.note_reconciliation()
         pipeline['reconciled'] = reconciled
         pipeline['drained'] = drained
         if not depletion_pipeline.legacy_sender_active():

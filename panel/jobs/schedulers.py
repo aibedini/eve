@@ -350,6 +350,8 @@ def _record_fetch_transitions(server_id, inbounds):
             return
         counts = telemetry_state.record_observations(
             server_id, observations, source='transition')
+        if counts.get('events_created'):
+            depletion_pipeline.note_detection()
         if counts.get('events_created') or counts.get('errors'):
             app.logger.info(
                 '[telemetry] server %s: %s transition(s), %s notification(s) queued, %s error(s)',

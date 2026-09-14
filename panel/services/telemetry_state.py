@@ -685,14 +685,46 @@ def metrics(*, now=None) -> dict:
     age = None
     if oldest is not None:
         age = max(0.0, (moment - oldest).total_seconds())
+    # Everything an operator needs to tell "quiet" from "broken", and nothing that
+    # could identify a customer: counts, ages and a status histogram.
     return {
         'available': True,
         'observed_services': int(observed),
         'by_status': by_status,
         'pending': sum(by_status.get(key, 0)
                        for key in CLAIMABLE_STATUSES + (LEASE_STATUS,)),
+        'pending_only': int(by_status.get('pending', 0)),
+        'retry': int(by_status.get('retry', 0)),
+        'leased': int(by_status.get(LEASE_STATUS, 0)),
+        'sent': int(by_status.get('sent', 0)),
+        'skipped': int(by_status.get('skipped', 0)),
+        'superseded': int(by_status.get('superseded', 0)),
+        'shadowed': int(by_status.get('shadowed', 0)),
+        'failed_terminal': int(by_status.get('failed_terminal', 0)),
         'oldest_pending_age_seconds': (round(age, 1) if age is not None else None),
         'overdue': int(overdue),
+        'retry_exhausted': int(by_status.get('failed_terminal', 0)),
+        'last_detected_at': _iso(_scalar(
+            db.session.query(func.max(ServiceNotificationEvent.created_at)))),
+        'last_sent_at': _iso(_scalar(
+            db.session.query(func.max(ServiceNotificationEvent.sent_at)))),
+        'last_superseded_at': _iso(_scalar(
+            db.session.query(func.max(ServiceNotificationEvent.superseded_at)))),
+        'last_reconciliation_at': _iso(_scalar(
+            db.session.query(func.max(ServiceNotificationEvent.created_at))
+            .filter(ServiceNotificationEvent.source == 'reconciliation'))),
         'max_attempts': MAX_ATTEMPTS,
         'backoff_seconds': list(NOTIFICATION_BACKOFF_SECONDS),
     }
+
+
+def _scalar(query):
+    try:
+        return query.scalar()
+    except Exception:
+        _safe_rollback()
+        return None
+
+
+def _iso(value):
+    return (value.isoformat() + 'Z') if isinstance(value, datetime) else None

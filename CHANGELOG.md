@@ -2,6 +2,17 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.4] - 2026-09-14
+
+Final acceptance + production hardening for the depletion-notification pipeline.
+
+### Added
+- **Doctor can no longer show a green pipeline over a broken one.** `/doctor/summary` -> `telemetry_pipeline` now carries a computed `state` (`ok`/`warning`/`degraded`/`error`), per-panel coverage (`enabled`, `covered`, `uncovered`, `refused_transport`, `unreachable`, `stale`, plus a per-panel row with the telemetry age), stage liveness (worker heartbeat, last detection, last delivery, last reconciliation, each with an age) and named `warnings` (`worker_heartbeat_missing`, `outbox_backlog_age`, `outbox_overdue`, `notification_retry_exhausted`, `redis_unavailable`, `panel_transport_refused`, `panel_unreachable`, `panel_telemetry_stale`, `no_recent_detection`, `pipeline_off`). One refused or stale panel makes the block degraded instead of hiding behind a healthy average. Counters, ages and status names only - never a destination, an address or a message.
+- Outbox metrics gained per-status counters (`pending_only`, `retry`, `leased`, `sent`, `skipped`, `superseded`, `shadowed`, `failed_terminal`, `retry_exhausted`) and the last detection/delivery/supersede/reconciliation timestamps.
+
+### Tests
+- `tests/test_telemetry_pipeline_integration.py`: the CI gap that let three wiring defects reach production is closed by an end-to-end test through the real boundaries (Server row -> `fetch_worker` -> `process_inbounds` -> snapshot -> ledger -> outbox -> delivery worker -> GMweb POST), covering the happy path with exactly one send, the renewal-before-delivery race (zero sends, event superseded), one-phone/two-services isolation, the transport policy reaching the real guard, the exactly-one-sender invariant for `off`/`shadow`/`on`, reconciliation idempotence and stale-snapshot protection after a renewal, and the 5xx/429 retry semantics.
+
 ## [2.7.3] - 2026-09-14
 
 ### Fixed

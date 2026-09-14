@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime
 
 from panel.services import lifecycle as lifecycle_service
 from panel.services import telemetry_state
@@ -167,13 +168,278 @@ def reconcile_snapshot(*, source='reconciliation', observed_at=None) -> dict:
     return totals
 
 
-def status() -> dict:
-    """Doctor-facing block. Counters only -- never a phone number or a message."""
-    from panel.services import telemetry_state as _telemetry
+
+
+# ---------------------------------------------------------------------------
+# Health: what the doctor page needs to tell "quiet" from "broken"
+#
+# The pipeline spent an afternoon looking healthy while the detector recorded
+# nothing (a wiring bug) and while six of eight panels could not be fetched at all
+# (a policy flag that never reached the fetcher). Counters alone did not show it, so
+# the surface below adds two things a counter cannot express: LIVENESS (when did
+# each stage last actually run) and COVERAGE (is every enabled panel being observed).
+# ---------------------------------------------------------------------------
+
+HEARTBEAT_PREFIX = 'eve:depletion:heartbeat:'
+LAST_DETECTION_KEY = 'eve:depletion:last_detection'
+LAST_DELIVERY_KEY = 'eve:depletion:last_delivery'
+LAST_RECONCILIATION_KEY = 'eve:depletion:last_reconciliation'
+HEARTBEAT_TTL_SECONDS = 90
+#: A panel whose telemetry is older than this cannot be trusted to detect a
+#: transition "in real time", so it is reported as stale rather than covered.
+PANEL_FRESH_SECONDS = 300
+#: Backlog older than this means the outbox is not draining.
+OUTBOX_AGE_WARN_SECONDS = 900
+#: A reconciliation run that repairs more than this many missed transitions is a
+#: signal that live detection is not keeping up (or was down).
+RECONCILIATION_BURST_WARN = 25
+
+_heartbeats = {}
+
+
+def _now_iso():
+    return datetime.utcnow().isoformat() + 'Z'
+
+
+def _mark(key, value=None):
+    """Record liveness for one stage in Redis (shared) and in this process."""
+    stamp = value or _now_iso()
+    _heartbeats[key] = stamp
+    client = _redis()
+    if client is None:
+        return stamp
+    try:
+        client.set(key, stamp, ex=HEARTBEAT_TTL_SECONDS * 8)
+    except Exception:
+        pass
+    return stamp
+
+
+def _read_marks():
+    marks = dict(_heartbeats)
+    client = _redis()
+    if client is None:
+        return marks
+    for key in (LAST_DETECTION_KEY, LAST_DELIVERY_KEY, LAST_RECONCILIATION_KEY,
+                HEARTBEAT_PREFIX + 'delivery_worker'):
+        try:
+            raw = client.get(key)
+        except Exception:
+            continue
+        if raw is None:
+            continue
+        marks[key] = raw.decode('utf-8', 'replace') if isinstance(raw, bytes) else str(raw)
+    return marks
+
+
+def note_detection(at=None):
+    return _mark(LAST_DETECTION_KEY, at)
+
+
+def note_delivery(at=None):
+    return _mark(LAST_DELIVERY_KEY, at)
+
+
+def note_reconciliation(at=None):
+    return _mark(LAST_RECONCILIATION_KEY, at)
+
+
+def note_worker_heartbeat():
+    """Called every delivery-worker tick; its absence is the loudest alarm."""
+    return _mark(HEARTBEAT_PREFIX + 'delivery_worker')
+
+
+def _redis():
+    try:
+        from panel.core.redis_client import get_redis
+        return get_redis()
+    except Exception:
+        return None
+
+
+def _age_seconds(stamp, now=None):
+    if not stamp:
+        return None
+    moment = now or datetime.utcnow()
+    try:
+        parsed = datetime.fromisoformat(str(stamp).replace('Z', '+00:00')).replace(tzinfo=None)
+    except Exception:
+        return None
+    return max(0.0, (moment - parsed).total_seconds())
+
+
+def panel_coverage(*, now=None, max_age_seconds=None) -> dict:
+    """Per-panel telemetry coverage: enabled, reachable, fresh, refused, stale.
+
+    "Enabled" comes from the database; "reachable" and the error text come from the
+    snapshot's server statuses; "fresh" is the age of the panel's telemetry stamp.
+    A panel that is enabled but not fresh is NOT covered, and that is the whole
+    point: one unreachable panel must not be hidden behind a healthy average.
+    """
+    from panel.core.redis_client import GLOBAL_SERVER_DATA
+    from panel.models import Server
+    limit = int(max_age_seconds or PANEL_FRESH_SECONDS)
+    moment = now or datetime.utcnow()
+    rows = {}
+    try:
+        enabled = Server.query.filter_by(enabled=True).all()
+    except Exception:
+        enabled = []
+    for server in enabled:
+        rows[int(server.id)] = {
+            'server_id': int(server.id),
+            'name': (server.name or '')[:64],
+            'secure_transport': str(server.host or '').lower().startswith('https://'),
+            'allow_insecure': bool(getattr(server, 'allow_insecure', False)),
+            'reachable': None, 'error': None, 'telemetry_age_seconds': None,
+            'fresh': False, 'covered': False,
+        }
+    statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
+    for status in statuses:
+        if not isinstance(status, dict):
+            continue
+        sid = _as_int(status.get('server_id'), None)
+        if sid is None or sid not in rows:
+            continue
+        rows[sid]['reachable'] = bool(status.get('success'))
+        error = status.get('error') or status.get('reachable_error') or ''
+        rows[sid]['error'] = (str(error)[:160] or None)
+    newest = {}
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        sid = _as_int((inbound or {}).get('server_id'), None)
+        if sid is None:
+            continue
+        for client in (inbound.get('clients') or ()):
+            stamp = client.get('telemetry_updated_at') or client.get('config_updated_at')
+            if not stamp:
+                continue
+            age = _age_seconds(stamp, now=moment)
+            if age is None:
+                continue
+            if sid not in newest or age < newest[sid]:
+                newest[sid] = age
+    for sid, row in rows.items():
+        age = newest.get(sid)
+        row['telemetry_age_seconds'] = (round(age, 1) if age is not None else None)
+        row['fresh'] = age is not None and age <= limit
+        row['covered'] = bool(row['fresh'] and row['reachable'] is not False)
+    enabled_count = len(rows)
+    covered = sum(1 for row in rows.values() if row['covered'])
+    refused = [row for row in rows.values()
+               if (row['error'] or '').startswith('Refusing to send panel credentials')]
     return {
+        'enabled': enabled_count,
+        'covered': covered,
+        'uncovered': enabled_count - covered,
+        'refused_transport': len(refused),
+        'unreachable': sum(1 for row in rows.values() if row['reachable'] is False),
+        'stale': sum(1 for row in rows.values()
+                     if row['reachable'] is not False and not row['fresh']),
+        'fresh_seconds_limit': limit,
+        'panels': [rows[sid] for sid in sorted(rows)],
+    }
+
+
+def warnings(*, coverage=None, outbox=None, now=None, marks=None) -> list:
+    """Operator-facing warnings. Each one is a named condition, never a guess."""
+    coverage = coverage if coverage is not None else panel_coverage(now=now)
+    outbox = outbox if outbox is not None else telemetry_state.metrics(now=now)
+    marks = marks if marks is not None else _read_marks()
+    warning_list = []
+    if mode() == 'off':
+        warning_list.append({
+            'code': 'pipeline_off',
+            'detail': 'the transition detector is disabled; only the periodic scan sends'})
+    heartbeat_age = _age_seconds(marks.get(HEARTBEAT_PREFIX + 'delivery_worker'), now=now)
+    if heartbeat_age is None or heartbeat_age > HEARTBEAT_TTL_SECONDS * 2:
+        warning_list.append({
+            'code': 'worker_heartbeat_missing',
+            'detail': 'no delivery-worker tick within %ss' % (HEARTBEAT_TTL_SECONDS * 2)})
+    if outbox.get('available') is False:
+        warning_list.append({'code': 'outbox_unavailable',
+                             'detail': 'the notification ledger could not be read'})
+    else:
+        age = outbox.get('oldest_pending_age_seconds')
+        if age is not None and age > OUTBOX_AGE_WARN_SECONDS:
+            warning_list.append({
+                'code': 'outbox_backlog_age',
+                'detail': 'oldest pending notification is %.0fs old' % age})
+        if outbox.get('overdue'):
+            warning_list.append({
+                'code': 'outbox_overdue',
+                'detail': '%s notification(s) are due now and waiting' % outbox['overdue']})
+        if outbox.get('failed_terminal'):
+            warning_list.append({
+                'code': 'notification_retry_exhausted',
+                'detail': '%s notification(s) exhausted the retry ladder'
+                          % outbox['failed_terminal']})
+    if _redis() is None:
+        warning_list.append({
+            'code': 'redis_unavailable',
+            'detail': 'shared watch marks and fetch tickets fall back to per-process state'})
+    if coverage.get('refused_transport'):
+        warning_list.append({
+            'code': 'panel_transport_refused',
+            'detail': '%s panel(s) are refused by the transport policy and cannot be observed'
+                      % coverage['refused_transport']})
+    if coverage.get('unreachable'):
+        warning_list.append({
+            'code': 'panel_unreachable',
+            'detail': '%s panel(s) failed their last fetch' % coverage['unreachable']})
+    if coverage.get('stale'):
+        warning_list.append({
+            'code': 'panel_telemetry_stale',
+            'detail': '%s panel(s) have telemetry older than %ss'
+                      % (coverage['stale'], coverage['fresh_seconds_limit'])})
+    detected_age = _age_seconds(marks.get(LAST_DETECTION_KEY), now=now)
+    if detected_age is not None and detected_age > 3600 and not coverage.get('uncovered'):
+        warning_list.append({
+            'code': 'no_recent_detection',
+            'detail': 'no transition observed in the last hour'})
+    return warning_list
+
+
+def health(*, now=None) -> dict:
+    """The whole surface: state, coverage, liveness and warnings, PII-free."""
+    outbox = telemetry_state.metrics(now=now)
+    coverage = panel_coverage(now=now)
+    marks = _read_marks()
+    warning_list = warnings(coverage=coverage, outbox=outbox, now=now, marks=marks)
+    if not outbox.get('available'):
+        state = 'error'
+    elif any(w['code'] in ('worker_heartbeat_missing', 'outbox_unavailable',
+                           'panel_transport_refused', 'notification_retry_exhausted')
+             for w in warning_list):
+        state = 'degraded'
+    elif warning_list:
+        state = 'warning'
+    else:
+        state = 'ok'
+    moment = now or datetime.utcnow()
+    return {
+        'state': state,
         'mode': mode(),
         'detection_enabled': detection_enabled(),
         'delivery_enabled': delivery_enabled(),
         'legacy_sender_active': legacy_sender_active(),
-        'outbox': _telemetry.metrics(),
+        'outbox': outbox,
+        'coverage': coverage,
+        'liveness': {
+            'worker_heartbeat_at': marks.get(HEARTBEAT_PREFIX + 'delivery_worker'),
+            'worker_heartbeat_age_seconds': _age_seconds(
+                marks.get(HEARTBEAT_PREFIX + 'delivery_worker'), now=moment),
+            'last_detection_at': marks.get(LAST_DETECTION_KEY),
+            'last_detection_age_seconds': _age_seconds(marks.get(LAST_DETECTION_KEY), now=moment),
+            'last_delivery_at': marks.get(LAST_DELIVERY_KEY),
+            'last_delivery_age_seconds': _age_seconds(marks.get(LAST_DELIVERY_KEY), now=moment),
+            'last_reconciliation_at': marks.get(LAST_RECONCILIATION_KEY),
+            'last_reconciliation_age_seconds': _age_seconds(
+                marks.get(LAST_RECONCILIATION_KEY), now=moment),
+        },
+        'warnings': warning_list,
     }
+
+
+def status() -> dict:
+    """Doctor-facing block. Counters, ages and panel coverage -- never customer data."""
+    return health()
