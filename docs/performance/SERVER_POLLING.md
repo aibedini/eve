@@ -32,6 +32,15 @@ honours it.
 * `retain_servers()` forgets panels that left the enabled set, so a deleted panel cannot
   keep the schedule permanently "due".
 
+* The watch marks are **shared, not process-local**: the browser's declaration
+  arrives in a web process while the loop that must speed up runs in the background
+  process, so each mark is written to Redis (`eve:refresh:watch:<server_id>`, TTL =
+  the active window, value = the reason) and the schedule consults the shared set as
+  well as its own. Without Redis the mark is process-local, which is correct for a
+  single-process install and is exactly the old behaviour. See
+  `docs/TELEMETRY_STATE_TRANSITIONS.md` and
+  `tests/test_watch_propagation_crossprocess.py`.
+
 Wiring:
 
 * `fetch_and_update_global_data(..., periodic=True)` is the automatic loop's cycle and the

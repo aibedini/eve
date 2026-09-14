@@ -59,6 +59,7 @@ from panel.routes.templates_api import (
     DEFAULT_ROYALTY_INFO_SMS_TEMPLATE,
     ROYALTY_INFO_SMS_TEMPLATE_TYPE,
 )
+from panel.services import depletion_pipeline, telemetry_state
 from panel.services import gmweb_contract
 from panel.services import lifecycle as lifecycle_service
 from panel.services.lifecycle import flush_invalidation_outbox
@@ -3711,6 +3712,379 @@ def _sms_depletion_state_still_valid(server_id, email: str, expected_state: str,
     return True, ''
 
 
+_DEPLETION_TRIGGER_KEYS = {
+    'near_expiry': 'trigger_near_expiry',
+    'low_volume': 'trigger_low_volume',
+    'expired': 'trigger_expired',
+    'ended': 'trigger_ended',
+}
+
+
+def _server_display_name(server_id) -> str:
+    """The server label the templates render, read from the shared snapshot."""
+    try:
+        for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+            if int(inbound.get('server_id') or -1) == int(server_id):
+                return inbound.get('server_name') or ''
+    except Exception:
+        pass
+    return ''
+
+
+def _sms_quiet_seconds_remaining(cfg: dict, now_utc=None) -> int:
+    """Seconds until the quiet window closes, so the event is DEFERRED not lost."""
+    if not _sms_in_quiet_hours(cfg, now_utc):
+        return 0
+    start = int(cfg.get('quiet_start', 0)) % 24
+    end = int(cfg.get('quiet_end', 0)) % 24
+    hour = _tehran_hour(now_utc)
+    if start < end:
+        remaining_hours = end - hour
+    elif hour >= start:
+        remaining_hours = 24 - hour + end
+    else:
+        remaining_hours = end - hour
+    return max(60, int(remaining_hours * 3600))
+
+
+def _sms_budget_deferral_seconds(reason: str) -> int:
+    """Seconds until the hourly/daily budget that refused this send is refilled."""
+    now = datetime.utcnow()
+    if reason == 'hourly_limit_reached':
+        return max(60, 3660 - ((now.minute * 60) + now.second))
+    return max(60, 86700 - ((now.hour * 3600) + (now.minute * 60) + now.second))
+
+
+def _depletion_event_mvars(event, row: dict, cfg: dict) -> dict:
+    """Template variables rebuilt from the LIVE cached row, never from the event.
+
+    The event carries identity and a state version -- not a message. Rebuilding the
+    message at delivery time from the row the dashboard is rendering is what keeps
+    "what the customer was told" and "what the panel shows" the same claim."""
+    from app import format_jalali  # deferred compatibility export
+    expiry_ts = int(row.get('expiryTimestamp') or 0)
+    expiry_date = None
+    if expiry_ts and expiry_ts > 0:
+        try:
+            expiry_date = format_jalali(datetime.utcfromtimestamp(expiry_ts / 1000))
+        except Exception:
+            expiry_date = None
+    return {
+        'user': event.client_email or (row.get('email') or ''),
+        'rem': row.get('remaining_formatted') or 'Unlimited',
+        'time': row.get('expiryTime') or '-',
+        'date': expiry_date or '-',
+        'server': _server_display_name(event.server_id),
+        '_sub_id': row.get('subId') or row.get('id') or '',
+    }
+
+
+def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, shadow):
+    """Deliver ONE outbox event. Returns (outcome, stop_draining).
+
+    Every gate the scan used is applied here, in the same order, and for the same
+    reason: the pipeline changes WHO detects a transition and WHEN it is sent, not
+    what is allowed to be sent. Nothing is posted on doubt -- a state that cannot be
+    proven live is deferred or superseded, never guessed.
+    """
+    from app import format_remaining_days, _utc_iso_now  # deferred compatibility exports
+    sid = int(event.server_id or 0)
+    email = (event.client_email or '').strip()
+    email_l = email.lower()
+    # The event stores the CANONICAL state; every gate below (per-state trigger,
+    # cooldown hours, template, manual review, priority) is configured in the SMS
+    # monitor's vocabulary. Translating here -- once -- is what keeps the operator's
+    # settings meaningful for a transition the pipeline detected.
+    state = telemetry_state.sms_state_for(event.state) or str(event.state or '')
+    jid = job_id or ('evt-%s' % event.event_id[:24])
+    if not email_l:
+        telemetry_state.mark_skipped(event, 'no_identity_email')
+        return 'skipped', False
+    if not cfg.get('enabled'):
+        telemetry_state.mark_skipped(event, 'sms_disabled', retry_in=600)
+        return 'deferred', False
+    trigger_key = _DEPLETION_TRIGGER_KEYS.get(state)
+    if trigger_key and not cfg.get(trigger_key):
+        telemetry_state.mark_skipped(event, 'trigger_disabled:%s' % state, retry_in=900)
+        return 'deferred', False
+    if _account_has_reseller_owner(sid, email_l):
+        telemetry_state.mark_skipped(event, 'reseller_owned')
+        return 'skipped', False
+
+    # FENCE 1 -- the lifecycle generation. A renewal that landed while this event
+    # sat in the queue invalidates the claim it makes.
+    current = {}
+    try:
+        current = lifecycle_service.generation_state(event.service_key) or {}
+    except Exception:
+        current = {}
+    live_generation = current.get('generation')
+    generation = int(event.lifecycle_generation or 0)
+    if live_generation is not None and generation and int(live_generation) != generation:
+        telemetry_state.mark_superseded(event, 'lifecycle_generation_advanced')
+        return 'superseded', False
+    last_change_at = current.get('last_lifecycle_change_at')
+    if not generation:
+        established = lifecycle_service.read_or_create_generation(
+            event.service_key, server_id=sid, client_email=email_l,
+            client_uuid=event.client_uuid or _service_uuid_for(sid, email_l),
+            reason='depletion_event_baseline')
+        if not established.get('established'):
+            telemetry_state.mark_skipped(
+                event, 'generation_unavailable:%s' % (established.get('reason') or 'unknown'),
+                retry_in=300)
+            return 'deferred', False
+        generation = int(established.get('generation') or 0)
+        event.lifecycle_generation = generation
+        last_change_at = established.get('last_lifecycle_change_at') or last_change_at
+
+    # FENCE 2 -- live state, recomputed from the shared snapshot with the ONE
+    # classifier both sides use. Duplicate cached copies that disagree suppress.
+    rows = _cached_snapshot_clients(sid, email_l)
+    if not rows:
+        telemetry_state.mark_skipped(event, 'account_missing')
+        return 'skipped', False
+    if any(_classify_cached_client_state(row, cfg) != state for row in rows):
+        telemetry_state.mark_superseded(event, 'state_changed_before_send')
+        return 'superseded', False
+    valid, reason = _sms_depletion_state_still_valid(
+        sid, email_l, state, cfg, service_key=event.service_key,
+        expected_generation=generation, last_lifecycle_change_at=last_change_at)
+    if not valid and reason in _SNAPSHOT_REFRESHABLE_REASONS:
+        # The cached copy is merely too old to prove anything: one targeted,
+        # read-only panel read for THIS client, then re-check. Never a fan-out.
+        refreshed, _observed_at = _targeted_candidate_refresh(sid, email_l)
+        if refreshed:
+            valid, reason = _sms_depletion_state_still_valid(
+                sid, email_l, state, cfg, service_key=event.service_key,
+                expected_generation=generation, last_lifecycle_change_at=last_change_at)
+    if not valid:
+        if reason in _SNAPSHOT_REFRESHABLE_REASONS:
+            # Deferred, not dropped: the cached copy is merely too old to PROVE the
+            # state, so the event waits for a fresher read instead of being decided
+            # on doubt. The audit row is what answers 'why did no SMS go out?'.
+            telemetry_state.mark_skipped(event, reason, retry_in=180)
+            _sms_log_row(jid, email_l, sid, _server_display_name(sid), state,
+                         recipient, 'deferred', reason)
+            return 'deferred', False
+        telemetry_state.mark_superseded(event, reason)
+        return 'superseded', False
+
+    row = rows[0]
+    comment = row.get('comment') or ''
+    if _sms_account_opted_out(sid, email_l, comment, refresh_shared=True):
+        telemetry_state.mark_skipped(event, 'opted_out_recheck')
+        return 'skipped', False
+    if _sms_has_manual_review(email_l, sid, state):
+        telemetry_state.mark_skipped(event, 'manual_review_pending', retry_in=1800)
+        return 'deferred', False
+    cd_hours = int(cooldown_hours.get(state, 24) or 24)
+    if _recent_bot_message_within(email_l, sid, cd_hours):
+        telemetry_state.mark_skipped(event, 'cooldown_active')
+        return 'skipped', False
+    recipient = _extract_iran_mobile_from_text(email, comment)
+    if not recipient:
+        telemetry_state.mark_skipped(event, 'no_recipient')
+        return 'skipped', False
+    total_bytes = int(row.get('totalGB') or 0)
+    expiry_ts = int(row.get('expiryTimestamp') or 0)
+    if cfg.get('skip_unlimited') and (total_bytes <= 0 or expiry_ts <= 0):
+        telemetry_state.mark_skipped(event, 'unlimited_skipped')
+        return 'skipped', False
+    hide_days = 7
+    mon = _get_monitor_settings_cached(cfg)
+    expired_max_age = int(cfg.get('expired_max_age_days') or 0) or hide_days
+    ended_max_age = int(cfg.get('ended_max_age_days') or 0)
+    if state == 'expired' and expired_max_age:
+        try:
+            exp = format_remaining_days(expiry_ts)
+            days_ago = abs(int(exp.get('days') or 0))
+        except Exception:
+            days_ago = 0
+        if days_ago > expired_max_age:
+            telemetry_state.mark_skipped(event, 'expired_too_old')
+            return 'skipped', False
+    if state == 'ended' and ended_max_age:
+        first = _ended_first_contact(email_l, sid)
+        if first and (datetime.utcnow() - first).days > ended_max_age:
+            telemetry_state.mark_skipped(event, 'ended_too_old')
+            return 'skipped', False
+    if _sms_in_quiet_hours(cfg):
+        telemetry_state.mark_skipped(event, 'quiet_hours',
+                                    retry_in=_sms_quiet_seconds_remaining(cfg))
+        return 'deferred', False
+    ready, ready_reason, _gateway_status = _sms_gateway_ready(cfg)
+    if not ready:
+        telemetry_state.mark_skipped(event, ready_reason or 'gateway_not_ready',
+                                    retry_in=300)
+        return 'deferred', False
+
+    tpl = (templates.get(SMS_STATE_TO_MONITOR_TPL.get(state)) or '').strip()
+    if not tpl:
+        telemetry_state.mark_skipped(event, 'no_template')
+        return 'skipped', False
+    mvars = _depletion_event_mvars(event, row, cfg)
+    if _template_wants_recommendation(tpl):
+        mvars.update(_recommendation_template_vars(
+            sid, mvars.get('_sub_id'), email,
+            terminal=state in ('expired', 'ended')))
+    text_msg = _render_monitor_state_template(tpl, mvars)
+    if not (text_msg or '').strip():
+        telemetry_state.mark_skipped(event, 'empty_message')
+        return 'skipped', False
+    if shadow:
+        # Shadow rollout: the pipeline explains what it WOULD have sent and the
+        # legacy scan keeps sending. Exactly one path reaches the gateway.
+        event.status = 'shadowed'
+        event.last_error = 'shadow_mode'
+        event.updated_at = datetime.utcnow()
+        db.session.commit()
+        _sms_log_row(jid, email_l, sid, _server_display_name(sid), state, recipient,
+                     'shadowed', 'shadow_mode')
+        return 'shadowed', False
+
+    segment_info = _sms_segment_info(text_msg)
+    segments = segment_info['sms_segments']
+    slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments, priority=state)
+    if not slot_ok:
+        if slot_reason in ('daily_limit_reached', 'hourly_limit_reached'):
+            telemetry_state.mark_skipped(event, slot_reason,
+                                        retry_in=_sms_budget_deferral_seconds(slot_reason))
+            return 'deferred', False
+        telemetry_state.mark_skipped(event, slot_reason, retry_in=120)
+        return 'deferred', False
+    pace = float(cfg.get('send_pace_seconds') or 0)
+    if pace > 0 and SMS_LAST_SEND_TS[0] > 0:
+        gap = pace - (time.time() - SMS_LAST_SEND_TS[0])
+        if gap > 0:
+            time.sleep(min(gap, 30))
+    notification_kind = lifecycle_service.sms_notification_kind(state)
+    idem = telemetry_state.idempotency_key_for(event)
+    meta = _depletion_notification_meta(
+        event.service_key, generation, notification_kind, last_change_at=last_change_at)
+    res = _send_sms_via_gmweb(recipient, text_msg, cfg,
+                              priority=_gmweb_sms_priority(state),
+                              idempotency_key=idem, meta=meta)
+    SMS_LAST_SEND_TS[0] = time.time()
+    if res.get('sent'):
+        try:
+            db.session.add(WhatsappBotLog(email=email_l, server_id=sid,
+                                         event='sms_%s' % state))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        _sms_log_row(jid, email_l, sid, _server_display_name(sid), state, recipient,
+                     _sms_accepted_status(res), None, res,
+                     _lifecycle_audit(event.service_key, generation,
+                                      meta.get('correlationId'), event.observed_at,
+                                      last_change_at, idempotency_key=idem))
+        telemetry_state.mark_sent(event, response=res,
+                                  correlation_id=meta.get('correlationId'),
+                                  gateway_request_id=res.get('request_id'))
+        return 'sent', False
+    _sms_refund_daily_segments(segments)
+    reason = res.get('reason') or 'send_failed'
+    _sms_log_row(jid, email_l, sid, _server_display_name(sid), state, recipient,
+                 'failed', reason, res,
+                 _lifecycle_audit(event.service_key, generation,
+                                  meta.get('correlationId'), event.observed_at,
+                                  last_change_at, idempotency_key=idem))
+    delay = telemetry_state.mark_retry(event, reason)
+    if res.get('status_code') == 429:
+        # The gateway is rate limiting: stop draining this batch instead of
+        # hammering it with the rest of the queue.
+        return 'failed', True
+    return 'failed', bool(delay == 0)
+
+
+_MONITOR_SETTINGS_CACHE = {}
+
+
+def _get_monitor_settings_cached(cfg) -> dict:
+    """Monitor settings, read once per drain instead of once per event."""
+    cached = _MONITOR_SETTINGS_CACHE.get('value')
+    if cached is not None:
+        return cached
+    try:
+        from app import _get_monitor_settings  # deferred compatibility export
+        cached = _get_monitor_settings() or {}
+    except Exception:
+        cached = {}
+    _MONITOR_SETTINGS_CACHE['value'] = cached
+    return cached
+
+
+def run_depletion_event_outbox(limit: int = 10, *, job_id: str | None = None,
+                              triggered_by: str = 'event') -> dict:
+    """Deliver due transition events. In 'on' mode this is the ONLY sender.
+
+    The scan can spend half an hour between runs; a customer who ran out of traffic
+    should not wait for it. This worker is the low-latency path: the fetch that
+    observed the transition wrote the event, and delivery happens seconds later.
+    """
+    result = {'claimed': 0, 'sent': 0, 'skipped': 0, 'deferred': 0,
+              'superseded': 0, 'failed': 0, 'shadowed': 0, 'stopped': None,
+              'triggered_by': triggered_by}
+    if not depletion_pipeline.detection_enabled():
+        return result
+    try:
+        _MONITOR_SETTINGS_CACHE.pop('value', None)
+        reclaimed = telemetry_state.reclaim_expired_leases()
+        if reclaimed:
+            _log_warning('[sms-events] reclaimed %s expired lease(s)', reclaimed)
+        events = telemetry_state.claim_events(limit=limit)
+        result['claimed'] = len(events)
+        if not events:
+            return result
+        cfg = _get_sms_runtime_settings()
+        mon = _get_monitor_settings_cached(cfg)
+        templates = mon.get('templates', {}) if isinstance(mon, dict) else {}
+        cooldown_hours = cfg.get('cooldown_hours') or {}
+        shadow = depletion_pipeline.shadow_mode()
+        for event in events:
+            try:
+                outcome, stop = _deliver_depletion_event(
+                    event, cfg=cfg, templates=templates,
+                    cooldown_hours=cooldown_hours, job_id=job_id, shadow=shadow)
+            except Exception:
+                db.session.rollback()
+                _log_warning('[sms-events] delivery failed for %s',
+                             event.event_id, exc_info=True)
+                outcome, stop = 'failed', False
+            result[outcome] = int(result.get(outcome) or 0) + 1
+            if stop:
+                result['stopped'] = outcome
+                break
+    except Exception:
+        db.session.rollback()
+        _log_warning('[sms-events] drain failed', exc_info=True)
+    return result
+
+
+def depletion_event_worker(interval_seconds: int = 5) -> None:
+    """Background loop that delivers transition events as they happen.
+
+    A short interval is affordable precisely because this loop does no panel I/O and
+    no full-install scan: it leases the few due rows (usually zero) and returns.
+    """
+    from app import app  # deferred: app-level helper, avoids circular import
+    while True:
+        try:
+            with app.app_context():
+                result = run_depletion_event_outbox(limit=10,
+                                                    triggered_by='worker')
+                if result.get('sent') or result.get('shadowed'):
+                    app.logger.info(
+                        '[sms-events] sent=%s shadowed=%s claimed=%s',
+                        result.get('sent'), result.get('shadowed'),
+                        result.get('claimed'))
+        except Exception as exc:
+            try:
+                app.logger.warning('[sms-events] worker error: %s', exc)
+            except Exception:
+                pass
+        time.sleep(max(2, int(interval_seconds)))
+
 def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto',
                             states: list[str] | tuple[str, ...] | None = None) -> dict:
     """State-based automated SMS scan. For each non-reseller-owned account, derive
@@ -3734,6 +4108,35 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         priority_map = SMS_STATE_PRIORITY
     now_iso = _utc_iso_now()
 
+    # ── Reconciliation safety net (not the detector) ──────────────────────────
+    # This scan used to BE the detector, and that was the bug: it asked "which
+    # accounts look depleted right now", so a transition that happened between two
+    # runs -- or while the snapshot was stale -- produced no event at all. It now
+    # runs the opposite direction: record what the snapshot holds into the durable
+    # ledger (so a transition nobody observed becomes an event instead of a silence)
+    # and drain the outbox. In on mode the outbox is the only sender, which is what
+    # makes it impossible for the two paths to text one customer twice.
+    pipeline = {
+        'mode': depletion_pipeline.mode(),
+        'detection': depletion_pipeline.detection_enabled(),
+    }
+    if depletion_pipeline.detection_enabled():
+        reconciled = depletion_pipeline.reconcile_snapshot(source='reconciliation')
+        drained = {'sent': 0, 'claimed': 0}
+        if cfg.get('enabled') and any(state_enabled.values()):
+            drained = run_depletion_event_outbox(limit=25, job_id=job_id,
+                                                 triggered_by=triggered_by)
+        pipeline['reconciled'] = reconciled
+        pipeline['drained'] = drained
+        if not depletion_pipeline.legacy_sender_active():
+            _sms_scan_set(state='idle', reason='reconciled',
+                          finished_at=_utc_iso_now(), pipeline=pipeline)
+            return {
+                'scanned': int(reconciled.get('observed') or 0),
+                'sent': int(drained.get('sent') or 0),
+                'reason': 'reconciled',
+                'pipeline': pipeline,
+            }
     if not cfg.get('enabled') or not any(state_enabled.values()):
         _sms_scan_set(state='idle', reason='disabled', finished_at=now_iso)
         return {'scanned': 0, 'sent': 0, 'reason': 'disabled'}

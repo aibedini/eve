@@ -665,6 +665,170 @@ class ServiceNotificationOutbox(db.Model):
         }
 
 
+# ---------------------------------------------------------------------------
+# Durable observed-state ledger + depletion notification outbox.
+#
+# Why: depletion used to be discovered by a 30-minute SMS scan reading whatever
+# the shared snapshot happened to hold. A customer whose traffic ran out between
+# two scans could sit at '2 GB remaining' on the dashboard while X-UI already
+# said 'Volume Ended', and the reminder that should have fired at the transition
+# did not exist. Telemetry is the authoritative detector; the scan is the repair
+# net. These two tables are the durable hand-off between them.
+#
+# `ServiceObservedState` is the last state Eve *observed* for a service (not what
+# a mutation intended), and `ServiceNotificationEvent` is the outbox row that a
+# transition produces. Both are keyed by the canonical `service_key`
+# (`eve:<server_id>:<client_uuid>`, see panel/services/lifecycle.py) so there is
+# exactly one identity system.
+# ---------------------------------------------------------------------------
+#: Notification states that are worth a reminder.
+DEPLETION_NOTIFICATION_STATES = ('low_volume', 'ended', 'expired', 'near_expiry')
+#: Canonical service state -> the SMS notification kind the gateway knows.
+SERVICE_STATE_TO_NOTIFICATION_KIND = {
+    'volume_low': 'low_volume',
+    'volume_ended': 'volume_ended',
+    'expired': 'expired',
+    'expiring_soon': 'near_expiry',
+}
+NOTIFICATION_EVENT_STATUSES = (
+    'pending', 'retry', 'sent', 'skipped', 'superseded', 'failed_terminal',
+    # 'sending' is the delivery lease a worker holds; 'shadowed' is what the
+    # pipeline records in shadow mode, where it must be able to explain what it
+    # WOULD have sent without sending it.
+    'sending', 'shadowed')
+NOTIFICATION_EVENT_SOURCES = ('transition', 'reconciliation')
+# Bounded retry ladder for a notification the gateway could not take, in seconds.
+NOTIFICATION_BACKOFF_SECONDS = (30, 120, 600, 1800, 3600, 10800)
+
+
+class ServiceObservedState(db.Model):
+    """The last authoritative state Eve observed for one service.
+
+    Written only from a *fresh panel read*, never from an intended mutation, so it
+    is the fact a transition is computed against. `state_version` increases on
+    every material change and is one half of a notification event's deduplication
+    key."""
+    __tablename__ = 'service_observed_states'
+    __table_args__ = (
+        db.UniqueConstraint('service_key', name='uq_service_observed_service_key'),
+        db.Index('ix_service_observed_identity', 'server_id', 'client_uuid'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    service_key = db.Column(db.String(255), nullable=False, index=True)
+    server_id = db.Column(db.Integer, nullable=False, index=True)
+    client_uuid = db.Column(db.String(100), nullable=True)
+    client_email = db.Column(db.String(255), nullable=True, index=True)
+    last_state = db.Column(db.String(32), nullable=True)
+    last_state_tag = db.Column(db.String(32), nullable=True)
+    last_remaining_bytes = db.Column(db.BigInteger, nullable=True)
+    last_total_bytes = db.Column(db.BigInteger, nullable=True)
+    last_expiry_ms = db.Column(db.BigInteger, nullable=True)
+    last_observed_at = db.Column(db.DateTime, nullable=True, index=True)
+    last_telemetry_updated_at = db.Column(db.DateTime, nullable=True)
+    state_version = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    def to_dict(self):
+        return {
+            'service_key': self.service_key,
+            'server_id': self.server_id,
+            'client_uuid': self.client_uuid,
+            'last_state': self.last_state,
+            'last_state_tag': self.last_state_tag,
+            'last_remaining_bytes': self.last_remaining_bytes,
+            'last_total_bytes': self.last_total_bytes,
+            'last_expiry_ms': self.last_expiry_ms,
+            'last_observed_at': (self.last_observed_at.isoformat() + 'Z'
+                                 if self.last_observed_at else None),
+            'state_version': int(self.state_version or 0),
+        }
+
+
+class ServiceNotificationEvent(db.Model):
+    """Durable depletion-notification outbox: one row per state transition.
+
+    The fetch pipeline writes it in the same transaction as the observed-state
+    update, so a crash between "X-UI says ended" and "the customer was told"
+    cannot lose the reminder. Delivery is a separate worker that re-validates the
+    lifecycle generation and the live state before it calls the gateway.
+    """
+    __tablename__ = 'service_notification_events'
+    __table_args__ = (
+        db.UniqueConstraint('event_id', name='uq_service_notification_event_id'),
+        db.Index('ix_service_notification_due', 'status', 'next_attempt_at'),
+        db.Index('ix_service_notification_service_generation',
+                 'service_key', 'lifecycle_generation'),
+        db.Index('ix_service_notification_service_state',
+                 'service_key', 'state', 'state_version'),
+        db.Index('ix_service_notification_identity', 'server_id', 'client_uuid'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.String(160), nullable=False)
+    service_key = db.Column(db.String(255), nullable=False, index=True)
+    server_id = db.Column(db.Integer, nullable=False, default=0, index=True)
+    client_uuid = db.Column(db.String(100), nullable=True)
+    client_email = db.Column(db.String(255), nullable=True)
+    state = db.Column(db.String(32), nullable=False)
+    previous_state = db.Column(db.String(32), nullable=True)
+    notification_kind = db.Column(db.String(32), nullable=False)
+    state_version = db.Column(db.Integer, nullable=False, default=0)
+    lifecycle_generation = db.Column(db.Integer, nullable=False, default=0)
+    observed_at = db.Column(db.DateTime, nullable=True)
+    telemetry_updated_at = db.Column(db.DateTime, nullable=True)
+    source = db.Column(db.String(24), nullable=False, default='transition')
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    next_attempt_at = db.Column(db.DateTime, nullable=True)
+    idempotency_key = db.Column(db.String(160), nullable=True)
+    correlation_id = db.Column(db.String(64), nullable=True)
+    gateway_request_id = db.Column(db.String(128), nullable=True)
+    last_error = db.Column(db.String(255), nullable=True)
+    last_status_code = db.Column(db.Integer, nullable=True)
+    last_attempt_at = db.Column(db.DateTime, nullable=True)
+    #: The delivery lease. Two workers must never send one event, so claiming is an
+    #: UPDATE guarded by 'status' (plus FOR UPDATE SKIP LOCKED on PostgreSQL) and
+    #: these columns record who holds the row and since when, which is also how a
+    #: crashed worker's lease is recognised and returned to the queue.
+    claimed_by = db.Column(db.String(64), nullable=True)
+    claimed_at = db.Column(db.DateTime, nullable=True)
+    superseded_reason = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    sent_at = db.Column(db.DateTime, nullable=True)
+    superseded_at = db.Column(db.DateTime, nullable=True)
+
+    @property
+    def terminal(self) -> bool:
+        return self.status in ('sent', 'skipped', 'superseded', 'failed_terminal')
+
+    def to_dict(self):
+        return {
+            'event_id': self.event_id,
+            'service_key': self.service_key,
+            'server_id': self.server_id,
+            'state': self.state,
+            'previous_state': self.previous_state,
+            'notification_kind': self.notification_kind,
+            'state_version': int(self.state_version or 0),
+            'lifecycle_generation': int(self.lifecycle_generation or 0),
+            'source': self.source,
+            'status': self.status,
+            'attempt_count': int(self.attempt_count or 0),
+            'next_attempt_at': (self.next_attempt_at.isoformat() + 'Z'
+                                if self.next_attempt_at else None),
+            'idempotency_key': self.idempotency_key,
+            'correlation_id': self.correlation_id,
+            'gateway_request_id': self.gateway_request_id,
+            'last_error': self.last_error,
+            'last_status_code': self.last_status_code,
+            'superseded_reason': self.superseded_reason,
+            'created_at': (self.created_at.isoformat() + 'Z'
+                           if self.created_at else None),
+            'sent_at': (self.sent_at.isoformat() + 'Z' if self.sent_at else None),
+        }
+
+
 class PendingSms(db.Model):
     """Transactional create/renew SMS that arrived during quiet hours. Parked here
     and flushed once the quiet window ends, so a confirmation is never lost nor

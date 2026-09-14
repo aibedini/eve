@@ -382,6 +382,7 @@ class WatchDeclarationRouteTests(unittest.TestCase):
         self.admin.set_password("CorrectHorseBattery1!")
         db.session.add(self.admin)
         db.session.commit()
+        self._stub_refresh_job()
         self.client = app.test_client()
         with self.client.session_transaction() as sess:
             sess.clear()
@@ -392,6 +393,25 @@ class WatchDeclarationRouteTests(unittest.TestCase):
     def _restore_snapshot(self):
         GLOBAL_SERVER_DATA.clear()
         GLOBAL_SERVER_DATA.update(self._saved_snapshot)
+
+    def _stub_refresh_job(self):
+        """Keep the route's refresh job out of this test.
+
+        Without Redis the route's job runs in a thread in THIS process, and its
+        first act is to prune the schedule of every server the test database does
+        not contain -- which is every server named here. That is a race with the
+        assertion below, and the subject of these tests is the watch declaration,
+        not the fetch it happens to trigger.
+        """
+        # The route imports the helper from the app namespace (deferred re-export),
+        # so that binding -- not the definition module -- is what has to be replaced.
+        patcher = mock.patch.object(
+            app_module, "enqueue_refresh_job",
+            lambda **kwargs: {"id": "test-job", "state": "queued",
+                              "mode": kwargs.get("mode"),
+                              "server_id": kwargs.get("server_id")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_a_dashboard_poll_marks_the_servers_it_renders(self):
         with mock.patch.object(refresh_policy, "record_activity"):

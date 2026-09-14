@@ -32,11 +32,21 @@ LEVELS = ('active', 'recent', 'idle')
 ACTIVITY_KEY = 'eve:refresh:last_activity'
 REMOTE_CACHE_SECONDS = 5.0
 
+# Per-server watch marks are the one piece of cadence state that MUST cross the
+# process boundary: the browser talks to a web process, the polling loop lives in
+# the background process, and an in-process dict in the web worker cannot make a
+# panel hot for the fetcher. Marks therefore live in Redis (with the TTL as the
+# expiry, so a closed tab stops refreshing on its own) and the local dict stays as
+# the fallback for a single-process install and for tests.
+WATCH_KEY_PREFIX = 'eve:refresh:watch:'
+
 _lock = threading.RLock()
 _wake = threading.Event()
 _last_activity = None
 _last_recorded = 0.0
 _remote_cache = {'at': 0.0, 'value': None}
+_watch_cache = {'at': 0.0, 'marks': {}}
+_local_watches = {}
 
 
 def _env_int(name, default, minimum=1):
@@ -129,6 +139,9 @@ def reset_state() -> None:
         _last_recorded = 0.0
         _remote_cache['at'] = 0.0
         _remote_cache['value'] = None
+        _watch_cache['at'] = 0.0
+        _watch_cache['marks'] = {}
+        _local_watches.clear()
         _servers.clear()
         _wake.clear()
 
@@ -265,8 +278,13 @@ def status(snapshot_age=None, now=None) -> dict:
 # has no webhook), so the per-server interval is what bounds that latency -- without
 # hammering a panel that is down. A server the operator just looked at or that an Eve
 # mutation touched is polled every couple of seconds; an untouched one far less often;
-# a failing one backs off exponentially. State is per process (the fetcher role owns
-# the loop); the shared activity timestamp above still drives the cycle cadence.
+# a failing one backs off exponentially. The schedule itself (next_due/failures) is per
+# process -- the fetcher role owns the loop -- but the WATCH MARKS are shared through
+# Redis, because the operator declares "this panel is on screen" in a web process while
+# the loop that has to act on it runs in the background process. Without the shared
+# marks a dashboard on screen and a dashboard in another process disagreed about which
+# panels were hot, which is the whole reason the per-server cadence looked broken.
+# The shared cycle-level activity timestamp above still drives the cycle cadence.
 
 SERVER_POLL_ACTIVE_TTL_DEFAULT = 120     # how long a server stays "active"
 SERVER_POLL_BACKOFF_BASE_DEFAULT = 5
@@ -312,6 +330,143 @@ def _server_state(server_id):
     return state
 
 
+def _watch_ttl_seconds(ttl=None) -> float:
+    """How long one watch mark stays valid. Defaults to the active window."""
+    if ttl is None:
+        return max(5.0, server_active_ttl())
+    try:
+        return max(0.0, float(ttl))
+    except (TypeError, ValueError):
+        return max(5.0, server_active_ttl())
+
+
+def _publish_watch(sid, *, ttl=None, reason='dashboard') -> None:
+    """Share one watch mark so the process that owns the loop can see it."""
+    window = _watch_ttl_seconds(ttl)
+    if window <= 0:
+        return
+    client = _redis()
+    if client is None:
+        return
+    try:
+        client.set(WATCH_KEY_PREFIX + str(sid), str(reason or 'dashboard')[:32],
+                   ex=int(max(1, round(window))))
+    except Exception:
+        pass
+
+
+def _read_watch_marks(now=None, force=False) -> dict:
+    """Currently marked servers as {server_id: reason}, cached briefly.
+
+    The mark TTL is Redis's own expiry, so one census is enough: no per-key TTL
+    read, and an expired mark cannot be resurrected by this cache.
+    """
+    moment = time.time() if now is None else float(now)
+    with _lock:
+        cached = _watch_cache
+        if not force and (moment - cached['at']) < REMOTE_CACHE_SECONDS:
+            return dict(cached['marks'])
+    marks = {}
+    client = _redis()
+    if client is not None:
+        try:
+            for key in client.scan_iter(match=WATCH_KEY_PREFIX + '*', count=100):
+                name = key.decode('utf-8', 'replace') if isinstance(key, bytes) else str(key)
+                raw = name[len(WATCH_KEY_PREFIX):]
+                try:
+                    sid = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                value = client.get(name)
+                if isinstance(value, bytes):
+                    value = value.decode('utf-8', 'replace')
+                marks[sid] = str(value or 'dashboard')
+        except Exception:
+            marks = {}
+    with _lock:
+        # Marks declared in this process are never lost to a failed census.
+        for sid in list(_local_watches):
+            marks.setdefault(sid, _local_watches[sid])
+        cached['at'] = moment
+        cached['marks'] = dict(marks)
+    return marks
+
+
+def watched_server_ids(*, now=None) -> list:
+    """Every server currently declared on screen, from any process, sorted."""
+    moment = time.time() if now is None else float(now)
+    with _lock:
+        local = {sid for sid, until in _local_watches.items() if until > moment}
+    remote = set(_read_watch_marks(now=moment))
+    return sorted(local | remote)
+
+
+def is_server_watched(server_id, *, now=None) -> bool:
+    """Whether any process has declared this server as on screen right now."""
+    sid = _coerce_server_id(server_id)
+    if sid is None:
+        return False
+    moment = time.time() if now is None else float(now)
+    with _lock:
+        if float(_local_watches.get(sid) or 0.0) > moment:
+            return True
+    return sid in _read_watch_marks(now=moment)
+
+
+def note_watch(sid, *, now=None, ttl=None, reason='dashboard') -> None:
+    """Record one watch mark locally, and share it when Redis is available."""
+    moment = time.time() if now is None else float(now)
+    window = _watch_ttl_seconds(ttl)
+    if window <= 0:
+        return
+    with _lock:
+        _local_watches[sid] = max(float(_local_watches.get(sid) or 0.0), moment + window)
+        _watch_cache['marks'][sid] = str(reason or 'dashboard')[:32]
+    _publish_watch(sid, ttl=window, reason=reason)
+
+
+def server_watch_marks(*, now=None) -> dict:
+    """Diagnostics: which servers are hot, and where each mark came from."""
+    moment = time.time() if now is None else float(now)
+    with _lock:
+        local = {sid: round(until - moment, 1) for sid, until in _local_watches.items()
+                 if until > moment}
+    remote = {}
+    for sid, reason in _read_watch_marks(now=moment).items():
+        remote[str(sid)] = reason
+    return {
+        'local': {str(sid): ttl for sid, ttl in sorted(local.items())},
+        'shared': remote,
+        'shared_backend': 'redis' if _redis() is not None else 'process',
+    }
+
+
+def _remote_watch_present(sid, moment) -> bool:
+    """Whether any process marked this server, backoff and failures aside."""
+    with _lock:
+        if float(_local_watches.get(sid) or 0.0) > moment:
+            return True
+    return sid in _read_watch_marks(now=moment)
+
+
+def _apply_remote_watch(sid, moment) -> bool:
+    """Pull a watched server's next poll in to the active interval.
+
+    This is what makes a dashboard in the web process speed up the loop in the
+    background process. A panel in backoff keeps its window: being looked at is not
+    a reason to retry a failing panel, the same rule note_server_activity follows.
+    """
+    state = _servers.get(sid)
+    if state is None or state.get('failures'):
+        return False
+    if not _remote_watch_present(sid, moment):
+        return False
+    soonest = moment + server_active_seconds()
+    if float(state.get('next_due') or 0.0) > soonest:
+        state['next_due'] = soonest
+    return True
+
+
 def note_server_activity(server_id, *, now=None, ttl=None) -> None:
     """Mark a server as worth watching (the operator looked at it, or Eve wrote to it).
 
@@ -345,15 +500,25 @@ def server_interval(server_id, *, now=None) -> float:
         return min(server_backoff_max(), delay)
     if (state.get('active_until') or 0.0) > moment:
         return server_active_seconds()
+    sid = _coerce_server_id(server_id)
+    if sid is not None and _remote_watch_present(sid, moment):
+        return server_active_seconds()
     return server_idle_seconds()
 
 
 def server_due(server_id, *, now=None) -> bool:
     """True when it is this panel's turn (a server never seen before is always due)."""
     state = _server_state(server_id)
-    if state is None or not state.get('next_due'):
+    if state is None:
         return True
     moment = time.time() if now is None else float(now)
+    sid = _coerce_server_id(server_id)
+    if sid is not None:
+        # A server another process put on screen is due at the active interval, not
+        # at the idle window its schedule was still serving.
+        _apply_remote_watch(sid, moment)
+    if not state.get('next_due'):
+        return True
     return moment >= float(state['next_due'])
 
 
@@ -398,13 +563,19 @@ def server_watch_limit() -> int:
     return _env_int('EVE_SERVER_POLL_WATCH_LIMIT', 20, minimum=1)
 
 
-def note_watched_servers(server_ids, *, now=None, limit=None) -> list:
+def note_watched_servers(server_ids, *, now=None, limit=None, reason='dashboard',
+                        ttl=None) -> list:
     """Mark the servers a browser says it is rendering as worth watching.
 
     The dashboard declares what is on screen on every poll, so the fast cadence
     follows the operator's attention instead of the whole install, and it expires on
     its own when the tab closes (nothing renews the mark). The declared set is capped
     so one open tab cannot pin a hundred-server install to a two-second fan-out.
+
+    The marks are SHARED as well as local, because the browser request lands in a web
+    process while the loop that has to speed up is the background fetcher: a
+    local-only mark made "the panel I am looking at" and "the panel being polled
+    fast" two unrelated facts in a split-role install.
     """
     if isinstance(server_ids, str):
         raw_values = server_ids.split(',')
@@ -424,6 +595,7 @@ def note_watched_servers(server_ids, *, now=None, limit=None) -> list:
         if sid is None or sid in marked:
             continue
         note_server_activity(sid, now=now)
+        note_watch(sid, now=now, ttl=ttl, reason=reason)
         marked.append(sid)
     return marked
 
@@ -476,10 +648,12 @@ def server_states(*, now=None) -> dict:
     moment = time.time() if now is None else float(now)
     with _lock:
         items = sorted(_servers.items())
+    shared_marks = _read_watch_marks(now=moment)
     rows = {}
     for sid, state in items:
         active_until = float(state.get('active_until') or 0.0)
         rows[str(sid)] = {
+            'watch_shared': sid in shared_marks,
             'interval_seconds': round(server_interval(sid, now=moment), 3),
             'due': server_due(sid, now=moment),
             'due_in_seconds': round(max(0.0, server_due_in(sid, now=moment)), 3),

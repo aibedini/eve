@@ -158,6 +158,22 @@ def doctor_summary():
         checks['refresh_policy'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.core import fetch_sequence, refresh_policy
+        from panel.services import depletion_pipeline
+        # The telemetry pipeline block answers the two questions an operator has
+        # after a missed reminder: is the detector running in this install, and is
+        # anything stuck in the outbox? Counters only -- never a phone number,
+        # an email address or a message body.
+        checks['telemetry_pipeline'] = {
+            'state': 'ok',
+            **depletion_pipeline.status(),
+            'fetch_sequence': fetch_sequence.status(),
+            'watch_marks': refresh_policy.server_watch_marks(),
+        }
+    except Exception as exc:
+        checks['telemetry_pipeline'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.services.usage_intelligence import observability, shadow
         from panel.services.usage_intelligence.recommendation import recommendation_mode
         checks['usage_intelligence'] = {

@@ -1,5 +1,32 @@
-# Eve - Xui Manager v2.6.0
+# Eve - Xui Manager v2.7.0
 
+## [2.7.0] - 2026-09-14
+
+**Depletion reminders are now driven by fresh telemetry, not by a timer.** The
+periodic SMS scan stops being the detector and becomes a reconciliation safety net;
+a durable outbox delivers exactly one reminder per state transition, seconds after
+the panel reports it.
+
+Highlights:
+- 📡 **Transition detection on the fresh read**: every panel read is recorded against a durable observed-state ledger, so "X-UI says Volume Ended" produces its reminder in seconds instead of waiting up to 30 minutes for a scan - and a transition that happens between two scans can no longer be missed entirely.
+- 📨 **Durable notification outbox**: one row per transition, deduplicated by a deterministic event id (a UNIQUE constraint, not a check-then-insert), delivered by a worker that re-reads the lifecycle generation and the live state before it posts. A crashed worker's lease is reclaimed; a broken gateway retries on a bounded ladder.
+- ⏱️ **Ordering that survives real life**: each panel read takes a ticket before it starts and is applied only if no newer read already won, so a slow response cannot revert a newer state and produce a second reminder for one depletion.
+- 🖥️ **The dashboard actually speeds up the loop**: per-server watch marks now travel through Redis to the fetching process, so "the panel I am looking at" and "the panel being polled every two seconds" are finally the same panel in a split web/background install.
+- 🩺 **Doctor visibility**: `/doctor/summary` reports the pipeline mode, outbox backlog and oldest pending age, with counters only - no customer data.
+
+Upgrade notes:
+- No configuration is required. `EVE_DEPLETION_EVENT_PIPELINE` defaults to `on` (pipeline detects and sends, scan reconciles); set `shadow` to watch the new detector without changing who sends, or `off` for the previous behaviour.
+- The first observation of a service is a silent baseline, so the upgrade does not text already-depleted accounts at once; the reconciliation pass picks up currently-actionable accounts under the existing caps.
+- The only schema change is the additive `f1d4a6b8c9e2` migration (two tables), applied automatically on start.
+
+فارسی:
+- 📡 **تشخیص گذار بر پایهٔ خواندن تازه**: هر خواندن پنل در یک دفترچهٔ وضعیت پایدار ثبت می‌شود؛ «Volume Ended» در X-UI حالا در چند ثانیه یادآور می‌سازد، نه تا ۳۰ دقیقه بعد - و گذاری که بین دو اسکن رخ دهد دیگر گم نمی‌شود.
+- 📨 **outbox پایدار اعلان**: یک ردیف برای هر گذار با شناسهٔ قطعی و قید UNIQUE (نه check-then-insert)، تحویل با workerی که پیش از ارسال، generation چرخهٔ عمر و وضعیت زنده را دوباره می‌خواند.
+- ⏱️ **ترتیب‌دهی**: هر خواندن پنل پیش از شروع یک ticket می‌گیرد و فقط اگر خواندن جدیدتری برنده نشده باشد اعمال می‌شود.
+- 🖥️ **داشبورد واقعاً حلقه را سریع می‌کند**: علامت‌های watch هر سرور از طریق Redis به پروسهٔ fetcher می‌رسد.
+- 🩺 **دید عملیاتی**: `/doctor/summary` حالت pipeline، backlog و قدیمی‌ترین ردیف معلق را نشان می‌دهد؛ فقط شمارنده، بدون دادهٔ مشتری.
+
+## [2.6.0] - 2026-09-12
 ## [2.6.0] - 2026-09-12
 
 A **production-hardening** release: thirty-two phases of security, correctness and

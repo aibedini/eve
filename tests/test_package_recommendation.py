@@ -2643,7 +2643,8 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
             status_code = 503
 
         with patch('app.requests.get', return_value=FakeResponse()) as get, \
-             patch('app._send_sms_via_gmweb') as send:
+             patch('app._send_sms_via_gmweb') as send, \
+             patch.dict(os.environ, {'EVE_DEPLETION_EVENT_PIPELINE': 'off'}):
             ready, reason, status = _sms_gateway_ready({
                 'base_url': 'https://gmweb.test',
                 'api_key': 'gmw_secret',
@@ -2699,6 +2700,7 @@ class PackageRecommendationRegressionTests(unittest.TestCase):
                     patch('panel.jobs.messaging._sms_scan_snapshot', return_value={'state': 'idle'}), \
                     patch('panel.jobs.messaging._account_has_reseller_owner', return_value=False), \
                     patch('panel.jobs.messaging._classify_monitor_status', return_value=None) as classify, \
+                    patch.dict(os.environ, {'EVE_DEPLETION_EVENT_PIPELINE': 'off'}), \
                     patch('app._get_monitor_settings', return_value=monitor_cfg):
                 result = _run_sms_depletion_scan(
                     job_id='sms-threshold-test',

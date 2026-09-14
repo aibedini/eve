@@ -2,6 +2,32 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.0] - 2026-09-14
+
+Real-time telemetry, dashboard sync and the depletion-notification pipeline. The
+periodic SMS scan stops being the detector: fresh panel telemetry is, and a durable
+notification outbox delivers one reminder per state transition.
+
+### Added
+- **Durable observed-state ledger** (`service_observed_states`): the last state Eve actually OBSERVED for a service, keyed by the canonical `eve:<server_id>:<client_uuid>` identity. A transition is "the value the one canonical calculator returns changed", so the dashboard, the subscription page and the reminder can never disagree about what a raw panel response means.
+- **Transition notification outbox** (`service_notification_events`): one row per transition, with a deterministic `event_id` as the cross-worker race barrier (two pollers observing the same transition converge through a UNIQUE constraint, not a check-then-insert) and a delivery lease so two workers cannot send one reminder.
+- **Low-latency delivery worker** (`depletion_event_worker`): claims due events every few seconds, re-reads the lifecycle generation, recomputes the state from the live snapshot, then posts with the durable generation and a stable `Idempotency-Key`. Quiet hours, daily and hourly budgets and rate limits DEFER an event (retry with `next_attempt_at`) instead of dropping the transition.
+- **Monotonic per-server fetch tickets** (`panel/core/fetch_sequence.py`): `begin()` before a panel read, compare-and-set `accept()` before applying it, so a slow read that returns late can no longer overwrite a newer one. `telemetry_updated_at` is stamped at apply time and therefore cannot order two reads.
+- **Shared per-server watch marks**: the dashboard's `?servers=1,2,3` declaration now reaches the fetching process through Redis (`eve:refresh:watch:<server_id>`, TTL = the active window), instead of only marking the web process that served the request.
+- **`GET /doctor/summary` telemetry block**: mode, outbox counters (pending/overdue/oldest age/by status), tracked fetch sequences and shared watch marks. Counters only - never a phone number, an email address or a message body.
+
+### Changed
+- **The periodic SMS scan is now a reconciliation safety net.** It records what the snapshot holds into the ledger (so a transition nobody observed becomes an event instead of a silence) and drains the same outbox, under every existing gate: enabled trigger, reseller rules, `#nosms`/`#nopm`, cooldown, quiet hours, daily and hourly limits, per-recipient interval, gateway readiness and 429 backoff.
+- **A renewal retires queued reminders** at the moment the lifecycle generation advances, in addition to the delivery-time generation fence: a reminder about the previous lifecycle cannot be delivered even if a worker had already leased it.
+- **Canonical-to-SMS state translation** at delivery time, so the per-state trigger, cooldown, template and priority the operator configured apply to a detected transition exactly as they did to a scanned candidate.
+
+### Rollout
+- `EVE_DEPLETION_EVENT_PIPELINE` selects the sender: `off` (scan only, pre-migration behaviour), `shadow` (the pipeline records what it *would* send while the scan keeps sending) or `on` (default: the pipeline sends, the scan reconciles). Whichever mode is set, exactly one path can reach the gateway for a logical transition.
+- The first observation of a service is a silent baseline, so deploying the ledger cannot text every already-depleted account at once; the reconciliation pass still catches currently-actionable accounts, bounded by the same caps.
+- The only schema change is the additive `f1d4a6b8c9e2` migration (two new tables and their indexes).
+- See `docs/TELEMETRY_STATE_TRANSITIONS.md` for the design, the invariant-to-test table and the operational surface.
+
+## [2.6.0] - 2026-09-12
 ## [2.6.0] - 2026-09-12
 
 A production-hardening release: thirty-two phases of security, correctness and

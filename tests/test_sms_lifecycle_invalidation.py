@@ -37,7 +37,9 @@ import panel.jobs.messaging as messaging  # noqa: E402
 from app import GLOBAL_SERVER_DATA, app, db  # noqa: E402
 from panel.models import (  # noqa: E402
     ServiceLifecycleState,
+    ServiceNotificationEvent,
     ServiceNotificationOutbox,
+    ServiceObservedState,
     SmsSendLog,
     WhatsappBotLog,
 )
@@ -202,6 +204,7 @@ class LifecycleGenerationTests(_AppContextTestCase):
         # documents). A fresh session makes that impossible.
         _drop_session()
         for model in (ServiceNotificationOutbox, ServiceLifecycleState,
+                      ServiceObservedState, ServiceNotificationEvent,
                       SmsSendLog, WhatsappBotLog):
             try:
                 model.query.delete()
@@ -347,8 +350,11 @@ class ScannerStaleSnapshotGuardTests(_AppContextTestCase):
         }
         self.addCleanup(lambda: GLOBAL_SERVER_DATA.update(self._orig))
         # Each test owns its generation rows: a leftover row from another test
-        # would make the durable barrier fire for the wrong reason.
-        for model in (ServiceNotificationOutbox, ServiceLifecycleState):
+        # would make the durable barrier fire for the wrong reason. The transition
+        # pipeline's ledger/outbox rows are equally durable, and a leftover row turns
+        # a first observation into a no-op duplicate.
+        for model in (ServiceNotificationOutbox, ServiceLifecycleState,
+                      ServiceObservedState, ServiceNotificationEvent):
             try:
                 model.query.delete()
             except Exception:
@@ -499,6 +505,7 @@ class DepletionScanEndToEndTests(_AppContextTestCase):
         }
         self.addCleanup(lambda: GLOBAL_SERVER_DATA.update(self._orig))
         for model in (ServiceNotificationOutbox, ServiceLifecycleState,
+                      ServiceObservedState, ServiceNotificationEvent,
                       SmsSendLog, WhatsappBotLog):
             try:
                 model.query.delete()
@@ -522,6 +529,11 @@ class DepletionScanEndToEndTests(_AppContextTestCase):
                                             "templates": MONITOR_TEMPLATES}),
             mock.patch.object(app_module, "fetch_and_update_global_data",
                               side_effect=self._targeted_refresh),
+            # These tests pin the LEGACY sender path (the RACE A / RACE B guards on
+            # the periodic scan), which remains a supported mode. The same races on the
+            # transition pipeline are covered in test_telemetry_state_transitions.py.
+            mock.patch.dict(os.environ,
+                            {"EVE_DEPLETION_EVENT_PIPELINE": "off"}),
         ]
         for patch in self._patches:
             patch.start()
@@ -665,6 +677,7 @@ class OutboxRetryTests(_AppContextTestCase):
     def _cleanup(self):
         _drop_session()
         for model in (ServiceNotificationOutbox, ServiceLifecycleState,
+                      ServiceObservedState, ServiceNotificationEvent,
                       SmsSendLog):
             try:
                 model.query.delete()

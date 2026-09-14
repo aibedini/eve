@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from sqlalchemy import and_, inspect, or_, text
 
 from panel.adapters.xui import persist_detected_panel_type
-from panel.core import panel_limits, refresh_policy
+from panel.core import fetch_sequence, panel_limits, refresh_policy
 from panel.core.redis_client import (
     GLOBAL_REFRESH_LOCK,
     GLOBAL_SERVER_DATA,
@@ -33,12 +33,14 @@ from panel.core.redis_client import (
 from panel.extensions import db
 from panel.jobs.messaging import (
     _notification_bot_for_reseller,
+    depletion_event_worker,
     sms_bot_worker,
     sms_status_worker,
     telegram_announcement_worker,
     telegram_depletion_worker,
     whatsapp_bot_worker,
 )
+from panel.services import depletion_pipeline, telemetry_state
 from panel.services.lifecycle import invalidation_outbox_worker
 from panel.jobs.refresh import (
     _backoff_get,
@@ -456,6 +458,34 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
         servers_by_id = {int(s.id): s for s in servers}
         server_order = [int(s.id) for s in servers]
 
+        def _record_transitions(sid, processed):
+            """Turn one fresh panel read into durable state transitions.
+
+            This is the whole point of the pipeline: the read that just happened is
+            the authoritative observation, so the transition is computed HERE, in the
+            same moment the dashboard's copy is produced -- not by a scan that may run
+            half an hour later from a snapshot that has moved on. Bookkeeping never
+            blocks the snapshot: a ledger failure is logged and the fetch result is
+            still published, and the reconciliation scan repairs the gap.
+            """
+            if not depletion_pipeline.detection_enabled():
+                return
+            try:
+                observations = depletion_pipeline.observations_from_inbounds(
+                    [{'server_id': sid, 'clients': processed or []}], server_id=sid)
+                if not observations:
+                    return
+                counts = telemetry_state.record_observations(
+                    sid, observations, source='transition')
+                if counts.get('events_created'):
+                    app.logger.info(
+                        '[telemetry] server %s: %s transition(s), %s notification(s) queued',
+                        sid, counts.get('transitions'), counts.get('events_created'))
+            except Exception:
+                app.logger.warning(
+                    '[telemetry] transition recording failed for server %s', sid,
+                    exc_info=True)
+
         def _commit_snapshot():
             """Publish the current (possibly partial) state to GLOBAL_SERVER_DATA
             so the dashboard renders servers as they finish instead of blocking on
@@ -490,7 +520,18 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 GLOBAL_SERVER_DATA['servers_status'] = statuses
                 GLOBAL_SERVER_DATA['last_update'] = _utc_iso_now()
 
-        def _apply_result(sid, res):
+        def _apply_result(sid, res, ticket=None):
+            # Ordering barrier FIRST: a panel that answered slowly must not overwrite
+            # a newer read of the same panel. Comparing wall-clock stamps cannot do
+            # this -- they are written at apply time (see panel/core/fetch_sequence.py)
+            # -- and the failure mode is not cosmetic: a stale "2 GB remaining"
+            # applied after a fresh "ended" reverts the ledger, and the next read then
+            # opens a SECOND depletion event for one logical depletion.
+            if not fetch_sequence.accept(sid, ticket):
+                app.logger.info(
+                    'Discarded out-of-order fetch result for server %s (ticket %s <= %s)',
+                    sid, ticket, fetch_sequence.last_accepted(sid))
+                return False
             expected_revision = refresh_revisions.get(sid, 0)
             if get_server_revision(sid) != expected_revision:
                 app.logger.info(
@@ -535,6 +576,7 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 inbounds = []
             processed, stats = process_inbounds(inbounds, srv, admin_user, '*', {}, online_index=online_index)
             new_by_server[sid] = list(processed or [])
+            _record_transitions(sid, processed)
 
             st = status_map.get(sid) or {"server_id": sid}
             status_payload = status_payload or {}
@@ -604,7 +646,14 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
         if server_dicts:
             with concurrent.futures.ThreadPoolExecutor(
                     max_workers=panel_limits.refresh_worker_limit()) as executor:
-                future_to_id = {executor.submit(fetch_worker, s): int(s['id']) for s in server_dicts}
+                fetch_tickets = {}
+                future_to_id = {}
+                for srv in server_dicts:
+                    srv_id = int(srv['id'])
+                    # Take the ticket BEFORE the read starts: the result is applied
+                    # under this ticket, so an older read that returns late loses.
+                    fetch_tickets[srv_id] = fetch_sequence.begin(srv_id)
+                    future_to_id[executor.submit(fetch_worker, srv)] = srv_id
                 for future in concurrent.futures.as_completed(future_to_id):
                     sid = future_to_id[future]
                     pending_ids.discard(sid)
@@ -615,7 +664,7 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                     except Exception as e:
                         res = (sid, None, None, None, None, str(e) or "Timeout", 'auto')
                     try:
-                        applied = _apply_result(sid, res)
+                        applied = _apply_result(sid, res, ticket=fetch_tickets.get(sid))
                     except Exception:
                         app.logger.exception("Failed to apply fetch result for server %s", sid)
                         applied = False
@@ -2154,6 +2203,13 @@ def ensure_background_threads_started():
 
     # Singleton: reconcile queued GMweb tasks and persist their terminal status.
     _start_worker('sms_status_worker', sms_status_worker, singleton=True)
+
+    # Singleton: deliver depletion NOTIFICATION EVENTS as they happen. This is the
+    # low-latency sender the transition pipeline needs: the fetch that observed the
+    # transition wrote a durable row, and this loop delivers it in seconds instead of
+    # waiting up to 30 minutes for the next scan. It does no panel I/O, so a 5s tick
+    # costs one indexed query that usually returns nothing.
+    _start_worker('depletion_event_worker', depletion_event_worker, singleton=True)
 
     # Singleton: drain the durable lifecycle-invalidation outbox. A renewal that
     # could not reach the SMS gateway leaves a row in the database, so this loop

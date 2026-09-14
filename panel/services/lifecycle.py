@@ -525,6 +525,7 @@ def handle_successful_service_lifecycle_change(
         'outbox_id': None,
         'correlation_id': correlation,
         'invalidate_kinds': kinds,
+        'superseded_notifications': 0,
         'error': None,
     }
 
@@ -588,6 +589,20 @@ def handle_successful_service_lifecycle_change(
         if outbox_id is None:
             persisted = _outbox_row_for_event(ev_id)
             outbox_id = getattr(persisted, 'id', None)
+
+        # The lifecycle just moved on, so every queued reminder about the PREVIOUS
+        # lifecycle is obsolete: retire those rows now, before a delivery worker can
+        # send one. The worker re-reads the generation before it posts (second fence),
+        # but a row already leased would otherwise still reach the gateway.
+        try:
+            from panel.services import telemetry_state as _telemetry_state
+            result['superseded_notifications'] = _telemetry_state.supersede_pending(
+                service_key, 'lifecycle_generation_advanced',
+                max_generation=generation - 1, now=now)
+        except Exception:
+            result['superseded_notifications'] = 0
+            logger.debug('[lifecycle] retiring pending notifications failed',
+                         exc_info=True)
 
         result.update({
             'generation': generation,

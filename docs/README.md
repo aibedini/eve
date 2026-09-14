@@ -78,6 +78,7 @@ relative link does not resolve.
 
 - [GMweb gateway contract](GMWEB_CONTRACT.md) - GMWEB_CONTRACT.md
 - [SMS lifecycle: renewal vs depletion-reminder consistency](SMS_LIFECYCLE_INVALIDATION.md) - SMS_LIFECYCLE_INVALIDATION.md
+- [Telemetry state transitions and the depletion notification pipeline](TELEMETRY_STATE_TRANSITIONS.md) - TELEMETRY_STATE_TRANSITIONS.md
 - [📨 SMS Gateway — Delivery-Confirmation Integration Spec](SMS_GATEWAY_DELIVERY_SPEC.md) - SMS_GATEWAY_DELIVERY_SPEC.md
 
 ## BNQO control plane
@@ -110,6 +111,7 @@ relative link does not resolve.
 
 - [Release security](RELEASE_SECURITY.md) - RELEASE_SECURITY.md
 - [Telegram Sales and Support Roadmap](TELEGRAM_ROADMAP.md) - TELEGRAM_ROADMAP.md
+- [Telegram: current state audit](CURRENT_STATE_TELEGRAM.md) - CURRENT_STATE_TELEGRAM.md
 
 ## UI design system
 
