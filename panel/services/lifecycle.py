@@ -33,7 +33,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
-from panel.core.redis_client import GLOBAL_SERVER_DATA
+from panel.core.redis_client import GLOBAL_REFRESH_LOCK, GLOBAL_SERVER_DATA
 from panel.extensions import db
 from panel.models import (
     SERVICE_INVALIDATION_BACKOFF_SECONDS,
@@ -218,6 +218,187 @@ def generation_state(service_key: str) -> dict:
         'generation': int(state.generation or 0),
         'last_lifecycle_change_at': _as_naive(state.last_lifecycle_change_at),
     }
+
+
+def validate_send_meta(meta):
+    """Local contract check for an outbound `meta` block. Returns a reason or None.
+
+    The gateway rejects a meta-aware send whose generation is not an integer >= 0
+    (HTTP 400 invalid_meta / meta_generation_required). Sending it anyway burns a
+    request, pollutes the send log with a gateway error and hides the real bug,
+    so the contract is asserted HERE, before any HTTP call: if meta is present,
+    source / serviceKey / notificationKind / integer generation >= 0 are all
+    required. A caller that cannot satisfy this must skip the message instead.
+    """
+    if meta is None:
+        return 'meta_missing'
+    if not isinstance(meta, dict):
+        return 'meta_not_a_mapping'
+    for field in ('source', 'serviceKey', 'notificationKind'):
+        value = meta.get(field)
+        if value is None or not str(value).strip():
+            return 'meta_%s_missing' % field
+    generation = meta.get('generation')
+    if generation is None:
+        return 'meta_generation_missing'
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        return 'meta_generation_not_an_integer'
+    if generation < 0:
+        return 'meta_generation_negative'
+    return None
+
+
+def resolve_canonical_service_key(server_id, email=None, client=None) -> str:
+    """The canonical serviceKey for a call site that may only know an email.
+
+    The durable lifecycle row is keyed by the panel client UUID. A caller that
+    falls back to `eve:<sid>:<email>` while a UUID-based row exists reads and
+    writes a DIFFERENT generation, which is exactly how a renewal ends up
+    emitting a confirmation with `generation: null` (HTTP 400 invalid_meta,
+    meta_generation_required). An email-only caller therefore looks the UUID up
+    in the shared snapshot first and uses the email form only when no UUID
+    exists at all."""
+    identity = resolve_client_uuid(client)
+    if not identity:
+        identity = _uuid_from_snapshot(server_id, email)
+    if not identity:
+        identity = client_uuid_from_email(email)
+    return make_service_key(server_id, identity)
+
+
+def _uuid_from_snapshot(server_id, email):
+    """Best-effort UUID lookup for one (server, email) in the shared snapshot."""
+    email_l = str(email or '').strip().lower()
+    if not email_l:
+        return None
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        with GLOBAL_REFRESH_LOCK:
+            inbounds = list(GLOBAL_SERVER_DATA.get('inbounds') or [])
+        for inbound in inbounds:
+            try:
+                if int(inbound.get('server_id', -1)) != sid:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            for client in (inbound.get('clients') or []):
+                if (client.get('email') or '').strip().lower() != email_l:
+                    continue
+                identity = resolve_client_uuid(client)
+                if identity:
+                    return identity
+    except Exception:
+        return None
+    return None
+
+
+def ensure_baseline_generation(service_key: str, *, server_id=None,
+                               client_uuid=None, client_email=None,
+                               reason='baseline', commit=True) -> dict:
+    """Guarantee a durable generation exists for a service; baseline 0 allowed.
+
+    A service created before lifecycle generations existed has no row, and the
+    gateway requires an integer generation on every meta-aware send. The
+    baseline is therefore created THROUGH this helper (never as an ad-hoc
+    `generation or 0` at a call site), in one transaction, so it is durable and
+    idempotent.
+
+    Fail closed: a read or write failure returns `established: False` with a
+    reason. A database problem is NEVER reported as generation 0, because that
+    would silently attach the wrong lifecycle to a real message.
+    """
+    out = {'established': False, 'generation': None, 'service_key': service_key,
+           'created': False, 'reason': None}
+    if not service_key:
+        out['reason'] = 'missing_service_key'
+        return out
+    try:
+        existing = _state_for_key(service_key)
+    except Exception as exc:
+        out['reason'] = 'generation_lookup_failed:%s' % type(exc).__name__
+        logger.warning('[lifecycle] baseline lookup failed for %s', service_key,
+                       exc_info=True)
+        return out
+    if existing is not None:
+        out.update({'established': True,
+                    'generation': int(existing.generation or 0),
+                    'reason': 'existing'})
+        return out
+
+    now = datetime.utcnow()
+    try:
+        state = ServiceLifecycleState(
+            service_key=service_key,
+            server_id=_as_int(server_id),
+            client_uuid=(str(client_uuid) if client_uuid else None),
+            client_email=(str(client_email).lower() if client_email else None),
+            generation=0,
+            last_event_type=str(reason or 'baseline')[:32],
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(state)
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+    except IntegrityError:
+        # Another worker created the same baseline between our SELECT and
+        # INSERT. Re-read instead of retrying the insert.
+        db.session.rollback()
+        try:
+            existing = _state_for_key(service_key)
+        except Exception:
+            existing = None
+        if existing is None:
+            out['reason'] = 'baseline_race_unresolved'
+            return out
+        out.update({'established': True,
+                    'generation': int(existing.generation or 0),
+                    'reason': 'existing_after_race'})
+        return out
+    except Exception as exc:
+        out['reason'] = 'baseline_write_failed:%s' % type(exc).__name__
+        logger.warning('[lifecycle] baseline write failed for %s', service_key,
+                       exc_info=True)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return out
+    out.update({'established': True, 'generation': 0, 'created': True,
+                'reason': 'created_baseline'})
+    return out
+
+
+def read_or_create_generation(service_key: str, **kwargs) -> dict:
+    """Read the durable generation, establishing the baseline if it is missing.
+
+    The ONE entry point every meta-aware SMS path uses, so no call site can
+    invent a generation or mistake a database failure for zero."""
+    kwargs.pop('reason', None)
+    try:
+        state = _state_for_key(service_key)
+    except Exception as exc:
+        logger.warning('[lifecycle] generation read failed for %s', service_key,
+                       exc_info=True)
+        return {'established': False, 'generation': None,
+                'service_key': service_key, 'created': False,
+                'last_lifecycle_change_at': None,
+                'reason': 'generation_lookup_failed:%s' % type(exc).__name__}
+    if state is not None:
+        return {'established': True,
+                'generation': int(state.generation or 0),
+                'service_key': service_key,
+                'created': False,
+                'last_lifecycle_change_at': _as_naive(state.last_lifecycle_change_at),
+                'reason': 'existing'}
+    created = ensure_baseline_generation(service_key, **kwargs)
+    created.setdefault('last_lifecycle_change_at', None)
+    return created
 
 
 def generations_for_keys(keys) -> dict:

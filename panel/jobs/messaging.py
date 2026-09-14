@@ -2532,6 +2532,12 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     payload = {'to': to, 'text': text, 'priority': canonical_priority}
     notification_meta = _notification_meta(meta)
     if notification_meta:
+        # Local contract assertion: never hand the gateway a meta block its own
+        # validation will refuse (invalid_meta / meta_generation_required).
+        meta_error = lifecycle_service.validate_send_meta(notification_meta)
+        if meta_error:
+            out['reason'] = meta_error
+            return out
         payload['meta'] = notification_meta
     headers = gmweb_contract.request_headers(
         api_key, json_body=True, idempotency_key=idempotency_key)
@@ -2650,6 +2656,15 @@ def _notification_meta(meta: dict | None) -> dict:
         out['correlationId'] = correlation[:64]
     out['requiresValidation'] = bool(meta.get('requiresValidation', True))
     return out
+
+
+def _service_uuid_for(server_id, email):
+    """The panel client UUID for one (server, email), or None.
+
+    Used only to stamp the durable baseline row so it records the real identity;
+    identity RESOLUTION goes through `lifecycle_service.resolve_canonical_service_key`
+    so there is exactly one implementation of the rule."""
+    return lifecycle_service._uuid_from_snapshot(server_id, email)
 
 
 def _log_warning(message: str, *args, **kwargs) -> None:
@@ -3119,11 +3134,28 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 # The notification identity this confirmation belongs to. The
                 # generation is read (not advanced) here: the renewal itself already
                 # advanced it on the request path.
-                service_key = lifecycle_service.service_key_for_client(
-                    sid_norm, None, email=email)
-                generation_state = lifecycle_service.generation_state(service_key)
+                #
+                # The serviceKey MUST be the canonical one: resolving it from the
+                # email while a UUID-based lifecycle row exists reads a different (or
+                # missing) generation, which is how the payload used to go out with
+                # `generation: null` and the gateway answered HTTP 400
+                # invalid_meta/meta_generation_required.
+                service_key = lifecycle_service.resolve_canonical_service_key(
+                    sid_norm, email=email)
+                generation_state = lifecycle_service.read_or_create_generation(
+                    service_key, server_id=sid_norm, client_email=email_l,
+                    client_uuid=_service_uuid_for(sid_norm, email),
+                    reason='%s_confirmation' % event_name)
+                generation = generation_state.get('generation')
+                if not generation_state.get('established'):
+                    # Fail closed: a database problem is not generation 0. A missing
+                    # confirmation is recoverable; the wrong lifecycle on a real
+                    # message is not.
+                    _log('', 'skipped', 'generation_unavailable:%s'
+                         % (generation_state.get('reason') or 'unknown'))
+                    return
                 audit = _lifecycle_audit(
-                    service_key, generation_state.get('generation'),
+                    service_key, generation,
                     lifecycle_service.new_correlation_id(), None,
                     generation_state.get('last_lifecycle_change_at'))
 
@@ -3191,7 +3223,8 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 # requiresValidation=False: a create/renew confirmation is
                 # transactional and is NEVER revoked by a lifecycle invalidation.
                 tx_meta = _transactional_notification_meta(
-                    service_key, event_name, correlation_id=audit.get('correlationId'))
+                    service_key, event_name, generation=generation,
+                    correlation_id=audit.get('correlationId'))
                 res = _send_sms_via_gmweb(
                     recipient, text, cfg,
                     priority=_gmweb_sms_priority(event_name), idempotency_key=idem,
@@ -3513,31 +3546,46 @@ def _depletion_notification_meta(service_key, generation, notification_kind, *,
                                  correlation_id=None, last_change_at=None) -> dict:
     """The contract meta block for an automated depletion reminder.
 
+    ``generation`` must be a real durable integer: this helper is never called with
+    None, and a caller that cannot establish one must skip the reminder instead of
+    posting meta the gateway will reject (invalid_meta/meta_generation_required).
+
     ``requiresValidation`` is True: this message is a claim about live state and
     may be revoked by a renewal. Transactional created/renew confirmations set it
     to False so an invalidation can never cancel them."""
+    if generation is None:
+        raise ValueError('depletion_notification_meta_requires_a_durable_generation')
     return {
         'source': 'eve',
         'serviceKey': service_key,
         'notificationKind': notification_kind,
-        'generation': generation,
+        'generation': int(generation),
         'correlationId': correlation_id or lifecycle_service.new_correlation_id(),
         'requiresValidation': True,
     }
 
 
-def _transactional_notification_meta(service_key, event_name, generation=None,
+def _transactional_notification_meta(service_key, event_name, generation,
                                       correlation_id=None) -> dict:
     """The contract meta block for a create/renew confirmation.
+
+    ``generation`` is REQUIRED and has no default: the gateway refuses a
+    meta-aware send that omits it (HTTP 400 invalid_meta /
+    meta_generation_required), and a default of None is exactly how that payload
+    used to be produced. Callers resolve it from the durable lifecycle row (a
+    baseline 0 is created through the lifecycle helper when the service predates
+    generations) and must skip the send if they cannot.
 
     ``requiresValidation`` is False and the kind is ``created``/``renew``, which
     keeps the message OUT of every lifecycle invalidation: a customer who just
     paid must still receive the confirmation that their renewal worked."""
+    if generation is None:
+        raise ValueError('transactional_notification_meta_requires_a_generation')
     return {
         'source': 'eve',
         'serviceKey': service_key,
         'notificationKind': lifecycle_service.sms_notification_kind(event_name),
-        'generation': generation,
+        'generation': int(generation),
         'correlationId': correlation_id or lifecycle_service.new_correlation_id(),
         'requiresValidation': False,
     }
@@ -3968,6 +4016,28 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                              _lifecycle_audit(service_key, expected_generation,
                                               None, observed_at, last_change_at))
                 continue
+
+        # The gateway requires an integer generation on every meta-aware send, so a
+        # candidate whose durable generation could not be established is SKIPPED
+        # rather than posted with `generation: null`. Missing one reminder is
+        # recoverable; a rejected request that hides the real cause is not.
+        if expected_generation is None:
+            established = lifecycle_service.read_or_create_generation(
+                service_key, server_id=sid_norm, client_email=email_l,
+                client_uuid=_service_uuid_for(sid_norm, email),
+                reason='depletion_baseline')
+            if not established.get('established'):
+                _sms_refund_daily_segments(segments)
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                             'skipped',
+                             'generation_unavailable:%s'
+                             % (established.get('reason') or 'unknown'),
+                             segment_info,
+                             _lifecycle_audit(service_key, None, None,
+                                              observed_at, last_change_at))
+                continue
+            expected_generation = established.get('generation')
+            last_change_at = established.get('last_lifecycle_change_at') or last_change_at
 
         # Stable Idempotency-Key: identical across every retry of THIS logical
         # message (including the 429 retry below), different for the next window.

@@ -871,13 +871,14 @@ class OutboxRetryTests(_AppContextTestCase):
 
     def test_transactional_confirmation_metadata_cannot_be_invalidated(self):
         meta = messaging._transactional_notification_meta(
-            "eve:1:uuid-bob", "renew")
+            "eve:1:uuid-bob", "renew", 18)
         self.assertEqual(meta["notificationKind"], "renew")
+        self.assertEqual(meta["generation"], 18)
         self.assertFalse(meta["requiresValidation"])
         self.assertNotIn(meta["notificationKind"],
                          lifecycle_service.DEPLETION_NOTIFICATION_KINDS)
         created = messaging._transactional_notification_meta(
-            "eve:1:uuid-bob", "created")
+            "eve:1:uuid-bob", "created", 0)
         self.assertEqual(created["notificationKind"], "created")
         self.assertFalse(created["requiresValidation"])
 
