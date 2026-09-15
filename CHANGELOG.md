@@ -2,6 +2,25 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.7] - 2026-09-15
+
+Version-gated 3x-ui 3.7.x / 3.8.x compatibility. Every behaviour introduced for a
+3.7 or 3.8 panel is confined to that panel's family; older, newer and unknown
+versions keep the behaviour they had before.
+
+### Fixed
+- **An EVE client mutation silently removed the operator's per-device (HWID) limit on 3x-ui 3.7.x and 3.8.x.** Upstream binds `limitHwid` as a *sibling* of the client object on `POST /panel/api/clients/update/{email}` (`model.Client` has no such field), so an absent key binds to Go's zero value, and `setClientLimitHwidByEmail` then writes `limit_hwid = 0` **unconditionally** (`client_crud.go:806` -> `client_hwid.go:296`, identical in both tags). Reproduced on a live 3.8.0 panel: `limitHwid` 2 before an EVE-shaped update, 0 after, with `expiryTime` changing in the same request. EVE could not echo the value because its mutation read path (`/inbounds/list` -> `settings.clients[]`) does not carry the field at all. Client updates now read the authoritative record from `/clients/get/{email}` and echo the device limit, so an unrelated renewal, edit, enable, reset or rotate leaves it untouched. A stored `0` ("no limit") is a real operator value and round-trips as `0`; if the authoritative read fails the mutation is refused rather than sent without the field, because sending it absent is what destroys the value.
+- **A scoped or expired 3x-ui API token could make EVE treat a modern panel as a legacy one.** 3.7.0 added scoped and optionally expiring API tokens and answers a scope miss with `403`; a rejected Bearer is `401` on 3.8.0 but `404` on 3.7.0 unless the request carries `X-Requested-With: XMLHttpRequest`. The capability probe was a bare boolean that read any non-200 as "no v3 client API", cached that verdict, and sent the removed legacy `updateClient` request -- the same failure class that previously left renewed users inactive on token-less panels. The probe now returns a typed outcome (`SUPPORTED`, `ROUTE_MISSING`, `AUTH_INVALID`, `SCOPE_INSUFFICIENT`, `TRANSPORT_ERROR`, `INVALID_RESPONSE`), only a definitive route answer may update the capability cache, and the 3.7 profile sends the hint header because that is the only way to tell a bad credential from a missing route there.
+
+### Added
+- **`panel/services/xui_compat.py` is the single authority for version-gated behaviour.** Panel versions are normalised to numbers and reduced to a `(major, minor)` family; only an explicit whitelist (`3.7`, `3.8`) selects a non-baseline profile. `3.9.x`, `4.x` and anything newer resolve to the baseline profile with a `future_version_uncertified` warning and never inherit 3.8 semantics; an unparseable version resolves to the baseline with `panel_version_unknown` and `unverified`. No other module compares versions.
+- **Version detection is local-first.** The panel's own build identity (`panelVersion` on `/panel/api/server/status`, present in both tags and continuously since 3.3.1) is authoritative and needs no outbound internet from the panel. `getPanelUpdateInfo` is corroboration only: it calls GitHub first and answers `success:false` with no `obj` when the panel is air-gapped, which is the normal case for the panels this matters for. Detection reuses the status response the fetcher already reads, so it adds no panel request.
+- **Panel-side lifecycle automation is surfaced, never adopted.** 3.7.0 added per-client `resetDay`, `resetMax`, `trafficReset` and `trafficResetDay`, which let a panel renew or reset a client outside EVE's lifecycle journal. EVE detects and reports the condition (`panel_lifecycle_automation_detected`, service classified `partially_managed`) and neither writes nor zeroes the fields. Translating panel-side transitions into EVE lifecycle events is deliberately not part of this change.
+
+### Tests
+- `tests/test_3xui_compat.py` grew 22 tests covering version normalisation (including `v`-prefixed, 2-component, build-suffixed and unusable inputs), whitelist-only profile selection, the future-version guarantee (3.9/4.x never select the 3.8 profile), pre-existing families keeping their status, status-code classification (401/403 are never "route missing"), the profile-gated hint header, device-limit preservation (present, absent, stored zero, read failure, explicit change, allowlist scoping and unrelated-field carry-through) and lifecycle-automation detection.
+- Acceptance against a real 3.8.0 panel: version detection (`panelVersion` 3.8.0 -> profile `xui_3_8`, `authoritative`), device limit preserved at 2 across EVE's production `v3_client_update` path while the expiry changed, read failure refused with an actionable error, and an explicit operator change to 5 honoured.
+
 ## [2.7.6] - 2026-09-14
 
 ### Fixed

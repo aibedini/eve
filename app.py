@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.7.6"
+APP_VERSION = "2.7.7"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2740,10 +2740,12 @@ from panel.adapters.xui import (  # noqa: F401
     XUI_COOKIE_SESSION_CACHE,
     _add_client_to_inbound,
     _autoupgrade_http_to_https,
+    _classify_probe_response,
     _fetch_csrf_token,
     _format_panel_connection_error,
     _normalize_server_status_payload,
     _pick_first_value,
+    _probe_headers_for,
     _probe_v3_client_api,
     _push_full_inbound,
     _reconcile_client_inbounds,
@@ -2768,6 +2770,9 @@ from panel.adapters.xui import (  # noqa: F401
     get_xui_cookie_session,
     get_xui_session,
     persist_detected_panel_type,
+    probe_v3_client_api,
+    read_authoritative_client_settings,
+    resolve_server_compatibility,
     server_is_v3,
     v3_add_client,
     v3_attach_client,
@@ -2784,6 +2789,27 @@ from panel.services.subscription import (  # noqa: F401
     find_client,
     generate_client_link,
     get_public_base_url,
+)
+
+# Version-gated 3x-ui compatibility: one authority, re-exported so existing
+# "from app import X" callers and tests keep working.
+from panel.services.xui_compat import (  # noqa: F401
+    CERTIFIED_FAMILIES,
+    COMPAT_CACHE,
+    PROFILE_BASELINE_V3,
+    PROFILE_XUI_3_7,
+    PROFILE_XUI_3_8,
+    PanelCompatibility,
+    PanelCompatibilityProfile,
+    PanelVersion,
+    cached_compatibility,
+    compat_with_warning,
+    detect_lifecycle_automation,
+    invalidate_compatibility,
+    normalize_version,
+    preserved_limit_hwid,
+    resolve_compatibility,
+    select_profile,
 )
 
 def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, app_base_url=None, online_index=None):
@@ -3340,6 +3366,9 @@ def fetch_worker(server_dict):
             inbounds, fetch_error, detected_type = fetch_inbounds(session_obj, server_obj.host, server_obj.panel_type)
             online_index, _ = fetch_onlines(session_obj, server_obj.host, server_obj.panel_type)
             status_payload, status_error, _status_type = fetch_server_status(session_obj, server_obj.host, server_obj.panel_type)
+            # Resolve the panel's version profile from the status we already read,
+            # so compatibility detection adds no panel request of its own.
+            resolve_server_compatibility(server_obj, status_payload=status_payload)
 
         # Enrich status_payload with online_count from the onlines endpoint
         # (the /status API does NOT return online_count; it comes from /onlines)

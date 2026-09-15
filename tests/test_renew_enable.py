@@ -102,6 +102,14 @@ class V3EnableAdapterTests(unittest.TestCase):
         client = _raw_client(enable=False)
         with (
             mock.patch.object(xui_adapter, '_v3_fix_spaced_email', return_value='bob'),
+            # The fallback re-issues a full client update, and upstream writes
+            # limitHwid unconditionally (an absent key becomes 0). The fallback
+            # must therefore consult the authoritative record first and echo the
+            # device limit, so it is stubbed here rather than left to a bare Mock.
+            mock.patch.object(
+                xui_adapter, 'read_authoritative_client_settings',
+                return_value=(True, {'email': 'bob', 'limitHwid': 2}),
+            ) as read_settings,
             mock.patch.object(
                 xui_adapter, '_v3_post',
                 side_effect=[
@@ -121,6 +129,37 @@ class V3EnableAdapterTests(unittest.TestCase):
         fallback_payload = post.call_args_list[1].args[3]
         self.assertEqual(fallback_path, '/panel/api/clients/update/bob')
         self.assertTrue(fallback_payload['enable'])
+        # The device limit survives the fallback (the 3.7/3.8 corruption fix).
+        self.assertEqual(fallback_payload['limitHwid'], 2)
+        read_settings.assert_called_once()
+
+    def test_fallback_refuses_when_the_device_limit_cannot_be_read(self):
+        """Fail closed: sending the update without the field is what clears it."""
+        server = mock.Mock()
+        session_obj = mock.Mock()
+        client = _raw_client(enable=False)
+        with (
+            mock.patch.object(xui_adapter, '_v3_fix_spaced_email', return_value='bob'),
+            mock.patch.object(
+                xui_adapter, 'read_authoritative_client_settings',
+                return_value=(False, None),
+            ),
+            mock.patch.object(
+                xui_adapter, '_v3_post',
+                side_effect=[
+                    (False, None, 'Non-JSON response (status 404, content-type text/html)'),
+                    (True, {'success': True}, None),
+                ],
+            ) as post,
+        ):
+            ok, _result, error = xui_adapter.v3_enable_client(
+                server, session_obj, 'bob', client,
+            )
+
+        self.assertFalse(ok)
+        self.assertIn('device limit', str(error))
+        # Only the bulkEnable attempt happened; the destructive fallback was not sent.
+        self.assertEqual(post.call_count, 1)
 
     def test_bulk_enable_success_with_skipped_client_is_failure(self):
         server = mock.Mock()

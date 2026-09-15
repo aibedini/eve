@@ -33,6 +33,9 @@ from panel.models import (
     Transaction,
     get_panel_api,
 )
+# Version-gated behaviour lives in one place. This adapter consumes it; it must
+# never grow its own version comparisons (specs/001-3xui-37-38-compat FR-009).
+from panel.services import xui_compat
 
 # Session cache for X-UI panels to speed up API calls
 XUI_SESSION_CACHE = {}  # server_id -> {'session': requests.Session, 'expiry': float}
@@ -68,6 +71,9 @@ def invalidate_xui_caches(server_id=None, host=None, username=None) -> None:
     if server_id is not None:
         XUI_SESSION_CACHE.pop(server_id, None)
         XUI_CAPABILITY_CACHE.pop(server_id, None)
+        # The detected version and its profile are cached per server too: a
+        # changed host or token must never leave a stale profile in place.
+        xui_compat.invalidate_compatibility(server_id)
     host_key = str(host or "").strip()
     user_key = str(username or "").strip()
     if not host_key:
@@ -157,14 +163,109 @@ def _remember_v3_capability(server, supported: bool):
     }
 
 
-def _probe_v3_client_api(server, session_obj, *, force=False) -> bool:
-    """Detect the first-class v3 client API by capability, not credentials.
+PROBE_SUPPORTED = "SUPPORTED"
+PROBE_ROUTE_MISSING = "ROUTE_MISSING"
+PROBE_AUTH_INVALID = "AUTH_INVALID"
+PROBE_SCOPE_INSUFFICIENT = "SCOPE_INSUFFICIENT"
+PROBE_TRANSPORT_ERROR = "TRANSPORT_ERROR"
+PROBE_INVALID_RESPONSE = "INVALID_RESPONSE"
 
-    API tokens are a strong v3 signal, but cookie-authenticated v3 panels expose
-    the same API and must not be sent to the removed legacy updateClient routes.
-    The deliberately missing email keeps the probe side-effect free and small.
-    A JSON response from the route (including "client not found") proves the
-    controller exists; a 404/HTML login page means it does not.
+
+def _probe_headers_for(server) -> dict:
+    """Request headers the capability probe must use for this panel.
+
+    On the 3.7 profile a rejected Bearer is answered 404 unless the request
+    carries X-Requested-With: XMLHttpRequest, which makes "bad credential" and
+    "route absent" indistinguishable. 3.8 answers 401 on the Bearer alone, and
+    older panels answer the same either way - so the header is only sent where
+    upstream evidence shows it changes the outcome.
+    """
+    headers = {"Accept": "application/json"}
+    compat = xui_compat.cached_compatibility(getattr(server, "id", None))
+    if compat is not None and compat.profile.bearer_hint_header_required:
+        headers["X-Requested-With"] = "XMLHttpRequest"
+    return headers
+
+
+def _classify_probe_response(resp) -> str:
+    """Map one probe HTTP response onto a typed outcome.
+
+    The distinction that matters: an authentication or authorization failure is
+    NOT evidence that the route is absent. Collapsing them is how a scoped token
+    turns a modern panel into a "legacy" one and leaves renewed users inactive.
+    """
+    status = getattr(resp, "status_code", None)
+    if status == 401:
+        return PROBE_AUTH_INVALID
+    if status == 403:
+        return PROBE_SCOPE_INSUFFICIENT
+    if status == 404:
+        return PROBE_ROUTE_MISSING
+    if status != 200:
+        return PROBE_ROUTE_MISSING if status == 405 else PROBE_INVALID_RESPONSE
+    payload, parse_error = _safe_response_json(resp)
+    if parse_error or not isinstance(payload, dict):
+        return PROBE_INVALID_RESPONSE
+    if "success" not in payload and "obj" not in payload and "msg" not in payload:
+        return PROBE_INVALID_RESPONSE
+    return PROBE_SUPPORTED
+
+
+def probe_v3_client_api(server, session_obj, *, force=False) -> str:
+    """Typed capability probe. Returns one of the PROBE_* outcomes.
+
+    Only a definitive answer about the ROUTE may update the capability cache.
+    Authentication and authorization failures leave the cached capability
+    untouched, because they say nothing about whether the route exists.
+    """
+    try:
+        sid = int(getattr(server, "id"))
+    except (TypeError, ValueError):
+        sid = None
+    if not force and sid is not None:
+        cached = XUI_CAPABILITY_CACHE.get(sid)
+        if cached and time.time() < float(cached.get("expiry") or 0):
+            return PROBE_SUPPORTED if cached.get("v3_clients") else PROBE_ROUTE_MISSING
+
+    base, webpath = extract_base_and_webpath(server.host)
+    url = "%s%s/panel/api/clients/get/__eve_capability_probe__" % (base, webpath)
+    try:
+        resp = session_obj.get(url, verify=session_tls_verify(session_obj), timeout=(3, 8),
+                               headers=_probe_headers_for(server))
+        outcome = _classify_probe_response(resp)
+    except Exception:
+        # A transient probe failure must not overwrite a previously known result.
+        if sid is not None and sid in XUI_CAPABILITY_CACHE:
+            return PROBE_SUPPORTED if XUI_CAPABILITY_CACHE[sid].get("v3_clients") else PROBE_ROUTE_MISSING
+        return PROBE_TRANSPORT_ERROR
+
+    if outcome == PROBE_SUPPORTED:
+        _remember_v3_capability(server, True)
+    elif outcome == PROBE_ROUTE_MISSING:
+        _remember_v3_capability(server, False)
+    elif outcome in (PROBE_AUTH_INVALID, PROBE_SCOPE_INSUFFICIENT):
+        # An auth/scope problem is an operator-actionable state, not a version
+        # fact. Attach it to whatever we already know about this panel so the
+        # doctor can say why management is degraded - and never let it rewrite
+        # the detected version.
+        compat = xui_compat.cached_compatibility(sid)
+        if compat is not None:
+            warning = (xui_compat.WARN_AUTH_INVALID
+                       if outcome == PROBE_AUTH_INVALID
+                       else xui_compat.WARN_SCOPE_INSUFFICIENT)
+            xui_compat.remember_compatibility(
+                xui_compat.compat_with_warning(compat, warning))
+    # AUTH_INVALID / SCOPE_INSUFFICIENT / INVALID_RESPONSE / TRANSPORT_ERROR
+    # deliberately do NOT touch the cache (spec FR-012, FR-013, guarantee N4).
+    return outcome
+
+
+def _probe_v3_client_api(server, session_obj, *, force=False) -> bool:
+    """Boolean view of probe_v3_client_api for existing callers.
+
+    Kept because the capability question (does the first-class v3 client API
+    exist?) is still legitimate on its own. It is NOT a version check and must
+    never be used as one - use panel.services.xui_compat for that.
     """
     try:
         sid = int(getattr(server, 'id'))
@@ -246,14 +347,28 @@ def _v3_post(server, session_obj, path, json_body=None, *, timeout=(3, 20)):
     return False, j, (msg or f"HTTP {resp.status_code}")
 
 
-def _v3_client_payload(client: dict) -> dict:
+#: Distinguishes "caller did not ask to change the device limit" (preserve the
+#: panel value) from an explicit request, including an explicit 0.
+_UNSET = object()
+
+
+def _v3_client_payload(client: dict, limit_hwid=None) -> dict:
     """Shape a client dict for v3 /clients/update|add. v3 unmarshals Client.id as a
     string, so `id` must carry the UUID (not the numeric DB row id). Numeric fields
-    must be numbers, not empty strings."""
+    must be numbers, not empty strings.
+
+    limit_hwid is the panel-side device limit to PRESERVE, read from an
+    authoritative client read. It is a sibling of the client object upstream
+    (model.Client has no such field) and the server writes it unconditionally,
+    defaulting an absent key to 0. So: pass the real value when the panel
+    exposes one, and pass None - never 0 - when it does not. A stored 0 is a
+    real operator choice and round-trips as 0."""
     c = dict(client or {})
     uid = c.get('uuid') or c.get('id') or ''
     if uid:
         c['id'] = uid
+    if limit_hwid is not None:
+        c['limitHwid'] = int(limit_hwid)
     for k in ('tgId', 'limitIp', 'reset'):
         if c.get(k) in ('', None):
             c[k] = 0
@@ -434,11 +549,76 @@ def _v3_fix_spaced_email(server, session_obj, email, client_obj=None):
     return clean
 
 
-def v3_update_client(server, session_obj, email, client: dict):
+def read_authoritative_client_settings(server, session_obj, email):
+    """Read the client record the mutation read path cannot see.
+
+    EVE builds update payloads from /inbounds/list, whose settings.clients[] does
+    NOT carry limitHwid (verified on a live 3.8.0 panel). Updating a client with
+    the key absent makes the panel write 0, silently removing the operator
+    device cap. This reads the authoritative record so the value can be echoed.
+
+    Returns (ok, client_dict). ok=False means the read FAILED and the caller must
+    not send a payload that would clear the stored value. When ok=True but
+    limitHwid is absent from the record, the panel simply does not expose it and
+    the field must be omitted. Only fields on
+    xui_compat.PRESERVED_CLIENT_FIELDS are ever consulted - secret and write-only
+    fields are never read back or resubmitted (spec FR-023).
+    """
+    base, webpath = extract_base_and_webpath(server.host)
+    url = "%s%s/panel/api/clients/get/%s" % (base, webpath, quote(str(email or ""), safe=""))
+    try:
+        resp = session_obj.get(
+            url,
+            headers={"Accept": "application/json",
+                     "Cache-Control": "no-store, no-cache, max-age=0"},
+            verify=session_tls_verify(session_obj),
+            timeout=(3, 12),
+        )
+    except Exception:
+        return False, None
+    payload, parse_error = _safe_response_json(resp)
+    if parse_error or not isinstance(payload, dict):
+        return False, None
+    # Guarded comparison: a stub or an unexpected object must read as "no
+    # authoritative value", never raise. The caller fails closed either way.
+    status = getattr(resp, "status_code", None)
+    if not isinstance(status, int) or status != 200 or not payload.get("success"):
+        # A missing client is a real answer; an auth/scope failure is not a
+        # successful read either way, and the caller must fail closed.
+        return False, None
+    obj = payload.get("obj")
+    # /clients/get answers {"obj": {"client": {...}, "inboundIds": [...]}}.
+    client_record = obj.get("client") if isinstance(obj, dict) else None
+    if not isinstance(client_record, dict):
+        return False, None
+    return True, client_record
+
+
+def v3_update_client(server, session_obj, email, client: dict, *, limit_hwid=_UNSET,
+                     preserved_client=None):
+    """Update a v3 client, preserving panel-side state EVE does not model.
+
+    By default this reads the authoritative client record and echoes the device
+    limit, because the panel writes that sibling field unconditionally and would
+    otherwise reset it to 0. Pass limit_hwid explicitly to SET the device limit
+    (an operator request), or preserved_client to reuse a read the caller already
+    made. Never sends a guessed or defaulted 0.
+    """
     email = _v3_fix_spaced_email(server, session_obj, email, client_obj=client)
+    if limit_hwid is not _UNSET:
+        preserved = limit_hwid
+    else:
+        snapshot = preserved_client
+        if not isinstance(snapshot, dict):
+            ok, snapshot = read_authoritative_client_settings(server, session_obj, email)
+            if not ok:
+                return False, None, (
+                    "could not read the client's current device limit; refusing to update "
+                    "because the panel would reset it to 0")
+        preserved = xui_compat.preserved_limit_hwid(snapshot)
     return _v3_post(server, session_obj,
                     f"/panel/api/clients/update/{quote(email, safe='')}",
-                    _v3_client_payload(client))
+                    _v3_client_payload(client, limit_hwid=preserved))
 
 
 def v3_enable_client(server, session_obj, email, client: dict):
@@ -484,10 +664,18 @@ def v3_enable_client(server, session_obj, email, client: dict):
         or 'method not allowed' in unavailable
         or 'unsupported' in unavailable
     ):
+        # The fallback re-issues a full client update, which would reset the
+        # device limit to 0 unless the authoritative value is echoed back.
+        _ok, _snapshot = read_authoritative_client_settings(server, session_obj, email)
+        if not _ok:
+            return False, None, (
+                "could not read the client's current device limit; refusing to re-enable "
+                "because the fallback update would reset it to 0")
         return _v3_post(
             server, session_obj,
             f"/panel/api/clients/update/{quote(email, safe='')}",
-            _v3_client_payload(enabled_client),
+            _v3_client_payload(enabled_client,
+                                limit_hwid=xui_compat.preserved_limit_hwid(_snapshot)),
         )
     return ok, result, error
 
@@ -1563,6 +1751,82 @@ def fetch_server_status(session_obj, host, panel_type='auto'):
             continue
 
     return None, last_error or 'Failed to fetch status', 'auto'
+
+
+def resolve_server_compatibility(server, session_obj=None, status_payload=None, *,
+                                 force=False, server_id=None):
+    """Resolve and cache which compatibility profile this panel gets.
+
+    Local-first by design: the panel's own build identity (panelVersion on
+    /server/status) is authoritative and needs no outbound internet from the
+    panel. The GitHub-backed update endpoint is corroboration only, because it
+    returns no version at all when the panel cannot reach GitHub - which is
+    exactly the situation on the panels this feature exists for.
+
+    Never guesses: an unusable version resolves to the baseline profile with an
+    explicit unknown warning, and no version-specific behaviour is attempted.
+    """
+    sid = server_id
+    if sid is None:
+        try:
+            sid = int(getattr(server, "id"))
+        except (TypeError, ValueError):
+            sid = None
+    if not force and sid is not None:
+        cached = xui_compat.cached_compatibility(sid)
+        if cached is not None:
+            return cached
+
+    version_raw = None
+    if isinstance(status_payload, dict):
+        version_raw = status_payload.get("xui_version")
+
+    if version_raw not in (None, ""):
+        return xui_compat.resolve_compatibility(
+            sid, version_raw,
+            source=xui_compat.SOURCE_SERVER_STATUS,
+            confidence=xui_compat.CONF_AUTHORITATIVE,
+        )
+
+    # Corroborating source. Its failure must not degrade anything.
+    if session_obj is not None:
+        corroborated = _fetch_panel_update_version(server, session_obj)
+        if corroborated not in (None, ""):
+            return xui_compat.resolve_compatibility(
+                sid, corroborated,
+                source=xui_compat.SOURCE_PANEL_UPDATE_INFO,
+                confidence=xui_compat.CONF_CORROBORATED,
+            )
+
+    return xui_compat.resolve_compatibility(sid, None)
+
+
+def _fetch_panel_update_version(server, session_obj):
+    """Best-effort panel version from the GitHub-backed update endpoint.
+
+    Returns None on any failure. The panel answers success:false with no obj when
+    it cannot reach GitHub, so absence here is normal and expected - it is never
+    treated as evidence about the version.
+    """
+    base, webpath = extract_base_and_webpath(server.host)
+    url = "%s%s/panel/api/server/getPanelUpdateInfo" % (base, webpath)
+    try:
+        resp = session_obj.get(
+            url,
+            headers={"Accept": "application/json"},
+            verify=session_tls_verify(session_obj),
+            timeout=(3, 10),
+        )
+    except Exception:
+        return None
+    payload, parse_error = _safe_response_json(resp)
+    if parse_error or not isinstance(payload, dict) or not payload.get("success"):
+        return None
+    obj = payload.get("obj")
+    if not isinstance(obj, dict):
+        return None
+    value = obj.get("currentVersion")
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def fetch_direct_link_from_subscription(sub_url: str, fallback_func=None, fallback_args=None,
