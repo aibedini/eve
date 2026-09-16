@@ -23,6 +23,7 @@ from panel.adapters.xui import (
 )
 from panel.core import subscription_cache
 from panel.core.redis_client import GLOBAL_SERVER_DATA
+from panel.services import xui_compat
 
 
 SUBSCRIPTION_STATISTICS_ENABLED_KEY = 'subscription_statistics_enabled'
@@ -97,6 +98,110 @@ def build_public_subscription_url(server_id, sub_id, fallback_url=''):
     if not base:
         return ''
     return f"{base}/s/{int(server_id)}/{quote(str(sub_id or '').strip(), safe='')}"
+
+
+def _normalized_panel_path(value, fallback=''):
+    """Return a safe path value while preserving the panel's path semantics."""
+    path = str(value or '').strip()
+    if not path:
+        path = str(fallback or '').strip()
+    if not path:
+        return ''
+    # Settings are paths, never origins or query fragments. Refuse an unexpected
+    # absolute URL instead of allowing it to redirect a generated subscription.
+    if '://' in path or '?' in path or '#' in path or '\\' in path:
+        return _normalized_panel_path(fallback) if path != str(fallback or '').strip() else ''
+    return '/' + path.strip('/') + '/'
+
+
+def _cached_subscription_profile_metadata(server_id):
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        return {}
+    with _SUBSCRIPTION_PROFILE_CACHE_LOCK:
+        cached = SUBSCRIPTION_PROFILE_CACHE.get(sid)
+        if not cached or time.monotonic() >= float(cached.get('expiry') or 0):
+            return {}
+        return dict(cached.get('value') or {})
+
+
+def resolve_subscription_paths(server, *, profile_metadata=None):
+    """Resolve panel subscription paths without performing network I/O.
+
+    Only the certified 3.8 profile consumes panel-advertised paths. Older,
+    future and unknown families keep the configured EVE values byte-for-byte in
+    behaviour. A missing 3.8 setting is an explicit, Doctor-visible fallback.
+    """
+    server_id = getattr(server, 'id', None)
+    configured_sub = _normalized_panel_path(getattr(server, 'sub_path', None), '/sub/')
+    configured_json = _normalized_panel_path(getattr(server, 'json_path', None), '/json/')
+    metadata = (
+        dict(profile_metadata)
+        if isinstance(profile_metadata, dict)
+        else _cached_subscription_profile_metadata(server_id)
+    )
+    compat = xui_compat.cached_compatibility(server_id)
+    authoritative = bool(
+        compat is not None
+        and compat.profile.random_subscription_paths
+        and metadata.get('settings_available')
+        and _normalized_panel_path(metadata.get('sub_path'))
+    )
+
+    if authoritative:
+        panel_json = _normalized_panel_path(metadata.get('sub_json_path'))
+        json_fallback = not bool(panel_json)
+        paths = {
+            'sub_path': _normalized_panel_path(metadata.get('sub_path')),
+            'sub_json_path': panel_json or configured_json,
+            'sub_clash_path': _normalized_panel_path(metadata.get('sub_clash_path')),
+            'source': 'panel_partial_fallback' if json_fallback else 'panel',
+            'fallback': json_fallback,
+            'warnings': (
+                [xui_compat.WARN_SUBSCRIPTION_FALLBACK] if json_fallback else []
+            ),
+        }
+    else:
+        is_38 = bool(compat is not None and compat.profile.random_subscription_paths)
+        paths = {
+            'sub_path': configured_sub,
+            'sub_json_path': configured_json,
+            'sub_clash_path': '',
+            'source': 'configured_fallback' if is_38 else 'configured',
+            'fallback': is_38,
+            'warnings': ([xui_compat.WARN_SUBSCRIPTION_FALLBACK] if is_38 else []),
+        }
+
+    if compat is not None and compat.profile.random_subscription_paths:
+        xui_compat.set_compatibility_warning(
+            server_id,
+            xui_compat.WARN_SUBSCRIPTION_FALLBACK,
+            active=paths['fallback'],
+        )
+    return paths
+
+
+def build_panel_subscription_url(server, sub_id, *, path_kind='sub', profile_metadata=None):
+    """Build a panel-hosted subscription URL from the resolved authoritative path."""
+    host_value = str(getattr(server, 'host', '') or '').strip()
+    if host_value and not host_value.startswith(('http://', 'https://')):
+        host_value = f"http://{host_value}"
+    parsed = urlparse(host_value)
+    hostname = parsed.hostname or parsed.path or ''
+    scheme = parsed.scheme or 'http'
+    final_port = getattr(server, 'sub_port', None) or parsed.port
+    port_str = f":{final_port}" if final_port else ''
+    key = {
+        'sub': 'sub_path',
+        'json': 'sub_json_path',
+        'clash': 'sub_clash_path',
+    }.get(path_kind, 'sub_path')
+    path = resolve_subscription_paths(
+        server, profile_metadata=profile_metadata).get(key, '').strip('/')
+    safe_sub_id = quote(str(sub_id or '').strip(), safe='')
+    base = f"{scheme}://{hostname}{port_str}"
+    return f"{base}/{path}/{safe_sub_id}" if path else f"{base}/{safe_sub_id}"
 
 
 def validate_subscription_statistics_template(value):
@@ -319,6 +424,7 @@ def fetch_subscription_profile_metadata(
             return dict(cached.get('value') or {})
 
     metadata = {}
+    settings_available = False
     try:
         ok, payload, _error = _v3_post(
             server,
@@ -329,14 +435,19 @@ def fetch_subscription_profile_metadata(
         )
         obj = payload.get('obj') if ok and isinstance(payload, dict) else None
         if isinstance(obj, dict):
+            settings_available = True
             metadata = {
                 'sub_title': str(obj.get('subTitle') or '').strip(),
                 'update_interval': str(obj.get('subUpdates') or '24').strip() or '24',
+                'sub_path': str(obj.get('subPath') or '').strip(),
+                'sub_json_path': str(obj.get('subJsonPath') or '').strip(),
+                'sub_clash_path': str(obj.get('subClashPath') or '').strip(),
+                'settings_available': True,
             }
     except Exception:
         metadata = {}
 
-    if metadata:
+    if settings_available:
         with _SUBSCRIPTION_PROFILE_CACHE_LOCK:
             SUBSCRIPTION_PROFILE_CACHE[server_id] = {
                 'value': dict(metadata),
@@ -346,7 +457,10 @@ def fetch_subscription_profile_metadata(
 
     # A temporary settings failure must not discard previously learned visual
     # metadata. Subscription credentials/configs are never stored in this cache.
-    return dict((cached or {}).get('value') or {})
+    stale = dict((cached or {}).get('value') or {})
+    if stale:
+        return stale
+    return {'settings_available': False}
 
 
 def build_subscription_profile_title(panel_title, server_name):

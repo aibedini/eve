@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
+from unittest import mock
 
 
 _DB_FILE = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
@@ -183,7 +184,9 @@ from app import (  # noqa: E402
     _v3_client_payload,
     detect_lifecycle_automation,
     normalize_version,
+    process_inbounds,
     preserved_limit_hwid,
+    resolve_compatibility,
     select_profile,
 )
 from panel.adapters.xui import (  # noqa: E402
@@ -194,6 +197,7 @@ from panel.adapters.xui import (  # noqa: E402
     PROBE_SUPPORTED,
     _UNSET,
 )
+from panel.services import subscription as subscription_service  # noqa: E402
 
 
 class _StatusResponse:
@@ -385,6 +389,137 @@ class LifecycleAutomationTests(unittest.TestCase):
     def test_traffic_reset_cycle_is_reported(self):
         self.assertIsNotNone(detect_lifecycle_automation({'email': 'a@b.c', 'trafficReset': 'monthly'}))
         self.assertIsNotNone(detect_lifecycle_automation({'email': 'a@b.c', 'resetMax': 4}))
+
+    def test_client_read_path_surfaces_partial_management_without_lifecycle_event(self):
+        server = SimpleNamespace(
+            id=3801,
+            name='3.8 panel',
+            host='https://panel.example',
+            panel_type='v3',
+            sub_port=None,
+            sub_path='/configured/',
+            json_path='/json/',
+        )
+        user = SimpleNamespace(role='superadmin', id=1, is_superadmin=True)
+        inbounds = [{
+            'id': 7,
+            'enable': True,
+            'settings': {'clients': [{
+                'id': 'client-uuid',
+                'email': 'managed@example.test',
+                'enable': True,
+                'expiryTime': 0,
+                'totalGB': 0,
+                'resetDay': 15,
+                'resetMax': 2,
+                'trafficReset': 'monthly',
+                'trafficResetDay': 1,
+            }]},
+            'clientStats': [],
+        }]
+        resolve_compatibility(3801, '3.8.0', source='server_status', confidence='authoritative')
+
+        from app import app
+        with app.app_context(), mock.patch('app.server_is_v3', return_value=True), mock.patch(
+                'panel.services.lifecycle.handle_successful_service_lifecycle_change') as lifecycle_event:
+            processed, _stats = process_inbounds(inbounds, server, user)
+
+        client = processed[0]['clients'][0]
+        self.assertEqual(client['managed_state'], 'partially_managed')
+        self.assertEqual(
+            client['lifecycle_automation']['warning'],
+            'panel_lifecycle_automation_detected',
+        )
+        self.assertEqual(client['lifecycle_automation']['fields']['resetDay'], 15)
+        lifecycle_event.assert_not_called()
+        self.assertIn(
+            'panel_lifecycle_automation_detected',
+            subscription_service.xui_compat.cached_compatibility(3801).warnings,
+        )
+
+
+class SubscriptionPathAuthorityTests(unittest.TestCase):
+    def setUp(self):
+        COMPAT_CACHE.clear()
+        subscription_service.SUBSCRIPTION_PROFILE_CACHE.clear()
+        self.server = SimpleNamespace(
+            id=3802,
+            name='3.8 panel',
+            host='https://panel.example:8443',
+            sub_port=2096,
+            sub_path='/configured-sub/',
+            json_path='/configured-json/',
+        )
+
+    def tearDown(self):
+        COMPAT_CACHE.clear()
+        subscription_service.SUBSCRIPTION_PROFILE_CACHE.clear()
+
+    def _metadata(self, settings):
+        session = _Session(post_response=_Response(200, {'success': True, 'obj': settings}))
+        return subscription_service.fetch_subscription_profile_metadata(
+            self.server,
+            session_obj=session,
+        )
+
+    def test_38_randomized_subscription_path_is_authoritative(self):
+        resolve_compatibility(3802, '3.8.0')
+        metadata = self._metadata({
+            'subPath': '/randomabcdefghijkl/',
+            'subJsonPath': '/random-json/',
+            'subClashPath': '/random-clash/',
+        })
+
+        paths = subscription_service.resolve_subscription_paths(
+            self.server, profile_metadata=metadata)
+
+        self.assertEqual(paths['sub_path'], '/randomabcdefghijkl/')
+        self.assertEqual(paths['sub_json_path'], '/random-json/')
+        self.assertEqual(paths['sub_clash_path'], '/random-clash/')
+        self.assertEqual(paths['source'], 'panel')
+        self.assertFalse(paths['fallback'])
+
+    def test_operator_changed_panel_path_takes_precedence(self):
+        resolve_compatibility(3802, '3.8.4')
+        metadata = self._metadata({'subPath': '/operator-selected/'})
+
+        url = subscription_service.build_panel_subscription_url(
+            self.server, 'subscriber-id', profile_metadata=metadata)
+        paths = subscription_service.resolve_subscription_paths(
+            self.server, profile_metadata=metadata)
+
+        self.assertEqual(url, 'https://panel.example:2096/operator-selected/subscriber-id')
+        self.assertEqual(paths['sub_json_path'], '/configured-json/')
+        self.assertEqual(paths['source'], 'panel_partial_fallback')
+        self.assertTrue(paths['fallback'])
+        self.assertIn('subscription_path_fallback', paths['warnings'])
+
+    def test_settings_failure_uses_explicit_observable_fallback(self):
+        resolve_compatibility(3802, '3.8.0')
+        metadata = self._metadata({})
+
+        paths = subscription_service.resolve_subscription_paths(
+            self.server, profile_metadata=metadata)
+
+        self.assertEqual(paths['sub_path'], '/configured-sub/')
+        self.assertEqual(paths['source'], 'configured_fallback')
+        self.assertTrue(paths['fallback'])
+        self.assertIn('subscription_path_fallback', paths['warnings'])
+        self.assertIn(
+            'subscription_path_fallback',
+            subscription_service.xui_compat.cached_compatibility(3802).warnings,
+        )
+
+    def test_pre_38_behavior_ignores_panel_advertised_path(self):
+        resolve_compatibility(3802, '3.7.9')
+        metadata = self._metadata({'subPath': '/panel-value-must-not-apply/'})
+
+        paths = subscription_service.resolve_subscription_paths(
+            self.server, profile_metadata=metadata)
+
+        self.assertEqual(paths['sub_path'], '/configured-sub/')
+        self.assertEqual(paths['source'], 'configured')
+        self.assertFalse(paths['fallback'])
 
 
 if __name__ == '__main__':

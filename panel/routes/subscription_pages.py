@@ -4,7 +4,6 @@ import json
 import re
 import threading
 from datetime import datetime, timedelta
-from urllib.parse import quote, urlparse
 
 from flask import (
     Blueprint, after_this_request, g, jsonify, make_response, render_template, request,
@@ -31,6 +30,7 @@ from panel.services.subscription import (
     SUBSCRIPTION_STATISTICS_ENABLED_KEY,
     SUBSCRIPTION_STATISTICS_TEMPLATE_EN_KEY,
     SUBSCRIPTION_STATISTICS_TEMPLATE_FA_KEY,
+    build_panel_subscription_url,
     build_public_subscription_url,
     build_subscription_profile_title,
     build_subscription_configs,
@@ -151,19 +151,8 @@ def get_client_direct_link(server_id, sub_id):
         if not ownership:
             return jsonify({"success": False, "error": "Access denied"}), 403
     
-    # Build subscription URL
-    host_value = server.host
-    if host_value and not host_value.startswith(('http://', 'https://')):
-        host_value = f"http://{host_value}"
-    parsed_host = urlparse(host_value or '')
-    hostname = parsed_host.hostname or parsed_host.path or ''
-    scheme = parsed_host.scheme or 'http'
-    final_port = server.sub_port if server.sub_port else parsed_host.port
-    port_str = f":{final_port}" if final_port else ''
-    sub_path = (server.sub_path or '/sub/').strip('/')
-    base_sub = f"{scheme}://{hostname}{port_str}"
-    safe_sub_id = quote(normalized_sub_id)
-    sub_url = f"{base_sub}/{sub_path}/{safe_sub_id}" if sub_path else f"{base_sub}/{safe_sub_id}"
+    # Uses only the cached settings metadata. No panel call is introduced here.
+    sub_url = build_panel_subscription_url(server, normalized_sub_id)
     
     configs = build_subscription_configs(
         server,

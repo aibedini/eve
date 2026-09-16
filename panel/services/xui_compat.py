@@ -234,6 +234,15 @@ class PanelCompatibility:
 
     def as_public_dict(self) -> dict:
         """Credential-free view for the doctor surface."""
+        warning_set = set(self.warnings)
+        if WARN_SCOPE_INSUFFICIENT in warning_set:
+            auth_state = "scope_insufficient"
+        elif WARN_AUTH_INVALID in warning_set or WARN_AUTH_EXPIRED in warning_set:
+            auth_state = "invalid"
+        elif self.detection_source == SOURCE_NONE and self.confidence == CONF_UNKNOWN:
+            auth_state = "unknown"
+        else:
+            auth_state = "healthy"
         return {
             "detected_version": self.detected_version,
             "normalized_version": self.version.display,
@@ -242,6 +251,7 @@ class PanelCompatibility:
             "detection_source": self.detection_source,
             "confidence": self.confidence,
             "certification": self.certification,
+            "auth_state": auth_state,
             "warnings": list(self.warnings),
         }
 
@@ -319,6 +329,26 @@ def compat_with_warning(compat: PanelCompatibility, warning: str) -> PanelCompat
     if compat is None or warning in compat.warnings:
         return compat
     return replace(compat, warnings=tuple(compat.warnings) + (warning,))
+
+
+def set_compatibility_warning(server_id, warning: str, active: bool = True):
+    """Add or remove one runtime warning on a cached compatibility record.
+
+    Lifecycle and subscription findings are derived while processing panel data,
+    after version detection has populated the cache. Keeping the finding on that
+    same record makes Doctor observable without creating a second state store.
+    """
+    compat = cached_compatibility(server_id)
+    if compat is None:
+        return None
+    warnings = list(compat.warnings)
+    if active and warning not in warnings:
+        warnings.append(warning)
+    elif not active and warning in warnings:
+        warnings = [item for item in warnings if item != warning]
+    else:
+        return compat
+    return remember_compatibility(replace(compat, warnings=tuple(warnings)))
 
 
 # --------------------------------------------------------------------------- #

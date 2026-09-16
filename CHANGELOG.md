@@ -2,6 +2,17 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.8] - 2026-09-16
+
+### Added
+- Wired 3.7/3.8 panel-side lifecycle automation detection into normal client reads and cache recomputation. Affected clients are reported as `partially_managed`, and Doctor receives the credential-free `panel_lifecycle_automation_detected` warning without synthesising an EVE lifecycle event.
+- Made certified 3.8 panel settings authoritative for `subPath`, `subJsonPath`, and `subClashPath`. Link generation consumes the bounded metadata cache; missing settings retain the configured path and expose `subscription_path_fallback` in Doctor. Older, future, and unknown panel families keep their prior configured-path behaviour.
+- Added authenticated Doctor-route coverage for version/profile/source/certification/auth state and verified that panel credentials, paths, and private-key material are absent from the response.
+
+### Tests
+- Added integration coverage for lifecycle read-path behaviour, randomized/operator-changed 3.8 subscription paths, observable path fallback, pre-3.8 compatibility, and authenticated Doctor output.
+- Real-panel 3.7.x acceptance remains pending; the core 3.7 verdict therefore remains `PASS WITH KNOWN GAP`.
+
 ## [2.7.7] - 2026-09-15
 
 Version-gated 3x-ui 3.7.x / 3.8.x compatibility. Every behaviour introduced for a

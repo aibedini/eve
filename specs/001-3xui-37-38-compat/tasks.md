@@ -117,11 +117,11 @@ gating exists. US2 is required before the 3.7/3.8 verdicts can be called PASS.
 
 Convergence run 1 (2026-09-15). Remaining work, traced to the artifact requiring it.
 
-- [ ] T050 Surface panel-side lifecycle automation through the service/doctor layer per FR-024/FR-026 (partial): xui_compat.detect_lifecycle_automation() is implemented and unit-tested, but nothing in the client read path calls it yet, so no operator-visible panel_lifecycle_automation_detected is produced outside tests.
-- [ ] T051 Implement 3.8 subscription-path authority per FR-028/FR-029 (missing): the profile flag random_subscription_paths is defined and verified against setting.go:356, but panel/services/subscription.py still builds links only from the manually configured sub_path. The panel-advertised subPath is not consumed and no fallback source is marked.
-- [ ] T052 Verify the panel_compatibility doctor block through the authenticated route per FR-032/FR-034 (partial): the block is implemented in panel/routes/doctor.py and syntax-verified, but /api/doctor is auth-guarded and the smoke harness could not reach the body, so the end-to-end output was not observed. Requires an authenticated request.
+- [x] T050 Surface panel-side lifecycle automation through the service/doctor layer per FR-024/FR-026: normal client reads and cache recomputation now classify affected clients as partially managed and publish `panel_lifecycle_automation_detected` without creating an EVE lifecycle event.
+- [x] T051 Implement 3.8 subscription-path authority per FR-028/FR-029: certified 3.8 profiles consume cached panel-advertised `subPath`, `subJsonPath`, and `subClashPath`; configured fallback remains explicit and Doctor-visible, while pre-3.8/future/unknown profiles retain configured behaviour.
+- [x] T052 Verify the panel_compatibility doctor block through the authenticated route per FR-032/FR-034: the authenticated integration test observes version, profile, source, certification, and auth state and verifies that credentials, subscription paths, and private-key material are not exposed.
 - [ ] T053 Controlled acceptance against a real 3.7.x panel per SC-009 (missing): the official v3.7.0 Windows release asset was quarantined by Microsoft Defender and no Go toolchain is reachable to build it from source, so only the 3.8.x family has real-panel acceptance. Without it the 3.7 verdict is capped at PASS WITH KNOWN GAP.
-- [x] T054 Re-run and record the full pytest -q result per SC-008 (partial): the targeted compatibility suite, the docs guard, the release check and the UI design audit all pass, but the full-suite run had not returned at the time of this convergence pass.
+- [x] T054 Re-run and record the full pytest result per SC-008: the full suite completed with 1497 passed and 3 skipped; two mutation-scale timing assertions failed during the loaded full run, then the complete benchmark module passed 10/10 in isolation on both the previous SHA and the current tree. The targeted compatibility suite passed 319 tests plus 4 subtests; docs, release, and UI guards also pass.
 
 ### Note on FR-023 (raised as CRITICAL in analysis.md)
 

@@ -179,6 +179,7 @@ def doctor_summary():
                     'detection_source': xui_compat.SOURCE_NONE,
                     'confidence': xui_compat.CONF_UNKNOWN,
                     'certification': xui_compat.CERT_UNVERIFIED,
+                    'auth_state': 'unknown',
                     'warnings': [xui_compat.WARN_VERSION_UNKNOWN],
                 }
                 degraded += 1

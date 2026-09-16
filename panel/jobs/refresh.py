@@ -26,6 +26,7 @@ from panel.adapters.xui import (
     fetch_server_status,
     get_xui_session,
     persist_detected_panel_type,
+    resolve_server_compatibility,
     server_is_v3,
     v3_reset_client,
     v3_update_client,
@@ -54,7 +55,7 @@ from panel.services.client_state import ClientMutationResult, normalize_client_s
 from panel.extensions import db
 from panel.models import Admin, ClientOwnership, Server
 from panel.services.backup import _run_telegram_backup
-from panel.services.subscription import find_client
+from panel.services.subscription import fetch_subscription_profile_metadata, find_client
 
 REFRESH_JOBS = {}  # job_id -> job dict
 REFRESH_JOBS_LOCK = threading.Lock()
@@ -1788,6 +1789,15 @@ def _fetch_and_update_server_data_inner(server_id: int):
 
     online_index, _ = fetch_onlines(session_obj, server.host, server.panel_type)
     status_payload, status_error, _status_type = fetch_server_status(session_obj, server.host, server.panel_type)
+    resolve_server_compatibility(
+        server,
+        session_obj=session_obj,
+        status_payload=status_payload,
+    )
+    # This bounded-TTL settings read supplies authoritative 3.8 subscription
+    # paths before process_inbounds builds links. The public request path remains
+    # network-free and consumes this cache only.
+    fetch_subscription_profile_metadata(server, session_obj=session_obj)
 
     # Enrich status_payload with online_count from onlines endpoint
     if online_index:
@@ -1970,6 +1980,26 @@ def _recompute_cached_client(cd, thresholds=None, lang=None, *,
     cd['comment'] = (raw.get('comment') or '').strip()
     cd['email'] = raw.get('email', cd.get('email'))
     cd['id'] = raw.get('id', cd.get('id'))
+
+    try:
+        from panel.services import xui_compat
+        compat = xui_compat.cached_compatibility(cd.get('server_id'))
+        finding = (
+            xui_compat.detect_lifecycle_automation(raw)
+            if compat is not None and compat.profile.panel_lifecycle_automation
+            else None
+        )
+        cd['managed_state'] = (
+            finding.get('managed_state') if finding else 'fully_managed')
+        cd['lifecycle_automation'] = finding
+        if finding:
+            xui_compat.set_compatibility_warning(
+                cd.get('server_id'),
+                xui_compat.WARN_LIFECYCLE_AUTOMATION,
+                active=True,
+            )
+    except Exception:
+        pass
 
     # Phase 6: configuration state and telemetry state age independently. A renew
     # must be visible without waiting for a traffic poll, so the two layers carry
