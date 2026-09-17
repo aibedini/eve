@@ -1,10 +1,11 @@
-import os
 import json
+import os
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
 from unittest import mock
+from urllib.parse import parse_qs, urlparse
 
 
 _DB_FILE = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
@@ -54,6 +55,12 @@ class _Session:
 
 
 class XuiCompatibilityTests(unittest.TestCase):
+    def test_audited_upstream_refs_are_recorded_in_the_contract_fixture(self):
+        fixture = Path(__file__).parent / 'fixtures' / 'xui' / 'README.md'
+        text = fixture.read_text(encoding='utf-8')
+        self.assertIn('f727d04f6522bb94a8fb52e8352fdcafb51c11e1', text)
+        self.assertIn('837addf66e945a80080273b5d2a315dea765d748', text)
+
     def setUp(self):
         XUI_CAPABILITY_CACHE.clear()
 

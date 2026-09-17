@@ -130,6 +130,15 @@ class MutationScaleBenchmarkTests(unittest.TestCase):
 
 
 class MutationScaleUnitTests(unittest.TestCase):
+    def test_least_noisy_round_keeps_wall_and_cpu_samples_paired(self):
+        module = _load_script()
+        wall, cpu = module._least_noisy_round(
+            [([8.0, 9.0], [80.0, 90.0]),
+             ([1.0, 2.0], [10.0, 20.0]),
+             ([3.0, 4.0], [30.0, 40.0])])
+        self.assertEqual(wall, [1.0, 2.0])
+        self.assertEqual(cpu, [10.0, 20.0])
+
     def test_p95_and_the_counting_redis(self):
         module = _load_script()
         self.assertEqual(module.p95([1.0, 2.0, 3.0, 4.0]), 4.0)

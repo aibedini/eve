@@ -2,6 +2,15 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.9] - 2026-09-17
+
+### Fixed
+- Restored the missing `tests/fixtures/xui/README.md` contract fixture and now test that the exact audited 3x-ui 3.7.0 and 3.8.0 commits remain recorded.
+- Stabilized the mutation-scale O(1) benchmark under shared-host scheduler and antivirus contention. Mutation latency is measured in three independent rounds with garbage collection outside each timed window; the lowest-noise wall-clock round and its matching CPU samples are kept together, without relaxing the existing 2x scale bound.
+
+### Validation
+- The official 3x-ui 3.7.0 Windows archive was retrieved from GitHub in verified-size ranges, but Microsoft Defender again blocked the combined archive before its SHA-256 could be read. Defender was not bypassed; real-panel 3.7 acceptance therefore still requires a disposable Linux/Docker panel or an externally provided panel.
+
 ## [2.7.8] - 2026-09-16
 
 ### Added
