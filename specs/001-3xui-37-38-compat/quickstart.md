@@ -6,7 +6,8 @@
 
 - EVE checkout on `feat/3xui-37-38-compat`
 - Test interpreter: `.venv-test\\Scripts\\python.exe` (pytest 9.1.1)
-- One disposable 3.x panel per certified family (never a production panel)
+- One disposable 3.8.x panel for controlled acceptance (never a production panel)
+- No real 3.7.x panel is required; that acceptance step is waived by product decision
 
 ## 1. Unit + contract layer (no panel required)
 
@@ -47,9 +48,11 @@ GET http://127.0.0.1:20581/panel/api/server/getPanelUpdateInfo -> obj.currentVer
 5. read back            -> obj.client.limitHwid MUST still be 2
 ```
 
-A test that only inspects EVE's outbound JSON is **not** acceptable evidence: the
-defect is a server-side default, so the assertion must be on the **persisted**
-value.
+For the controlled 3.8.x acceptance, a test that only inspects EVE's outbound
+JSON is **not** acceptable evidence: the defect is a server-side default, so the
+assertion must be on the **persisted** value. For 3.7.x, the required release
+evidence is the automated/contract preservation matrix; real-panel execution is
+intentionally excluded from this release's acceptance scope.
 
 ## 4. Version-gating proof
 
@@ -82,11 +85,30 @@ With `admin`, `monitor`, `node-sync`, expired, rotated and invalid tokens:
 .venv-test\Scripts\python.exe -m pytest tests/test_docs_index.py -q
 ```
 
-## 7. Verdict rules
+## 7. Definition of Done and verdict rules
 
-- CORE 3.7 = PASS only when §1–§6 pass **and** §3 passes against a real 3.7.x panel.
-- CORE 3.8 = PASS only when §1–§6 pass **and** §3 passes against a real 3.8.x panel.
-- If no real panel of a family was available, that family is at best
-  **PASS WITH KNOWN GAP**, regardless of mock coverage.
-- Extended features (TUIC, AmneziaWG, HWID UI) are reported separately and never
-  downgrade a core verdict.
+Required release gates:
+
+- 3.7 version-profile tests pass
+- auth matrix passes
+- `limitHwid` preservation passes
+- field-preservation matrix passes
+- lifecycle automation guard passes
+- existing protocol regression tests pass
+- full EVE suite passes
+- `release_check` passes
+- docs guard passes
+- UI design audit passes
+- `git diff --check` passes
+
+Final compatibility verdict:
+
+- Core 3.7 compatibility: **PASS — automated/contract verified**
+- Real-panel acceptance: **NOT RUN — waived by product decision**
+- Core 3.8 compatibility: **PASS — including controlled real-panel acceptance**
+
+T048/T053 are **WAIVED / NOT REQUIRED FOR RELEASE**. Reason: product decision —
+real 3.7 panel acceptance intentionally excluded from acceptance scope. This is
+not a known gap and does not cap or downgrade the 3.7 core verdict. Extended
+features (TUIC, AmneziaWG, HWID UI) are reported separately and never downgrade
+a core verdict.

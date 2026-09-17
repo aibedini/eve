@@ -46,8 +46,10 @@ No Alembic revision is required.
 
 **Testing**: pytest (`testpaths = ["tests"]`, `pythonpath = ["."]`), interpreter
 `.venv-test\\Scripts\\python.exe`. Existing suite
-`tests/test_3xui_compat.py` is extended; new contract fixtures derived from the
-exact upstream tags; plus controlled acceptance against real disposable panels.
+`tests/test_3xui_compat.py` is extended; new contract fixtures are derived from
+the exact upstream tags; plus controlled acceptance against a real disposable
+3.8.x panel. Real-panel 3.7.x acceptance is waived by product decision; its
+automated/contract compatibility gates remain required.
 
 **Target Platform**: EVE server (Linux/Docker in production, Windows dev checkout)
 
@@ -83,7 +85,7 @@ Approximately 6 existing files touched.
 | X. Database Evolution | Satisfied — **no schema change**, therefore no Alembic revision. Deliberate: compatibility metadata is derived, not stored. |
 | XI. Observability | Satisfied — FR-032–034 require named degraded states and forbid reporting an unusable server as healthy. |
 | XII. Testing | Satisfied — contract fixtures derived from the exact tagged upstream source/OpenAPI, integration tests through the real wiring, and preservation tests that assert *persisted* panel state, not just payload shape. |
-| XIII. Production Acceptance | Satisfied — controlled acceptance against real disposable 3.7.x and 3.8.x panels; no production customer accounts touched. |
+| XIII. Production Acceptance | Satisfied — controlled acceptance passed against a real disposable 3.8.x panel; real-panel 3.7.x acceptance is NOT RUN and waived by product decision, while the 3.7 automated/contract gates remain mandatory. No production customer accounts were touched. |
 
 **Gate result: PASS.** No violations requiring justification.
 

@@ -41,3 +41,8 @@
 - Numeric thresholds (TTL bounds, cache sizes) are intentionally left to the plan
   so the spec stays outcome-focused.
 - Verification status: all 16 checklist items pass.
+- Release acceptance scope was updated by product decision on 2026-09-17:
+  real-panel 3.7.x acceptance is explicitly waived/not required, while all 3.7
+  automated/contract gates and controlled real-panel 3.8.x acceptance remain
+  required. This waiver is represented in SC-009, the Definition of Done, and
+  T048/T053 without claiming that a real 3.7.x run occurred.

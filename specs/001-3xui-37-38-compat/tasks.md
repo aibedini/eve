@@ -47,7 +47,8 @@ Independent test: `quickstart.md` §5 auth matrix.
 ## Phase 5: US1 — Renewing must not destroy the device limit (P1, P0 defect)
 
 Goal: persisted `limitHwid` survives every unrelated mutation.
-Independent test: `quickstart.md` §3 against a real panel.
+Independent test: the automated preservation matrix for both profiles, plus
+`quickstart.md` §3 persisted-state proof against the controlled real 3.8.x panel.
 
 - [x] T021 [US1] Implement `read_authoritative_client_settings(server, session, email)` in `panel/adapters/xui.py` using `GET /clients/get/{email}` → `obj.client.limitHwid`, returning `None` when the panel does not expose the field (FR-019, FR-020, D3)
 - [x] T022 [US1] Extend `_v3_client_payload` in `panel/adapters/xui.py` to accept and inject a preserved `limitHwid` **only** when it is not `None`; never default it to 0 (FR-019, forbidden-defaults)
@@ -91,7 +92,7 @@ Independent test: `quickstart.md` §3 against a real panel.
 - [x] T045 Run the targeted suites: `tests/test_3xui_compat.py`, renew/enable, subscription, server polling/fetch, telemetry integration, lifecycle/SMS generation, allow_insecure/security
 - [x] T046 Run the full EVE suite plus `scripts/release_check.py --json`, `scripts/ui_design_audit.py --check`, `tests/test_docs_index.py` (SC-008)
 - [x] T047 Controlled acceptance against a real 3.8.x panel: run the P0 preservation proof and the auth matrix, asserting persisted panel state (SC-001, SC-009)
-- [x] T048 Controlled acceptance against a real 3.7.x panel: same proof (SC-009) — BLOCKED pending panel availability; if unavailable, record as a known gap and cap the 3.7 verdict
+- [x] T048 WAIVED / NOT REQUIRED FOR RELEASE — controlled acceptance against a real 3.7.x panel. Reason: product decision — real 3.7 panel acceptance intentionally excluded from acceptance scope. 3.7 implementation is complete and its automated/contract compatibility tests remain required (SC-009).
 - [x] T049 Record the extended-feature status (TUIC / AmneziaWG / HWID management) as implemented / partial / not implemented without downgrading the core verdict (FR-044)
 
 ## Dependencies
@@ -100,7 +101,8 @@ Independent test: `quickstart.md` §3 against a real panel.
 - Phase 3 (profiles) blocks Phase 4, 5, 8 — they consume the profile.
 - Phase 5 (T021) blocks T023/T024/T026.
 - Phase 10 documentation tasks depend on implementation being final (T042/T043 after T021–T041).
-- T048 depends on external panel availability and does not block T047.
+- T048 is waived by product decision and is not a release blocker; T047 remains
+  the required controlled real-panel acceptance task for 3.8.x.
 
 ## Parallel opportunities
 
@@ -120,8 +122,8 @@ Convergence run 1 (2026-09-15). Remaining work, traced to the artifact requiring
 - [x] T050 Surface panel-side lifecycle automation through the service/doctor layer per FR-024/FR-026: normal client reads and cache recomputation now classify affected clients as partially managed and publish `panel_lifecycle_automation_detected` without creating an EVE lifecycle event.
 - [x] T051 Implement 3.8 subscription-path authority per FR-028/FR-029: certified 3.8 profiles consume cached panel-advertised `subPath`, `subJsonPath`, and `subClashPath`; configured fallback remains explicit and Doctor-visible, while pre-3.8/future/unknown profiles retain configured behaviour.
 - [x] T052 Verify the panel_compatibility doctor block through the authenticated route per FR-032/FR-034: the authenticated integration test observes version, profile, source, certification, and auth state and verifies that credentials, subscription paths, and private-key material are not exposed.
-- [ ] T053 Controlled acceptance against a real 3.7.x panel per SC-009 (missing): the exact `v3.7.0` source tag was re-cloned and verified at `f727d04f6522bb94a8fb52e8352fdcafb51c11e1`. The official Windows asset was downloaded in verified-size ranges from GitHub, but Microsoft Defender again blocked the combined archive before SHA-256 validation. Docker is unavailable, WSL has no installed distro, and the official Go archive endpoint returned 404, so no safe local 3.7 runtime is available. Do not bypass Defender; acceptance requires a disposable Linux/Docker instance or an externally supplied 3.7 panel. Until then the 3.7 verdict remains PASS WITH KNOWN GAP.
-- [x] T054 Re-run and record the full pytest result per SC-008: after stabilizing the timing harness, the full suite completed with 1501 passed, 3 skipped, 22 subtests passed, and zero failures. The focused compatibility/Doctor/benchmark suite passed 50 tests; docs, release, and UI guards also pass.
+- [x] T053 WAIVED / NOT REQUIRED FOR RELEASE — real 3.7.x panel acceptance was not run and no panel was obtained, built, or started. Reason: product decision — real 3.7 panel acceptance intentionally excluded from acceptance scope. This waiver closes the former convergence blocker without claiming execution; required 3.7 automated/contract evidence remains green.
+- [x] T054 Re-run and record the full pytest result per SC-008: after stabilizing the timing harness, the full suite completed with 1502 passed, 3 skipped, 22 subtests passed, and zero failures. The focused compatibility/Doctor/benchmark suite and the docs, release, and UI guards also pass.
 
 ### Note on FR-023 (raised as CRITICAL in analysis.md)
 

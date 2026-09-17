@@ -1,7 +1,7 @@
 # Specification Analysis Report
 
 **Feature**: 001-3xui-37-38-compat
-**Scope**: spec.md (45 FR, 9 SC, 7 user stories) × plan.md × tasks.md (49 tasks) × constitution
+**Scope**: spec.md (45 FR, 9 SC, 7 user stories) × plan.md × tasks.md (54 tasks) × constitution
 **Mode**: read-only
 
 ## Findings
@@ -10,7 +10,7 @@
 |----|----------|----------|-------------|---------|----------------|
 | C1 | Coverage gap | **CRITICAL** | spec.md FR-023 / tasks.md | FR-023 ("MUST NOT resubmit fields whose upstream contract forbids or makes write-only, and MUST NOT read back or echo secrets") has **zero** mapped task. It is a security requirement and it constrains exactly the code path T021–T025 touch (the new authoritative client read + payload echo). | Add a task in Phase 5 that scopes the preservation read/echo strictly to the client-record allowlist and excludes secret/write-only fields; assert it in T027/T041. |
 | C2 | Coverage gap | MEDIUM | spec.md FR-036 / tasks.md | FR-036 ("version/compat resolution MUST NOT add a panel request per rendered page or client operation") has no dedicated task; it is only implied by T006 (cache) and T036 (sub paths). Not independently verifiable as written. | Add an explicit assertion task: after warm cache, a page render / client operation issues zero additional panel requests. |
-| C3 | Underspecification | MEDIUM | tasks.md T048 | T048 is marked BLOCKED pending a real 3.7.x panel, but no task records *how* the verdict is capped if the panel never materialises. | Make the cap explicit in T048's completion criterion (already stated) and mirror it in the final report's verdict rules. |
+| C3 | Product decision | **RESOLVED** | spec.md SC-009 / tasks.md T048, T053 / quickstart.md §7 | Real-panel 3.7.x acceptance is explicitly **WAIVED / NOT REQUIRED FOR RELEASE** and was not run. Required 3.7 automated/contract evidence remains release-blocking; the verdict is `PASS — automated/contract verified`. | No remaining blocker; do not claim real-panel 3.7 execution. |
 | C4 | Terminology drift | LOW | research.md D6 vs spec.md FR-026 | research.md uses "panel-side automatic lifecycle settings"; spec.md/contracts use "panel-side lifecycle automation". Same concept. | Normalise to "panel-side lifecycle automation" in research.md D6. |
 | C5 | Ambiguity | LOW | tasks.md T034 | "audit `subJsonPath` / `subClashPath`" does not state the acceptance condition (consume vs merely observe). | State: consume `subPath`; record presence/absence of the other two for the doctor surface. |
 | C6 | Constitution alignment | LOW | plan.md Constitution Check, Principle V | The per-worker cache divergence window is documented as acceptable. The constitution permits process-local state for non-durable facts, so this is aligned — recorded here only because it is a judgement call a reviewer should see. | No change required; surfaced for reviewer awareness. |
@@ -37,7 +37,7 @@ FR-041→T029 · FR-042→T030 · FR-043→T015/T030 · FR-044→T049
 
 **Success criteria coverage**: SC-001→T027/T047 · SC-002→T012 · SC-003→T020 ·
 SC-004→T028 · SC-005→T029 · SC-006→T037/T041 · SC-007→T006 (see C2) ·
-SC-008→T046 · SC-009→T047/T048
+SC-008→T046/T054 · SC-009→T047/T048/T053
 
 **Unmapped tasks**: none.
 
@@ -51,7 +51,7 @@ translate into EVE events).
 ## Metrics
 
 - Total requirements: 45 FR + 9 SC = 54
-- Total tasks: 49
+- Total tasks: 54
 - Requirement coverage: 52/54 (96%) — gaps FR-023 (zero), FR-036 (partial)
 - Ambiguity count: 2 (C5, and the C2 partial)
 - Duplication count: 0
@@ -80,3 +80,6 @@ Applied during implementation rather than as a separate edit pass:
 - **C2** → folded into T006 (cache hit ⇒ zero additional panel request).
 - **C4/C5** → normalised terminology and made the acceptance condition explicit in
   the tasks that carry them.
+- **C3** → superseded by product decision: T048/T053 are complete as explicit
+  waivers, not unresolved blockers; quickstart §7 and SC-009 carry the final
+  compatibility verdict and required release gates.

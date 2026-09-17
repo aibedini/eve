@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-15
 
-**Status**: Draft
+**Status**: Complete
 
 **Input**: User description: "Implement and prove safe, version-gated compatibility between EVE and 3x-ui 3.7.x / 3.8.x. Behavior introduced for 3.7.x or 3.8.x MUST NOT automatically apply to older versions, 3.9.x, 4.x, or any unknown future version. Core certified compatibility is the release blocker; extended feature parity (TUIC, AmneziaWG, HWID management) may be staged separately."
 
@@ -21,6 +21,15 @@ version-gated, and provable — not an opportunistic "version >= 3.7" branch.
 | --- | --- |
 | `v3.7.0` | `f727d04f6522bb94a8fb52e8352fdcafb51c11e1` |
 | `v3.8.0` | `837addf66e945a80080273b5d2a315dea765d748` |
+
+**Release acceptance scope (product decision, 2026-09-17)**:
+
+- 3.7 implementation: **COMPLETE**
+- 3.7 automated/contract compatibility tests: **REQUIRED**
+- 3.7 real-panel acceptance: **WAIVED BY PRODUCT DECISION**
+- Reason: product decision — real 3.7 panel acceptance intentionally excluded
+  from acceptance scope.
+- 3.8 implementation and controlled real-panel acceptance remain required.
 
 **Verified upstream deltas that drive this feature** (each confirmed against the
 exact tagged Go source and generated OpenAPI, not from release notes):
@@ -63,9 +72,12 @@ exactly what it was before.
 shared-account protection is active; an unrelated EVE action turns it off. It is
 already happening in production on any 3.7+/3.8+ panel.
 
-**Independent Test**: Seed a client with `limitHwid = 2` on a real panel, run each
+**Independent Test**: For both 3.7.x and 3.8.x profiles, run the automated
+version-profile, auth, `limitHwid`, field-preservation and lifecycle contract
+matrices. On the controlled real 3.8.x panel, also seed `limitHwid = 2`, run each
 EVE mutation path (renew, change volume, enable, edit, rotate, reset, admin edit),
-and assert the persisted value is still `2` after every one.
+and assert the persisted value is still `2` after every one. Real-panel 3.7.x
+execution is intentionally outside this release's acceptance scope.
 
 **Acceptance Scenarios**:
 
@@ -421,8 +433,9 @@ suite must stay green, with no change to legacy/older-version request shapes.
 ### Measurable Outcomes
 
 - **SC-001**: Across every EVE mutation path, a panel-side device limit set to a
-  non-zero value is still that exact value afterwards — 100% of mutation paths,
-  proven on a real certified panel.
+  non-zero value is still that exact value afterwards — 100% of mutation paths
+  in the 3.7/3.8 automated contract matrix, plus persisted-state proof on the
+  controlled real 3.8.x panel.
 - **SC-002**: A 3.9.x or 4.x simulated panel selects the baseline profile in 100%
   of runs; the 3.8 profile is selected in 0% of those runs.
 - **SC-003**: A panel using monitor or node-sync credentials is reported with an
@@ -437,8 +450,32 @@ suite must stay green, with no change to legacy/older-version request shapes.
 - **SC-007**: Compatibility resolution adds zero additional panel requests to
   page renders and client operations once the cache is warm.
 - **SC-008**: The full existing EVE test suite passes with zero regressions.
-- **SC-009**: Core 3.7.x and 3.8.x acceptance each pass against a real panel of
-  that exact family.
+- **SC-009**: Core 3.7.x compatibility passes the required automated/contract
+  evidence. Core 3.8.x compatibility additionally passes controlled real-panel
+  acceptance. Real-panel 3.7.x acceptance is **NOT RUN — waived by product
+  decision**, and is not a release blocker.
+
+## Definition of Done
+
+The feature is done for release when all of the following gates pass:
+
+- 3.7 version-profile tests
+- auth matrix
+- `limitHwid` preservation
+- field-preservation matrix
+- lifecycle automation guard
+- existing protocol regression tests
+- full EVE suite
+- `release_check`
+- docs guard
+- UI design audit
+- `git diff --check`
+
+The compatibility verdict must then be reported as:
+
+- Core 3.7 compatibility: **PASS — automated/contract verified**
+- Real-panel acceptance: **NOT RUN — waived by product decision**
+- Core 3.8 compatibility: **PASS — including controlled real-panel acceptance**
 
 ## Assumptions
 

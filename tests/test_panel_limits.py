@@ -34,7 +34,11 @@ class CoalesceTests(unittest.TestCase):
                     results.append(slot.result)
                     return
                 started.set()
-                time.sleep(0.15)
+                deadline = time.monotonic() + 5
+                while panel_limits.panel_metrics()["coalesced"] < 4:
+                    if time.monotonic() >= deadline:
+                        self.fail("followers did not overlap the leader")
+                    time.sleep(0.01)
                 executions.append(1)
                 slot.result = "payload"
                 results.append(slot.result)
@@ -189,7 +193,11 @@ class FetchCoalescingTests(unittest.TestCase):
 
         def slow_inner(server_id):
             started.set()
-            time.sleep(0.15)
+            deadline = time.monotonic() + 5
+            while panel_limits.panel_metrics()["coalesced"] < 3:
+                if time.monotonic() >= deadline:
+                    self.fail("fetch followers did not overlap the leader")
+                time.sleep(0.01)
             calls.append(server_id)
             return {"server_id": server_id}
 

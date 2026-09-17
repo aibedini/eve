@@ -244,9 +244,11 @@ and settings failures must keep today's behaviour, FR-031).
 
 ## D8 — How is preservation actually proven?
 
-**Decision**: Prove it at the layer that can lie: **persisted panel state**, on a
-real panel, for every mutation path — not merely by asserting on the outbound
-payload.
+**Decision**: For 3.8.x controlled acceptance, prove preservation at the layer
+that can lie: **persisted panel state**, on a real panel, for every mutation path
+— not merely by asserting on the outbound payload. For 3.7.x, product has waived
+real-panel acceptance; the automated/contract preservation evidence remains
+required for release.
 
 **Rationale**: The defect is a server-side default, so a test that only inspects
 EVE's JSON body would pass while the value is still destroyed. The mission
@@ -259,8 +261,9 @@ requires Test C (real handler, persisted value) for exactly this reason.
    the exact tagged OpenAPI/source.
 3. Integration — through EVE's real wiring, asserting the outbound payload carries
    the preserved value and that auth failures never downgrade capability state.
-4. Acceptance — live disposable panels; assert the **persisted** value read back
-   from the panel after each mutation.
+4. Acceptance — a live disposable 3.8.x panel; assert the **persisted** value read
+   back from the panel after each mutation. The corresponding 3.7.x real-panel
+   layer is NOT RUN and waived by product decision.
 
 **Alternatives considered**: mocked panel responses only — insufficient; the
 mission explicitly rejects calling a mock "3.8 compatibility".

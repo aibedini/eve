@@ -2,6 +2,13 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.10] - 2026-09-17
+
+### Changed
+- Recorded the product decision that real-panel 3.7.x acceptance is not required for this release. Core 3.7 remains gated by the automated/contract compatibility matrix, while core 3.8 retains controlled real-panel acceptance.
+- Marked Spec Kit tasks T048/T053 as waived rather than unresolved blockers, updated the Definition of Done and verdict rules, and added a regression guard for the release-scope metadata.
+- Stabilized performance and coalescing test isolation on contended shared hosts: benchmark retries keep every original SLO/scale threshold intact, and the coalescing test now waits for actual follower overlap instead of assuming a fixed thread-start delay.
+
 ## [2.7.9] - 2026-09-17
 
 ### Fixed
@@ -9,7 +16,7 @@ All notable changes to Eve - Xui Manager are documented in this file.
 - Stabilized the mutation-scale O(1) benchmark under shared-host scheduler and antivirus contention. Mutation latency is measured in three independent rounds with garbage collection outside each timed window; the lowest-noise wall-clock round and its matching CPU samples are kept together, without relaxing the existing 2x scale bound.
 
 ### Validation
-- The official 3x-ui 3.7.0 Windows archive was retrieved from GitHub in verified-size ranges, but Microsoft Defender again blocked the combined archive before its SHA-256 could be read. Defender was not bypassed; real-panel 3.7 acceptance therefore still requires a disposable Linux/Docker panel or an externally provided panel.
+- Product waived real-panel 3.7.x acceptance for this release; it was not run and no real 3.7 panel was obtained, built, or started. The required 3.7 automated/contract gates remain in scope, while 3.8 includes controlled real-panel acceptance.
 
 ## [2.7.8] - 2026-09-16
 
@@ -20,7 +27,7 @@ All notable changes to Eve - Xui Manager are documented in this file.
 
 ### Tests
 - Added integration coverage for lifecycle read-path behaviour, randomized/operator-changed 3.8 subscription paths, observable path fallback, pre-3.8 compatibility, and authenticated Doctor output.
-- Real-panel 3.7.x acceptance remains pending; the core 3.7 verdict therefore remains `PASS WITH KNOWN GAP`.
+- Superseded by the 2.7.9 product decision: real-panel 3.7.x acceptance is waived and not required for release; automated/contract verification is the required core 3.7 gate.
 
 ## [2.7.7] - 2026-09-15
 

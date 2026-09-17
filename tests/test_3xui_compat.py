@@ -55,6 +55,31 @@ class _Session:
 
 
 class XuiCompatibilityTests(unittest.TestCase):
+    def test_release_scope_records_the_37_real_panel_waiver(self):
+        feature_dir = Path(__file__).parents[1] / 'specs' / '001-3xui-37-38-compat'
+        spec = (feature_dir / 'spec.md').read_text(encoding='utf-8')
+        tasks = (feature_dir / 'tasks.md').read_text(encoding='utf-8')
+        quickstart = (feature_dir / 'quickstart.md').read_text(encoding='utf-8')
+
+        waiver = 'WAIVED / NOT REQUIRED FOR RELEASE'
+        reason = (
+            'Reason: product decision — real 3.7 panel acceptance intentionally '
+            'excluded from acceptance scope.'
+        )
+        self.assertIn('3.7 implementation: **COMPLETE**', spec)
+        self.assertIn('3.7 automated/contract compatibility tests: **REQUIRED**', spec)
+        self.assertIn('3.7 real-panel acceptance: **WAIVED BY PRODUCT DECISION**', spec)
+        self.assertIn(f'- [x] T048 {waiver}', tasks)
+        self.assertIn(f'- [x] T053 {waiver}', tasks)
+        self.assertEqual(tasks.count(reason), 2)
+        self.assertIn('Core 3.7 compatibility: **PASS — automated/contract verified**', quickstart)
+        self.assertIn('Real-panel acceptance: **NOT RUN — waived by product decision**', quickstart)
+        self.assertIn(
+            'Core 3.8 compatibility: **PASS — including controlled real-panel acceptance**',
+            quickstart,
+        )
+        self.assertNotIn('PASS WITH KNOWN GAP', spec + tasks + quickstart)
+
     def test_audited_upstream_refs_are_recorded_in_the_contract_fixture(self):
         fixture = Path(__file__).parent / 'fixtures' / 'xui' / 'README.md'
         text = fixture.read_text(encoding='utf-8')

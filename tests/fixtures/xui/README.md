@@ -13,5 +13,6 @@ Source repository: `https://github.com/MHSanaei/3x-ui`.
 
 The tests intentionally encode only credential-free request/response shapes derived
 from those commits. Real-panel persistence evidence remains a separate controlled
-acceptance step; no production database, token, password, or subscription identifier
-belongs in this directory.
+acceptance step for 3.8.x. Real-panel 3.7.x acceptance is NOT RUN and waived by
+product decision; automated/contract coverage remains required. No production
+database, token, password, or subscription identifier belongs in this directory.
