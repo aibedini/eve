@@ -1,18 +1,33 @@
+import atexit
 import os
-import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
+
+from sqlalchemy import create_engine, inspect, text
 
 _DB_FILE = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 _DB_FILE.close()
-os.environ['DATABASE_URL'] = f"sqlite:///{_DB_FILE.name.replace(os.sep, '/')}"
+os.environ.setdefault('DATABASE_URL', f"sqlite:///{_DB_FILE.name.replace(os.sep, '/')}")
 os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
+
+
+def _cleanup_module_db_file():
+    try:
+        os.unlink(_DB_FILE.name)
+    except OSError:
+        pass
+
+
+atexit.register(_cleanup_module_db_file)
 
 from app import (  # noqa: E402
     Admin,
     TelegramBotInstance,
     TelegramBotStartEvent,
+    TelegramPurchasePolicy,
     _migrate_add_columns,
     app,
     db,
@@ -29,16 +44,12 @@ class TelegramSettingsPayloadTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         db.session.remove()
-        db.drop_all()
         cls.ctx.pop()
-        try:
-            os.unlink(_DB_FILE.name)
-        except OSError:
-            pass
 
     def tearDown(self):
         db.session.rollback()
         TelegramBotStartEvent.query.delete()
+        TelegramPurchasePolicy.query.delete()
         TelegramBotInstance.query.delete()
         Admin.query.filter(Admin.username.like('payload-test-%')).delete(
             synchronize_session=False)
@@ -111,55 +122,52 @@ class TelegramSettingsPayloadTests(unittest.TestCase):
     def test_migrate_add_columns_resumes_after_partial_failure(self):
         """A failed ALTER must never skip the remaining columns (the 2.5.0
         production bug: partially applied telegram_purchase_policies migration)."""
-        db.session.add(TelegramBotInstance(scope_key='payload-test-migration'))
-        db.session.commit()
-        # Simulate a partially applied migration: two policy columns are gone.
-        engine_url = str(db.engine.url)
-        db_path = engine_url.replace('sqlite:///', '')
-        con = sqlite3.connect(db_path)
-        try:
-            con.execute('ALTER TABLE telegram_purchase_policies DROP COLUMN trial_enabled')
-            con.execute('ALTER TABLE telegram_purchase_policies DROP COLUMN emergency_days')
-            con.commit()
-        finally:
-            con.close()
-        db.session.remove()
-        try:
-            _migrate_add_columns('telegram_purchase_policies', [
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, 'migration.db')
+            engine = create_engine(f"sqlite:///{db_path.replace(os.sep, '/')}")
+            with engine.begin() as connection:
+                connection.execute(text(
+                    'CREATE TABLE telegram_purchase_policies '
+                    '(id INTEGER PRIMARY KEY, emergency_volume_gb INTEGER DEFAULT 1)'))
+
+            isolated_db = SimpleNamespace(engine=engine)
+            columns = [
+                # Deliberately invalid SQL proves that one failed ALTER does not
+                # prevent the valid columns that follow it from being applied.
+                ('broken-column', 'BOOLEAN'),
                 ('trial_enabled', 'BOOLEAN DEFAULT 0'),
                 ('trial_package_id', 'INTEGER'),
                 ('emergency_enabled', 'BOOLEAN DEFAULT 0'),
                 ('emergency_days', 'INTEGER DEFAULT 1'),
                 ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
                 ('emergency_cooldown_days', 'INTEGER DEFAULT 30'),
-            ])
-            inspector_columns = {
-                column['name']
-                for column in db.inspect(db.engine).get_columns('telegram_purchase_policies')
-            }
-            self.assertIn('trial_enabled', inspector_columns)
-            self.assertIn('emergency_days', inspector_columns)
-            # Re-running over an existing column must not raise or stop.
-            _migrate_add_columns('telegram_purchase_policies', [
-                ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
-            ])
-            inspector_columns = {
-                column['name']
-                for column in db.inspect(db.engine).get_columns('telegram_purchase_policies')
-            }
-            self.assertIn('emergency_volume_gb', inspector_columns)
-        finally:
-            # Never leave the shared schema broken for later suites.
-            db.session.remove()
-            _migrate_add_columns('telegram_purchase_policies', [
-                ('trial_enabled', 'BOOLEAN DEFAULT 0'),
-                ('trial_package_id', 'INTEGER'),
-                ('emergency_enabled', 'BOOLEAN DEFAULT 0'),
-                ('emergency_days', 'INTEGER DEFAULT 1'),
-                ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
-                ('emergency_cooldown_days', 'INTEGER DEFAULT 30'),
-            ])
-            db.session.remove()
+            ]
+
+            try:
+                with mock.patch('panel.migrate.db', isolated_db):
+                    _migrate_add_columns('telegram_purchase_policies', columns)
+
+                    inspector_columns = {
+                        column['name']
+                        for column in inspect(engine).get_columns(
+                            'telegram_purchase_policies')
+                    }
+                    self.assertNotIn('broken-column', inspector_columns)
+                    self.assertIn('trial_enabled', inspector_columns)
+                    self.assertIn('emergency_days', inspector_columns)
+
+                    # Re-running over an existing column must not raise or stop.
+                    _migrate_add_columns('telegram_purchase_policies', [
+                        ('emergency_volume_gb', 'INTEGER DEFAULT 1'),
+                    ])
+                    inspector_columns = {
+                        column['name']
+                        for column in inspect(engine).get_columns(
+                            'telegram_purchase_policies')
+                    }
+                    self.assertIn('emergency_volume_gb', inspector_columns)
+            finally:
+                engine.dispose()
 
 
 if __name__ == '__main__':

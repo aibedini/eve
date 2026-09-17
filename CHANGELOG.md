@@ -2,6 +2,12 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.11] - 2026-09-17
+
+### Fixed
+- Made the Telegram settings migration regression test own a disposable SQLAlchemy engine, eliminating import-order-dependent mutation and teardown of the process-global test database.
+- Supplied the repository token required by the pinned Gitleaks action so the blocking full-history secret scan actually executes before dependency and filesystem security scans.
+
 ## [2.7.10] - 2026-09-17
 
 ### Changed
