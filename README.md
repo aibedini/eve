@@ -12,6 +12,28 @@ and secure day-two operations in one responsive dashboard.
 > Reliable, auditable VPN operations with first-class Persian/Jalali
 > localization and Asia/Tehran timezone support.
 
+## Deploy EVE
+
+Choose the deployment model that fits your environment:
+
+### Ubuntu/Debian installer
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/aibedini/eve/main/setup.sh)
+```
+
+Review the installer and configure production secrets before exposing Eve to a
+network.
+
+### Docker and offline bundles
+
+```bash
+bash scripts/docker/build-offline-bundle.sh
+```
+
+See [DOCKER.md](DOCKER.md) and [OFFLINE_INSTALL.md](OFFLINE_INSTALL.md) for
+connected, restricted, and transferable image workflows.
+
 ## What Eve does
 
 - Operates unlimited Sanaei 3X-UI and Alireza X-UI panels from one dashboard.
@@ -110,29 +132,12 @@ panel/
 └── migrate.py  serialized schema migration and seed runner
 ```
 
-## Runtime and deployment
+## Runtime model
 
 Production separates web requests from background work: Gunicorn serves the
 control plane, Redis coordinates snapshots and workers, PostgreSQL stores
 durable state, and dedicated schedulers perform refresh, rollups, watchdog,
 backup, and messaging jobs. Single-process development mode is also supported.
-
-### Ubuntu/Debian installer
-
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/aibedini/eve/main/setup.sh)
-```
-
-Review the installer and configure production secrets before use.
-
-### Docker and offline bundles
-
-```bash
-bash scripts/docker/build-offline-bundle.sh
-```
-
-See [DOCKER.md](DOCKER.md) and [OFFLINE_INSTALL.md](OFFLINE_INSTALL.md) for
-connected, restricted, and transferable image workflows.
 
 ### Development
 
