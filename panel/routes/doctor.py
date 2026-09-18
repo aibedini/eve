@@ -158,6 +158,50 @@ def doctor_summary():
         checks['refresh_policy'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.models import Server
+        from panel.services import xui_compat
+        # Per-panel compatibility: which version was detected, which profile is
+        # active, how it was detected, whether it is certified and whether the
+        # credentials are usable. A panel whose management cannot work because of
+        # insufficient token scope must not sit under a green state.
+        panels = []
+        degraded = 0
+        for srv in db.session.query(Server).order_by(Server.id).all():
+            compat = xui_compat.cached_compatibility(srv.id)
+            if compat is None:
+                row = {
+                    'server_id': srv.id,
+                    'name': srv.name,
+                    'detected_version': None,
+                    'normalized_version': None,
+                    'family': None,
+                    'profile': xui_compat.PROFILE_BASELINE_V3.name,
+                    'detection_source': xui_compat.SOURCE_NONE,
+                    'confidence': xui_compat.CONF_UNKNOWN,
+                    'certification': xui_compat.CERT_UNVERIFIED,
+                    'auth_state': 'unknown',
+                    'warnings': [xui_compat.WARN_VERSION_UNKNOWN],
+                }
+                degraded += 1
+            else:
+                row = {'server_id': srv.id, 'name': srv.name}
+                row.update(compat.as_public_dict())
+                # Only a certified panel with no degraded condition is healthy.
+                if (compat.certification != xui_compat.CERT_SUPPORTED
+                        or compat.warnings):
+                    degraded += 1
+            panels.append(row)
+        checks['panel_compatibility'] = {
+            'state': 'ok' if degraded == 0 else 'warning',
+            'panels_total': len(panels),
+            'panels_degraded': degraded,
+            'profiles': sorted(xui_compat.CERTIFIED_FAMILIES_PROFILE_NAMES),
+            'panels': panels,
+        }
+    except Exception as exc:
+        checks['panel_compatibility'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.core import fetch_sequence, refresh_policy
         from panel.services import depletion_pipeline
         # The telemetry pipeline block answers the two questions an operator has

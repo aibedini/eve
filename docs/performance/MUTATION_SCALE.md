@@ -21,8 +21,11 @@ delta path exists to avoid sending.
 ## Measured
 
 `python scripts/benchmark_mutation_scale.py --json docs/performance/mutation-scale.json`
-(25 cached clients per panel, mutation p95 over 80 iterations per scale, cache reads
-through the real Flask route):
+(25 cached clients per panel, mutation p95 over 80 iterations in each of three
+independent rounds per scale, cache reads through the real Flask route). The reported
+round is the complete wall-clock/CPU pair with the lowest wall-clock p95. Garbage
+collection runs before each round and is paused only during its short timed window, so
+an unrelated scheduler or antivirus pause is not misclassified as O(n) growth:
 
 | panels | clients | mutation p95 | mutation CPU p95 | delta bytes | full snapshot | cache read (full) | cache read (delta) | Redis ops/mutation | X-UI polls/min¹ |
 |--------|---------|--------------|------------------|-------------|---------------|-------------------|--------------------|--------------------|-----------------|

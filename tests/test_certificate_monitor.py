@@ -21,9 +21,10 @@ from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 from cryptography.x509.oid import NameOID  # noqa: E402
 
-from app import Admin, HealthLog, SystemSetting, app, db  # noqa: E402
+from app import Admin, HealthLog, Server, SystemSetting, app, db  # noqa: E402
 from panel.jobs import schedulers  # noqa: E402
 from panel.services import certificates  # noqa: E402
+from panel.services import xui_compat  # noqa: E402
 
 
 def _write_cert(directory, name="cert.pem", common_name="localhost", days=90,
@@ -291,6 +292,7 @@ class DoctorApiTests(unittest.TestCase):
     def setUp(self):
         HealthLog.query.delete()
         SystemSetting.query.delete()
+        Server.query.delete()
         Admin.query.delete()
         db.session.commit()
         self.admin = Admin(username="doctor-admin", role="admin", enabled=True)
@@ -301,6 +303,7 @@ class DoctorApiTests(unittest.TestCase):
         db.session.add_all([self.admin, self.reseller])
         db.session.commit()
         certificates.invalidate_cache()
+        xui_compat.COMPAT_CACHE.clear()
         self.client = app.test_client()
 
     def _login(self, admin):
@@ -339,11 +342,58 @@ class DoctorApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.data)
         body = response.get_json()
         self.assertTrue(body["success"])
-        self.assertIn(body["state"], ("ok", "warning", "error", "critical", "unknown"))
+        self.assertIn(
+            body["state"],
+            ("ok", "warning", "degraded", "error", "critical", "unknown"),
+        )
         for name in ("database", "disk", "secret_key", "tls"):
             self.assertIn(name, body["checks"])
         self.assertIn("certificate_thresholds", body)
         self.assertEqual(body["checks"]["database"]["state"], "ok")
+
+    def test_authenticated_doctor_exposes_compatibility_without_credentials(self):
+        server = Server(
+            name='Doctor 3.8',
+            host='https://panel.example',
+            username='panel-admin',
+            password='doctor-password-secret',
+            api_token='doctor-token-secret',
+            sub_path='/subscription-secret-path/',
+            panel_type='v3',
+        )
+        db.session.add(server)
+        db.session.commit()
+        compat = xui_compat.resolve_compatibility(
+            server.id,
+            '3.8.0',
+            source=xui_compat.SOURCE_SERVER_STATUS,
+            confidence=xui_compat.CONF_AUTHORITATIVE,
+        )
+        xui_compat.remember_compatibility(
+            xui_compat.compat_with_warning(
+                compat,
+                xui_compat.WARN_SCOPE_INSUFFICIENT,
+            )
+        )
+
+        self._login(self.admin)
+        response = self.client.get('/api/doctor')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        panel = response.get_json()['checks']['panel_compatibility']['panels'][0]
+        self.assertEqual(panel['detected_version'], '3.8.0')
+        self.assertEqual(panel['profile'], 'xui_3_8')
+        self.assertEqual(panel['detection_source'], 'server_status')
+        self.assertEqual(panel['certification'], 'supported')
+        self.assertEqual(panel['auth_state'], 'scope_insufficient')
+        serialized = response.get_data(as_text=True)
+        for secret in (
+            'doctor-password-secret',
+            'doctor-token-secret',
+            'subscription-secret-path',
+            'PRIVATE KEY',
+        ):
+            self.assertNotIn(secret, serialized)
 
 
 class HealthWatchdogCertificateTests(unittest.TestCase):

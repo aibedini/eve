@@ -11,7 +11,6 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
 
 import qrcode
 import requests
@@ -2483,7 +2482,8 @@ def rotate_client(server_id):
     from app import (  # deferred: app-level helper, avoids circular import
         GLOBAL_REFRESH_LOCK, GLOBAL_SERVER_DATA, _add_client_to_inbound, _has_client_access,
         _json_field, _push_full_inbound, _recompute_cached_client, add_cached_client, app,
-        build_public_subscription_url, fetch_inbounds, get_xui_session, invalidate_ownership_cache,
+        build_panel_subscription_url, build_public_subscription_url, fetch_inbounds,
+        get_xui_session, invalidate_ownership_cache,
         persist_detected_panel_type, server_is_v3, v3_add_client, v3_update_client,
     )
     user = db.session.get(Admin, session['admin_id'])
@@ -2761,12 +2761,8 @@ def rotate_client(server_id):
             pass
 
         # ── New subscription links ──
-        parsed_host = urlparse(server.host)
-        final_port = server.sub_port if server.sub_port else parsed_host.port
-        port_str = f":{final_port}" if final_port else ""
-        base_sub = f"{parsed_host.scheme}://{parsed_host.hostname}{port_str}"
         final_id = new_sub_id or new_client_uuid
-        sub_url = f"{base_sub}/{(server.sub_path or '').strip('/')}/{final_id}"
+        sub_url = build_panel_subscription_url(server, final_id)
         dash_sub_url = build_public_subscription_url(
             server.id, final_id, request.url_root,
         )
@@ -3114,7 +3110,8 @@ def add_client(server_id, inbound_id):
         _account_info_channel_links, _calculate_minimum_price, _cancel_stale_account_sms,
         _fire_automation_sms, _json_field, _render_text_template, _reseller_can_create_free,
         _safe_response_json, _ss_password, _user_can_afford, add_cached_client, app,
-        build_panel_url, build_public_subscription_url, calculate_reseller_price, collect_endpoint_templates,
+        build_panel_subscription_url, build_panel_url, build_public_subscription_url,
+        calculate_reseller_price, collect_endpoint_templates,
         ensure_reseller_allowed_for_assignment, generate_client_link, get_reseller_access_maps,
         get_xui_session, invalidate_ownership_cache, is_inbound_accessible,
         is_server_accessible, log_transaction, server_is_v3, v3_add_client,
@@ -3280,12 +3277,8 @@ def add_client(server_id, inbound_id):
             add_cached_client(server.id, assign_ids, new_client)
 
             # Links from subId (one subscription aggregates all assigned inbounds)
-            parsed_host = urlparse(server.host)
-            final_port = server.sub_port if server.sub_port else parsed_host.port
-            port_str = f":{final_port}" if final_port else ""
-            base_sub = f"{parsed_host.scheme}://{parsed_host.hostname}{port_str}"
             final_id = client_sub_id or client_uuid
-            sub_url = f"{base_sub}/{(server.sub_path or '').strip('/')}/{final_id}"
+            sub_url = build_panel_subscription_url(server, final_id)
             dash_sub_url = build_public_subscription_url(
                 server.id, final_id, request.url_root,
             )
@@ -3506,17 +3499,9 @@ def add_client(server_id, inbound_id):
             add_cached_client(server.id, [inbound_id], new_client)
 
             # Generate Links for Response
-            parsed_host = urlparse(server.host)
-            hostname = parsed_host.hostname
-            scheme = parsed_host.scheme
-            final_port = server.sub_port if server.sub_port else parsed_host.port
-            port_str = f":{final_port}" if final_port else ""
-            
-            base_sub = f"{scheme}://{hostname}{port_str}"
-            s_path = server.sub_path.strip('/')
             final_id = client_sub_id if client_sub_id else client_uuid
-            
-            sub_url = f"{base_sub}/{s_path}/{final_id}"
+
+            sub_url = build_panel_subscription_url(server, final_id)
             app_base = request.url_root.rstrip('/')
             dash_sub_url = f"{app_base}/s/{server.id}/{final_id}"
             

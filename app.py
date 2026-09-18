@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.7.6"
+APP_VERSION = "2.7.11"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2740,10 +2740,12 @@ from panel.adapters.xui import (  # noqa: F401
     XUI_COOKIE_SESSION_CACHE,
     _add_client_to_inbound,
     _autoupgrade_http_to_https,
+    _classify_probe_response,
     _fetch_csrf_token,
     _format_panel_connection_error,
     _normalize_server_status_payload,
     _pick_first_value,
+    _probe_headers_for,
     _probe_v3_client_api,
     _push_full_inbound,
     _reconcile_client_inbounds,
@@ -2768,6 +2770,9 @@ from panel.adapters.xui import (  # noqa: F401
     get_xui_cookie_session,
     get_xui_session,
     persist_detected_panel_type,
+    probe_v3_client_api,
+    read_authoritative_client_settings,
+    resolve_server_compatibility,
     server_is_v3,
     v3_add_client,
     v3_attach_client,
@@ -2779,11 +2784,35 @@ from panel.adapters.xui import (  # noqa: F401
 )
 
 from panel.services.subscription import (  # noqa: F401
+    build_panel_subscription_url,
     build_public_subscription_url,
     build_subscription_configs,
+    fetch_subscription_profile_metadata,
     find_client,
     generate_client_link,
     get_public_base_url,
+    resolve_subscription_paths,
+)
+
+# Version-gated 3x-ui compatibility: one authority, re-exported so existing
+# "from app import X" callers and tests keep working.
+from panel.services.xui_compat import (  # noqa: F401
+    CERTIFIED_FAMILIES,
+    COMPAT_CACHE,
+    PROFILE_BASELINE_V3,
+    PROFILE_XUI_3_7,
+    PROFILE_XUI_3_8,
+    PanelCompatibility,
+    PanelCompatibilityProfile,
+    PanelVersion,
+    cached_compatibility,
+    compat_with_warning,
+    detect_lifecycle_automation,
+    invalidate_compatibility,
+    normalize_version,
+    preserved_limit_hwid,
+    resolve_compatibility,
+    select_profile,
 )
 
 def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, app_base_url=None, online_index=None):
@@ -2809,8 +2838,9 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
     _final_port = server.sub_port if server.sub_port else _parsed_host.port
     _port_str = f":{_final_port}" if _final_port else ""
     _base_sub = f"{_scheme}://{_hostname}{_port_str}"
-    _s_path = (server.sub_path or '').strip('/')
-    _j_path = (server.json_path or '').strip('/')
+    _subscription_paths = resolve_subscription_paths(server)
+    _s_path = _subscription_paths['sub_path'].strip('/')
+    _j_path = _subscription_paths['sub_json_path'].strip('/')
     if app_base_url:
         _app_base = get_public_base_url(app_base_url)
     else:
@@ -2824,6 +2854,10 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
     # Count each person ONCE for all aggregate stats so totals aren't inflated.
     _is_v3 = server_is_v3(server)
     _v3_seen_emails = set()
+    _compat = cached_compatibility(server.id)
+    _detect_panel_lifecycle = bool(
+        _compat is not None and _compat.profile.panel_lifecycle_automation)
+    _lifecycle_automation_seen = False
 
     for inbound in inbounds:
         try:
@@ -2940,6 +2974,13 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 except Exception:
                     is_online = False
 
+                lifecycle_finding = (
+                    detect_lifecycle_automation(client)
+                    if _detect_panel_lifecycle else None
+                )
+                if lifecycle_finding:
+                    _lifecycle_automation_seen = True
+
                 client_data = {
                     "email": email,
                     "comment": (client.get('comment') or '').strip(),
@@ -2956,6 +2997,11 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                     "service_state_label": account_state.get('label', 'فعاله' if panel_lang == 'fa' else 'Active'),
                     "service_state_emoji": account_state.get('emoji', '✅'),
                     "service_state_tag": account_state.get('tag', 'ok'),
+                    "managed_state": (
+                        lifecycle_finding.get('managed_state')
+                        if lifecycle_finding else 'fully_managed'
+                    ),
+                    "lifecycle_automation": lifecycle_finding,
                     "expiryTime": expiry_info['text'],
                     "expiryTimestamp": expiry_raw,
                     "expiryType": expiry_info['type'],
@@ -3027,6 +3073,14 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
         except Exception as e:
             continue
             
+    if _compat is not None and _compat.profile.panel_lifecycle_automation:
+        from panel.services import xui_compat as _xui_compat
+        _xui_compat.set_compatibility_warning(
+            server.id,
+            _xui_compat.WARN_LIFECYCLE_AUTOMATION,
+            active=_lifecycle_automation_seen,
+        )
+
     stats["total_inbounds"] = len(processed)
     stats["total_upload"] = format_bytes(stats["upload_raw"])
     stats["total_download"] = format_bytes(stats["download_raw"])
@@ -3340,6 +3394,16 @@ def fetch_worker(server_dict):
             inbounds, fetch_error, detected_type = fetch_inbounds(session_obj, server_obj.host, server_obj.panel_type)
             online_index, _ = fetch_onlines(session_obj, server_obj.host, server_obj.panel_type)
             status_payload, status_error, _status_type = fetch_server_status(session_obj, server_obj.host, server_obj.panel_type)
+            # Resolve the panel's version profile from the status we already read,
+            # so compatibility detection adds no panel request of its own.
+            resolve_server_compatibility(server_obj, status_payload=status_payload)
+            # Warm the bounded settings metadata cache while already off the
+            # public request path. 3.8 link builders consume the authoritative
+            # subPath/subJsonPath/subClashPath from this read.
+            fetch_subscription_profile_metadata(
+                server_obj,
+                session_obj=session_obj,
+            )
 
         # Enrich status_payload with online_count from the onlines endpoint
         # (the /status API does NOT return online_count; it comes from /onlines)
