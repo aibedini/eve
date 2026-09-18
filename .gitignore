@@ -81,6 +81,10 @@ uv.lock
 .mypy_cache/
 graphify-out/
 
+# Local Spec Kit / agent session artifacts (canonical specifications live in specs/)
+.dsh/
+.specify/
+
 # Codebase Memory output: the artifact names the machine-local checkout path in its
 # `project` field and the graph database is an 8 MB binary, so both are local caches,
 # not shared sources. Every developer builds their own index (see

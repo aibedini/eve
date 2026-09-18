@@ -1,278 +1,212 @@
-# 🛡️ Eve — X-UI Manager
+# Eve — Enterprise X-UI Operations Platform
 
-> A professional, multi-tenant control panel that unifies **unlimited X-UI VPN servers** into one dashboard — with a full **reseller billing system**, **SMS & WhatsApp automation**, financial reporting, and self-healing operations. Works with **Sanaei 3X-UI** and **Alireza X-UI** panels.
+Eve is a multi-tenant control plane for teams operating Sanaei 3X-UI and
+Alireza X-UI infrastructure at scale. It unifies panel management, client
+lifecycle operations, reseller commerce, customer messaging, observability,
+and secure day-two operations in one responsive dashboard.
 
-🌐 Built for Iranian operators: **Jalali (Persian) calendar** and **Asia/Tehran** time throughout. 🇮🇷
+[![Tests](https://github.com/aibedini/eve/actions/workflows/tests.yml/badge.svg)](https://github.com/aibedini/eve/actions/workflows/tests.yml)
+[![Security](https://github.com/aibedini/eve/actions/workflows/security.yml/badge.svg)](https://github.com/aibedini/eve/actions/workflows/security.yml)
+[![Docker](https://github.com/aibedini/eve/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/aibedini/eve/actions/workflows/docker-publish.yml)
 
----
+> Reliable, auditable VPN operations with first-class Persian/Jalali
+> localization and Asia/Tehran timezone support.
 
-## ✨ Why Eve?
+## What Eve does
 
-- 🧩 **One dashboard for every panel** — attach any number of Sanaei/Alireza servers; panel type, sub/JSON paths and protocols are **auto-detected**.
-- 💰 **A complete reseller economy** — prepaid wallets, packages, custom tariffs, ownership rules, and a full **financial statement** per reseller.
-- 📲 **Hands-off customer messaging** — **SMS & WhatsApp automation** for create, renew, low-volume, near-expiry, expired and volume-ended events.
-- 🩺 **Runs itself** — a **self-healing health watchdog**, Redis-shared background workers, and automatic DB migrations.
-- 📱 **Mobile-first** — every page, modal and table is responsive, with a unified dark theme.
+- Operates unlimited Sanaei 3X-UI and Alireza X-UI panels from one dashboard.
+- Manages servers, inbounds, clients, subscriptions, traffic, QR links, and
+  safe client mutations.
+- Provides reseller wallets, packages, custom tariffs, ownership rules,
+  server visibility, receipts, and financial statements.
+- Automates SMS, WhatsApp, and Telegram purchase, trial, support, and delivery
+  workflows with cooldowns, quiet hours, pacing, and audit history.
+- Monitors panel reachability, usage, workers, database, disk, static assets,
+  and operational drift through dashboards, SSE, and Doctor diagnostics.
+- Runs on connected, restricted, or offline networks with native or Docker
+  deployment paths.
 
----
+## Enterprise capabilities
 
-## 📚 Documentation
+### X-UI compatibility and client lifecycle
 
-The full documentation map is [`docs/README.md`](docs/README.md). The most useful
-entry points:
+- Version-gated 3.7.x and 3.8.x compatibility profiles; older, future, and
+  unknown versions remain on a safe baseline.
+- Typed authentication outcomes distinguish supported, missing route, invalid
+  credentials, insufficient scope, transport, and invalid responses.
+- Authoritative `limitHwid` preservation on every unrelated client mutation;
+  failed reads fail closed instead of clearing an operator setting.
+- Contract-protected preservation of reset, traffic, keep-alive, flow,
+  subscription, comment, enable, expiry, and quota fields.
+- Panel-side lifecycle automation is detected and surfaced as
+  `partially_managed`; Eve never invents lifecycle events.
+- Certified 3.8 subscription paths are authoritative, with explicit fallback
+  visibility when panel settings are unavailable.
 
-- [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md) — day-two operations: health checks, retention, audit, performance evidence.
-- [`docs/security/THREAT_MODEL.md`](docs/security/THREAT_MODEL.md) and [`SECURITY.md`](SECURITY.md) — security model and disclosure policy.
-- [`docs/performance/BASELINE.md`](docs/performance/BASELINE.md) — what was measured and how to reproduce it.
-- [`docs/RELEASE_SECURITY.md`](docs/RELEASE_SECURITY.md) — the release checklist and image attestation.
+### Multi-tenant commerce
 
----
+- Prepaid wallets, package marketplace, day/GB custom pricing, gift volume,
+  frozen transaction pricing, and durable wallet ledger.
+- Ownership claims, reseller scopes, allowed-server maps, superadmin controls,
+  deposits, receipts, cards, CSV exports, and Jalali statements.
 
-## 🚀 Installation (One-Command)
+### Messaging and engagement
 
-Run on your Ubuntu/Debian server:
+- SMS through GMweb; WhatsApp through Baileys/OpenWA-compatible gateways.
+- Telegram bots with purchase, trial, emergency access, membership gates,
+  receipts, support, and reseller flows.
+- Event and state-based messaging for creation, renewal, low volume, near
+  expiry, expiry, and volume exhaustion.
+- Shared cooldowns, quiet hours, age cutoffs, opt-out tags, rate-limit backoff,
+  circuit breakers, delivery queues, and searchable send logs.
+- Royalty and re-engagement workflows for inactive customers.
+
+### Security, reliability, and observability
+
+- Rate-limited authentication, secure cookies, strong password hashing,
+  MFA/WebAuthn, RBAC, and scoped reseller authorization.
+- Encrypted operational secrets, encrypted Telegram backups, TLS enforcement,
+  hardened uploads, private-key handling, audit chains, and retention policy.
+- Redis-backed snapshots, delta synchronization, bounded polling, refresh
+  queues, usage rollups, traffic checks, and worker health monitoring.
+- File-locked idempotent migration runner; all new schema changes use Alembic.
+- RAM-aware Gunicorn workers, dedicated background processes, compressed
+  responses, offline bundles, SBOM, and provenance attestations.
+
+## Architecture
+
+```text
+ Browser / Telegram / API clients
+              │
+              ▼
+ Flask routes + auth guards (25 domain blueprints)
+              │
+              ▼
+ Services and adapters: billing, ownership, lifecycle,
+ subscriptions, backup, BNQO, and X-UI compatibility
+              │                 │
+              ▼                 ▼
+ SQLAlchemy models        Sanaei / Alireza X-UI panels
+ core · finance · ops · telegram
+              │
+              ▼
+ PostgreSQL · Redis · encrypted runtime filesystem
+
+ Background plane: refresh · messaging · schedulers · usage · watchdog
+ Control plane:    auth · RBAC · CRUD · finance · audit · subscriptions
+```
+
+The application bootstrap and compatibility surface remain in `app.py`. New
+domain code follows one-way dependency flow inside `panel/`:
+
+```text
+panel/
+├── core/       locks, Redis, phones, snapshots, transport primitives
+├── models/     core, finance, telegram, and operations models
+├── adapters/   external integrations, including adapters/xui.py
+├── services/   billing, ownership, subscriptions, lifecycle, backup, BNQO
+├── routes/     authenticated domain blueprints
+├── jobs/       refresh, messaging, schedulers, usage, and BNQO workers
+└── migrate.py  serialized schema migration and seed runner
+```
+
+## Runtime and deployment
+
+Production separates web requests from background work: Gunicorn serves the
+control plane, Redis coordinates snapshots and workers, PostgreSQL stores
+durable state, and dedicated schedulers perform refresh, rollups, watchdog,
+backup, and messaging jobs. Single-process development mode is also supported.
+
+### Ubuntu/Debian installer
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/aibedini/eve/main/setup.sh)
 ```
 
-The installer self-updates, verifies and installs requirements, and brings the service up behind nginx + gunicorn.
+Review the installer and configure production secrets before use.
 
-### 🐳 Docker / Offline Deployment
-
-For production or restricted/offline servers, use Docker. GitHub Actions builds the image and publishes it to GHCR, so the **target server needs no GitHub, PyPI, or apt access** after the images are transferred. See [DOCKER.md](DOCKER.md).
-
-Build a transferable bundle on an online server:
+### Docker and offline bundles
 
 ```bash
 bash scripts/docker/build-offline-bundle.sh
 ```
 
----
+See [DOCKER.md](DOCKER.md) and [OFFLINE_INSTALL.md](OFFLINE_INSTALL.md) for
+connected, restricted, and transferable image workflows.
 
-## 🌟 Features
+### Development
 
-### 🔐 Enterprise Security
+Requirements: Python 3.11+, PostgreSQL, and Redis for the production split.
 
-- **Brute-force protection**: 10 login attempts per minute, rate-limited.
-- **Secure sessions**: `HTTPONLY` + `SECURE` + `SAMESITE` production cookies.
-- **Strong password hashing**: Werkzeug's versioned password-hash format.
-- **Encrypted operational secrets**: versioned envelopes backed by deployment keys.
-- **Private vulnerability handling**: see [`SECURITY.md`](SECURITY.md).
-
-### 📊 Unified Operations Dashboard
-
-- **Unlimited servers**: attach any number of Sanaei 3X-UI / Alireza X-UI panels.
-- **Auto-detection**: panel type, subscription/JSON paths, and protocols detected for you.
-- **Actionable grid**: toggle clients, expand QR codes, assign owners, and inspect traffic from one table.
-- **Instant global search & auto-refresh**: find any client in milliseconds, stats stay synced on a timer.
-- **Live health visibility**: inline error toasts for unreachable panels + per-server failure notes.
-
-### 💼 Reseller Economy, Wallets & Billing
-
-- **Prepaid wallets**: a live balance pill follows the reseller everywhere in the UI.
-- **Package marketplace**: define bundles (days / GB / price) and let resellers buy or renew in one click.
-- **Custom tariffs**: with no package selected, pricing falls back to configurable cost-per-day and cost-per-GB tiers.
-- **Guarded paid flows**: renew/reset show the deduction before charging; costs are enforced **server-side**.
-- **Ownership & allowed servers**: assign clients to resellers and restrict which servers each one can see or charge.
-
-### 🧾 Finance & Reseller Statements
-
-- **Per-reseller statement**: pick a reseller + a Jalali date range and see exactly how many accounts they **created / renewed / reset**.
-- **"Should-deposit" accounting**: total spent vs. actually deposited, with a clear **owes / credit balance**.
-- **Drill-down by package**: expand any package to list every user, their GB/days, cost, and a 🎁 **gift** flag.
-- **Breakdowns & export**: by package and by server, with **CSV export** and a full transaction ledger.
-
-### 📲 SMS Automation (GMweb gateway)
-
-- **Event-driven**: auto-send on **account creation** and **renewal**, using your own templates.
-- **State-based reminders**: a periodic scan messages each non-reseller account on ⚠️ low volume, ⏳ near expiry, ⛔ expired, and 🚫 volume-ended.
-- **Smart cooldowns**: a **per-state resend gap (hours), shared across SMS + WhatsApp**, that survives restarts and **resets on renewal**.
-- **🌙 Quiet hours (Asia/Tehran)**: pause the reminder scan overnight — while **create/renew confirmations still send immediately**.
-- **Age cutoffs**: stop nagging long-expired or long-ended accounts after a configurable number of days.
-- **Opt-out tags**: a `#nosms` / `#nopm` tag in a client's comment is always honored (auto-toggled when you disable/enable a client).
-- **Send queue & log**: live progress, priority ordering, rate-limit / 429 back-off, and a **paginated, Jalali-timestamped** send log.
-
-### 💬 WhatsApp Automation
-
-- **Welcome / renew / pre-expiry** triggers via a Baileys/OpenWA gateway.
-- **Warm-up & pacing** controls, daily limits, and a circuit breaker for safe sending.
-- **Region-aware**: cleanly disabled when the panel is deployed inside Iran.
-
-### 📡 Monitor & 👑 Royalty
-
-- **Monitor**: per-state message templates and live service-state alerts (soon / low / expired / ended) that the SMS & WhatsApp automation reuse.
-- **Royalty**: re-engagement messaging for idle accounts that haven't connected yet.
-
-### 👥 Client Lifecycle
-
-- **Purchase / renew**: a modern modal for package or fully custom plans, including "start after first use" and **gift volume**.
-- **Reset traffic**: billed server-side; ownership rules stop resellers touching foreign clients.
-- **Link delivery**: subscription, JSON, direct, and dashboard QR codes optimized for mobile scanning.
-
-### 🔒 SSL, 🩺 Health & 📈 Traffic
-
-- **SSL toolkit**: sync from LetsEncrypt, export a bundle, upload it to another server, and apply to nginx — **HTTPS instantly**.
-- **Self-healing watchdog**: monitors DB, servers, disk and static files every 60s, with a logged action trail.
-- **Traffic Check**: per-server / per-inbound usage over Today / 7 / 30 days, from usage snapshots.
-- **Supported Apps manager**: curate the V2Ray client apps shown on the subscription page.
-
-### 📱 Responsive Experience
-
-- **Touch-ready modals** and **adaptive grids** that collapse gracefully from desktop to phone.
-- **Collapsible sidebar** and a **unified dark theme** with glassmorphism cards and status pills.
-
-### ⚙️ Operations & Reliability
-
-- **Memory-aware runtime**: RAM-sized Gunicorn web workers read per-server Redis snapshots while refresh, scheduling, and automations run in a dedicated background process.
-- **Zero-downtime schema updates**: columns/tables are auto-migrated on startup.
-- **Compressed responses**: gzip/brotli to keep large payloads fast.
-
----
-
-## 🛠️ Manual Installation
-
-### Requirements
-
-- 🐍 Python 3.11+
-- 🐘 PostgreSQL
-- 🧰 Redis (required for the production web/background split; optional only for single-process development)
-
-### Setup
-
-1. **Clone**
 ```bash
 git clone https://github.com/aibedini/eve.git
-cd eve-xui-manager
-```
-
-2. **Install dependencies**
-```bash
+cd eve
+python -m venv .venv
+source .venv/bin/activate              # Linux/macOS
 pip install --require-hashes -r requirements.lock
-```
-
-3. **Environment variables**
-```bash
-export DATABASE_URL="postgresql://user:password@localhost/dbname"
-export SESSION_SECRET="your-secret-key"
-export INITIAL_ADMIN_PASSWORD="your-admin-password"
-```
-
-4. **Run**
-```bash
+export DATABASE_URL='postgresql://user:password@localhost/eve'
+export SESSION_SECRET='replace-with-a-random-secret'
+export INITIAL_ADMIN_PASSWORD='replace-before-first-login'
 python app.py
 ```
 
-The dashboard is available at `http://localhost:5000`.
+Never commit `.env`, databases, runtime data, credentials, private keys,
+backups, logs, virtual environments, or local agent/cache output.
 
----
+## Configuration
 
-## 🔑 Default Credentials
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SESSION_SECRET` | Flask session signing secret |
+| `INITIAL_ADMIN_PASSWORD` | First administrator password |
+| `SERVER_PASSWORD_KEY` | Encryption key for stored panel secrets |
+| `EVE_BACKUP_KEY` | Encryption key for Telegram backup files |
+| `REDIS_URL` | Shared snapshots and background-job coordination |
 
-- **Username**: `admin`
-- **Password**: from `INITIAL_ADMIN_PASSWORD` (default: `admin`)
-- ⚠️ **Change the password immediately after first login!**
+See the [operations runbook](docs/OPERATIONS_RUNBOOK.md), [security architecture](docs/security/ARCHITECTURE.md),
+and [documentation index](docs/README.md) for the complete configuration contract.
 
----
+## Quality gates
 
-## ⚙️ Configuration
-
-### Environment Variables
-
-**Required**
-- `DATABASE_URL` — PostgreSQL connection string
-
-**Security**
-- `SESSION_SECRET` — Flask session secret key
-- `SERVER_PASSWORD_KEY` — Fernet key for stored application secrets
-- `EVE_BACKUP_KEY` — AES-256 key for encrypted Telegram backup files
-- `INITIAL_ADMIN_PASSWORD` — initial admin password (default: `admin`)
-
-**Optional**
-- `REDIS_URL` — shared per-server snapshots and background-job queue
-- `XUI_HOST` / `XUI_USERNAME` / `XUI_PASSWORD` — default X-UI panel host & credentials
-
-### Per-Server Settings
-
-- **Name**, **Host**, **Credentials**
-- **Panel Type**: Auto-detect / Sanaei 3X-UI / Alireza X-UI
-- **Subscription Path** (default `/sub/`), **JSON Path** (default `/json/`), **Subscription Port** (optional)
-
----
-
-## 🗂️ Project Structure
-
-```
-.
-├── app.py                  # Thin Flask app core: config, security, shared helpers, blueprint registration
-├── panel/                  # Modular application package
-│   ├── extensions.py       # db (SQLAlchemy) + limiter, bound via init_app
-│   ├── core/               # App-independent helpers (redis cache, phone normalization)
-│   ├── models/             # All SQLAlchemy models, split by domain (core/finance/telegram/ops)
-│   ├── adapters/           # External systems (xui.py — 3x-ui panel API client)
-│   ├── services/           # Business logic (billing, subscription, ownership, backup)
-│   ├── routes/             # 25 Flask blueprints by domain (auth, pages, clients, finance, telegram, ...)
-│   ├── jobs/               # Background work: refresh pipeline, messaging workers, schedulers/watchdogs
-│   └── migrate.py          # Single, file-locked schema migration runner
-├── alembic/                # Alembic migrations (baseline adopts existing DBs; new changes = new revisions)
-├── maintenance.py          # Post-update maintenance runner (systemd eve-maintenance.service)
-├── telegram_bot_worker.py  # Interactive Telegram bot process
-├── setup.sh                # One-line installer for Ubuntu/Debian
-├── requirements.txt        # Direct dependency policy (lock input)
-├── requirements.lock       # Fully pinned, hashed runtime dependencies
-├── pyproject.toml          # Python project metadata
-├── templates/              # Jinja2 views
-│   ├── base.html           # Layout + sidebar + wallet pill
-│   ├── dashboard.html      # Main dashboard, client modals, JS helpers
-│   ├── monitor.html        # Service-state monitor + message templates
-│   ├── royalty.html        # Re-engagement messaging
-│   ├── finance.html        # Finance overview + reseller statement
-│   ├── transactions.html   # Wallet ledger
-│   ├── receipts.html       # Deposit receipts & approval
-│   ├── bank_cards.html     # Destination cards
-│   ├── packages.html       # Packages & base tariffs
-│   ├── reseller_packages.html
-│   ├── servers.html        # Server CRUD UI
-│   ├── admins.html         # Admin/reseller management (superadmin)
-│   ├── settings.html       # SMS/WhatsApp automation, SSL, health, traffic, apps
-│   ├── sub_manager.html    # Supported-apps / subscription manager
-│   ├── subscription.html   # Public subscription landing page
-│   ├── client_portal.html  # End-user portal
-│   └── error.html          # Friendly error surface
-├── static/                 # Unified dark theme + responsive styles, assets
-├── DOCKER.md               # Docker and restricted/offline deployment
-├── OFFLINE_INSTALL.md      # Native offline installation guide
-├── CHANGELOG.md / RELEASE_NOTES.md
-└── README.md               # You are here
+```bash
+python -m pytest -q
+python scripts/release_check.py --profile ci
+python scripts/ui_design_audit.py --check
+python -m pytest -q tests/test_docs_index.py
+git diff --check
 ```
 
----
+CI also runs focused unit tests, latency SLOs, mutation-scale O(1) proofs,
+full integration tests, CodeQL, forbidden-artifact checks, Gitleaks,
+pip-audit, Trivy, Docker release guards, SBOM, and provenance attestations.
 
-## 🌐 Browser Support
+### Compatibility status
 
-- Chrome / Edge: ✅ latest
-- Firefox: ✅ latest
-- Safari: ✅ latest
-- Mobile: ✅ iOS Safari, Chrome Android
+- **3.7 implementation:** complete.
+- **3.7 automated/contract compatibility:** required and continuously tested.
+- **3.7 real-panel acceptance:** waived by product decision for this release;
+  intentionally not run.
+- **3.8 compatibility:** automated coverage plus controlled real-panel
+  acceptance.
 
----
+## Documentation
 
-## 🤝 Contributing
+- [Documentation index](docs/README.md)
+- [Operations runbook](docs/OPERATIONS_RUNBOOK.md)
+- [X-UI API and compatibility contract](3XUI_V3_API.md)
+- [BNQO architecture](docs/bnqo/ARCHITECTURE.md)
+- [Threat model](docs/security/THREAT_MODEL.md)
+- [Release security](docs/RELEASE_SECURITY.md)
+- [Performance evidence](docs/performance/BASELINE.md)
+- [Changelog](CHANGELOG.md)
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+## Contributing and support
 
-## 🆘 Support
+Create a focused branch from `main`, keep domain dependencies one-way, add
+regression tests for behavior and compatibility contracts, run every quality
+gate, and open a pull request with security and operational impact documented.
 
-For issues and feature requests, please open an issue on GitHub.
-
-## 🗒️ Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
-
----
-
-**Made with ❤️ for VPN administrators worldwide**
+Report vulnerabilities through [SECURITY.md](SECURITY.md), not public issues.
+For support and feature requests, open a GitHub issue with sanitized logs and
+reproduction steps.
