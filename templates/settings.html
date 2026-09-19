@@ -6952,6 +6952,745 @@
         }
     }
 
+    function refreshOverview() {
+        /* One explicit refresh action for the tab. The two requests stay separate so a
+           memory failure cannot blank the overview, and nothing here polls: a memory
+           gauge that redraws every few seconds invites reading noise as a leak. */
+        loadOverview();
+        loadMemory();
+    }
+
+    /* ------------------------------------------------------------------
+       Memory attribution (Settings -> Overview).
+
+       "3.45 GB of 3.78 GB is used - by what?" has three tempting wrong answers,
+       and this section refuses to give any of them, because each is a known way
+       to misread exactly these numbers:
+
+         * page cache counted as application usage. The kernel reclaims cache
+           under pressure, so used/total (total - MemAvailable) is shown next to
+           the cache and the cache is labelled as reclaimable;
+         * RSS summed over EVE's processes, which bills the interpreter and the
+           shared libraries once per process. The aggregate is PSS, and a role
+           whose PSS is really an RSS fallback says so;
+         * a section the host could not read printed as 0 B, which reads as
+           "nothing there" instead of "not measured". An unavailable section
+           shows the backend's reason and no numbers at all.
+
+       No threshold and no health word is computed here: both come from
+       host.health and health.state, which the backend owns.
+       ------------------------------------------------------------------ */
+
+    /* Every new string lives in this one object: the English column and the
+       Persian column sit side by side so the two cannot drift apart. memT() falls
+       back to English for a missing Persian key, so an untranslated string shows
+       as English instead of "undefined". */
+    const MEM_LANG = {{ ('fa' if panel_lang == 'fa' else 'en')|tojson }};
+    const MEM_CAN_ANALYZE = {{ (is_superadmin|default(false))|tojson }};
+    const MEM_TEXT = {
+        en: {
+            'title': 'Memory',
+            'subtitle': 'Where the host RAM actually went, and what is reclaimable.',
+            'host': 'Host Memory',
+            'usedOfTotal': 'Used / total (total minus MemAvailable)',
+            'available': 'Available',
+            'pageCache': 'Page cache',
+            'cacheNote': 'Page cache is reclaimable file cache: the kernel frees it under pressure. It is not application usage and is not part of Used.',
+            'swapUsed': 'Swap used / total',
+            'healthOk': 'ok',
+            'healthWarning': 'warning',
+            'healthCritical': 'critical',
+            'healthUnknown': 'unknown',
+            'eve': 'EVE Processes',
+            'evePss': 'EVE (PSS) - aggregate, not a single process',
+            'evePssWithXray': 'EVE + managed Xray',
+            'pssNote': 'The EVE figure is a sum of PSS, so the interpreter and the shared libraries are counted once, not once per process.',
+            'roles': 'Roles',
+            'processes': 'Processes',
+            'otherProcesses': 'Other processes (not EVE)',
+            'memoryHealth': 'Memory Health',
+            'healthOkNote': 'The backend reports no memory pressure.',
+            'breakdown': 'Memory Breakdown',
+            'rolesGroup': 'By role',
+            'notProcessGroup': 'Not a process',
+            'snapshotGroup': 'In-process snapshot',
+            'component': 'Component',
+            'componentRole': 'Component / role',
+            'rss': 'RSS',
+            'pss': 'PSS',
+            'uss': 'USS (private)',
+            'threads': 'Threads',
+            'uptime': 'Uptime',
+            'approximated': 'PSS approximated by RSS',
+            'sizeOrCount': 'Size / count',
+            'detail': 'Detail',
+            'redisSnapshot': 'Redis snapshot (compressed)',
+            'serverKeys': 'server keys',
+            'manifest': 'manifest',
+            'version': 'version',
+            'caches': 'Caches',
+            'entry': 'entry',
+            'entries': 'entries',
+            'cacheXuiSessions': 'X-UI sessions',
+            'cacheXuiCapabilities': 'X-UI capabilities',
+            'cacheRefreshJobs': 'Refresh jobs',
+            'cacheBulkJobs': 'Bulk jobs',
+            'cacheSubscription': 'Subscription cache',
+            'cacheOwnership': 'Ownership cache',
+            'redisNote': 'Redis keeps the published snapshot compressed; the size is what those keys occupy, not the decompressed Python objects.',
+            'cachesNote': 'Caches are reported as entry counts: the size of a cache is not the retained memory of what it points at.',
+            'servers': 'Servers',
+            'inbounds': 'Inbounds',
+            'clientRows': 'Client rows',
+            'uniqueClients': 'Unique clients',
+            'duplicateRows': 'Duplicate rows',
+            'duplicationRatio': 'Duplication ratio',
+            'rowsWithRawClient': 'Rows with raw_client',
+            'rowsWithFormatted': 'Rows with formatted strings',
+            'lastUpdate': 'Last update',
+            'duplicationNote': 'Duplicate rows are the same account appearing once per assigned inbound (a v3 characteristic), and raw_client is the client config retained twice per row. They are not separate clients.',
+            'trend': 'Trend',
+            'trendSub': 'Current EVE (PSS)',
+            'peak': 'Peak',
+            'change': 'Change',
+            'perHour': 'Change per hour',
+            'growing': 'growing',
+            'stable': 'stable',
+            'shrinking': 'shrinking',
+            'samples': 'Samples',
+            'window': 'Window',
+            'minutes': 'min',
+            'noSamples': 'No trend samples in this window yet, so there is no direction to report.',
+            'trendNote': 'A steady high value after a full dashboard load is the retained snapshot, not a leak; a value that climbs while the client count is flat is a leak.',
+            'notMeasured': 'not measured',
+            'unavailable': 'unavailable',
+            'ago': 'ago',
+            'loading': 'Loading...',
+            'loadFailed': 'The memory report could not be loaded.',
+            'noRoles': 'The payload carries no role data.',
+            'analyze': 'Analyze Python Memory',
+            'analyzing': 'Analyzing...',
+            'analyzeHint': 'One-off tracemalloc sample in this worker; it never runs on page load.',
+            'elapsed': 'elapsed',
+            'truncated': 'The sample hit its time limit and was cut short, so the list is partial.',
+            'analyzeDenied': 'This action needs a fresh admin confirmation. Re-authenticate and try again.',
+            'analyzeFailed': 'The memory analysis failed.',
+            'noEntries': 'No allocation entries were returned.',
+            'file': 'File',
+            'line': 'Line',
+            'size': 'Size',
+            'blocks': 'Blocks',
+            'roleWeb': 'web',
+            'roleBackground': 'background',
+            'roleTelegramBot': 'telegram bot',
+            'roleTelegramEgress': 'telegram egress',
+            'rolePulse': 'pulse',
+            'roleXray': 'xray'
+        },
+        fa: {{ ({
+            'title': 'حافظه',
+            'subtitle': 'حافظه میزبان واقعاً کجا رفته و چه مقدار آن آزادشدنی است.',
+            'host': 'حافظه میزبان',
+            'usedOfTotal': 'مصرف‌شده / کل (کل منهای MemAvailable)',
+            'available': 'در دسترس',
+            'pageCache': 'کش صفحه',
+            'cacheNote': 'کش صفحه، کش فایلِ آزادشدنی است؛ کرنل زیر فشار آن را آزاد می‌کند. مصرف برنامه نیست و در «مصرف‌شده» حساب نمی‌شود.',
+            'swapUsed': 'سوآپ مصرف‌شده / کل',
+            'healthOk': 'سالم',
+            'healthWarning': 'هشدار',
+            'healthCritical': 'بحرانی',
+            'healthUnknown': 'نامشخص',
+            'eve': 'فرایندهای EVE',
+            'evePss': 'EVE (PSS) — جمع کل، نه یک فرایند',
+            'evePssWithXray': 'EVE + Xray مدیریت‌شده',
+            'pssNote': 'رقم EVE جمع PSS است؛ بنابراین مفسر و کتابخانه‌های مشترک یک‌بار شمرده می‌شوند، نه یک‌بار برای هر فرایند.',
+            'roles': 'نقش‌ها',
+            'processes': 'فرایندها',
+            'otherProcesses': 'فرایندهای دیگر (غیر EVE)',
+            'memoryHealth': 'سلامت حافظه',
+            'healthOkNote': 'بک‌اند هیچ فشاری روی حافظه گزارش نکرده است.',
+            'breakdown': 'تفکیک حافظه',
+            'rolesGroup': 'بر پایه نقش',
+            'notProcessGroup': 'غیرفرایندی',
+            'snapshotGroup': 'اسنپ‌شات درون‌فرایند',
+            'component': 'مؤلفه',
+            'componentRole': 'مؤلفه / نقش',
+            'rss': 'RSS',
+            'pss': 'PSS',
+            'uss': 'USS (خصوصی)',
+            'threads': 'نخ‌ها',
+            'uptime': 'زمان کارکرد',
+            'approximated': 'PSS تقریبی از روی RSS',
+            'sizeOrCount': 'حجم / تعداد',
+            'detail': 'جزئیات',
+            'redisSnapshot': 'اسنپ‌شات Redis (فشرده)',
+            'serverKeys': 'کلید سرور',
+            'manifest': 'مانیفست',
+            'version': 'نسخه',
+            'caches': 'کش‌ها',
+            'entry': 'ورودی',
+            'entries': 'ورودی',
+            'cacheXuiSessions': 'نشست‌های X-UI',
+            'cacheXuiCapabilities': 'قابلیت‌های X-UI',
+            'cacheRefreshJobs': 'کارهای به‌روزرسانی',
+            'cacheBulkJobs': 'کارهای گروهی',
+            'cacheSubscription': 'کش لینک اشتراک',
+            'cacheOwnership': 'کش مالکیت',
+            'redisNote': 'Redis اسنپ‌شات منتشرشده را فشرده نگه می‌دارد؛ عدد بالا حجم همان کلیدهاست، نه اندازه شیءهای پایتون پس از بازگشایی.',
+            'cachesNote': 'کش‌ها با تعداد ورودی گزارش می‌شوند؛ حجم یک کش، حافظه نگه‌داشته‌شده‌ی مقصدش نیست.',
+            'servers': 'سرورها',
+            'inbounds': 'اینباندها',
+            'clientRows': 'ردیف‌های کلاینت',
+            'uniqueClients': 'کلاینت‌های یکتا',
+            'duplicateRows': 'ردیف‌های تکراری',
+            'duplicationRatio': 'نسبت تکرار',
+            'rowsWithRawClient': 'ردیف‌های دارای raw_client',
+            'rowsWithFormatted': 'ردیف‌های دارای رشته‌های formatted',
+            'lastUpdate': 'آخرین به‌روزرسانی',
+            'duplicationNote': 'ردیف‌های تکراری همان حساب‌اند که یک‌بار برای هر اینباند تخصیص‌یافته ظاهر می‌شوند (ویژگی نسخه v3)، و raw_client همان پیکربندی کلاینت است که در هر ردیف دو بار نگه داشته می‌شود. کلاینت جداگانه نیستند.',
+            'trend': 'روند',
+            'trendSub': 'EVE (PSS) کنونی',
+            'peak': 'اوج',
+            'change': 'تغییر',
+            'perHour': 'تغییر در ساعت',
+            'growing': 'رشدی',
+            'stable': 'پایدار',
+            'shrinking': 'کاهنده',
+            'samples': 'نمونه‌ها',
+            'window': 'بازه',
+            'minutes': 'دقیقه',
+            'noSamples': 'هنوز نمونه‌ای در این بازه ثبت نشده، پس جهتی برای گزارش نیست.',
+            'trendNote': 'مقدار بالا و ثابت پس از بارگذاری کامل داشبورد، اسنپ‌شات نگه‌داشته‌شده است نه نشتی؛ مقداری که با ثابت بودن تعداد کلاینت بالا می‌رود، نشتی است.',
+            'notMeasured': 'اندازه‌گیری‌نشده',
+            'unavailable': 'در دسترس نیست',
+            'ago': 'پیش',
+            'loading': 'در حال بارگذاری...',
+            'loadFailed': 'گزارش حافظه بارگذاری نشد.',
+            'noRoles': 'داده‌ای از نقش‌ها در پاسخ نیست.',
+            'analyze': 'تحلیل حافظه پایتون',
+            'analyzing': 'در حال تحلیل...',
+            'analyzeHint': 'یک نمونه‌برداری یک‌باره tracemalloc در همین ورکر؛ هرگز در بارگذاری صفحه اجرا نمی‌شود.',
+            'elapsed': 'زمان اجرا',
+            'truncated': 'نمونه‌برداری به محدودیت زمانی خورد و ناقص ماند؛ فهرست کامل نیست.',
+            'analyzeDenied': 'این عملیات به تأیید تازه مدیر نیاز دارد. دوباره وارد شوید و تلاش کنید.',
+            'analyzeFailed': 'تحلیل حافظه ناموفق بود.',
+            'noEntries': 'هیچ ورودی تخصیصی برگردانده نشد.',
+            'file': 'فایل',
+            'line': 'خط',
+            'size': 'حجم',
+            'blocks': 'بلوک',
+            'roleWeb': 'وب',
+            'roleBackground': 'پس‌زمینه',
+            'roleTelegramBot': 'ربات تلگرام',
+            'roleTelegramEgress': 'خروجی تلگرام',
+            'rolePulse': 'Pulse',
+            'roleXray': 'Xray'
+        })|tojson }}
+    };
+
+    const MEM_ROLE_ORDER = ['web', 'background', 'telegram-bot', 'telegram-egress', 'pulse', 'xray'];
+    const MEM_ROLE_LABELS = {
+        'web': 'roleWeb',
+        'background': 'roleBackground',
+        'telegram-bot': 'roleTelegramBot',
+        'telegram-egress': 'roleTelegramEgress',
+        'pulse': 'rolePulse',
+        'xray': 'roleXray'
+    };
+    const MEM_CACHE_ORDER = ['xui_sessions', 'xui_capabilities', 'refresh_jobs',
+                             'bulk_jobs', 'subscription', 'ownership'];
+    const MEM_CACHE_LABELS = {
+        xui_sessions: 'cacheXuiSessions',
+        xui_capabilities: 'cacheXuiCapabilities',
+        refresh_jobs: 'cacheRefreshJobs',
+        bulk_jobs: 'cacheBulkJobs',
+        subscription: 'cacheSubscription',
+        ownership: 'cacheOwnership'
+    };
+    const MEM_TREND_BADGE = { growing: 'badge-warning', shrinking: 'badge-info', stable: 'badge-success' };
+    const MEM_TREND_WORD = { growing: 'growing', shrinking: 'shrinking', stable: 'stable' };
+    const MEM_HEALTH_BADGE = { ok: 'badge-success', warning: 'badge-warning', critical: 'badge-danger' };
+    const MEM_HEALTH_WORD = { ok: 'healthOk', warning: 'healthWarning', critical: 'healthCritical' };
+
+    function memT(key) {
+        const column = MEM_TEXT[MEM_LANG] || MEM_TEXT.en;
+        if (column[key] !== undefined) return column[key];
+        if (MEM_TEXT.en[key] !== undefined) return MEM_TEXT.en[key];
+        return key;
+    }
+
+    /* null/undefined means "not measured" and 0 means zero. Collapsing the two would
+       turn a section the host could not read into an apparent measurement, which is
+       the exact misreading this page exists to prevent. */
+    function memBytes(value) {
+        if (value === null || value === undefined) return null;
+        const n = Number(value);
+        if (!isFinite(n)) return null;
+        if (Math.abs(n) < 1024) return Math.round(n) + ' B';
+        const units = ['KB', 'MB', 'GB', 'TB'];
+        let scaled = Math.abs(n) / 1024;
+        let index = 0;
+        while (scaled >= 1024 && index < units.length - 1) {
+            scaled = scaled / 1024;
+            index += 1;
+        }
+        return (n < 0 ? '-' : '') + scaled.toFixed(1) + ' ' + units[index];
+    }
+
+    function memNum(value) {
+        if (value === null || value === undefined) return null;
+        const n = Number(value);
+        if (!isFinite(n)) return null;
+        return n.toLocaleString();
+    }
+
+    /* Same as memNum without the grouping separator: a source line number is an
+       identifier, and "1,489" reads as a quantity. */
+    function memPlain(value) {
+        if (value === null || value === undefined) return null;
+        const n = Number(value);
+        if (!isFinite(n)) return String(value);
+        return String(n);
+    }
+
+    /* Ages read as "2m" / "1h": a scale cue, not a timestamp. */
+    function memAge(seconds) {
+        if (seconds === null || seconds === undefined) return null;
+        const n = Number(seconds);
+        if (!isFinite(n)) return null;
+        const s = Math.max(0, Math.round(n));
+        if (s < 60) return s + 's';
+        if (s < 3600) return Math.floor(s / 60) + 'm';
+        if (s < 86400) return Math.floor(s / 3600) + 'h';
+        return Math.floor(s / 86400) + 'd';
+    }
+
+    function memSigned(value) {
+        if (value === null || value === undefined) return null;
+        const n = Number(value);
+        if (!isFinite(n)) return null;
+        const text = memBytes(Math.abs(n));
+        return (n > 0 ? '+' : (n < 0 ? '-' : '')) + text;
+    }
+
+    /* Snapshot stamps are UTC on the writer side, so a naive ISO string is read as
+       UTC here as well: Date.parse would read it as local time and every age would
+       carry the host's offset. */
+    function memAgoStamp(value) {
+        if (value === null || value === undefined || value === '') return null;
+        let ms;
+        if (typeof value === 'number') {
+            ms = value * 1000;
+        } else {
+            const text = String(value);
+            const hasZone = /[zZ]$|[+-][0-9]{2}:?[0-9]{2}$/.test(text);
+            ms = Date.parse(hasZone ? text : text + 'Z');
+        }
+        if (!isFinite(ms)) return String(value);
+        return memAge((Date.now() - ms) / 1000) + ' ' + memT('ago');
+    }
+
+    function memEsc(value) {
+        return String(value === null || value === undefined ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function memOr(value) {
+        return (value === null || value === undefined || value === '')
+            ? memT('notMeasured') : value;
+    }
+
+    function memNote(text, extraClass) {
+        return '<small class="field-note ' + (extraClass || '') + '">' + memEsc(text) + '</small>';
+    }
+
+    /* The compact form keeps the column scannable at one decimal, so the exact byte
+       count rides along in title: one decimal alone would print 1.7 GB for both
+       eve_pss_bytes and eve_pss_with_xray_bytes and hide the Xray contribution the
+       two rows exist to show. */
+    function memExact(value) {
+        if (value === null || value === undefined) return '';
+        const n = Number(value);
+        if (!isFinite(n)) return '';
+        return ' title="' + memEsc(String(Math.round(n)) + ' bytes') + '"';
+    }
+
+    function memKvRow(label, valueHtml, titleText) {
+        return '<div class="mem-kv-row"><span class="label-note">' + memEsc(label)
+            + '</span><span class="mem-kv-value"' + (titleText || '') + '>' + valueHtml
+            + '</span></div>';
+    }
+
+    function memRow(label, text) {
+        return memKvRow(label, memEsc(memOr(text)));
+    }
+
+    function memBytesRow(label, value) {
+        return memKvRow(label, memEsc(memOr(memBytes(value))), memExact(value));
+    }
+
+    function memByteCell(value) {
+        return '<td class="mem-num"' + memExact(value) + '>' + memEsc(memOr(memBytes(value))) + '</td>';
+    }
+
+    function memCountCell(value) {
+        return '<td class="mem-num">' + memEsc(memOr(memNum(value))) + '</td>';
+    }
+
+    function memCard(parts) {
+        return '<div class="overview-card">'
+            + '<div class="overview-card-title">' + memEsc(parts.title)
+            + (parts.badge ? ' ' + parts.badge : '') + '</div>'
+            + (parts.value ? '<div class="overview-card-value"' + (parts.valueTitle || '') + '>'
+                + parts.value + '</div>' : '')
+            + (parts.sub ? '<div class="overview-card-sub">' + parts.sub + '</div>' : '')
+            + (parts.body ? '<div class="mem-kv">' + parts.body + '</div>' : '')
+            + '</div>';
+    }
+
+    function memHealthBadge(word) {
+        const key = String(word || '');
+        const cls = MEM_HEALTH_BADGE[key] || 'badge-secondary';
+        return '<span class="badge ' + cls + '">' + memEsc(memT(MEM_HEALTH_WORD[key] || 'healthUnknown')) + '</span>';
+    }
+
+    /* Unknown keys come last and sorted: the backend builds its role table from a
+       /proc scan, so an unstable order would reshuffle the table between refreshes. */
+    function memOrderedKeys(present, order) {
+        const known = order.filter(key => present.indexOf(key) !== -1);
+        present.filter(key => order.indexOf(key) === -1).sort().forEach(key => known.push(key));
+        return known;
+    }
+
+    function memLabel(key, table) {
+        const textKey = table[key];
+        if (textKey) return memT(textKey);
+        return String(key).replace(/[_-]+/g, ' ');
+    }
+
+    function memTable(headers, rowsHtml, numericColumns) {
+        const numeric = numericColumns || [];
+        let head = '';
+        headers.forEach((label, index) => {
+            head += '<th' + (numeric.indexOf(index) !== -1 ? ' class="mem-num"' : '') + '>'
+                + memEsc(label) + '</th>';
+        });
+        return '<div class="table-responsive"><table class="table"><thead><tr>' + head
+            + '</tr></thead><tbody>' + rowsHtml + '</tbody></table></div>';
+    }
+
+    function renderHostCard(host) {
+        if (host.available === false) {
+            return memCard({title: memT('host'),
+                            body: memNote(host.reason || memT('unavailable'), 'field-note-warn')});
+        }
+        const used = memBytes(host.used_bytes);
+        const total = memBytes(host.total_bytes);
+        const headline = (used === null || total === null) ? memT('notMeasured') : used + ' / ' + total;
+        const pct = (host.available_pct === null || host.available_pct === undefined)
+            ? '' : ' <span class="label-note">(' + memEsc(Number(host.available_pct).toFixed(1) + '%') + ')</span>';
+        const body = [
+            memKvRow(memT('available'), memEsc(memOr(memBytes(host.available_bytes))) + pct,
+                     memExact(host.available_bytes)),
+            memBytesRow(memT('pageCache'), host.cache_bytes),
+            memNote(memT('cacheNote')),
+            memKvRow(memT('swapUsed'), memEsc(memOr(memBytes(host.swap_used_bytes)) + ' / '
+                + memOr(memBytes(host.swap_total_bytes))), memExact(host.swap_used_bytes))
+        ];
+        return memCard({
+            title: memT('host'),
+            badge: memHealthBadge(host.health),
+            value: memEsc(headline),
+            valueTitle: memExact(host.used_bytes),
+            sub: memEsc(memT('usedOfTotal')),
+            body: body.join('')
+        });
+    }
+
+    function renderEveCard(eve) {
+        if (eve.available === false) {
+            return memCard({title: memT('eve'),
+                            body: memNote(eve.reason || memT('unavailable'), 'field-note-warn')});
+        }
+        const roles = eve.roles || {};
+        const keys = memOrderedKeys(Object.keys(roles), MEM_ROLE_ORDER);
+        const processes = keys.reduce((sum, key) => sum + (Number((roles[key] || {}).processes) || 0), 0);
+        const body = [
+            memBytesRow(memT('evePssWithXray'), eve.eve_pss_with_xray_bytes),
+            memRow(memT('roles'), memNum(keys.length)),
+            memRow(memT('processes'), memNum(processes)),
+            memNote(memT('pssNote'))
+        ];
+        return memCard({
+            title: memT('eve'),
+            value: memEsc(memOr(memBytes(eve.eve_pss_bytes))),
+            valueTitle: memExact(eve.eve_pss_bytes),
+            sub: memEsc(memT('evePss')),
+            body: body.join('')
+        });
+    }
+
+    function renderHealthCard(health) {
+        const state = String((health && health.state) || 'unknown');
+        const notes = (health && Array.isArray(health.notes)) ? health.notes : [];
+        const body = notes.length
+            ? notes.map(note => memNote(note)).join('')
+            : memNote(memT('healthOkNote'));
+        return memCard({title: memT('memoryHealth'), badge: memHealthBadge(state), body: body});
+    }
+
+    function renderTrendCard(trend) {
+        if (trend.available === false) {
+            return memCard({title: memT('trend'),
+                            body: memNote(trend.reason || memT('unavailable'), 'field-note-warn')});
+        }
+        const samples = Number(trend.samples) || 0;
+        if (!samples) {
+            /* An empty window is not a flat line: printing Current 0 B would read as a
+               measurement of an idle process. The payload carries no series, so there
+               is nothing to draw either - the four numbers are the honest answer. */
+            return memCard({title: memT('trend'), body: memNote(memT('noSamples'), 'field-note-warn')});
+        }
+        const direction = String(trend.trend || '');
+        const badge = '<span class="badge ' + (MEM_TREND_BADGE[direction] || 'badge-secondary') + '">'
+            + memEsc(memT(MEM_TREND_WORD[direction] || 'healthUnknown')) + '</span>';
+        const body = [
+            memBytesRow(memT('peak'), trend.peak_bytes),
+            memRow(memT('change'), memSigned(trend.delta_bytes)),
+            memRow(memT('perHour'), memSigned(trend.per_hour_bytes)),
+            memRow(memT('samples'), memNum(samples)),
+            memRow(memT('window'), (memNum(trend.window_minutes) || '-') + ' ' + memT('minutes')),
+            memNote(memT('trendNote'))
+        ];
+        return memCard({
+            title: memT('trend'),
+            badge: badge,
+            value: memEsc(memOr(memBytes(trend.current_bytes))),
+            valueTitle: memExact(trend.current_bytes),
+            sub: memEsc(memT('trendSub')),
+            body: body.join('')
+        });
+    }
+
+    function renderRoleTable(eve) {
+        if (eve.available === false) {
+            return memNote(eve.reason || memT('unavailable'), 'field-note-warn');
+        }
+        const roles = eve.roles || {};
+        const keys = memOrderedKeys(Object.keys(roles), MEM_ROLE_ORDER);
+        if (!keys.length) return memNote(memT('noRoles'));
+        let rows = '';
+        keys.forEach(key => {
+            const bucket = roles[key] || {};
+            const approximated = bucket.pss_approximated
+                ? ' <span class="label-note">(' + memEsc(memT('approximated')) + ')</span>' : '';
+            rows += '<tr>'
+                + '<td>' + memEsc(memLabel(key, MEM_ROLE_LABELS)) + approximated + '</td>'
+                + memByteCell(bucket.rss_bytes)
+                + memByteCell(bucket.pss_bytes)
+                + memByteCell(bucket.private_bytes)
+                + memCountCell(bucket.processes)
+                + memCountCell(bucket.threads)
+                + '<td class="mem-num">' + memEsc(memOr(memAge(bucket.max_uptime_seconds))) + '</td>'
+                + '</tr>';
+        });
+        /* Processes outside EVE are counted but deliberately not attributed: showing
+           them keeps the table from implying that its rows sum to the whole host. */
+        if (Number(eve.other_processes) > 0) {
+            rows += '<tr><td>' + memEsc(memT('otherProcesses')) + '</td>'
+                + '<td class="mem-num">-</td><td class="mem-num">-</td><td class="mem-num">-</td>'
+                + '<td class="mem-num">' + memEsc(memNum(eve.other_processes)) + '</td>'
+                + '<td class="mem-num">-</td><td class="mem-num">-</td></tr>';
+        }
+        return memTable([memT('componentRole'), memT('rss'), memT('pss'), memT('uss'),
+                         memT('processes'), memT('threads'), memT('uptime')], rows,
+                        [1, 2, 3, 4, 5, 6]);
+    }
+
+    function renderNonProcessTable(redis, caches) {
+        const rows = [];
+        if (redis.available === false) {
+            rows.push('<tr><td>' + memEsc(memT('redisSnapshot')) + '</td>'
+                + '<td colspan="2">' + memNote(redis.reason || memT('unavailable'), 'field-note-warn')
+                + '</td></tr>');
+        } else {
+            const detail = [];
+            const keys = memNum(redis.server_keys);
+            if (keys !== null) detail.push(keys + ' ' + memT('serverKeys'));
+            if (redis.manifest_bytes !== null && redis.manifest_bytes !== undefined) {
+                detail.push(memT('manifest') + ' ' + memBytes(redis.manifest_bytes));
+            }
+            if (redis.version !== null && redis.version !== undefined && redis.version !== '') {
+                detail.push(memT('version') + ' ' + redis.version);
+            }
+            rows.push('<tr><td>' + memEsc(memT('redisSnapshot')) + '</td>'
+                + memByteCell(redis.total_bytes)
+                + '<td>' + memEsc(detail.join(' / ')) + '</td></tr>');
+        }
+        if (caches.available === false) {
+            rows.push('<tr><td>' + memEsc(memT('caches')) + '</td>'
+                + '<td colspan="2">' + memNote(caches.reason || memT('unavailable'), 'field-note-warn')
+                + '</td></tr>');
+        } else {
+            const store = caches.caches || {};
+            memOrderedKeys(Object.keys(store), MEM_CACHE_ORDER).forEach(key => {
+                const count = memNum((store[key] || {}).entries);
+                const unit = (count === '1') ? memT('entry') : memT('entries');
+                rows.push('<tr><td>' + memEsc(memLabel(key, MEM_CACHE_LABELS)) + '</td>'
+                    + '<td class="mem-num">'
+                    + (count === null ? memEsc(memT('notMeasured')) : memEsc(count + ' ' + unit))
+                    + '</td><td></td></tr>');
+            });
+        }
+        return memTable([memT('component'), memT('sizeOrCount'), memT('detail')], rows.join(''), [1])
+            + memNote(memT('redisNote'))
+            + memNote(memT('cachesNote'));
+    }
+
+    function renderSnapshotRows(snapshot) {
+        if (snapshot.available === false) {
+            return memNote(snapshot.reason || memT('unavailable'), 'field-note-warn');
+        }
+        const ratio = snapshot.duplication_ratio;
+        const rows = [
+            memRow(memT('servers'), memNum(snapshot.servers)),
+            memRow(memT('inbounds'), memNum(snapshot.inbounds)),
+            memRow(memT('clientRows'), memNum(snapshot.client_rows)),
+            memRow(memT('uniqueClients'), memNum(snapshot.unique_clients)),
+            memRow(memT('duplicateRows'), memNum(snapshot.duplicate_rows)),
+            memKvRow(memT('duplicationRatio'), memEsc((ratio === null || ratio === undefined)
+                ? memT('notMeasured') : Number(ratio).toFixed(2) + 'x')),
+            memRow(memT('rowsWithRawClient'), memNum(snapshot.rows_with_raw_client)),
+            memRow(memT('rowsWithFormatted'), memNum(snapshot.rows_with_formatted_strings)),
+            memRow(memT('lastUpdate'), memAgoStamp(snapshot.last_update)),
+            memNote(memT('duplicationNote'))
+        ];
+        return '<div class="mem-kv">' + rows.join('') + '</div>';
+    }
+
+    function renderBreakdown(eve, snapshot, redis, caches) {
+        return '<details class="mem-details">'
+            + '<summary>' + memEsc(memT('breakdown')) + '</summary>'
+            + '<div class="mem-group-title">' + memEsc(memT('rolesGroup')) + '</div>'
+            + renderRoleTable(eve)
+            + '<div class="mem-group-title">' + memEsc(memT('notProcessGroup')) + '</div>'
+            + renderNonProcessTable(redis, caches)
+            + '<div class="mem-group-title">' + memEsc(memT('snapshotGroup')) + '</div>'
+            + renderSnapshotRows(snapshot)
+            + '</details>';
+    }
+
+    function renderAnalyzeBlock() {
+        if (!MEM_CAN_ANALYZE) return '';
+        return '<div class="mem-actions">'
+            + '<button type="button" class="btn btn-secondary" id="memory-analyze-btn"'
+            + ' onclick="runMemoryAnalysis()">' + memEsc(memT('analyze')) + '</button>'
+            + '<small class="field-note">' + memEsc(memT('analyzeHint')) + '</small>'
+            + '</div>'
+            + '<div id="memory-analyze-result"></div>';
+    }
+
+    function renderMemory(data) {
+        return '<div class="overview-grid">'
+            + renderHostCard(data.host || {})
+            + renderEveCard(data.eve || {})
+            + renderHealthCard(data.health || {})
+            + renderTrendCard(data.trend || {})
+            + '</div>'
+            + renderBreakdown(data.eve || {}, data.snapshot || {}, data.redis_snapshot || {},
+                              data.caches || {})
+            + renderAnalyzeBlock();
+    }
+
+    function renderAnalysis(result) {
+        const entries = Array.isArray(result.entries) ? result.entries : [];
+        const parts = [
+            memNote((memNum(result.elapsed_ms) || '-') + ' ms ' + memT('elapsed')
+                + ' / ' + entries.length + ' ' + memT('entries'), 'field-note-strong')
+        ];
+        if (result.truncated) parts.push(memNote(memT('truncated'), 'field-note-warn'));
+        if (!entries.length) {
+            parts.push(memNote(memT('noEntries')));
+            return parts.join('');
+        }
+        let rows = '';
+        entries.forEach(entry => {
+            rows += '<tr><td>' + memEsc(entry.file) + '</td>'
+                + '<td class="mem-num">' + memEsc(memOr(memPlain(entry.line))) + '</td>'
+                + '<td class="mem-num">' + memEsc(memOr(memBytes(entry.size_bytes))) + '</td>'
+                + '<td class="mem-num">' + memEsc(memOr(memNum(entry.blocks))) + '</td></tr>';
+        });
+        parts.push(memTable([memT('file'), memT('line'), memT('size'), memT('blocks')], rows, [1, 2, 3]));
+        return parts.join('');
+    }
+
+    async function runMemoryAnalysis() {
+        const button = document.getElementById('memory-analyze-btn');
+        const box = document.getElementById('memory-analyze-result');
+        if (!button || !box || button.disabled) return;
+        const label = button.textContent;
+        button.disabled = true;
+        button.textContent = memT('analyzing');
+        box.innerHTML = memNote(memT('analyzing'));
+        try {
+            const res = await fetch('/api/system/memory/analyze', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+                body: JSON.stringify({limit: 40})
+            });
+            let payload = null;
+            try { payload = await res.json(); } catch (error) { payload = null; }
+            if (res.status === 401 || res.status === 403) {
+                /* The step-up guard on this route is deliberate, so a refused call is
+                   explained rather than surfaced as a crash. */
+                box.innerHTML = memNote(memT('analyzeDenied'), 'field-note-warn');
+            } else if (!payload || payload.success !== true) {
+                const reason = payload && (payload.error || payload.message);
+                box.innerHTML = memNote(reason ? String(reason) : memT('analyzeFailed'),
+                                        'field-note-warn');
+            } else if (payload.available === false) {
+                box.innerHTML = memNote(payload.reason || memT('unavailable'), 'field-note-warn');
+            } else {
+                box.innerHTML = renderAnalysis(payload);
+            }
+        } catch (error) {
+            box.innerHTML = memNote(memT('analyzeFailed'), 'field-note-warn');
+        } finally {
+            button.disabled = false;
+            button.textContent = label || memT('analyze');
+        }
+    }
+
+    async function loadMemory() {
+        const container = document.getElementById('memory-content');
+        if (!container) return;
+        const title = document.getElementById('memory-title');
+        const subtitle = document.getElementById('memory-subtitle');
+        if (title) title.textContent = memT('title');
+        if (subtitle) subtitle.textContent = memT('subtitle');
+        container.innerHTML = memNote(memT('loading'), 'mem-loading');
+        try {
+            const res = await fetch('/api/system/memory', {headers: {'Accept': 'application/json'}});
+            let payload = null;
+            try { payload = await res.json(); } catch (error) { payload = null; }
+            if (!res.ok || !payload || payload.success !== true) {
+                const reason = payload && (payload.error || payload.message);
+                container.innerHTML = memNote(reason ? String(reason)
+                    : memT('loadFailed') + ' (HTTP ' + res.status + ')', 'field-note-warn');
+                return;
+            }
+            container.innerHTML = renderMemory(payload);
+        } catch (error) {
+            /* One clear note in this card only; the overview above is a separate
+               request and is left exactly as it was. */
+            container.innerHTML = memNote(memT('loadFailed'), 'field-note-warn');
+        }
+    }
+
     function renderSSLStatus(data) {
         const panel = document.getElementById('ssl-status-panel');
         const certIcon = document.getElementById('ssl-cert-icon');

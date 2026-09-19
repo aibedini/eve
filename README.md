@@ -14,7 +14,7 @@ A production-oriented operations platform for teams running **Sanaei 3x-ui** and
 [![Security](https://github.com/aibedini/eve/actions/workflows/security.yml/badge.svg)](https://github.com/aibedini/eve/actions/workflows/security.yml)
 [![Docker](https://github.com/aibedini/eve/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/aibedini/eve/actions/workflows/docker-publish.yml)
 
-![EVE](https://img.shields.io/badge/EVE-2.7.17-6f42c1?style=flat-square)
+![EVE](https://img.shields.io/badge/EVE-2.7.18-6f42c1?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square\&logo=python\&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Production-4169E1?style=flat-square\&logo=postgresql\&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-Realtime-DC382D?style=flat-square\&logo=redis\&logoColor=white)

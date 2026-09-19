@@ -2,6 +2,15 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.18] - 2026-09-19
+
+### Added
+- **Settings → Overview now has a Memory section** that answers "3.45 GB of 3.78 GB is used - by what?" from the attribution API: host cards (used/total, **Available** with percent, page cache labelled as reclaimable and explicitly not application usage, swap, pressure), Eve's own total as **PSS** (plus the with-Xray figure), the backend's health verdict and its notes, and the bounded trend (current, peak, delta, per-hour slope, direction). An expandable breakdown lists every role - web, background, telegram bot, telegram egress, pulse, managed xray - with RSS, PSS, USS, processes, threads and uptime, then what is not a process (the compressed snapshot in Redis, the out-of-snapshot caches) and what the in-process snapshot holds (client rows vs unique clients, the duplication ratio, rows still carrying `raw_client`, rows carrying formatted strings), with the v3 explanation of why one account can appear once per assigned inbound. An admin-only "Analyze Python Memory" action runs the deep sample on demand (never on page load, disabled while running, step-up refusals explained inline).
+- Every unavailable section prints the backend's reason and **no numbers** - a null renders as "not measured", never as a zero that looks like a measurement - and the memory card sits beside the overview rather than inside it, so a failure there cannot blank the page.
+
+### Fixed
+- The half-committed state of the previous commit is closed: `51682b2` had swept 104 lines of this in-progress UI into a test-fix commit (its `Refresh` handler and the memory container, without the renderer), which is a broken interactive state on `main`. The remainder is committed here; the earlier commit's message stands for the test fix it was meant to be.
+
 ## [2.7.17] - 2026-09-19
 
 ### Added
