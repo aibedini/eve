@@ -56,8 +56,8 @@ curl -s -b "session=<admin-cookie>" http://127.0.0.1:<app_port>/api/system/memor
 ## The architecture as it stands (code-level, before any measurement)
 
 Roles, from the systemd units the installer writes (`setup.sh:1351-1422`) and the
-auto-sizing it applies to the web worker (`setup.sh:1324-1331`: 3 workers above ~4 GB RAM,
-2 above ~2 GB, **1 on a 4 GB host**):
+auto-sizing it applies to the web worker (`setup.sh:1324-1333`: 3 workers from 12 GB RAM
+up, 2 from 6 GB, **1 below 6 GB - so 1 on a 4 GB host**; `GUNICORN_WORKERS` overrides it):
 
 ```
 eve-manager                 gunicorn (1 worker on 4 GB) + N threads
@@ -208,7 +208,7 @@ an OOM safety net, not as a fix.
 ## Runtime configuration (Phase 8 findings)
 
 * **Web workers are already sized to the host**: 1 on a 4 GB machine
-  (`setup.sh:1324-1331`). There is no evidence of worker-count bloat, and the measurement
+  (`setup.sh:1324-1333`). There is no evidence of worker-count bloat, and the measurement
   above will show it directly (`eve.roles.web.processes`).
 * **No `max_requests` / `max_requests_jitter` is configured anywhere** (`gunicorn_config.py`
   sets worker class, threads, timeouts and logging only). Adding them is a safety net
