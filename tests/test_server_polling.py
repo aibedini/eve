@@ -1019,6 +1019,33 @@ class CadenceBandTests(OfflinePolicyTests):
                 self.assertEqual(refresh_policy.server_interval(sid, now=moment),
                                  bands[mode])
 
+    def test_a_stale_published_report_admits_it_is_stale(self):
+        # A fetcher that dies mid-poll leaves next_due in the past, which clamps to 0 - so
+        # the dashboard would render "HOT / Next poll: 0s" forever, reading as "about to
+        # poll" when it means "nobody has updated this in minutes". The report carries its
+        # own publish time, so an old one must say so instead of faking a due time.
+        now = BASE
+        fresh = {'mode': 'hot', 'watched': True, 'next_due': now + 1.0,
+                 'last_success_at': now - 1.0, 'updated_at': now - 0.5,
+                 'sync_health': 'live', 'failures': 0}
+        row = refresh_policy._public_sync_row(1, fresh, now=now)
+        self.assertEqual(row['sync_health'], 'live')
+        self.assertEqual(row['next_due_in_seconds'], 1.0)
+        self.assertFalse(row['report_stale'])
+        self.assertEqual(row['report_age_seconds'], 0.5)
+
+        old = dict(fresh, next_due=now - 40.0, last_success_at=None,
+                   updated_at=now - refresh_policy.SERVER_SYNC_STALE_SECONDS - 1,
+                   sync_health='live', failures=3)
+        row = refresh_policy._public_sync_row(2, old, now=now)
+        # No fake "0s": the schedule is unknown, not due now.
+        self.assertIsNone(row['next_due_in_seconds'])
+        # And a report that stopped arriving may not keep claiming "live".
+        self.assertEqual(row['sync_health'], 'stale')
+        self.assertTrue(row['report_stale'])
+        self.assertGreater(row['report_age_seconds'],
+                           refresh_policy.SERVER_SYNC_STALE_SECONDS)
+
     def test_a_busy_idle_panel_is_not_promoted_into_the_warm_band(self):
         # A busy install has traffic moving on every panel between two of its own polls.
         # If "changed" promoted an IDLE panel to WARM, the whole install would settle on

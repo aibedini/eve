@@ -2,6 +2,16 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.16] - 2026-09-19
+
+### Fixed
+- **The recovery sweep no longer runs before the per-server loop.** It used to run first and the scheduler only started when it finished, so a slow or hanging sweep delayed every panel's cadence - including one an operator had just opened - and could stall the loop indefinitely. That is exactly the shape of the reported runtime state (`Sync issue`, `Poll mode: HOT`, `Next poll: 0s`, no successful sync). The loop starts first now; the sweep runs beside it in its own thread, and it is still the only path that records reachability for panels that fail.
+- **A stale scheduling report no longer renders as "HOT / Next poll: 0s".** A fetcher that stops publishing leaves `next_due` in the past, which was clamped to `0.0` and read as "about to poll" when it meant "nobody has updated this for minutes". A published row now carries its own publish age (`report_age_seconds`, `report_stale`), reports its due time as unknown once it is stale instead of faking 0, and is never allowed to keep claiming `live`.
+- **The renew result modal no longer claims success before the panel agrees.** With a partially applied renewal (volume matched, expiry still old) the title said "Renewal Successful" and "Send to Client" stayed armed, so an operator could hand a customer a confirmation for a change that had not been applied. The title now states the real state (pending / partially applied), copy and send are disabled until the read-back matches, Re-check carries the primary emphasis, and every field pill's tooltip shows expected vs observed.
+
+### Added
+- `scripts/diagnose_sync_runtime.py`: one-shot, read-only runtime diagnosis for the sync pipeline - process role, worker inventory (state/singleton), Redis and wake-listener state, scheduler metrics, the per-server sync fields as the fetcher sees them AND as a web process sees them, and the sync log tail for one server, with a plain-language verdict. It exists because the fields that explain "Sync issue" live in the fetcher process and in Redis, neither of which is visible from the browser.
+
 ## [2.7.15] - 2026-09-19
 
 ### Fixed

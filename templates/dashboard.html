@@ -734,7 +734,7 @@
 <div class="modal-overlay hidden" id="renew-success-modal">
     <div class="modal modal-sm">
         <div class="modal-header">
-            <h2>Renewal Successful</h2>
+            <h2 id="renew-modal-title">Renewal Successful</h2>
             <button class="modal-close" onclick="closeRenewSuccessModal()">&times;</button>
         </div>
         <div class="modal-body">
@@ -747,11 +747,11 @@
                 <button class="btn btn-secondary renew-success-action" onclick="recheckRenewal()" id="renew-recheck-btn">
                     Re-check
                 </button>
-                <button class="btn btn-primary renew-success-action" onclick="copyRenewSuccessText()">
+                <button class="btn btn-primary renew-success-action" onclick="copyRenewSuccessText()" id="renew-copy-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     Copy Text
                 </button>
-                <button class="btn btn-success renew-success-action renew-success-action-primary" onclick="sendRenewToUser()">
+                <button class="btn btn-success renew-success-action renew-success-action-primary" onclick="sendRenewToUser()" id="renew-send-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                     {{ 'ارسال به کاربر' if panel_lang == 'fa' else 'Send to Client' }}
                 </button>
@@ -5079,7 +5079,15 @@
                 if (!check) return;
                 const color = check.matches === true ? '#bbf7d0' : (check.matches === false ? '#fecaca' : '#fde68a');
                 const icon = check.matches === true ? '✓' : (check.matches === false ? '✗' : '?');
-                parts.push(`<span class="server-badge" style="color:${color};">${icon} ${label}: ${escapeHtml(formatter(check.observed))}</span>`);
+                // Expected vs observed in the tooltip: a bare "✗ Expiry" tells an operator
+                // that something is wrong but not what the panel actually answered, which is
+                // the first thing needed to tell a panel-side refusal from a wrong expected.
+                const detail = [
+                    `${statusIsFa ? 'انتظار' : 'Expected'}: ${formatter(check.expected)}`,
+                    `${statusIsFa ? 'مشاهده‌شده' : 'Observed'}: ${formatter(check.observed)}`,
+                    `${statusIsFa ? 'تطابق' : 'Match'}: ${check.matches === true ? 'yes' : (check.matches === false ? 'no' : 'unknown')}`,
+                ].join('&#10;');
+                parts.push(`<span class="server-badge" style="color:${color};" title="${escapeHtml(detail)}">${icon} ${label}: ${escapeHtml(formatter(check.observed))}</span>`);
             };
             addCheck('expiryTime', statusIsFa ? 'انقضا' : 'Expiry', formatExpiry);
             addCheck('totalGB', statusIsFa ? 'حجم' : 'Volume', formatBytes);
@@ -5095,9 +5103,41 @@
 
             box.innerHTML = parts.join(' ');
             box.style.display = 'flex';
+            _applyRenewVerificationState(verify);
         } catch (e) {
             // ignore
         }
+    }
+
+    // A renewal whose read-back did not match is NOT a success. The modal used to say
+    // "Renewal Successful" and leave "Send to Client" armed while the panel still showed
+    // the old expiry, so an operator could hand a customer a confirmation for a change
+    // that had not been applied. The title states the real state, the confirmation
+    // actions stay locked until the panel agrees, and Re-check carries the emphasis
+    // because it is the only thing that can move the state forward.
+    const RENEW_VERIFY_TEXT = {
+        success: {{ ('تمدید موفق')|tojson }},
+        pending: {{ ('تمدید در انتظار تأیید')|tojson }},
+        partial: {{ ('تمدید ناقص اعمال شد')|tojson }},
+    };
+    function _applyRenewVerificationState(verify) {
+        const ok = verify ? verify.ok === true : false;
+        const state = verify ? String(verify.state || '') : '';
+        const title = document.getElementById('renew-modal-title');
+        if (title) {
+            title.textContent = ok
+                ? RENEW_VERIFY_TEXT.success
+                : (state === 'partially_applied' ? RENEW_VERIFY_TEXT.partial
+                                                 : RENEW_VERIFY_TEXT.pending);
+        }
+        const copyBtn = document.getElementById('renew-copy-btn');
+        const sendBtn = document.getElementById('renew-send-btn');
+        const recheckBtn = document.getElementById('renew-recheck-btn');
+        for (const btn of [copyBtn, sendBtn]) {
+            if (btn) btn.disabled = !ok;
+        }
+        if (recheckBtn) recheckBtn.classList.toggle('renew-success-action-primary', !ok);
+        if (sendBtn) sendBtn.classList.toggle('renew-success-action-primary', ok);
     }
 
     // A duplicate/while-running renew: show the result modal in an "in progress"

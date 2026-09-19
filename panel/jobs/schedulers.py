@@ -254,20 +254,43 @@ def inject_version():
 
 
 
+def _bootstrap_sweep_once():
+    """One recovery sweep: discovery plus a first coherent snapshot.
+
+    Runs in its own thread so it can never delay the per-server loop (see
+    ``background_data_fetcher``). It keeps its reachability bookkeeping - the sweep is the
+    only path that writes ``servers_status`` for a panel that FAILED - so it is not
+    optional, only non-blocking.
+    """
+    from app import app  # deferred: app-level helper, avoids circular import
+    try:
+        with app.app_context():
+            fetch_and_update_global_data(force=False)
+    except Exception:
+        try:
+            with app.app_context():
+                app.logger.warning('Bootstrap fetch failed', exc_info=True)
+        except Exception:
+            pass
+
+
 def background_data_fetcher():
-    """The automatic fetch loop: a bootstrap sweep, then per-server scheduling.
+    """The automatic fetch loop: per-server scheduling, with a recovery sweep beside it.
 
-    Historically this was one loop of "collect every due panel, fetch the batch, wait
-    for the batch, sleep, repeat". That shape made the CYCLE length the effective
-    interval of the one panel the operator was watching, and ordering or batching the
-    same batch cannot change it: the next start of a HOT panel still waited for the
-    rest of the fan-out. The loop below is the shape that does change it -- see
-    ``run_per_server_scheduler`` -- and this function only owns the startup sequence.
+    Historically this was one loop of "collect every due panel, fetch the batch, wait for
+    the batch, sleep, repeat". That shape made the CYCLE length the effective interval of
+    the one panel the operator was watching, and ordering or batching the same batch
+    cannot change it: the next start of a HOT panel still waited for the rest of the
+    fan-out. ``run_per_server_scheduler`` is the shape that does change it, and this
+    function only owns the startup sequence.
 
-    The global sweep survives for what it is actually good at: the first fill after a
-    restart (discovery of the enabled set, one coherent snapshot), an explicit operator
-    refresh, recovery, and the per-server staleness ceiling that ``server_due()``
-    enforces on its own.
+    Startup order matters, and used to be wrong: the recovery sweep ran FIRST and the
+    scheduler only started after it finished, so a sweep against a slow or hanging panel
+    delayed every panel's cadence - including one an operator had just opened - and could
+    stall it indefinitely. The loop is the timing authority, so it starts first; the sweep
+    runs beside it in its own thread, purely to fill the snapshot and to record
+    reachability for the panels that fail. The overlap is bounded by the panel concurrency
+    cap and made harmless by the fetch ticket/revision guards, and it lasts one sweep.
     """
     from app import GLOBAL_SERVER_DATA, app  # deferred: app-level helper, avoids circular import
     ensure_background_threads_started()
@@ -284,17 +307,14 @@ def background_data_fetcher():
         refresh_policy.start_wake_listener()
     except Exception:
         app.logger.warning('Refresh wake listener could not start', exc_info=True)
-    # Bootstrap sweep: fill the snapshot and let the policy learn the enabled set before
-    # the per-server loop starts making dispatch decisions from it.
+    # The loop first: it is the timing authority, and a sweep that runs before it delays
+    # every panel's cadence until the sweep finishes. The recovery sweep runs beside it.
     try:
-        with app.app_context():
-            fetch_and_update_global_data(force=False)
+        threading.Thread(target=_bootstrap_sweep_once, name='eve-bootstrap-sweep',
+                         daemon=True).start()
     except Exception:
-        try:
-            with app.app_context():
-                app.logger.warning('Bootstrap fetch failed', exc_info=True)
-        except Exception:
-            pass
+        # No thread available: run it inline rather than losing the reachability pass.
+        _bootstrap_sweep_once()
     run_per_server_scheduler()
 
 

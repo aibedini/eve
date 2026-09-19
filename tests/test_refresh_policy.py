@@ -172,14 +172,16 @@ class FetcherLoopTests(unittest.TestCase):
         pass
 
     def _start(self, sweeps):
-        """Run the startup path, stopping it at the first scheduler tick."""
+        """Run the startup path, stopping it at the first scheduler tick.
+
+        The recovery sweep runs in its OWN thread now, so the test patches the sweep
+        itself rather than the fetch it calls: the contract under test is "the loop starts
+        and does not wait for the sweep", which a patched sweep states exactly.
+        """
         stop = self._Stop
 
-        def fake_sweep(force=False, **kwargs):
-            sweeps.append({'force': force, 'kwargs': dict(kwargs)})
-            # A real sweep refreshes last_update; keep the policy truthful.
-            GLOBAL_SERVER_DATA["last_update"] = datetime.now(timezone.utc).isoformat()
-            return True
+        def fake_sweep():
+            sweeps.append({'thread': threading.current_thread().name})
 
         def fake_scheduler(*args, **kwargs):
             raise stop()
@@ -187,27 +189,24 @@ class FetcherLoopTests(unittest.TestCase):
         with (
             mock.patch.object(schedulers, "ensure_background_threads_started"),
             mock.patch.object(schedulers, "load_snapshot_from_redis"),
-            mock.patch.object(schedulers, "fetch_and_update_global_data", fake_sweep),
+            mock.patch.object(schedulers, "_bootstrap_sweep_once", fake_sweep),
             mock.patch.object(schedulers, "run_per_server_scheduler", fake_scheduler),
             app.app_context(),
         ):
             with self.assertRaises(stop):
                 schedulers.background_data_fetcher()
 
-    def test_the_startup_runs_exactly_one_bootstrap_sweep_then_the_scheduler(self):
+    def test_the_scheduler_starts_without_waiting_for_the_recovery_sweep(self):
+        # The sweep used to run FIRST and the loop only started when it finished, so a slow
+        # or hanging sweep stalled every panel's cadence - including the one an operator had
+        # just opened. The loop must be entered regardless of the sweep.
         sweeps = []
         self._start(sweeps)
-        self.assertEqual(len(sweeps), 1, "the sweep is a bootstrap, not a cadence")
-        self.assertFalse(sweeps[0]['force'], "a bootstrap must not force every panel")
-
-    def test_the_bootstrap_sweep_happens_even_with_a_fresh_snapshot(self):
-        # The sweep is what discovers the enabled set and fills an empty snapshot; it is
-        # not conditional on staleness any more (that decision belongs to the policy the
-        # scheduler consults per panel).
-        GLOBAL_SERVER_DATA["last_update"] = datetime.now(timezone.utc).isoformat()
-        sweeps = []
-        self._start(sweeps)
-        self.assertEqual(len(sweeps), 1)
+        # The sweep was launched (in its own thread) and the loop was entered without
+        # waiting for it: the assertion above proves the loop was reached, and this proves
+        # the sweep was still dispatched.
+        self.assertTrue(sweeps, "the recovery sweep was never started")
+        self.assertEqual(sweeps[0]['thread'], 'eve-bootstrap-sweep')
 
     def test_the_wake_listener_starts_before_the_loop(self):
         # A nudge from a web process only shortens the sleep if this process is

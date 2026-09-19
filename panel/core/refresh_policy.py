@@ -1712,6 +1712,11 @@ def server_sync_state(server_id, *, now=None) -> dict:
 #: live?" without pretending it knows the fetcher's memory.
 SERVER_SYNC_KEY = 'eve:refresh:server_sync'
 SERVER_SYNC_TTL = 900
+#: How old a published scheduling row may be before it stops counting as a live schedule.
+#: A fetcher publishes one row per completed read; a panel on the slowest band still
+#: refreshes its row within ~a minute, so anything past this is a fetcher that stopped
+#: publishing rather than a panel that is merely idle.
+SERVER_SYNC_STALE_SECONDS = 30.0
 _server_sync_cache = {'at': 0.0, 'rows': {}}
 SERVER_SYNC_CACHE_SECONDS = 2.0
 
@@ -1818,7 +1823,16 @@ def server_sync_report(server_ids=None, *, now=None) -> dict:
 
 
 def _public_sync_row(sid, row, *, now) -> dict:
-    """Turn a published row into the same shape the local one has (ages, not stamps)."""
+    """Turn a published row into the same shape the local one has (ages, not stamps).
+
+    A published row is a REPORT, and a report that stopped arriving must not be read as a
+    live schedule. Without the age check below, a fetcher that died mid-poll leaves
+    ``next_due`` in the past, which clamps to ``0.0`` - so the dashboard renders
+    "HOT / Next poll: 0s" forever, which reads as "about to poll" when it actually means
+    "nobody has updated this for minutes". The row therefore carries its own publish time,
+    ages past ``SERVER_SYNC_STALE_SECONDS`` are downgraded, and the due time is reported as
+    unknown rather than as "now".
+    """
     def _age(stamp):
         if not stamp:
             return None
@@ -1827,7 +1841,14 @@ def _public_sync_row(sid, row, *, now) -> dict:
         except (TypeError, ValueError):
             return None
 
+    report_age = _age(row.get('updated_at'))
+    stale_report = report_age is not None and report_age > SERVER_SYNC_STALE_SECONDS
     next_due = row.get('next_due')
+    health = row.get('sync_health') or 'down'
+    if stale_report and health in ('live', 'fresh'):
+        # The schedule itself may have been fine when it was written; the honest statement
+        # about it now is "stale", never "live".
+        health = 'stale'
     return {
         'server_id': sid,
         'mode': row.get('mode') or 'idle',
@@ -1836,8 +1857,9 @@ def _public_sync_row(sid, row, *, now) -> dict:
         'last_success_age_seconds': _age(row.get('last_success_at')),
         'last_fetch_duration_ms': row.get('last_fetch_duration_ms'),
         'last_publish_age_seconds': _age(row.get('last_publish_at')),
-        'next_due_in_seconds': (round(max(0.0, float(next_due) - float(now)), 3)
-                                if next_due else None),
+        'next_due_in_seconds': (None if stale_report
+                                else (round(max(0.0, float(next_due) - float(now)), 3)
+                                      if next_due else None)),
         'next_due_at': (round(float(next_due), 3) if next_due else None),
         'consecutive_failures': int(row.get('failures') or 0),
         'backoff_seconds': float(row.get('backoff_seconds') or 0.0),
@@ -1845,7 +1867,12 @@ def _public_sync_row(sid, row, *, now) -> dict:
         'wake_pending': bool(row.get('wake_pending')),
         'scheduler_queue_delay_ms': row.get('queue_delay_ms'),
         'last_start_gap_ms': row.get('last_start_gap_ms'),
-        'sync_health': row.get('sync_health') or 'down',
+        'sync_health': health,
+        # How old the scheduling report itself is. A large value with an otherwise healthy
+        # row is the signature of a fetcher that stopped publishing, which is a different
+        # problem from a panel that stopped answering.
+        'report_age_seconds': report_age,
+        'report_stale': bool(stale_report),
         'source': 'published',
     }
 
