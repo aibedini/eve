@@ -277,6 +277,32 @@ class TrendTests(unittest.TestCase):
         with mock.patch('panel.core.redis_client.get_redis', return_value=noise):
             self.assertEqual(memory_report.trend(now=104.0)['trend'], 'stable')
 
+    def test_trend_carries_a_bounded_series_so_a_chart_needs_no_invention(self):
+        mb = 1024 * 1024
+        fake = self._FakeRedis()
+        for at in range(0, 300, 60):
+            fake.items.insert(0, '{"at": %d, "eve_pss_bytes": %d}' % (at, (500 + at) * mb))
+        with mock.patch('panel.core.redis_client.get_redis', return_value=fake):
+            row = memory_report.trend(now=240.0, minutes=60)
+        self.assertEqual(row['max_samples'], memory_report.SAMPLE_MAX)
+        self.assertTrue(row['series'])
+        self.assertEqual(sorted(row['series'][0]), ['at', 'bytes'])
+        # Only the window, and only the newest points: the payload stays small while the
+        # ring itself may hold a day.
+        self.assertTrue(all(240 - point['at'] <= 60 * 60 for point in row['series']))
+        self.assertEqual(row['series'][-1]['bytes'], (500 + 240) * mb)
+
+    def test_a_series_is_capped_but_the_statistics_use_every_sample(self):
+        mb = 1024 * 1024
+        fake = self._FakeRedis()
+        for at in range(0, 120):
+            fake.items.insert(0, '{"at": %d, "eve_pss_bytes": %d}' % (at, (100 + at) * mb))
+        with mock.patch('panel.core.redis_client.get_redis', return_value=fake):
+            row = memory_report.trend(now=119.0, minutes=60, series_points=10)
+        self.assertEqual(len(row['series']), 10)
+        self.assertEqual(row['samples'], 120)      # every sample still counted
+        self.assertEqual(row['peak_bytes'], 219 * mb)
+
     def test_an_empty_ring_reports_no_samples(self):
         with mock.patch('panel.core.redis_client.get_redis', return_value=self._FakeRedis()):
             row = memory_report.trend(now=1.0)

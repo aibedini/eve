@@ -2,6 +2,14 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.19] - 2026-09-19
+
+### Added
+- `GET /api/system/memory` -> `trend` now carries `series` (the newest samples in the window, capped at 120 points, as `{at, bytes}`) and `max_samples` (the ring's capacity). A memory chart can therefore be drawn from measurements that were actually taken instead of an interpolation, and "12 of N samples" can be stated honestly.
+
+### Tests
+- `tests/test_memory_report.py`: the series is window-bounded and newest-first, its size is capped while the statistics still use every sample, and an empty ring still reports no samples rather than a flat zero line.
+
 ## [2.7.18] - 2026-09-19
 
 ### Added

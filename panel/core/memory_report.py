@@ -507,8 +507,15 @@ def record_sample(now=None, *, force=False) -> bool:
         return False
 
 
-def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES) -> dict:
-    """Current / peak / delta over the window, from the bounded ring."""
+def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES, series_points=120) -> dict:
+    """Current / peak / delta over the window, plus a bounded series to draw.
+
+    ``series`` exists so a chart can be drawn from measurements instead of an
+    interpolation: an operator asking "is this growing?" is looking at a shape, and the
+    only honest way to draw one is to hand over the samples that were taken. It is capped
+    at ``series_points`` (the newest ones) so the payload stays small even though the ring
+    holds a day.
+    """
     moment = time.time() if now is None else float(now)
     try:
         from panel.core import redis_client
@@ -532,6 +539,7 @@ def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES) -> dict:
     marks = [int(row['eve_pss_bytes']) for row in window if row.get('eve_pss_bytes')]
     if not marks:
         return {'available': True, 'samples': 0, 'window_minutes': minutes,
+                'max_samples': SAMPLE_MAX, 'series': [],
                 'note': 'no samples yet in this window'}
     current = marks[-1]
     peak = max(marks)
@@ -544,16 +552,21 @@ def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES) -> dict:
         direction = 'shrinking'
     else:
         direction = 'stable'
+    points = [row for row in window if row.get('eve_pss_bytes')]
+    series = [{'at': round(float(row['at']), 1), 'bytes': int(row['eve_pss_bytes'])}
+              for row in points[-max(2, int(series_points)):]]
     return {
         'available': True,
         'samples': len(marks),
         'window_minutes': minutes,
+        'max_samples': SAMPLE_MAX,
         'current_bytes': current,
         'peak_bytes': peak,
         'window_start_bytes': marks[0],
         'delta_bytes': delta,
         'per_hour_bytes': int(per_hour),
         'trend': direction,
+        'series': series,
         'note': ('a steady high value after a full dashboard load is retained snapshot, '
                  'not a leak; a value that climbs while the client count is flat is a leak'),
     }
