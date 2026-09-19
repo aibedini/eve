@@ -10,7 +10,7 @@ import string
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import qrcode
 import requests
@@ -109,6 +109,53 @@ def _renewal_source_from_payload(data) -> str:
     except Exception:
         requested = ''
     return requested if requested in _RENEWAL_SOURCES else 'explicit_renew'
+
+
+def _timestamp_age_seconds(stamp):
+    """Age of one naive-UTC ISO timestamp, or None when it cannot be told."""
+    if not stamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return max(0.0, (datetime.utcnow() - parsed).total_seconds())
+
+
+def _cached_telemetry_age_seconds(row, fallback_stamp=None):
+    """Age of a cached client row's traffic view, or None when it cannot be told.
+
+    A renewal derives the new cap and the "previous" figures in its ledger entry from
+    the pre-mutation traffic state, so the age of that state is a correctness input,
+    not a performance detail. The row's own per-layer stamp
+    (``panel/jobs/refresh.py: _stamp_snapshot_rows``) is the precise answer; the
+    snapshot's ``last_update`` is the conservative bound when the row predates those
+    stamps, because a row can never be newer than the snapshot it was published in.
+    A missing or unparseable stamp on both reports None, which the caller reads as
+    "unknown", not as "old".
+    """
+    if isinstance(row, dict):
+        age = _timestamp_age_seconds(
+            row.get('telemetry_updated_at') or row.get('config_updated_at'))
+        if age is not None:
+            return age
+    return _timestamp_age_seconds(fallback_stamp)
+
+
+def _cached_baseline_is_fresh(row, max_age: float, fallback_stamp=None) -> bool:
+    """Whether a cached row may stand in for the panel as a renewal baseline.
+
+    Only a KNOWN age is a reason to refuse the cache. A row with no usable stamp is
+    accepted, because the cache is then the only state anybody has and reading the
+    panel first would buy nothing; what this bound exists for is the row that says, by
+    its own stamp, that it is too old to be the pre-mutation state.
+    """
+    age = _cached_telemetry_age_seconds(row, fallback_stamp)
+    if max_age <= 0 or age is None:
+        return True
+    return age <= max_age
 
 
 @bp.route('/api/clients/search')
@@ -1551,24 +1598,42 @@ def renew_client(server_id, inbound_id, email):
 
     # Optimization: Try to find client in global cache first to avoid slow fetch_inbounds
     # NOTE: cached display rows include usage stats while `raw_client` often does not.
+    #
+    # The cache is only allowed to stand in for the panel while its traffic view is
+    # fresh. A renewal's new cap and its "previous" ledger figures come from this
+    # state, so an arbitrarily old row is a wrong baseline, not just a slow one; when
+    # the stamp is too old (or absent) the read below falls through to the panel.
     target_client = None
     cached_client_row = None
     fetched_inbound_row = None
     stats_up = 0
     stats_down = 0
+    from panel.core import refresh_policy as _refresh_policy  # deferred: keeps route import light
+    baseline_max_age = _refresh_policy.baseline_max_age_seconds()
+    baseline_snapshot_stamp = GLOBAL_SERVER_DATA.get('last_update')
     cached_inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
     for ib in cached_inbounds:
         try:
             if int(ib.get('server_id', -1)) == int(server.id) and int(ib.get('id', -1)) == int(inbound_id):
                 for c in ib.get('clients', []):
                     if c.get('email') == email and 'raw_client' in c:
+                        age = _cached_telemetry_age_seconds(c, baseline_snapshot_stamp)
+                        timing["cache_baseline_age_seconds"] = (
+                            None if age is None else round(age, 3))
+                        if not _cached_baseline_is_fresh(
+                                c, baseline_max_age, baseline_snapshot_stamp):
+                            timing["cache_baseline_rejected"] = True
+                            continue
                         target_client = copy.deepcopy(c['raw_client'])
                         cached_client_row = c
                         timing["used_cache_client"] = True
+                        timing["baseline_source"] = 'cache'
                         break
         except (ValueError, TypeError):
             continue
         if target_client: break
+    if target_client is None:
+        timing.setdefault("baseline_source", 'panel')
 
     t_login0 = time.perf_counter()
     session_obj, error = get_xui_session(server)
@@ -2046,12 +2111,31 @@ def renew_client(server_id, inbound_id, email):
 
                             # Compute service state for immediate UI update
                             try:
+                                # Traffic counters: the client-level read (v3) carries
+                                # its own up/down and reflects a reset immediately,
+                                # while the aggregate inbound list can still show the
+                                # pre-reset numbers. Read both and keep the larger, the
+                                # same "never undercount usage" rule the baseline uses.
                                 v_up = 0
                                 v_down = 0
+                                try:
+                                    v_up = int(v_client.get('up') or 0)
+                                except (TypeError, ValueError):
+                                    v_up = 0
+                                try:
+                                    v_down = int(v_client.get('down') or 0)
+                                except (TypeError, ValueError):
+                                    v_down = 0
                                 for st in (v_inbound.get('clientStats', []) if v_inbound else []):
                                     if st.get('email') == email:
-                                        v_up = st.get('up', 0)
-                                        v_down = st.get('down', 0)
+                                        try:
+                                            v_up = max(v_up, int(st.get('up') or 0))
+                                        except (TypeError, ValueError):
+                                            pass
+                                        try:
+                                            v_down = max(v_down, int(st.get('down') or 0))
+                                        except (TypeError, ValueError):
+                                            pass
                                         break
                                 
                                 v_total = verify["observed"]["totalGB"] or 0
@@ -2289,8 +2373,11 @@ def renew_client(server_id, inbound_id, email):
                 # index from this response instead of waiting for a poll (Phase 3).
                 mutation = None
                 verified_state = None
+                # What the panel actually holds now. Only a verified read-back may
+                # travel as authoritative state, and only it may be written through:
+                # the values we intended to set are not evidence.
+                _observed = (verify.get('observed') or {}) if verify.get('ok') else {}
                 if verify.get('ok'):
-                    _observed = verify.get('observed') or {}
                     _verified_raw = dict(target_client or {})
                     _verified_raw.update({
                         'email': email,
@@ -2349,15 +2436,34 @@ def renew_client(server_id, inbound_id, email):
                             renewal_trace_id, server_id, exc_info=True,
                         )
                 try:
+                    if verify.get('ok'):
+                        # Write through the panel's own numbers. Writing the intended
+                        # values (or leaving the counters untouched unless a reset was
+                        # requested) is what made the cache disagree with the panel
+                        # until the next poll republished the old state.
+                        _write_up = int(_observed.get('up') or 0)
+                        _write_down = int(_observed.get('down') or 0)
+                        _write_total = int(_observed.get('totalGB') or 0)
+                        _write_expiry = int(_observed.get('expiryTime') or 0)
+                        _write_enable = bool(_observed.get('enable', True))
+                    else:
+                        # Unverified (only reachable when a caller disables the
+                        # verification gate): fall back to the pre-mutation snapshot,
+                        # plus the one intent a reset expresses about the counters.
+                        _write_up = 0 if reset_traffic else None
+                        _write_down = 0 if reset_traffic else None
+                        _write_total = int(target_client.get('totalGB') or 0)
+                        _write_expiry = int(target_client.get('expiryTime') or 0)
+                        _write_enable = True
                     mutation = patch_cached_client(
                         server_id, email,
                         client_uuid=str(target_client.get('id')) if target_client and target_client.get('id') else None,
-                        total_gb_bytes=int(target_client.get('totalGB') or 0),
-                        expiry_ts=int(target_client.get('expiryTime') or 0),
-                        enable=True,
+                        total_gb_bytes=_write_total,
+                        expiry_ts=_write_expiry,
+                        enable=_write_enable,
                         comment=target_client.get('comment'),
-                        up=(0 if reset_traffic else None),
-                        down=(0 if reset_traffic else None),
+                        up=_write_up,
+                        down=_write_down,
                         operation='renew',
                         verified_state=verified_state,
                         inbound_id=inbound_id)

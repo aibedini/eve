@@ -2,6 +2,25 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.12] - 2026-09-19
+
+### Changed
+- Completed the per-server polling policy (`docs/performance/SERVER_POLLING.md`). Each panel now has a HOT/WARM/IDLE band plus an exponential backoff: HOT at `EVE_SERVER_POLL_ACTIVE_SECONDS`, a new WARM band at `EVE_SERVER_POLL_WARM_SECONDS` (10 s) for `EVE_SERVER_WARM_TTL_SECONDS` after the hot window, and IDLE at `EVE_SERVER_POLL_IDLE_SECONDS` with a stable per-server offset inside `EVE_SERVER_POLL_IDLE_JITTER_SECONDS`, so a large install no longer comes due in the same second.
+- One fan-out now reads a bounded, band-ordered batch (`EVE_REFRESH_BATCH_SERVERS`, default twice the refresh worker pool) instead of every due panel, so a watched panel is read at the head of every cycle rather than behind the idle majority; the panels left out stay due for the next cycle. `EVE_SERVER_POLL_IDLE_JITTER_SECONDS=0` and `EVE_REFRESH_BATCH_SERVERS=0` restore the previous whole-install sweep for diagnosis.
+- Watch marks cross the process boundary through a sorted-set index (`eve:refresh:hot_servers` + `eve:refresh:watch_reason`) and a Redis Pub/Sub nudge on `eve:refresh:wake`; the fetcher subscribes and breaks its sleep instead of waiting out its slice. The keyspace `SCAN` is gone from the hot path: keys written by an older build are folded into the index by one bounded scan per minute. `note_server_activity()` now publishes, so an EVE mutation made in a web process makes the panel hot in the process that polls.
+- A verified mutation records a read-your-writes fence (`EVE_CLIENT_FENCE_SECONDS`) that stops a slower aggregate panel read from writing pre-mutation counters over the verified ones, and is released as soon as the panel catches up.
+- A renewal writes through the values the panel's read-back reported, and its pre-mutation baseline may only come from the cache while that row is younger than `EVE_RENEW_BASELINE_MAX_AGE_SECONDS`; otherwise the client is read from the panel first.
+- The dashboard caps the panels it declares at the server's own `EVE_SERVER_POLL_WATCH_LIMIT` (rendered into the page) instead of sending a longer list the scheduler silently truncates.
+- `GET /api/doctor` exposes the aggregate sync summary, the full sync state of the panels that are stale/backing off/down, and the effective intervals and bounds.
+
+### Fixed
+- A renewal no longer reports pre-mutation traffic: `patch_cached_client()` prefers the verified read-back over the cached row for the returned client state, and the traffic counters are observed from the panel's client-level read (v3) rather than only from the aggregate inbound list.
+- `_handle_wake_payload()` reads a single scalar `server_ids` value as one id rather than iterating its characters, so a wake message from an older or external publisher can no longer mark unrelated (and non-existent) panels hot.
+
+### Tests
+- `tests/test_server_polling.py` grew from 28 to 60 tests: the WARM band and its hand-off, idle jitter, batch ordering and its bound, cross-process wake payloads (including the scalar form), the watch-share throttle, the client fence lifecycle with and without Redis, the sync health/summary vocabulary, and structured `sync_event` rendering.
+- `tests/_crossprocess_child.py` (the real child-process proof) now models strings, hashes and sorted sets with expiry, so the shared-backend path is exercised instead of silently degrading.
+
 ## [2.7.11] - 2026-09-17
 
 ### Fixed

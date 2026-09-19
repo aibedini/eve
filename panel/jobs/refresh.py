@@ -2154,9 +2154,14 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
 
     Pass ``verified_state`` (the client object read back from the panel) when the
     caller verified the write; the result then carries the canonical state even if
-    this worker's cache had no matching row.
+    this worker's cache had no matching row. Its telemetry outranks a caller that
+    passed nothing: leaving the counters unwritten is what let a renewal's traffic
+    view drift back to the pre-mutation numbers.
     """
     from app import _get_dashboard_status_thresholds, _get_panel_ui_lang, app, format_bytes  # deferred: app-level helper, avoids circular import
+    verified = verified_state if isinstance(verified_state, dict) else None
+    effective_up = up if up is not None else (verified or {}).get('used_up')
+    effective_down = down if down is not None else (verified or {}).get('used_down')
     changed = False
     operation = operation or ('rotate' if new_email else 'update')
     revision_before = get_server_revision(server_id) if publish else None
@@ -2172,6 +2177,16 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             refresh_policy.note_server_activity(server_id)
         except Exception:
             pass
+        # Read-your-writes fence. The panel's client-level endpoint reflected this
+        # write immediately, but its aggregate inbound list can lag by a poll; the
+        # fence tells the fetcher to hold the verified counters until the slower
+        # view catches up (panel/jobs/schedulers.py: _apply_client_fences).
+        if verified:
+            try:
+                refresh_policy.record_client_fence(
+                    server_id, verified.get('email') or new_email or email, verified)
+            except Exception:
+                pass
     try:
         write_context = serialized_server_snapshot_write(server_id) if publish else GLOBAL_REFRESH_LOCK
         with write_context:
@@ -2192,17 +2207,18 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                     raw['enable'] = bool(enable)
                 if new_email is not None:
                     raw['email'] = new_email
-                if up is not None:
-                    cd['up'] = int(up)
-                    cd['up_formatted'] = format_bytes(int(up))
-                if down is not None:
-                    cd['down'] = int(down)
-                    cd['down_formatted'] = format_bytes(int(down))
+                if effective_up is not None:
+                    cd['up'] = int(effective_up)
+                    cd['up_formatted'] = format_bytes(int(effective_up))
+                if effective_down is not None:
+                    cd['down'] = int(effective_down)
+                    cd['down_formatted'] = format_bytes(int(effective_down))
                 _recompute_cached_client(
                     cd, thresholds, lang,
                     config_changed=any(value is not None for value in (
                         comment, total_gb_bytes, expiry_ts, enable, new_email)),
-                    telemetry_changed=(up is not None or down is not None))
+                    telemetry_changed=(effective_up is not None
+                                       or effective_down is not None))
                 changed = True
                 patched_row = cd
             if changed:
@@ -2225,8 +2241,8 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
         )
         return ClientMutationResult(
             server_id=server_id, email=new_email or email, operation=operation,
-            client_id=client_uuid, verified=bool(verified_state), changed=False,
-            client_state=(verified_state if verified_state else None),
+            client_id=client_uuid, verified=bool(verified), changed=False,
+            client_state=(verified if verified else None),
         )
     if publish:
         _report_cache_patch(server_id, email, client_uuid, revision_before, changed)
@@ -2238,8 +2254,20 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             _request_targeted_cache_repair(server_id, email)
     if patched_row is not None:
         state = normalize_client_state(row=patched_row, inbound_id=inbound_id)
-    elif verified_state:
-        state = verified_state
+        if verified:
+            # The row is this worker's merged view; the verified read is the panel's
+            # own answer. Publish the verified values and keep only the freshness
+            # stamps (and any presentation the read did not carry) from the row --
+            # otherwise a renew reports the pre-mutation telemetry it just replaced.
+            state = dict(verified)
+            row_state = normalize_client_state(row=patched_row, inbound_id=inbound_id)
+            for key in ('config_updated_at', 'telemetry_updated_at', 'service_state',
+                        'service_state_label', 'service_state_emoji',
+                        'service_state_tag', 'inbound_id'):
+                if state.get(key) is None and row_state.get(key) is not None:
+                    state[key] = row_state[key]
+    elif verified:
+        state = verified
     else:
         state = None
     # The browser's cursor is a snapshot revision; publish the one this mutation
@@ -2273,7 +2301,7 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             deleted=False)
     return ClientMutationResult(
         server_id=server_id, email=new_email or email, operation=operation,
-        client_id=client_uuid, verified=bool(verified_state), changed=changed,
+        client_id=client_uuid, verified=bool(verified), changed=changed,
         client_state=state,
         server_revision=(get_server_revision(server_id) if publish else 0),
         snapshot_revision=snapshot_revision,

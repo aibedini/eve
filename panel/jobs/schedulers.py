@@ -48,6 +48,7 @@ from panel.jobs.refresh import (
     _backoff_record_success,
     _backoff_should_skip,
     _check_server_reachable,
+    _recompute_cached_client,
     _recompute_global_stats_from_server_statuses,
     _set_snap_progress,
     refresh_queue_worker,
@@ -270,6 +271,13 @@ def background_data_fetcher():
         load_snapshot_from_redis(force=True)
     except Exception:
         pass
+    # Cross-process wake: a dashboard in a web worker marks a panel HOT and publishes a
+    # nudge; this subscription turns that into "the loop re-evaluates now" instead of
+    # "the loop re-evaluates when its current sleep expires".
+    try:
+        refresh_policy.start_wake_listener()
+    except Exception:
+        app.logger.warning('Refresh wake listener could not start', exc_info=True)
     while True:
         try:
             with app.app_context():
@@ -293,10 +301,12 @@ def background_data_fetcher():
                 if due_in is not None:
                     # Wake for the earliest due panel; never spin on a ~0 remainder.
                     interval = min(interval, max(0.25, due_in))
-            # Sleep a bounded slice: a request (local event or shared Redis
-            # timestamp) makes the next evaluation switch to the active cadence.
+            # Sleep a bounded slice: a request (local event, shared activity timestamp
+            # or a published wake nudge) makes the next evaluation re-read the policy.
+            # The slice is bounded well below the cycle interval so a lost nudge costs
+            # latency rather than correctness.
             refresh_policy.wait_for_interval(
-                min(interval, refresh_policy.activity_poll_seconds()))
+                min(interval, refresh_policy.max_wake_slice()))
         except Exception:
             try:
                 with app.app_context():
@@ -361,6 +371,95 @@ def _record_fetch_transitions(server_id, inbounds):
         app.logger.warning(
             '[telemetry] transition recording failed for server %s', server_id,
             exc_info=True)
+
+
+def _block_signature(inbounds):
+    """Cheap change detector for ONE server's block (never the whole install).
+
+    Freshness has to know whether a poll returned something new, and hashing every
+    client of every panel would be exactly the expensive pass this project already
+    avoids. The counters below move for everything the dashboard shows -- traffic,
+    quota, expiry, enable -- so a poll that moved none of them is reported as
+    ``no_change`` without touching the rest of the install.
+    """
+    count = up = down = total = enabled = expiry = 0
+    for inbound in inbounds or []:
+        for client in (inbound.get('clients') or []):
+            count += 1
+            if client.get('enable', True):
+                enabled += 1
+            try:
+                up += int(client.get('up') or 0)
+                down += int(client.get('down') or 0)
+                total += int(client.get('totalGB') or 0)
+                expiry += int(client.get('expiryTimestamp') or 0)
+            except (TypeError, ValueError):
+                continue
+    return (count, up, down, total, enabled, expiry)
+
+
+def _apply_client_fences(server_id, inbounds):
+    """Refuse to let a slower aggregate read revert a verified client mutation.
+
+    Reached only while a fence is live (a few seconds after an EVE mutation read the
+    client back from the panel). The client-level endpoint reflects the write
+    immediately while the aggregate inbound list can lag; without this guard the next
+    background poll writes the pre-mutation counters over the verified ones, and the
+    renewal looks like it undid itself a minute later.
+
+    The fence is dropped the moment a read comes back at or above the verified counters,
+    so it can never pin a value the panel genuinely changed.
+    """
+    fences = refresh_policy.client_fences(server_id)
+    if not fences:
+        return inbounds
+    normalised = {
+        str(key).replace(' ', '').lower(): value for key, value in fences.items()
+    }
+    thresholds = None
+    lang = None
+    for inbound in (inbounds or []):
+        for client in (inbound.get('clients') or []):
+            lookup = str(client.get('email') or '').replace(' ', '').lower()
+            fence = normalised.get(lookup)
+            if not fence:
+                continue
+            try:
+                want_up = int(fence.get('used_up'))
+                want_down = int(fence.get('used_down'))
+                cur_up = int(client.get('up') or 0)
+                cur_down = int(client.get('down') or 0)
+            except (TypeError, ValueError):
+                continue
+            if cur_up >= want_up and cur_down >= want_down:
+                # The panel caught up: the fence has done its job.
+                refresh_policy.clear_client_fence(server_id, fence.get('email'))
+                refresh_policy.sync_event(
+                    'sync.server.fence_cleared', server_id=server_id)
+                continue
+            if thresholds is None:
+                from app import _get_dashboard_status_thresholds, _get_panel_ui_lang
+                thresholds = _get_dashboard_status_thresholds()
+                lang = _get_panel_ui_lang()
+            client['up'] = max(cur_up, want_up)
+            client['down'] = max(cur_down, want_down)
+            try:
+                from app import format_bytes
+                client['up_formatted'] = format_bytes(int(client['up']))
+                client['down_formatted'] = format_bytes(int(client['down']))
+            except Exception:
+                pass
+            try:
+                _recompute_cached_client(
+                    client, thresholds, lang, telemetry_changed=True)
+            except Exception:
+                pass
+            refresh_policy.sync_event(
+                'sync.server.fence_held', server_id=server_id,
+                observed_up=cur_up, observed_down=cur_down,
+                kept_up=int(client['up']), kept_down=int(client['down']))
+    return inbounds
+
 
 def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_callback=None,
                                  wait_seconds: float = 0.0, periodic: bool = False) -> bool:
@@ -450,6 +549,29 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
             'allow_insecure': bool(getattr(s, 'allow_insecure', False)),
         } for s in servers
             if int(s.id) not in skipped_ids and int(s.id) not in deferred_ids]
+        # One fan-out per cycle, ordered by urgency and bounded in size. The cadence is
+        # only real if the loop comes back to a HOT panel before the idle panels it
+        # shares the worker pool with: a whole-install sweep made the cycle length the
+        # effective interval of the one panel the operator was watching. Panels left out
+        # here stay due for the next cycle, which starts as soon as this one ends.
+        #
+        # Only the automatic cycle is bounded. A manual refresh, a targeted repair and
+        # the messaging warm-up name a set and must get ALL of it: operator intent
+        # outranks the poll schedule, and a silently truncated "Refresh" is worse than
+        # a slow one.
+        if periodic and not server_ids:
+            due_count = len(server_dicts)
+            server_dicts = refresh_policy.prioritize_fetch_batch(server_dicts, now=now_ts)
+            if len(server_dicts) < due_count:
+                try:
+                    refresh_policy.sync_event(
+                        'sync.cycle.bounded', level='debug',
+                        due=due_count, reading=len(server_dicts),
+                        hot=sum(1 for srv in server_dicts
+                                if refresh_policy.server_mode(
+                                    int(srv['id']), now=now_ts) == 'hot'))
+                except Exception:
+                    pass
         refresh_revisions = {
             int(s['id']): get_server_revision(int(s['id'])) for s in server_dicts
         }
@@ -538,7 +660,7 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 GLOBAL_SERVER_DATA['servers_status'] = statuses
                 GLOBAL_SERVER_DATA['last_update'] = _utc_iso_now()
 
-        def _apply_result(sid, res, ticket=None):
+        def _apply_result(sid, res, ticket=None, duration_ms=None):
             # Ordering barrier FIRST: a panel that answered slowly must not overwrite
             # a newer read of the same panel. Comparing wall-clock stamps cannot do
             # this -- they are written at apply time (see panel/core/fetch_sequence.py)
@@ -558,12 +680,14 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 )
                 # The panel answered; only this snapshot copy is stale. Reschedule the
                 # next poll so the loop does not treat the panel as still in flight.
-                refresh_policy.note_server_result(sid, True)
+                refresh_policy.note_server_result(
+                    sid, True, duration_ms=duration_ms)
                 return False
             _, inbounds, online_index, status_payload, status_error, error, detected_type = res
             if error:
                 _backoff_record_failure(sid, error)
-                refresh_policy.note_server_result(sid, False)
+                refresh_policy.note_server_result(
+                    sid, False, duration_ms=duration_ms, error=error)
                 st = status_map.get(sid) or {"server_id": sid}
                 # Keep cached stats if present to avoid UI dropping counts.
                 if isinstance(st.get('stats'), dict) and st.get('stats'):
@@ -586,14 +710,21 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 return True  # keep existing inbounds block (if any)
 
             _backoff_record_success(sid)
-            refresh_policy.note_server_result(sid, True)
             srv = servers_by_id.get(sid)
             if srv is not None and persist_detected_panel_type(srv, detected_type):
                 app.logger.info("Detected panel type for server %s as %s", sid, detected_type)
             if not isinstance(inbounds, list):
                 inbounds = []
             processed, stats = process_inbounds(inbounds, srv, admin_user, '*', {}, online_index=online_index)
+            # A verified EVE mutation holds its read-back against a lagging aggregate
+            # read for a few seconds (panel/core/refresh_policy.py: client fences).
+            if processed:
+                _apply_client_fences(sid, processed)
+            previous_signature = _block_signature(existing_by_server.get(sid) or [])
+            changed = _block_signature(processed) != previous_signature
             new_by_server[sid] = list(processed or [])
+            refresh_policy.note_server_result(
+                sid, True, duration_ms=duration_ms, changed=changed)
             _record_fetch_transitions(sid, processed)
 
             st = status_map.get(sid) or {"server_id": sid}
@@ -652,6 +783,12 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 if publish_snapshot_to_redis(
                         publishable, expected_server_revisions=expected):
                     dirty_server_ids.difference_update(publishable)
+                    for sid in publishable:
+                        refresh_policy.note_snapshot_publish(sid)
+                    refresh_policy.sync_event(
+                        'sync.server.publish', level='debug',
+                        servers=len(publishable),
+                        server_ids=','.join(str(sid) for sid in sorted(publishable))[:200])
                 else:
                     # A CAS failure means at least one mutation won the race. Drop
                     # those stale candidates; successful panel data is fetched again
@@ -665,12 +802,15 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
             with concurrent.futures.ThreadPoolExecutor(
                     max_workers=panel_limits.refresh_worker_limit()) as executor:
                 fetch_tickets = {}
+                fetch_started = {}
                 future_to_id = {}
                 for srv in server_dicts:
                     srv_id = int(srv['id'])
                     # Take the ticket BEFORE the read starts: the result is applied
                     # under this ticket, so an older read that returns late loses.
                     fetch_tickets[srv_id] = fetch_sequence.begin(srv_id)
+                    fetch_started[srv_id] = time.time()
+                    refresh_policy.note_fetch_started(srv_id)
                     future_to_id[executor.submit(fetch_worker, srv)] = srv_id
                 for future in concurrent.futures.as_completed(future_to_id):
                     sid = future_to_id[future]
@@ -681,8 +821,16 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                             res = (sid, None, None, None, None, "Timeout", 'auto')
                     except Exception as e:
                         res = (sid, None, None, None, None, str(e) or "Timeout", 'auto')
+                    duration_ms = None
                     try:
-                        applied = _apply_result(sid, res, ticket=fetch_tickets.get(sid))
+                        duration_ms = int(
+                            (time.time() - fetch_started.get(sid, time.time())) * 1000)
+                    except Exception:
+                        duration_ms = None
+                    try:
+                        applied = _apply_result(
+                            sid, res, ticket=fetch_tickets.get(sid),
+                            duration_ms=duration_ms)
                     except Exception:
                         app.logger.exception("Failed to apply fetch result for server %s", sid)
                         applied = False

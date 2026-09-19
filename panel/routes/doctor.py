@@ -135,6 +135,18 @@ def doctor_summary():
         from app import GLOBAL_SERVER_DATA  # deferred: app-level state
         from panel.core import refresh_policy
         server_states = refresh_policy.server_states()
+        sync_summary = refresh_policy.sync_summary()
+        # Only the panels that need attention carry their full sync state: the doctor
+        # payload is read by an operator looking for the exception, not for a dump of
+        # every server's timings.
+        attention = {}
+        for sid in sorted(server_states):
+            try:
+                health = refresh_policy.sync_health(sid)
+            except Exception:
+                continue
+            if health in ('stale', 'backoff', 'down'):
+                attention[sid] = refresh_policy.server_sync_state(sid)
         checks['refresh_policy'] = {
             'state': 'ok',
             **refresh_policy.status(
@@ -145,13 +157,23 @@ def doctor_summary():
             'servers': server_states,
             'servers_tracked': len(server_states),
             'servers_due': sum(1 for row in server_states.values() if row.get('due')),
+            # Aggregate health plus the full state of the panels that are not live:
+            # a stale or backing-off panel is the reason anyone opens this page.
+            'sync': sync_summary,
+            'servers_attention': attention,
             'server_intervals': {
                 'active_seconds': refresh_policy.server_active_seconds(),
+                'warm_seconds': refresh_policy.server_warm_seconds(),
                 'idle_seconds': refresh_policy.server_idle_seconds(),
                 'active_ttl_seconds': refresh_policy.server_active_ttl(),
+                'warm_ttl_seconds': refresh_policy.server_warm_ttl(),
+                'idle_jitter_seconds': refresh_policy.idle_jitter_span(),
                 'backoff_base_seconds': refresh_policy.server_backoff_base(),
                 'backoff_max_seconds': refresh_policy.server_backoff_max(),
                 'watch_limit': refresh_policy.server_watch_limit(),
+                'fetch_batch_servers': refresh_policy.fetch_batch_limit(),
+                'client_fence_seconds': refresh_policy.client_fence_seconds(),
+                'renew_baseline_max_age_seconds': refresh_policy.baseline_max_age_seconds(),
             },
         }
     except Exception as exc:

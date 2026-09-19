@@ -3290,6 +3290,10 @@
 
     // Phase 10: the panels whose rows are on screen right now. Sent with every poll so
     // the server-side scheduler knows what the operator is actually watching.
+    // The cap is the server's own (EVE_SERVER_POLL_WATCH_LIMIT): declaring more than it
+    // accepts would silently drop the surplus, so the browser caps the list it sends
+    // rather than claiming a panel is being watched when the scheduler disagrees.
+    const WATCH_LIMIT = {{ watch_limit|default(50)|int }};
     function watchedServerIds() {
         const seen = new Set();
         (Array.isArray(allInboundsData) ? allInboundsData : []).forEach((row) => {
@@ -3297,7 +3301,7 @@
             if (sid === null || sid === undefined || sid === '') return;
             seen.add(String(sid));
         });
-        return Array.from(seen).slice(0, 50);
+        return Array.from(seen).slice(0, WATCH_LIMIT);
     }
 
     async function refreshData(isSilent = false, options = {}) {

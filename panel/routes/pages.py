@@ -41,6 +41,7 @@ def dashboard():
     bank_cards = BankCard.query.filter_by(is_active=True).all()
 
     from panel.routes.dashboard import sse_enabled  # deferred: avoids an import cycle
+    from panel.core import refresh_policy  # deferred: keeps page import light
 
     return render_template('dashboard.html',
                          servers=servers,
@@ -54,7 +55,12 @@ def dashboard():
                          base_cost_gb=user_cost_gb,
                          base_cost_day_unlimited=user_cost_day_unlimited,
                          bank_cards=bank_cards,
-                         sse_enabled=sse_enabled())
+                         sse_enabled=sse_enabled(),
+                         # The browser declares which panels it renders; this is the
+                         # server's cap on how many of them it will hold on the fast
+                         # cadence, so the page can cap itself instead of declaring a
+                         # panel that is silently ignored.
+                         watch_limit=refresh_policy.server_watch_limit())
 
 @bp.route('/servers')
 @login_required
