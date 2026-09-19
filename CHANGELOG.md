@@ -2,6 +2,17 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.21] - 2026-09-19
+
+### Added
+- `scripts/measure_snapshot_footprint.py` measures what the in-process snapshot actually costs, so the memory plan rests on bytes instead of on the size of a row as imagined. It builds fleets through the **production** builder (`app.process_inbounds`) from synthetic 3x-ui payloads and reports a bounded deep size, JSON, gzip, the measured marginal cost of one more row (the slope between two fleet sizes, so the snapshot's fixed part cancels), and - for attribution - the **deletion delta** of `raw_client` and of the `*_formatted` strings. No network, no database, no Redis, no sleeps.
+
+### Fixed
+- The documented plan for the snapshot's cost was based on an arithmetic that measurement contradicts, and `docs/performance/MEMORY.md` now records both corrections: a row measured in isolation (4,933 bytes) overstates a row's true cost (2,230 bytes marginal) by 2.2x because interned literals are shared across rows, and attributing a key by summing its subtree (1,596 bytes/row) overstates what deleting it saves (27.5% of the snapshot), because part of that subtree is already referenced by the row itself.
+
+### Docs
+- `docs/performance/MEMORY.md`: the measured table (per-row, per-key, JSON, gzip, the v3 mirror's 3.82x byte cost and the 73.9% a normalised entity would return), the per-copy scaling at 10k/30k/60k rows, and a ranked plan whose savings are now measured values rather than suspects D/E/F.
+
 ## [2.7.20] - 2026-09-19
 
 ### Added

@@ -26,6 +26,7 @@ document proposes a fix that has not been measured on the install it applies to.
 | `GET /api/system/memory` (superadmin) | the same payload Settings → Overview renders |
 | `POST /api/system/memory/analyze` (superadmin + step-up) | explicit, bounded deep Python sample: largest allocations as file/line/size only |
 | Settings → Overview → Memory | the human-readable version: host, Eve PSS, roles table, snapshot, caches, trend, health notes |
+| `scripts/measure_snapshot_footprint.py` | how many bytes a row, `raw_client` and the `*_formatted` strings actually cost, by building production rows and re-measuring after deleting each key |
 | `health_watchdog` | one sample a minute into a Redis ring (`LPUSH` + `LTRIM`, capped at 1440 entries) |
 
 The trend is what separates the two very different explanations of a high number:
@@ -108,20 +109,80 @@ The instrumentation deliberately does not compute the true retained size of nest
 on every request; that is the on-demand deep analysis, which is bounded, admin-only and
 returns file/line/size only.
 
+Suspects D, E and F no longer need the live host to be quantified: they were measured in
+bytes by building production rows and deleting one key at a time (next section). A, B, C
+and G still need the host, because they are about how many copies exist and how large each
+process is.
+
+## What was measured (this checkout, 2026-09-19)
+
+`scripts/measure_snapshot_footprint.py` builds fleets through the **production** builder
+(`app.process_inbounds`) from synthetic 3x-ui payloads and measures the result four ways:
+a bounded deep size, JSON, gzip, and - for attribution - the **deletion delta**, i.e. the
+same snapshot with `raw_client` or the `*_formatted` keys removed. It touches no network,
+no database and no Redis, and it never sleeps. Default run: 3 servers x 4 inbounds, 50
+accounts per server.
+
+| Measurement | Result |
+|---|---|
+| one processed row, measured in isolation | 4,933 bytes |
+| **marginal cost of one more row** (two fleet sizes, fixed part cancels) | **2,230 bytes** |
+| `raw_client` inside one row, in isolation | 1,596 bytes |
+| JSON of the snapshot | 0.163 MB per 150 rows |
+| gzip of that JSON (the Redis copy) | 9.4% of JSON |
+| deleting `raw_client` | -27.5% deep, -26.7% JSON, **-31.1% gzip** |
+| deleting the `*_formatted` strings | -8.4% deep, -10.4% JSON, **-17.4% gzip** |
+| deleting both | -35.9% deep, -37.0% JSON, **-47.7% gzip** |
+| the v3 mirror, same account fleet | 150 unique rows -> 600 rows (4.00x), 0.338 -> 1.294 MB (3.82x) |
+| collapsing the mirror to one entity per account | removes 0.956 MB, **73.9%** of the mirrored snapshot |
+
+Two of these numbers are corrections to the arithmetic this document was written with:
+
+* **A row measured in isolation is not what a row costs.** 4,933 bytes isolated against
+  2,230 bytes marginal - the difference is interned literals (`'xtls-rprx-vision'`, short
+  strings and small ints) that are shared across rows and counted once per row by an
+  isolated measurement. Scaling with the isolated figure overstates the snapshot 2.2x, so
+  the slope between two fleet sizes is the number to use.
+* **Attribution has to be a deletion, not a sum.** The isolated `raw_client` subtree is
+  1,596 bytes/row, but deleting it saves 27.5% of the snapshot rather than 32% of it,
+  because part of that subtree (the same email, id and literal values) is already
+  referenced by the row itself. The plan below quotes the deletion delta.
+
+Scaling from the measured slope (2,230 bytes/row retained; extrapolation, not a
+measurement), per snapshot copy:
+
+| Rows | Retained | Redis copy (gzip ~9.3%) |
+|---|---|---|
+| 10,000 | 21 MB | 2.0 MB |
+| 30,000 | 64 MB | 6.0 MB |
+| 60,000 | 128 MB | 12 MB |
+
+That per-copy figure is what matters, because the snapshot exists in up to three Python
+processes (background, web, Telegram bot, see above). What the host actually holds is
+`snapshot.client_rows` on the live instance - read it from `/api/system/memory` and
+multiply, rather than assuming the fleet size.
+
 ## Optimization plan (ranked, not implemented)
 
 Measured impact can only come from the numbers above; the ordering below is by expected
 value and risk, and each item states what to measure before and after.
 
-| # | Change | Expected saving | Complexity | Risk | Migration | Performance |
+| # | Change | Measured or expected saving | Complexity | Risk | Migration | Performance |
 |---|---|---|---|---|---|---|
-| 1 | Telegram bot stops holding the full snapshot; read one service state from a small Redis index (`eve:service_state:<server>:<client>`) | its whole snapshot copy (C) | medium | low-medium (bot paths must be enumerated: 4 read sites today, `telegram_bot_worker.py:521,1111,1702,3513`) | none (additive index, backfilled by the fetcher) | bot latency improves (one key instead of a full hydrate) |
-| 2 | Drop `raw_client` from the hot snapshot where an authoritative client read already exists | D, minus what the mutation path re-reads | high | medium-high (renew/edit/rotate depend on it; the targeted read path must cover legacy too) | none | mutation latency unchanged (it already re-reads on v3); dashboard read unchanged |
-| 3 | Normalise v3 client entities: one entity per server, inbound membership by reference | E | high | high (touches every consumer of the snapshot shape and the delta fingerprint) | snapshot format change (versioned payload) | JSON/delta and gzip shrink proportionally |
-| 4 | Stop storing `*_formatted` strings in the canonical cache; format at render | F | medium | low-medium (templates and the API consumers must format) | API shape annotation | smaller payloads, slightly more CPU in the browser |
-| 5 | Web hydration made lazy/per-server instead of forever-whole-fleet | B | high | medium-high (global search and the overview need an index or a server-side query) | none | first paint equal or better; search needs the index |
+| 1 | Telegram bot stops holding the full snapshot; read one service state from a small Redis index (`eve:service_state:<server>:<client>`) | its whole snapshot copy (C): ~64 MB retained at 30k rows, plus ~6 MB of Redis reads per hydrate | medium | low-medium (bot paths must be enumerated: 4 read sites today, `telegram_bot_worker.py:521,1111,1702,3513`) | none (additive index, backfilled by the fetcher) | bot latency improves (one key instead of a full hydrate) |
+| 2 | Normalise v3 client entities: one entity per server, inbound membership by reference | **measured** -73.9% of the snapshot on a mirrored fleet (150 unique rows cost 0.338 MB; the 4.00x mirror costs 1.294 MB) | high | high (touches every consumer of the snapshot shape and the delta fingerprint) | snapshot format change (versioned payload) | JSON/delta shrink with the row count; gzip too |
+| 3 | Drop `raw_client` from the hot snapshot where an authoritative client read already exists | **measured** -27.5% deep, -26.7% JSON, -31.1% gzip (1,596 B/row isolated) | high | medium-high (renew/edit/rotate depend on it; the targeted read path must cover legacy too) | none | mutation latency unchanged (it already re-reads on v3); dashboard read unchanged |
+| 4 | Stop storing `*_formatted` strings in the canonical cache; format at render | **measured** -8.4% deep, -10.4% JSON, -17.4% gzip | medium | low-medium (templates and the API consumers must format) | API shape annotation | smaller payloads, slightly more CPU in the browser |
+| 5 | Web hydration made lazy/per-server instead of forever-whole-fleet | B (unmeasured until a live `snapshot.*` from a web process exists) | high | medium-high (global search and the overview need an index or a server-side query) | none | first paint equal or better; search needs the index |
 | 6 | Server-side search index so search does not need every client in RAM | enables 5 | medium | medium | none | search stays fast with less memory |
 | 7 | Split bootstrap so background/telegram workers do not import the whole web app | interpreter + route + cache overhead per worker | medium | medium (blueprint/cache imports move behind factories) | none | faster worker start-up |
+
+The measured order is worth stating plainly, because it is not the order the suspects were
+listed in: on a v3 install the duplication (2) is an order of magnitude larger than
+`raw_client` (3), and the two together are larger than everything else on the list. Items 3
+and 4 are the cheap ones - together they cut roughly half the gzipped Redis payload without
+touching the snapshot's shape - which makes them the place to start if the risk budget is
+small, and the mirror (2) the place to go if it is not.
 
 Two things deliberately **not** in the plan: calling `gc.collect()` on hot paths (it trades
 CPU for nothing when the retention is architectural), and solving pressure with swap or
