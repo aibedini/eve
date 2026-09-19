@@ -1,5 +1,15 @@
 # Repository Guidelines
 
+## Editing text files (encoding)
+
+Never rewrite a source file through a shell pipe or redirect (`Get-Content | Set-Content`,
+`>`, `>>`, `sed -i` through a CP1252-hosted shell, and similar). PowerShell decodes a UTF-8
+file with the console's default encoding and writes it back mangled, which silently turned
+`app.py`'s Persian digit table into two-character sequences and broke the import (fixed in
+`0b0d23a`'s follow-up). Use the file tools (`edit`/`write`), which are byte-exact. This is
+the same class of accident as the `static/style.css` corruption noted under "UI Changes"
+below: the file still looks valid, and the damage is only visible at runtime or in a diff.
+
 ## Validation Budget (read this before running any test)
 
 Do **not** run the whole suite after an ordinary edit. Use the changed-files → affected-tests
