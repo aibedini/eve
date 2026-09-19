@@ -8,6 +8,9 @@ without guessing:
   ``/proc/<pid>/smaps_rollup`` and ``/proc/<pid>/status``;
 * Eve's own processes grouped by ROLE (web, background, telegram bot, telegram egress,
   pulse, managed xray) so "Eve is using N GB" is a sum of PSS, not of double-counted RSS;
+* the host services that are not Eve (Redis, PostgreSQL, nginx) and the unclassified
+  remainder, so the used RAM is reconciled against the processes on the box instead of
+  stopping at "it was not Eve";
 * what the in-process snapshot actually holds (servers, inbounds, client rows, unique
   clients, duplicated rows, rows still carrying ``raw_client``, formatted-string rows) -
   the internal duplication the architecture pays for;
@@ -53,6 +56,21 @@ ROLE_MARKERS = (
     ('web', 'gunicorn'),
 )
 XRAY_MARKERS = ('/xray', 'xray-linux', 'xray run')
+
+#: Host services that run on the same box but are NOT Eve. They are reported separately
+#: and excluded from Eve's total, because folding PostgreSQL into "Eve is using 2 GB"
+#: would be the exact attribution error this module exists to avoid.
+SERVICE_MARKERS = (
+    ('redis', 'redis-server'),
+    ('postgres', 'postgres'),
+    ('nginx', 'nginx'),
+)
+SERVICE_ROLES = tuple(role for role, _marker in SERVICE_MARKERS)
+#: Roles that belong to the host rather than to Eve, so they are outside ``eve_pss_bytes``.
+#: Managed Xray stays listed under ``roles`` (Eve spawns it) but is still reported outside
+#: the Eve total, exactly as before. ``other`` is listed here as well so that an
+#: unclassified process can never be attributed to Eve through the ``include_other`` path.
+NON_EVE_ROLES = ('xray', 'other') + SERVICE_ROLES
 
 #: A sample is compact and lives in Redis, trimmed to a hard cap, so the history itself
 #: can never become the memory problem.
@@ -227,6 +245,9 @@ def _role_for(pid) -> str:
     for marker in XRAY_MARKERS:
         if marker in line:
             return 'xray'
+    for role, marker in SERVICE_MARKERS:
+        if marker in line:
+            return role
     return 'other'
 
 
@@ -261,11 +282,21 @@ def _uptime_for(pid):
 
 
 def eve_processes(*, include_other=False) -> dict:
-    """Eve's processes grouped by role, aggregated on PSS."""
+    """Eve's processes grouped by role, aggregated on PSS.
+
+    Host services (Redis, PostgreSQL, nginx) are collected under ``services`` rather than
+    folded into ``roles``: they are not Eve, so counting them in Eve's total would make
+    the headline number a lie. Managed Xray stays in ``roles`` because Eve spawns it, and
+    remains outside the Eve total as before. Unclassified processes are only counted by
+    default; their PSS is still summed into ``other_pss_bytes`` so the host can be
+    reconciled without listing them (see :func:`unclassified_processes`).
+    """
     if not os.path.isdir(PROC):
         return {'available': False, 'reason': 'no /proc', 'roles': {}}
     roles = {}
-    other = {'processes': 0, 'rss_bytes': 0, 'pss_bytes': 0, 'private_bytes': 0}
+    services = {}
+    other = {'processes': 0, 'rss_bytes': 0, 'pss_bytes': 0, 'private_bytes': 0,
+             'threads': 0}
     for name in os.listdir(PROC):
         if not name.isdigit():
             continue
@@ -275,8 +306,11 @@ def eve_processes(*, include_other=False) -> dict:
         role = row.get('role') or 'other'
         if role == 'other' and not include_other:
             other['processes'] += 1
+            for key in ('rss_bytes', 'pss_bytes', 'private_bytes'):
+                other[key] += int(row.get(key) or 0)
+            other['threads'] += int(row.get('threads') or 0)
             continue
-        bucket = roles.setdefault(role, {
+        bucket = (services if role in SERVICE_ROLES else roles).setdefault(role, {
             'processes': 0, 'rss_bytes': 0, 'pss_bytes': 0, 'private_bytes': 0,
             'threads': 0, 'pids': [], 'max_uptime_seconds': 0.0,
             'peak_rss_bytes': 0, 'pss_approximated': False,
@@ -291,17 +325,87 @@ def eve_processes(*, include_other=False) -> dict:
         if row.get('pss_is_rss_fallback'):
             bucket['pss_approximated'] = True
     eve_pss = sum(bucket['pss_bytes'] for role, bucket in roles.items()
-                  if role != 'xray')
+                  if role not in NON_EVE_ROLES)
     eve_pss_with_xray = eve_pss + int((roles.get('xray') or {}).get('pss_bytes') or 0)
     return {
         'available': True,
         'roles': roles,
+        'services': services,
         'other_processes': other['processes'],
+        'other_rss_bytes': other['rss_bytes'],
+        'other_pss_bytes': other['pss_bytes'],
+        'other_private_bytes': other['private_bytes'],
+        'other_threads': other['threads'],
         'eve_pss_bytes': eve_pss,
         'eve_pss_with_xray_bytes': eve_pss_with_xray,
+        'service_pss_bytes': sum(bucket['pss_bytes'] for bucket in services.values()),
         'note': ('EVE total is a sum of PSS, which counts shared pages once across the '
                  'processes that map them; summing RSS would double-count the interpreter '
-                 'and the loaded libraries'),
+                 'and the loaded libraries. Host services and unclassified processes are '
+                 'reported separately and are not part of the EVE figure.'),
+    }
+
+
+def unclassified_processes(*, limit=10) -> dict:
+    """The largest processes that matched no Eve role and no known host service.
+
+    This is the "who else is on the box" list, so a row carries the executable basename
+    only - never argv, which is where a token or a connection string would sit - and no
+    command-line arguments, environment or customer data.
+    """
+    if not os.path.isdir(PROC):
+        return {'available': False, 'reason': 'no /proc', 'processes': []}
+    rows = []
+    for name in os.listdir(PROC):
+        if not name.isdigit():
+            continue
+        row = process_memory(name)
+        if not row.get('available') or (row.get('role') or 'other') != 'other':
+            continue
+        rows.append({'pid': row['pid'], 'command': row.get('command') or '',
+                     'rss_bytes': row.get('rss_bytes'), 'pss_bytes': row.get('pss_bytes'),
+                     'private_bytes': row.get('private_bytes'),
+                     'threads': row.get('threads')})
+    rows.sort(key=lambda item: -int(item.get('pss_bytes') or 0))
+    limit = max(1, int(limit))
+    return {'available': True, 'processes': rows[:limit], 'count': len(rows),
+            'truncated': len(rows) > limit,
+            'note': 'command is the executable basename; arguments are deliberately not read'}
+
+
+def accounting(host, eve) -> dict:
+    """Reconcile total RAM against the PSS attributed to processes, residual included.
+
+    ``residual_bytes`` is reported rather than absorbed: kernel, slab, page tables and
+    driver memory are real, belong to no process, and a breakdown that quietly buried them
+    would be claiming an accuracy it does not have.
+    """
+    total = host.get('total_bytes')
+    if not total:
+        return {'available': False, 'reason': 'host total unknown'}
+    free = host.get('free_bytes')
+    cache = host.get('cache_bytes')
+    residue_parts = (free, cache)
+    process_pss = sum(int(eve.get(key) or 0) for key in
+                      ('eve_pss_with_xray_bytes', 'service_pss_bytes', 'other_pss_bytes'))
+    return {
+        'available': True,
+        'total_bytes': total,
+        'free_bytes': free,
+        'cache_bytes': cache,
+        'process_pss_bytes': process_pss,
+        'eve_pss_bytes': int(eve.get('eve_pss_bytes') or 0),
+        'xray_pss_bytes': int((eve.get('roles') or {}).get('xray', {}).get('pss_bytes') or 0),
+        'service_pss_bytes': int(eve.get('service_pss_bytes') or 0),
+        'other_pss_bytes': int(eve.get('other_pss_bytes') or 0),
+        'residual_bytes': (None if None in residue_parts
+                           else total - free - cache - process_pss),
+        'used_bytes': host.get('used_bytes'),
+        'available_bytes': host.get('available_bytes'),
+        'note': ('free + page cache + the PSS of every process = total; the residual is '
+                 'kernel, slab, page tables and driver memory, which belongs to no '
+                 'process. used (total - MemAvailable) is the smaller number shown as '
+                 'usage, because the page cache is reclaimable.'),
     }
 
 
@@ -572,8 +676,15 @@ def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES, series_points=120) -> dict:
     }
 
 
-def report(*, now=None, trend_minutes=SAMPLE_KEEP_MINUTES) -> dict:
-    """The whole attribution in one payload for Settings -> Overview."""
+def host_report(*, now=None, trend_minutes=SAMPLE_KEEP_MINUTES) -> dict:
+    """The host-wide attribution: safe to call from a process that is not the app.
+
+    Everything here is read from ``/proc``, Redis and the modules' own caches, so it never
+    imports the application. ``report()`` adds the in-process snapshot on top - a snapshot
+    only means something inside a worker that actually holds one, and importing the app to
+    discover that would run the app's import-time side effects (including migrations) in
+    whatever process asked, which is not something a read-only collector may do.
+    """
     moment = time.time() if now is None else float(now)
     host = host_memory(now=moment)
     eves = eve_processes()
@@ -584,11 +695,20 @@ def report(*, now=None, trend_minutes=SAMPLE_KEEP_MINUTES) -> dict:
         'process_role': (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower(),
         'host': host,
         'eve': eves,
-        'snapshot': snapshot_footprint(),
+        'accounting': accounting(host, eves),
         'redis_snapshot': redis_snapshot_bytes(),
         'caches': cache_footprint(),
         'trend': trend(now=moment, minutes=trend_minutes),
     }
+    payload['health'] = _health(payload)
+    return payload
+
+
+def report(*, now=None, trend_minutes=SAMPLE_KEEP_MINUTES) -> dict:
+    """The whole attribution in one payload for Settings -> Overview."""
+    payload = host_report(now=now, trend_minutes=trend_minutes)
+    payload['snapshot'] = snapshot_footprint()
+    # Recomputed with the snapshot present: this is where the duplication note comes from.
     payload['health'] = _health(payload)
     return payload
 

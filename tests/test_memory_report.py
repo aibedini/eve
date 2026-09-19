@@ -125,7 +125,13 @@ class ProcessMemoryTests(unittest.TestCase):
                 ('python\x00/app/telegram_egress_worker.py\x00', 'telegram-egress'),
                 ('python\x00/app/pulse_runner.py\x00', 'pulse'),
                 ('/usr/local/bin/xray\x00run\x00-c\x00/config.json\x00', 'xray'),
-                ('/usr/sbin/nginx\x00-g\x00daemon off;\x00', 'other'),
+                # Host services are classified so they can be attributed to the host
+                # rather than to Eve; they were 'other' before, which made the host's
+                # 3.45/3.78 GB question unanswerable.
+                ('/usr/sbin/nginx\x00-g\x00daemon off;\x00', 'nginx'),
+                ('/usr/bin/redis-server\x00*:6379\x00', 'redis'),
+                ('/usr/lib/postgresql/16/bin/postgres\x00-D\x00/var/lib/pg\x00', 'postgres'),
+                ('/usr/sbin/sshd\x00-D\x00', 'other'),
         ):
             files = {'/proc/7/status': STATUS, '/proc/7/cmdline': cmdline}
             with mock.patch.object(memory_report, '_read', _fake_read(files)):
@@ -165,6 +171,86 @@ class EveAggregationTests(unittest.TestCase):
         self.assertEqual(report['roles']['background']['threads'], 9)
         self.assertEqual(report['roles']['xray']['processes'], 1)
         self.assertIn('double-count', report['note'])
+
+    def _grouped(self, rows):
+        with mock.patch.object(memory_report, 'process_memory',
+                               side_effect=lambda pid: rows[str(pid)]), \
+                mock.patch.object(memory_report.os, 'listdir',
+                                  return_value=[key for key in rows] + ['x']), \
+                mock.patch.object(memory_report.os.path, 'isdir', return_value=True):
+            return memory_report.eve_processes()
+
+    def test_host_services_are_attributed_separately_and_never_to_eve(self):
+        report = self._grouped({
+            '100': {'available': True, 'pid': 100, 'role': 'web',
+                    'rss_bytes': 500, 'pss_bytes': 300, 'private_bytes': 200, 'threads': 3,
+                    'uptime_seconds': 10, 'peak_rss_bytes': 600},
+            '101': {'available': True, 'pid': 101, 'role': 'redis',
+                    'rss_bytes': 100, 'pss_bytes': 74, 'private_bytes': 70, 'threads': 6,
+                    'uptime_seconds': 99, 'peak_rss_bytes': 120},
+            '102': {'available': True, 'pid': 102, 'role': 'postgres',
+                    'rss_bytes': 200, 'pss_bytes': 182, 'private_bytes': 180, 'threads': 8,
+                    'uptime_seconds': 500, 'peak_rss_bytes': 240},
+            '103': {'available': True, 'pid': 103, 'role': 'other',
+                    'rss_bytes': 90, 'pss_bytes': 60, 'private_bytes': 55, 'threads': 2,
+                    'uptime_seconds': 5, 'peak_rss_bytes': 95},
+        })
+        # Eve is Eve: Redis and PostgreSQL are on the host, not in the Eve figure.
+        self.assertEqual(report['eve_pss_bytes'], 300)
+        self.assertEqual(report['service_pss_bytes'], 256)
+        self.assertEqual(report['services']['redis']['pss_bytes'], 74)
+        self.assertEqual(report['services']['postgres']['threads'], 8)
+        self.assertNotIn('redis', report['roles'])
+        # Unclassified processes stay out of the tables but their PSS is still summed,
+        # so the host can be reconciled without them being listed.
+        self.assertEqual(report['other_processes'], 1)
+        self.assertEqual(report['other_pss_bytes'], 60)
+        self.assertNotIn('other', report['roles'])
+
+    def test_unclassified_processes_are_ranked_and_limited(self):
+        rows = {
+            '100': {'available': True, 'pid': 100, 'role': 'web', 'command': 'gunicorn',
+                    'pss_bytes': 900, 'rss_bytes': 900, 'threads': 1},
+            '101': {'available': True, 'pid': 101, 'role': 'other', 'command': 'java',
+                    'pss_bytes': 300, 'rss_bytes': 400, 'threads': 20},
+            '102': {'available': True, 'pid': 102, 'role': 'other', 'command': 'dockerd',
+                    'pss_bytes': 500, 'rss_bytes': 600, 'threads': 30},
+        }
+        with mock.patch.object(memory_report, 'process_memory',
+                               side_effect=lambda pid: rows[str(pid)]), \
+                mock.patch.object(memory_report.os, 'listdir',
+                                  return_value=['100', '101', '102', 'x']), \
+                mock.patch.object(memory_report.os.path, 'isdir', return_value=True):
+            out = memory_report.unclassified_processes(limit=1)
+            full = memory_report.unclassified_processes(limit=10)
+        self.assertEqual([row['command'] for row in full['processes']],
+                         ['dockerd', 'java'])
+        self.assertEqual(out['count'], 2)
+        self.assertTrue(out['truncated'])
+        self.assertEqual(out['processes'][0]['pid'], 102)
+        self.assertFalse(full['truncated'])
+
+    def test_the_host_reconciles_down_to_a_residual_instead_of_hiding_it(self):
+        host = {'total_bytes': 1000, 'free_bytes': 100, 'cache_bytes': 200,
+                'used_bytes': 700, 'available_bytes': 300}
+        eve = {'eve_pss_bytes': 300, 'eve_pss_with_xray_bytes': 320,
+               'service_pss_bytes': 100, 'other_pss_bytes': 50,
+               'roles': {'xray': {'pss_bytes': 20}}}
+        row = memory_report.accounting(host, eve)
+        # Xray is already inside eve_pss_with_xray, so it is not summed a second time.
+        self.assertEqual(row['process_pss_bytes'], 470)
+        self.assertEqual(row['residual_bytes'], 230)
+        self.assertEqual(row['used_bytes'], 700)
+
+    def test_accounting_without_a_host_total_is_unavailable_not_zero(self):
+        row = memory_report.accounting({'available': False}, {})
+        self.assertFalse(row['available'])
+        self.assertIn('reason', row)
+
+    def test_accounting_says_so_when_free_and_cache_are_unknown(self):
+        row = memory_report.accounting({'total_bytes': 1000}, {})
+        self.assertTrue(row['available'])
+        self.assertIsNone(row['residual_bytes'])
 
 
 class SnapshotFootprintTests(unittest.TestCase):

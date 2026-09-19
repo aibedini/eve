@@ -22,10 +22,11 @@ document proposes a fix that has not been measured on the install it applies to.
 
 | Surface | What it answers |
 |---|---|
-| `panel/core/memory_report.py` | host totals/pressure, per-process RSS/PSS/USS/threads/peak/uptime, Eve's roles, snapshot duplication, Redis snapshot bytes, caches, bounded trend |
+| `panel/core/memory_report.py` | host totals/pressure, per-process RSS/PSS/USS/threads/peak/uptime, Eve's roles, the host services that are not Eve (Redis, PostgreSQL, nginx), the unclassified remainder, the reconciliation down to a residual, snapshot duplication, Redis snapshot bytes, caches, bounded trend |
 | `GET /api/system/memory` (superadmin) | the same payload Settings → Overview renders |
 | `POST /api/system/memory/analyze` (superadmin + step-up) | explicit, bounded deep Python sample: largest allocations as file/line/size only |
-| Settings → Overview → Memory | the human-readable version: host, Eve PSS, roles table, snapshot, caches, trend, health notes |
+| Settings → Overview → Memory | the human-readable version: host, Eve PSS, account reconciliation, roles table, host-services table, snapshot, caches, trend, health notes |
+| `scripts/memory_attribution.py` | the same attribution as a read-only on-host command, for a before/after artifact |
 | `scripts/measure_snapshot_footprint.py` | how many bytes a row, `raw_client` and the `*_formatted` strings actually cost, by building production rows and re-measuring after deleting each key |
 | `health_watchdog` | one sample a minute into a Redis ring (`LPUSH` + `LTRIM`, capped at 1440 entries) |
 
@@ -47,11 +48,21 @@ only counts, byte sizes, pids, roles and ages - and a unit test asserts that
 (`tests/test_memory_report.py::ReportContractTests`). A process command line is reduced to
 the executable basename for the same reason.
 
-Collect it on the host:
+Collect it on the host. Two ways, and they answer different halves:
 
 ```bash
+# Everything including the in-process snapshot, from the process that holds one
+# (needs an admin session cookie):
 curl -s -b "session=<admin-cookie>" http://127.0.0.1:<app_port>/api/system/memory | python -m json.tool
+
+# Host-wide attribution with no session, safe to run over SSH and to diff before/after.
+# It never imports the app, so it reports no snapshot - that is the half above.
+python scripts/memory_attribution.py --json > memory-before.json
 ```
+
+Run the collector with the service's environment for the Redis sections (`REDIS_URL`), for
+example from `systemctl show -p Environment eve-manager-background` or by sourcing the
+unit's EnvironmentFile.
 
 ## The architecture as it stands (code-level, before any measurement)
 
@@ -66,6 +77,14 @@ eve-manager-telegram-egress telegram_egress_worker.py
 eve-manager-telegram-bot    telegram_bot_worker.py
 Redis, PostgreSQL, nginx, managed Xray children
 ```
+
+That last line is why the payload reports **two** groupings rather than one: `eve.roles`
+(web, background, telegram bot, telegram egress, pulse, managed xray) and `eve.services`
+(Redis, PostgreSQL, nginx). Redis and PostgreSQL are not Eve, and folding them into the Eve
+figure is the attribution error this document exists to prevent - so they are reported next
+to it, never inside it. `accounting` then reconciles total RAM as
+`free + page cache + the PSS of every process + a named residual`, so the kernel's share is
+stated instead of being quietly spread over the other rows.
 
 The snapshot is the big object, and it plausibly lives in **three** Python processes:
 
@@ -233,6 +252,8 @@ Settings → Overview → Memory is expected to answer, for the reported host:
   `rows_with_raw_client`, `rows_with_formatted_strings`);
 * how much Redis holds for the compressed snapshot, and how big the out-of-snapshot caches
   are;
+* how much Redis, PostgreSQL and nginx cost as processes, how much is left to unclassified
+  processes, and how much belongs to the kernel (the residual) rather than to any process;
 * whether memory is stable or growing, from a bounded trend.
 
 Only then is a representation change worth making, and the ranking above says which one to

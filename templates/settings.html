@@ -7146,7 +7146,20 @@
             'roleTelegramBot': 'telegram bot',
             'roleTelegramEgress': 'telegram egress',
             'rolePulse': 'pulse',
-            'roleXray': 'xray'
+            'roleXray': 'xray',
+            'roleRedis': 'redis',
+            'rolePostgres': 'postgresql',
+            'roleNginx': 'nginx',
+            'servicesGroup': 'Host services (not EVE)',
+            'serviceNote': 'Redis, PostgreSQL and nginx run on this host but are not EVE, so they are listed separately and are never part of the EVE figure.',
+            'otherPss': 'Unclassified processes',
+            'managedXray': 'Managed Xray',
+            'accountingGroup': 'Where the used memory is',
+            'freeMemory': 'Free',
+            'residual': 'Residual',
+            'residualNote': 'Kernel, slab, page tables and driver memory: real, and owned by no process. It is reported rather than absorbed into another row.',
+            'sumLine': 'Free + page cache + process PSS + residual',
+            'collectorHint': 'For a copy-and-paste artifact, run python scripts/memory_attribution.py --json on the host.'
         },
         fa: {{ ({
             'title': 'حافظه',
@@ -7248,7 +7261,20 @@
             'roleTelegramBot': 'ربات تلگرام',
             'roleTelegramEgress': 'خروجی تلگرام',
             'rolePulse': 'Pulse',
-            'roleXray': 'Xray'
+            'roleXray': 'Xray',
+            'roleRedis': 'Redis',
+            'rolePostgres': 'PostgreSQL',
+            'roleNginx': 'nginx',
+            'servicesGroup': 'سرویس‌های میزبان (غیر EVE)',
+            'serviceNote': 'Redis، PostgreSQL و nginx روی همین میزبان اجرا می‌شوند ولی EVE نیستند؛ جدا فهرست می‌شوند و هرگز در رقم EVE حساب نمی‌شوند.',
+            'otherPss': 'فرایندهای طبقه‌بندی‌نشده',
+            'managedXray': 'Xray مدیریت‌شده',
+            'accountingGroup': 'حافظه مصرف‌شده کجاست',
+            'freeMemory': 'آزاد',
+            'residual': 'باقی‌مانده',
+            'residualNote': 'کرنل، slab، جدول‌های صفحه و حافظه درایور: واقعی‌اند و مال هیچ فرایندی نیستند. گزارش می‌شوند تا در ردیف دیگری پنهان نشوند.',
+            'sumLine': 'آزاد + کش صفحه + PSS فرایندها + باقی‌مانده',
+            'collectorHint': 'برای خروجی قابل‌کپی، روی میزبان اجرا کنید: python scripts/memory_attribution.py --json'
         })|tojson }}
     };
 
@@ -7260,6 +7286,14 @@
         'telegram-egress': 'roleTelegramEgress',
         'pulse': 'rolePulse',
         'xray': 'roleXray'
+    };
+    /* Host services that are not EVE. Kept in their own order and their own table so the
+       EVE figure can never absorb PostgreSQL and call it Eve's memory. */
+    const MEM_SERVICE_ORDER = ['redis', 'postgres', 'nginx'];
+    const MEM_SERVICE_LABELS = {
+        'redis': 'roleRedis',
+        'postgres': 'rolePostgres',
+        'nginx': 'roleNginx'
     };
     const MEM_CACHE_ORDER = ['xui_sessions', 'xui_capabilities', 'refresh_jobs',
                              'bulk_jobs', 'subscription', 'ownership'];
@@ -7610,13 +7644,17 @@
                 + '<td class="mem-num">' + memEsc(memOr(memAge(bucket.max_uptime_seconds))) + '</td>'
                 + '</tr>';
         });
-        /* Processes outside EVE are counted but deliberately not attributed: showing
-           them keeps the table from implying that its rows sum to the whole host. */
+        /* Processes outside EVE are attributed as a total instead of one by one: a host
+           may run anything, and listing it here would turn this card into a process
+           table. The total is what lets the host be reconciled. */
         if (Number(eve.other_processes) > 0) {
             rows += '<tr><td>' + memEsc(memT('otherProcesses')) + '</td>'
-                + '<td class="mem-num">-</td><td class="mem-num">-</td><td class="mem-num">-</td>'
+                + memByteCell(eve.other_rss_bytes)
+                + memByteCell(eve.other_pss_bytes)
+                + memByteCell(eve.other_private_bytes)
                 + '<td class="mem-num">' + memEsc(memNum(eve.other_processes)) + '</td>'
-                + '<td class="mem-num">-</td><td class="mem-num">-</td></tr>';
+                + memCountCell(eve.other_threads)
+                + '<td class="mem-num">-</td></tr>';
         }
         return memTable([memT('componentRole'), memT('rss'), memT('pss'), memT('uss'),
                          memT('processes'), memT('threads'), memT('uptime')], rows,
@@ -7684,11 +7722,67 @@
         return '<div class="mem-kv">' + rows.join('') + '</div>';
     }
 
-    function renderBreakdown(eve, snapshot, redis, caches) {
+    /* Redis, PostgreSQL and nginx are on the host but are not EVE. Without this table the
+       answer to "3.45 of 3.78 GB" would stop at "it was not EVE". */
+    function renderServiceTable(eve) {
+        if (eve.available === false) {
+            return memNote(eve.reason || memT('unavailable'), 'field-note-warn');
+        }
+        const services = eve.services || {};
+        const keys = memOrderedKeys(Object.keys(services), MEM_SERVICE_ORDER);
+        if (!keys.length) return memNote(memT('serviceNote'));
+        let rows = '';
+        keys.forEach(key => {
+            const bucket = services[key] || {};
+            const approximated = bucket.pss_approximated
+                ? ' <span class="label-note">(' + memEsc(memT('approximated')) + ')</span>' : '';
+            rows += '<tr>'
+                + '<td>' + memEsc(memLabel(key, MEM_SERVICE_LABELS)) + approximated + '</td>'
+                + memByteCell(bucket.rss_bytes)
+                + memByteCell(bucket.pss_bytes)
+                + memByteCell(bucket.private_bytes)
+                + memCountCell(bucket.processes)
+                + memCountCell(bucket.threads)
+                + '<td class="mem-num">' + memEsc(memOr(memAge(bucket.max_uptime_seconds))) + '</td>'
+                + '</tr>';
+        });
+        return memTable([memT('componentRole'), memT('rss'), memT('pss'), memT('uss'),
+                         memT('processes'), memT('threads'), memT('uptime')], rows,
+                        [1, 2, 3, 4, 5, 6])
+            + memNote(memT('serviceNote'));
+    }
+
+    /* The reconciliation: free + page cache + the PSS of every process = total, and what
+       is left is named instead of being quietly spread across the other rows. */
+    function renderAccounting(accounting) {
+        if (!accounting || accounting.available === false) {
+            return memNote((accounting && accounting.reason) || memT('unavailable'),
+                           'field-note-warn');
+        }
+        const rows = [
+            memBytesRow(memT('eve'), accounting.eve_pss_bytes),
+            memBytesRow(memT('managedXray'), accounting.xray_pss_bytes),
+            memBytesRow(memT('servicesGroup'), accounting.service_pss_bytes),
+            memBytesRow(memT('otherPss'), accounting.other_pss_bytes),
+            memBytesRow(memT('pageCache'), accounting.cache_bytes),
+            memBytesRow(memT('freeMemory'), accounting.free_bytes),
+            memBytesRow(memT('residual'), accounting.residual_bytes),
+            memBytesRow(memT('sumLine'), accounting.total_bytes),
+            memNote(memT('residualNote')),
+            memNote(memT('collectorHint'))
+        ];
+        return '<div class="mem-kv">' + rows.join('') + '</div>';
+    }
+
+    function renderBreakdown(eve, accounting, snapshot, redis, caches) {
         return '<details class="mem-details">'
             + '<summary>' + memEsc(memT('breakdown')) + '</summary>'
+            + '<div class="mem-group-title">' + memEsc(memT('accountingGroup')) + '</div>'
+            + renderAccounting(accounting)
             + '<div class="mem-group-title">' + memEsc(memT('rolesGroup')) + '</div>'
             + renderRoleTable(eve)
+            + '<div class="mem-group-title">' + memEsc(memT('servicesGroup')) + '</div>'
+            + renderServiceTable(eve)
             + '<div class="mem-group-title">' + memEsc(memT('notProcessGroup')) + '</div>'
             + renderNonProcessTable(redis, caches)
             + '<div class="mem-group-title">' + memEsc(memT('snapshotGroup')) + '</div>'
@@ -7713,8 +7807,8 @@
             + renderHealthCard(data.health || {})
             + renderTrendCard(data.trend || {})
             + '</div>'
-            + renderBreakdown(data.eve || {}, data.snapshot || {}, data.redis_snapshot || {},
-                              data.caches || {})
+            + renderBreakdown(data.eve || {}, data.accounting || {}, data.snapshot || {},
+                              data.redis_snapshot || {}, data.caches || {})
             + renderAnalyzeBlock();
     }
 

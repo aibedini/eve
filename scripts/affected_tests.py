@@ -123,6 +123,10 @@ MAPPING = (
         ['tests.test_measure_snapshot_footprint'],
         ['tests.test_memory_report'],
     )),
+    ('scripts/memory_attribution.py', (
+        ['tests.test_memory_attribution'],
+        ['tests.test_memory_report'],
+    )),
     ('scripts/', (
         ['tests.test_ci_guards'],
         ['tests.test_benchmark_harness'],
