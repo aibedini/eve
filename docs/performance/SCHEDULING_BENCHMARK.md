@@ -47,46 +47,122 @@ Reproduce:
 .\.venv\Scripts\python.exe scripts\benchmark_per_server_scheduling.py --quick   # ~1 min
 ```
 
-## Results: HOT panel start-to-start (ms)
+## Two different questions, measured separately
 
-`p50`/`p95` are over the steady-state gaps (all gaps after the catch-up poll).
+| | A) INSTALL SIZE SCALING | B) HOT CONCURRENCY CAPACITY |
+|---|---|---|
+| setup | **1 HOT panel** + N-1 IDLE | **M panels HOT at the same time** |
+| question | does the HOT panel's cadence depend on the install size? | when does the worker pool stop serving them at their cadence, and how does it degrade? |
+| harness | `benchmark_per_server_scheduling.py` (wall clock, this document) | `benchmark_hot_capacity.py` (virtual time, below) |
 
-| mode | servers | read | p50 | p95 | max gap | queue delay p95 | polls in window |
-|------|---------|------|-----|-----|---------|-----------------|-----------------|
-| legacy-cycle | 1 | 100 ms | 2007 | 2015 | 2015 | n/a | 7 |
-| legacy-cycle | 1 | 1000 ms | 1999 | 2001 | 2001 | n/a | 7 |
-| legacy-cycle | 10 | 1000 ms | 1994 | 2009 | 2009 | n/a | 7 |
-| legacy-cycle | 50 | 300 ms | 1990 | 2014 | 2014 | n/a | 7 |
-| **legacy-cycle** | **50** | **1000 ms** | **1297** | **1297** | **1297** | n/a | **2** |
-| legacy-cycle | 100 | 300 ms | 1746 | 2031 | 2031 | n/a | 7 |
-| **legacy-cycle** | **100** | **1000 ms** | **--** | **--** | **--** | n/a | **1** |
-| cycle (batch cap + jitter) | 50 | 300 ms | 2068 | -- | -- | n/a | 3 |
-| per-server | 1 | 100 ms | 2001 | 2014 | 2014 | 6 | 7 |
-| per-server | 1 | 1000 ms | 2006 | 2014 | 2014 | 11 | 7 |
-| per-server | 10 | 100 ms | 1999 | 2009 | 2009 | 2 | 7 |
-| per-server | 10 | 1000 ms | 2002 | 2010 | 2010 | 15 | 7 |
-| per-server | 50 | 100 ms | 2001 | 2007 | 2007 | 0 | 7 |
-| per-server | 50 | 1000 ms | 2003 | 2004 | 2004 | 0 | 7 |
-| per-server | 100 | 100 ms | 2000 | 2009 | 2009 | 0 | 7 |
-| per-server | 100 | 300 ms | 2017 | 2114 | 2114 | 0 | 7 |
-| per-server | 100 | 1000 ms | 2005 | 2005 | 2005 | 0 | 7 |
+The earlier version of this document reported a capacity number from a measurement that
+only ever ran **1 HOT panel among N-1 IDLE panels**. That is experiment A, and it says
+nothing about how many panels can be HOT at once — reading "100 panels held the 2 s
+cadence" as "100 HOT panels are served every 2 s" is exactly the misreading this section
+exists to prevent.
 
-Reading of the two rows that matter:
+## Results: A) install size scaling (1 HOT, rest IDLE)
 
-* **per-server, 1 -> 100 panels, 100 -> 1000 ms read: 2001 -> 2005 ms p50.** The cadence is
-  the configured 2 s; the install size and the read time do not enter it. `queue delay p95`
-  is 0-15 ms, i.e. no HOT dispatch waited for a worker in any of these configurations.
-* **legacy-cycle, 100 panels at 1000 ms: one poll in the 12 s window** (the HOT panel did
-  not get a second read at all), and 50 panels at 1000 ms: two polls, i.e. the effective
-  cadence was ~6 s against a 2 s target. That is the starvation the architecture change
-  removes; it is not visible at 100 panels/100 ms because there the whole sweep finishes
-  inside one cadence.
+HOT panel start-to-start, wall clock, `EVE_REFRESH_WORKERS=5`, cadence 2 s. From
+`benchmark_per_server_scheduling.py`:
 
-`max inflight` stayed at 4-5 (the worker pool) in both modes, and `saturation_events`
-was non-zero for per-server at 50/100 panels -- the scheduler reports the ticks where more
-panels were due than there were free workers, which is the honest signal that capacity (not
-cadence maths) is the limit. The HOT panel's own queue delay stayed at 0 in those runs
-because it outranked the idle majority.
+| mode | servers | read | p50 | p95 | queue delay p95 | polls in window |
+|------|---------|------|-----|-----|-----------------|-----------------|
+| legacy-cycle | 1 | 1000 ms | 1999 | 2001 | n/a | 7 |
+| **legacy-cycle** | **50** | **1000 ms** | **1297** | **1297** | n/a | **2** |
+| **legacy-cycle** | **100** | **1000 ms** | **—** | **—** | n/a | **1** |
+| per-server | 1 | 1000 ms | 2006 | 2014 | 11 ms | 7 |
+| per-server | 50 | 1000 ms | 2003 | 2004 | 0 ms | 7 |
+| per-server | 100 | 1000 ms | 2005 | 2005 | 0 ms | 7 |
+| per-server | 100 | 300 ms | 2017 | 2114 | 0 ms | 7 |
+
+* **per-server: 2.00–2.02 s p50 at every install size and read time** — the cadence is the
+  configured one and the install does not enter it.
+* **legacy-cycle at 100 panels x 1000 ms: ONE poll in a 12 s window** (the HOT panel never
+  got a second read), and at 50 x 1000 ms the effective cadence was ~6 s. That starvation
+  is what the architecture change removes.
+
+The virtual-time harness reproduces A deterministically and instantly (Tier 3 script),
+including the 0 → 99 idle-panel sweep:
+
+| idle panels | HOT p50 | HOT p95 | queue delay p95 |
+|---|---|---|---|
+| 0 | 2000 ms | 2000 ms | 0 ms |
+| 9 | 2000 ms | 2000 ms | 0 ms |
+| 49 | 2000 ms | 2000 ms | 0 ms |
+| 99 | 2000 ms | 2000 ms | 0 ms |
+
+## Results: B) HOT concurrency capacity (M HOT at once)
+
+Theory first: a HOT panel of cadence `c` whose read takes `r` occupies `r/c` of a worker,
+so the pool of `w` workers can sustain
+
+    max_hot = w * c / r
+
+With `w=5`, `c=2 s`: **100 ms → 100 panels, 300 ms → 33, 1000 ms → 10**. Measured with
+`scripts/benchmark_hot_capacity.py` (virtual time, real policy decisions, 5 workers,
+cadence 2 s, 3-minute horizon; the dashboard's watch marks are renewed every 30 s as a
+real tab does):
+
+| HOT panels | read | p50 | p95 | queue delay p95 | missed deadlines | saturation ticks |
+|---|---|---|---|---|---|---|
+| 1 | 300 ms | 2000 ms | 2000 ms | 0 ms | 0 % | 0 |
+| 10 | 300 ms | 2000 ms | 2000 ms | 50 ms | 0 % | 5 |
+| 20 | 300 ms | 2000 ms | 2000 ms | 100 ms | 0 % | 16 |
+| 30 | 300 ms | 2100 ms | 2100 ms | **1750 ms** | 0 % | 918 |
+| 40 | 300 ms | **2800 ms** | 2800 ms | **2450 ms** | 0 % | 552 |
+| 5 | 1000 ms | 2000 ms | 2000 ms | 0 ms | 0 % | 6 |
+| 10 | 1000 ms | 2100 ms | 2100 ms | **1050 ms** | 0 % | 176 |
+| 15 | 1000 ms | **3150 ms** | 3150 ms | **2100 ms** | **58 %** | 176 |
+
+So the measured comfort zone is ~20 HOT panels at 300 ms (queue delay ≤ 100 ms) and ~5 at
+1 s, with the theoretical ceiling (33 / 10) reached as a *hard* edge where queue delay
+explodes. This replaces the earlier "≈10 at 300 ms / ≈4 at 1 s" claim in this document,
+which understated the pool by roughly 3x — the formula above is the one to size with, and
+the measured rows are what it looks like when the pool is actually exhausted.
+
+## Results: idle load and the WARM band
+
+The idle feed rate is the model, not an accident. For `n` idle panels on band `i` with
+jitter span `j`, the rate is approximately `n * 60 / (i + j/2)`:
+
+| panels | band | measured | model |
+|---|---|---|---|
+| 100 (99 idle + 1 HOT) | 45 s | **126.6 /min** | ~119 /min |
+| 100, compressed to 5 s (the wall-clock benchmark's `--idle-seconds 5`) | 5 s | ~400–500 /min | ~800–1200 /min |
+
+The earlier report's "~400–500 fetch/min" came from that **compressed 5 s band**, not from
+production's 45 s; at the production band the same install is ~127 feeds/min. (The
+wall-clock figure also sits below its own model because that run had no Redis and pays a
+connection-retry stall periodically, and because a 12 s window is short; the virtual-time
+number is the one to quote.)
+
+Per-mode accounting for the production band (virtual harness, 100 panels, 1 HOT):
+
+| install | feeds/min by mode | final modes |
+|---|---|---|
+| calm (idle polls report no change) | hot 30.2, warm 0, idle 126.6 | hot 1, warm 0, idle 99 |
+| **busy** (every idle poll reports new traffic) | hot 30.2, warm 0, idle 126.6 | hot 1, warm 0, idle 99 |
+
+The busy row is the important one: it is identical to the calm row, i.e. a busy install does
+**not** promote itself into the WARM band. Before this was fixed, "the poll returned new
+data" extended WARM on every panel, so a busy install settled onto the 10 s band for the
+WARM TTL and paid several times the panel load with nothing on screen to justify it. WARM is
+now a hand-off from attention: only a panel that was HOT (or still settling from one) can
+extend it. `tests/test_server_polling.py::test_a_busy_idle_panel_is_not_promoted_into_the_warm_band`
+guards it.
+
+## Reproducing everything here
+
+```powershell
+# A) install size scaling + a wall-clock cross-check of B (Tier 3)
+.\.venv\Scripts\python.exe scripts\benchmark_per_server_scheduling.py `
+    --modes legacy-cycle,per-server --servers 1,10,50,100 `
+    --latency-ms 100,300,1000 --seconds 12 --idle-seconds 5 --json bench-scheduling.json
+
+# A + B + idle/WARM in virtual time, ~10 s of wall clock, no sleeps (Tier 3)
+.\.venv\Scripts\python.exe scripts\benchmark_hot_capacity.py --json hot-capacity.json
+```
 
 ## Results: wake -> dispatch
 
@@ -134,19 +210,22 @@ process through real Redis -- is measured separately by
 
 ## Sizing recommendation
 
-With `EVE_REFRESH_WORKERS=5` and `EVE_SERVER_POLL_ACTIVE_SECONDS=2`:
+With `EVE_REFRESH_WORKERS=5` and `EVE_SERVER_POLL_ACTIVE_SECONDS=2`, the pool sustains
+`workers * cadence / read` HOT panels: 100 at 100 ms, ~33 at 300 ms, ~10 at 1 s. Measured,
+the comfortable zone is about two thirds of that (queue delay stays ≤ 100 ms), and the
+theoretical number is a hard edge rather than a target:
 
-* Up to ~10 HOT panels whose reads take <=300 ms, and up to ~4 HOT panels whose reads take
-  ~1 s, keep the 2 s cadence with no queue delay (the pool is the limit: a HOT panel needs
-  `read_time / cadence` of a worker on average, so 5 workers at 2 s cadence serve roughly
-  `5 * 2 s / read_time` HOT panels).
-* Beyond that the cadence degrades **visibly**: `scheduler_queue_delay_ms` grows per panel,
-  `saturation_events` grows in `/api/doctor`, and the freshness line on the dashboard shows
-  the age. Raise `EVE_REFRESH_WORKERS` (and `EVE_PANEL_CONCURRENCY` if the panel hosts can
-  take it) or lower `EVE_SERVER_POLL_WATCH_LIMIT`.
-* Do not raise `EVE_REFRESH_WORKERS` past `EVE_PANEL_CONCURRENCY` without raising that too:
-  the panel semaphore is the process-wide bound on simultaneous panel sessions, and a
-  worker that cannot get a slot spends its time waiting for one.
+* ~20 HOT panels at 300 ms reads, ~5 at 1 s reads: full cadence, no queue delay.
+* 30 HOT at 300 ms, 10 at 1 s: still ~2.1 s p50, but `queue_delay_ms` climbs to ~1-1.8 s.
+* 40 HOT at 300 ms, 15 at 1 s: the cadence itself degrades (2.8-3.2 s p50) and deadlines
+  are missed. This is capacity exhaustion, not a scheduling bug.
+
+Beyond the pool, the cadence degrades **visibly**: `scheduler_queue_delay_ms` grows per
+panel, `saturation_events` and `capacity_rejections` grow in `/api/doctor`, and the
+freshness line on the dashboard shows the age. Raise `EVE_REFRESH_WORKERS` (and
+`EVE_PANEL_CONCURRENCY` with it), or lower `EVE_SERVER_POLL_WATCH_LIMIT` so fewer panels
+are HOT. Do not raise the worker count past the panel semaphore: a worker that cannot get
+a slot spends its time waiting for one.
 
 ## Limits of this benchmark
 

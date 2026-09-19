@@ -51,8 +51,10 @@ relative link does not resolve.
 - [Bounded, coalesced panel access](performance/PANEL_LIMITS.md) - performance/PANEL_LIMITS.md
 - [Per-server snapshot cache](performance/PER_SERVER_CACHE.md) - performance/PER_SERVER_CACHE.md
 - [Hot-path query budget](performance/QUERY_OPTIMIZATION.md) - performance/QUERY_OPTIMIZATION.md
+- [Real-Redis multi-process proof](performance/REDIS_MULTIPROCESS.md) - performance/REDIS_MULTIPROCESS.md
 - [Scoped refresh locks](performance/REFRESH_LOCK.md) - performance/REFRESH_LOCK.md
 - [Mutation / cache / UI regression suite](performance/REGRESSION_SUITE.md) - performance/REGRESSION_SUITE.md
+- [Per-server scheduling benchmark and HOT capacity](performance/SCHEDULING_BENCHMARK.md) - performance/SCHEDULING_BENCHMARK.md
 - [Reseller refresh projection](performance/SERIALIZATION.md) - performance/SERIALIZATION.md
 - [Per-server adaptive polling](performance/SERVER_POLLING.md) - performance/SERVER_POLLING.md
 - [Live updates over server-sent events](performance/SSE.md) - performance/SSE.md

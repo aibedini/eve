@@ -1,5 +1,31 @@
 # Repository Guidelines
 
+## Validation Budget (read this before running any test)
+
+Do **not** run the whole suite after an ordinary edit. Use the changed-files → affected-tests
+mapping and the tier that fits the moment:
+
+| Tier | When | Target | What |
+|------|------|--------|------|
+| 1 | default after every edit | ≤ 30 s | unit tests of the changed modules, syntax/import, targeted regression. No real sleeps, no real Redis, no benchmarks. |
+| 2 | before the final commit, or for a cross-cutting change | ≤ 2 min | Tier 1 plus the integration suites the change can touch (renew consistency, scheduler, snapshot/fake Redis, SSE, UI audit). |
+| 3 | release / CI / nightly only | — | full suite, real-Redis multi-process harness, capacity and scale benchmarks. **Never in a normal iteration.** |
+
+`scripts/affected_tests.py` implements the mapping (`--tier 1|2`, `--changed <paths>`,
+`--list`). It runs modules sequentially in high-signal order and **stops at the first
+failure** so the cheapest tier catches the break; do not paper over a red Tier 1 by moving
+on.
+
+Test-writing rules that keep Tier 1 fast and honest:
+
+- No real sleeps for time-based logic (cadence, TTL, backoff, wake). Inject the clock
+  (`now=`), drive the loop with an event the test releases, or simulate in virtual time.
+- No real Redis and no network in Tier 1/2 tests: the file-backed fake is the always-on
+  guard, the real-backend harness is Tier 3.
+- Benchmarks are their own scripts under `scripts/`, and their numbers belong in
+  `docs/performance/`; a test that measures wall-clock throughput is a Tier 3 test.
+- Prefer asserting a decision (order, schedule arithmetic, counters) over a duration.
+
 ## Versioning & Releases
 
 The project uses the `2.x.y` version scheme. `APP_VERSION` in `app.py` is the single source of truth.

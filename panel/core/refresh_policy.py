@@ -1297,6 +1297,14 @@ def note_server_result(server_id, ok, *, now=None, duration_ms=None, changed=Non
     if state is None:
         return 0.0
     moment = time.time() if now is None else float(now)
+    # Was this panel already being watched or settling when the read started? WARM is a
+    # hand-off band, not a promotion: only a panel that was HOT or WARM may extend it.
+    # Without this, a busy install promotes itself: traffic moves between two idle polls
+    # on every panel, every poll reports ``changed``, and the whole install settles into
+    # the 10 s band -- turning the 45 s idle cadence into a fiction and multiplying the
+    # panel load by ~4.5x for no operator-visible reason.
+    was_settling = (float(state.get('active_until') or 0.0) > moment
+                    or float(state.get('warm_until') or 0.0) > moment)
     if ok:
         state['failures'] = 0
         state['consecutive_failures'] = 0
@@ -1305,10 +1313,14 @@ def note_server_result(server_id, ok, *, now=None, duration_ms=None, changed=Non
         state['last_outcome'] = 'changed' if changed else 'no_change'
         if changed:
             state['last_changed_at'] = moment
-            # A panel that actually moved is worth the middle cadence even after the
-            # operator's attention has moved on (traffic can keep changing).
-            state['warm_until'] = max(
-                state.get('warm_until') or 0.0, moment + server_warm_ttl())
+            if was_settling:
+                # A panel that moved while it was being watched (or while it was still
+                # settling from one) is worth the middle cadence after the operator's
+                # attention moves on: that is the hand-off WARM exists for. An IDLE panel
+                # whose counters moved between two idle polls is simply a busy panel, and
+                # promoting it would put the whole install on the 10 s band forever.
+                state['warm_until'] = max(
+                    state.get('warm_until') or 0.0, moment + server_warm_ttl())
         elif state.get('last_changed_at') is None:
             state['last_changed_at'] = moment
     else:

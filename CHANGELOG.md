@@ -2,6 +2,20 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.14] - 2026-09-19
+
+### Fixed
+- **A busy install no longer promotes itself onto the WARM band.** `changed` on a poll used to extend `warm_until` for every panel, so on an install where traffic moves between two idle polls every panel settled onto the 10 s band for the whole WARM TTL, multiplying panel load several times over with nothing on screen to justify it. WARM is a hand-off from attention now: only a panel that was HOT (or still settling from one) can extend it. Measured on the virtual-time harness, a busy 100-panel install stays at ~127 idle feeds/min, identical to a calm one, with every panel still IDLE.
+- A stop request to the per-server scheduler no longer blocks behind the slowest in-flight panel read (`ThreadPoolExecutor.shutdown(wait=False)`), so the loop is interruptible.
+
+### Changed
+- Corrected the scheduling benchmark's capacity claim. It had reported "≈10 HOT panels at 300 ms / ≈4 at 1 s" from an experiment that only ever ran **1 HOT panel among N-1 IDLE panels** - install-size scaling, which says nothing about concurrency. The pool sustains `workers * cadence / read` HOT panels: **~33 at 300 ms and ~10 at 1 s** for the 5-worker default, with the measured comfort zone at ~20 (300 ms) and ~5 (1 s) before queue delay grows. `docs/performance/SCHEDULING_BENCHMARK.md` now separates the two questions, carries both tables, and explains the idle feed rate (the earlier "400-500/min" was a deliberately compressed 5 s idle band plus a no-Redis retry stall; production's 45 s band is ~127/min).
+- The scheduler unit tests no longer measure wall-clock time: the cadence claim is asserted as policy arithmetic (plan order + period-preserving `next_due`) and the loop tests are event-driven, so `PerServerSchedulerTests` runs in ~2 s instead of sleeping through real intervals. The cadence numbers live in the benchmark scripts.
+
+### Added
+- `scripts/benchmark_hot_capacity.py`: HOT concurrency capacity in virtual time - the worker pool is simulated, every scheduling decision comes from the real policy, and there are no sleeps (whole matrix in ~10 s). Reports cadence p50/p95, queue delay, missed deadlines, saturation ticks and per-mode feed rates for 1/10/20/30/40 HOT at 300 ms and 5/10/15 at 1 s, plus the install-size sweep and the busy-install WARM check.
+- `scripts/affected_tests.py` and a tiered validation policy in `AGENTS.md`/`CLAUDE.md`: Tier 1 (changed-file unit tests, ≤ 30 s, default after every edit), Tier 2 (integration suites the change can touch, ≤ 2 min, before the final commit), Tier 3 (full suite, real-Redis harness, benchmarks; release/CI only). The script maps changed files to modules and fails fast on the first red one.
+
 ## [2.7.13] - 2026-09-19
 
 ### Changed

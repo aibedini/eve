@@ -1,3 +1,21 @@
+## Validation budget
+
+Do **not** run the whole suite after an ordinary edit. Map changed files to affected tests
+and pick the tier:
+
+- **Tier 1 (default, ≤ 30 s)**: unit tests of the changed modules, syntax/import, targeted
+  regression. No real sleeps, no real Redis, no benchmarks.
+- **Tier 2 (before the final commit, or a cross-cutting change, ≤ 2 min)**: Tier 1 plus the
+  integration suites the change can touch (renew consistency, scheduler, snapshot/fake
+  Redis, SSE, UI audit).
+- **Tier 3 (release / CI / nightly only)**: full suite, real-Redis multi-process harness,
+  capacity and scale benchmarks. Never in a normal iteration.
+
+`scripts/affected_tests.py` implements the mapping (`--tier 1|2`, `--changed <paths>`,
+`--list`); it runs modules sequentially and stops at the first failure, so debug at the
+cheapest tier that catches the break. Time-based logic must be tested with an injected
+clock, a released event, or a virtual-time simulation — never with a real sleep.
+
 ## Versioning & releases
 
 Version scheme: `2.x.y` (single source of truth: `APP_VERSION` in `app.py`).

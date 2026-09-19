@@ -427,8 +427,9 @@ def run_per_server_scheduler(*, fetch_callable=None, server_rows=None, duration=
     from app import app as scheduler_app  # deferred: app-level object, avoids an import cycle
 
     _scheduler_reset_metrics(workers)
-    with concurrent.futures.ThreadPoolExecutor(
-            max_workers=max(1, workers), thread_name_prefix='eve-fetch') as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, workers), thread_name_prefix='eve-fetch')
+    try:
         while not stop.is_set():
             if deadline is not None and time.monotonic() >= deadline:
                 break
@@ -486,6 +487,14 @@ def run_per_server_scheduler(*, fetch_callable=None, server_rows=None, duration=
                 except Exception:
                     pass
                 stop.wait(SCHEDULER_TICK_SECONDS)
+    finally:
+        # A stop request must not hang behind the slowest panel read in flight: the reads
+        # that are still running finish on their own (they hold no schedule of ours), and
+        # the loop is the thing that has to be interruptible.
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:      # Python < 3.9 has no cancel_futures
+            pool.shutdown(wait=False)
     return scheduler_metrics()
 
 
