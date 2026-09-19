@@ -8,6 +8,8 @@ read or returned.
 """
 import os
 import shutil
+import time
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 from sqlalchemy import text
@@ -18,6 +20,42 @@ from panel.routes.common import permission_required
 from panel.services import certificates
 
 bp = Blueprint('doctor', __name__)
+
+
+def _block_stamp_ages(snapshot, *, now):
+    """Per-server age of the snapshot's own two freshness layers.
+
+    Configuration and telemetry age independently (a renew updates configuration
+    immediately while traffic arrives on the next poll), so an operator asking "why does
+    this card look old?" needs both numbers. They are read from the block the dashboard
+    is actually rendering -- the scheduler's memory cannot answer a question about data
+    another process is serving.
+    """
+    ages = {}
+    for inbound in (snapshot or {}).get('inbounds') or []:
+        try:
+            sid = str(int(inbound.get('server_id', -1)))
+        except (TypeError, ValueError):
+            continue
+        if sid in ages:
+            continue
+        row = {}
+        for key, field in (('config_age_seconds', 'config_updated_at'),
+                           ('telemetry_age_seconds', 'telemetry_updated_at')):
+            stamp = inbound.get(field)
+            if not stamp:
+                row[key] = None
+                continue
+            try:
+                parsed = datetime.fromisoformat(str(stamp))
+            except (TypeError, ValueError):
+                row[key] = None
+                continue
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            row[key] = round(max(0.0, (datetime.utcnow() - parsed).total_seconds()), 3)
+        ages[sid] = row
+    return ages
 
 
 def _repo_root():
@@ -134,19 +172,21 @@ def doctor_summary():
     try:
         from app import GLOBAL_SERVER_DATA  # deferred: app-level state
         from panel.core import refresh_policy
+        from panel.jobs import schedulers as scheduler_jobs
         server_states = refresh_policy.server_states()
         sync_summary = refresh_policy.sync_summary()
-        # Only the panels that need attention carry their full sync state: the doctor
-        # payload is read by an operator looking for the exception, not for a dump of
-        # every server's timings.
-        attention = {}
+        # The two freshness layers come from the snapshot itself (each block's own
+        # stamps), because they describe the DATA being served, not the scheduler.
+        stamp_ages = _block_stamp_ages(GLOBAL_SERVER_DATA, now=time.time())
+        servers_sync = {}
         for sid in sorted(server_states):
-            try:
-                health = refresh_policy.sync_health(sid)
-            except Exception:
-                continue
-            if health in ('stale', 'backoff', 'down'):
-                attention[sid] = refresh_policy.server_sync_state(sid)
+            row = refresh_policy.server_sync_state(sid)
+            row.update(stamp_ages.get(str(sid)) or {})
+            servers_sync[sid] = row
+        # The panels that are not live, in the same shape: the aggregate tells the
+        # operator whether it is one panel or the whole sync path.
+        attention = {sid: row for sid, row in servers_sync.items()
+                     if row.get('sync_health') in ('stale', 'backoff', 'down')}
         checks['refresh_policy'] = {
             'state': 'ok',
             **refresh_policy.status(
@@ -157,9 +197,13 @@ def doctor_summary():
             'servers': server_states,
             'servers_tracked': len(server_states),
             'servers_due': sum(1 for row in server_states.values() if row.get('due')),
-            # Aggregate health plus the full state of the panels that are not live:
-            # a stale or backing-off panel is the reason anyone opens this page.
+            # Aggregate health, the scheduler's own evidence (queue delay, worker
+            # saturation) and the full per-server sync state: mode, watched, inflight,
+            # wake_pending, every stamp and age, the two revisions and the health word.
+            # Ids, modes, ages and counters only -- never a credential, address or email.
             'sync': sync_summary,
+            'scheduler': scheduler_jobs.scheduler_metrics(),
+            'servers_sync': servers_sync,
             'servers_attention': attention,
             'server_intervals': {
                 'active_seconds': refresh_policy.server_active_seconds(),

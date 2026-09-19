@@ -4,7 +4,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, Response, jsonify, make_response, request, session, stream_with_context
 
@@ -81,6 +81,44 @@ def _request_since():
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _sync_report_for(inbounds, now=None):
+    """Per-server scheduling/freshness rows for the panels in this response.
+
+    Served as a side map rather than annotated onto the inbound blocks: the blocks are
+    the SHARED snapshot, and writing a per-request age into them would make the delta
+    fingerprint change on every poll (which would turn every delta into a full one) as
+    well as let one request's view leak into another's. The map is the backend's own
+    vocabulary -- ``sync_health`` is decided here, never in the browser -- and a server
+    missing from it is "unknown", which the UI must not render as "live".
+    """
+    ids = []
+    for block in inbounds or ():
+        if isinstance(block, dict):
+            sid = block.get('server_id')
+            if sid is not None:
+                ids.append(sid)
+    if not ids:
+        return {}
+    try:
+        from panel.core import refresh_policy  # deferred: keeps the route import light
+        return refresh_policy.server_sync_report(ids, now=now)
+    except Exception:
+        return {}
+
+
+def _stamp_age_seconds(stamp, now):
+    """Age of a naive-UTC ISO stamp, or None when it cannot be read."""
+    if not stamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return round(max(0.0, (datetime.utcnow() - parsed).total_seconds()), 3)
 
 
 @bp.route('/api/refresh/stream')
@@ -284,11 +322,16 @@ def api_refresh():
 
         sync = snapshot_delta.build_sync(GLOBAL_SERVER_DATA, since)
         if sync['mode'] == 'unchanged':
-            # The client already holds this revision: answer with a small
-            # envelope instead of the whole snapshot.
+            # The client already holds this revision: answer with a small envelope
+            # instead of the whole snapshot. The per-server freshness rows still travel,
+            # because their whole point is that they move on their own: a tab whose reads
+            # stopped must be able to say "stale" WITHOUT the snapshot changing (and an
+            # unchanged poll is what an idle dashboard mostly sees).
             return jsonify({
                 "success": True,
                 "sync": sync,
+                "servers_sync": _sync_report_for(
+                    GLOBAL_SERVER_DATA.get('inbounds') or []),
                 "refresh_job": _summarize_job(job),
                 "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
             }), 200
@@ -307,6 +350,10 @@ def api_refresh():
             "servers": GLOBAL_SERVER_DATA.get('servers_status') or [],
             "server_count": len(GLOBAL_SERVER_DATA.get('servers_status') or []),
             "last_update": GLOBAL_SERVER_DATA.get('last_update'),
+            # Freshness/mode per panel, in the backend's own vocabulary: a dashboard must
+            # be able to say "Stale - 42s ago" without inventing thresholds in JS, and a
+            # panel the fetcher has no row for stays absent rather than looking live.
+            "servers_sync": _sync_report_for(inbounds),
             "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
             "refresh_job": _summarize_job(job),
         }
@@ -322,9 +369,18 @@ def api_refresh():
     # the full filtered view is sent (the client applies it as a full snapshot).
     reseller_sync = snapshot_delta.build_sync(GLOBAL_SERVER_DATA, since)
     if reseller_sync['mode'] == 'unchanged':
+        # Freshness rows travel here too (see the superadmin branch). They are limited to
+        # the panels this tab declared it is rendering: the declaration comes from the
+        # reseller's own page, so it cannot widen what they are allowed to see, and it
+        # avoids re-running the per-reseller access queries just to decorate an envelope
+        # whose whole purpose is to be cheap.
+        declared = request.args.get('servers') or request.args.get('server_ids') or ''
+        declared_ids = [part for part in str(declared).split(',') if part.strip()]
         return jsonify({
             "success": True,
             "sync": reseller_sync,
+            "servers_sync": _sync_report_for(
+                [{'server_id': sid} for sid in declared_ids]),
             "refresh_job": _summarize_job(job),
             "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
         }), 200
@@ -501,6 +557,8 @@ def api_refresh():
         "servers": filtered_servers_status,
         "server_count": len(unique_server_ids),
         "last_update": data['last_update'],
+        # Same side map as the superadmin path, over the panels this reseller can see.
+        "servers_sync": _sync_report_for(filtered_inbounds),
         "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
         "refresh_job": _summarize_job(job),
     }

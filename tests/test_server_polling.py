@@ -8,8 +8,10 @@ keeps its idle cadence, and how a failing panel backs off.
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
+from collections import defaultdict
 from datetime import datetime, timezone
 from unittest import mock
 
@@ -349,6 +351,21 @@ class PeriodicCycleGateTests(unittest.TestCase):
         # for the next cycle instead of silently losing its turn.
         self.assertTrue(refresh_policy.server_due(9101))
 
+    def test_the_scheduler_discovers_panels_from_the_database(self):
+        # The real loop (no injected rows) takes its enabled set from the database, which
+        # needs an application context: a missing one fails once per tick and the install
+        # silently stops being polled. This is the only test that drives that path.
+        fetched = []
+
+        def fake_fetch(sid):
+            fetched.append(int(sid))
+            return {'server_id': int(sid), 'changed': False, 'block': []}
+
+        with mock.patch.object(schedulers, 'fetch_and_update_server_data', fake_fetch):
+            schedulers.run_per_server_scheduler(duration=1.0, worker_limit=2)
+        self.assertTrue(fetched, "the scheduler discovered no enabled panel")
+        self.assertTrue(set(fetched).issubset({9101, 9102}), fetched)
+
     def test_a_manual_cycle_is_never_truncated_by_the_batch_bound(self):
         # The bound is a scheduling device, not a budget: an operator who clicks
         # Refresh asked for every panel, and a silently partial refresh is worse than
@@ -382,80 +399,218 @@ class PeriodicCycleGateTests(unittest.TestCase):
         self.assertEqual(list(refresh_policy.server_states()), ["9102"])
 
 
-class FetcherLoopWakeTests(unittest.TestCase):
-    """The loop must wake for the earliest due panel, not for the whole cycle."""
+class PerServerSchedulerTests(unittest.TestCase):
+    """The scheduler must dispatch each panel on its own clock, not on a batch.
 
-    class _Stop(BaseException):
-        pass
+    The invariant these tests defend: a HOT panel's start-to-start interval is a
+    function of ITS cadence and the panel read time, and NOT of how many other panels
+    exist or how long the rest of the install takes to read. The old cycle-oriented
+    loop could not satisfy this at any batch size -- a batch is a barrier -- so this is
+    the acceptance test for the architecture, not a performance nicety.
+    """
 
     def setUp(self):
         refresh_policy.reset_state()
+        schedulers._scheduler_reset_metrics()
         for name in SERVER_ENV:
             os.environ.pop(name, None)
-        self._saved_last_update = GLOBAL_SERVER_DATA.get("last_update")
-        self.addCleanup(self._restore)
 
-    def _restore(self):
-        GLOBAL_SERVER_DATA["last_update"] = self._saved_last_update
+    def tearDown(self):
         refresh_policy.reset_state()
 
-    def test_the_sleep_is_bounded_by_the_earliest_due_panel(self):
-        stop = self._Stop
-        # A fresh snapshot (nothing to do at cycle level) plus one panel whose own
-        # cadence elapses in two seconds.
-        GLOBAL_SERVER_DATA["last_update"] = datetime.now(timezone.utc).isoformat()
-        refresh_policy.note_server_activity(301)
-        refresh_policy.note_server_result(301, True)
-        fetches, waits = [], []
+    def _run(self, *, servers, hot, latency, seconds, workers=4):
+        """Drive the REAL scheduler loop against a fake panel read.
 
-        def fake_fetch(force=False, **kwargs):
-            fetches.append(force)
-            raise stop()
+        Returns the recorded start timestamps per server, so a test can assert on the
+        cadence instead of on a log line.
+        """
+        starts = defaultdict(list)
 
-        def fake_wait(seconds):
-            waits.append(seconds)
-            raise stop()
+        def fake_fetch(sid):
+            starts[sid].append(time.monotonic())
+            time.sleep(latency)
+            return {"server_id": sid, "changed": False, "block": []}
 
-        with (
-            mock.patch.object(schedulers, "ensure_background_threads_started"),
-            mock.patch.object(schedulers, "load_snapshot_from_redis"),
-            mock.patch.object(schedulers, "fetch_and_update_global_data", fake_fetch),
-            mock.patch.object(refresh_policy, "wait_for_interval", fake_wait),
-            app.app_context(),
-        ):
-            with self.assertRaises(stop):
-                schedulers.background_data_fetcher()
+        stop = threading.Event()
 
-        self.assertEqual(fetches, [], "nothing was due yet")
-        self.assertEqual(len(waits), 1)
-        self.assertLessEqual(waits[0], refresh_policy.server_active_seconds() + 0.5)
-        self.assertGreaterEqual(waits[0], 0.25)
+        def provider():
+            return [{"id": sid} for sid in servers]
 
-    def test_a_due_panel_wakes_the_loop_even_when_the_snapshot_looks_fresh(self):
-        stop = self._Stop
-        GLOBAL_SERVER_DATA["last_update"] = datetime.now(timezone.utc).isoformat()
-        # Polled long ago (its window has long since elapsed), so it is due now.
-        refresh_policy.note_server_result(302, True, now=time.time() - 300)
-        calls = []
+        try:
+            with mock.patch.dict(os.environ, {
+                    "EVE_SERVER_POLL_ACTIVE_SECONDS": "1",
+                    "EVE_SERVER_POLL_WARM_SECONDS": "1",
+                    "EVE_SERVER_POLL_IDLE_SECONDS": "2",
+                    "EVE_REFRESH_WORKERS": str(workers)}):
+                refresh_policy.note_server_activity(hot, now=time.time() - 5)
+                refresh_policy.note_server_result(hot, True, now=time.time() - 5)
+                schedulers.run_per_server_scheduler(
+                    fetch_callable=fake_fetch, server_rows=provider,
+                    duration=seconds, stop_event=stop, worker_limit=workers)
+        finally:
+            stop.set()
+        return starts
 
-        def fake_fetch(force=False, **kwargs):
-            calls.append((force, kwargs.get("periodic")))
-            raise stop()
+    def test_a_hot_panel_is_not_paced_by_the_rest_of_the_install(self):
+        # Ten idle panels, each read taking longer than the hot cadence. A batch/cycle
+        # loop would make the hot panel wait for all of them (10 x 0.12 s = 1.2 s per
+        # sweep); the per-server loop must keep the hot panel near its own cadence.
+        servers = [9001] + list(range(9002, 9012))
+        starts = self._run(servers=servers, hot=9001, latency=0.12, seconds=2.5,
+                           workers=4)
+        hot_starts = starts[9001]
+        self.assertGreaterEqual(len(hot_starts), 2, "the hot panel was never rescheduled")
+        gaps = [b - a for a, b in zip(hot_starts, hot_starts[1:])]
+        # cadence (1 s) + read time (0.12 s) + one scheduler tick of slack.
+        self.assertLess(max(gaps), 1.6,
+                        "hot start-to-start gaps grew with the install: %s" % gaps)
+        # The idle panels are still polled, just on their own (slower) cadence.
+        self.assertTrue(all(starts[sid] for sid in servers[1:]),
+                        "an idle panel was starved entirely")
 
-        with (
-            mock.patch.object(schedulers, "ensure_background_threads_started"),
-            mock.patch.object(schedulers, "load_snapshot_from_redis"),
-            mock.patch.object(schedulers, "fetch_and_update_global_data", fake_fetch),
-            mock.patch.object(refresh_policy, "wait_for_interval", lambda seconds: None),
-            app.app_context(),
-        ):
-            with self.assertRaises(stop):
-                schedulers.background_data_fetcher()
-        self.assertEqual(calls, [(False, True)])
+    def test_the_hot_cadence_does_not_grow_with_the_server_count(self):
+        # Same hot panel, a much bigger install: the cadence must not be a function of
+        # the number of OTHER panels.
+        small = self._run(servers=[9101] + list(range(9102, 9106)), hot=9101,
+                          latency=0.05, seconds=2.0)
+        large = self._run(servers=[9201] + list(range(9202, 9242)), hot=9201,
+                          latency=0.05, seconds=2.0)
 
-    def test_the_loop_asks_for_the_periodic_path(self):
+        def average_gap(starts):
+            gaps = [b - a for a, b in zip(starts, starts[1:])]
+            self.assertTrue(gaps, "the hot panel was only polled once")
+            return sum(gaps) / len(gaps)
+
+        small_gap = average_gap(small[9101])
+        large_gap = average_gap(large[9201])
+        self.assertLess(large_gap, small_gap * 1.5 + 0.2,
+                        "40 panels paced the hot panel instead of its own clock: "
+                        "%.3fs vs %.3fs" % (large_gap, small_gap))
+
+    def test_a_server_is_never_read_twice_at_once(self):
+        concurrent_now = {'value': 0, 'max': 0}
+        lock = threading.Lock()
+
+        def fake_fetch(sid):
+            with lock:
+                concurrent_now['value'] += 1
+                concurrent_now['max'] = max(concurrent_now['max'], concurrent_now['value'])
+            time.sleep(0.1)
+            with lock:
+                concurrent_now['value'] -= 1
+            return {"server_id": sid, "changed": False, "block": []}
+
+        with mock.patch.dict(os.environ, {"EVE_SERVER_POLL_ACTIVE_SECONDS": "1"}):
+            refresh_policy.note_server_activity(9301, now=time.time() - 5)
+            schedulers.run_per_server_scheduler(
+                fetch_callable=fake_fetch, server_rows=[{"id": 9301}],
+                duration=1.2, worker_limit=4)
+        # One read per panel: the inflight flag plus coalescing make a duplicate read
+        # impossible even when the panel is due again before its first read returns.
+        self.assertEqual(concurrent_now['max'], 1)
+
+    def test_global_concurrency_stays_bounded(self):
+        seen = {'value': 0, 'max': 0}
+        lock = threading.Lock()
+
+        def fake_fetch(sid):
+            with lock:
+                seen['value'] += 1
+                seen['max'] = max(seen['max'], seen['value'])
+            time.sleep(0.08)
+            with lock:
+                seen['value'] -= 1
+            return {"server_id": sid, "changed": False, "block": []}
+
+        servers = [{"id": sid} for sid in range(9401, 9415)]
+        schedulers.run_per_server_scheduler(
+            fetch_callable=fake_fetch, server_rows=servers, duration=1.0, worker_limit=3)
+        self.assertLessEqual(seen['max'], 3, "the worker bound was exceeded")
+
+    def test_worker_saturation_is_measured_not_hidden(self):
+        # Twelve panels due at once with two workers: the queue delay must be visible in
+        # the metrics, because that is the number that says "the cadence is not being
+        # met, and here is why" instead of silently reporting a two-second poll.
+        def fake_fetch(sid):
+            time.sleep(0.1)
+            return {"server_id": sid, "changed": False, "block": []}
+
+        servers = [{"id": sid} for sid in range(9501, 9513)]
+        metrics = schedulers.run_per_server_scheduler(
+            fetch_callable=fake_fetch, server_rows=servers, duration=1.5, worker_limit=2)
+        self.assertGreater(metrics['dispatched'], 0)
+        self.assertGreater(metrics['saturation_events'], 0,
+                           "a saturated scheduler must report it")
+        self.assertGreaterEqual(metrics['queue_delay_ms_max'], 0.0)
+        self.assertEqual(metrics['workers'], 2)
+
+    def test_a_wake_during_an_inflight_read_reschedules_that_panel_immediately(self):
+        # The panel is ALREADY being read when the nudge arrives. The nudge cannot
+        # shorten that read, but it must not be lost either: the next read of THIS panel
+        # starts as soon as the first one returns, instead of waiting out a full idle
+        # window that the completion just scheduled.
+        starts = []
+        release = threading.Event()
+
+        def fake_fetch(sid):
+            starts.append(time.monotonic())
+            if len(starts) == 1:
+                release.wait(2.0)
+            return {"server_id": sid, "changed": False, "block": []}
+
+        def nudge():
+            # Wait until the first read is genuinely in flight, then nudge it.
+            deadline = time.monotonic() + 2.0
+            while not starts and time.monotonic() < deadline:
+                time.sleep(0.01)
+            refresh_policy.note_server_activity(9601, now=time.time(), share=False)
+            self.assertTrue(refresh_policy.wake_pending(9601),
+                            "a nudge during an in-flight read must be held")
+            release.set()
+
+        thread = threading.Thread(target=nudge, daemon=True)
+        with mock.patch.dict(os.environ, {"EVE_SERVER_POLL_IDLE_SECONDS": "30",
+                                          "EVE_SERVER_POLL_ACTIVE_SECONDS": "1"}):
+            # Due now, but its NEXT schedule would be the 30 s idle band: only a held
+            # nudge can bring the second read back inside this run.
+            refresh_policy.note_server_result(9601, True, now=time.time() - 60)
+            thread.start()
+            schedulers.run_per_server_scheduler(
+                fetch_callable=fake_fetch, server_rows=[{"id": 9601}],
+                duration=1.2, worker_limit=1)
+        thread.join(timeout=3.0)
+        self.assertGreaterEqual(len(starts), 1, "the panel was never read")
+        self.assertGreaterEqual(len(starts), 2,
+                                "the held nudge did not reschedule the panel")
+        self.assertLess(starts[1] - starts[0], 1.0,
+                        "the held nudge was dropped at completion")
+
+    def test_a_capacity_rejection_is_not_a_panel_failure(self):
+        # The process-wide panel cap refusing a slot says the INSTALL is busy, not that
+        # the panel is sick. Recording it as a failure would put a healthy panel into
+        # backoff because of local pressure - a self-inflicted outage - so it must be
+        # counted as capacity and leave the panel's health alone.
+        from panel.core import panel_limits
+
+        def fake_fetch(sid):
+            raise panel_limits.PanelBusy('panel concurrency limit reached')
+
+        schedulers.run_per_server_scheduler(
+            fetch_callable=fake_fetch, server_rows=[{'id': 9701}], duration=0.6,
+            worker_limit=1)
+        state = refresh_policy.server_sync_state(9701)
+        self.assertEqual(state['consecutive_failures'], 0)
+        self.assertIn(state['sync_health'], ('live', 'fresh'))
+        self.assertGreaterEqual(
+            schedulers.scheduler_metrics().get('capacity_rejections', 0), 1)
+
+    def test_the_bootstrap_sweep_is_not_the_timing_authority(self):
         source = __import__("inspect").getsource(schedulers.background_data_fetcher)
-        self.assertIn("periodic=True", source)
+        # One sweep at startup for discovery and a coherent first snapshot, then the
+        # per-server loop. A periodic sweep as the timing authority is exactly the
+        # architecture this replaced.
+        self.assertIn("run_per_server_scheduler()", source)
+        self.assertNotIn("periodic=True", source)
 
 
 class WatchDeclarationRouteTests(unittest.TestCase):
@@ -847,6 +1002,71 @@ class ClientFenceTests(OfflinePolicyTests):
                                            {"used_up": 2}, now=BASE)
         self.assertTrue(refresh_policy.clear_client_fence(901))
         self.assertEqual(refresh_policy.client_fences(901, now=BASE), {})
+
+    def test_a_lagging_read_cannot_revert_the_verified_cap_or_expiry(self):
+        # The counters are not the whole verified state: an aggregate read that predates
+        # the mutation reports the OLD cap and expiry too, and committing those makes the
+        # row disagree with the response and the renewal ledger. The guard must hold the
+        # configuration as well, and only release the fence when the aggregate agrees.
+        from panel.jobs import refresh as refresh_jobs
+        refresh_policy.record_client_fence(
+            906, "cap@example.invalid",
+            {"used_up": 2 * 1024 ** 3, "used_down": 0,
+             "total_bytes": 30 * 1024 ** 3, "expiry_time": 1_700_000_000_000},
+            now=BASE)
+        stale = [{
+            'id': 1, 'server_id': 906, 'remark': 'in',
+            'clients': [{
+                'email': 'cap@example.invalid', 'up': 1024 ** 3, 'down': 0,
+                'up_formatted': '1 GiB', 'down_formatted': '0 B',
+                'totalGB': 10 * 1024 ** 3, 'expiryTimestamp': 1_600_000_000_000,
+                'raw_client': {'email': 'cap@example.invalid',
+                               'totalGB': 10 * 1024 ** 3,
+                               'expiryTime': 1_600_000_000_000},
+            }],
+        }]
+        with mock.patch.object(refresh_jobs, "_recompute_cached_client"), \
+                mock.patch("app._get_dashboard_status_thresholds", return_value={}), \
+                mock.patch("app._get_panel_ui_lang", return_value="en"), \
+                mock.patch("app.format_bytes", side_effect=lambda value: "%d B" % value):
+            refresh_jobs._apply_client_fences(906, stale, now=BASE)
+        row = stale[0]['clients'][0]
+        # Counters: held at the verified (higher) value.
+        self.assertEqual(row['up'], 2 * 1024 ** 3)
+        # Configuration: the verified cap and expiry win over the lagging aggregate.
+        self.assertEqual(row['totalGB'], 30 * 1024 ** 3)
+        self.assertEqual(row['raw_client']['totalGB'], 30 * 1024 ** 3)
+        self.assertEqual(row['expiryTimestamp'], 1_700_000_000_000)
+        self.assertEqual(row['raw_client']['expiryTime'], 1_700_000_000_000)
+        # The fence is still live: the panel has not caught up, so it may not be released.
+        self.assertEqual(list(refresh_policy.client_fences(906, now=BASE + 1)),
+                         ["cap@example.invalid"])
+
+    def test_the_fence_is_released_once_the_aggregate_agrees_on_everything(self):
+        from panel.jobs import refresh as refresh_jobs
+        refresh_policy.record_client_fence(
+            907, "agree@example.invalid",
+            {"used_up": 2 * 1024 ** 3, "used_down": 0,
+             "total_bytes": 30 * 1024 ** 3, "expiry_time": 1_700_000_000_000},
+            now=BASE)
+        caught_up = [{
+            'id': 1, 'server_id': 907, 'remark': 'in',
+            'clients': [{
+                'email': 'agree@example.invalid', 'up': 2 * 1024 ** 3, 'down': 0,
+                'totalGB': 30 * 1024 ** 3, 'expiryTimestamp': 1_700_000_000_000,
+                'raw_client': {'email': 'agree@example.invalid',
+                               'totalGB': 30 * 1024 ** 3,
+                               'expiryTime': 1_700_000_000_000},
+            }],
+        }]
+        with mock.patch.object(refresh_jobs, "_recompute_cached_client"), \
+                mock.patch("app._get_dashboard_status_thresholds", return_value={}), \
+                mock.patch("app._get_panel_ui_lang", return_value="en"):
+            refresh_jobs._apply_client_fences(907, caught_up, now=BASE)
+        # Nothing was rewritten (the aggregate already agrees) and the fence is gone, so
+        # a later genuine change by the panel is never pinned by an old verification.
+        self.assertEqual(caught_up[0]['clients'][0]['totalGB'], 30 * 1024 ** 3)
+        self.assertEqual(refresh_policy.client_fences(907, now=BASE + 1), {})
 
     def test_a_local_fence_expires_on_its_own(self):
         refresh_policy.record_client_fence(905, "a@example.invalid",

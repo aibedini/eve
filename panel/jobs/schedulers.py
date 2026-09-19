@@ -43,14 +43,18 @@ from panel.jobs.messaging import (
 from panel.services import depletion_pipeline, telemetry_state
 from panel.services.lifecycle import invalidation_outbox_worker
 from panel.jobs.refresh import (
+    _apply_client_fences,
     _backoff_get,
     _backoff_record_failure,
     _backoff_record_success,
     _backoff_should_skip,
+    _block_signature,
     _check_server_reachable,
+    _fetch_and_update_server_data_inner,
     _recompute_cached_client,
     _recompute_global_stats_from_server_statuses,
     _set_snap_progress,
+    fetch_and_update_server_data,
     refresh_queue_worker,
 )
 from panel.models import (
@@ -251,17 +255,19 @@ def inject_version():
 
 
 def background_data_fetcher():
-    """
-    Adaptive fetcher loop: fetch every panel when the snapshot is stale for the
-    current activity level (active/recent/idle), otherwise sleep in short slices so
-    dashboard activity is noticed promptly. Idle panels are polled far less often
-    while the maximum staleness still bounds data age. See panel/core/refresh_policy.py.
+    """The automatic fetch loop: a bootstrap sweep, then per-server scheduling.
 
-    Phase 10: the cycle cadence above is only half of the policy -- inside a cycle the
-    file's per-server cadence decides which panels are actually due, so one watched
-    server is polled every couple of seconds without re-fetching the whole install, and
-    the loop also wakes for the earliest scheduled panel instead of waiting out a whole
-    cycle.
+    Historically this was one loop of "collect every due panel, fetch the batch, wait
+    for the batch, sleep, repeat". That shape made the CYCLE length the effective
+    interval of the one panel the operator was watching, and ordering or batching the
+    same batch cannot change it: the next start of a HOT panel still waited for the
+    rest of the fan-out. The loop below is the shape that does change it -- see
+    ``run_per_server_scheduler`` -- and this function only owns the startup sequence.
+
+    The global sweep survives for what it is actually good at: the first fill after a
+    restart (discovery of the enabled set, one coherent snapshot), an explicit operator
+    refresh, recovery, and the per-server staleness ceiling that ``server_due()``
+    enforces on its own.
     """
     from app import GLOBAL_SERVER_DATA, app  # deferred: app-level helper, avoids circular import
     ensure_background_threads_started()
@@ -278,42 +284,382 @@ def background_data_fetcher():
         refresh_policy.start_wake_listener()
     except Exception:
         app.logger.warning('Refresh wake listener could not start', exc_info=True)
-    while True:
+    # Bootstrap sweep: fill the snapshot and let the policy learn the enabled set before
+    # the per-server loop starts making dispatch decisions from it.
+    try:
+        with app.app_context():
+            fetch_and_update_global_data(force=False)
+    except Exception:
         try:
             with app.app_context():
-                snapshot_age = refresh_policy.snapshot_age_seconds(
-                    GLOBAL_SERVER_DATA.get('last_update'))
-                should_fetch, _reason = refresh_policy.should_fetch_now(snapshot_age)
-                due_in = refresh_policy.next_server_due_in()
-                if due_in is not None:
-                    # Once panels are tracked the per-server cadence is the authority;
-                    # the cycle-level staleness above is only the bootstrap path. Using
-                    # both here would spin the loop, because a cycle may legitimately
-                    # defer every panel it was woken for.
-                    should_fetch = due_in <= 0
-                if should_fetch:
-                    # fetch_and_update_global_data owns the fetch guard (and skips
-                    # the cycle when a manual refresh is already fetching), so this
-                    # loop never holds the shared snapshot lock across network I/O.
-                    fetch_and_update_global_data(force=False, periodic=True)
-                    continue
-                interval = refresh_policy.next_interval(snapshot_age)
-                if due_in is not None:
-                    # Wake for the earliest due panel; never spin on a ~0 remainder.
-                    interval = min(interval, max(0.25, due_in))
-            # Sleep a bounded slice: a request (local event, shared activity timestamp
-            # or a published wake nudge) makes the next evaluation re-read the policy.
-            # The slice is bounded well below the cycle interval so a lost nudge costs
-            # latency rather than correctness.
-            refresh_policy.wait_for_interval(
-                min(interval, refresh_policy.max_wake_slice()))
+                app.logger.warning('Bootstrap fetch failed', exc_info=True)
         except Exception:
+            pass
+    run_per_server_scheduler()
+
+
+def _scheduler_server_rows():
+    """The enabled, visible panels the scheduler may dispatch, freshest from the DB."""
+    servers = Server.query.filter_by(enabled=True).filter(
+        (Server.hidden == False) | (Server.hidden == None)).all()
+    return [{'id': int(s.id)} for s in servers]
+
+
+#: Scheduler tick and DB discovery cadence.
+#:
+#: The tick is how often the loop re-evaluates while it is waiting: it bounds the
+#: latency of a cross-process wake (a nudge is noticed within one tick) and the delay
+#: before a freed worker is reused. It is deliberately short -- the loop is idle-waiting
+#: on an event, not spinning on work -- and the discovery cadence keeps the enabled set
+#: fresh without a database read per tick.
+SCHEDULER_TICK_SECONDS = 0.05
+SCHEDULER_DISCOVERY_SECONDS = 15.0
+
+_scheduler_lock = threading.Lock()
+_scheduler_stats = {}
+
+
+def _scheduler_reset_metrics(workers=None):
+    with _scheduler_lock:
+        _scheduler_stats.clear()
+        _scheduler_stats.update({
+            'dispatched': 0, 'completed': 0, 'errors': 0, 'stale_discarded': 0,
+            'capacity_rejections': 0, 'saturation_events': 0,
+            'max_inflight': 0, 'max_due_i_wait': 0,
+            'queue_delay_ms_max': 0.0, 'queue_delay_ms_total': 0.0,
+            'wake_consumed': 0, 'started_at': time.time(),
+            'workers': (panel_limits.refresh_worker_limit() if workers is None
+                        else int(workers)),
+        })
+
+
+def _scheduler_note_saturation(inflight_now, due_total):
+    with _scheduler_lock:
+        _scheduler_stats['saturation_events'] = _scheduler_stats.get('saturation_events', 0) + 1
+        _scheduler_stats['max_inflight'] = max(
+            _scheduler_stats.get('max_inflight', 0), inflight_now)
+        _scheduler_stats['max_due_i_wait'] = max(
+            _scheduler_stats.get('max_due_i_wait', 0), due_total)
+
+
+def _scheduler_record_completion(sid, *, error=None, stale=False):
+    delay = None
+    try:
+        delay = refresh_policy.server_sync_state(sid).get('scheduler_queue_delay_ms')
+    except Exception:
+        delay = None
+    with _scheduler_lock:
+        _scheduler_stats['completed'] = _scheduler_stats.get('completed', 0) + 1
+        if error:
+            _scheduler_stats['errors'] = _scheduler_stats.get('errors', 0) + 1
+        if stale:
+            _scheduler_stats['stale_discarded'] = _scheduler_stats.get('stale_discarded', 0) + 1
+        if isinstance(delay, (int, float)):
+            _scheduler_stats['queue_delay_ms_total'] = (
+                _scheduler_stats.get('queue_delay_ms_total', 0.0) + float(delay))
+            _scheduler_stats['queue_delay_ms_max'] = max(
+                _scheduler_stats.get('queue_delay_ms_max', 0.0), float(delay))
+
+
+def scheduler_metrics() -> dict:
+    """Scheduling evidence: throughput, saturation and how late dispatches were.
+
+    This is the answer to "is the two-second cadence actually being met, and if not,
+    why": ``queue_delay_ms_avg`` is time a due panel spent waiting for a free worker,
+    ``saturation_events`` counts the ticks where more panels were due than there were
+    workers, and ``modes``/``health`` come from the policy. A worker-starved install
+    shows up here instead of hiding behind the word "polling".
+    """
+    with _scheduler_lock:
+        stats = dict(_scheduler_stats)
+    dispatched = int(stats.get('dispatched') or 0)
+    total_delay = float(stats.get('queue_delay_ms_total') or 0.0)
+    stats['queue_delay_ms_avg'] = round(total_delay / dispatched, 3) if dispatched else 0.0
+    stats['queue_delay_ms_max'] = round(float(stats.get('queue_delay_ms_max') or 0.0), 3)
+    if not stats.get('workers'):
+        # The loop records the worker count it actually ran with; the environment value
+        # is only the fallback for a metric read before the loop ever started.
+        stats['workers'] = panel_limits.refresh_worker_limit()
+    try:
+        stats['panel_concurrency_limit'] = panel_limits.concurrency_limit()
+        stats['panel_in_flight'] = panel_limits.panel_metrics().get('in_flight', 0)
+        stats['panel_max_in_flight'] = panel_limits.panel_metrics().get('max_in_flight', 0)
+    except Exception:
+        pass
+    stats['tick_seconds'] = SCHEDULER_TICK_SECONDS
+    return stats
+
+
+def run_per_server_scheduler(*, fetch_callable=None, server_rows=None, duration=None,
+                             stop_event=None, worker_limit=None, bootstrap_rows=True):
+    """Dispatch each due panel on its own clock, independent of every other panel.
+
+    The shape, which is the whole point of this function:
+
+        due server ----► dispatch (free worker) ----► fetch ONE server ----► commit
+             ▲                                                                  │
+             └──────────── next_due = completion + that server's cadence ◄──────┘
+
+    There is no batch and no barrier: a completed read frees its worker and the very
+    next tick dispatches whatever is due, so the number of OTHER panels changes how long
+    a panel waits for a FREE worker (which is measured and reported as queue delay),
+    never when it is scheduled. One read in flight per server is enforced by the policy
+    (``inflight``) and again by ``panel_limits.coalesce`` for callers outside this loop.
+
+    ``fetch_callable``/``server_rows``/``duration``/``stop_event`` exist so the benchmark
+    and the tests drive the real loop instead of a re-implementation of it.
+    """
+    fetch_one = fetch_callable or fetch_and_update_server_data
+    if server_rows is None:
+        # The real loop: discover the enabled set from the database (and re-read it
+        # periodically, so a panel added or disabled while running is picked up).
+        rows_provider = _scheduler_server_rows
+    elif callable(server_rows):
+        rows_provider = server_rows
+    else:
+        rows_provider = lambda: list(server_rows)
+    workers = int(worker_limit or panel_limits.refresh_worker_limit())
+    deadline = None if duration is None else time.monotonic() + float(duration)
+    stop = stop_event or threading.Event()
+    inflight = {}
+    cached_rows = []
+    rows_read_at = 0.0
+    from app import app as scheduler_app  # deferred: app-level object, avoids an import cycle
+
+    _scheduler_reset_metrics(workers)
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, workers), thread_name_prefix='eve-fetch') as pool:
+        while not stop.is_set():
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             try:
-                with app.app_context():
-                    app.logger.exception('Background fetcher cycle failed')
+                # A dispatch tick reads the database (the enabled set, the revisions) and
+                # records telemetry, so it owns an application context. It is taken per
+                # tick rather than held for the process's life: a long-lived context
+                # would also keep a long-lived session, and this loop outlives any
+                # request.
+                with scheduler_app.app_context():
+                    now = time.time()
+                    if bootstrap_rows and (not cached_rows
+                                           or (now - rows_read_at) >= SCHEDULER_DISCOVERY_SECONDS):
+                        cached_rows = list(rows_provider() or [])
+                        rows_read_at = now
+                        refresh_policy.retain_servers(
+                            row.get('id') for row in cached_rows if isinstance(row, dict))
+                    free = max(0, workers - len(inflight))
+                    if free:
+                        plan = refresh_policy.scheduler_plan(
+                            cached_rows, now=now, limit=free)
+                        due_total = len(refresh_policy.scheduler_plan(cached_rows, now=now))
+                        if due_total > free:
+                            _scheduler_note_saturation(len(inflight), due_total)
+                        for sid in plan:
+                            if sid in inflight:
+                                continue
+                            try:
+                                if _backoff_should_skip(sid, now):
+                                    # The fetch layer owns its own retry ladder; mirroring
+                                    # the window here keeps the loop from waking for a
+                                    # panel it would only skip again.
+                                    refresh_policy.defer_server_until(
+                                        sid, (_backoff_get(sid) or {}).get('next_allowed_at'))
+                                    continue
+                            except Exception:
+                                continue
+                            inflight[sid] = _scheduler_dispatch(pool, fetch_one, sid)
+                            if len(inflight) >= workers:
+                                break
+                    timeout = _scheduler_next_timeout(inflight, cached_rows)
+                    done = _scheduler_wait(set(inflight.values()), timeout, stop)
+                    now_after = time.time()
+                    for sid in [s for s, fut in inflight.items() if fut in done]:
+                        future = inflight.pop(sid)
+                        _scheduler_finish(sid, future, now=now_after)
+                    # A nudge or a completion can make another panel due immediately; the
+                    # loop never sleeps "for the cycle" to find that out.
+                    if not done and _scheduler_consume_wake():
+                        continue
+            except Exception:
+                try:
+                    with scheduler_app.app_context():
+                        scheduler_app.logger.exception('Per-server scheduler tick failed')
+                except Exception:
+                    pass
+                stop.wait(SCHEDULER_TICK_SECONDS)
+    return scheduler_metrics()
+
+
+def _scheduler_dispatch(pool, fetch_one, sid):
+    """Start one panel read and return its future, marking the server in flight."""
+    queued_at = time.time()
+    try:
+        ticket = fetch_sequence.begin(sid)
+    except Exception:
+        ticket = None
+    try:
+        revision_before = get_server_revision(sid)
+    except Exception:
+        revision_before = 0
+    refresh_policy.note_fetch_started(sid, now=queued_at, queued_at=queued_at)
+    with _scheduler_lock:
+        _scheduler_stats['dispatched'] = _scheduler_stats.get('dispatched', 0) + 1
+
+    def _run():
+        # Each worker owns its app context: the fetch reads the database and the
+        # snapshot, and a pooled thread does not inherit the caller's context.
+        try:
+            from app import app
+            with app.app_context():
+                return fetch_one(sid)
+        except panel_limits.PanelBusy as exc:
+            # The process-wide panel cap refused a slot: the panel is fine and we simply
+            # could not start it. Recording that as a panel failure would put a healthy
+            # panel into backoff because the INSTALL is busy, which is exactly the
+            # self-inflicted outage the capacity report exists to avoid.
+            return {'server_id': sid, 'busy': True, 'error': str(exc),
+                    'changed': False, 'block': None}
+        except Exception as exc:
+            return {'server_id': sid, 'error': str(exc) or 'fetch_failed',
+                    'changed': False, 'block': None}
+
+    future = pool.submit(_run)
+    future.scheduler_ticket = ticket
+    future.scheduler_revision = revision_before
+    future.scheduler_started_at = queued_at
+    return future
+
+
+def _scheduler_finish(sid, future, *, now=None):
+    """Apply one completed read for ONE server and reschedule only that server."""
+    moment = time.time() if now is None else float(now)
+    started_at = getattr(future, 'scheduler_started_at', moment)
+    ticket = getattr(future, 'scheduler_ticket', None)
+    revision_before = getattr(future, 'scheduler_revision', None)
+    duration_ms = int(max(0.0, moment - float(started_at)) * 1000)
+    try:
+        result = future.result()
+    except Exception as exc:
+        result = {'server_id': sid, 'error': str(exc) or 'fetch_failed',
+                  'changed': False, 'block': None}
+    if not isinstance(result, dict):
+        result = {'server_id': sid, 'changed': False, 'block': None}
+    error = result.get('error')
+    changed = bool(result.get('changed'))
+    if result.get('busy'):
+        # Not a panel failure: reschedule on the normal cadence and count it as a
+        # capacity event, so the doctor page shows pressure instead of fake failures.
+        with _scheduler_lock:
+            _scheduler_stats['capacity_rejections'] = (
+                _scheduler_stats.get('capacity_rejections', 0) + 1)
+        refresh_policy.note_server_result(sid, True, now=moment, duration_ms=duration_ms)
+        _scheduler_record_completion(sid, error=None)
+        return
+
+    # Ordering barrier: a slow read that started before a newer one must not commit.
+    if ticket is not None:
+        try:
+            if not fetch_sequence.accept(sid, ticket):
+                _backoff_record_success(sid)
+                refresh_policy.note_server_result(
+                    sid, True, now=moment, duration_ms=duration_ms)
+                _scheduler_record_completion(sid, error=None, stale=True)
+                return
+        except Exception:
+            pass
+
+    try:
+        if error:
+            _backoff_record_failure(sid, error)
+            refresh_policy.note_server_result(
+                sid, False, now=moment, duration_ms=duration_ms, error=error)
+            _scheduler_record_completion(sid, error=error)
+            return
+        _backoff_record_success(sid)
+        publish_needed = bool(changed)
+        if publish_needed and revision_before is not None:
+            try:
+                if get_server_revision(sid) != revision_before:
+                    # A mutation won the race: the panel data is real but this snapshot
+                    # copy is stale, so it is not published over the newer revision.
+                    publish_needed = False
             except Exception:
                 pass
-            time.sleep(refresh_policy.MIN_INTERVAL_SECONDS)
+        if publish_needed:
+            try:
+                if publish_snapshot_to_redis(
+                        [sid], expected_server_revisions={sid: revision_before}):
+                    refresh_policy.note_snapshot_publish(sid, now=moment)
+            except Exception:
+                pass
+        block = result.get('block')
+        if block:
+            _record_fetch_transitions(sid, block)
+        refresh_policy.note_server_result(
+            sid, True, now=moment, duration_ms=duration_ms, changed=changed)
+        try:
+            from panel.core import snapshot_delta
+            refresh_policy.note_server_revisions(
+                sid,
+                server_revision=get_server_revision(sid),
+                snapshot_revision=snapshot_delta.current_revision(GLOBAL_SERVER_DATA))
+        except Exception:
+            pass
+        _scheduler_record_completion(sid, error=None)
+    except Exception:
+        try:
+            from app import app
+            with app.app_context():
+                app.logger.exception('Failed to apply fetch result for server %s', sid)
+        except Exception:
+            pass
+        try:
+            refresh_policy.note_server_result(
+                sid, False, now=moment, duration_ms=duration_ms,
+                error='apply_failed')
+        except Exception:
+            pass
+
+
+def _scheduler_consume_wake() -> bool:
+    """Test-and-clear the wake event, counting it as evidence the nudge arrived."""
+    if refresh_policy.consume_wake():
+        with _scheduler_lock:
+            _scheduler_stats['wake_consumed'] = _scheduler_stats.get('wake_consumed', 0) + 1
+        return True
+    return False
+
+
+def _scheduler_next_timeout(inflight, rows):
+    """How long this tick may wait: until the next due panel, bounded by the wake slice."""
+    due_in = refresh_policy.next_server_due_in()
+    if due_in is None:
+        return refresh_policy.max_wake_slice()
+    # Never sleep past the earliest due panel; never sleep so long that a nudge costs
+    # more than the slice (the wait loop also watches the wake event).
+    return min(refresh_policy.max_wake_slice(), max(SCHEDULER_TICK_SECONDS, due_in))
+
+
+def _scheduler_wait(futures, timeout, stop):
+    """Wait for a completion, the next tick, or a wake nudge -- whichever is first."""
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while not stop.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return set()
+        if not futures:
+            # Nothing running: sleep in ticks so a nudge is acted on within one tick.
+            if _scheduler_consume_wake():
+                return set()
+            stop.wait(min(SCHEDULER_TICK_SECONDS, remaining))
+            continue
+        done, _ = concurrent.futures.wait(
+            futures, timeout=min(SCHEDULER_TICK_SECONDS, remaining),
+            return_when=concurrent.futures.FIRST_COMPLETED)
+        if done:
+            return done
+        if _scheduler_consume_wake():
+            return set()
+    return set()
 
 
 def snapshot_reader_worker():
@@ -372,93 +718,6 @@ def _record_fetch_transitions(server_id, inbounds):
             '[telemetry] transition recording failed for server %s', server_id,
             exc_info=True)
 
-
-def _block_signature(inbounds):
-    """Cheap change detector for ONE server's block (never the whole install).
-
-    Freshness has to know whether a poll returned something new, and hashing every
-    client of every panel would be exactly the expensive pass this project already
-    avoids. The counters below move for everything the dashboard shows -- traffic,
-    quota, expiry, enable -- so a poll that moved none of them is reported as
-    ``no_change`` without touching the rest of the install.
-    """
-    count = up = down = total = enabled = expiry = 0
-    for inbound in inbounds or []:
-        for client in (inbound.get('clients') or []):
-            count += 1
-            if client.get('enable', True):
-                enabled += 1
-            try:
-                up += int(client.get('up') or 0)
-                down += int(client.get('down') or 0)
-                total += int(client.get('totalGB') or 0)
-                expiry += int(client.get('expiryTimestamp') or 0)
-            except (TypeError, ValueError):
-                continue
-    return (count, up, down, total, enabled, expiry)
-
-
-def _apply_client_fences(server_id, inbounds):
-    """Refuse to let a slower aggregate read revert a verified client mutation.
-
-    Reached only while a fence is live (a few seconds after an EVE mutation read the
-    client back from the panel). The client-level endpoint reflects the write
-    immediately while the aggregate inbound list can lag; without this guard the next
-    background poll writes the pre-mutation counters over the verified ones, and the
-    renewal looks like it undid itself a minute later.
-
-    The fence is dropped the moment a read comes back at or above the verified counters,
-    so it can never pin a value the panel genuinely changed.
-    """
-    fences = refresh_policy.client_fences(server_id)
-    if not fences:
-        return inbounds
-    normalised = {
-        str(key).replace(' ', '').lower(): value for key, value in fences.items()
-    }
-    thresholds = None
-    lang = None
-    for inbound in (inbounds or []):
-        for client in (inbound.get('clients') or []):
-            lookup = str(client.get('email') or '').replace(' ', '').lower()
-            fence = normalised.get(lookup)
-            if not fence:
-                continue
-            try:
-                want_up = int(fence.get('used_up'))
-                want_down = int(fence.get('used_down'))
-                cur_up = int(client.get('up') or 0)
-                cur_down = int(client.get('down') or 0)
-            except (TypeError, ValueError):
-                continue
-            if cur_up >= want_up and cur_down >= want_down:
-                # The panel caught up: the fence has done its job.
-                refresh_policy.clear_client_fence(server_id, fence.get('email'))
-                refresh_policy.sync_event(
-                    'sync.server.fence_cleared', server_id=server_id)
-                continue
-            if thresholds is None:
-                from app import _get_dashboard_status_thresholds, _get_panel_ui_lang
-                thresholds = _get_dashboard_status_thresholds()
-                lang = _get_panel_ui_lang()
-            client['up'] = max(cur_up, want_up)
-            client['down'] = max(cur_down, want_down)
-            try:
-                from app import format_bytes
-                client['up_formatted'] = format_bytes(int(client['up']))
-                client['down_formatted'] = format_bytes(int(client['down']))
-            except Exception:
-                pass
-            try:
-                _recompute_cached_client(
-                    client, thresholds, lang, telemetry_changed=True)
-            except Exception:
-                pass
-            refresh_policy.sync_event(
-                'sync.server.fence_held', server_id=server_id,
-                observed_up=cur_up, observed_down=cur_down,
-                kept_up=int(client['up']), kept_down=int(client['down']))
-    return inbounds
 
 
 def fetch_and_update_global_data(force: bool = False, server_ids=None, progress_callback=None,

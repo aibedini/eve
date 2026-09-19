@@ -1621,6 +1621,14 @@
     let pendingServers = [];
     let serverStatuses = []; // /api/refresh -> servers (status list)
     let snapshotRevision = null; // last applied /api/refresh revision (delta sync)
+    // /api/refresh -> servers_sync: one scheduling/freshness row per server id
+    // (string key). It is the ONLY freshness source: the shared inbound blocks carry
+    // no per-request age, because stamping one into them would change the delta
+    // fingerprint on every poll. Reachability is a DIFFERENT question: serverStatuses
+    // answers "did the panel answer", this answers "how old is the authoritative read
+    // behind the numbers on the card", and a server missing here is unknown - never
+    // "live". Never derive one from the other.
+    let serversSync = {};
     let refreshController = null;
     const serverRefreshControllers = new Map(); // serverId -> AbortController
     let activeRefreshJobId = null;
@@ -3110,6 +3118,10 @@
             const data = await resp.json();
 
             if (data && data.success) {
+                // The per-server endpoint is NOT part of the servers_sync contract, so
+                // this must not touch the store: the freshness rows stay the last
+                // statement /api/refresh made instead of being erased by a route that
+                // says nothing about scheduling.
                 const jobId = data.refresh_job && data.refresh_job.id;
                 const jobState = data.refresh_job && data.refresh_job.state;
                 const isAsyncJobPending = Boolean(jobId && (jobState === 'queued' || jobState === 'running'));
@@ -3289,11 +3301,12 @@
     }
 
     // Phase 10: the panels whose rows are on screen right now. Sent with every poll so
-    // the server-side scheduler knows what the operator is actually watching.
-    // The cap is the server's own (EVE_SERVER_POLL_WATCH_LIMIT): declaring more than it
-    // accepts would silently drop the surplus, so the browser caps the list it sends
-    // rather than claiming a panel is being watched when the scheduler disagrees.
-    const WATCH_LIMIT = {{ watch_limit|default(50)|int }};
+    // the server-side scheduler knows what the operator is actually watching, and so the
+    // per-server freshness rows cover everything on screen.
+    // The cap is the SERVER's (EVE_SERVER_POLL_WATCH_LIMIT): it decides how many of the
+    // declared panels it holds on the fast cadence, and the freshness line shows each
+    // panel's real mode, so a declared-but-idle panel is visibly idle rather than
+    // silently claimed as watched.
     function watchedServerIds() {
         const seen = new Set();
         (Array.isArray(allInboundsData) ? allInboundsData : []).forEach((row) => {
@@ -3301,7 +3314,7 @@
             if (sid === null || sid === undefined || sid === '') return;
             seen.add(String(sid));
         });
-        return Array.from(seen).slice(0, WATCH_LIMIT);
+        return Array.from(seen);
     }
 
     async function refreshData(isSilent = false, options = {}) {
@@ -3367,10 +3380,18 @@
                 if (sync && typeof sync.revision === 'number') {
                     snapshotRevision = sync.revision;
                 }
+                // The servers_sync rows of THIS response are the authority (see
+                // _captureServersSync), so a render triggered below never shows the
+                // previous poll's idea of how fresh the data is.
+                _captureServersSync(data);
 
                 if (shouldApplySnapshotNow) {
                     if (sync && sync.mode === 'unchanged') {
                         // Nothing changed since the last poll: keep the current view.
+                        // The freshness rows can still have moved, so repaint those
+                        // lines in place - otherwise a snapshot whose reads stopped
+                        // keeps reading as "Live" for as long as it stays unchanged.
+                        _refreshSyncIndicators();
                     } else if (sync && sync.mode === 'delta') {
                         applySnapshotDelta(data);
                     } else {
@@ -3704,6 +3725,143 @@
         });
     }
 
+    // --- Per-server freshness -------------------------------------------------
+    // A server that answers the status probe can still be showing numbers from a
+    // read that succeeded minutes ago. The label below repeats ONLY the backend's
+    // own sync vocabulary (sync_health), so this page cannot promote a reachable
+    // but old server to "Live" on its own judgement.
+    const SYNC_TEXT = {
+        live: {{ ('زنده' if panel_lang == 'fa' else 'Live')|tojson }},
+        fresh: {{ ('تازه' if panel_lang == 'fa' else 'Fresh')|tojson }},
+        stale: {{ ('قدیمی' if panel_lang == 'fa' else 'Stale')|tojson }},
+        issue: {{ ('مشکل همگام‌سازی' if panel_lang == 'fa' else 'Sync issue')|tojson }},
+        panelSync: {{ ('همگام‌سازی پنل' if panel_lang == 'fa' else 'Panel sync')|tojson }},
+        telemetry: {{ ('تلمتری' if panel_lang == 'fa' else 'Telemetry')|tojson }},
+        config: {{ ('تنظیمات' if panel_lang == 'fa' else 'Config')|tojson }},
+        mode: {{ ('حالت پایش' if panel_lang == 'fa' else 'Poll mode')|tojson }},
+        nextPoll: {{ ('پایش بعدی' if panel_lang == 'fa' else 'Next poll')|tojson }},
+        // Suffixes appended to a formatted duration ("8s" + " ago"). The Persian
+        // wording keeps its leading space, exactly as it is written after a number.
+        ago: {{ (' پیش' if panel_lang == 'fa' else ' ago')|tojson }},
+        unitSeconds: {{ (' ثانیه' if panel_lang == 'fa' else 's')|tojson }},
+        unitMinutes: {{ (' دقیقه' if panel_lang == 'fa' else 'm')|tojson }},
+        unitHours: {{ (' ساعت' if panel_lang == 'fa' else 'h')|tojson }},
+    };
+    // The complete vocabulary the backend owns. Anything outside it is unknown, and
+    // an unknown sync state renders NOTHING: showing "Live" for a state this page
+    // does not understand is the exact misreading the indicator exists to prevent.
+    const SYNC_HEALTH = {
+        live: { word: 'live', tone: 'field-note-ok' },
+        fresh: { word: 'fresh', tone: '' },
+        stale: { word: 'stale', tone: 'field-note-warn' },
+        backoff: { word: 'issue', tone: 'field-note-warn' },
+        down: { word: 'issue', tone: 'field-note-warn' },
+    };
+
+    // Seconds -> "8s" / "2m" / "1h". Only the unit suffix is language-dependent, and
+    // that comes from the label table, so this formats a duration and nothing else:
+    // every freshness threshold belongs to the backend, and classifying an age here
+    // would be a second, divergent copy of that rule.
+    function _formatSyncSeconds(seconds) {
+        const value = Math.max(0, Math.floor(Number(seconds) || 0));
+        if (value < 60) return `${value}${SYNC_TEXT.unitSeconds}`;
+        if (value < 3600) return `${Math.floor(value / 60)}${SYNC_TEXT.unitMinutes}`;
+        return `${Math.floor(value / 3600)}${SYNC_TEXT.unitHours}`;
+    }
+
+    // A missing or non-numeric age is unknown; it must not become 0 ("just now").
+    function _syncNumber(value) {
+        return (typeof value === 'number' && Number.isFinite(value) && value >= 0) ? value : null;
+    }
+
+    // Take the scheduler rows of an /api/refresh envelope. The object is the ONLY
+    // authority for freshness (the shared inbound blocks carry no per-request age:
+    // an age written into them would change the delta fingerprint on every poll).
+    // Absent object, or a server missing from it, means UNKNOWN - so this REPLACES
+    // the store instead of merging: carrying a previous answer forward would let a
+    // snapshot whose reads stopped keep reading as "Live" forever. Only an
+    // /api/refresh envelope may call this; the per-server endpoint is not part of
+    // the contract and must not be able to erase what the contract supplied.
+    function _captureServersSync(payload) {
+        const rows = payload && payload.servers_sync;
+        serversSync = (rows && typeof rows === 'object' && !Array.isArray(rows)) ? rows : {};
+    }
+
+    // Label and tooltip are built together from ONE reading of the row, so a repaint
+    // can never leave the visible age and the tooltip describing different reads.
+    function _serverSyncInfo(sid) {
+        // JSON keys are strings while the ids iterated here are numbers.
+        const key = String(sid);
+        const row = (serversSync && typeof serversSync === 'object') ? serversSync[key] : null;
+        const detail = (row && typeof row === 'object') ? row : {};
+        const health = (typeof detail.sync_health === 'string' && detail.sync_health) ? detail.sync_health : '';
+        const age = _syncNumber(detail.last_success_age_seconds);
+        // Own-property lookup: a value such as "constructor" must resolve to unknown
+        // and render nothing, not to something inherited from Object.prototype.
+        const known = Object.prototype.hasOwnProperty.call(SYNC_HEALTH, health)
+            ? SYNC_HEALTH[health]
+            : null;
+        if (!known) return null; // no usable sync state: say nothing at all
+
+        const ago = SYNC_TEXT.ago;
+        const ageText = (age !== null && Math.floor(age) >= 1)
+            ? _formatSyncSeconds(age) + ago
+            : '';
+        const word = SYNC_TEXT[known.word];
+
+        const tooltip = [word];
+        if (ageText) tooltip.push(`${SYNC_TEXT.panelSync}: ${ageText}`);
+        const telemetry = _syncNumber(detail.telemetry_age_seconds);
+        if (telemetry !== null) tooltip.push(`${SYNC_TEXT.telemetry}: ${_formatSyncSeconds(telemetry)}${ago}`);
+        const configAge = _syncNumber(detail.config_age_seconds);
+        if (configAge !== null) tooltip.push(`${SYNC_TEXT.config}: ${_formatSyncSeconds(configAge)}${ago}`);
+        const mode = (typeof detail.mode === 'string' && detail.mode) ? detail.mode.toUpperCase() : '';
+        if (mode) tooltip.push(`${SYNC_TEXT.mode}: ${mode}`);
+        const nextDue = _syncNumber(detail.next_due_in_seconds);
+        if (nextDue !== null) tooltip.push(`${SYNC_TEXT.nextPoll}: ${_formatSyncSeconds(nextDue)}`);
+
+        return {
+            text: ageText ? `${word} · ${ageText}` : word,
+            title: tooltip.join('\n'),
+            cls: known.tone ? `field-note ${known.tone}` : 'field-note',
+        };
+    }
+
+    // A literal newline in a title attribute is collapsed by some parsers, so the
+    // entity keeps the native tooltip one row per fact.
+    function _syncTitleAttr(text) {
+        return escapeHtml(text).replace(/\n/g, '&#10;');
+    }
+
+    // The server section header's freshness line. It is a text note, never a second
+    // badge: a badge here would read as another reachability/status pill.
+    function _serverSyncHtml(sid) {
+        const info = _serverSyncInfo(sid);
+        if (!info) return '';
+        return `<small class="${info.cls}" data-sync-server="${escapeHtml(String(sid))}" title="${_syncTitleAttr(info.title)}">${escapeHtml(info.text)}</small>`;
+    }
+
+    // A poll can carry new rows without replacing any inbound block (the "unchanged"
+    // envelope), so the visible lines are repainted in place instead of waiting for a
+    // card rebuild. Repainting through the same builder keeps text and tooltip in
+    // step, and a server that is no longer in servers_sync is hidden again rather than
+    // keeping the last claim on screen.
+    function _refreshSyncIndicators() {
+        document.querySelectorAll('[data-sync-server]').forEach(node => {
+            const info = _serverSyncInfo(node.getAttribute('data-sync-server') || '');
+            if (!info) {
+                node.classList.add('hidden');
+                node.textContent = '';
+                node.removeAttribute('title');
+                return;
+            }
+            node.classList.remove('hidden');
+            node.className = info.cls;
+            node.textContent = info.text;
+            node.title = info.title;
+        });
+    }
+
     function _buildV3ServerCard(sid, serverInbounds, forceExpand = false) {
         const server = (allServers || []).find(s => String(s.id) === String(sid));
         const serverName = server ? server.name : `Server #${sid}`;
@@ -3767,6 +3925,7 @@
                 <div class="inbound-title" style="flex-wrap:wrap;gap:6px;align-items:center;">
                     <span class="v3-badge">v3</span>
                     <h3>${escapeHtml(serverName)}</h3>
+                    ${_serverSyncHtml(sid)}
                     <div class="v3-ib-tags">${ibTagsHtml}</div>
                 </div>
                 <div class="inbound-status">
@@ -3815,6 +3974,7 @@
         
         // Build render items: v3 servers get one unified card; legacy get one per inbound.
         const _v3Done = new Set();
+        const _syncDone = new Set(); // servers whose freshness line this paint already emitted
         const _renderItems = []; // { html, clientCount }
         for (const inbound of inbounds) {
             const _sid = String(inbound.server_id);
@@ -3826,7 +3986,10 @@
                 }
                 continue; // remaining inbounds of the same v3 server are merged in
             }
-            // Legacy: one card per inbound
+            // Legacy: one card per inbound. The freshness line describes the SERVER,
+            // so a server with several inbound cards carries it once, not on every card.
+            const _syncFirst = !_syncDone.has(_sid);
+            if (_syncFirst) _syncDone.add(_sid);
             const inboundKey = `${inbound.server_id}:${inbound.id}`;
             const isExpanded = expandedInboundKeys.has(inboundKey);
             const toggleCount = inbound.clients.length;
@@ -3846,6 +4009,7 @@
                         <h3>${inbound.remark}</h3>
                         <span class="port-badge">:${inbound.port}</span>
                         <span class="server-badge">${inbound.server_name}</span>
+                        ${_syncFirst ? _serverSyncHtml(_sid) : ''}
                     </div>
                     <div class="inbound-status">
                         ${inbound.enable
@@ -3995,6 +4159,7 @@
                                     <h3>${escapeHtml(s?.name || ('Server #' + sid))}</h3>
                                     ${panelType ? `<span class="port-badge">${panelType}</span>` : ''}
                                     <span class="server-badge">#${sid}</span>
+                                    ${_serverSyncHtml(sid)}
                                 </div>
                                 <div class="inbound-status">${pill}</div>
                             </div>
@@ -7379,6 +7544,7 @@ Connection links
         // rows mount lazily — so a write-through patch + applyFilters() re-render keeps
         // every copy of a v3 client in sync here too.
         const _v3Done = new Set();
+        const _syncDone = new Set(); // servers whose freshness line this paint already emitted
         const parts = [];
         inboundsToShow.forEach(inbound => {
             const sid = String(inbound.server_id);
@@ -7389,6 +7555,10 @@ Connection links
                 parts.push(_buildV3ServerCard(sid, sib, true).html);
                 return;
             }
+            // The search view rebuilds a card per inbound from reduced rows, so the
+            // freshness line comes from the scheduler rows, and still once per server.
+            const _syncFirst = !_syncDone.has(sid);
+            if (_syncFirst) _syncDone.add(sid);
             const inboundKey = `${inbound.server_id}:${inbound.id}`;
             _cardRowData.set(inboundKey, {
                 items: inbound.clients,
@@ -7397,7 +7567,8 @@ Connection links
                 objOf: (c) => ({ server_id: parseInt(inbound.server_id), inbound_id: parseInt(inbound.id), email: c.email, client_uuid: c.id || '' }),
                 enableOf: (c) => !!c.enable,
             });
-            parts.push(_searchInboundCardShell(inbound, inboundKey));
+            parts.push(_searchInboundCardShell(inbound, inboundKey,
+                _syncFirst ? _serverSyncHtml(sid) : ''));
         });
 
         container.innerHTML = parts.join('');
@@ -7409,7 +7580,7 @@ Connection links
     // Legacy (non-v3) search-result card shell: header + an expanded, empty-<tbody>
     // clients table. Rows are mounted lazily from _cardRowData via _legacyClientRowHtml,
     // matching the main list exactly.
-    function _searchInboundCardShell(inbound, inboundKey) {
+    function _searchInboundCardShell(inbound, inboundKey, syncHtml = '') {
         const count = inbound.clients.length;
         const SVG_HIDE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>`;
         return `
@@ -7420,6 +7591,7 @@ Connection links
                     <h3>${inbound.remark}</h3>
                     <span class="port-badge">:${inbound.port}</span>
                     <span class="server-badge">${inbound.server_name}</span>
+                    ${syncHtml}
                 </div>
                 <div class="inbound-status">
                     ${inbound.enable

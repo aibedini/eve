@@ -227,6 +227,8 @@ def reset_state() -> None:
         _legacy_scan_at = 0.0
         _last_watch_wake_at = 0.0
         _local_fences.clear()
+        _server_sync_cache['at'] = 0.0
+        _server_sync_cache['rows'] = {}
         _remote_cache['at'] = 0.0
         _remote_cache['value'] = None
         _watch_cache['at'] = 0.0
@@ -546,6 +548,13 @@ def _new_server_state():
         'last_changed_at': None, 'consecutive_failures': 0, 'backoff_seconds': 0.0,
         'currently_fetching': False, 'last_error': None, 'server_revision': 0,
         'last_outcome': None,
+        # Per-server scheduling state. The scheduler dispatches from THIS, not from a
+        # batch: one fetch in flight per server, and a nudge that arrives while that
+        # fetch is running is remembered instead of being lost with the sleep it
+        # interrupted (see mark_wake_pending / note_server_result).
+        'inflight': False, 'wake_pending': False,
+        'due_since': None, 'last_dispatch_delay_ms': None,
+        'last_start_gap_ms': None, 'snapshot_revision': 0,
     }
 
 
@@ -888,6 +897,11 @@ def note_server_activity(server_id, *, now=None, ttl=None, share=True, reason='m
             scheduled = float(state.get('next_due') or 0.0)
             if scheduled and scheduled > soonest:
                 state['next_due'] = soonest
+    # A read of this panel may already be running: the nudge cannot shorten it, but it
+    # must not be lost either, or a mutation landing mid-poll stays invisible for a
+    # whole cadence. note_server_result turns the flag into "due immediately". This is
+    # local bookkeeping, so it happens whether or not the mark is also published.
+    mark_wake_pending(server_id, now=moment)
     if not share:
         return
     sid = _coerce_server_id(server_id)
@@ -941,15 +955,114 @@ def server_mode(server_id, *, now=None) -> str:
     return 'idle'
 
 
-def note_fetch_started(server_id, *, now=None) -> None:
-    """Record that a panel read began (the in-flight flag bounds duplicate fetches)."""
+def note_fetch_started(server_id, *, now=None, queued_at=None) -> float:
+    """Record that a panel read began; returns how late it started.
+
+    ``inflight`` is the scheduler's own guard: the invariant is ONE fetch in flight per
+    server, so a due panel that is already being read is skipped rather than queued a
+    second time. The returned delay is measured against the panel's own schedule
+    (``next_due``), which is what makes worker saturation measurable instead of
+    invisible: a HOT panel whose start keeps slipping past its cadence shows up as
+    queue delay rather than being reported as "2 s polling".
+    """
     state = _server_state(server_id)
     if state is None:
-        return
+        return 0.0
     moment = time.time() if now is None else float(now)
     with _lock:
+        previous_start = state.get('last_fetch_started_at')
+        scheduled = state.get('next_due')
+        due_at = float(scheduled or 0.0)
         state['last_fetch_started_at'] = moment
         state['currently_fetching'] = True
+        state['inflight'] = True
+        state['due_since'] = None
+        # Remember WHICH schedule this read is serving: the next one is measured from it
+        # (period-preserving), so a read does not push the whole cadence out by its own
+        # duration. While the read runs the panel carries a provisional schedule, so it
+        # is neither reported as overdue nor re-dispatched.
+        state['dispatched_for'] = due_at if scheduled else moment
+        delay = max(0.0, moment - due_at) if due_at else 0.0
+        if queued_at is not None:
+            try:
+                delay = max(delay, moment - float(queued_at))
+            except (TypeError, ValueError):
+                pass
+        state['last_dispatch_delay_ms'] = int(round(delay * 1000))
+        if previous_start:
+            try:
+                state['last_start_gap_ms'] = int(round((moment - float(previous_start)) * 1000))
+            except (TypeError, ValueError):
+                pass
+        try:
+            state['next_due'] = moment + server_interval(server_id, now=moment)
+        except Exception:
+            pass
+    return delay
+
+
+def mark_wake_pending(server_id, *, now=None) -> bool:
+    """Remember that this server was nudged while a read of it was already running.
+
+    The scheduler is level-triggered (it dispatches whatever is due), so the only thing
+    a nudge during an in-flight read can add is "re-evaluate this one the moment the
+    read finishes instead of waiting out its freshly scheduled interval". Dropping that
+    would make a mutation land during a poll invisible for a whole cadence.
+    """
+    state = _server_state(server_id)
+    if state is None:
+        return False
+    with _lock:
+        if not state.get('inflight'):
+            return False
+        state['wake_pending'] = True
+        return True
+
+
+def wake_pending(server_id) -> bool:
+    state = _server_state(server_id)
+    return bool(state and state.get('wake_pending'))
+
+
+def inflight(server_id) -> bool:
+    state = _server_state(server_id)
+    return bool(state and state.get('inflight'))
+
+
+def consume_wake() -> bool:
+    """Test-and-clear this process's wake event.
+
+    The scheduler waits on the thread pool, not only on a sleep, so it needs a way to
+    ask "was I nudged since the last time I looked?" without blocking. A plain
+    ``is_set`` would leave the event raised and spin the loop.
+    """
+    if _wake.is_set():
+        _wake.clear()
+        return True
+    return False
+
+
+def snapshot_sync_health(age_seconds, *, failures=0, backoff_seconds=0.0) -> str:
+    """Freshness of a server BLOCK, from the age of its authoritative read.
+
+    The same vocabulary ``sync_health()`` uses for the scheduler's own state, so a
+    dashboard reading a published snapshot and the fetcher reading its memory describe
+    one server the same way. Reachability is a different question and is answered
+    elsewhere: a panel can be online and still be stale.
+    """
+    if failures:
+        return 'backoff' if float(backoff_seconds or 0.0) < server_backoff_max() else 'down'
+    if age_seconds is None:
+        return 'down'
+    try:
+        age = max(0.0, float(age_seconds))
+    except (TypeError, ValueError):
+        return 'down'
+    if age <= LIVE_MAX_AGE_SECONDS:
+        return 'live'
+    if age <= FRESH_MAX_AGE_SECONDS:
+        return 'fresh'
+    return 'stale'
 
 
 def note_snapshot_publish(server_id, *, now=None) -> None:
@@ -959,6 +1072,31 @@ def note_snapshot_publish(server_id, *, now=None) -> None:
         return
     with _lock:
         state['last_snapshot_publish_at'] = time.time() if now is None else float(now)
+
+
+def note_server_revisions(server_id, *, server_revision=None,
+                          snapshot_revision=None) -> None:
+    """Record the revisions a completed read left behind.
+
+    Diagnostics only, but the two answer different questions: the per-server revision is
+    the ordering barrier a mutation bumps, and the snapshot revision is the cursor the
+    browser delta-syncs from. A panel whose server revision moved after its read was
+    discarded is a panel whose displayed block is deliberately older than the mutation.
+    """
+    state = _server_state(server_id)
+    if state is None:
+        return
+    with _lock:
+        if server_revision is not None:
+            try:
+                state['server_revision'] = int(server_revision)
+            except (TypeError, ValueError):
+                pass
+        if snapshot_revision is not None:
+            try:
+                state['snapshot_revision'] = int(snapshot_revision)
+            except (TypeError, ValueError):
+                pass
 
 
 def client_fence_seconds() -> float:
@@ -1109,7 +1247,13 @@ def clear_client_fence(server_id, email=None) -> bool:
 
 
 def server_due(server_id, *, now=None) -> bool:
-    """True when it is this panel's turn (a server never seen before is always due)."""
+    """True when it is this panel's turn (a server never seen before is always due).
+
+    The staleness ceiling is enforced here rather than by a periodic global sweep: a
+    panel that has not been read for ``EVE_REFRESH_MAX_STALENESS_SECONDS`` becomes due
+    again even if its own band would have it waiting longer, which is what keeps the
+    safety net while the loop itself is purely per-server.
+    """
     state = _server_state(server_id)
     if state is None:
         return True
@@ -1120,8 +1264,23 @@ def server_due(server_id, *, now=None) -> bool:
         # at the idle window its schedule was still serving.
         _apply_remote_watch(sid, moment)
     if not state.get('next_due'):
+        state['due_since'] = moment
         return True
-    return moment >= float(state['next_due'])
+    due = moment >= float(state['next_due'])
+    ceiling = max_staleness()
+    if not due and ceiling > 0 and not state.get('failures'):
+        last_started = state.get('last_fetch_started_at')
+        if last_started and (moment - float(last_started)) >= ceiling:
+            # Nothing may stay unread past the ceiling: an install whose cadence maths
+            # is wrong (a huge idle band, a stuck clock) must still converge.
+            due = True
+            state['next_due'] = moment
+    if due:
+        state['due_since'] = min(
+            float(state.get('due_since') or float(state['next_due'])), float(state['next_due']))
+    else:
+        state['due_since'] = None
+    return due
 
 
 def note_server_result(server_id, ok, *, now=None, duration_ms=None, changed=None,
@@ -1163,7 +1322,21 @@ def note_server_result(server_id, ok, *, now=None, duration_ms=None, changed=Non
     # backoff (its interval is a retry ladder, not a schedule to smooth out).
     jitter = 0.0 if state.get('failures') else server_idle_jitter(
         server_id, interval, now=moment)
-    state['next_due'] = moment + interval + jitter
+    # Period-preserving, not completion-relative: the next poll is measured from the
+    # schedule this read was serving, so a HOT panel whose read takes 300 ms is polled
+    # every 2 s (start-to-start) rather than every 2.3 s, and a slow panel does not make
+    # the cadence drift. A read that took longer than its interval leaves the schedule in
+    # the past, which means "due now" -- the panel is behind and catches up instead of
+    # silently skipping a slot. The clamp keeps a stale schedule (a backoff window that
+    # was deferred while a manual refresh was running) from pushing the next poll out
+    # beyond one full interval.
+    served = state.pop('dispatched_for', None)
+    try:
+        base = float(served) if served and float(served) <= moment else moment
+    except (TypeError, ValueError):
+        base = moment
+    next_due = min(base + interval + jitter, moment + interval + jitter)
+    state['next_due'] = max(next_due, moment)
     state['backoff_seconds'] = interval if state.get('failures') else 0.0
     if duration_ms is not None:
         try:
@@ -1172,6 +1345,20 @@ def note_server_result(server_id, ok, *, now=None, duration_ms=None, changed=Non
             pass
     state['last_fetch_finished_at'] = moment
     state['currently_fetching'] = False
+    state['inflight'] = False
+    # A nudge that arrived while this read was running must not be swallowed by the
+    # interval just computed: the panel is still wanted now, so it is due now. A failing
+    # panel keeps its backoff window -- being nudged is not a reason to retry sooner.
+    if state.pop('wake_pending', False) and not state.get('failures'):
+        state['next_due'] = moment
+        state['due_since'] = moment
+    # Mirror the scheduling row for the processes that do not own this schedule (a web
+    # worker rendering the dashboard). One HSET per completed read, and never an input
+    # to a scheduling decision -- the memory above stays the authority.
+    try:
+        publish_server_sync(server_id, now=moment)
+    except Exception:
+        pass
     sync_event(
         'sync.server.fetch.%s' % ('success' if ok else 'error'),
         # An unchanged poll is the common case at scale; it keeps its specified event
@@ -1207,6 +1394,36 @@ _POLL_RANKS = {'hot': 0, 'warm': 1, 'backoff': 2, 'idle': 3}
 def server_poll_rank(server_id, *, now=None) -> int:
     """Sort key for one panel: lower is more urgent."""
     return _POLL_RANKS.get(server_mode(server_id, now=now), 3)
+
+
+def scheduler_plan(rows, *, now=None, limit=None) -> list:
+    """The servers this scheduler tick should dispatch, most urgent first.
+
+    ``rows`` is an iterable of server ids or of dicts carrying ``id``. A server in
+    flight is never returned twice (one read per panel), a server in backoff is left to
+    the fetch layer's own retry window, and the list is ordered by band and then by how
+    long each panel has been waiting, so a HOT panel that is overdue outranks an idle
+    panel that just came due. ``limit`` caps the result to the free workers; when it is
+    None every due server is returned (the caller decides how many it can start).
+    """
+    moment = time.time() if now is None else float(now)
+    candidates = []
+    for row in rows or ():
+        sid = _coerce_server_id((row or {}).get('id') if isinstance(row, dict) else row)
+        if sid is None:
+            continue
+        state = _servers.get(sid) or {}
+        if state.get('inflight'):
+            continue
+        if not server_due(sid, now=moment):
+            continue
+        due_since = float(state.get('due_since') or state.get('next_due') or moment)
+        candidates.append((server_poll_rank(sid, now=moment), due_since, sid))
+    candidates.sort()
+    ordered = [sid for _rank, _due, sid in candidates]
+    if limit is not None:
+        return ordered[:max(0, int(limit))]
+    return ordered
 
 
 def fetch_batch_limit() -> int:
@@ -1453,12 +1670,171 @@ def server_sync_state(server_id, *, now=None) -> dict:
         'last_publish_age_seconds': _age(state.get('last_snapshot_publish_at')),
         'last_changed_age_seconds': _age(state.get('last_changed_at')),
         'next_due_in_seconds': round(max(0.0, server_due_in(sid, now=moment)), 3),
+        # Absolute stamps next to the ages: an operator reading the page at 14:03 needs to
+        # know WHEN, not only "37 s ago", and a log line can be matched against them.
+        'last_fetch_started_at': state.get('last_fetch_started_at'),
+        'last_fetch_finished_at': state.get('last_fetch_finished_at'),
+        'last_success_at': state.get('last_fetch_success_at'),
+        'last_publish_at': state.get('last_snapshot_publish_at'),
+        'next_due_at': (round(float(state['next_due']), 3) if state.get('next_due') else None),
         'consecutive_failures': int(state.get('consecutive_failures') or 0),
         'backoff_seconds': float(state.get('backoff_seconds') or 0.0),
         'currently_fetching': bool(state.get('currently_fetching')),
+        # Per-server scheduling evidence: whether a read is running right now, whether a
+        # nudge was held back by that read, and how late this server's last dispatch was
+        # against its own schedule (the number that exposes worker saturation).
+        'inflight': bool(state.get('inflight')),
+        'wake_pending': bool(state.get('wake_pending')),
+        'scheduler_queue_delay_ms': state.get('last_dispatch_delay_ms'),
+        'last_start_gap_ms': state.get('last_start_gap_ms'),
+        'server_revision': int(state.get('server_revision') or 0),
+        'snapshot_revision': int(state.get('snapshot_revision') or 0),
         'last_outcome': state.get('last_outcome'),
         'last_error': state.get('last_error'),
         'sync_health': sync_health(sid, now=moment),
+    }
+
+
+#: One published row per server for the processes that do NOT own the schedule. The
+#: fetcher is the only writer; a web worker reads it to answer "is what I am rendering
+#: live?" without pretending it knows the fetcher's memory.
+SERVER_SYNC_KEY = 'eve:refresh:server_sync'
+SERVER_SYNC_TTL = 900
+_server_sync_cache = {'at': 0.0, 'rows': {}}
+SERVER_SYNC_CACHE_SECONDS = 2.0
+
+
+def publish_server_sync(server_id, *, now=None) -> bool:
+    """Mirror one server's scheduling row to the shared backend.
+
+    Written on every completed fetch (one HSET), so the web process can render the
+    freshness/mode of the data it is serving. This is a report, never an input to
+    scheduling: the fetcher's own memory stays the authority, and a missing row means
+    "unknown", which the reader must not turn into "live".
+    """
+    sid = _coerce_server_id(server_id)
+    if sid is None:
+        return False
+    client = _redis()
+    if client is None:
+        return False
+    state = _servers.get(sid) or {}
+    moment = time.time() if now is None else float(now)
+    row = {
+        'mode': server_mode(sid, now=moment),
+        'watched': bool(state.get('watched')) or is_server_watched(sid, now=moment),
+        'watch_reason': state.get('watch_reason'),
+        'inflight': bool(state.get('inflight')),
+        'wake_pending': bool(state.get('wake_pending')),
+        'last_success_at': state.get('last_fetch_success_at'),
+        'last_fetch_duration_ms': state.get('last_fetch_duration_ms'),
+        'last_publish_at': state.get('last_snapshot_publish_at'),
+        'next_due': state.get('next_due'),
+        'queue_delay_ms': state.get('last_dispatch_delay_ms'),
+        'last_start_gap_ms': state.get('last_start_gap_ms'),
+        'failures': int(state.get('consecutive_failures') or 0),
+        'backoff_seconds': float(state.get('backoff_seconds') or 0.0),
+        'sync_health': sync_health(sid, now=moment),
+        'updated_at': moment,
+    }
+    try:
+        client.hset(SERVER_SYNC_KEY, str(sid), json.dumps(row))
+        client.expire(SERVER_SYNC_KEY, SERVER_SYNC_TTL)
+        # Keep the reader's short cache coherent with what was just published.
+        with _lock:
+            _server_sync_cache['rows'][str(sid)] = row
+        return True
+    except Exception:
+        return False
+
+
+def shared_server_sync(*, now=None, force=False) -> dict:
+    """The published per-server rows, cached briefly, keyed by server id string."""
+    moment = time.time() if now is None else float(now)
+    with _lock:
+        cached = _server_sync_cache
+        if not force and (moment - cached['at']) < SERVER_SYNC_CACHE_SECONDS:
+            return dict(cached['rows'])
+    client = _redis()
+    rows = {}
+    if client is not None:
+        try:
+            raw = client.hgetall(SERVER_SYNC_KEY)
+        except Exception:
+            raw = None
+        for field, value in (raw or {}).items():
+            key = field.decode('utf-8', 'replace') if isinstance(field, bytes) else str(field)
+            if isinstance(value, bytes):
+                value = value.decode('utf-8', 'replace')
+            try:
+                rows[key] = json.loads(value or '{}')
+            except Exception:
+                continue
+    with _lock:
+        _server_sync_cache['at'] = moment
+        _server_sync_cache['rows'] = dict(rows)
+    return rows
+
+
+def server_sync_report(server_ids=None, *, now=None) -> dict:
+    """Per-server scheduling rows for the servers actually being rendered.
+
+    Local state wins where this process owns the schedule (the fetcher); otherwise the
+    published row is used. A server present in neither is omitted rather than invented.
+    """
+    moment = time.time() if now is None else float(now)
+    with _lock:
+        local_ids = set(_servers.keys())
+    wanted = None
+    if server_ids is not None:
+        wanted = set()
+        for value in server_ids:
+            sid = _coerce_server_id(value)
+            if sid is not None:
+                wanted.add(sid)
+    published = shared_server_sync(now=moment)
+    report = {}
+    for sid in sorted(local_ids | {_coerce_server_id(k) for k in published if _coerce_server_id(k) is not None}):
+        if wanted is not None and sid not in wanted:
+            continue
+        if sid in local_ids:
+            report[str(sid)] = server_sync_state(sid, now=moment)
+            continue
+        row = published.get(str(sid)) or {}
+        report[str(sid)] = _public_sync_row(sid, row, now=moment)
+    return report
+
+
+def _public_sync_row(sid, row, *, now) -> dict:
+    """Turn a published row into the same shape the local one has (ages, not stamps)."""
+    def _age(stamp):
+        if not stamp:
+            return None
+        try:
+            return round(max(0.0, float(now) - float(stamp)), 3)
+        except (TypeError, ValueError):
+            return None
+
+    next_due = row.get('next_due')
+    return {
+        'server_id': sid,
+        'mode': row.get('mode') or 'idle',
+        'watched': bool(row.get('watched')),
+        'watch_reason': row.get('watch_reason'),
+        'last_success_age_seconds': _age(row.get('last_success_at')),
+        'last_fetch_duration_ms': row.get('last_fetch_duration_ms'),
+        'last_publish_age_seconds': _age(row.get('last_publish_at')),
+        'next_due_in_seconds': (round(max(0.0, float(next_due) - float(now)), 3)
+                                if next_due else None),
+        'next_due_at': (round(float(next_due), 3) if next_due else None),
+        'consecutive_failures': int(row.get('failures') or 0),
+        'backoff_seconds': float(row.get('backoff_seconds') or 0.0),
+        'inflight': bool(row.get('inflight')),
+        'wake_pending': bool(row.get('wake_pending')),
+        'scheduler_queue_delay_ms': row.get('queue_delay_ms'),
+        'last_start_gap_ms': row.get('last_start_gap_ms'),
+        'sync_health': row.get('sync_health') or 'down',
+        'source': 'published',
     }
 
 

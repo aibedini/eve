@@ -1767,7 +1767,14 @@ def fetch_and_update_server_data(server_id: int):
 
 
 def _fetch_and_update_server_data_inner(server_id: int):
-    """Fetch a single server's inbounds and update GLOBAL_SERVER_DATA in-place."""
+    """Fetch a single server's inbounds and update GLOBAL_SERVER_DATA in-place.
+
+    Returns a small result dict rather than only committing into the shared snapshot,
+    because a per-server scheduler has to report the outcome for THIS server: whether
+    its data actually moved (which decides the warm band and the browser delta) and the
+    block it committed. The mutation-fence guard runs here, inside the read, so no
+    caller can forget it.
+    """
     from app import app, process_inbounds  # deferred: app-level helper, avoids circular import
     server = db.session.get(Server, int(server_id))
     if not server or not server.enabled:
@@ -1814,8 +1821,19 @@ def _fetch_and_update_server_data_inner(server_id: int):
         inbounds = []
     processed, stats = process_inbounds(inbounds, server, admin_user, '*', {}, online_index=online_index)
 
+    # Mutation fence: a verified EVE write may still be propagating through the panel's
+    # aggregate view. The guard rewrites those counters (and nothing else) before the
+    # block is committed, so the stale aggregate can never overwrite the verified state.
+    try:
+        fenced = _apply_client_fences(int(server.id), processed)
+        if isinstance(fenced, list):
+            processed = fenced
+    except Exception:
+        app.logger.exception('Client fence guard failed for server %s', server.id)
+
     # Update the shared snapshot atomically: the read-modify-write of one
     # server's block is serialized with the background fan-out commits.
+    changed = False
     with GLOBAL_REFRESH_LOCK:
         # Update cache atomically under lock
         # - Replace only this server's inbounds
@@ -1827,6 +1845,16 @@ def _fetch_and_update_server_data_inner(server_id: int):
         # Phase 6: a panel read is authoritative for configuration AND telemetry, so
         # the freshly read block carries both freshness stamps.
         _stamp_snapshot_rows(new_block, config=True, telemetry=True)
+        previous_block = []
+        for item in existing_inbounds:
+            try:
+                if int(item.get('server_id', -1)) == int(server.id):
+                    previous_block.append(item)
+            except Exception:
+                continue
+        # "Did this panel actually move?" is answered for THIS server only; a global
+        # comparison would make fifty unchanged panels look like one change.
+        changed = _block_signature(new_block) != _block_signature(previous_block)
 
         # Find the first occurrence index of this server in the existing list (if any)
         first_idx = None
@@ -1908,6 +1936,155 @@ def _fetch_and_update_server_data_inner(server_id: int):
             warm_subscription_cache(server)
         except Exception:
             pass
+
+    return {
+        'server_id': int(server.id),
+        'block': new_block,
+        'stats': stats,
+        'changed': bool(changed),
+        'status_payload': status_payload or {},
+    }
+
+
+def _block_signature(inbounds):
+    """Cheap change detector for ONE server's block (never the whole install).
+
+    Freshness has to know whether a poll returned something new, and hashing every
+    client of every panel would be exactly the expensive pass this project already
+    avoids. The counters below move for everything the dashboard shows -- traffic,
+    quota, expiry, enable -- so a poll that moved none of them is reported as
+    ``no_change`` without touching the rest of the install.
+    """
+    count = up = down = total = enabled = expiry = 0
+    for inbound in inbounds or []:
+        for client in (inbound.get('clients') or []):
+            count += 1
+            if client.get('enable', True):
+                enabled += 1
+            try:
+                up += int(client.get('up') or 0)
+                down += int(client.get('down') or 0)
+                total += int(client.get('totalGB') or 0)
+                expiry += int(client.get('expiryTimestamp') or 0)
+            except (TypeError, ValueError):
+                continue
+    return (count, up, down, total, enabled, expiry)
+
+
+def _apply_client_fences(server_id, inbounds, *, now=None):
+    """Refuse to let a slower aggregate read revert a verified client mutation.
+
+    Reached only while a fence is live (a few seconds after an EVE mutation read the
+    client back from the panel). The client-level endpoint reflects the write
+    immediately while the aggregate inbound list can lag; without this guard the next
+    background poll writes the pre-mutation state over the verified one, and the renewal
+    looks like it undid itself a minute later.
+
+    The guard covers the WHOLE verified state, not only the traffic counters: a lagging
+    aggregate view reverts the cap and the expiry just as happily, and a row reading
+    "10 GB account, 8 GB left" after a renewal that the response and the ledger both
+    recorded as 30 GB is the same bug with a different field. Counters are held with
+    "at or above" (they only grow, and a reset legitimately shrinks them); the cap and
+    the expiry are held until the aggregate AGREES, because they can move in either
+    direction and only agreement proves the panel caught up.
+
+    The fence is dropped as soon as the aggregate agrees, so it can never pin a value the
+    panel genuinely changed. It lives here, next to the cache write-through, because
+    EVERY panel read has to pass it: the per-server scheduler, the recovery sweep, and
+    the manually triggered single-server refresh.
+    """
+    fences = refresh_policy.client_fences(server_id, now=now)
+    if not fences:
+        return inbounds
+    normalised = {
+        str(key).replace(' ', '').lower(): value for key, value in fences.items()
+    }
+    thresholds = None
+    lang = None
+    for inbound in (inbounds or []):
+        for client in (inbound.get('clients') or []):
+            lookup = str(client.get('email') or '').replace(' ', '').lower()
+            fence = normalised.get(lookup)
+            if not fence:
+                continue
+            try:
+                want_up = int(fence.get('used_up'))
+                want_down = int(fence.get('used_down'))
+                cur_up = int(client.get('up') or 0)
+                cur_down = int(client.get('down') or 0)
+            except (TypeError, ValueError):
+                continue
+
+            def _as_int(value):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return None
+
+            def _agree(field_name, current, wanted):
+                # `wanted is None` means the mutation did not report that field, so the
+                # aggregate is the only evidence and is left alone.
+                if wanted is None:
+                    return True
+                return current == wanted
+
+            raw = client.get('raw_client') if isinstance(client.get('raw_client'), dict) else None
+            cur_total = _as_int(client.get('totalGB'))
+            if cur_total is None and raw is not None:
+                cur_total = _as_int(raw.get('totalGB'))
+            cur_expiry = _as_int(client.get('expiryTimestamp'))
+            if cur_expiry is None and raw is not None:
+                cur_expiry = _as_int(raw.get('expiryTime'))
+            elif raw is not None and raw.get('expiryTime') is not None:
+                # Both spellings exist on a cached row; agreement needs either to match.
+                cur_expiry = _as_int(raw.get('expiryTime'))
+            want_total = _as_int(fence.get('total_bytes'))
+            want_expiry = _as_int(fence.get('expiry_time'))
+
+            counters_caught_up = cur_up >= want_up and cur_down >= want_down
+            config_caught_up = (_agree('total_bytes', cur_total, want_total)
+                                and _agree('expiry_time', cur_expiry, want_expiry))
+            if counters_caught_up and config_caught_up:
+                # The panel caught up: the fence has done its job.
+                refresh_policy.clear_client_fence(server_id, fence.get('email'))
+                refresh_policy.sync_event(
+                    'sync.server.fence_cleared', server_id=server_id)
+                continue
+            if thresholds is None:
+                from app import _get_dashboard_status_thresholds, _get_panel_ui_lang
+                thresholds = _get_dashboard_status_thresholds()
+                lang = _get_panel_ui_lang()
+            client['up'] = max(cur_up, want_up)
+            client['down'] = max(cur_down, want_down)
+            if not config_caught_up:
+                if raw is None:
+                    raw = {}
+                    client['raw_client'] = raw
+                if want_total is not None and cur_total != want_total:
+                    raw['totalGB'] = want_total
+                    client['totalGB'] = want_total
+                if want_expiry is not None and cur_expiry != want_expiry:
+                    raw['expiryTime'] = want_expiry
+                    client['expiryTimestamp'] = want_expiry
+            try:
+                from app import format_bytes
+                client['up_formatted'] = format_bytes(int(client['up']))
+                client['down_formatted'] = format_bytes(int(client['down']))
+            except Exception:
+                pass
+            try:
+                _recompute_cached_client(
+                    client, thresholds, lang,
+                    config_changed=not config_caught_up, telemetry_changed=True)
+            except Exception:
+                pass
+            refresh_policy.sync_event(
+                'sync.server.fence_held', server_id=server_id,
+                observed_up=cur_up, observed_down=cur_down,
+                kept_up=int(client['up']), kept_down=int(client['down']),
+                observed_total=cur_total, kept_total=client.get('totalGB'),
+                observed_expiry=cur_expiry, kept_expiry=client.get('expiryTimestamp'))
+    return inbounds
 
 
 # ── Write-through cache ──────────────────────────────────────────────────────

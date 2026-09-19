@@ -2,6 +2,30 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.13] - 2026-09-19
+
+### Changed
+- **The automatic fetch path is now an independent per-server scheduler, not a cycle.** `schedulers.run_per_server_scheduler()` keeps a bounded worker pool and dispatches whatever is due to a free worker on every tick: one read per panel, rescheduled from that panel's own completion, with no batch and no barrier. The number of other panels can therefore only affect how long a panel waits for a FREE worker - which is measured - and never when it is scheduled. `background_data_fetcher()` keeps one bootstrap sweep (discovery plus a coherent first snapshot) and then hands over to the scheduler; an operator refresh, recovery, and the per-server staleness ceiling (`EVE_REFRESH_MAX_STALENESS_SECONDS`, now enforced by `server_due()` itself) are the sweep's remaining jobs.
+- Next polls are **period-preserving**: measured from the schedule the completed read was serving, so a HOT panel whose read takes 300 ms is polled every 2 s start-to-start instead of 2.3 s, and a read that overran its interval makes the panel due immediately rather than skipping a slot.
+- One read in flight per panel is enforced twice (the policy's `inflight` flag and `panel_limits.coalesce`), and a nudge that arrives during a read is held as `wake_pending` and rescheduled the moment that read returns.
+- Saturation is measured instead of hidden: `scheduler_metrics()` (also `/api/doctor` -> `checks.refresh_policy.scheduler`) reports `queue_delay_ms_avg/max`, `saturation_events`, `max_due_i_wait`, `workers` and `wake_consumed`, and every per-server row carries `scheduler_queue_delay_ms`, `last_start_gap_ms`, `inflight` and `wake_pending`.
+- `/api/doctor` now carries the full per-server sync state under `servers_sync` (mode, watched, reason, inflight, wake_pending, every absolute stamp and age, `config_age_seconds`/`telemetry_age_seconds` from the snapshot's own block stamps, both revisions, queue delay, backoff, health) plus the scheduler metrics, and repeats the non-live subset under `servers_attention`.
+- `/api/refresh` returns `servers_sync` (including on the `unchanged` envelope, so an idle tab's freshness line does not flicker) and the dashboard renders a per-server freshness line from it: Live / Fresh - 8s ago / Stale - 42s ago / Sync issue, with a tooltip for panel-sync, telemetry and config ages, poll mode and next poll. The browser never classifies an age itself - the backend owns the vocabulary - and a server with no row renders nothing rather than a claim.
+- The dashboard declares every panel it renders (`?servers=`); the server keeps its own `EVE_SERVER_POLL_WATCH_LIMIT` cap on how many are held HOT, and each panel's mode is visible on the card, so a declared-but-idle panel is visibly idle instead of silently assumed watched.
+- Every completed read mirrors one compact scheduling row to Redis (`eve:refresh:server_sync`, one `HSET`, TTL 15 min) so a web process can answer "is what I am rendering live?" without knowing the fetcher's memory. A missing row means unknown.
+
+### Fixed
+- The read-your-writes fence now holds the **whole** verified state, not only the counters: a lagging aggregate read previously reverted the verified cap and expiry, so a renewed account could read as its pre-renewal size while the response and the renewal ledger said otherwise. The fence is released only when the aggregate agrees on both the counters and the configuration.
+- `_apply_client_fences` moved next to the cache write-through in `panel/jobs/refresh.py`, so every read path applies it (scheduler, recovery sweep and the manual single-server refresh) instead of only the paths that remembered to ask for it.
+- A locally shared activity mark during an in-flight read is no longer dropped (`share=False` used to return before the pending-nudge bookkeeping).
+
+### Added
+- `scripts/benchmark_per_server_scheduling.py`: the acceptance benchmark (1/10/50/100 panels x 100/300/1000 ms simulated reads, the previous dispatch shape vs the new one, HOT start-to-start, queue delay, saturation, idle load, CPU, wake-to-dispatch). Results and sizing: `docs/performance/SCHEDULING_BENCHMARK.md`.
+- `tests/test_renew_consistency.py`: the five renewal scenarios driven through the real route and the real read path (stale cache baseline, fresh baseline, verified counters winning, a pre-mutation background read, a lagging aggregate endpoint).
+
+### Tests
+- `tests/test_server_polling.py` 28 -> 67 tests, including the architectural acceptance: a HOT panel is not paced by the rest of the install, its cadence does not grow with the server count, one read per panel, bounded global concurrency, saturation is measured, a held nudge reschedules the panel, and the bootstrap sweep is not the timing authority.
+
 ## [2.7.12] - 2026-09-19
 
 ### Changed

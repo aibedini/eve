@@ -28,13 +28,33 @@ target unreachable, and each of them is addressed below:
 
 ## Change
 
-`panel/core/refresh_policy.py` owns a per-server schedule, and the periodic cycle
-honours it.
+The automatic fetch path is a **per-server scheduler**, not a cycle:
+`schedulers.run_per_server_scheduler()` keeps a bounded worker pool and, on every tick,
+dispatches whatever is due to a free worker -- one read per panel, rescheduled from that
+panel's own completion. There is no batch and no barrier, so the number of other panels
+changes how long a panel waits for a FREE worker (measured, see below), never when it is
+scheduled. `panel/core/refresh_policy.py` owns the schedule the scheduler dispatches from.
+
+The global sweep survives for what it is actually good at: the first fill after a restart
+(discovery + one coherent snapshot), an operator's refresh, recovery, and the staleness
+ceiling that `server_due()` enforces on its own.
 
 * Each panel has a runtime state: `next_due`, `failures`, `active_until`, `warm_until`,
-  the last fetch/success/error/publish timestamps, the outcome, the revision and the
-  mode. `server_sync_state()` and `sync_summary()` expose it (ids, modes, ages and
-  counters only - never a credential, address or email).
+  `inflight`, `wake_pending`, the last fetch/success/error/publish timestamps, the
+  dispatch/queue delay, the outcomes, the two revisions and the mode.
+  `server_sync_state()` and `sync_summary()` expose it (ids, modes, ages and counters
+  only - never a credential, address or email).
+* **One read in flight per server**, enforced twice: the scheduler skips a panel whose
+  `inflight` flag is set, and `panel_limits.coalesce` makes any other caller of the same
+  panel wait for that read instead of starting a second one.
+* A nudge that arrives while a panel is being read is **held** (`wake_pending`) and the
+  panel is rescheduled for immediately when the read returns, so a mutation landing
+  mid-poll is not invisible for a whole cadence.
+* The next poll is **period-preserving**: it is measured from the schedule the completed
+  read was serving, so a HOT panel whose read takes 300 ms is polled every 2 s
+  start-to-start rather than every 2.3 s. A read that overran its interval leaves the
+  schedule in the past, which means "due now" - the panel catches up instead of silently
+  skipping a slot.
 * **HOT** panels - the ones on screen (`?servers=`/`?server_id=` on `/api/refresh`, the
   same declaration on the SSE stream) or touched by an Eve mutation - are polled every
   `EVE_SERVER_POLL_ACTIVE_SECONDS` (2 s). The mark is a TTL: nothing renews it once the
@@ -50,25 +70,38 @@ honours it.
   in every process and after a restart (`hash()` is salted per interpreter and would
   re-align the very panels the jitter separates).
 * A failing panel backs off exponentially (5 s, 10 s, 20 s ... capped at 300 s) and the
-  window is mirrored into the schedule, so the loop never wakes for a cycle that would
-  only skip that panel again. A backoff keeps its exact interval - jitter is a property
-  of the idle band, not of a retry ladder.
+  window is mirrored into the schedule, so the loop never wakes for a panel it would only
+  skip again. A backoff keeps its exact interval - jitter is a property of the idle band,
+  not of a retry ladder.
 * Becoming active **pulls the next poll in** (a panel appearing on screen must not sit out
   a remaining idle window), except while it is backing off.
 * `retain_servers()` forgets panels that left the enabled set, so a deleted panel cannot
   keep the schedule permanently "due".
 
-### One cycle reads a bounded, ordered batch
+### Saturation is measured, not hidden
 
-`prioritize_fetch_batch()` orders the cycle's due panels by band (HOT, WARM, backoff,
-idle) and then by how long each has been due, and bounds the batch to
+`scheduler_metrics()` (also in `/api/doctor` under `scheduler`) reports `dispatched`,
+`completed`, `errors`, `queue_delay_ms_avg/max` (how late a due panel actually started
+against its own schedule), `saturation_events` (ticks where more panels were due than
+there were free workers), `max_due_i_wait`, `workers`, `wake_consumed` and the panel
+concurrency counters. `server_sync_state()` carries the same evidence per panel
+(`scheduler_queue_delay_ms`, `last_start_gap_ms`, `inflight`, `wake_pending`).
+
+This exists because capacity is finite: the cadence is only promised up to the worker
+pool. When the pool is saturated the queue delay rises visibly instead of the system
+quietly calling a 9-second poll "2-second polling".
+
+### Batch ordering is still used by the sweep
+
+`prioritize_fetch_batch()` orders the *sweep's* due panels by band (HOT, WARM, backoff,
+idle) and then by how long each has been due, and bounds it to
 `EVE_REFRESH_BATCH_SERVERS` (default: twice the refresh worker limit). A panel that just
-became HOT is therefore read in this cycle's first worker slot instead of behind
+became HOT is therefore read in the sweep's first worker slot instead of behind
 everything else that happens to be due; the panels left out stay due and are picked up by
-the next cycle, which starts as soon as this one ends. Their own interval - not the sweep
-- is what paces them.
+the next sweep. This is the recovery/bootstrap path - the per-server scheduler does not
+need it.
 
-Only the automatic cycle is bounded. A manual refresh, a targeted repair and the
+Only the sweep is bounded. A manual refresh, a targeted repair and the
 messaging warm-up name a set and get all of it: the bound is a scheduling device, not a
 budget, and a silently partial "Refresh" would be worse than a slow one.
 
@@ -118,25 +151,35 @@ renewal appearing to undo itself a minute later.
 
 Wiring:
 
-* `fetch_and_update_global_data(..., periodic=True)` is the automatic loop's cycle and the
-  only path that honours the schedule; a manual refresh, a targeted repair, and the
-  usage-rollup warm-up always fetch what they ask for (operator intent outranks the poll
-  schedule).
-* A cycle in which every enabled panel is deferred returns without publishing: bumping
+* `background_data_fetcher()` runs ONE bootstrap sweep (discovery and a coherent first
+  snapshot), then `run_per_server_scheduler()` for the rest of the process's life. The
+  sweep is the recovery/bootstrap path; it is not the timing authority for HOT polling.
+* A sweep in which every enabled panel is deferred returns without publishing: bumping
   `last_update` there would fake a fresh snapshot and hide the panel whose turn it is.
 * A deferred panel is **not** a skipped panel: it keeps its cached block and its
   reachability instead of being reported as unreachable/"Backoff".
-* `background_data_fetcher` wakes for `min(cycle interval, next due panel)` bounded by
-  `EVE_REFRESH_SAFETY_SLICE_SECONDS` (5 s), and treats the per-server schedule as the
-  authority once panels are tracked (the cycle-level staleness is then only the bootstrap
-  path).
+* The scheduler waits on its worker futures and the wake event in `SCHEDULER_TICK_SECONDS`
+  (0.05 s) steps, so a cross-process nudge is acted on within one tick and a freed worker
+  is reused immediately - it never sleeps "for the cycle".
+* `server_due()` enforces `EVE_REFRESH_MAX_STALENESS_SECONDS` itself, so the safety net
+  that a periodic sweep used to provide survives without one.
+* Every completed read mirrors a compact scheduling row to Redis
+  (`eve:refresh:server_sync`, TTL 15 min, one HSET per read). A web process reads it to
+  answer "is what I am rendering live?" without pretending it knows the fetcher's memory;
+  a missing row means unknown. This is a report, never an input to a scheduling decision.
 * The dashboard sends the panels it renders with every cache poll (`?servers=1,2,3`) and
   on the live-update stream, and caps that list at the server's own limit (rendered into
   the page from `EVE_SERVER_POLL_WATCH_LIMIT`) so the two cannot disagree about which
   panels are being watched.
+* `/api/refresh` returns `servers_sync`: per server, `mode`, `watched`, `watch_reason`,
+  `inflight`, `wake_pending`, `sync_health`, the ages and the queue delay. It is a side map
+  rather than a field on each inbound block, because those blocks are the shared snapshot
+  and a per-request age written into them would change the delta fingerprint on every poll.
 * `GET /api/doctor` -> `checks.refresh_policy` exposes `servers`, `servers_tracked`,
-  `servers_due`, the aggregate `sync` summary, the full sync state of the panels that are
-  `stale`/`backoff`/`down` under `servers_attention`, and `server_intervals`.
+  `servers_due`, the aggregate `sync` summary, `scheduler` (throughput, queue delay,
+  saturation), the full per-server state under `servers_sync` (including
+  `config_age_seconds`/`telemetry_age_seconds` from the snapshot's own stamps), the
+  non-live subset under `servers_attention`, and `server_intervals`.
 
 ## Configuration
 
@@ -151,14 +194,34 @@ Wiring:
 | EVE_SERVER_POLL_BACKOFF_BASE_SECONDS | 5 | first backoff step after a failure |
 | EVE_SERVER_POLL_BACKOFF_MAX_SECONDS | 300 | backoff ceiling |
 | EVE_SERVER_POLL_WATCH_LIMIT | 20 | panels one dashboard may keep on the fast cadence |
-| EVE_REFRESH_BATCH_SERVERS | 0 (auto) | panels one fan-out may read; 0 = every due panel |
-| EVE_REFRESH_SAFETY_SLICE_SECONDS | 5 | longest sleep even without a wake nudge |
+| EVE_REFRESH_WORKERS | 5 | worker threads the scheduler may use at once |
+| EVE_PANEL_CONCURRENCY | 12 | process-wide simultaneous panel fetches |
+| EVE_REFRESH_BATCH_SERVERS | 0 (auto) | panels one SWEEP may read; 0 = every due panel |
 | EVE_CLIENT_FENCE_SECONDS | 30 | read-your-writes fence lifetime |
 | EVE_RENEW_BASELINE_MAX_AGE_SECONDS | 30 | oldest cached traffic view a renewal may use |
 
-`EVE_REFRESH_BATCH_SERVERS=0` restores the old whole-install sweep, and
+`EVE_REFRESH_BATCH_SERVERS=0` makes the recovery sweep whole-install, and
 `EVE_SERVER_POLL_IDLE_JITTER_SECONDS=0` restores the synchronized idle schedule; both are
 diagnostics, not settings an install should keep.
+
+### Production sizing (measured)
+
+`scripts/benchmark_per_server_scheduling.py` measures the same policy under the previous
+dispatch shape and the per-server one; `docs/performance/SCHEDULING_BENCHMARK.md` carries
+the numbers and the sizing recommendation. The short version: with the default
+`EVE_REFRESH_WORKERS=5` and `EVE_SERVER_POLL_ACTIVE_SECONDS=2`, one HOT panel keeps its
+2 s cadence up to a 100-panel install as long as the panel read is comfortably under
+`workers x cadence / hot_panels`. Panels that are HOT beyond the pool's capacity are
+served with a visible `scheduler_queue_delay_ms` (and `saturation_events` in the doctor
+payload) rather than a silent promise of 2 s.
+
+**Degradation policy when more panels are HOT than the pool can serve:** the scheduler
+keeps strict fairness (band, then how long each panel has been waiting), so no panel
+starves and every HOT panel is served in due order; what grows is queue delay, which is
+reported per panel and in aggregate. A `saturation_events` counter that keeps rising with
+`queue_delay_ms_max` well above the cadence is the signal to raise `EVE_REFRESH_WORKERS`
+(and, if the panel hosts can take it, `EVE_PANEL_CONCURRENCY`), or to lower the watch
+limit so fewer panels are HOT.
 
 ## Cost
 
@@ -168,21 +231,27 @@ the tab is actively polling), everything else stays on the idle cadence. An inst
 more panels than the limit is still bounded, and an operator who wants the whole install
 live can raise the limit knowingly or click Refresh, which fetches everything.
 
-Bounding the batch trades one long cycle for several short ones: the same panel reads per
-minute, spread so a HOT panel is read at the head of every cycle instead of once per
-sweep. The jitter does not add reads; it moves idle panels off each other's due time.
+Bounding a sweep's batch trades one long cycle for several short ones: the same panel
+reads per minute, spread so a HOT panel is read at the head of every sweep instead of once
+per whole install. The jitter does not add reads; it moves idle panels off each other's
+due time. In the steady state the scheduler does not need either: each panel is read on
+its own clock.
 
 ## Limits
 
 * The schedule itself is per process: only the fetcher role owns the loop, so the timings
   are not shared through Redis (unlike the watch marks, the fences and the activity
-  timestamp). A second fetcher would keep its own `next_due` values.
-* The wake channel is best effort. A missed nudge costs up to
-  `EVE_REFRESH_SAFETY_SLICE_SECONDS` of latency, and a fan-out already in flight is not
-  interrupted - which is why the batch is bounded and ordered.
-* The fence is read-your-writes, not a lock: it holds the verified counters for its
-  lifetime and is released early the moment the panel's own read catches up. A value the
-  panel genuinely changed is never pinned.
+  timestamp) - the published `eve:refresh:server_sync` rows are a read-only report. A
+  second fetcher would keep its own `next_due` values.
+* The wake channel is best effort. A missed nudge costs one scheduler tick (0.05 s) plus
+  the pub/sub round trip, and a read already running is not interrupted - it is remembered
+  as `wake_pending` and the panel is rescheduled the moment that read returns.
+* The cadence is a promise UP TO the worker pool. Beyond it the delay is real, reported
+  (`scheduler_queue_delay_ms`, `saturation_events`) and fair, but it is a delay: an install
+  that wants N panels HOT at once needs the workers to serve them.
+* The fence is read-your-writes, not a lock: it holds the verified state (counters, cap,
+  expiry) for its lifetime and is released the moment the panel's own read agrees. A value
+  the panel genuinely changed is never pinned beyond the fence's TTL.
 * A panel is "watched" because the browser says so; a bot or API-only client that never
   calls `/api/refresh` does not create watch marks.
 * With `EVE_SSE_ENABLED=1` a stream-driven tab renews its marks from the stream itself,
@@ -193,17 +262,25 @@ sweep. The jitter does not add reads; it moves idle panels off each other's due 
 
 ## Tests
 
-`tests/test_server_polling.py`: cadence and TTL, the WARM band and its hand-off, idle
-jitter, the active pull-in, backoff and its interaction with a watch mark, defer never
-pulling a poll earlier, watch capping and deduplication, `retain_servers`, the periodic
-cycle (second cycle defers and does not publish, manual cycle ignores the schedule, only
-the elapsed panel is fetched, a deferred panel keeps its reachability, a backoff skip
-reschedules, a disabled panel is forgotten), batch ordering and its limit, the loop's wake
-bound and the periodic-path flag, the cross-process wake payload and listener, the client
-fence lifecycle, the sync state/summary/health vocabulary, `sync_event` rendering, and the
-route-level declaration (`?servers=`, `?server_id=`, the cap, and the SSE stream renewing
-its marks).
+`tests/test_server_polling.py` (67 tests): cadence and TTL, the WARM band and its
+hand-off, idle jitter, the active pull-in, backoff and its interaction with a watch mark,
+defer never pulling a poll earlier, watch capping and deduplication, `retain_servers`, the
+recovery sweep (a second sweep defers and does not publish, a manual sweep ignores the
+schedule, only the elapsed panel is fetched, a deferred panel keeps its reachability, a
+backoff skip reschedules, a disabled panel is forgotten), batch ordering and its limit,
+the **per-server scheduler** (a HOT panel is not paced by the rest of the install, the
+cadence does not grow with the server count, one read per panel, bounded concurrency,
+saturation is measured, a nudge during an in-flight read reschedules the panel, the
+bootstrap sweep is not the timing authority), the cross-process wake payload and listener,
+the client fence lifecycle including the cap/expiry hold, the sync state/summary/health
+vocabulary, `sync_event` rendering, and the route-level declaration (`?servers=`,
+`?server_id=`, the cap, and the SSE stream renewing its marks).
+
+`tests/test_renew_consistency.py` drives the real renew route and the real single-server
+read path for the five renewal scenarios (stale cache baseline, fresh cache baseline,
+verified counters winning, a pre-mutation background read, a lagging aggregate endpoint).
 
 `tests/test_watch_propagation_crossprocess.py` proves the shared watch mark against real
-child processes, and `tests/test_mutation_scale.py` /
+child processes, `scripts/integration_redis_multiprocess.py` does the same against a real
+Redis (see `docs/performance/REDIS_MULTIPROCESS.md`), and `tests/test_mutation_scale.py` /
 `scripts/benchmark_mutation_scale.py` keep the mutation path bounded on a large install.
