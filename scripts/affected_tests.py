@@ -58,9 +58,13 @@ MAPPING = (
         ['tests.test_sse_updates', 'tests.test_client_events'],
     )),
     ('panel/jobs/schedulers.py', (
-        ['tests.test_server_polling', 'tests.test_telemetry_pipeline_integration'],
+        # test_refresh_lock_scoping inspects this module's source (the fetch path must not
+        # take the snapshot lock) and was missing from the first version of this map: a
+        # rewrite of background_data_fetcher passed Tier 1/2 and only failed in CI.
+        ['tests.test_server_polling', 'tests.test_refresh_lock_scoping',
+         'tests.test_telemetry_pipeline_integration'],
         ['tests.test_refresh_reconcile', 'tests.test_sse_updates',
-         'tests.test_usage_intelligence_observability'],
+         'tests.test_usage_intelligence_observability', 'tests.test_refresh_policy'],
     )),
     ('panel/jobs/refresh.py', (
         ['tests.test_config_vs_telemetry', 'tests.test_server_polling'],

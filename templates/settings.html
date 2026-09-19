@@ -73,7 +73,7 @@
                         <h2>System Overview</h2>
                         <p class="text-secondary">Live snapshot of your panel's current state.</p>
                     </div>
-                    <button class="btn btn-secondary" onclick="loadOverview()">
+                    <button class="btn btn-secondary" onclick="refreshOverview()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"></path></svg>
                         Refresh
                     </button>
@@ -81,6 +81,19 @@
                 <div id="overview-content">
                     <div style="color:var(--text-secondary);padding:24px 0;text-align:center;">Loading…</div>
                 </div>
+            </div>
+
+            <!-- Memory attribution. A sibling card, not a child of #overview-content:
+                 loadOverview() replaces its container wholesale, so a memory failure
+                 must not be able to blank the rest of the Overview. -->
+            <div class="panel-card mem-section">
+                <div class="panel-card-header">
+                    <div class="header-content">
+                        <h2 id="memory-title"></h2>
+                        <p class="text-secondary" id="memory-subtitle"></p>
+                    </div>
+                </div>
+                <div id="memory-content"></div>
             </div>
         </div>
 
@@ -2944,6 +2957,92 @@
         margin-top: -4px;
     }
 
+    /* Memory breakdown (Settings -> Overview). The section is built from the page's
+       own vocabulary (.overview-card, .table, .badge, .btn, .field-note); these rules
+       cover only what that vocabulary cannot express: a label/value pair that must
+       not read as one sentence, numeric cells that stay column-aligned, and a
+       disclosure that follows the theme. The monitor accordion is not reused here
+       because it is a fixed dark surface and would invert badly in light mode. */
+    .mem-section {
+        margin-top: 20px;
+    }
+
+    .mem-kv {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .mem-kv-row {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    .mem-kv-value {
+        color: var(--text-primary);
+        font-size: 0.875rem;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    .mem-num {
+        text-align: end;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    .mem-group-title {
+        margin: 18px 0 4px;
+        color: var(--text-secondary);
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+    }
+
+    .mem-details {
+        margin-top: 18px;
+        padding: 12px 14px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+    }
+
+    .mem-details > summary {
+        cursor: pointer;
+        color: var(--text-primary);
+        font-weight: 600;
+        list-style: none;
+    }
+
+    .mem-details > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .mem-details > summary::after {
+        content: '\25B8';
+        float: right;
+        color: var(--text-secondary);
+    }
+
+    .mem-details[open] > summary::after {
+        content: '\25BE';
+    }
+
+    .mem-loading {
+        padding: 12px 0;
+    }
+
+    .mem-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 18px;
+    }
+
     /* Vazirmatn font for forms */
     .form-input, .form-select, .form-control, label, .modal-body {
         font-family: 'Vazirmatn', sans-serif !important;
@@ -3833,7 +3932,7 @@
         const activeTab = document.querySelector('.settings-tab.active');
         if (activeTab) {
             const onclick = activeTab.getAttribute('onclick');
-            if (onclick.includes("'overview'")) loadOverview();
+            if (onclick.includes("'overview'")) { loadOverview(); loadMemory(); }
             else
             if (onclick.includes("'general'")) syncThemeToggleUI();
             else if (onclick.includes("'templates'")) { loadTemplates(); loadAccountMessageTemplates(); }
@@ -3909,6 +4008,7 @@
 
         if (tabName === 'overview') {
             loadOverview();
+            loadMemory();
         } else if (tabName === 'general') {
             loadGeneralSettings();
         } else if (tabName === 'backups') {

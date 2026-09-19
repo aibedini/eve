@@ -142,9 +142,18 @@ class FetchLockScopingTests(unittest.TestCase):
         self.assertTrue(set(SERVER_IDS).issubset(statuses), statuses)
 
     def test_background_fetcher_does_not_take_the_snapshot_lock(self):
-        source = inspect.getsource(schedulers.background_data_fetcher)
-        self.assertNotIn("GLOBAL_REFRESH_LOCK", source)
-        self.assertIn("fetch_and_update_global_data", source)
+        # The guarantee: the fetch path never wraps panel I/O in the shared snapshot lock,
+        # and the recovery sweep still goes through the one entry point that owns the
+        # fan-out. The startup sequence is now two functions - the loop starts first and the
+        # sweep runs beside it - so the assertion is made against both, which is the same
+        # claim stated for the structure that exists.
+        loop_source = inspect.getsource(schedulers.background_data_fetcher)
+        sweep_source = inspect.getsource(schedulers._bootstrap_sweep_once)
+        self.assertNotIn("GLOBAL_REFRESH_LOCK", loop_source)
+        self.assertNotIn("GLOBAL_REFRESH_LOCK", sweep_source)
+        self.assertIn("fetch_and_update_global_data", sweep_source)
+        self.assertIn("_bootstrap_sweep_once", loop_source)
+        self.assertIn("run_per_server_scheduler", loop_source)
 
 
 class LockBenchmarkScriptTests(unittest.TestCase):
