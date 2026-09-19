@@ -20,6 +20,11 @@ FORBIDDEN_NAMES = {'id_rsa', 'id_ed25519', 'credentials', '.netrc'}
 FORBIDDEN_DIR_PREFIXES = ('instance/', 'runtime/')
 ALLOWED_EXCEPTIONS = {'.env.docker.example'}
 BACKUP_SUFFIX_RE = re.compile(r'\.(bak|backup)(\.|$)', re.I)
+#: macOS AppleDouble resource forks, e.g. ``._route_smoke.py``. They are filesystem
+#: metadata, not source. One was tracked next to the real test it duplicated, and because
+#: its name is not ``test_*.py`` unittest discovery never ran it - the route contract it
+#: held was silently dead until it was moved to tests/test_memory_routes.py.
+APPLEDOUBLE_PREFIX = '._'
 
 
 def is_forbidden(path: str) -> bool:
@@ -36,6 +41,8 @@ def is_forbidden(path: str) -> bool:
     if lower.endswith(FORBIDDEN_SUFFIXES):
         return True
     if name in FORBIDDEN_NAMES or name.startswith('.env'):
+        return True
+    if name.startswith(APPLEDOUBLE_PREFIX):
         return True
     if any(normalized.startswith(prefix) for prefix in FORBIDDEN_DIR_PREFIXES):
         return True

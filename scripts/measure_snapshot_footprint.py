@@ -322,6 +322,86 @@ def measure(*, servers, inbounds, clients, mirror, v3=True):
     }
 
 
+def peak_rss_bytes():
+    """The process's high-water RSS, or None where the platform does not report it."""
+    try:
+        import resource
+    except ImportError:          # Windows has no resource module
+        return None
+    try:
+        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except Exception:
+        return None
+    if value is None:
+        return None
+    # Linux reports kilobytes, macOS bytes.
+    return int(value) * 1024 if sys.platform.startswith('linux') else int(value)
+
+
+def transient_peak(build, *, warmup=None):
+    """What publishing and re-hydrating the snapshot costs at its worst moment.
+
+    The retained size is not the peak, and the difference is what an OOM lands on: a
+    publish holds the object graph, the JSON text and the compressed bytes at the same
+    time, and a hydrating process builds the new graph while the old one is still
+    referenced. The trend ring cannot see any of it, because the sample a minute later is
+    back to the steady state.
+
+    ``build`` is a callable returning the snapshot rather than the snapshot itself, because
+    ``tracemalloc`` only counts allocations made *while tracing*: a graph built before
+    tracing started would be invisible and the peak would be understated by exactly the
+    object graph - the single largest part of it. ``warmup`` runs before tracing starts and
+    exists for the same reason at the other end: building a snapshot imports the app, and
+    counting that import as "the snapshot" would swamp a 0.35 MB fleet with ~67 MB of
+    routes, models and SQLAlchemy. The high-water peak is also why this must run in a fresh
+    process state, with no preceding deepcopy.
+    """
+    import tracemalloc
+
+    if warmup is not None:
+        warmup()
+    stages = {}
+
+    def mark(name):
+        current, peak = tracemalloc.get_traced_memory()
+        stages[name] = {'current_bytes': int(current), 'peak_bytes': int(peak),
+                        'rss_peak_bytes': peak_rss_bytes()}
+
+    was_tracing = tracemalloc.is_tracing()
+    if not was_tracing:
+        tracemalloc.start()
+    try:
+        snapshot = build()
+        mark('retained')
+        text = json.dumps(snapshot, default=str, separators=(',', ':'))
+        encoded = text.encode('utf-8')
+        mark('json')
+        blob = gzip.compress(encoded, 6)
+        mark('gzip')
+        reloaded = json.loads(gzip.decompress(blob).decode('utf-8'))
+        mark('hydrate')
+    finally:
+        if not was_tracing:
+            tracemalloc.stop()
+    rows = sum(len(inbound.get('clients') or []) for inbound in (reloaded.get('inbounds') or []))
+    retained = stages['retained']['current_bytes']
+    peak = stages['hydrate']['peak_bytes']
+    return {
+        'available': True,
+        'stages': stages,
+        'rows': rows,
+        'json_bytes': len(encoded),
+        'gzip_bytes': len(blob),
+        'retained_bytes': retained,
+        'peak_bytes': peak,
+        'peak_ratio': round(peak / retained, 2) if retained else None,
+        'rss_peak_bytes': stages['hydrate']['rss_peak_bytes'],
+        'note': ('peak is the tracemalloc high-water mark while the graph, the JSON text '
+                 'and the compressed bytes were all alive and the hydrate had built a '
+                 'second graph. It is transient: a steady-state sample never sees it.'),
+    }
+
+
 def marginal_bytes_per_row(*, servers, inbounds, clients, mirror):
     """Measured slope: the cost of one more row once the snapshot's fixed part cancels."""
     small = measure(servers=servers, inbounds=inbounds, clients=clients, mirror=mirror)
@@ -345,6 +425,62 @@ def _variant_line(name, variant, full):
                / max(1, full['gzip_bytes'])))
 
 
+def _report_transient(args):
+    """Print the transient attribution on its own: the peak is a high-water mark."""
+    def _build(servers, inbounds, clients, mirror):
+        return build_snapshot(servers=servers, inbounds=inbounds, clients=clients,
+                              mirror=mirror, v3=True)
+
+    result = transient_peak(
+        lambda: _build(args.servers, args.inbounds, args.clients, args.mirror),
+        # Import the app and build one throwaway fleet first, so the app import is not
+        # counted as snapshot memory (see transient_peak).
+        warmup=lambda: _build(1, 1, 1, False))
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0
+    stages = result['stages']
+    retained = result['retained_bytes']
+    peak = result['peak_bytes']
+    print('=' * 80)
+    print('TRANSIENT PEAK: publishing and re-hydrating the snapshot, worst moment')
+    print('  %d servers x %d inbounds, %d accounts/server -> %d rows'
+          % (args.servers, args.inbounds, args.clients, result['rows']))
+    print('  %-22s %10s %12s' % ('stage', 'live', 'peak so far'))
+    labels = (('retained', 'retained graph'), ('json', 'after json.dumps'),
+              ('gzip', 'after gzip.compress'), ('hydrate', 'after hydrate'))
+    for name, label in labels:
+        stage = stages[name]
+        print('  %-22s %7.3f MB %9.3f MB'
+              % (label, stage['current_bytes'] / 1024 / 1024,
+                 stage['peak_bytes'] / 1024 / 1024))
+    print('    json text %8.3f MB, gzip %8.3f MB'
+          % (result['json_bytes'] / 1024 / 1024, result['gzip_bytes'] / 1024 / 1024))
+    print('  %s' % ('-' * 68))
+    print('  %-22s %7.3f MB = %sx the retained graph'
+          % ('transient peak', peak / 1024 / 1024, result['peak_ratio']))
+    end = stages['hydrate']['current_bytes']
+    print('  %-22s %7.3f MB = %sx   (graph + text + gzip + the second graph)'
+          % ('live at the end', end / 1024 / 1024,
+             round(end / retained, 2) if retained else None))
+    rss = result['rss_peak_bytes']
+    print('  %-22s %s'
+          % ('process RSS peak',
+             'not reported on this platform' if rss is None
+             else '%.1f MB (high-water mark of this process)' % (rss / 1024 / 1024)))
+    if result['rows']:
+        per_row = end / result['rows']
+        print('  %-22s %5.0f MB at 30k rows, %5.0f MB at 60k (extrapolation from the '
+              'measured slope)' % ('scaling the live end', per_row * 30000 / 1024 / 1024,
+                                   per_row * 60000 / 1024 / 1024))
+    print('=' * 80)
+    print('tracemalloc was started before the snapshot was built, so the object graph is')
+    print('counted; the peak also includes short-lived encoder temporaries, so "live" is')
+    print('the number that stays referenced and "peak" is the worst instant. The peak is a')
+    print('high-water mark, so run this in a fresh process (no preceding measurement).')
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--servers', type=int, default=3)
@@ -352,7 +488,16 @@ def main():
     parser.add_argument('--clients', type=int, default=50,
                         help='accounts per server (spread over the inbounds)')
     parser.add_argument('--json', action='store_true', help='print the result as JSON')
+    parser.add_argument('--transient', action='store_true',
+                        help='measure the publish/hydrate transient peak instead of the '
+                             'retained and serialized sizes')
+    parser.add_argument('--mirror', action='store_true',
+                        help='with --transient: mirror every account onto every inbound '
+                             '(the v3 shape)')
     args = parser.parse_args()
+
+    if args.transient:
+        return _report_transient(args)
 
     shapes = [('each account on one inbound', False)]
     if args.inbounds > 1:

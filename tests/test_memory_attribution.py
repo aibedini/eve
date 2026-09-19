@@ -132,6 +132,18 @@ class CollectorReportTests(unittest.TestCase):
         self.assertIn('Sum', text)
         self.assertIn(collector.human_bytes(HOST['total_bytes']), text)
 
+    def test_an_unreadable_proc_says_unavailable_and_invents_no_counts(self):
+        host, eve, unclassified = _patched(
+            eve={'available': False, 'reason': 'no /proc', 'roles': {}, 'services': {},
+                 'other_processes': None, 'other_rss_bytes': None, 'other_pss_bytes': None,
+                 'other_private_bytes': None, 'other_threads': None, 'eve_pss_bytes': None,
+                 'eve_pss_with_xray_bytes': None, 'service_pss_bytes': None})
+        with host, eve, unclassified:
+            text = collector.render(collector.collect(top=1, now=1000.0))
+        self.assertIn('unavailable: no /proc', text)
+        self.assertNotIn('None', text)
+        self.assertNotIn('0 processes', text)
+
     def test_the_payload_is_the_endpoint_shape_plus_the_collector_note(self):
         data = self._data()
         for key in ('host', 'eve', 'accounting', 'redis_snapshot', 'caches', 'trend',

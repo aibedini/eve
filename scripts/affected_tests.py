@@ -62,7 +62,7 @@ MAPPING = (
         # can silently change what Settings -> Overview reports, so its own suite is
         # Tier 1 and never "unmapped" (the map had no entry for it).
         ['tests.test_memory_report'],
-        ['tests.test_measure_snapshot_footprint'],
+        ['tests.test_measure_snapshot_footprint', 'tests.test_memory_routes'],
     )),
     ('panel/jobs/schedulers.py', (
         # test_refresh_lock_scoping inspects this module's source (the fetch path must not
@@ -91,6 +91,12 @@ MAPPING = (
     ('panel/routes/doctor.py', (
         ['tests.test_server_polling'],
         ['tests.test_observability'],
+    )),
+    ('panel/routes/system.py', (
+        # The memory endpoint lives here (and the updater); its contract is asserted by
+        # test_memory_routes, which had no mapping to reach it.
+        ['tests.test_memory_routes'],
+        ['tests.test_system_update', 'tests.test_security_headers'],
     )),
     ('panel/routes/pages.py', (
         ['tests.test_ui_design_system'],

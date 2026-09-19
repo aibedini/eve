@@ -10,6 +10,8 @@ this module.
 The counters are deliberately app-free (``row_stats`` takes a plain snapshot), which is
 what makes them testable without importing the application.
 """
+import gzip
+import json
 import os
 import sys
 import unittest
@@ -130,6 +132,50 @@ class DeletionDeltaTests(unittest.TestCase):
         once = footprint.deep_size(shared)
         self.assertGreaterEqual(footprint.deep_size(holder), once)
         self.assertLess(footprint.deep_size(holder), 2 * once)
+
+
+class TransientPeakTests(unittest.TestCase):
+    def test_the_live_total_only_grows_as_publish_and_hydrate_hold_more(self):
+        result = footprint.transient_peak(lambda: _snapshot([['a', 'b'], ['a']]))
+        self.assertTrue(result['available'])
+        self.assertEqual(result['rows'], 3)
+        stages = result['stages']
+        self.assertGreater(stages['retained']['current_bytes'], 0)
+        self.assertGreater(stages['json']['current_bytes'],
+                           stages['retained']['current_bytes'])
+        self.assertGreater(stages['gzip']['current_bytes'], stages['json']['current_bytes'])
+        self.assertGreater(stages['hydrate']['current_bytes'],
+                           stages['gzip']['current_bytes'])
+        self.assertGreaterEqual(result['peak_bytes'], stages['hydrate']['current_bytes'])
+        self.assertGreater(result['peak_ratio'], 1.0)
+
+    def test_the_json_and_gzip_sizes_match_a_direct_serialization(self):
+        snapshot = _snapshot([['a', 'b']])
+        result = footprint.transient_peak(lambda: snapshot)
+        expected = json.dumps(snapshot, default=str, separators=(',', ':')).encode('utf-8')
+        self.assertEqual(result['json_bytes'], len(expected))
+        self.assertEqual(result['gzip_bytes'], len(gzip.compress(expected, 6)))
+
+    def test_the_warmup_runs_before_tracing_starts(self):
+        # The app import must not be counted as snapshot memory.
+        seen = []
+
+        def warmup():
+            import tracemalloc
+            seen.append(tracemalloc.is_tracing())
+
+        footprint.transient_peak(lambda: _snapshot([['a']]), warmup=warmup)
+        self.assertEqual(seen, [False])
+
+    def test_the_tracing_state_is_left_as_it_was_found(self):
+        import tracemalloc
+        before = tracemalloc.is_tracing()
+        footprint.transient_peak(lambda: _snapshot([['a']]))
+        self.assertEqual(tracemalloc.is_tracing(), before)
+
+    def test_an_rss_peak_is_an_integer_or_an_honest_none(self):
+        value = footprint.peak_rss_bytes()
+        self.assertTrue(value is None or isinstance(value, int), value)
 
 
 if __name__ == '__main__':

@@ -292,7 +292,15 @@ def eve_processes(*, include_other=False) -> dict:
     reconciled without listing them (see :func:`unclassified_processes`).
     """
     if not os.path.isdir(PROC):
-        return {'available': False, 'reason': 'no /proc', 'roles': {}}
+        # The same keys as the measured branch, with None instead of invented zeros: two
+        # consumers (Settings -> Overview and scripts/memory_attribution.py) read this
+        # payload, and a shape that changes with the platform makes both of them lie in a
+        # different way. A count of None says "not measured", a count of 0 says "none".
+        return {'available': False, 'reason': 'no /proc', 'roles': {}, 'services': {},
+                'other_processes': None, 'other_rss_bytes': None, 'other_pss_bytes': None,
+                'other_private_bytes': None, 'other_threads': None,
+                'eve_pss_bytes': None, 'eve_pss_with_xray_bytes': None,
+                'service_pss_bytes': None}
     roles = {}
     services = {}
     other = {'processes': 0, 'rss_bytes': 0, 'pss_bytes': 0, 'private_bytes': 0,
@@ -382,7 +390,13 @@ def accounting(host, eve) -> dict:
     """
     total = host.get('total_bytes')
     if not total:
-        return {'available': False, 'reason': 'host total unknown'}
+        # The same keys as the measured branch, with None for "not measured", for the same
+        # reason as eve_processes(): two consumers read this payload.
+        return {'available': False, 'reason': 'host total unknown', 'total_bytes': None,
+                'free_bytes': None, 'cache_bytes': None, 'process_pss_bytes': None,
+                'eve_pss_bytes': None, 'xray_pss_bytes': None, 'service_pss_bytes': None,
+                'other_pss_bytes': None, 'residual_bytes': None, 'used_bytes': None,
+                'available_bytes': None}
     free = host.get('free_bytes')
     cache = host.get('cache_bytes')
     residue_parts = (free, cache)

@@ -252,6 +252,20 @@ class EveAggregationTests(unittest.TestCase):
         self.assertTrue(row['available'])
         self.assertIsNone(row['residual_bytes'])
 
+    def test_an_unavailable_proc_still_returns_the_full_key_set(self):
+        # Two consumers read this payload (the Overview and the on-host collector), so a
+        # shape that changes with the platform would break one of them silently.
+        with mock.patch.object(memory_report.os.path, 'isdir', return_value=False):
+            report = memory_report.eve_processes()
+        self.assertFalse(report['available'])
+        for key in ('roles', 'services', 'other_processes', 'other_rss_bytes',
+                    'other_pss_bytes', 'other_private_bytes', 'other_threads',
+                    'eve_pss_bytes', 'eve_pss_with_xray_bytes', 'service_pss_bytes'):
+            self.assertIn(key, report, key)
+        # "Not measured" is None, never 0: a zero would read as "there are none".
+        self.assertIsNone(report['eve_pss_bytes'])
+        self.assertIsNone(report['other_processes'])
+
 
 class SnapshotFootprintTests(unittest.TestCase):
     def _snapshot(self):

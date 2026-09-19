@@ -115,6 +115,7 @@ def render(data) -> str:
     """The human report. Every figure is printed as measured, '-' where it is unknown."""
     host = data.get('host') or {}
     eve = data.get('eve') or {}
+    services = eve.get('services') or {}
     acct = data.get('accounting') or {}
     redis = data.get('redis_snapshot') or {}
     trend = data.get('trend') or {}
@@ -155,21 +156,25 @@ def render(data) -> str:
 
     out.append('')
     out.append('WHERE THE USED MEMORY IS')
-    out.append('  %-22s %s   (sum of PSS, not RSS)'
-               % ('EVE', human_bytes(eve.get('eve_pss_bytes'))))
-    for key in ordered(eve.get('roles') or {}, ROLE_ORDER):
-        bucket = (eve.get('roles') or {}).get(key) or {}
-        out.append('    %-20s %s' % (key, human_bytes(bucket.get('pss_bytes'))))
-    services = eve.get('services') or {}
-    for key in ordered(services, SERVICE_ORDER):
-        bucket = services.get(key) or {}
-        out.append('  %-22s %s   (host service, not EVE)'
-                   % (key, human_bytes(bucket.get('pss_bytes'))))
-    if not services:
-        out.append('  %-22s %s' % ('Host services', 'none detected'))
-    out.append('  %-22s %s   (%s processes, unclassified)'
-               % ('Other processes', human_bytes(eve.get('other_pss_bytes')),
-                  eve.get('other_processes', 0)))
+    if eve.get('available') is False:
+        out.append('  %-22s unavailable: %s'
+                   % ('EVE', eve.get('reason') or 'unknown'))
+    else:
+        out.append('  %-22s %s   (sum of PSS, not RSS)'
+                   % ('EVE', human_bytes(eve.get('eve_pss_bytes'))))
+        for key in ordered(eve.get('roles') or {}, ROLE_ORDER):
+            bucket = (eve.get('roles') or {}).get(key) or {}
+            out.append('    %-20s %s' % (key, human_bytes(bucket.get('pss_bytes'))))
+        for key in ordered(services, SERVICE_ORDER):
+            bucket = services.get(key) or {}
+            out.append('  %-22s %s   (host service, not EVE)'
+                       % (key, human_bytes(bucket.get('pss_bytes'))))
+        if not services:
+            out.append('  %-22s %s' % ('Host services', 'none detected'))
+        count = eve.get('other_processes')
+        out.append('  %-22s %s   (%s, unclassified)'
+                   % ('Other processes', human_bytes(eve.get('other_pss_bytes')),
+                      'count not measured' if count is None else '%s processes' % count))
     out.append('  %-22s %s   (reclaimable)' % ('Page cache', human_bytes(host.get('cache_bytes'))))
     out.append('  %-22s %s' % ('Free', human_bytes(host.get('free_bytes'))))
     out.append('  %-22s %s   (kernel, slab, page tables: no process owns it)'

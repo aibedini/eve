@@ -27,7 +27,7 @@ document proposes a fix that has not been measured on the install it applies to.
 | `POST /api/system/memory/analyze` (superadmin + step-up) | explicit, bounded deep Python sample: largest allocations as file/line/size only |
 | Settings → Overview → Memory | the human-readable version: host, Eve PSS, account reconciliation, roles table, host-services table, snapshot, caches, trend, health notes |
 | `scripts/memory_attribution.py` | the same attribution as a read-only on-host command, for a before/after artifact |
-| `scripts/measure_snapshot_footprint.py` | how many bytes a row, `raw_client` and the `*_formatted` strings actually cost, by building production rows and re-measuring after deleting each key |
+| `scripts/measure_snapshot_footprint.py` | how many bytes a row, `raw_client` and the `*_formatted` strings actually cost (deletion deltas), and with `--transient`: what publishing and re-hydrating one copy costs at its worst instant |
 | `health_watchdog` | one sample a minute into a Redis ring (`LPUSH` + `LTRIM`, capped at 1440 entries) |
 
 The trend is what separates the two very different explanations of a high number:
@@ -122,16 +122,17 @@ plus, on v3, the same client appearing once per assigned inbound. That is what
 | D | `raw_client` duplicates config per row | `snapshot.rows_with_raw_client / client_rows` | a large share of rows carry it |
 | E | v3 clients repeat per assigned inbound | `snapshot.duplication_ratio` | ratio well above 1.0 |
 | F | formatted strings are cached | `snapshot.rows_with_formatted_strings` | near `client_rows` |
-| G | a big `/api/refresh` spikes RSS | `eve.roles.web.peak_rss_bytes` (VmHWM) before/after a full dashboard load | peak ≫ steady after a load |
+| G | a big `/api/refresh` spikes RSS | `eve.roles.web.peak_rss_bytes` (VmHWM) before/after a full dashboard load, plus the measured transient ratio (`--transient`: 3.2x live, 4x at the peak, per publish/hydrate) | peak ≫ steady after a load |
 
 The instrumentation deliberately does not compute the true retained size of nested objects
 on every request; that is the on-demand deep analysis, which is bounded, admin-only and
 returns file/line/size only.
 
 Suspects D, E and F no longer need the live host to be quantified: they were measured in
-bytes by building production rows and deleting one key at a time (next section). A, B, C
-and G still need the host, because they are about how many copies exist and how large each
-process is.
+bytes by building production rows and deleting one key at a time (next section), and the
+transient ratio of G is measured the same way. A, B, C and the "how many copies, how big
+each" half of G still need the host, because they are about how many copies exist and how
+large each process is.
 
 ## What was measured (this checkout, 2026-09-19)
 
@@ -196,6 +197,38 @@ That per-copy figure is what matters, because the snapshot exists in up to three
 processes (background, web, Telegram bot, see above). What the host actually holds is
 `snapshot.client_rows` on the live instance - read it from `/api/system/memory` and
 multiply, rather than assuming the fleet size.
+
+### The transient peak (what an OOM actually lands on)
+
+`scripts/measure_snapshot_footprint.py --transient` measures the other half of suspect G:
+not what the snapshot retains, but what publishing and re-hydrating it costs at the worst
+instant. It starts `tracemalloc` before the graph is built (a graph allocated before tracing
+started would be invisible, understating the peak by the largest part of it), warms the app
+import *outside* the traced window (an import counted as snapshot memory swamps a 0.36 MB
+fleet with ~67 MB of routes, models and SQLAlchemy), and reports both the bytes still
+referenced at each stage and the high-water peak.
+
+| Stage (150 rows) | Live | Peak so far |
+|---|---|---|
+| retained graph | 0.365 MB | 0.404 MB |
+| after `json.dumps` | 0.695 MB | 1.516 MB |
+| after `gzip.compress` | 0.711 MB | 1.516 MB |
+| after hydrate (`json.loads`) | 1.165 MB | 1.516 MB |
+
+The v3 mirror over the same 150 accounts (600 rows, 1.372 MB retained) behaves the same way:
+4.499 MB live at the end (3.27x) and a 5.453 MB peak (3.96x).
+
+The transferable number is the **ratio**, not the absolute. Publishing or re-hydrating one
+copy holds about **3.2x its retained size live** - the graph, the JSON text, the gzip bytes
+and the second graph the loader builds while the first is still referenced - and touches
+about **4x** at the worst instant. Per row that is ~7.9 KB of live transient: ~233 MB at 30k
+rows and ~466 MB at 60k, *per process that publishes or hydrates*. On a host that already
+holds the snapshot in three processes, the transient - not the steady state - is what a small
+VPS runs out of, and the trend ring cannot see it, because the next sample is a minute later.
+
+Still owed to the host: how many copies actually exist, and what `VmHWM` shows before and
+after a real dashboard load (the RSS-peak column is `None` off Linux). This measurement says
+what one publish or hydrate costs; the host says how many of them happen at once.
 
 ## Optimization plan (ranked, not implemented)
 

@@ -36,6 +36,8 @@ class TrackedArtifactGuardTests(unittest.TestCase):
             'backup.dump',
             'keystore.jks',
             'thing.eveenc',
+            # A macOS AppleDouble fork: metadata that shadows a real file's name.
+            '._route_smoke.py',
         ]
         for path in forbidden:
             self.assertTrue(self.guard.is_forbidden(path), path)
@@ -50,6 +52,8 @@ class TrackedArtifactGuardTests(unittest.TestCase):
             'alembic/versions/b2c3d4e5f6a7_wallet_ledger.py',
             'bnqo/Cargo.lock',
             'static/css/app.css',
+            # A dot inside a name is fine; only the AppleDouble prefix is not.
+            'scripts/_leading_underscore.py',
         ]
         for path in allowed:
             self.assertFalse(self.guard.is_forbidden(path), path)
