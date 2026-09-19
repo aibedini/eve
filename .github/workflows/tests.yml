@@ -124,11 +124,22 @@ jobs:
       - name: Run full test suite
         run: |
           set +e
-          pytest -q --tb=short > pytest-all.log 2>&1
-          status=$?
-          tail -n 40 pytest-all.log
+          # Stream the output as well as capturing it: a job that hangs leaves NO trace
+          # when the log is only written to a file and tailed at the end (a 45-minute
+          # timeout once produced a completely empty step log, which is undiagnosable).
+          # The captured file is still what the failure summary greps, and --durations
+          # names the slowest tests so a slowdown is visible before it becomes a timeout.
+          pytest -q --tb=short --durations=25 2>&1 | tee pytest-all.log
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             failures=$(grep -E '^(FAILED|ERROR) ' pytest-all.log | head -n 15 | tr '\n' '|' | cut -c1-900)
             echo "::error title=pytest failed ($status)::$failures"
           fi
           exit $status
+      - name: Upload the full-suite log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-all-log
+          path: pytest-all.log
+          if-no-files-found: warn

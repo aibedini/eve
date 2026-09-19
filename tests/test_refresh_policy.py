@@ -142,6 +142,16 @@ class IntervalTests(unittest.TestCase):
 
 
 class FetcherLoopTests(unittest.TestCase):
+    """The startup sequence: one bootstrap sweep, then the per-server scheduler.
+
+    The loop itself is no longer a cycle, so what is left to test here is the handover.
+    The old version of this class drove the retired loop through a patched
+    ``fetch_and_update_global_data`` and expected it to return after one sleep; with the
+    scheduler in place that call never comes back (the loop runs for the life of the
+    process), and a test that waited for it hung the whole suite for 45 minutes in CI.
+    Every test here is therefore event-driven and returns immediately.
+    """
+
     def setUp(self):
         refresh_policy.reset_state()
         for name in POLICY_ENV:
@@ -157,58 +167,95 @@ class FetcherLoopTests(unittest.TestCase):
         refresh_policy.reset_state()
 
     class _Stop(BaseException):
-        # BaseException so the fetcher's own "except Exception" cycle guard does
-        # not swallow the stop signal (it would sleep and loop again).
+        # BaseException so the loop's own "except Exception" tick guard does not swallow
+        # the stop signal and sleep instead of unwinding.
         pass
 
-    def _run_loop(self, fetches, waits, stop_after_waits=1):
+    def _start(self, sweeps):
+        """Run the startup path, stopping it at the first scheduler tick."""
         stop = self._Stop
 
-        def fake_fetch(force=False, **kwargs):
-            fetches.append(force)
-            # A real cycle refreshes last_update; without this the stale-snapshot
-            # tests would fetch forever.
+        def fake_sweep(force=False, **kwargs):
+            sweeps.append({'force': force, 'kwargs': dict(kwargs)})
+            # A real sweep refreshes last_update; keep the policy truthful.
             GLOBAL_SERVER_DATA["last_update"] = datetime.now(timezone.utc).isoformat()
-            if len(fetches) >= 3:
-                raise stop()
             return True
 
-        def fake_wait(seconds):
-            waits.append(seconds)
-            if len(waits) >= stop_after_waits:
-                raise stop()
+        def fake_scheduler(*args, **kwargs):
+            raise stop()
 
         with (
             mock.patch.object(schedulers, "ensure_background_threads_started"),
             mock.patch.object(schedulers, "load_snapshot_from_redis"),
-            mock.patch.object(schedulers, "fetch_and_update_global_data", fake_fetch),
-            mock.patch.object(refresh_policy, "wait_for_interval", fake_wait),
+            mock.patch.object(schedulers, "fetch_and_update_global_data", fake_sweep),
+            mock.patch.object(schedulers, "run_per_server_scheduler", fake_scheduler),
             app.app_context(),
         ):
             with self.assertRaises(stop):
                 schedulers.background_data_fetcher()
 
-    def test_fresh_snapshot_is_not_fetched_and_sleeps_a_bounded_slice(self):
+    def test_the_startup_runs_exactly_one_bootstrap_sweep_then_the_scheduler(self):
+        sweeps = []
+        self._start(sweeps)
+        self.assertEqual(len(sweeps), 1, "the sweep is a bootstrap, not a cadence")
+        self.assertFalse(sweeps[0]['force'], "a bootstrap must not force every panel")
+
+    def test_the_bootstrap_sweep_happens_even_with_a_fresh_snapshot(self):
+        # The sweep is what discovers the enabled set and fills an empty snapshot; it is
+        # not conditional on staleness any more (that decision belongs to the policy the
+        # scheduler consults per panel).
         GLOBAL_SERVER_DATA["last_update"] = datetime.now(timezone.utc).isoformat()
-        fetches, waits = [], []
-        self._run_loop(fetches, waits)
-        self.assertEqual(fetches, [])
-        self.assertEqual(len(waits), 1)
-        self.assertLessEqual(waits[0], refresh_policy.activity_poll_seconds())
+        sweeps = []
+        self._start(sweeps)
+        self.assertEqual(len(sweeps), 1)
 
-    def test_stale_snapshot_is_fetched_immediately(self):
-        GLOBAL_SERVER_DATA["last_update"] = (
-            datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        fetches, waits = [], []
-        self._run_loop(fetches, waits)
-        self.assertEqual(fetches, [False])
-        self.assertEqual(len(waits), 1)
+    def test_the_wake_listener_starts_before_the_loop(self):
+        # A nudge from a web process only shortens the sleep if this process is
+        # subscribed; starting the listener after the first sweep is the documented order.
+        started = []
 
-    def test_missing_snapshot_is_fetched_immediately(self):
-        GLOBAL_SERVER_DATA["last_update"] = None
-        fetches, waits = [], []
-        self._run_loop(fetches, waits)
-        self.assertEqual(fetches, [False])
+        def fake_listener():
+            started.append(True)
+            return True
+
+        with (
+            mock.patch.object(schedulers, "ensure_background_threads_started"),
+            mock.patch.object(schedulers, "load_snapshot_from_redis"),
+            mock.patch.object(schedulers, "fetch_and_update_global_data",
+                              lambda **kwargs: True),
+            mock.patch.object(refresh_policy, "start_wake_listener", fake_listener),
+            mock.patch.object(schedulers, "run_per_server_scheduler",
+                              side_effect=self._Stop()),
+            app.app_context(),
+        ):
+            with self.assertRaises(self._Stop):
+                schedulers.background_data_fetcher()
+        self.assertEqual(started, [True])
+
+    def test_a_failing_tick_backs_off_instead_of_spinning(self):
+        # An unreachable database used to be retried at the tick rate (20 failed queries
+        # and 20 log lines a second, forever), which is what turned one broken test module
+        # into a 45-minute CI timeout. The retry delay must grow.
+        import panel.core.panel_limits as panel_limits  # noqa: F401
+        attempts = []
+        stop = threading.Event()
+
+        def failing_refresh(server_id):
+            attempts.append(time.monotonic())
+            if len(attempts) >= 3:
+                stop.set()
+            return {'server_id': int(server_id), 'changed': False, 'block': []}
+
+        with mock.patch.object(schedulers, "_scheduler_server_rows",
+                               side_effect=RuntimeError('no such table: servers')):
+            schedulers.run_per_server_scheduler(
+                fetch_callable=failing_refresh, duration=5.0, stop_event=stop,
+                worker_limit=1)
+        metrics = schedulers.scheduler_metrics()
+        self.assertGreaterEqual(metrics.get('tick_errors', 0), 2)
+        # The tick rate is 0.05 s; three failures inside a 5 s budget prove the loop is
+        # pacing itself rather than spinning at that rate.
+        self.assertLessEqual(metrics.get('tick_errors', 0), 12, metrics)
 
 
 class RefreshPolicyScriptTests(unittest.TestCase):

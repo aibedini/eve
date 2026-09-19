@@ -2,6 +2,16 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.15] - 2026-09-19
+
+### Fixed
+- **A failing scheduler tick is no longer retried at the tick rate.** An unreachable database (or a half-migrated schema) made the per-server loop retry and log twenty times a second, forever. The delay now doubles per consecutive failure up to 30 s and resets on the first healthy tick; `/api/doctor` exposes `tick_errors` and `consecutive_tick_errors` so the condition is visible instead of only noisy.
+- `tests/test_refresh_policy.py::FetcherLoopTests` still drove the retired cycle loop, so once the loop became long-lived it never returned - and hung the CI integration job until its 45-minute timeout (the previous run of that job took 2m46s). It now tests the startup contract (one bootstrap sweep, then the per-server scheduler, wake listener started) and that a failing tick backs off. Every test is event-driven and returns immediately.
+
+### Changed
+- The affected-tests map now includes `tests/test_refresh_policy.py` for `panel/core/refresh_policy.py` and `tests.test_client_rotate` for `panel/routes/clients.py`. That missing entry is why Tier 1/2 stayed green while the module hung.
+- The full-suite CI job streams pytest's output (`tee`) instead of only redirecting it, runs with `--durations=25`, and uploads `pytest-all.log` with `if: always()`. A timed-out job previously produced a completely empty step log, which is undiagnosable.
+
 ## [2.7.14] - 2026-09-19
 
 ### Fixed

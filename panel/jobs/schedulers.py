@@ -314,6 +314,11 @@ def _scheduler_server_rows():
 #: fresh without a database read per tick.
 SCHEDULER_TICK_SECONDS = 0.05
 SCHEDULER_DISCOVERY_SECONDS = 15.0
+#: A tick that fails (an unreachable database, a half-migrated schema) must not be
+#: retried at the tick rate: a 50 ms retry is 20 failed queries and 20 log lines per
+#: second, forever. The delay doubles per consecutive failure up to this ceiling and
+#: resets on the first tick that works.
+SCHEDULER_ERROR_BACKOFF_MAX_SECONDS = 30.0
 
 _scheduler_lock = threading.Lock()
 _scheduler_stats = {}
@@ -325,6 +330,7 @@ def _scheduler_reset_metrics(workers=None):
         _scheduler_stats.update({
             'dispatched': 0, 'completed': 0, 'errors': 0, 'stale_discarded': 0,
             'capacity_rejections': 0, 'saturation_events': 0,
+            'tick_errors': 0, 'consecutive_tick_errors': 0,
             'max_inflight': 0, 'max_due_i_wait': 0,
             'queue_delay_ms_max': 0.0, 'queue_delay_ms_total': 0.0,
             'wake_consumed': 0, 'started_at': time.time(),
@@ -427,6 +433,7 @@ def run_per_server_scheduler(*, fetch_callable=None, server_rows=None, duration=
     from app import app as scheduler_app  # deferred: app-level object, avoids an import cycle
 
     _scheduler_reset_metrics(workers)
+    tick_failures = 0
     pool = concurrent.futures.ThreadPoolExecutor(
         max_workers=max(1, workers), thread_name_prefix='eve-fetch')
     try:
@@ -480,13 +487,25 @@ def run_per_server_scheduler(*, fetch_callable=None, server_rows=None, duration=
                     # loop never sleeps "for the cycle" to find that out.
                     if not done and _scheduler_consume_wake():
                         continue
+                tick_failures = 0
             except Exception:
+                tick_failures += 1
+                with _scheduler_lock:
+                    _scheduler_stats['tick_errors'] = (
+                        _scheduler_stats.get('tick_errors', 0) + 1)
+                    _scheduler_stats['consecutive_tick_errors'] = tick_failures
                 try:
                     with scheduler_app.app_context():
-                        scheduler_app.logger.exception('Per-server scheduler tick failed')
+                        scheduler_app.logger.exception(
+                            'Per-server scheduler tick failed (%d in a row)', tick_failures)
                 except Exception:
                     pass
-                stop.wait(SCHEDULER_TICK_SECONDS)
+                # Back off instead of spinning: an unreachable database would otherwise be
+                # retried (and logged) twenty times a second for as long as the process
+                # lives. Capped, and reset by the first tick that succeeds.
+                delay = min(SCHEDULER_ERROR_BACKOFF_MAX_SECONDS,
+                            SCHEDULER_TICK_SECONDS * (2 ** min(tick_failures, 10)))
+                stop.wait(delay)
     finally:
         # A stop request must not hang behind the slowest panel read in flight: the reads
         # that are still running finish on their own (they hold no schedule of ours), and

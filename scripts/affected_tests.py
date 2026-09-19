@@ -37,7 +37,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: specific mapping can refine a broad one.
 MAPPING = (
     ('panel/core/refresh_policy.py', (
-        ['tests.test_server_polling'],
+        # test_refresh_policy is the OLD policy suite and was missing from the first
+        # version of this map: a rewrite of the fetcher loop left one of its tests driving
+        # a loop that no longer returns, and Tier 1/2 never saw it. It hung the CI
+        # integration job for 45 minutes. Keep it here.
+        ['tests.test_server_polling', 'tests.test_refresh_policy'],
         ['tests.test_watch_propagation_crossprocess', 'tests.test_client_mutation_result'],
     )),
     ('panel/core/redis_client.py', (
@@ -71,7 +75,7 @@ MAPPING = (
     ('panel/routes/dashboard.py', (
         ['tests.test_sse_updates'],
         ['tests.test_client_events', 'tests.test_server_polling',
-         'tests.test_subscription_scope'],
+         'tests.test_subscription_scope', 'tests.test_refresh_policy'],
     )),
     ('panel/routes/doctor.py', (
         ['tests.test_server_polling'],
