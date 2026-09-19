@@ -2,6 +2,15 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.20] - 2026-09-19
+
+### Added
+- **The Settings → Overview Memory trend now draws its measured samples.** A sparkline renders one thin bar per point in `trend.series`, scaled to the window's own min..max, drawn with 20 discrete height classes rather than an inline style. Every bar's tooltip carries the exact byte value and that sample's age, so a 32px bar cannot imply more precision than the ring holds. Fewer than two points draws nothing (one point has no shape, and a line between two points would imply samples that were never taken), and a flat window is drawn flat instead of as a row of zero-height bars that would read as "nothing is using memory". The whole chart is a single `role="img"` with a text label.
+- The samples row reads **"Ring samples | 60 of 1440 · window 60 min"**, with the held count and the ring's capacity both taken from the payload; a missing `max_samples` drops the denominator instead of inventing `of -`.
+
+### Tests
+- `tests/test_ui_design_system.py` and `python scripts/ui_design_audit.py --check` keep the template at its design-system ceiling (counts unchanged); the renderer was exercised in Node for a 60-point series, an empty series, and missing/`null`/single-point/points-without-bytes/flat/missing-capacity payloads.
+
 ## [2.7.19] - 2026-09-19
 
 ### Added

@@ -2987,6 +2987,64 @@
         white-space: nowrap;
     }
 
+    /* The samples row carries a composed sentence ("12 of 1440 / window 60 min"), so it
+       must wrap inside a 260px grid track instead of overflowing the card. */
+    .mem-kv-value.mem-wrap {
+        white-space: normal;
+    }
+
+    /* Sparkline: one thin bar per measured sample. The bars shrink before the row
+       scrolls, and a scroll container's automatic minimum size is zero, so a dense
+       series cannot widen the card past the grid track the other cards use - the same
+       trap the .settings-content min-width rule documents for the panel cards. */
+    .mem-spark {
+        display: flex;
+        align-items: flex-end;
+        gap: 1px;
+        height: 32px;
+        min-width: 0;
+        margin-top: 8px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: thin;
+    }
+
+    .mem-spark::-webkit-scrollbar {
+        height: 4px;
+    }
+
+    .mem-spark-bar {
+        flex: 1 1 2px;
+        min-width: 1px;
+        max-width: 6px;
+        background: var(--primary);
+        border-radius: 1px;
+    }
+
+    /* Heights are discrete classes, never an inline style: 20 levels are finer than a
+       32px bar can render, and each bar's title carries the exact byte value and the
+       sample's age, so the bar cannot claim more precision than it has. */
+    .mem-spark-bar.l0 { height: 5%; }
+    .mem-spark-bar.l1 { height: 10%; }
+    .mem-spark-bar.l2 { height: 15%; }
+    .mem-spark-bar.l3 { height: 20%; }
+    .mem-spark-bar.l4 { height: 25%; }
+    .mem-spark-bar.l5 { height: 30%; }
+    .mem-spark-bar.l6 { height: 35%; }
+    .mem-spark-bar.l7 { height: 40%; }
+    .mem-spark-bar.l8 { height: 45%; }
+    .mem-spark-bar.l9 { height: 50%; }
+    .mem-spark-bar.l10 { height: 55%; }
+    .mem-spark-bar.l11 { height: 60%; }
+    .mem-spark-bar.l12 { height: 65%; }
+    .mem-spark-bar.l13 { height: 70%; }
+    .mem-spark-bar.l14 { height: 75%; }
+    .mem-spark-bar.l15 { height: 80%; }
+    .mem-spark-bar.l16 { height: 85%; }
+    .mem-spark-bar.l17 { height: 90%; }
+    .mem-spark-bar.l18 { height: 95%; }
+    .mem-spark-bar.l19 { height: 100%; }
+
     .mem-num {
         text-align: end;
         font-variant-numeric: tabular-nums;
@@ -7057,8 +7115,11 @@
             'growing': 'growing',
             'stable': 'stable',
             'shrinking': 'shrinking',
-            'samples': 'Samples',
-            'window': 'Window',
+            'samples': 'samples',
+            'samplesLine': 'Ring samples',
+            'samplesOf': 'of',
+            'sparkLabel': 'EVE (PSS) over the window',
+            'window': 'window',
             'minutes': 'min',
             'noSamples': 'No trend samples in this window yet, so there is no direction to report.',
             'trendNote': 'A steady high value after a full dashboard load is the retained snapshot, not a leak; a value that climbs while the client count is flat is a leak.',
@@ -7156,7 +7217,10 @@
             'growing': 'رشدی',
             'stable': 'پایدار',
             'shrinking': 'کاهنده',
-            'samples': 'نمونه‌ها',
+            'samples': 'نمونه',
+            'samplesLine': 'نمونه‌های حلقه',
+            'samplesOf': 'از',
+            'sparkLabel': 'EVE (PSS) در طول بازه',
             'window': 'بازه',
             'minutes': 'دقیقه',
             'noSamples': 'هنوز نمونه‌ای در این بازه ثبت نشده، پس جهتی برای گزارش نیست.',
@@ -7280,6 +7344,7 @@
         if (value === null || value === undefined || value === '') return null;
         let ms;
         if (typeof value === 'number') {
+            if (!isFinite(value)) return null;
             ms = value * 1000;
         } else {
             const text = String(value);
@@ -7319,9 +7384,10 @@
         return ' title="' + memEsc(String(Math.round(n)) + ' bytes') + '"';
     }
 
-    function memKvRow(label, valueHtml, titleText) {
+    function memKvRow(label, valueHtml, titleText, valueClass) {
         return '<div class="mem-kv-row"><span class="label-note">' + memEsc(label)
-            + '</span><span class="mem-kv-value"' + (titleText || '') + '>' + valueHtml
+            + '</span><span class="mem-kv-value' + (valueClass ? ' ' + valueClass : '') + '"'
+            + (titleText || '') + '>' + valueHtml
             + '</span></div>';
     }
 
@@ -7348,6 +7414,7 @@
             + (parts.value ? '<div class="overview-card-value"' + (parts.valueTitle || '') + '>'
                 + parts.value + '</div>' : '')
             + (parts.sub ? '<div class="overview-card-sub">' + parts.sub + '</div>' : '')
+            + (parts.spark || '')
             + (parts.body ? '<div class="mem-kv">' + parts.body + '</div>' : '')
             + '</div>';
     }
@@ -7443,6 +7510,42 @@
         return memCard({title: memT('memoryHealth'), badge: memHealthBadge(state), body: body});
     }
 
+    /* The sparkline draws the samples the backend measured, never an interpolation.
+       Two guards keep it honest: fewer than two points draws NOTHING (one point has no
+       shape, and a line between two points would imply samples that were never taken),
+       and every bar carries the exact byte value plus that sample's age in its title,
+       because a 32px bar cannot show the difference one decimal hides. */
+    function renderSparkline(trend) {
+        const raw = Array.isArray(trend.series) ? trend.series : [];
+        const points = raw.filter(point => point && isFinite(Number(point.bytes)));
+        if (points.length < 2) return '';
+        let min = Infinity;
+        let max = -Infinity;
+        points.forEach(point => {
+            const value = Number(point.bytes);
+            if (value < min) min = value;
+            if (value > max) max = value;
+        });
+        const span = max - min;
+        const levels = 20;
+        let bars = '';
+        points.forEach(point => {
+            const value = Number(point.bytes);
+            /* A flat window is drawn flat at the top of the band: a row of zero-height
+               bars would read as "nothing is using memory". */
+            const ratio = span > 0 ? (value - min) / span : 1;
+            const level = Math.max(0, Math.min(levels - 1, Math.round(ratio * (levels - 1))));
+            const age = memAgoStamp(point.at);
+            bars += '<div class="mem-spark-bar l' + level + '" title="'
+                + memEsc(String(Math.round(value)) + ' bytes' + (age ? ', ' + age : ''))
+                + '"></div>';
+        });
+        const label = memT('sparkLabel') + ' (' + points.length + ' ' + memT('samples')
+            + ', ' + memBytes(min) + ' - ' + memBytes(max) + ')';
+        return '<div class="mem-spark" role="img" aria-label="' + memEsc(label) + '">'
+            + bars + '</div>';
+    }
+
     function renderTrendCard(trend) {
         if (trend.available === false) {
             return memCard({title: memT('trend'),
@@ -7451,19 +7554,27 @@
         const samples = Number(trend.samples) || 0;
         if (!samples) {
             /* An empty window is not a flat line: printing Current 0 B would read as a
-               measurement of an idle process. The payload carries no series, so there
-               is nothing to draw either - the four numbers are the honest answer. */
+               measurement of an idle process, and series is [] so there are no bars to
+               draw either. */
             return memCard({title: memT('trend'), body: memNote(memT('noSamples'), 'field-note-warn')});
         }
         const direction = String(trend.trend || '');
         const badge = '<span class="badge ' + (MEM_TREND_BADGE[direction] || 'badge-secondary') + '">'
             + memEsc(memT(MEM_TREND_WORD[direction] || 'healthUnknown')) + '</span>';
+        /* Both counts come from the payload: samples is what the window holds, max_samples
+           is the ring's capacity. memPlain keeps them ungrouped so the sentence reads as
+           one quantity ("12 of 1440"), and a missing capacity is reported by leaving the
+           denominator out rather than inventing one. */
+        const capacity = memPlain(trend.max_samples);
+        const sampleText = memPlain(samples)
+            + (capacity === null ? '' : ' ' + memT('samplesOf') + ' ' + capacity)
+            + ' \u00b7 ' + memT('window') + ' '
+            + (memPlain(trend.window_minutes) || '-') + ' ' + memT('minutes');
         const body = [
             memBytesRow(memT('peak'), trend.peak_bytes),
             memRow(memT('change'), memSigned(trend.delta_bytes)),
             memRow(memT('perHour'), memSigned(trend.per_hour_bytes)),
-            memRow(memT('samples'), memNum(samples)),
-            memRow(memT('window'), (memNum(trend.window_minutes) || '-') + ' ' + memT('minutes')),
+            memKvRow(memT('samplesLine'), memEsc(sampleText), '', 'mem-wrap'),
             memNote(memT('trendNote'))
         ];
         return memCard({
@@ -7472,6 +7583,7 @@
             value: memEsc(memOr(memBytes(trend.current_bytes))),
             valueTitle: memExact(trend.current_bytes),
             sub: memEsc(memT('trendSub')),
+            spark: renderSparkline(trend),
             body: body.join('')
         });
     }
