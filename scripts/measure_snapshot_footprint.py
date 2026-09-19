@@ -262,6 +262,13 @@ def measure(*, servers, inbounds, clients, mirror, v3=True):
             # constants once per row, so they are not the saving a deletion would give.
             'isolated_bytes': round(isolated_row_bytes / rows, 1) if rows else 0,
             'isolated_raw_client_bytes': round(isolated_raw_bytes / rows, 1) if rows else 0,
+            # What the isolated measurement double-counted: the objects the rows share
+            # (dict keys, interned constants) appear once in the snapshot but once per row
+            # in the sum.
+            'shared_bytes_per_row': (round((isolated_row_bytes - full['deep_bytes']) / rows, 1)
+                                     if rows else 0),
+            'shared_share': (round((isolated_row_bytes - full['deep_bytes'])
+                                   / isolated_row_bytes, 3) if isolated_row_bytes else None),
             'rows_with_raw_client': rows_with_raw,
             'rows_with_formatted_strings': rows_with_formatted,
             'formatted_keys': formatted_keys,
@@ -339,6 +346,10 @@ def main():
         print('  inside a row (isolated measurement; over-counts shared constants):')
         print('    one row            : %7.1f bytes'
               % per_row['isolated_bytes'])
+        print('    of which shared    : %7.1f bytes  (%.1f%%: dict keys and interned '
+              'constants, counted once per row here and once in the snapshot)'
+              % (per_row['shared_bytes_per_row'],
+                 100.0 * (per_row['shared_share'] or 0)))
         print('    its raw_client     : %7.1f bytes  (%d/%d rows carry one)'
               % (per_row['isolated_raw_client_bytes'],
                  per_row['rows_with_raw_client'], totals['rows']))

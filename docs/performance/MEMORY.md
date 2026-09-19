@@ -126,6 +126,7 @@ accounts per server.
 | Measurement | Result |
 |---|---|
 | one processed row, measured in isolation | 4,933 bytes |
+| of that, **shared with the rest of the snapshot** (dict keys, interned constants) | 2,568 bytes, **52.1%** |
 | **marginal cost of one more row** (two fleet sizes, fixed part cancels) | **2,230 bytes** |
 | `raw_client` inside one row, in isolation | 1,596 bytes |
 | JSON of the snapshot | 0.163 MB per 150 rows |
@@ -139,14 +140,21 @@ accounts per server.
 Two of these numbers are corrections to the arithmetic this document was written with:
 
 * **A row measured in isolation is not what a row costs.** 4,933 bytes isolated against
-  2,230 bytes marginal - the difference is interned literals (`'xtls-rprx-vision'`, short
-  strings and small ints) that are shared across rows and counted once per row by an
-  isolated measurement. Scaling with the isolated figure overstates the snapshot 2.2x, so
-  the slope between two fleet sizes is the number to use.
+  2,230 bytes marginal - and the isolated figure says exactly where the difference is:
+  52.1% of a row is objects shared with the rest of the snapshot (the dict keys such as
+  `'email'`, interned short strings such as `'xtls-rprx-vision'`, small ints), which an
+  isolated measurement counts once per row. Scaling with the isolated figure overstates the
+  snapshot 2.2x, so the slope between two fleet sizes is the number to use.
 * **Attribution has to be a deletion, not a sum.** The isolated `raw_client` subtree is
   1,596 bytes/row, but deleting it saves 27.5% of the snapshot rather than 32% of it,
   because part of that subtree (the same email, id and literal values) is already
   referenced by the row itself. The plan below quotes the deletion delta.
+
+What this measurement is not: the fleet is synthetic (the *field set* is production, since
+`process_inbounds` built every row, but the values are short and uniform, so a real install
+with longer emails and comments is slightly larger), and the byte sizes are CPython 3.14 on
+x86-64, the interpreter this checkout runs. Both are reasons to read the live
+`snapshot.client_rows` from the host and multiply, not to trust a fleet size assumed here.
 
 Scaling from the measured slope (2,230 bytes/row retained; extrapolation, not a
 measurement), per snapshot copy:

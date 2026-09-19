@@ -2,6 +2,12 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.22] - 2026-09-19
+
+### Added
+- `scripts/measure_snapshot_footprint.py` now reports how much of an isolated row is actually shared with the rest of the snapshot (dict keys, interned constants): 2,568 of 4,933 bytes, **52.1%**. That is the mechanism behind the isolated-versus-marginal gap, so the warning that an isolated row overstates its own cost by 2.2x is a measured decomposition rather than an explanation.
+- `docs/performance/MEMORY.md` states what the measurement is not: the fleet is synthetic (the field set is production, since `process_inbounds` built every row, but the values are short and uniform, so a real install is slightly larger) and the byte sizes are CPython 3.14 on x86-64.
+
 ## [2.7.21] - 2026-09-19
 
 ### Added
