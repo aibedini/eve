@@ -57,6 +57,13 @@ MAPPING = (
         ['tests.test_snapshot_delta'],
         ['tests.test_sse_updates', 'tests.test_client_events'],
     )),
+    ('panel/core/memory_report.py', (
+        # Attribution is the module the whole memory pass is read through: an edit here
+        # can silently change what Settings -> Overview reports, so its own suite is
+        # Tier 1 and never "unmapped" (the map had no entry for it).
+        ['tests.test_memory_report'],
+        ['tests.test_measure_snapshot_footprint'],
+    )),
     ('panel/jobs/schedulers.py', (
         # test_refresh_lock_scoping inspects this module's source (the fetch path must not
         # take the snapshot lock) and was missing from the first version of this map: a
@@ -109,6 +116,12 @@ MAPPING = (
     ('docs/', (
         ['tests.test_docs_index'],
         ['tests.test_ci_guards'],
+    )),
+    ('scripts/measure_snapshot_footprint.py', (
+        # Longest prefix wins, so the measurement script gets its own counters test
+        # instead of falling through to the generic scripts/ entry.
+        ['tests.test_measure_snapshot_footprint'],
+        ['tests.test_memory_report'],
     )),
     ('scripts/', (
         ['tests.test_ci_guards'],

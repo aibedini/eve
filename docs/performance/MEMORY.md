@@ -152,9 +152,17 @@ Two of these numbers are corrections to the arithmetic this document was written
 
 What this measurement is not: the fleet is synthetic (the *field set* is production, since
 `process_inbounds` built every row, but the values are short and uniform, so a real install
-with longer emails and comments is slightly larger), and the byte sizes are CPython 3.14 on
-x86-64, the interpreter this checkout runs. Both are reasons to read the live
-`snapshot.client_rows` from the host and multiply, not to trust a fleet size assumed here.
+with longer emails and comments is slightly larger), and the absolute byte sizes belong to
+the interpreter that produced them. The table above was **not** reproduced on this
+checkout: it states CPython 3.14 on x86-64, while this checkout runs CPython 3.11.6 (3.11
+and 3.7 are the only interpreters installed here). Re-running the same documented command
+on 3.11.6 gives 5,447 bytes for an isolated row and 2,329 bytes marginal per row, with the
+deletion deltas inside one percentage point of the table (-27.1% deep / -30.4% gzip for
+`raw_client`, -9.3% / -17.0% for the formatted strings, -36.3% / -47.3% for both, and
+73.8% removed by collapsing the v3 mirror). Read the **percentages and the slope** as the
+transferable result and the absolutes as "on the interpreter that produced them", then
+read the live `snapshot.client_rows` from the host and multiply, rather than trusting a
+fleet size assumed here.
 
 Scaling from the measured slope (2,230 bytes/row retained; extrapolation, not a
 measurement), per snapshot copy:

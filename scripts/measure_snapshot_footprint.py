@@ -49,6 +49,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # an import would otherwise launch only adds noise to a footprint measurement.
 os.environ.setdefault('EVE_SKIP_IMPORT_MIGRATIONS', '1')
 os.environ.setdefault('DISABLE_BACKGROUND_THREADS', '1')
+# Importing the app core also insists on a session secret outside dev mode. This script
+# never serves a request and holds no session, so a bare checkout must not need
+# SESSION_SECRET to measure a dict. An explicitly configured environment is left alone,
+# and a real host has the secret anyway, so the documented command works in both places.
+if not any(os.environ.get(name) for name in ('FLASK_ENV', 'ENV', 'DEBUG')):
+    os.environ['FLASK_ENV'] = 'development'
 
 
 def deep_size(obj, _seen=None):
@@ -209,30 +215,69 @@ def _variant(snapshot, *, drop_raw=False, drop_formatted=False):
     return _sizes(work)
 
 
+def row_stats(inbounds):
+    """Per-row counters for a snapshot: rows, unique clients, and what one row retains.
+
+    ``rows_with_formatted_strings`` counts **rows** that carry at least one formatted
+    string - the same thing ``panel.core.memory_report.snapshot_footprint`` counts - and
+    not the formatted strings themselves. Counting strings inflates it by the number of
+    formatted keys a row happens to have (four on a real install), which would overstate
+    how many rows the change touches and disagree with the live endpoint.
+
+    Pure and app-free on purpose: it is the part of the measurement that a unit test can
+    pin without importing the application.
+    """
+    rows = 0
+    unique = set()
+    isolated_row_bytes = 0
+    isolated_raw_bytes = 0
+    rows_with_raw = 0
+    rows_with_formatted = 0
+    formatted_keys = {}
+    for inbound in inbounds or []:
+        if not isinstance(inbound, dict):
+            continue
+        for client in (inbound.get('clients') or []):
+            if not isinstance(client, dict):
+                continue
+            rows += 1
+            unique.add(str(client.get('id') or client.get('email')))
+            isolated_row_bytes += deep_size(client)
+            raw = client.get('raw_client')
+            if isinstance(raw, dict):
+                rows_with_raw += 1
+                isolated_raw_bytes += deep_size(raw)
+            carries_formatted = False
+            for key, value in client.items():
+                if key.endswith('_formatted') and isinstance(value, str):
+                    formatted_keys[key] = formatted_keys.get(key, 0) + 1
+                    carries_formatted = True
+            if carries_formatted:
+                rows_with_formatted += 1
+    return {
+        'rows': rows,
+        'unique_clients': len(unique),
+        'isolated_row_bytes': isolated_row_bytes,
+        'isolated_raw_client_bytes': isolated_raw_bytes,
+        'rows_with_raw_client': rows_with_raw,
+        'rows_with_formatted_strings': rows_with_formatted,
+        'formatted_keys': formatted_keys,
+    }
+
+
 def measure(*, servers, inbounds, clients, mirror, v3=True):
     """Build the fleet through the production builder and return the attribution."""
     snapshot = build_snapshot(servers=servers, inbounds=inbounds, clients=clients,
                               mirror=mirror, v3=v3)
     full = _sizes(snapshot)
 
-    seen_uids = set()
-    isolated_row_bytes = 0
-    isolated_raw_bytes = 0
-    rows_with_raw = 0
-    rows_with_formatted = 0
-    formatted_keys = {}
-    for inbound in snapshot['inbounds']:
-        for client in inbound.get('clients') or []:
-            seen_uids.add(str(client.get('id') or client.get('email')))
-            isolated_row_bytes += deep_size(client)
-            raw = client.get('raw_client')
-            if isinstance(raw, dict):
-                rows_with_raw += 1
-                isolated_raw_bytes += deep_size(raw)
-            for key, value in client.items():
-                if key.endswith('_formatted') and isinstance(value, str):
-                    formatted_keys[key] = formatted_keys.get(key, 0) + 1
-                    rows_with_formatted += 1
+    stats = row_stats(snapshot['inbounds'])
+    unique_clients = stats['unique_clients']
+    isolated_row_bytes = stats['isolated_row_bytes']
+    isolated_raw_bytes = stats['isolated_raw_client_bytes']
+    rows_with_raw = stats['rows_with_raw_client']
+    rows_with_formatted = stats['rows_with_formatted_strings']
+    formatted_keys = stats['formatted_keys']
 
     variants = {
         'full': full,
@@ -247,8 +292,8 @@ def measure(*, servers, inbounds, clients, mirror, v3=True):
                   'accounts_per_server': clients, 'mirror': mirror, 'v3': v3},
         'totals': {
             'rows': rows,
-            'unique_clients': len(seen_uids),
-            'duplication_ratio': round(rows / len(seen_uids), 3) if seen_uids else None,
+            'unique_clients': unique_clients,
+            'duplication_ratio': round(rows / unique_clients, 3) if unique_clients else None,
             'deep_bytes': full['deep_bytes'],
             'json_bytes': full['json_bytes'],
             'gzip_bytes': full['gzip_bytes'],
