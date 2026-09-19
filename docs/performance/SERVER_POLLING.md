@@ -260,6 +260,37 @@ its own clock.
   `stale`. "live" is reserved for a successful read inside the HOT cadence, so the badge
   never claims real time for data the loop has not refreshed.
 
+## Known follow-up: phase-spreading a fleet that goes HOT together
+
+Not implemented, and deliberately so - it is not needed at the shipped limits. Recorded
+here because the measurement that motivates it is real.
+
+When many panels share one cadence and become watched at the same moment, their due times
+are nearly in phase, so they arrive at the worker pool as a burst and the queue delay is
+spikier than the average utilisation suggests. Measured with
+`scripts/benchmark_hot_capacity.py` (5 workers, 2 s cadence, 300 ms reads):
+
+| HOT panels | queue delay p95 | saturation ticks |
+|---|---|---|
+| 10 | 50 ms | 5 |
+| 20 | 100 ms | 16 |
+| 30 | **1750 ms** | 918 |
+| 40 | **2450 ms** | 552 |
+
+30 HOT panels is still under the theoretical ceiling (33), yet p95 queue delay is 1.75 s:
+a mini thundering herd, not a throughput limit. The same effect appears at 1 s reads
+(10 HOT is the edge at 1050 ms).
+
+The fix, if it is ever needed, is a deterministic per-server phase offset on TOP of the
+cadence (the idle band already has one - `server_idle_jitter`):
+`sid 1 -> 0.00 s, sid 2 -> 0.10 s, sid 3 -> 0.20 s, ...` up to one cadence, so every panel
+keeps its 2 s interval while the pool is fed evenly.
+
+Revisit when any of these becomes true: `EVE_SERVER_POLL_WATCH_LIMIT` is raised above the
+comfortable zone (see `docs/performance/SCHEDULING_BENCHMARK.md`), the 2 s cadence is
+lowered, panel read latency grows toward the cadence, or `saturation_events` /
+`queue_delay_ms_max` in `/api/doctor` start showing bursts rather than a steady floor.
+
 ## Tests
 
 `tests/test_server_polling.py` (67 tests): cadence and TTL, the WARM band and its
