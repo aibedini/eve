@@ -1,6 +1,6 @@
-<div align="center">
+﻿<div align="center">
 
-# ⚡ EVE
+# âš¡ EVE
 
 ### Enterprise Control Plane for 3x-ui Operations
 
@@ -14,7 +14,7 @@ A production-oriented operations platform for teams running **Sanaei 3x-ui** and
 [![Security](https://github.com/aibedini/eve/actions/workflows/security.yml/badge.svg)](https://github.com/aibedini/eve/actions/workflows/security.yml)
 [![Docker](https://github.com/aibedini/eve/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/aibedini/eve/actions/workflows/docker-publish.yml)
 
-![EVE](https://img.shields.io/badge/EVE-2.7.16-6f42c1?style=flat-square)
+![EVE](https://img.shields.io/badge/EVE-2.7.17-6f42c1?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square\&logo=python\&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Production-4169E1?style=flat-square\&logo=postgresql\&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-Realtime-DC382D?style=flat-square\&logo=redis\&logoColor=white)
@@ -24,13 +24,13 @@ A production-oriented operations platform for teams running **Sanaei 3x-ui** and
 
 <br />
 
-**[Quick Start](#-quick-start) · [Features](#-what-eve-can-do) · [3x-ui Compatibility](#-3x-ui-compatibility) · [Architecture](#-architecture) · [Security](#-security-by-design) · [Documentation](#-documentation)**
+**[Quick Start](#-quick-start) Â· [Features](#-what-eve-can-do) Â· [3x-ui Compatibility](#-3x-ui-compatibility) Â· [Architecture](#-architecture) Â· [Security](#-security-by-design) Â· [Documentation](#-documentation)**
 
 </div>
 
 ---
 
-## 👋 Meet EVE
+## ðŸ‘‹ Meet EVE
 
 Running one X-UI panel is easy.
 
@@ -40,10 +40,10 @@ Running **many panels, thousands of clients, resellers, renewals, notifications,
 
 It turns multiple 3x-ui installations into a unified control plane with centralized client lifecycle management, reseller commerce, automated messaging, observability, security controls and production-grade background processing.
 
-> **One place to operate your entire X-UI infrastructure — without losing control of what happens underneath.**
+> **One place to operate your entire X-UI infrastructure â€” without losing control of what happens underneath.**
 
 ---
-# 📦 Deployment
+# ðŸ“¦ Deployment
 
 EVE supports multiple installation models.
 
@@ -57,7 +57,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/aibedini/eve/main/setup.sh)
 
 ---
 
-## 🐳 Docker
+## ðŸ³ Docker
 
 Build the offline-capable Docker bundle:
 
@@ -73,28 +73,28 @@ See:
 
 ---
 
-## ✨ What EVE can do
+## âœ¨ What EVE can do
 
 | Area                           | Capability                                                                         |
 | ------------------------------ | ---------------------------------------------------------------------------------- |
-| 🖥️ **Multi-Panel Operations** | Manage multiple Sanaei 3x-ui and compatible X-UI servers from a single dashboard   |
-| 👤 **Client Lifecycle**        | Create, edit, renew, enable, disable, reset, rotate and safely mutate clients      |
-| 📊 **Traffic Intelligence**    | Track quota, consumption, expiry, activity and lifecycle state                     |
-| 🔗 **Subscriptions**           | Generate and manage subscription links, QR codes and multi-inbound subscriptions   |
-| 💳 **Reseller Platform**       | Wallets, packages, tariffs, ownership, permissions, receipts and financial ledgers |
-| 📨 **Smart Messaging**         | SMS, Telegram and WhatsApp workflows for lifecycle and customer communication      |
-| ⚡ **Realtime Updates**         | Redis snapshots, delta synchronization, adaptive refresh and SSE updates           |
-| 🩺 **EVE Doctor**              | Operational diagnostics for panels, workers, queues, telemetry and infrastructure  |
-| 🔐 **Security**                | MFA, WebAuthn, RBAC, encryption, TLS policy, audit trails and secret protection    |
-| 🧠 **Lifecycle Automation**    | Durable state transitions and notification workflows tied to real service state    |
-| 🌐 **Localized Operations**    | Persian/RTL UX, Jalali dates and Asia/Tehran-aware operations                      |
-| 📦 **Flexible Deployment**     | Native Linux, Docker and offline / restricted-network installation                 |
+| ðŸ–¥ï¸ **Multi-Panel Operations** | Manage multiple Sanaei 3x-ui and compatible X-UI servers from a single dashboard   |
+| ðŸ‘¤ **Client Lifecycle**        | Create, edit, renew, enable, disable, reset, rotate and safely mutate clients      |
+| ðŸ“Š **Traffic Intelligence**    | Track quota, consumption, expiry, activity and lifecycle state                     |
+| ðŸ”— **Subscriptions**           | Generate and manage subscription links, QR codes and multi-inbound subscriptions   |
+| ðŸ’³ **Reseller Platform**       | Wallets, packages, tariffs, ownership, permissions, receipts and financial ledgers |
+| ðŸ“¨ **Smart Messaging**         | SMS, Telegram and WhatsApp workflows for lifecycle and customer communication      |
+| âš¡ **Realtime Updates**         | Redis snapshots, delta synchronization, adaptive refresh and SSE updates           |
+| ðŸ©º **EVE Doctor**              | Operational diagnostics for panels, workers, queues, telemetry and infrastructure  |
+| ðŸ” **Security**                | MFA, WebAuthn, RBAC, encryption, TLS policy, audit trails and secret protection    |
+| ðŸ§  **Lifecycle Automation**    | Durable state transitions and notification workflows tied to real service state    |
+| ðŸŒ **Localized Operations**    | Persian/RTL UX, Jalali dates and Asia/Tehran-aware operations                      |
+| ðŸ“¦ **Flexible Deployment**     | Native Linux, Docker and offline / restricted-network installation                 |
 
 ---
 
-# 🚀 Core Features
+# ðŸš€ Core Features
 
-## 🖥️ Unified Multi-Panel Control
+## ðŸ–¥ï¸ Unified Multi-Panel Control
 
 Operate your infrastructure without jumping between panel tabs.
 
@@ -118,7 +118,7 @@ Panel operations are isolated per server so activity on one infrastructure node 
 
 ---
 
-## 👤 Safe Client Lifecycle Management
+## ðŸ‘¤ Safe Client Lifecycle Management
 
 Client operations are not treated as simple JSON edits.
 
@@ -126,15 +126,15 @@ EVE maintains lifecycle semantics around operations such as:
 
 ```text
 Create
-   ↓
+   â†“
 Active
-   ↓
+   â†“
 Near Expiry / Low Traffic
-   ↓
+   â†“
 Renew / Extend / Refill
-   ↓
+   â†“
 Active
-   ↓
+   â†“
 Expired / Depleted
 ```
 
@@ -151,7 +151,7 @@ Common actions include:
 * QR generation
 * Multi-inbound assignments
 
-### 🛡️ Mutation Safety
+### ðŸ›¡ï¸ Mutation Safety
 
 EVE protects fields owned by newer versions of 3x-ui.
 
@@ -167,7 +167,7 @@ If EVE cannot safely read a field that must be preserved, the mutation **fails c
 
 ---
 
-# 🔄 Lifecycle Intelligence
+# ðŸ”„ Lifecycle Intelligence
 
 EVE does more than periodically scan accounts.
 
@@ -200,33 +200,33 @@ The first observation establishes a baseline instead of generating a notificatio
 
 ---
 
-## 📨 Durable Notification Pipeline
+## ðŸ“¨ Durable Notification Pipeline
 
 Lifecycle notifications use a durable event pipeline instead of relying only on periodic scanning.
 
 EVE provides:
 
-### 🧾 Durable observed state
+### ðŸ§¾ Durable observed state
 
 Each service has a canonical observed state.
 
-### 📬 Durable notification outbox
+### ðŸ“¬ Durable notification outbox
 
 Transitions produce persistent notification events.
 
-### 🔒 Idempotency
+### ðŸ”’ Idempotency
 
 Deterministic event identities prevent multiple workers from independently creating duplicate logical events.
 
-### 🕐 Delivery leasing
+### ðŸ• Delivery leasing
 
 Workers lease events before delivery to reduce duplicate sends.
 
-### ♻️ Reconciliation
+### â™»ï¸ Reconciliation
 
 Periodic scanning remains available as a safety net if a realtime transition is missed.
 
-### 🚫 Stale reminder cancellation
+### ðŸš« Stale reminder cancellation
 
 When a customer renews, EVE advances the lifecycle generation and retires notifications associated with the previous lifecycle.
 
@@ -234,7 +234,7 @@ That means a queued **"your service has expired"** reminder should not remain va
 
 ---
 
-# 📱 Messaging & Customer Engagement
+# ðŸ“± Messaging & Customer Engagement
 
 EVE can automate communication across multiple channels.
 
@@ -276,19 +276,19 @@ EVE includes operational protections such as:
 
 ---
 
-# 💳 Reseller & Commerce Platform
+# ðŸ’³ Reseller & Commerce Platform
 
 EVE includes a built-in commerce layer for reseller-based operations.
 
-### 💰 Wallets
+### ðŸ’° Wallets
 
 Maintain prepaid reseller balances with durable financial history.
 
-### 📦 Package Marketplace
+### ðŸ“¦ Package Marketplace
 
 Create volume/time packages for reseller purchase.
 
-### 🧮 Flexible Pricing
+### ðŸ§® Flexible Pricing
 
 Support:
 
@@ -298,15 +298,15 @@ Support:
 * Gift traffic
 * Frozen transaction pricing
 
-### 🔐 Ownership
+### ðŸ” Ownership
 
 Control which reseller owns or can operate each service.
 
-### 🌍 Server Visibility
+### ðŸŒ Server Visibility
 
 Restrict reseller access to selected servers.
 
-### 🧾 Financial Records
+### ðŸ§¾ Financial Records
 
 Support operational records including:
 
@@ -321,7 +321,7 @@ Financial transactions are recorded durably rather than being reconstructed from
 
 ---
 
-# 🔗 Subscription Management
+# ðŸ”— Subscription Management
 
 EVE manages customer subscription delivery while respecting differences between 3x-ui versions.
 
@@ -341,7 +341,7 @@ When panel metadata is unavailable, fallback behavior is visible through **EVE D
 
 ---
 
-# 🧠 3x-ui Compatibility
+# ðŸ§  3x-ui Compatibility
 
 EVE does not assume every 3x-ui release behaves identically.
 
@@ -357,14 +357,14 @@ Panel versions are normalized into compatibility families and receive only behav
 
 | 3x-ui Version   | EVE Profile   |       Status | Notes                                                                                                    |
 | --------------- | ------------- | -----------: | -------------------------------------------------------------------------------------------------------- |
-| Legacy / pre-v3 | `legacy`      |  🟡 Retained | Existing legacy compatibility                                                                            |
-| `3.3.x – 3.6.x` | `baseline_v3` |  🟡 Baseline | Existing v3 behavior preserved                                                                           |
-| **`3.7.x`**     | `xui_3_7`     | 🟢 Certified | Scoped API tokens, `limitHwid`, lifecycle automation awareness, AmneziaWG-era API behavior               |
-| **`3.8.x`**     | `xui_3_8`     | 🟢 Certified | 3.7 behavior + 3.8 authentication semantics, dynamic subscription paths and 3.8-era protocol/API changes |
-| `3.9.x+`        | `baseline_v3` | ⚪ Unverified | Safe baseline + `future_version_uncertified` warning                                                     |
-| Unknown         | `baseline_v3` | ⚪ Unverified | No version guessing; explicit warning                                                                    |
+| Legacy / pre-v3 | `legacy`      |  ðŸŸ¡ Retained | Existing legacy compatibility                                                                            |
+| `3.3.x â€“ 3.6.x` | `baseline_v3` |  ðŸŸ¡ Baseline | Existing v3 behavior preserved                                                                           |
+| **`3.7.x`**     | `xui_3_7`     | ðŸŸ¢ Certified | Scoped API tokens, `limitHwid`, lifecycle automation awareness, AmneziaWG-era API behavior               |
+| **`3.8.x`**     | `xui_3_8`     | ðŸŸ¢ Certified | 3.7 behavior + 3.8 authentication semantics, dynamic subscription paths and 3.8-era protocol/API changes |
+| `3.9.x+`        | `baseline_v3` | âšª Unverified | Safe baseline + `future_version_uncertified` warning                                                     |
+| Unknown         | `baseline_v3` | âšª Unverified | No version guessing; explicit warning                                                                    |
 
-## 🔎 Local-First Version Detection
+## ðŸ”Ž Local-First Version Detection
 
 EVE does not need GitHub access from every managed panel just to determine the panel version.
 
@@ -384,7 +384,7 @@ Remote update metadata is treated as corroborating information rather than the s
 
 ---
 
-## 🔑 3x-ui Authentication Awareness
+## ðŸ”‘ 3x-ui Authentication Awareness
 
 Modern 3x-ui versions distinguish authentication and authorization failures.
 
@@ -403,7 +403,7 @@ This prevents a broken API token from causing EVE to silently switch to an incom
 
 ---
 
-# ⚡ Realtime Data Plane
+# âš¡ Realtime Data Plane
 
 EVE is designed around bounded, incremental synchronization instead of continuously rebuilding the entire world.
 
@@ -421,26 +421,26 @@ The runtime includes:
 
 ---
 
-## 🧭 Monotonic Fetch Ordering
+## ðŸ§­ Monotonic Fetch Ordering
 
 Multiple requests to the same panel may finish out of order.
 
 EVE assigns monotonic fetch sequences so an older, slower request cannot overwrite data from a newer request.
 
 ```text
-Fetch #101 ────────────────┐
-                          │ returns late ❌ rejected
-Fetch #102 ────────┐       │
-                   └───────┴─ ✅ accepted
+Fetch #101 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                          â”‚ returns late âŒ rejected
+Fetch #102 â”€â”€â”€â”€â”€â”€â”€â”€â”       â”‚
+                   â””â”€â”€â”€â”€â”€â”€â”€â”´â”€ âœ… accepted
 ```
 
 This protects dashboard and notification state from stale panel responses.
 
 ---
 
-# 🩺 EVE Doctor
+# ðŸ©º EVE Doctor
 
-Operational health should be observable — not guessed.
+Operational health should be observable â€” not guessed.
 
 EVE Doctor exposes diagnostics for areas such as:
 
@@ -467,7 +467,7 @@ Diagnostic endpoints expose operational state while avoiding sensitive values su
 
 ---
 
-# 📊 Observability
+# ðŸ“Š Observability
 
 EVE includes operational visibility across the application stack.
 
@@ -495,13 +495,13 @@ X-Request-ID
 
 ---
 
-# 🔐 Security by Design
+# ðŸ” Security by Design
 
 EVE treats infrastructure credentials and customer data as production secrets.
 
 Security controls include:
 
-### 🔑 Authentication
+### ðŸ”‘ Authentication
 
 * Rate-limited authentication
 * Strong password hashing
@@ -511,7 +511,7 @@ Security controls include:
 * WebAuthn
 * Step-up authentication
 
-### 🛂 Authorization
+### ðŸ›‚ Authorization
 
 * Permission-based RBAC
 * Reseller scopes
@@ -519,7 +519,7 @@ Security controls include:
 * Allowed-server policies
 * Superadmin boundaries
 
-### 🔒 Secret Protection
+### ðŸ”’ Secret Protection
 
 * Encrypted panel credentials
 * Key versioning
@@ -527,19 +527,19 @@ Security controls include:
 * Encrypted backup support
 * TLS enforcement policies
 
-### 🧾 Auditability
+### ðŸ§¾ Auditability
 
 Sensitive operations are recorded in a tamper-evident audit trail.
 
 Audit entries include operational metadata and are protected using a hash chain so unexpected modification or deletion can be detected.
 
-### 📁 Upload Security
+### ðŸ“ Upload Security
 
 Uploaded application files are validated by actual file characteristics rather than trusting extensions alone.
 
 ---
 
-# 🚄 Performance Engineering
+# ðŸš„ Performance Engineering
 
 Performance behavior is documented and tested as an engineering contract.
 
@@ -567,95 +567,95 @@ docs/performance/
 
 ---
 
-# 🏗️ Architecture
+# ðŸ—ï¸ Architecture
 
 ```mermaid
 flowchart TB
 
-    UI["🌐 Browser / Dashboard"]
-    TG["🤖 Telegram"]
-    API["🔌 API Clients"]
+    UI["ðŸŒ Browser / Dashboard"]
+    TG["ðŸ¤– Telegram"]
+    API["ðŸ”Œ API Clients"]
 
     UI --> WEB
     TG --> WEB
     API --> WEB
 
-    WEB["Flask Control Plane<br/>Auth · RBAC · Routes"]
+    WEB["Flask Control Plane<br/>Auth Â· RBAC Â· Routes"]
 
     WEB --> SERVICES
     WEB --> CACHE
 
-    SERVICES["Domain Services<br/>Lifecycle · Billing · Ownership<br/>Subscriptions · Backup"]
+    SERVICES["Domain Services<br/>Lifecycle Â· Billing Â· Ownership<br/>Subscriptions Â· Backup"]
 
     SERVICES --> XUI
     SERVICES --> DB
 
-    XUI["🖥️ 3x-ui / X-UI Panels"]
+    XUI["ðŸ–¥ï¸ 3x-ui / X-UI Panels"]
 
-    DB[("🐘 PostgreSQL")]
-    CACHE[("⚡ Redis")]
+    DB[("ðŸ˜ PostgreSQL")]
+    CACHE[("âš¡ Redis")]
 
-    JOBS["⚙️ Background Plane<br/>Refresh · Messaging · Usage<br/>Schedulers · Watchdog"]
+    JOBS["âš™ï¸ Background Plane<br/>Refresh Â· Messaging Â· Usage<br/>Schedulers Â· Watchdog"]
 
     JOBS --> DB
     JOBS --> CACHE
     JOBS --> XUI
 
-    MSG["📨 GMweb / Telegram / WhatsApp"]
+    MSG["ðŸ“¨ GMweb / Telegram / WhatsApp"]
 
     JOBS --> MSG
 ```
 
 ---
 
-## 🧩 Code Organization
+## ðŸ§© Code Organization
 
 New domain logic follows one-way dependency boundaries under `panel/`.
 
 ```text
 panel/
-├── core/
-│   ├── Redis
-│   ├── locks
-│   ├── snapshots
-│   ├── phones
-│   └── transport primitives
-│
-├── models/
-│   ├── core
-│   ├── finance
-│   ├── telegram
-│   └── operations
-│
-├── adapters/
-│   └── xui.py
-│
-├── services/
-│   ├── lifecycle
-│   ├── subscriptions
-│   ├── billing
-│   ├── ownership
-│   ├── backup
-│   └── BNQO
-│
-├── routes/
-│   └── authenticated domain blueprints
-│
-├── jobs/
-│   ├── refresh
-│   ├── messaging
-│   ├── usage
-│   ├── schedulers
-│   └── watchdog
-│
-└── migrate.py
+â”œâ”€â”€ core/
+â”‚   â”œâ”€â”€ Redis
+â”‚   â”œâ”€â”€ locks
+â”‚   â”œâ”€â”€ snapshots
+â”‚   â”œâ”€â”€ phones
+â”‚   â””â”€â”€ transport primitives
+â”‚
+â”œâ”€â”€ models/
+â”‚   â”œâ”€â”€ core
+â”‚   â”œâ”€â”€ finance
+â”‚   â”œâ”€â”€ telegram
+â”‚   â””â”€â”€ operations
+â”‚
+â”œâ”€â”€ adapters/
+â”‚   â””â”€â”€ xui.py
+â”‚
+â”œâ”€â”€ services/
+â”‚   â”œâ”€â”€ lifecycle
+â”‚   â”œâ”€â”€ subscriptions
+â”‚   â”œâ”€â”€ billing
+â”‚   â”œâ”€â”€ ownership
+â”‚   â”œâ”€â”€ backup
+â”‚   â””â”€â”€ BNQO
+â”‚
+â”œâ”€â”€ routes/
+â”‚   â””â”€â”€ authenticated domain blueprints
+â”‚
+â”œâ”€â”€ jobs/
+â”‚   â”œâ”€â”€ refresh
+â”‚   â”œâ”€â”€ messaging
+â”‚   â”œâ”€â”€ usage
+â”‚   â”œâ”€â”€ schedulers
+â”‚   â””â”€â”€ watchdog
+â”‚
+â””â”€â”€ migrate.py
 ```
 
 The application bootstrap and compatibility boundary remain integrated with `app.py` while domain-specific code continues moving toward explicit modules.
 
 ---
 
-# 🧱 Production Runtime
+# ðŸ§± Production Runtime
 
 A typical production deployment separates interactive requests from background processing.
 
@@ -689,7 +689,7 @@ flowchart LR
 
 ---
 
-# 🌍 Persian-First Operations
+# ðŸŒ Persian-First Operations
 
 EVE includes first-class support for environments where Persian UX is not an afterthought.
 
@@ -705,7 +705,7 @@ Features include:
 ---
 
 
-# 🧑‍💻 Development
+# ðŸ§‘â€ðŸ’» Development
 
 ## Requirements
 
@@ -751,7 +751,7 @@ python app.py
 
 ---
 
-# ⚙️ Important Configuration
+# âš™ï¸ Important Configuration
 
 | Variable                 | Description                               |
 | ------------------------ | ----------------------------------------- |
@@ -778,7 +778,7 @@ local agent/cache output
 
 ---
 
-# ✅ Quality Gates
+# âœ… Quality Gates
 
 Before a release, EVE can be validated with:
 
@@ -812,7 +812,7 @@ CI also includes controls and checks such as:
 
 ---
 
-# 🧪 Reliability Principles
+# ðŸ§ª Reliability Principles
 
 Several invariants guide EVE's design.
 
@@ -846,33 +846,33 @@ Authentication, authorization, transport and API compatibility failures remain d
 
 ---
 
-# 📚 Documentation
+# ðŸ“š Documentation
 
 EVE keeps implementation details and operational contracts close to the code.
 
 | Topic                    | Documentation                                                                        |
 | ------------------------ | ------------------------------------------------------------------------------------ |
-| 📘 Documentation Index   | [`docs/README.md`](docs/README.md)                                                   |
-| 🛠️ Operations           | [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md)                           |
-| 🧠 3x-ui Compatibility   | [`3XUI_V3_API.md`](3XUI_V3_API.md)                                                   |
-| 🔐 Security Architecture | [`docs/security/ARCHITECTURE.md`](docs/security/ARCHITECTURE.md)                     |
-| ⚠️ Threat Model          | [`docs/security/THREAT_MODEL.md`](docs/security/THREAT_MODEL.md)                     |
-| 🔑 MFA & Sessions        | [`docs/security/MFA.md`](docs/security/MFA.md)                                       |
-| 🧾 Audit Trail           | [`docs/security/AUDIT_LOG.md`](docs/security/AUDIT_LOG.md)                           |
-| 🚄 Performance           | [`docs/performance/BASELINE.md`](docs/performance/BASELINE.md)                       |
-| ⚡ Delta Sync             | [`docs/performance/DELTA_SYNC.md`](docs/performance/DELTA_SYNC.md)                   |
-| 📡 SSE                   | [`docs/performance/SSE.md`](docs/performance/SSE.md)                                 |
-| 📊 Usage Intelligence    | [`docs/architecture/USAGE_INTELLIGENCE.md`](docs/architecture/USAGE_INTELLIGENCE.md) |
-| 📨 GMweb Contract        | [`docs/GMWEB_CONTRACT.md`](docs/GMWEB_CONTRACT.md)                                   |
-| 🔄 SMS Lifecycle         | [`docs/SMS_LIFECYCLE_INVALIDATION.md`](docs/SMS_LIFECYCLE_INVALIDATION.md)           |
-| 🧠 State Transitions     | [`docs/TELEMETRY_STATE_TRANSITIONS.md`](docs/TELEMETRY_STATE_TRANSITIONS.md)         |
-| 🎨 UI Design System      | [`docs/UI_DESIGN_SYSTEM.md`](docs/UI_DESIGN_SYSTEM.md)                               |
-| 📦 Release Security      | [`docs/RELEASE_SECURITY.md`](docs/RELEASE_SECURITY.md)                               |
-| 📝 Changelog             | [`CHANGELOG.md`](CHANGELOG.md)                                                       |
+| ðŸ“˜ Documentation Index   | [`docs/README.md`](docs/README.md)                                                   |
+| ðŸ› ï¸ Operations           | [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md)                           |
+| ðŸ§  3x-ui Compatibility   | [`3XUI_V3_API.md`](3XUI_V3_API.md)                                                   |
+| ðŸ” Security Architecture | [`docs/security/ARCHITECTURE.md`](docs/security/ARCHITECTURE.md)                     |
+| âš ï¸ Threat Model          | [`docs/security/THREAT_MODEL.md`](docs/security/THREAT_MODEL.md)                     |
+| ðŸ”‘ MFA & Sessions        | [`docs/security/MFA.md`](docs/security/MFA.md)                                       |
+| ðŸ§¾ Audit Trail           | [`docs/security/AUDIT_LOG.md`](docs/security/AUDIT_LOG.md)                           |
+| ðŸš„ Performance           | [`docs/performance/BASELINE.md`](docs/performance/BASELINE.md)                       |
+| âš¡ Delta Sync             | [`docs/performance/DELTA_SYNC.md`](docs/performance/DELTA_SYNC.md)                   |
+| ðŸ“¡ SSE                   | [`docs/performance/SSE.md`](docs/performance/SSE.md)                                 |
+| ðŸ“Š Usage Intelligence    | [`docs/architecture/USAGE_INTELLIGENCE.md`](docs/architecture/USAGE_INTELLIGENCE.md) |
+| ðŸ“¨ GMweb Contract        | [`docs/GMWEB_CONTRACT.md`](docs/GMWEB_CONTRACT.md)                                   |
+| ðŸ”„ SMS Lifecycle         | [`docs/SMS_LIFECYCLE_INVALIDATION.md`](docs/SMS_LIFECYCLE_INVALIDATION.md)           |
+| ðŸ§  State Transitions     | [`docs/TELEMETRY_STATE_TRANSITIONS.md`](docs/TELEMETRY_STATE_TRANSITIONS.md)         |
+| ðŸŽ¨ UI Design System      | [`docs/UI_DESIGN_SYSTEM.md`](docs/UI_DESIGN_SYSTEM.md)                               |
+| ðŸ“¦ Release Security      | [`docs/RELEASE_SECURITY.md`](docs/RELEASE_SECURITY.md)                               |
+| ðŸ“ Changelog             | [`CHANGELOG.md`](CHANGELOG.md)                                                       |
 
 ---
 
-# 🛡️ Security Reporting
+# ðŸ›¡ï¸ Security Reporting
 
 Please **do not disclose vulnerabilities through public GitHub issues**.
 
@@ -895,7 +895,7 @@ Customer-identifying data
 
 ---
 
-# 🤝 Contributing
+# ðŸ¤ Contributing
 
 Contributions should preserve EVE's operational and compatibility guarantees.
 
@@ -914,7 +914,7 @@ Changes affecting panel mutation, authentication, lifecycle state, messaging or 
 
 ---
 
-# 🗺️ Project Philosophy
+# ðŸ—ºï¸ Project Philosophy
 
 EVE is built around a simple idea:
 
@@ -933,7 +933,7 @@ That means preferring:
 
 <div align="center">
 
-## ⚡ EVE
+## âš¡ EVE
 
 ### Operate the infrastructure.
 
@@ -945,6 +945,6 @@ That means preferring:
 
 **Built for serious X-UI operations.**
 
-[Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
+[Documentation](docs/README.md) Â· [Changelog](CHANGELOG.md) Â· [Security](SECURITY.md)
 
 </div>

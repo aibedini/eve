@@ -47,6 +47,7 @@ relative link does not resolve.
 - [Delta sync for /api/refresh](performance/DELTA_SYNC.md) - performance/DELTA_SYNC.md
 - [Latency SLOs: mutation -> cache -> UI](performance/LATENCY_SLO.md) - performance/LATENCY_SLO.md
 - [Load test](performance/LOAD_TEST.md) - performance/LOAD_TEST.md
+- [Memory attribution and optimization plan](performance/MEMORY.md) - performance/MEMORY.md
 - [Mutation scale: O(1) in the number of panels](performance/MUTATION_SCALE.md) - performance/MUTATION_SCALE.md
 - [Bounded, coalesced panel access](performance/PANEL_LIMITS.md) - performance/PANEL_LIMITS.md
 - [Per-server snapshot cache](performance/PER_SERVER_CACHE.md) - performance/PER_SERVER_CACHE.md

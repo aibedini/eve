@@ -1567,6 +1567,14 @@ def health_watchdog():
             try:
                 time.sleep(HEALTH_CHECK_INTERVAL)
                 _run_single_health_cycle()
+                # One bounded memory sample per tick (the module throttles to a minute and
+                # trims the ring to a hard cap): the trend is what separates "retained
+                # snapshot" from "a leak", and it must not become a leak itself.
+                try:
+                    from panel.core import memory_report
+                    memory_report.record_sample()
+                except Exception:
+                    pass
                 # Prune old logs – keep last 500
                 try:
                     count = HealthLog.query.count()

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import socket
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file
@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.7.16"
+APP_VERSION = "2.7.17"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -143,7 +143,7 @@ XRAY_INSTALL_START_COMMAND = (
 )
 _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 
-# ── Optional Redis (shared cache across gunicorn workers) ────────────────────
+# â”€â”€ Optional Redis (shared cache across gunicorn workers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Extracted to panel.core.redis_client; re-exported here for compatibility.
 from panel.core.redis_client import (  # noqa: F401
     GLOBAL_SERVER_DATA,
@@ -178,14 +178,14 @@ from panel import telegram_egress as egress_policy  # noqa: E402
 _OWNERSHIP_CACHE: dict = {
     'email_map': {},   # {(server_id, email_lower): {'id':..,'username':..,'created_at':..}}
     'uuid_map':  {},   # {(server_id, uuid_lower):  {'id':..,'username':..,'created_at':..}}
-    'uuid_global_map': {},  # {uuid_lower: {...}} — server-independent fallback so
+    'uuid_global_map': {},  # {uuid_lower: {...}} â€” server-independent fallback so
                             # ownership survives a server re-add (new server_id) or
                             # an inbound rebuild (new inbound_id). 3X-UI UUIDs are
                             # globally unique, so matching by UUID alone is safe.
     'updated_at': 0.0, # time.monotonic()
 }
 _OWNERSHIP_CACHE_LOCK = threading.Lock()
-OWNERSHIP_CACHE_TTL = 30  # seconds — ownership refreshed at most every 30 s
+OWNERSHIP_CACHE_TTL = 30  # seconds â€” ownership refreshed at most every 30 s
 
 def _build_ownership_maps() -> tuple[dict, dict, dict, bool]:
     """Query DB once and return (email_map, uuid_map, uuid_global_map, success)."""
@@ -226,7 +226,7 @@ def _build_ownership_maps() -> tuple[dict, dict, dict, bool]:
                     uuid_global_map[uu] = info
         return email_map, uuid_map, uuid_global_map, True
     except Exception:
-        app.logger.exception("_build_ownership_maps failed — ownership cache not updated")
+        app.logger.exception("_build_ownership_maps failed â€” ownership cache not updated")
         return email_map, uuid_map, uuid_global_map, False
 
 def _get_ownership_maps(force: bool = False) -> tuple[dict, dict]:
@@ -251,7 +251,7 @@ def _refresh_ownership_cache_if_stale(force: bool = False) -> None:
         _OWNERSHIP_CACHE['uuid_map']  = um
         _OWNERSHIP_CACHE['uuid_global_map'] = ug
         if ok:
-            # Only cache on success — if DB failed, next request retries immediately
+            # Only cache on success â€” if DB failed, next request retries immediately
             _OWNERSHIP_CACHE['updated_at'] = time.monotonic()
 
 def invalidate_ownership_cache() -> None:
@@ -552,7 +552,7 @@ from panel.jobs.messaging import (  # noqa: F401
     _send_whatsapp_message,
 )
 
-# Phone normalization helpers (panel.core.phone) — re-export restored.
+# Phone normalization helpers (panel.core.phone) â€” re-export restored.
 from panel.core.phone import (  # noqa: F401
     _normalize_ascii_digits,
     normalize_iran_mobile,
@@ -570,7 +570,7 @@ def _parse_bool(value) -> bool:
     return str(value or '').strip().lower() in ('1', 'true', 'yes', 'y', 'on')
 
 
-# (refresh/bulk-job pipeline extracted to panel.jobs.refresh — imported at REFRESH_JOBS above.)
+# (refresh/bulk-job pipeline extracted to panel.jobs.refresh â€” imported at REFRESH_JOBS above.)
 # BACKGROUND_THREADS_STARTED lives in panel.jobs.schedulers (imported below).
 
 SERVER_PASSWORD_PREFIX = 'enc:'
@@ -912,7 +912,7 @@ else:
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['MAX_CONTENT_LENGTH'] = 2048 * 1024 * 1024  # 2 GB — covers large migration bundles / installers / videos
+app.config['MAX_CONTENT_LENGTH'] = 2048 * 1024 * 1024  # 2 GB â€” covers large migration bundles / installers / videos
 # Re-read templates from disk on each render in dev so UI edits show without a
 # full restart. Harmless in prod; production still benefits from a restart.
 if _is_dev_mode():
@@ -1073,7 +1073,7 @@ def add_security_headers(response):
     except Exception:
         pass
 
-    # The subscription route (/s/...) must be LIVE for everyone — both the HTML
+    # The subscription route (/s/...) must be LIVE for everyone â€” both the HTML
     # manager page AND the VPN-app config. Force no-store on EVERY /s/ response
     # (all branches/return paths) so neither the browser nor the CDN (WCDN) serves
     # a stale copy. Covers the "mobile shows disabled, desktop active" cache bug.
@@ -1133,7 +1133,7 @@ def add_security_headers(response):
         pass
 
     # The CDN (WCDN) replaces ANY non-2xx response with its own HTML error page,
-    # throwing away our JSON {success:false, error:"..."} body — so the UI only
+    # throwing away our JSON {success:false, error:"..."} body â€” so the UI only
     # saw "Server error (HTTP 4xx)" with no reason. For business errors on /api/
     # JSON responses, downgrade the status to 200 so the CDN passes the body
     # through; the real code is kept in X-Eve-Status. Auth/404/5xx are untouched.
@@ -1363,7 +1363,7 @@ logger = get_logger(__name__)
 from panel.models import *  # noqa: F401,F403
 
 RENEW_TEMPLATE_SETTING_KEY = 'renew_template'
-DEFAULT_RENEW_TEMPLATE = """🔰{email}\n⌛{days_label} 📊{volume_label}{if_gift}\n🎁 +{gift_volume} گیگ هدیه{/if_gift}\nتمدید شد"""
+DEFAULT_RENEW_TEMPLATE = """ðŸ”°{email}\nâŒ›{days_label} ðŸ“Š{volume_label}{if_gift}\nðŸŽ +{gift_volume} Ú¯ÛŒÚ¯ Ù‡Ø¯ÛŒÙ‡{/if_gift}\nØªÙ…Ø¯ÛŒØ¯ Ø´Ø¯"""
 
 MONITOR_SETTINGS_KEY = 'monitor_settings'
 GENERAL_TIMEZONE_SETTING_KEY = 'general_timezone'
@@ -1434,11 +1434,11 @@ DEFAULT_MONITOR_SETTINGS = {
         "debug": False
     },
     "templates": {
-        "ended": "مشترک گرامی {user}، حجم سرویس شما به پایان رسیده است.\nلطفا جهت تمدید اقدام فرمایید.",
-        "expired": "مشترک گرامی {user}، زمان سرویس شما به پایان رسیده است.\nلطفا جهت تمدید اقدام فرمایید.",
-        "low": "مشترک گرامی {user}، تنها {rem} از حجم سرویس شما باقی مانده است.\nتمدید میفرمایید؟",
-        "soon": "مشترک گرامی {user}، تنها {time} از زمان سرویس شما باقی مانده است.\nتمدید میفرمایید؟",
-        "disabled": "مشترک گرامی {user}، سرویس شما غیرفعال شده است.\nبرای پیگیری با پشتیبانی در تماس باشید.",
+        "ended": "Ù…Ø´ØªØ±Ú© Ú¯Ø±Ø§Ù…ÛŒ {user}ØŒ Ø­Ø¬Ù… Ø³Ø±ÙˆÛŒØ³ Ø´Ù…Ø§ Ø¨Ù‡ Ù¾Ø§ÛŒØ§Ù† Ø±Ø³ÛŒØ¯Ù‡ Ø§Ø³Øª.\nÙ„Ø·ÙØ§ Ø¬Ù‡Øª ØªÙ…Ø¯ÛŒØ¯ Ø§Ù‚Ø¯Ø§Ù… ÙØ±Ù…Ø§ÛŒÛŒØ¯.",
+        "expired": "Ù…Ø´ØªØ±Ú© Ú¯Ø±Ø§Ù…ÛŒ {user}ØŒ Ø²Ù…Ø§Ù† Ø³Ø±ÙˆÛŒØ³ Ø´Ù…Ø§ Ø¨Ù‡ Ù¾Ø§ÛŒØ§Ù† Ø±Ø³ÛŒØ¯Ù‡ Ø§Ø³Øª.\nÙ„Ø·ÙØ§ Ø¬Ù‡Øª ØªÙ…Ø¯ÛŒØ¯ Ø§Ù‚Ø¯Ø§Ù… ÙØ±Ù…Ø§ÛŒÛŒØ¯.",
+        "low": "Ù…Ø´ØªØ±Ú© Ú¯Ø±Ø§Ù…ÛŒ {user}ØŒ ØªÙ†Ù‡Ø§ {rem} Ø§Ø² Ø­Ø¬Ù… Ø³Ø±ÙˆÛŒØ³ Ø´Ù…Ø§ Ø¨Ø§Ù‚ÛŒ Ù…Ø§Ù†Ø¯Ù‡ Ø§Ø³Øª.\nØªÙ…Ø¯ÛŒØ¯ Ù…ÛŒÙØ±Ù…Ø§ÛŒÛŒØ¯ØŸ",
+        "soon": "Ù…Ø´ØªØ±Ú© Ú¯Ø±Ø§Ù…ÛŒ {user}ØŒ ØªÙ†Ù‡Ø§ {time} Ø§Ø² Ø²Ù…Ø§Ù† Ø³Ø±ÙˆÛŒØ³ Ø´Ù…Ø§ Ø¨Ø§Ù‚ÛŒ Ù…Ø§Ù†Ø¯Ù‡ Ø§Ø³Øª.\nØªÙ…Ø¯ÛŒØ¯ Ù…ÛŒÙØ±Ù…Ø§ÛŒÛŒØ¯ØŸ",
+        "disabled": "Ù…Ø´ØªØ±Ú© Ú¯Ø±Ø§Ù…ÛŒ {user}ØŒ Ø³Ø±ÙˆÛŒØ³ Ø´Ù…Ø§ ØºÛŒØ±ÙØ¹Ø§Ù„ Ø´Ø¯Ù‡ Ø§Ø³Øª.\nØ¨Ø±Ø§ÛŒ Ù¾ÛŒÚ¯ÛŒØ±ÛŒ Ø¨Ø§ Ù¾Ø´ØªÛŒØ¨Ø§Ù†ÛŒ Ø¯Ø± ØªÙ…Ø§Ø³ Ø¨Ø§Ø´ÛŒØ¯.",
         "zero_usage": ""
     }
 }
@@ -1572,8 +1572,8 @@ def _get_or_create_system_setting(key: str, default_value: str | None = None) ->
 
 # Conditional template blocks: {if_<name>}...{/if_<name>}
 # The block is KEPT (markers stripped) when variables['<name>_given'] is truthy
-# (falling back to variables['<name>']), otherwise the whole block — along with
-# the newline that precedes it — is removed so no blank line is left behind.
+# (falling back to variables['<name>']), otherwise the whole block â€” along with
+# the newline that precedes it â€” is removed so no blank line is left behind.
 # This must run BEFORE str.format(), because the {if_..}/{/if_..} markers are
 # not valid format fields and would otherwise raise.
 _TEMPLATE_COND_RE = re.compile(r'(\n?)\{if_([a-zA-Z0-9_]+)\}(.*?)\{/if_\2\}', re.DOTALL)
@@ -1745,12 +1745,12 @@ def _compute_client_service_state(*, enabled: bool, total_bytes: int, remaining_
     is_fa = _normalize_ui_lang(lang, default='en') == 'fa'
 
     labels = {
-        'active': 'فعاله' if is_fa else 'Active',
-        'inactive': 'غیرفعال' if is_fa else 'Inactive',
-        'expired': 'منقضی شده' if is_fa else 'Expired',
-        'volume_low': 'حجم رو به اتمامه' if is_fa else 'Low Volume',
-        'expiring_soon': 'انقضا نزدیکه' if is_fa else 'Expiring Soon',
-        'volume_ended': 'حجم تمام کردی' if is_fa else 'Volume Ended',
+        'active': 'ÙØ¹Ø§Ù„Ù‡' if is_fa else 'Active',
+        'inactive': 'ØºÛŒØ±ÙØ¹Ø§Ù„' if is_fa else 'Inactive',
+        'expired': 'Ù…Ù†Ù‚Ø¶ÛŒ Ø´Ø¯Ù‡' if is_fa else 'Expired',
+        'volume_low': 'Ø­Ø¬Ù… Ø±Ùˆ Ø¨Ù‡ Ø§ØªÙ…Ø§Ù…Ù‡' if is_fa else 'Low Volume',
+        'expiring_soon': 'Ø§Ù†Ù‚Ø¶Ø§ Ù†Ø²Ø¯ÛŒÚ©Ù‡' if is_fa else 'Expiring Soon',
+        'volume_ended': 'Ø­Ø¬Ù… ØªÙ…Ø§Ù… Ú©Ø±Ø¯ÛŒ' if is_fa else 'Volume Ended',
     }
 
     low_volume_threshold_gb = float((thresholds or {}).get('low_volume_gb') or 1.0)
@@ -1763,27 +1763,27 @@ def _compute_client_service_state(*, enabled: bool, total_bytes: int, remaining_
     # the bare enable flag is what lets us show the real reason (expired / volume
     # ended) instead of a generic "inactive" for auto-disabled accounts.
     if total_bytes > 0 and remaining_bytes is not None and remaining_bytes <= 0:
-        return {'key': 'volume_ended', 'label': labels['volume_ended'], 'emoji': '🚫', 'tag': 'ended'}
+        return {'key': 'volume_ended', 'label': labels['volume_ended'], 'emoji': 'ðŸš«', 'tag': 'ended'}
 
     if str((expiry_info or {}).get('type') or '').lower() == 'expired':
-        return {'key': 'expired', 'label': labels['expired'], 'emoji': '⛔', 'tag': 'expired'}
+        return {'key': 'expired', 'label': labels['expired'], 'emoji': 'â›”', 'tag': 'expired'}
 
     # Past time/traffic checks: a still-disabled account was turned off manually.
     if not enabled:
-        return {'key': 'inactive', 'label': labels['inactive'], 'emoji': '⏸️', 'tag': 'inactive'}
+        return {'key': 'inactive', 'label': labels['inactive'], 'emoji': 'â¸ï¸', 'tag': 'inactive'}
 
     if total_bytes > 0 and remaining_bytes is not None:
         remaining_gb = float(remaining_bytes) / (1024 ** 3)
         if remaining_gb <= low_volume_threshold_gb:
-            return {'key': 'volume_low', 'label': labels['volume_low'], 'emoji': '⚠️', 'tag': 'low'}
+            return {'key': 'volume_low', 'label': labels['volume_low'], 'emoji': 'âš ï¸', 'tag': 'low'}
 
     if expiry_ts and expiry_ts > 0 and str((expiry_info or {}).get('type') or '').lower() not in ('unlimited', 'start_after_use'):
         now_ms = int(time.time() * 1000)
         remaining_ms = expiry_ts - now_ms
         if remaining_ms > 0 and near_expiry_ms > 0 and remaining_ms <= near_expiry_ms:
-            return {'key': 'expiring_soon', 'label': labels['expiring_soon'], 'emoji': '⏳', 'tag': 'soon'}
+            return {'key': 'expiring_soon', 'label': labels['expiring_soon'], 'emoji': 'â³', 'tag': 'soon'}
 
-    return {'key': 'active', 'label': labels['active'], 'emoji': '✅', 'tag': 'ok'}
+    return {'key': 'active', 'label': labels['active'], 'emoji': 'âœ…', 'tag': 'ok'}
 
 
 
@@ -1813,7 +1813,7 @@ def _get_system_configs_batch(keys: list) -> dict:
     return result
 
 
-# (messaging workers extracted to panel.jobs.messaging — imported above.)
+# (messaging workers extracted to panel.jobs.messaging â€” imported above.)
 def _get_app_tzinfo():
     tz_name = _get_app_timezone_name()
     if ZoneInfo is not None:
@@ -1838,7 +1838,7 @@ def _to_app_timezone(dt: datetime | None):
     except Exception:
         return dt
 
-# (Finance/ownership models extracted to panel.models.finance — imported at MODELS above.)
+# (Finance/ownership models extracted to panel.models.finance â€” imported at MODELS above.)
 # Ownership-claim review/verification extracted to panel.services.ownership.
 from panel.services.ownership import (  # noqa: F401
     _can_review_ownership_claim,
@@ -1850,8 +1850,8 @@ from panel.services.ownership import (  # noqa: F401
 )
 
 
-# (Telegram bot models extracted to panel.models.telegram — imported at MODELS above.)
-# (Ops/monitoring models extracted to panel.models.ops — imported at MODELS above.)
+# (Telegram bot models extracted to panel.models.telegram â€” imported at MODELS above.)
+# (Ops/monitoring models extracted to panel.models.ops â€” imported at MODELS above.)
 def _add_health_log(level, category, message, action_taken=None, details=None, resolved=False):
     """Helper to insert a HealthLog row safely."""
     try:
@@ -1975,10 +1975,10 @@ def build_panel_url(host, template, replacements):
     return f"{base}{webpath}{endpoint_clean}"
 
 
-# ── SSL auto-detection (defined early so startup context block can use it) ──
+# â”€â”€ SSL auto-detection (defined early so startup context block can use it) â”€â”€
 
 _SSL_KNOWN_PATHS = [
-    # Copied by setup.sh / ssl/sync endpoint — evemgr-owned, always readable
+    # Copied by setup.sh / ssl/sync endpoint â€” evemgr-owned, always readable
     ('/etc/ssl/eve-manager/fullchain.pem', '/etc/ssl/eve-manager/privkey.pem'),
     # Self-signed via setup.sh
     ('/etc/ssl/eve-manager/cert.pem',      '/etc/ssl/eve-manager/privkey.pem'),
@@ -2194,8 +2194,8 @@ def format_jalali(dt):
     return format_app_datetime(dt)
 
 _DIGIT_TRANSLATION = str.maketrans({
-    '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
-    '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
+    'Û°': '0', 'Û±': '1', 'Û²': '2', 'Û³': '3', 'Û´': '4', 'Ûµ': '5', 'Û¶': '6', 'Û·': '7', 'Û¸': '8', 'Û¹': '9',
+    'Ù ': '0', 'Ù¡': '1', 'Ù¢': '2', 'Ù£': '3', 'Ù¤': '4', 'Ù¥': '5', 'Ù¦': '6', 'Ù§': '7', 'Ù¨': '8', 'Ù©': '9',
 })
 
 
@@ -2630,14 +2630,14 @@ def format_remaining_days(timestamp, lang: str = 'en'):
         if is_fa:
             parts = []
             if days > 0:
-                parts.append(f"{days} روز")
+                parts.append(f"{days} Ø±ÙˆØ²")
             if hours > 0:
-                parts.append(f"{hours} ساعت")
+                parts.append(f"{hours} Ø³Ø§Ø¹Øª")
             if minutes > 0 and not parts:
-                parts.append(f"{minutes} دقیقه")
+                parts.append(f"{minutes} Ø¯Ù‚ÛŒÙ‚Ù‡")
             if not parts:
-                return "امروز"
-            return f"{' و '.join(parts)} باقی مانده"
+                return "Ø§Ù…Ø±ÙˆØ²"
+            return f"{' Ùˆ '.join(parts)} Ø¨Ø§Ù‚ÛŒ Ù…Ø§Ù†Ø¯Ù‡"
 
         if days > 0 and hours > 0:
             return f"{days}d {hours}h left"
@@ -2652,14 +2652,14 @@ def format_remaining_days(timestamp, lang: str = 'en'):
     def _fmt_expired(days_ago: int, hours_ago: int) -> str:
         if is_fa:
             if days_ago > 0 and hours_ago > 0:
-                ago_label = f"{days_ago} روز و {hours_ago} ساعت پیش"
+                ago_label = f"{days_ago} Ø±ÙˆØ² Ùˆ {hours_ago} Ø³Ø§Ø¹Øª Ù¾ÛŒØ´"
             elif days_ago > 0:
-                ago_label = f"{days_ago} روز پیش"
+                ago_label = f"{days_ago} Ø±ÙˆØ² Ù¾ÛŒØ´"
             elif hours_ago > 0:
-                ago_label = f"{hours_ago} ساعت پیش"
+                ago_label = f"{hours_ago} Ø³Ø§Ø¹Øª Ù¾ÛŒØ´"
             else:
-                ago_label = "لحظاتی پیش"
-            return f"منقضی شده ({ago_label})"
+                ago_label = "Ù„Ø­Ø¸Ø§ØªÛŒ Ù¾ÛŒØ´"
+            return f"Ù…Ù†Ù‚Ø¶ÛŒ Ø´Ø¯Ù‡ ({ago_label})"
 
         if days_ago > 0 and hours_ago > 0:
             ago_label = f"{days_ago}d {hours_ago}h ago"
@@ -2685,11 +2685,11 @@ def format_remaining_days(timestamp, lang: str = 'en'):
                 timestamp = 0
 
     if timestamp == 0 or timestamp is None:
-        return {"text": ("نامحدود" if is_fa else "Unlimited"), "days": -1, "type": "unlimited"}
+        return {"text": ("Ù†Ø§Ù…Ø­Ø¯ÙˆØ¯" if is_fa else "Unlimited"), "days": -1, "type": "unlimited"}
     if timestamp < 0:
         days = abs(timestamp) // 86400000
         if is_fa:
-            text = (f"{days} روز بعد از اولین اتصال" if days > 0 else "بعد از اولین اتصال")
+            text = (f"{days} Ø±ÙˆØ² Ø¨Ø¹Ø¯ Ø§Ø² Ø§ÙˆÙ„ÛŒÙ† Ø§ØªØµØ§Ù„" if days > 0 else "Ø¨Ø¹Ø¯ Ø§Ø² Ø§ÙˆÙ„ÛŒÙ† Ø§ØªØµØ§Ù„")
         else:
             text = (f"Not started ({days} days)" if days > 0 else "Not started")
         return {"text": text, "days": days, "type": "start_after_use"}
@@ -2715,7 +2715,7 @@ def format_remaining_days(timestamp, lang: str = 'en'):
             return {"text": text, "days": int(days), "type": "soon"}
         return {"text": text, "days": int(days), "type": "normal"}
     except:
-        return {"text": ("تاریخ نامعتبر" if is_fa else "Invalid Date"), "days": 0, "type": "error"}
+        return {"text": ("ØªØ§Ø±ÛŒØ® Ù†Ø§Ù…Ø¹ØªØ¨Ø±" if is_fa else "Invalid Date"), "days": 0, "type": "error"}
 
 
 def get_accessible_servers(user, include_disabled=False):
@@ -2831,7 +2831,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
         ownerships = ClientOwnership.query.filter_by(reseller_id=user.id, server_id=server.id).all()
         owned_emails = {o.client_email.lower() for o in ownerships if o.client_email}
 
-    # ── Hoist server-level values out of the per-client loop (computed once) ──
+    # â”€â”€ Hoist server-level values out of the per-client loop (computed once) â”€â”€
     _parsed_host = urlparse(server.host)
     _hostname = _parsed_host.hostname
     _scheme = _parsed_host.scheme
@@ -2994,8 +2994,8 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                     "remaining_formatted": remaining_formatted,
                     "volume_status": volume_status,
                     "service_state": account_state.get('key', 'active'),
-                    "service_state_label": account_state.get('label', 'فعاله' if panel_lang == 'fa' else 'Active'),
-                    "service_state_emoji": account_state.get('emoji', '✅'),
+                    "service_state_label": account_state.get('label', 'ÙØ¹Ø§Ù„Ù‡' if panel_lang == 'fa' else 'Active'),
+                    "service_state_emoji": account_state.get('emoji', 'âœ…'),
                     "service_state_tag": account_state.get('tag', 'ok'),
                     "managed_state": (
                         lifecycle_finding.get('managed_state')
@@ -3031,13 +3031,13 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                     if client.get('enable', True) and remaining_bytes is not None and remaining_bytes >= 0:
                         stats["remaining_raw"] += int(remaining_bytes)
             
-            # استخراج network و security از settings
+            # Ø§Ø³ØªØ®Ø±Ø§Ø¬ network Ùˆ security Ø§Ø² settings
             streamSettings = settings.get('streamSettings', {})
             network = streamSettings.get('network', 'tcp')
             security = streamSettings.get('security', 'none')
             
             # Remaining = sum of active+usable clients only:
-            # enabled, not expired, not disabled — active / expiring_soon / volume_low
+            # enabled, not expired, not disabled â€” active / expiring_soon / volume_low
             _ACTIVE_STATES = {'active', 'expiring_soon', 'volume_low'}
             _inbound_remaining_raw = sum(
                 c['remaining_bytes'] for c in processed_clients
@@ -3278,11 +3278,11 @@ def _compute_royalty_idle(admin_id, days, server_filter, reseller_filter):
                 continue
             base = baseline.get((sid, sub_id))
             if base is None:
-                continue  # no history at window start → can't classify
+                continue  # no history at window start â†’ can't classify
             current_total = canonical_totals.get((sid, sub_id),
                                                   int(c.get('up', 0) or 0) + int(c.get('down', 0) or 0))
             if current_total != base:
-                continue  # had traffic → not idle
+                continue  # had traffic â†’ not idle
 
             # Ownership / reseller resolution (UUID first, then email, then global UUID)
             uu = str(c.get('id') or '').strip().lower()
@@ -3420,7 +3420,7 @@ def fetch_worker(server_dict):
 def enrich_inbounds_with_ownership(inbounds):
     """Attach owner fields to inbound clients using the in-memory ownership cache.
 
-    Old approach: built email/uuid sets → huge IN-clause DB query → second iteration.
+    Old approach: built email/uuid sets â†’ huge IN-clause DB query â†’ second iteration.
     New approach: read from _OWNERSHIP_CACHE (rebuilt at most every 30 s); each
     client lookup is O(1) dict access.  No per-request DB query.
     """
@@ -3464,7 +3464,7 @@ def _ensure_snapshot_enriched():
     """Enrich the shared GLOBAL_SERVER_DATA snapshot with ownership in place, but
     only once per (snapshot, ownership) version. Enrichment is idempotent and
     additive (it just sets/clears owner_* fields on client dicts), so the read
-    path can serve the shared lists directly — avoiding a full deepcopy of the
+    path can serve the shared lists directly â€” avoiding a full deepcopy of the
     snapshot on every /api/refresh, which was the dominant cost at scale."""
     try:
         key = (GLOBAL_SERVER_DATA.get('last_update'), _OWNERSHIP_CACHE.get('updated_at'))
@@ -3527,11 +3527,11 @@ def _user_can_afford(user, price: int) -> tuple[bool, str | None]:
         shortfall = (cur - price) - min_bal
         if _get_panel_ui_lang() == 'fa':
             return False, (
-                f"موجودی کافی نیست — اعتبار فعلی: {cur:,} T، "
-                f"هزینه: {price:,} T، کسری: {abs(shortfall):,} T"
+                f"Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ú©Ø§ÙÛŒ Ù†ÛŒØ³Øª â€” Ø§Ø¹ØªØ¨Ø§Ø± ÙØ¹Ù„ÛŒ: {cur:,} TØŒ "
+                f"Ù‡Ø²ÛŒÙ†Ù‡: {price:,} TØŒ Ú©Ø³Ø±ÛŒ: {abs(shortfall):,} T"
             )
         return False, (
-            f"Insufficient credit — current balance: {cur:,} T, "
+            f"Insufficient credit â€” current balance: {cur:,} T, "
             f"cost: {price:,} T, shortfall: {abs(shortfall):,} T"
         )
     return True, None
@@ -3720,7 +3720,7 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
             remove_cached_client(server.id, email, client_uuid=str(client_id) if client_id else None)
             return True, None, 200
 
-        # Shadowsocks clients have no UUID — delClient/:clientId won't work.
+        # Shadowsocks clients have no UUID â€” delClient/:clientId won't work.
         # Remove the client from the full inbound settings and push.
         if 'id' not in target_client:
             _full_ib_del = _delete_inbound_row
@@ -3854,8 +3854,8 @@ def _delete_client_core(user, server, inbound_id: int, email: str):
 
 
 
-# ── App File Manager ──────────────────────────────────────────────────────────
-# Separate from the general /api/upload — restricted to superadmin,
+# â”€â”€ App File Manager â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Separate from the general /api/upload â€” restricted to superadmin,
 # larger size limits, strict whitelist, stored in static/app-files/.
 
 _APP_FILES_DIR_NAME  = 'app-files'
@@ -3905,10 +3905,10 @@ with app.app_context():
         logger.warning("  mkdir -p '%s' && chmod 755 <dir>", os.path.join(app.static_folder or '', _APP_FILES_DIR_NAME))
 
 
-# ── SSL startup migration ─────────────────────────────────────────────────────
+# â”€â”€ SSL startup migration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # When upgrading from a version that didn't copy certs to /etc/ssl/eve-manager/,
 # we try to do the copy automatically so the export feature works immediately.
-# This is silent — failure never blocks startup.
+# This is silent â€” failure never blocks startup.
 with app.app_context():
     try:
         _ssl_dest_cert = '/etc/ssl/eve-manager/fullchain.pem'
@@ -3917,7 +3917,7 @@ with app.app_context():
                          and os.path.isfile(_ssl_dest_key) and os.access(_ssl_dest_key, os.R_OK))
 
         if _need_copy:
-            # Try to find source paths (nginx config → letsencrypt glob)
+            # Try to find source paths (nginx config â†’ letsencrypt glob)
             import re as _re, glob as _gl
             _src_cert = _src_key = ''
 
@@ -3972,9 +3972,9 @@ with app.app_context():
                     db.session.commit()
                     logger.info("SSL certs migrated to /etc/ssl/eve-manager/")
                 else:
-                    logger.warning("SSL cert migration failed (sudo not configured — use Settings → SSL → Sync)")
+                    logger.warning("SSL cert migration failed (sudo not configured â€” use Settings â†’ SSL â†’ Sync)")
             else:
-                logger.info("SSL not detected or not yet configured — skipping cert migration")
+                logger.info("SSL not detected or not yet configured â€” skipping cert migration")
     except Exception as _ssl_migrate_err:
         logger.warning("SSL migration skipped: %s", _ssl_migrate_err)
 
@@ -4015,15 +4015,15 @@ def _account_info_channel_links(admin: 'Admin') -> dict:
     """Return telegram_channel / whatsapp_channel for the logged-in admin,
     resolved by role exactly like the public subscription page:
 
-    - reseller            → the reseller's own channel fields, falling back to
+    - reseller            â†’ the reseller's own channel fields, falling back to
                             the global SystemConfig channels if unset.
-    - superadmin / admin  → the global SystemConfig channels
+    - superadmin / admin  â†’ the global SystemConfig channels
                             ('channel_telegram' / 'channel_whatsapp'), falling
                             back to any value stored on the admin row.
 
     (Superadmin channels live in SystemConfig, NOT on the Admin row, which is
     why reading only admin.channel_* left {whatsapp_channel} blank for them.)
-    - still not set       → empty string (template var stays blank, not shown).
+    - still not set       â†’ empty string (template var stays blank, not shown).
     """
     def _cfg(key):
         row = db.session.get(SystemConfig, key)
@@ -5100,7 +5100,7 @@ def _verify_required_channels(bot: TelegramBotInstance, channels: list[dict]) ->
     try:
         api = _telegram_bot_api_client(bot)
     except ValueError:
-        return None  # no token/route configured yet — nothing to verify with
+        return None  # no token/route configured yet â€” nothing to verify with
     from telegram_bot_runtime import TelegramApiError, is_chat_access_error
     try:
         bot_user_id = int(bot.bot_user_id) if bot.bot_user_id else None

@@ -199,6 +199,43 @@ def system_update_status():
     return response
 
 
+@bp.route('/api/system/memory', methods=['GET'])
+@superadmin_required
+def system_memory():
+    """Memory attribution for Settings -> Overview.
+
+    Read-only and bounded: host totals, per-role PSS/RSS/USS for Eve's processes, what the
+    in-process snapshot holds, the compressed snapshot in Redis, the caches outside it, and
+    the bounded trend. No credentials, commands, environment values or customer data - only
+    counts, sizes, pids and roles (see panel/core/memory_report.py).
+    """
+    from panel.core import memory_report  # deferred: keeps the route import light
+    payload = memory_report.report()
+    response = jsonify({'success': True, **payload})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/api/system/memory/analyze', methods=['POST'])
+@superadmin_required
+@step_up_required('system.update')
+def system_memory_analyze():
+    """Explicit, admin-only deep Python memory sample (never runs continuously).
+
+    Returns the largest current allocations as file/line/size only. It is behind the same
+    step-up guard as the updater because it briefly traces allocations, and the sample is
+    bounded: a timeout marker is returned rather than letting the request hang.
+    """
+    from flask import current_app
+    from panel.core import memory_report  # deferred: keeps the route import light
+    data = request.get_json(silent=True) or {}
+    limit = max(1, min(200, int(data.get('limit') or 40)))
+    if not current_app.config.get('TESTING') and not os.path.isdir('/proc'):
+        return jsonify({'success': False,
+                        'error': 'deep memory analysis needs Linux /proc'}), 503
+    return jsonify({'success': True, **memory_report.analyze_python_memory(limit=limit)})
+
+
 @bp.route('/api/system-update/start', methods=['POST'])
 @superadmin_required
 @step_up_required('system.update')

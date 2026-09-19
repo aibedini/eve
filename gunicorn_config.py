@@ -35,3 +35,18 @@ worker_class = "gthread"
 threads = int(os.environ.get("GUNICORN_THREADS", 4))
 timeout = int(os.environ.get("GUNICORN_TIMEOUT", 120))
 graceful_timeout = int(os.environ.get("GUNICORN_GRACEFUL_TIMEOUT", 30))
+
+# Worker recycling. Disabled by default (0), because it is a SAFETY NET and not a fix: a
+# recycled worker drops the snapshot it had hydrated and warms it again, so on a small host
+# it only helps if the measured trend (Settings -> Overview -> Memory) shows growth that a
+# restart actually reclaims. Enable it deliberately once the attribution exists, and keep
+# the value high enough that restarts are not the steady state; the jitter spreads them so
+# two workers never recycle at the same moment.
+#
+#   GUNICORN_MAX_REQUESTS=800  GUNICORN_MAX_REQUESTS_JITTER=100
+#
+# See docs/performance/MEMORY.md ("Runtime configuration").
+_max_requests = int(os.environ.get("GUNICORN_MAX_REQUESTS", 0) or 0)
+if _max_requests > 0:
+    max_requests = _max_requests
+    max_requests_jitter = max(0, int(os.environ.get("GUNICORN_MAX_REQUESTS_JITTER", 0) or 0))

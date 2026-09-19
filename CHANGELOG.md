@@ -2,6 +2,18 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.17] - 2026-09-19
+
+### Added
+- **Memory attribution, before any optimization.** `panel/core/memory_report.py` answers "3.45 GB of 3.78 GB is used - by what?" from `/proc/meminfo`, `/proc/pressure/memory`, `/proc/<pid>/smaps_rollup` and `/proc/<pid>/status`: host totals with **MemAvailable** and page cache reported separately, per-process RSS/**PSS**/USS/threads/peak/uptime, Eve's processes grouped by role (web, background, telegram bot, telegram egress, pulse, managed xray), the in-process snapshot's counts including duplicate rows, rows still carrying `raw_client`, rows carrying formatted strings, the compressed snapshot in Redis (O(servers), never a keyspace scan), the caches outside the snapshot, and a bounded trend. Eve's total is a sum of PSS, so shared pages are not counted once per process; page cache is never presented as application memory; where `/proc` is absent every section says why instead of inventing zeros. No credentials, commands, environment values or customer data cross the boundary (unit-tested).
+- `GET /api/system/memory` (superadmin) serves that payload, and `POST /api/system/memory/analyze` (superadmin + step-up) runs an explicit, bounded `tracemalloc` sample returning file/line/size only - never a repr, which is where a token would hide. It never runs on page load and never continuously.
+- The health watchdog records one trend sample a minute into a Redis ring (`LPUSH` + `LTRIM`, hard cap 1440 entries), so the history itself cannot become the memory problem, and "stable at 950 MB" is distinguishable from "growing without bound".
+- `GUNICORN_MAX_REQUESTS` / `GUNICORN_MAX_REQUESTS_JITTER` are now honoured by `gunicorn_config.py`, off by default: worker recycling drops and re-warms a hydrated snapshot, so it is a safety net to enable *after* the trend shows growth a restart reclaims, not a fix.
+- `docs/performance/MEMORY.md`: the measured architecture (three plausible snapshot copies with file:line references, per-row duplication, refresh peak), the suspect list with what measures each one, and a ranked optimization plan with expected saving, complexity, risk, migration and performance notes - explicitly not implemented yet.
+
+### Tests
+- `tests/test_memory_report.py` (20 tests): cache excluded from `used`, health thresholds, `/proc`-absent fallback, PSS-vs-RSS aggregation across roles, Xray reported separately, duplication ratio, role detection for every launch entry point, a command line never returned verbatim, bounded/throttled/trimmed trend, flat-vs-growing direction, deep sample shape, and a no-credentials/no-customer-data assertion over the whole payload.
+
 ## [2.7.16] - 2026-09-19
 
 ### Fixed
