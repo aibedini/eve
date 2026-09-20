@@ -205,12 +205,16 @@ def system_memory():
     """Memory attribution for Settings -> Overview.
 
     Read-only and bounded: host totals, per-role PSS/RSS/USS for Eve's processes, what the
-    in-process snapshot holds, the compressed snapshot in Redis, the caches outside it, and
-    the bounded trend. No credentials, commands, environment values or customer data - only
-    counts, sizes, pids and roles (see panel/core/memory_report.py).
+    in-process snapshot holds, how many processes hold a copy of it, the compressed snapshot
+    in Redis, the caches outside it, and the bounded trend. ``?trend_minutes=`` selects the
+    trend window and is clamped to what the ring can answer (5 .. 1440 minutes, i.e. a day);
+    the payload echoes the window it actually used. No credentials, commands, environment
+    values or customer data - only counts, sizes, pids and roles
+    (see panel/core/memory_report.py).
     """
     from panel.core import memory_report  # deferred: keeps the route import light
-    payload = memory_report.report()
+    minutes = memory_report.clamp_trend_minutes(request.args.get('trend_minutes'))
+    payload = memory_report.report(trend_minutes=minutes)
     response = jsonify({'success': True, **payload})
     response.headers['Cache-Control'] = 'no-store'
     return response

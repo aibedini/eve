@@ -77,7 +77,26 @@ NON_EVE_ROLES = ('xray', 'other') + SERVICE_ROLES
 SAMPLE_KEY = 'eve:memory:samples'
 SAMPLE_INTERVAL_SECONDS = 60.0
 SAMPLE_MAX = 1440          # 24 h at one sample a minute
-SAMPLE_KEEP_MINUTES = 60   # the window the overview renders
+SAMPLE_KEEP_MINUTES = 60   # the window the overview renders by default
+
+#: What a caller may ask the trend for. The ring holds one sample a minute up to
+#: ``SAMPLE_MAX``, so a longer request cannot be answered - and answering it with a short
+#: history would be worse than refusing, which is why the clamp is to the ring itself.
+TREND_WINDOW_MIN = 5
+TREND_WINDOW_MAX = int(SAMPLE_MAX * SAMPLE_INTERVAL_SECONDS / 60)   # 1440 minutes = 24 h
+
+
+def clamp_trend_minutes(value, *, default=SAMPLE_KEEP_MINUTES) -> int:
+    """A requested trend window, clamped to what the ring can actually answer.
+
+    The payload echoes the window it used (``trend.window_minutes``), so a caller that asks
+    for a day and gets an hour is told so rather than handed a mislabelled series.
+    """
+    try:
+        minutes = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return max(TREND_WINDOW_MIN, min(TREND_WINDOW_MAX, minutes))
 
 _lock = threading.Lock()
 _last_sample_at = 0.0
@@ -749,6 +768,18 @@ def record_sample(now=None, *, force=False) -> bool:
         return False
 
 
+def _trend_unavailable(reason, minutes) -> dict:
+    """The trend's keys with None for "not measured", so the shape does not vary.
+
+    Three consumers read this (the Overview, the collector and the route contract), and a
+    branch that omits keys makes each of them guard differently for the same condition.
+    """
+    return {'available': False, 'reason': reason, 'samples': None,
+            'window_minutes': minutes, 'max_samples': SAMPLE_MAX, 'current_bytes': None,
+            'peak_bytes': None, 'window_start_bytes': None, 'delta_bytes': None,
+            'per_hour_bytes': None, 'trend': None, 'series': []}
+
+
 def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES, series_points=120) -> dict:
     """Current / peak / delta over the window, plus a bounded series to draw.
 
@@ -764,10 +795,10 @@ def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES, series_points=120) -> dict:
         import json
         client = redis_client.get_redis()
         if client is None:
-            return {'available': False, 'reason': 'no Redis configured'}
+            return _trend_unavailable('no Redis configured', minutes)
         raw = client.lrange(SAMPLE_KEY, 0, SAMPLE_MAX - 1)
     except Exception as exc:
-        return {'available': False, 'reason': str(exc)[:120]}
+        return _trend_unavailable(str(exc)[:120], minutes)
     samples = []
     for item in raw or []:
         if isinstance(item, bytes):
@@ -873,6 +904,11 @@ def _health(payload) -> dict:
     if (snapshot.get('duplication_ratio') or 0) > 1.2:
         notes.append('the snapshot holds %sx duplicate client rows'
                      % snapshot.get('duplication_ratio'))
+    # A top-level verdict of "ok" must not hide the one shape that means a leak: the trend
+    # is what separates growth from a steady retained snapshot (see the module docstring).
+    if (payload.get('trend') or {}).get('trend') == 'growing':
+        notes.append("Eve's PSS is growing across the trend window, which is the shape a "
+                     "leak takes rather than retained snapshot")
     return {'state': 'ok' if not notes else 'warning', 'notes': notes}
 
 

@@ -15,6 +15,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 import app as app_module  # noqa: E402
 from app import Admin, app, db  # noqa: E402
+from panel.core import build_identity  # noqa: E402
 from panel.routes import settings as settings_routes  # noqa: E402
 from panel.routes import system as system_routes  # noqa: E402
 
@@ -25,9 +26,22 @@ class SystemUpdateApiTest(unittest.TestCase):
         cls.ctx = app.app_context()
         cls.ctx.push()
         db.create_all()
+        # Every response carries the build identity, which shells out to `git rev-parse`
+        # ONCE PER PROCESS (panel.core.build_identity memoizes it). These tests patch
+        # subprocess.run and assert on the calls they expect, so whether an unrelated git
+        # call lands in that window depended on whether an earlier test in the same process
+        # had already warmed the cache: the suite passed and the module alone failed.
+        # Pinning the identity from the environment removes the git call entirely, so the
+        # assertion tests the probe it is about and nothing else.
+        cls._identity_env = mock.patch.dict(
+            os.environ, {build_identity.ENV_VAR: 'test-build-sha'})
+        cls._identity_env.start()
+        build_identity.reset_cache()
 
     @classmethod
     def tearDownClass(cls):
+        build_identity.reset_cache()
+        cls._identity_env.stop()
         db.session.remove()
         db.drop_all()
         cls.ctx.pop()

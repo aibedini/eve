@@ -410,6 +410,69 @@ class SnapshotCopyTests(unittest.TestCase):
                 inbounds=self._inbounds([1]), version='v1'))
 
 
+class TrendWindowTests(unittest.TestCase):
+    """The trend window a caller may ask for, and the shape it is answered with."""
+
+    def test_the_window_is_clamped_to_what_the_ring_can_answer(self):
+        self.assertEqual(memory_report.TREND_WINDOW_MAX, 1440)   # one day at one a minute
+        self.assertEqual(memory_report.clamp_trend_minutes(60), 60)
+        self.assertEqual(memory_report.clamp_trend_minutes('120'), 120)
+        self.assertEqual(memory_report.clamp_trend_minutes(1440), 1440)
+        # A day and a half cannot be answered from a day of ring: refuse by clamping.
+        self.assertEqual(memory_report.clamp_trend_minutes(99999), 1440)
+        self.assertEqual(memory_report.clamp_trend_minutes(0), memory_report.TREND_WINDOW_MIN)
+        self.assertEqual(memory_report.clamp_trend_minutes(-5), memory_report.TREND_WINDOW_MIN)
+        self.assertEqual(memory_report.clamp_trend_minutes(60.9), 60)
+
+    def test_a_missing_or_unparsable_window_falls_back_to_the_default(self):
+        self.assertEqual(memory_report.clamp_trend_minutes(None),
+                         memory_report.SAMPLE_KEEP_MINUTES)
+        self.assertEqual(memory_report.clamp_trend_minutes(''), memory_report.SAMPLE_KEEP_MINUTES)
+        self.assertEqual(memory_report.clamp_trend_minutes('abc'),
+                         memory_report.SAMPLE_KEEP_MINUTES)
+
+    def test_an_unavailable_trend_keeps_the_full_key_set(self):
+        # Same reason as eve_processes(): three consumers read this shape.
+        with mock.patch('panel.core.redis_client.get_redis', return_value=None):
+            row = memory_report.trend(minutes=1440)
+        self.assertFalse(row['available'])
+        self.assertEqual(row['window_minutes'], 1440)
+        for key in ('samples', 'max_samples', 'current_bytes', 'peak_bytes', 'delta_bytes',
+                    'per_hour_bytes', 'trend', 'series', 'reason'):
+            self.assertIn(key, row, key)
+        self.assertIsNone(row['current_bytes'])
+        self.assertEqual(row['series'], [])
+
+
+class HealthVerdictTests(unittest.TestCase):
+    """A verdict of "ok" must not hide the one shape that means a leak."""
+
+    def _payload(self, direction):
+        return {
+            'host': {'available': True, 'available_pct': 40.0, 'swap_used_bytes': 0,
+                     'total_bytes': 4 * 1024 ** 3},
+            'eve': {'eve_pss_bytes': 100},
+            'snapshot': {},
+            'trend': {'available': True, 'trend': direction},
+        }
+
+    def test_growth_is_named_in_the_verdict(self):
+        row = memory_report._health(self._payload('growing'))
+        self.assertEqual(row['state'], 'warning')
+        self.assertTrue(any('growing' in note for note in row['notes']), row['notes'])
+
+    def test_a_stable_or_shrinking_trend_is_not_a_warning(self):
+        for direction in ('stable', 'shrinking'):
+            row = memory_report._health(self._payload(direction))
+            self.assertEqual(row['state'], 'ok', row)
+            self.assertEqual(row['notes'], [])
+
+    def test_an_unknown_host_is_still_unknown_with_a_trend_present(self):
+        row = memory_report._health({'host': {'available': False, 'reason': 'no /proc'},
+                                     'trend': {'trend': 'growing'}})
+        self.assertEqual(row['state'], 'unknown')
+
+
 class TrendTests(unittest.TestCase):
     class _FakeRedis:
         def __init__(self):

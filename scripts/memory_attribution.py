@@ -78,9 +78,13 @@ def _pid_cell(pids, shown=4):
     return head or '-'
 
 
-def collect(*, top=5, now=None) -> dict:
+def collect(*, top=5, now=None, trend_minutes=None) -> dict:
     """The full payload: the host-wide report plus the largest unclassified processes."""
-    data = memory_report.host_report(now=now)
+    if trend_minutes is None:
+        data = memory_report.host_report(now=now)
+    else:
+        data = memory_report.host_report(
+            now=now, trend_minutes=memory_report.clamp_trend_minutes(trend_minutes))
     data['unclassified'] = memory_report.unclassified_processes(limit=top)
     data['collector'] = {
         'top': max(1, int(top)),
@@ -287,9 +291,11 @@ def main():
                              'minus the in-process snapshot)')
     parser.add_argument('--top', type=int, default=5,
                         help='how many unclassified processes to list (default 5)')
+    parser.add_argument('--trend-minutes', type=int, default=None,
+                        help='trend window to ask for, clamped to 5..1440 (default 60)')
     args = parser.parse_args()
 
-    data = collect(top=args.top)
+    data = collect(top=args.top, trend_minutes=args.trend_minutes)
     if args.json:
         print(json.dumps(data, indent=2, default=str))
         return 0

@@ -78,6 +78,15 @@ class MemoryRouteTests(unittest.TestCase):
         for forbidden in ('password', 'token', 'secret', 'api_key', 'authorization'):
             self.assertNotIn(forbidden, text)
 
+    def test_the_trend_window_is_clamped_and_echoed_back(self):
+        # The ring holds a day: asking for more is clamped rather than answered with a
+        # short history under a long label.
+        for requested, expected in (('1440', 1440), ('99999', 1440), ('120', 120),
+                                    ('0', 5), ('abc', 60)):
+            payload = self.client.get(
+                '/api/system/memory?trend_minutes=' + requested).get_json()
+            self.assertEqual(payload['trend']['window_minutes'], expected, requested)
+
     def test_anonymous_and_non_superadmin_cannot_read_it(self):
         self.assertIn(app.test_client().get('/api/system/memory').status_code,
                       (302, 401, 403))

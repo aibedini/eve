@@ -23,7 +23,7 @@ document proposes a fix that has not been measured on the install it applies to.
 | Surface | What it answers |
 |---|---|
 | `panel/core/memory_report.py` | host totals/pressure, per-process RSS/PSS/USS/threads/peak/uptime, Eve's roles, the host services that are not Eve (Redis, PostgreSQL, nginx), the unclassified remainder, the reconciliation down to a residual, how many processes hold the snapshot, snapshot duplication, Redis snapshot bytes, caches, bounded trend |
-| `GET /api/system/memory` (superadmin) | the same payload Settings → Overview renders |
+| `GET /api/system/memory` (superadmin) | the same payload Settings → Overview renders; `?trend_minutes=` selects the trend window (clamped to 5..1440 and echoed back) |
 | `record_snapshot_copy` + `snapshot_copies` | one bounded record per process that adopted a snapshot version, so `snapshot_copies.copies` answers "how many full copies exist" from a **single** call, with each copy's row count and age |
 | `POST /api/system/memory/analyze` (superadmin + step-up) | explicit, bounded deep Python sample: largest allocations as file/line/size only |
 | Settings → Overview → Memory | the human-readable version: host, Eve PSS, account reconciliation, roles table, host-services table, snapshot, caches, trend, health notes |
@@ -37,6 +37,13 @@ The trend is what separates the two very different explanations of a high number
 600 MB -> 700 MB -> 850 MB -> 1.1 GB -> 1.5 GB     a leak
 restart -> 400 MB -> full dashboard -> 950 MB, flat  retained snapshot architecture
 ```
+
+The window is a request, not a measurement: the card's picker (and `?trend_minutes=` on the
+endpoint) accepts 1 h, 6 h or a day. The ring holds a day at one sample a minute, so a longer
+ask is **clamped** rather than answered with a short history under a long label, and the
+payload echoes the window it actually used. The same series feeds the top-level verdict: a
+growing Eve PSS adds a warning note to `health`, so a host reported as `ok` cannot be hiding
+the one shape that means a leak.
 
 Sources: `/proc/meminfo`, `/proc/pressure/memory`, `/proc/<pid>/smaps_rollup` (RSS, PSS,
 PSS_Anon/File/Shmem, Private_*), `/proc/<pid>/status` (VmHWM peak, Threads, VmSwap),

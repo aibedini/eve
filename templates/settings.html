@@ -7164,7 +7164,8 @@
             'copiesNote': 'Each process records what it holds when it adopts a new snapshot version, and the record expires, so a stopped process stops counting as a copy.',
             'noCopies': 'no copy recorded yet',
             'largestCopy': 'largest copy',
-            'copiesUnit': 'rows'
+            'copiesUnit': 'rows',
+            'windowLabel': 'Window'
         },
         fa: {{ ({
             'title': 'حافظه',
@@ -7284,7 +7285,8 @@
             'copiesNote': 'هر پروسه هنگام پذیرش نسخه جدید اسنپ‌شات، آنچه را نگه می‌دارد ثبت می‌کند و این ثبت منقضی می‌شود؛ پس پروسه متوقف‌شده دیگر نسخه شمرده نمی‌شود.',
             'noCopies': 'هنوز نسخه‌ای ثبت نشده',
             'largestCopy': 'بزرگ‌ترین نسخه',
-            'copiesUnit': 'ردیف'
+            'copiesUnit': 'ردیف',
+            'windowLabel': 'بازه'
         })|tojson }}
     };
 
@@ -7594,17 +7596,45 @@
             + bars + '</div>';
     }
 
+    /* The window is a request, not a measurement: the ring holds a day at one sample a
+       minute, the backend clamps a longer ask, and the payload echoes the window it used -
+       which is why the selected option is taken from window_minutes and not from the click.
+       A window that is not one of the presets (a URL, a future caller) is added rather than
+       silently shown as the first option. */
+    const MEM_TREND_WINDOWS = [60, 360, 1440];
+
+    function memTrendWindow(activeMinutes) {
+        const active = Number(activeMinutes) || MEM_TREND_WINDOWS[0];
+        const windows = MEM_TREND_WINDOWS.indexOf(active) === -1
+            ? MEM_TREND_WINDOWS.concat([active]).sort((a, b) => a - b)
+            : MEM_TREND_WINDOWS;
+        let options = '';
+        windows.forEach(minutes => {
+            options += '<option value="' + minutes + '"'
+                + (minutes === active ? ' selected' : '') + '>'
+                + memEsc((minutes / 60) + ' h') + '</option>';
+        });
+        return '<div class="form-group">'
+            + '<label class="label-note" for="memory-trend-window">'
+            + memEsc(memT('windowLabel')) + '</label>'
+            + '<select class="form-select" id="memory-trend-window"'
+            + ' onchange="loadMemory(this.value)">' + options + '</select></div>';
+    }
+
     function renderTrendCard(trend) {
+        const windowPicker = memTrendWindow(trend.window_minutes);
         if (trend.available === false) {
             return memCard({title: memT('trend'),
-                            body: memNote(trend.reason || memT('unavailable'), 'field-note-warn')});
+                            body: memNote(trend.reason || memT('unavailable'), 'field-note-warn')
+                                + windowPicker});
         }
         const samples = Number(trend.samples) || 0;
         if (!samples) {
             /* An empty window is not a flat line: printing Current 0 B would read as a
                measurement of an idle process, and series is [] so there are no bars to
-               draw either. */
-            return memCard({title: memT('trend'), body: memNote(memT('noSamples'), 'field-note-warn')});
+               draw either. The picker stays, so another window can still be asked for. */
+            return memCard({title: memT('trend'),
+                            body: memNote(memT('noSamples'), 'field-note-warn') + windowPicker});
         }
         const direction = String(trend.trend || '');
         const badge = '<span class="badge ' + (MEM_TREND_BADGE[direction] || 'badge-secondary') + '">'
@@ -7623,7 +7653,8 @@
             memRow(memT('change'), memSigned(trend.delta_bytes)),
             memRow(memT('perHour'), memSigned(trend.per_hour_bytes)),
             memKvRow(memT('samplesLine'), memEsc(sampleText), '', 'mem-wrap'),
-            memNote(memT('trendNote'))
+            memNote(memT('trendNote')),
+            windowPicker
         ];
         return memCard({
             title: memT('trend'),
@@ -7902,7 +7933,7 @@
         }
     }
 
-    async function loadMemory() {
+    async function loadMemory(minutes) {
         const container = document.getElementById('memory-content');
         if (!container) return;
         const title = document.getElementById('memory-title');
@@ -7911,7 +7942,12 @@
         if (subtitle) subtitle.textContent = memT('subtitle');
         container.innerHTML = memNote(memT('loading'), 'mem-loading');
         try {
-            const res = await fetch('/api/system/memory', {headers: {'Accept': 'application/json'}});
+            /* The window travels in the request; the backend clamps it and the payload
+               echoes what it used, so the card can never label a window it did not get. */
+            const wanted = Number(minutes);
+            const url = '/api/system/memory'
+                + (wanted > 0 ? '?trend_minutes=' + encodeURIComponent(wanted) : '');
+            const res = await fetch(url, {headers: {'Accept': 'application/json'}});
             let payload = null;
             try { payload = await res.json(); } catch (error) { payload = null; }
             if (!res.ok || !payload || payload.success !== true) {
