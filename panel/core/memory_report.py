@@ -81,6 +81,18 @@ SAMPLE_KEEP_MINUTES = 60   # the window the overview renders
 
 _lock = threading.Lock()
 _last_sample_at = 0.0
+#: The last version *this process* recorded a copy for, per role: the throttle is keyed by
+#: role because the record is, so a process that reports under two roles still records both.
+_last_copy_versions = {}
+
+#: One small record per process that has adopted the shared snapshot, so a single endpoint
+#: call can answer "how many full copies exist" instead of one call per role. The roles are
+#: the fixed set the installer's units write (setup.sh, docker-compose.yml) plus the
+#: single-process ``combined`` case, so reading them is one GET each - never a keyspace
+#: SCAN, which would grow with everything else Redis holds.
+COPY_KEY_PREFIX = 'eve:memory:copy:'
+COPY_ROLES = ('web', 'background', 'telegram-bot', 'telegram-egress', 'pulse', 'combined')
+COPY_TTL_SECONDS = 600
 
 
 def _read(path):
@@ -476,6 +488,118 @@ def snapshot_footprint(snapshot=None) -> dict:
     }
 
 
+def _copy_key(role) -> str:
+    return COPY_KEY_PREFIX + str(role)
+
+
+def record_snapshot_copy(*, inbounds, servers=(), version=None, now=None) -> bool:
+    """Publish this process's snapshot footprint, once per snapshot version.
+
+    This is what lets one endpoint call answer "how many full copies exist" instead of one
+    call per role: a process records what it holds when it adopts a version, and
+    :func:`snapshot_copies` reads the records back.
+
+    Bounded and version-throttled: one small key with a TTL, written only when this process
+    adopts a version it has not recorded yet, so a forced reload of an unchanged version
+    issues no command at all. It never raises - a footprint record must not be able to break
+    a snapshot load, and a Redis double that does not implement ``set`` must stay harmless.
+    """
+    marker = '' if version is None else str(version)
+    role = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
+    if marker and _last_copy_versions.get(role) == marker:
+        return False
+    inbounds = [inbound for inbound in (inbounds or []) if isinstance(inbound, dict)]
+    rows = 0
+    unique = set()
+    for inbound in inbounds:
+        for client in (inbound.get('clients') or []):
+            if not isinstance(client, dict):
+                continue
+            rows += 1
+            unique.add(str(client.get('id') or client.get('uuid') or client.get('email')))
+    payload = {
+        'role': role,
+        'pid': os.getpid(),
+        'at': round(time.time() if now is None else float(now), 1),
+        'client_rows': rows,
+        'unique_clients': len(unique),
+        'inbounds': len(inbounds),
+        'servers': len(servers or []),
+        'version': marker,
+    }
+    try:
+        from panel.core import redis_client
+        import json
+        client = redis_client.get_redis()
+        if client is None:
+            return False
+        client.set(_copy_key(role), json.dumps(payload, separators=(',', ':')),
+                   ex=COPY_TTL_SECONDS)
+        _last_copy_versions[role] = marker
+        return True
+    except Exception:
+        return False
+
+
+def snapshot_copies(now=None) -> dict:
+    """Every process that published a snapshot footprint, and how many copies that is.
+
+    One GET per known role, never a keyspace SCAN: the roles are the fixed set the units
+    write, and a scan would grow with everything else Redis holds - the hidden cost this
+    module exists to avoid. A record older than its TTL is reported as expired rather than
+    counted, so a process that was stopped stops being a copy.
+    """
+    moment = time.time() if now is None else float(now)
+    try:
+        from panel.core import redis_client
+        import json
+        client = redis_client.get_redis()
+    except Exception as exc:
+        return {'available': False, 'reason': str(exc)[:120]}
+    if client is None:
+        return {'available': False, 'reason': 'no Redis configured'}
+    found = {}
+    expired = []
+    try:
+        for role in COPY_ROLES:
+            raw = client.get(_copy_key(role))
+            if not raw:
+                continue
+            if isinstance(raw, bytes):
+                raw = raw.decode('utf-8', 'replace')
+            try:
+                record = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(record, dict):
+                continue
+            age = moment - float(record.get('at') or 0)
+            if age > COPY_TTL_SECONDS:
+                expired.append(role)
+                continue
+            record['age_seconds'] = round(age, 1)
+            found[role] = record
+    except Exception as exc:
+        return {'available': False, 'reason': str(exc)[:120]}
+    rows = [int(record.get('client_rows') or 0) for record in found.values()]
+    versions = sorted({str(record.get('version')) for record in found.values()
+                       if record.get('version')})
+    return {
+        'available': True,
+        'copies': len(found),
+        'roles': found,
+        'expired_roles': sorted(expired),
+        'largest_client_rows': max(rows, default=0),
+        'client_rows_summed': sum(rows),
+        'versions': versions,
+        'ttl_seconds': COPY_TTL_SECONDS,
+        'note': ('one record per process that adopted the shared snapshot, written when it '
+                 'adopted a new version and expiring with the TTL. More than one copy with '
+                 'comparable rows is suspects A/B/C; client_rows_summed counts rows per '
+                 'copy, so the same fleet held twice sums to twice the fleet.'),
+    }
+
+
 def cache_footprint() -> dict:
     """Sizes of the caches that live outside the snapshot. Counts only."""
     out = {'available': True, 'caches': {}}
@@ -711,6 +835,7 @@ def host_report(*, now=None, trend_minutes=SAMPLE_KEEP_MINUTES) -> dict:
         'eve': eves,
         'accounting': accounting(host, eves),
         'redis_snapshot': redis_snapshot_bytes(),
+        'snapshot_copies': snapshot_copies(now=moment),
         'caches': cache_footprint(),
         'trend': trend(now=moment, minutes=trend_minutes),
     }

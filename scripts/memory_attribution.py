@@ -243,6 +243,31 @@ def render(data) -> str:
                        % other.get('count'))
 
     out.append('')
+    out.append('SNAPSHOT COPIES (who holds the shared snapshot)')
+    copies = data.get('snapshot_copies') or {}
+    if copies.get('available') is False:
+        out.append('  unavailable: %s' % (copies.get('reason') or 'unknown'))
+    elif not copies.get('copies'):
+        out.append('  none recorded yet (no process has adopted a new snapshot version,')
+        out.append('  or Redis was restarted and the records expired)')
+    else:
+        out.append('  %-22s %s   (rows summed over copies, not distinct clients)'
+                   % ('Copies', copies.get('copies')))
+        out.append('  %-22s %s rows' % ('Largest copy',
+                                        copies.get('largest_client_rows')))
+        for key in sorted(copies.get('roles') or {}):
+            record = (copies.get('roles') or {}).get(key) or {}
+            out.append('    %-20s %s rows, %s inbounds, pid %s, %ss old'
+                       % (key, record.get('client_rows'), record.get('inbounds'),
+                          record.get('pid'), record.get('age_seconds')))
+        if copies.get('expired_roles'):
+            out.append('  expired (stopped processes): %s'
+                       % ', '.join(copies['expired_roles']))
+        out.append('  Records are written when a process adopts a new version and expire')
+        out.append('  after %s s, so a stopped process stops counting as a copy.'
+                   % copies.get('ttl_seconds'))
+
+    out.append('')
     out.append('IN-PROCESS SNAPSHOT')
     out.append('  Not readable from this process: it does not run the app, so it holds no')
     out.append('  snapshot and printing zeros would imply an empty fleet. Read snapshot.*')

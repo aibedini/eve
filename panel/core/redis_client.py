@@ -600,6 +600,18 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
                 GLOBAL_SERVER_DATA['servers_status'] = payload.get('servers_status') or []
                 GLOBAL_SERVER_DATA['last_update'] = payload.get('last_update')
         if targets is None:
+            # Record what this process now holds (see memory_report.snapshot_copies): it is
+            # what lets one call answer "how many full copies exist". Full loads only, and
+            # version-throttled inside the recorder, so a forced reload of an unchanged
+            # version issues no extra Redis command. Never allowed to break the load.
+            try:
+                from panel.core import memory_report
+                memory_report.record_snapshot_copy(
+                    inbounds=GLOBAL_SERVER_DATA.get('inbounds') or [],
+                    servers=GLOBAL_SERVER_DATA.get('servers_status') or [],
+                    version=version)
+            except Exception:
+                pass
             # A targeted load deliberately leaves the global version unmarked so
             # the next full load still merges servers changed by other workers.
             _LAST_LOADED_SNAPSHOT_VERSION = version

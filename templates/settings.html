@@ -7159,7 +7159,12 @@
             'residual': 'Residual',
             'residualNote': 'Kernel, slab, page tables and driver memory: real, and owned by no process. It is reported rather than absorbed into another row.',
             'sumLine': 'Free + page cache + process PSS + residual',
-            'collectorHint': 'For a copy-and-paste artifact, run python scripts/memory_attribution.py --json on the host.'
+            'collectorHint': 'For a copy-and-paste artifact, run python scripts/memory_attribution.py --json on the host.',
+            'copies': 'Processes holding a copy',
+            'copiesNote': 'Each process records what it holds when it adopts a new snapshot version, and the record expires, so a stopped process stops counting as a copy.',
+            'noCopies': 'no copy recorded yet',
+            'largestCopy': 'largest copy',
+            'copiesUnit': 'rows'
         },
         fa: {{ ({
             'title': 'حافظه',
@@ -7274,7 +7279,12 @@
             'residual': 'باقی‌مانده',
             'residualNote': 'کرنل، slab، جدول‌های صفحه و حافظه درایور: واقعی‌اند و مال هیچ فرایندی نیستند. گزارش می‌شوند تا در ردیف دیگری پنهان نشوند.',
             'sumLine': 'آزاد + کش صفحه + PSS فرایندها + باقی‌مانده',
-            'collectorHint': 'برای خروجی قابل‌کپی، روی میزبان اجرا کنید: python scripts/memory_attribution.py --json'
+            'collectorHint': 'برای خروجی قابل‌کپی، روی میزبان اجرا کنید: python scripts/memory_attribution.py --json',
+            'copies': 'پروسه‌های دارای نسخه',
+            'copiesNote': 'هر پروسه هنگام پذیرش نسخه جدید اسنپ‌شات، آنچه را نگه می‌دارد ثبت می‌کند و این ثبت منقضی می‌شود؛ پس پروسه متوقف‌شده دیگر نسخه شمرده نمی‌شود.',
+            'noCopies': 'هنوز نسخه‌ای ثبت نشده',
+            'largestCopy': 'بزرگ‌ترین نسخه',
+            'copiesUnit': 'ردیف'
         })|tojson }}
     };
 
@@ -7295,6 +7305,10 @@
         'postgres': 'rolePostgres',
         'nginx': 'roleNginx'
     };
+    /* The fixed set of roles a process can report a snapshot copy under: the units the
+       installer writes, plus the single-process case. */
+    const MEM_COPY_ORDER = ['web', 'background', 'telegram-bot', 'telegram-egress',
+                            'pulse', 'combined'];
     const MEM_CACHE_ORDER = ['xui_sessions', 'xui_capabilities', 'refresh_jobs',
                              'bulk_jobs', 'subscription', 'ownership'];
     const MEM_CACHE_LABELS = {
@@ -7701,7 +7715,21 @@
             + memNote(memT('cachesNote'));
     }
 
-    function renderSnapshotRows(snapshot) {
+    /* How many processes hold the shared snapshot, from the records each one publishes.
+       This is the answer to "how many copies exist" without calling the endpoint inside
+       every role: a record expires with its TTL, so a stopped process stops counting. */
+    function memCopiesText(copies) {
+        if (!copies || copies.available === false) return memT('unavailable');
+        if (!Number(copies.copies)) return memT('noCopies');
+        const roles = copies.roles || {};
+        const names = memOrderedKeys(Object.keys(roles), MEM_COPY_ORDER).join(', ');
+        const largest = memNum(copies.largest_client_rows);
+        return memPlain(copies.copies) + ' (' + names + ')'
+            + (largest === null ? '' : ' - ' + memT('largestCopy') + ' '
+               + largest + ' ' + memT('copiesUnit'));
+    }
+
+    function renderSnapshotRows(snapshot, copies) {
         if (snapshot.available === false) {
             return memNote(snapshot.reason || memT('unavailable'), 'field-note-warn');
         }
@@ -7717,7 +7745,9 @@
             memRow(memT('rowsWithRawClient'), memNum(snapshot.rows_with_raw_client)),
             memRow(memT('rowsWithFormatted'), memNum(snapshot.rows_with_formatted_strings)),
             memRow(memT('lastUpdate'), memAgoStamp(snapshot.last_update)),
-            memNote(memT('duplicationNote'))
+            memNote(memT('duplicationNote')),
+            memKvRow(memT('copies'), memEsc(memCopiesText(copies)), '', 'mem-wrap'),
+            memNote(memT('copiesNote'))
         ];
         return '<div class="mem-kv">' + rows.join('') + '</div>';
     }
@@ -7774,7 +7804,7 @@
         return '<div class="mem-kv">' + rows.join('') + '</div>';
     }
 
-    function renderBreakdown(eve, accounting, snapshot, redis, caches) {
+    function renderBreakdown(eve, accounting, snapshot, copies, redis, caches) {
         return '<details class="mem-details">'
             + '<summary>' + memEsc(memT('breakdown')) + '</summary>'
             + '<div class="mem-group-title">' + memEsc(memT('accountingGroup')) + '</div>'
@@ -7786,7 +7816,7 @@
             + '<div class="mem-group-title">' + memEsc(memT('notProcessGroup')) + '</div>'
             + renderNonProcessTable(redis, caches)
             + '<div class="mem-group-title">' + memEsc(memT('snapshotGroup')) + '</div>'
-            + renderSnapshotRows(snapshot)
+            + renderSnapshotRows(snapshot, copies)
             + '</details>';
     }
 
@@ -7808,7 +7838,8 @@
             + renderTrendCard(data.trend || {})
             + '</div>'
             + renderBreakdown(data.eve || {}, data.accounting || {}, data.snapshot || {},
-                              data.redis_snapshot || {}, data.caches || {})
+                              data.snapshot_copies || {}, data.redis_snapshot || {},
+                              data.caches || {})
             + renderAnalyzeBlock();
     }
 

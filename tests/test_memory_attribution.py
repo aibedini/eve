@@ -144,6 +144,28 @@ class CollectorReportTests(unittest.TestCase):
         self.assertNotIn('None', text)
         self.assertNotIn('0 processes', text)
 
+    def test_the_copy_records_are_rendered_with_their_roles(self):
+        data = self._data()
+        data['snapshot_copies'] = {
+            'available': True, 'copies': 2, 'largest_client_rows': 24813,
+            'client_rows_summed': 49626, 'ttl_seconds': 600, 'expired_roles': ['pulse'],
+            'roles': {'web': {'client_rows': 24813, 'inbounds': 93, 'pid': 11,
+                              'age_seconds': 12.0},
+                      'background': {'client_rows': 24813, 'inbounds': 93, 'pid': 22,
+                                     'age_seconds': 30.0}}}
+        text = collector.render(data)
+        self.assertIn('SNAPSHOT COPIES', text)
+        self.assertIn('background', text)
+        self.assertIn('24813 rows', text)
+        self.assertIn('expired (stopped processes): pulse', text)
+
+    def test_no_copies_yet_is_stated_rather_than_guessed(self):
+        data = self._data()
+        data['snapshot_copies'] = {'available': False, 'reason': 'no Redis configured'}
+        self.assertIn('unavailable: no Redis configured', collector.render(data))
+        data['snapshot_copies'] = {'available': True, 'copies': 0, 'roles': {}}
+        self.assertIn('none recorded yet', collector.render(data))
+
     def test_the_payload_is_the_endpoint_shape_plus_the_collector_note(self):
         data = self._data()
         for key in ('host', 'eve', 'accounting', 'redis_snapshot', 'caches', 'trend',

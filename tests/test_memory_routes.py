@@ -24,8 +24,8 @@ os.environ.setdefault('EVE_SKIP_IMPORT_MIGRATIONS', '1')
 import app as app_module  # noqa: E402,F401  (importing it is what builds the app)
 from app import Admin, app, db  # noqa: E402
 
-REQUIRED_KEYS = ('host', 'eve', 'accounting', 'snapshot', 'redis_snapshot', 'caches',
-                 'trend', 'health')
+REQUIRED_KEYS = ('host', 'eve', 'accounting', 'snapshot', 'snapshot_copies',
+                 'redis_snapshot', 'caches', 'trend', 'health')
 
 
 class MemoryRouteTests(unittest.TestCase):
@@ -68,6 +68,9 @@ class MemoryRouteTests(unittest.TestCase):
         self.assertIn('roles', payload['eve'])
         self.assertIn('services', payload['eve'])
         self.assertIn('total_bytes', payload['accounting'])
+        # "How many full snapshot copies exist" travels in its own block, so it is present
+        # even when this process holds no snapshot of its own.
+        self.assertIn('available', payload['snapshot_copies'])
 
     def test_the_payload_carries_no_credentials_or_customer_data(self):
         payload = self.client.get('/api/system/memory').get_json()

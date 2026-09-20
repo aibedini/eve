@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.7.25"
+APP_VERSION = "2.7.26"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()

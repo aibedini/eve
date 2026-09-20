@@ -22,8 +22,9 @@ document proposes a fix that has not been measured on the install it applies to.
 
 | Surface | What it answers |
 |---|---|
-| `panel/core/memory_report.py` | host totals/pressure, per-process RSS/PSS/USS/threads/peak/uptime, Eve's roles, the host services that are not Eve (Redis, PostgreSQL, nginx), the unclassified remainder, the reconciliation down to a residual, snapshot duplication, Redis snapshot bytes, caches, bounded trend |
+| `panel/core/memory_report.py` | host totals/pressure, per-process RSS/PSS/USS/threads/peak/uptime, Eve's roles, the host services that are not Eve (Redis, PostgreSQL, nginx), the unclassified remainder, the reconciliation down to a residual, how many processes hold the snapshot, snapshot duplication, Redis snapshot bytes, caches, bounded trend |
 | `GET /api/system/memory` (superadmin) | the same payload Settings → Overview renders |
+| `record_snapshot_copy` + `snapshot_copies` | one bounded record per process that adopted a snapshot version, so `snapshot_copies.copies` answers "how many full copies exist" from a **single** call, with each copy's row count and age |
 | `POST /api/system/memory/analyze` (superadmin + step-up) | explicit, bounded deep Python sample: largest allocations as file/line/size only |
 | Settings → Overview → Memory | the human-readable version: host, Eve PSS, account reconciliation, roles table, host-services table, snapshot, caches, trend, health notes |
 | `scripts/memory_attribution.py` | the same attribution as a read-only on-host command, for a before/after artifact |
@@ -127,6 +128,14 @@ plus, on v3, the same client appearing once per assigned inbound. That is what
 The instrumentation deliberately does not compute the true retained size of nested objects
 on every request; that is the on-demand deep analysis, which is bounded, admin-only and
 returns file/line/size only.
+
+A, B and C no longer need the endpoint called inside each role. Each process writes one
+small bounded record (with a TTL) when it adopts a snapshot version, so
+`snapshot_copies.copies` counts the copies that actually exist right now and
+`snapshot_copies.roles.<role>.client_rows` says how much each one holds. A record expires
+with its TTL, so a process that was stopped stops counting as a copy, and a forced reload of
+an unchanged version writes nothing at all (the throttle is per role and per version, which
+is what keeps this off the Redis op counts the mutation benchmark asserts).
 
 Suspects D, E and F no longer need the live host to be quantified: they were measured in
 bytes by building production rows and deleting one key at a time (next section), and the
@@ -279,8 +288,8 @@ Settings → Overview → Memory is expected to answer, for the reported host:
 * how much RAM the host has, how much is **available**, how much is cache, and how much is
   swap;
 * Eve's own total as **PSS**, and which role uses the most;
-* how many full snapshot copies exist (three roles with a snapshot section of comparable
-  size = three copies) and how large each is;
+* how many full snapshot copies exist (`snapshot_copies.copies`, from the bounded per-process
+  records - no longer one endpoint call per role) and how large each role is;
 * how much of a snapshot row is duplication (`duplication_ratio`,
   `rows_with_raw_client`, `rows_with_formatted_strings`);
 * how much Redis holds for the compressed snapshot, and how big the out-of-snapshot caches

@@ -1,4 +1,5 @@
 """Memory attribution: host totals, per-role PSS, snapshot duplication, bounded trend."""
+import json
 import os
 import tempfile
 import unittest
@@ -309,6 +310,104 @@ class SnapshotFootprintTests(unittest.TestCase):
             row = memory_report.snapshot_footprint()
         self.assertFalse(row['available'])
         self.assertIn('reason', row)
+
+
+class SnapshotCopyTests(unittest.TestCase):
+    """The per-process copy records: what makes "how many copies exist" answerable."""
+
+    class _FakeRedis:
+        def __init__(self):
+            self.store = {}
+            self.sets = []
+
+        def set(self, key, value, ex=None):
+            self.store[key] = value
+            self.sets.append((key, ex))
+            return True
+
+        def get(self, key):
+            return self.store.get(key)
+
+    def setUp(self):
+        memory_report._last_copy_versions.clear()
+
+    @staticmethod
+    def _inbounds(rows_per_inbound):
+        return [{'server_id': index + 1, 'id': index,
+                 'clients': [{'id': 'uuid-%d-%d' % (index, n), 'email': 'c%d@x' % n}
+                             for n in range(count)]}
+                for index, count in enumerate(rows_per_inbound)]
+
+    def _record(self, fake, inbounds, version, role='web', now=1000.0):
+        with mock.patch('panel.core.redis_client.get_redis', return_value=fake), \
+                mock.patch.dict('os.environ', {'EVE_PROCESS_ROLE': role}):
+            return memory_report.record_snapshot_copy(
+                inbounds=inbounds, servers=[{'server_id': 1}], version=version, now=now)
+
+    def test_a_record_carries_the_rows_it_holds_and_gets_a_ttl(self):
+        fake = self._FakeRedis()
+        self.assertTrue(self._record(fake, self._inbounds([3, 2]), 'v1'))
+        key, ttl = fake.sets[0]
+        self.assertEqual(key, memory_report.COPY_KEY_PREFIX + 'web')
+        self.assertEqual(ttl, memory_report.COPY_TTL_SECONDS)
+        record = json.loads(fake.store[key])
+        self.assertEqual(record['client_rows'], 5)
+        self.assertEqual(record['unique_clients'], 5)
+        self.assertEqual(record['inbounds'], 2)
+        self.assertEqual(record['servers'], 1)
+        self.assertEqual(record['version'], 'v1')
+
+    def test_the_same_version_is_not_written_twice(self):
+        # This is what keeps a forced reload off the Redis op counts and off the hot path.
+        fake = self._FakeRedis()
+        self.assertTrue(self._record(fake, self._inbounds([1]), 'v1'))
+        self.assertFalse(self._record(fake, self._inbounds([1]), 'v1'))
+        self.assertEqual(len(fake.sets), 1)
+        self.assertTrue(self._record(fake, self._inbounds([1]), 'v2'))
+        self.assertEqual(len(fake.sets), 2)
+
+    def test_a_role_that_stopped_expires_instead_of_counting_as_a_copy(self):
+        fake = self._FakeRedis()
+        self._record(fake, self._inbounds([4]), 'v1', role='web', now=1000.0)
+        self._record(fake, self._inbounds([4]), 'v1', role='background', now=1000.0)
+        with mock.patch('panel.core.redis_client.get_redis', return_value=fake):
+            live = memory_report.snapshot_copies(now=1000.0 + memory_report.COPY_TTL_SECONDS - 1)
+            stale = memory_report.snapshot_copies(now=1000.0 + memory_report.COPY_TTL_SECONDS + 1)
+        self.assertEqual(live['copies'], 2)
+        self.assertEqual(live['largest_client_rows'], 4)
+        self.assertEqual(live['client_rows_summed'], 8)   # rows per copy, not distinct rows
+        self.assertEqual(live['versions'], ['v1'])
+        self.assertEqual(live['roles']['web']['age_seconds'], 599.0)
+
+    def test_expired_records_are_reported_as_expired_not_counted(self):
+        fake = self._FakeRedis()
+        self._record(fake, self._inbounds([4]), 'v1', role='web', now=1000.0)
+        with mock.patch('panel.core.redis_client.get_redis', return_value=fake):
+            row = memory_report.snapshot_copies(now=1000.0 + memory_report.COPY_TTL_SECONDS + 1)
+        self.assertEqual(row['copies'], 0)
+        self.assertEqual(row['expired_roles'], ['web'])
+        self.assertEqual(row['client_rows_summed'], 0)
+
+    def test_no_redis_and_a_corrupt_record_are_handled(self):
+        with mock.patch('panel.core.redis_client.get_redis', return_value=None):
+            self.assertFalse(memory_report.snapshot_copies()['available'])
+        fake = self._FakeRedis()
+        fake.store[memory_report.COPY_KEY_PREFIX + 'web'] = 'not json'
+        with mock.patch('panel.core.redis_client.get_redis', return_value=fake):
+            row = memory_report.snapshot_copies(now=1000.0)
+        self.assertTrue(row['available'])
+        self.assertEqual(row['copies'], 0)
+
+    def test_a_redis_without_set_cannot_break_the_recorder(self):
+        # A test double or a proxy may not implement set(); the recorder must absorb it.
+        class _NoSet:
+            def get(self, key):
+                return None
+
+        with mock.patch('panel.core.redis_client.get_redis', return_value=_NoSet()), \
+                mock.patch.dict('os.environ', {'EVE_PROCESS_ROLE': 'web'}):
+            self.assertFalse(memory_report.record_snapshot_copy(
+                inbounds=self._inbounds([1]), version='v1'))
 
 
 class TrendTests(unittest.TestCase):
