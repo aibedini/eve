@@ -16,6 +16,12 @@ All notable changes to Eve - Xui Manager are documented in this file.
 ### Measured
 - On the documented 150-account/600-membership synthetic fixture, schema v2 reduced retained deep size (including mutation indexes) by 69.0%, JSON by 67.1%, gzip by 66.1%, and the absolute publish/hydrate peak by 61.7%. These are checkout measurements, not production estimates.
 
+### Upgrade notes
+- **Forward is safe.** A per-server block with no `schema_version` (the legacy expanded list) loads unchanged; a dict block is schema v2 and is hydrated; a block whose `schema_version` is neither is rejected with a logged warning and the last good local block is kept, so a newer Redis payload cannot corrupt an older reader's memory (`panel/core/redis_client.py`, the `decoded` branch; `snapshot_model.validate_server_block`).
+- **Rollback is not symmetric.** A build older than 2.7.28 decodes `eve:server_data:<id>` and uses it verbatim as the expanded inbound list, so a schema-v2 dict lands where a list is expected and that server's block is unreadable (its keys are iterated as if they were inbounds) until the block is replaced. The keys carry a 600 s TTL and the older build republishes its own format as it fetches, so it self-heals; for a clean rollback, drop the snapshot keys first:
+  `redis-cli --scan --pattern 'eve:server_data*' | xargs redis-cli del`
+- The format is per server, not per install: only a panel reporting the v3 client API is written as schema v2 (`server_is_v3` gates it in the fetcher, and a server that fails to normalize falls back to the expanded list), so a legacy install publishes exactly the format an older build expects and a rollback on a mixed install is degraded for the v3 panels only.
+
 ## [2.7.27] - 2026-09-20
 
 ### Added
