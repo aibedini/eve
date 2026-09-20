@@ -16,6 +16,51 @@ All notable changes to Eve - Xui Manager are documented in this file.
 ### Measured
 - On the documented 150-account/600-membership synthetic fixture, schema v2 reduced retained deep size (including mutation indexes) by 69.0%, JSON by 67.1%, gzip by 66.1%, and the absolute publish/hydrate peak by 61.7%. These are checkout measurements, not production estimates.
 
+## [2.7.27] - 2026-09-20
+
+### Added
+- The trend ring always held a day (1440 samples at one a minute) but nothing could read more than an hour of it: `report()` was wired to the 60-minute default and the endpoint had no window parameter. `memory_report.clamp_trend_minutes()` with `TREND_WINDOW_MIN/MAX` (5..1440) now clamps a request to what the ring can answer, `GET /api/system/memory?trend_minutes=` takes the window and echoes it as `trend.window_minutes`, the trend card's picker offers 1 h / 6 h / a day and re-fetches, and `scripts/memory_attribution.py --trend-minutes` asks for the same window on the host.
+- `_health()` adds a warning note when the trend is growing, so a host reported as "ok" cannot hide the one shape that means a leak rather than a retained snapshot.
+
+### Fixed
+- `trend()`'s two unavailable branches return the full key set with `None` instead of omitting keys, the same correction `eve_processes()` and `accounting()` needed: three consumers read that shape, and a branch that omits keys makes each of them guard differently for the same condition.
+- A pre-existing order-dependent `tests/test_system_update.py`: adding `panel/routes/system.py` to the affected-tests map brought it into the plan for the first time, and it failed in isolation because the build identity shells out to `git rev-parse` once per process (memoized) while the test patches `subprocess.run` and asserts the call list. The identity is now pinned from the environment for that module, so the assertion tests the systemd probe rather than the order of the suite.
+
+## [2.7.26] - 2026-09-20
+
+### Added
+- **How many snapshot copies exist, from a single call.** Each process writes one bounded record when it adopts a snapshot version and `snapshot_copies()` reads them back, so `snapshot_copies.copies` counts the copies that exist right now and `roles.<role>.client_rows` says how much each holds. Bounded by construction: one short key per role with a 600 s TTL (a stopped process stops counting), written on full loads only and throttled per role and version (a forced reload of an unchanged version issues no Redis command), read back with one GET per known role and never a keyspace SCAN, and wrapped so it cannot raise.
+- Surfaced in Settings → Overview (the snapshot group shows the copy count, the roles and the largest copy), in `scripts/memory_attribution.py`, and in the endpoint contract test.
+
+### Fixed
+- The record's throttle was a single module-level version, so a process recording under two roles skipped the second one. It is now keyed by role, because the record is.
+
+## [2.7.25] - 2026-09-20
+
+### Added
+- **The publish/hydrate transient is measured, so suspect G no longer needs the host for half its answer.** `scripts/measure_snapshot_footprint.py --transient` traces one session with `tracemalloc` started before the graph is built (a graph allocated earlier is invisible and understates the peak by its largest part) and with the app import warmed outside the traced window (counting it would swamp a 0.36 MB fleet with ~67 MB of routes, models and SQLAlchemy). On 150 production-built rows: 0.365 MB retained, 1.165 MB live after the hydrate (3.19x) and a 1.516 MB high-water peak (4.15x); the v3 mirror over the same accounts gives 3.27x live and 3.96x peak. That is ~7.9 KB of live transient per row - ~233 MB at 30k rows and ~466 MB at 60k - per process that publishes or hydrates.
+
+### Fixed
+- `eve_processes()` and `accounting()` returned a truncated dict when `/proc` or the host total was missing; both now return every key with `None` for "not measured" instead of omitting it, because a count of 0 reads as "there are none". The collector's EVE section printed "None processes" for the same reason and now says unavailable.
+- The memory endpoint's only route test was `._route_smoke.py` at the repository root, whose AppleDouble name keeps unittest discovery from ever running it, so the contract was silently dead. It is now `tests/test_memory_routes.py`, extended with the keys the payload gained since, and `scripts/check_tracked_artifacts.py` refuses any `._*` path so it cannot come back.
+
+## [2.7.24] - 2026-09-20
+
+### Added
+- **The host's RAM is attributed to services, not only to Eve.** Every process that was not Eve used to be counted as `other_processes` and then dropped, so Redis, PostgreSQL and nginx could not be named and the used RAM was never reconciled against anything. `eve_processes()` now reports `roles` (unchanged), `services` (Redis, PostgreSQL, nginx, classified from `/proc/<pid>/cmdline` and kept strictly outside `eve_pss_bytes`, because folding PostgreSQL into "Eve is using 2 GB" is the attribution error this module exists to prevent) and the unclassified remainder as totals. `accounting()` reconciles the host as free + page cache + the PSS of every process + a named residual, which is reported rather than absorbed because kernel, slab, page tables and driver memory are real and belong to no process.
+- `scripts/memory_attribution.py` prints that whole breakdown on the host, read-only: no HTTP, no session, no database write, and it deliberately never imports the app (the import would run migrations inside the collector), so it reports no in-process snapshot and says so. `host_report()` is the app-free entry point it calls; `report()` is unchanged for the endpoint.
+- Settings → Overview gains "Where the used memory is" with the reconciliation and residual, and a "Host services (not EVE)" table; the unclassified row shows its RSS/PSS/threads instead of dashes.
+
+## [2.7.23] - 2026-09-20
+
+### Fixed
+- `scripts/measure_snapshot_footprint.py` could not run from its own documented command: importing the app core outside dev mode aborts with "SESSION_SECRET is required in production". It now defaults that flag as well and still leaves an explicitly configured environment (`FLASK_ENV`/`ENV`/`DEBUG`) alone.
+- `rows_with_formatted_strings` counted formatted *keys*, not rows, so a 150-row fleet reported "600/150 rows" because a row carries four formatted strings. The counter is row-level now, which is what `memory_report.snapshot_footprint` - and therefore Settings → Overview - has always reported, and extracting it into an app-free `row_stats()` is what lets a unit test pin that the script and the live endpoint agree.
+- `panel/core/memory_report.py` had no entry in the affected-tests map, so editing the module the whole memory pass is read through ran no Tier 1 test at all.
+
+### Docs
+- `docs/performance/MEMORY.md` no longer claims CPython 3.14 is the interpreter this checkout runs (only 3.11.6 and 3.7 are installed here) and records the re-measured 3.11.6 values plus the deltas that do transfer.
+
 ## [2.7.22] - 2026-09-19
 
 ### Added
