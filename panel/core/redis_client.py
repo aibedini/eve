@@ -50,7 +50,10 @@ GLOBAL_SERVER_DATA = {
     'inbounds': [],
     'stats': {},
     'servers_status': [],
-    'is_updating': False
+    'is_updating': False,
+    # Server ids whose retained compatibility graph is backed by schema v2.
+    'normalized_server_ids': set(),
+    'normalized_indexes': {},
 }
 
 # Serializes all writes to GLOBAL_SERVER_DATA (fetch pipeline, ownership
@@ -469,7 +472,11 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                 pipe.multi()
                 encoded_blocks = {}
                 for sid in changed:
-                    block_blob = _encode_snapshot(blocks.get(sid, []))
+                    block = blocks.get(sid, [])
+                    if sid in (GLOBAL_SERVER_DATA.get('normalized_server_ids') or set()):
+                        from panel.core.snapshot_model import normalize_server_block
+                        block = normalize_server_block(block, sid)
+                    block_blob = _encode_snapshot(block)
                     encoded_blocks[sid] = block_blob
                     pipe.set(_redis_server_snapshot_key(sid), block_blob, ex=REDIS_SNAPSHOT_TTL)
                 for sid in published_versions:
@@ -546,6 +553,8 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
                 _SNAPSHOT_METRICS['targeted_loads'] += 1
 
             new_blocks = {}
+            normalized_ids = set(GLOBAL_SERVER_DATA.get('normalized_server_ids') or set())
+            accepted_versions = dict(_LAST_LOADED_SERVER_VERSIONS)
             for sid, server_version in server_versions.items():
                 local = current_blocks.get(sid)
                 if targets is not None and sid not in targets and local:
@@ -558,7 +567,28 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
                     continue
                 block_blob = client.get(_redis_server_snapshot_key(sid))
                 if block_blob:
-                    new_blocks[sid] = _decode_snapshot(block_blob)
+                    decoded = _decode_snapshot(block_blob)
+                    if isinstance(decoded, dict):
+                        try:
+                            from panel.core.snapshot_model import hydrate_server_block
+                            new_blocks[sid] = hydrate_server_block(decoded)
+                            normalized_ids.add(sid)
+                        except (ValueError, TypeError) as exc:
+                            logger.warning(
+                                'Rejected snapshot block for server %s; keeping last good: %s',
+                                sid, exc,
+                            )
+                            if local:
+                                new_blocks[sid] = local
+                            continue
+                    elif isinstance(decoded, list):
+                        new_blocks[sid] = decoded
+                        normalized_ids.discard(sid)
+                    else:
+                        if local:
+                            new_blocks[sid] = local
+                        continue
+                    accepted_versions[sid] = server_version
                     _SNAPSHOT_METRICS['blocks_decoded'] += 1
                     _SNAPSHOT_METRICS['bytes_decoded'] += len(block_blob)
                 elif local:
@@ -579,13 +609,19 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
                 GLOBAL_SERVER_DATA['stats'] = manifest.get('stats') or {}
                 GLOBAL_SERVER_DATA['servers_status'] = manifest.get('servers_status') or []
                 GLOBAL_SERVER_DATA['last_update'] = manifest.get('last_update')
+                GLOBAL_SERVER_DATA['normalized_server_ids'] = normalized_ids
+                from panel.core.snapshot_model import build_retained_index
+                GLOBAL_SERVER_DATA['normalized_indexes'] = {
+                    sid: build_retained_index(new_blocks.get(sid) or [])
+                    for sid in normalized_ids if sid in new_blocks
+                }
                 if targets is None:
-                    _LAST_LOADED_SERVER_VERSIONS = server_versions
+                    _LAST_LOADED_SERVER_VERSIONS = accepted_versions
                 else:
                     refreshed = dict(_LAST_LOADED_SERVER_VERSIONS)
                     for sid in targets:
-                        if sid in server_versions:
-                            refreshed[sid] = server_versions[sid]
+                        if sid in accepted_versions:
+                            refreshed[sid] = accepted_versions[sid]
                     _LAST_LOADED_SERVER_VERSIONS = refreshed
         else:
             # The old pickle format is intentionally rejected. Redis is an

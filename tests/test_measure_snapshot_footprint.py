@@ -134,6 +134,25 @@ class DeletionDeltaTests(unittest.TestCase):
         self.assertLess(footprint.deep_size(holder), 2 * once)
 
 
+class NormalizationMeasurementTests(unittest.TestCase):
+    def test_comparison_reports_entities_memberships_and_smaller_retained_graph(self):
+        snapshot = _snapshot([['a', 'b'], ['a', 'b'], ['a', 'b']])
+        # Measurement fixtures use short ids; give them reliable v3 UUIDs.
+        ids = {
+            'a': '4ce7db6e-4576-4e55-bb2a-452487fe1bb6',
+            'b': 'ff5f8c59-9fd9-4609-93fa-5c5a0bbf02a4',
+        }
+        for inbound in snapshot['inbounds']:
+            for client in inbound['clients']:
+                client['id'] = ids[client['id']]
+        result = footprint.normalization_comparison(snapshot)
+        self.assertEqual(result['entities'], 2)
+        self.assertEqual(result['memberships'], 6)
+        self.assertLess(result['normalized_retained']['deep_bytes'],
+                        result['old']['deep_bytes'])
+        self.assertLess(result['normalized_json_bytes'], result['old']['json_bytes'])
+
+
 class TransientPeakTests(unittest.TestCase):
     def test_the_live_total_only_grows_as_publish_and_hydrate_hold_more(self):
         result = footprint.transient_peak(lambda: _snapshot([['a', 'b'], ['a']]))
@@ -176,6 +195,16 @@ class TransientPeakTests(unittest.TestCase):
     def test_an_rss_peak_is_an_integer_or_an_honest_none(self):
         value = footprint.peak_rss_bytes()
         self.assertTrue(value is None or isinstance(value, int), value)
+
+    def test_normalized_publish_and_hydrate_peak_uses_schema_v2(self):
+        snapshot = _snapshot([['a'], ['a']])
+        reliable = '4ce7db6e-4576-4e55-bb2a-452487fe1bb6'
+        for inbound in snapshot['inbounds']:
+            inbound['clients'][0]['id'] = reliable
+        result = footprint.normalized_transient_peak(lambda: snapshot)
+        self.assertTrue(result['available'])
+        self.assertEqual(result['rows'], 2)
+        self.assertGreater(result['peak_bytes'], result['retained_bytes'])
 
 
 if __name__ == '__main__':

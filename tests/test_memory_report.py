@@ -328,6 +328,9 @@ class SnapshotCopyTests(unittest.TestCase):
         def get(self, key):
             return self.store.get(key)
 
+        def strlen(self, key):
+            return len(self.store.get(key, b''))
+
     def setUp(self):
         memory_report._last_copy_versions.clear()
 
@@ -408,6 +411,39 @@ class SnapshotCopyTests(unittest.TestCase):
                 mock.patch.dict('os.environ', {'EVE_PROCESS_ROLE': 'web'}):
             self.assertFalse(memory_report.record_snapshot_copy(
                 inbounds=self._inbounds([1]), version='v1'))
+
+
+class RedisSnapshotByteTests(unittest.TestCase):
+    class FakeRedis:
+        def __init__(self, values):
+            self.values = values
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def strlen(self, key):
+            return len(self.values.get(key, b''))
+
+    def test_compressed_manifest_counts_all_compressed_server_blocks(self):
+        from panel.core import redis_client
+        manifest = redis_client._encode_snapshot({
+            'last_update': 'v7',
+            'server_versions': {'1': 'a', '22': 'b'},
+        })
+        block1 = redis_client._encode_snapshot([{'id': 1}])
+        block2 = redis_client._encode_snapshot([{'id': 22}, {'id': 23}])
+        fake = self.FakeRedis({
+            redis_client.REDIS_SNAPSHOT_MANIFEST_KEY: manifest,
+            redis_client.REDIS_SERVER_SNAPSHOT_PREFIX + '1': block1,
+            redis_client.REDIS_SERVER_SNAPSHOT_PREFIX + '22': block2,
+        })
+        with mock.patch.object(redis_client, 'get_redis', return_value=fake):
+            row = memory_report.redis_snapshot_bytes()
+        self.assertTrue(row['available'])
+        self.assertEqual(row['server_keys'], 2)
+        self.assertEqual(row['server_blocks_bytes'], len(block1) + len(block2))
+        self.assertEqual(row['total_bytes'], len(manifest) + len(block1) + len(block2))
+        self.assertEqual(row['last_update'], 'v7')
 
 
 class TrendWindowTests(unittest.TestCase):

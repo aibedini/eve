@@ -200,6 +200,60 @@ def _sizes(snapshot):
     }
 
 
+def normalize_snapshot(snapshot):
+    """Production schema-v2 representation plus its shared retained graph."""
+    from panel.core import snapshot_model
+
+    by_server = {}
+    order = []
+    for inbound in snapshot.get('inbounds') or []:
+        sid = int(inbound.get('server_id'))
+        if sid not in by_server:
+            order.append(sid)
+        by_server.setdefault(sid, []).append(inbound)
+    blocks = []
+    retained = []
+    for sid in order:
+        block = snapshot_model.normalize_server_block(by_server[sid], sid)
+        blocks.append(block)
+        retained.extend(snapshot_model.hydrate_server_block(block))
+    indexes = {}
+    for sid in order:
+        server_rows = [row for row in retained if int(row.get('server_id')) == sid]
+        indexes[sid] = snapshot_model.build_retained_index(server_rows)
+    return ({'schema_version': 2, 'server_blocks': blocks,
+             'servers_status': snapshot.get('servers_status') or [],
+             'last_update': snapshot.get('last_update')},
+            {'inbounds': retained,
+             'servers_status': snapshot.get('servers_status') or [],
+             'last_update': snapshot.get('last_update'),
+             'normalized_server_ids': set(order),
+             'normalized_indexes': indexes})
+
+
+def normalization_comparison(snapshot):
+    schema, retained = normalize_snapshot(snapshot)
+    old = _sizes(snapshot)
+    normalized_retained = {
+        'deep_bytes': deep_size(retained),
+        'rows': sum(len(inbound.get('clients') or [])
+                    for inbound in retained.get('inbounds') or []),
+    }
+    schema_json = json.dumps(schema, default=str, separators=(',', ':')).encode('utf-8')
+    entities = sum(len(block.get('clients') or {}) for block in schema['server_blocks'])
+    memberships = sum(
+        len(inbound.get('client_refs') or [])
+        for block in schema['server_blocks'] for inbound in block.get('inbounds') or [])
+    return {
+        'entities': entities,
+        'memberships': memberships,
+        'old': old,
+        'normalized_retained': normalized_retained,
+        'normalized_json_bytes': len(schema_json),
+        'normalized_gzip_bytes': len(gzip.compress(schema_json, 6)),
+    }
+
+
 def _variant(snapshot, *, drop_raw=False, drop_formatted=False):
     """Measure a counterfactual representation by deleting keys, not by imagining it."""
     if not (drop_raw or drop_formatted):
@@ -287,7 +341,7 @@ def measure(*, servers, inbounds, clients, mirror, v3=True):
     }
     rows = full['rows']
 
-    return {
+    result = {
         'shape': {'servers': servers, 'inbounds_per_server': inbounds,
                   'accounts_per_server': clients, 'mirror': mirror, 'v3': v3},
         'totals': {
@@ -320,6 +374,9 @@ def measure(*, servers, inbounds, clients, mirror, v3=True):
         },
         'variants': variants,
     }
+    if mirror and v3:
+        result['normalization'] = normalization_comparison(snapshot)
+    return result
 
 
 def peak_rss_bytes():
@@ -338,7 +395,7 @@ def peak_rss_bytes():
     return int(value) * 1024 if sys.platform.startswith('linux') else int(value)
 
 
-def transient_peak(build, *, warmup=None):
+def transient_peak(build, *, warmup=None, serialize=None, hydrate=None):
     """What publishing and re-hydrating the snapshot costs at its worst moment.
 
     The retained size is not the peak, and the difference is what an OOM lands on: a
@@ -373,12 +430,14 @@ def transient_peak(build, *, warmup=None):
     try:
         snapshot = build()
         mark('retained')
-        text = json.dumps(snapshot, default=str, separators=(',', ':'))
+        serializable = serialize(snapshot) if serialize is not None else snapshot
+        text = json.dumps(serializable, default=str, separators=(',', ':'))
         encoded = text.encode('utf-8')
         mark('json')
         blob = gzip.compress(encoded, 6)
         mark('gzip')
-        reloaded = json.loads(gzip.decompress(blob).decode('utf-8'))
+        decoded = json.loads(gzip.decompress(blob).decode('utf-8'))
+        reloaded = hydrate(decoded) if hydrate is not None else decoded
         mark('hydrate')
     finally:
         if not was_tracing:
@@ -400,6 +459,27 @@ def transient_peak(build, *, warmup=None):
                  'and the compressed bytes were all alive and the hydrate had built a '
                  'second graph. It is transient: a steady-state sample never sees it.'),
     }
+
+
+def normalized_transient_peak(build, *, warmup=None):
+    """Publish/hydrate peak using schema v2 while the retained graph stays live."""
+    from panel.core import snapshot_model
+
+    def serialize(snapshot):
+        schema, _retained = normalize_snapshot(snapshot)
+        return schema
+
+    def build_retained():
+        _schema, retained = normalize_snapshot(build())
+        return retained
+
+    def hydrate(payload):
+        rows = []
+        for block in payload.get('server_blocks') or []:
+            rows.extend(snapshot_model.hydrate_server_block(block))
+        return {'inbounds': rows}
+
+    return transient_peak(build_retained, warmup=warmup, serialize=serialize, hydrate=hydrate)
 
 
 def marginal_bytes_per_row(*, servers, inbounds, clients, mirror):
@@ -431,11 +511,13 @@ def _report_transient(args):
         return build_snapshot(servers=servers, inbounds=inbounds, clients=clients,
                               mirror=mirror, v3=True)
 
-    result = transient_peak(
+    runner = normalized_transient_peak if args.normalized else transient_peak
+    result = runner(
         lambda: _build(args.servers, args.inbounds, args.clients, args.mirror),
         # Import the app and build one throwaway fleet first, so the app import is not
         # counted as snapshot memory (see transient_peak).
         warmup=lambda: _build(1, 1, 1, False))
+    result['representation'] = 'schema_v2_normalized' if args.normalized else 'legacy_expanded'
     if args.json:
         print(json.dumps(result, indent=2))
         return 0
@@ -494,6 +576,8 @@ def main():
     parser.add_argument('--mirror', action='store_true',
                         help='with --transient: mirror every account onto every inbound '
                              '(the v3 shape)')
+    parser.add_argument('--normalized', action='store_true',
+                        help='with --transient: publish and hydrate schema v2')
     args = parser.parse_args()
 
     if args.transient:

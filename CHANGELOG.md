@@ -2,6 +2,20 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.28] - 2026-09-20
+
+### Added
+- V3 server snapshots now retain one canonical client entity per reliable UUID with lightweight inbound memberships. Legacy blocks remain expanded, membership-specific differences round-trip as overlays, and requested dashboard full/delta views are materialized ephemerally with the correct inbound id.
+- Redis per-server blocks use JSON-compatible schema v2 for normalized servers. Legacy blocks still load unchanged; unknown schema versions preserve the last good local block instead of replacing it.
+- Background memory lifecycle telemetry records bounded, PII-free PSS/USS checkpoints from idle through fetch, processing, commit, Redis publication, result release and the 30-second settled state.
+- The snapshot measurement script compares expanded and normalized retained/JSON/gzip sizes and supports `--transient --normalized` for the schema-v2 publish/hydrate peak.
+
+### Fixed
+- Redis snapshot-byte attribution now decodes the compressed manifest with the canonical snapshot codec, so it counts every per-server block instead of silently reporting zero servers.
+
+### Measured
+- On the documented 150-account/600-membership synthetic fixture, schema v2 reduced retained deep size (including mutation indexes) by 69.0%, JSON by 67.1%, gzip by 66.1%, and the absolute publish/hydrate peak by 61.7%. These are checkout measurements, not production estimates.
+
 ## [2.7.22] - 2026-09-19
 
 ### Added

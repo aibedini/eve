@@ -14,6 +14,7 @@ from app import (  # noqa: E402
     Admin, ClientOwnership, GLOBAL_SERVER_DATA, Server, app, db,
 )
 from panel.core import snapshot_delta as delta  # noqa: E402
+from panel.core import snapshot_model  # noqa: E402
 
 
 class FakeRedis:
@@ -128,6 +129,26 @@ class SnapshotDeltaTests(unittest.TestCase):
         self.assertTrue(hashed)
         self.assertTrue(all(key[0] == 1 for key in hashed), hashed)
         self.assertEqual(result["changed"], [[1, 1]])
+
+    def test_shared_v3_entity_marks_every_membership_inbound_changed(self):
+        uid = '4ce7db6e-4576-4e55-bb2a-452487fe1bb6'
+        expanded = [
+            {'server_id': 7, 'id': 10,
+             'clients': [{'id': uid, 'email': 'a@x', 'up': 1}]},
+            {'server_id': 7, 'id': 20,
+             'clients': [{'id': uid, 'email': 'a@x', 'up': 1}]},
+        ]
+        retained, _ = snapshot_model.normalize_retained_block(expanded, 7)
+        snapshot = {'last_update': 't1', 'inbounds': retained,
+                    'servers_status': [], 'stats': {}}
+        delta.sync(snapshot)
+        retained[0]['clients'][0]['up'] = 9
+        snapshot['last_update'] = 't2'
+        delta.mark_dirty(inbound_keys=[(7, 10), (7, 20)])
+        with mock.patch.object(delta, 'fingerprint', wraps=delta.fingerprint) as fingerprints:
+            result = delta.sync(snapshot)
+        self.assertEqual(result['changed'], [[7, 10], [7, 20]])
+        self.assertEqual(fingerprints.call_count, 2)
 
     def test_hinted_removal_is_detected(self):
         snapshot = _snapshot()

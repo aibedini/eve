@@ -45,7 +45,7 @@ MAPPING = (
         ['tests.test_watch_propagation_crossprocess', 'tests.test_client_mutation_result'],
     )),
     ('panel/core/redis_client.py', (
-        ['tests.test_per_server_redis'],
+        ['tests.test_per_server_redis', 'tests.test_snapshot_redis'],
         ['tests.test_watch_propagation_crossprocess', 'tests.test_snapshot_delta',
          'tests.test_refresh_lock_scoping'],
     )),
@@ -56,6 +56,14 @@ MAPPING = (
     ('panel/core/snapshot_delta.py', (
         ['tests.test_snapshot_delta'],
         ['tests.test_sse_updates', 'tests.test_client_events'],
+    )),
+    ('panel/core/snapshot_model.py', (
+        ['tests.test_snapshot_model', 'tests.test_snapshot_redis'],
+        ['tests.test_snapshot_delta', 'tests.test_regression_matrix'],
+    )),
+    ('panel/core/memory_probe.py', (
+        ['tests.test_memory_probe'],
+        ['tests.test_memory_report', 'tests.test_server_polling'],
     )),
     ('panel/core/memory_report.py', (
         # Attribution is the module the whole memory pass is read through: an edit here
@@ -74,7 +82,8 @@ MAPPING = (
          'tests.test_usage_intelligence_observability', 'tests.test_refresh_policy'],
     )),
     ('panel/jobs/refresh.py', (
-        ['tests.test_config_vs_telemetry', 'tests.test_server_polling'],
+        ['tests.test_config_vs_telemetry', 'tests.test_server_polling',
+         'tests.test_refresh_mutations'],
         ['tests.test_regression_matrix', 'tests.test_renew_consistency',
          'tests.test_client_mutation_result', 'tests.test_refresh_reconcile'],
     )),

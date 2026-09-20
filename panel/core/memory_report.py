@@ -35,6 +35,7 @@ Rules this module follows:
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -548,7 +549,6 @@ def record_snapshot_copy(*, inbounds, servers=(), version=None, now=None) -> boo
     }
     try:
         from panel.core import redis_client
-        import json
         client = redis_client.get_redis()
         if client is None:
             return False
@@ -683,10 +683,8 @@ def redis_snapshot_bytes() -> dict:
         raw_manifest = client.get(manifest_key) if manifest_key else None
         manifest = {}
         if raw_manifest:
-            if isinstance(raw_manifest, bytes):
-                raw_manifest = raw_manifest.decode('utf-8', 'replace')
             try:
-                manifest = json.loads(raw_manifest)
+                manifest = redis_client._decode_snapshot(raw_manifest)
             except Exception:
                 manifest = {}
         server_ids = list((manifest.get('server_versions') or {}).keys())
@@ -870,6 +868,15 @@ def host_report(*, now=None, trend_minutes=SAMPLE_KEEP_MINUTES) -> dict:
         'caches': cache_footprint(),
         'trend': trend(now=moment, minutes=trend_minutes),
     }
+    try:
+        from panel.core import memory_probe
+        payload['background_fetch'] = memory_probe.report()
+    except Exception as exc:
+        payload['background_fetch'] = {
+            'available': False,
+            'reason': str(exc)[:120],
+            'samples': [],
+        }
     payload['health'] = _health(payload)
     return payload
 

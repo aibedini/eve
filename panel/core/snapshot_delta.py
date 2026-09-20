@@ -42,6 +42,7 @@ def _init_state():
     return {
         'dirty': True,
         'dirty_servers': set(),
+        'dirty_keys': set(),
         'revision': 0,
         'local_revision': 0,
         'last_update': None,
@@ -61,7 +62,7 @@ def reset_state():
         _state.update(_init_state())
 
 
-def mark_dirty(server_ids=None):
+def mark_dirty(server_ids=None, inbound_keys=None):
     """Declare that GLOBAL_SERVER_DATA was mutated in place.
 
     Passing the ids of the servers that were replaced lets sync() re-fingerprint
@@ -70,8 +71,13 @@ def mark_dirty(server_ids=None):
     """
     with _lock:
         _state['dirty'] = True
-        if server_ids is None:
+        if inbound_keys is not None:
+            _state.setdefault('dirty_keys', set()).update(
+                (key[0], key[1]) for key in inbound_keys
+                if isinstance(key, (list, tuple)) and len(key) == 2)
+        elif server_ids is None:
             _state['dirty_servers'] = set()
+            _state['dirty_keys'] = set()
         else:
             _state.setdefault('dirty_servers', set()).update(
                 int(server_id) for server_id in server_ids
@@ -204,6 +210,7 @@ def sync(snapshot, force=False):
         inbounds = (snapshot.get('inbounds') or []) if isinstance(snapshot, dict) else []
         previous = _state['fingerprints']
         hints = set(_state.get('dirty_servers') or ())
+        key_hints = set(_state.get('dirty_keys') or ())
         # A hint is only usable when every inbound is attributed to a server.
         if hints and any(
             isinstance(inbound, dict) and inbound.get('server_id') is None
@@ -211,7 +218,27 @@ def sync(snapshot, force=False):
         ):
             hints = set()
 
-        if hints:
+        if key_hints:
+            current = dict(previous)
+            present = set()
+            changed = []
+            for inbound in inbounds:
+                if not isinstance(inbound, dict):
+                    continue
+                key = snapshot_key(inbound)
+                if key not in key_hints:
+                    continue
+                present.add(key)
+                digest = fingerprint(inbound)
+                if previous.get(key) != digest:
+                    changed.append(key)
+                current[key] = digest
+            removed = []
+            for key in key_hints:
+                if key in previous and key not in present:
+                    removed.append(key)
+                    current.pop(key, None)
+        elif hints:
             current = dict(previous)
             hinted_keys = {}
             changed = []
@@ -247,6 +274,7 @@ def sync(snapshot, force=False):
         _state['last_update'] = last_update
         _state['dirty'] = False
         _state['dirty_servers'] = set()
+        _state['dirty_keys'] = set()
 
         revision = _state['revision']
         if changed or removed or meta_changed or revision == 0:

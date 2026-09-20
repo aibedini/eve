@@ -19,8 +19,8 @@ from types import SimpleNamespace
 
 from sqlalchemy import and_, inspect, or_, text
 
-from panel.adapters.xui import persist_detected_panel_type
-from panel.core import fetch_sequence, panel_limits, refresh_policy
+from panel.adapters.xui import persist_detected_panel_type, server_is_v3
+from panel.core import fetch_sequence, memory_probe, panel_limits, refresh_policy, snapshot_model
 from panel.core.redis_client import (
     GLOBAL_REFRESH_LOCK,
     GLOBAL_SERVER_DATA,
@@ -151,9 +151,22 @@ def _run_snapshot_with_progress():
                         if not isinstance(inbounds, list):
                             inbounds = []
                         processed, stats = process_inbounds(inbounds, srv, admin_user, '*', {}, online_index=online_index)
+                        is_normalized = server_is_v3(srv)
+                        if is_normalized:
+                            processed, _ = snapshot_model.normalize_retained_block(
+                                processed, srv.id)
                         existing = GLOBAL_SERVER_DATA.get('inbounds') or []
                         without = [ib for ib in existing if int(ib.get('server_id', -1)) != int(srv.id)]
                         GLOBAL_SERVER_DATA['inbounds'] = without + list(processed or [])
+                        normalized = set(GLOBAL_SERVER_DATA.get('normalized_server_ids') or set())
+                        (normalized.add if is_normalized else normalized.discard)(int(srv.id))
+                        GLOBAL_SERVER_DATA['normalized_server_ids'] = normalized
+                        indexes = dict(GLOBAL_SERVER_DATA.get('normalized_indexes') or {})
+                        if is_normalized:
+                            indexes[int(srv.id)] = snapshot_model.build_retained_index(processed)
+                        else:
+                            indexes.pop(int(srv.id), None)
+                        GLOBAL_SERVER_DATA['normalized_indexes'] = indexes
                         GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
                         publish_snapshot_to_redis(
                             [srv.id], expected_server_revisions={srv.id: revision_before},
@@ -502,7 +515,16 @@ def run_per_server_scheduler(*, fetch_callable=None, server_rows=None, duration=
                     now_after = time.time()
                     for sid in [s for s, fut in inflight.items() if fut in done]:
                         future = inflight.pop(sid)
-                        _scheduler_finish(sid, future, now=now_after)
+                        released_probe = _scheduler_finish(sid, future, now=now_after)
+                        del future
+                        if released_probe:
+                            cycle_id, counts = released_probe
+                            counts = dict(counts or {})
+                            counts['inflight_work'] = 0
+                            memory_probe.record(
+                                cycle_id, 'after_worker_result_release', counts=counts)
+                            memory_probe.schedule_settled(
+                                cycle_id, counts=counts, delay=30.0)
                     # A nudge or a completion can make another panel due immediately; the
                     # loop never sleeps "for the cycle" to find that out.
                     if not done and _scheduler_consume_wake():
@@ -591,6 +613,8 @@ def _scheduler_finish(sid, future, *, now=None):
                   'changed': False, 'block': None}
     if not isinstance(result, dict):
         result = {'server_id': sid, 'changed': False, 'block': None}
+    probe_cycle = result.get('_memory_probe_cycle')
+    probe_counts = result.get('_memory_probe_counts')
     error = result.get('error')
     changed = bool(result.get('changed'))
     if result.get('busy'):
@@ -639,6 +663,9 @@ def _scheduler_finish(sid, future, *, now=None):
                     refresh_policy.note_snapshot_publish(sid, now=moment)
             except Exception:
                 pass
+        if probe_cycle:
+            memory_probe.record(
+                probe_cycle, 'after_redis_publish', counts=probe_counts)
         block = result.get('block')
         if block:
             _record_fetch_transitions(sid, block)
@@ -653,6 +680,8 @@ def _scheduler_finish(sid, future, *, now=None):
         except Exception:
             pass
         _scheduler_record_completion(sid, error=None)
+        if probe_cycle:
+            return probe_cycle, probe_counts
     except Exception:
         try:
             from app import app
@@ -794,6 +823,8 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                                         periodic=False):
     """Body of fetch_and_update_global_data; the caller owns the fetch guard."""
     from app import _utc_iso_now, app, fetch_worker, get_server_password, process_inbounds  # deferred: app-level helper, avoids circular import
+    probe_cycles = {}
+    probe_counts = {}
     try:
         with GLOBAL_REFRESH_LOCK:
             GLOBAL_SERVER_DATA['is_updating'] = True
@@ -808,6 +839,32 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 pass
 
         servers = servers_q.all()
+
+        def _snapshot_counts():
+            rows = GLOBAL_SERVER_DATA.get('inbounds') or []
+            memberships = sum(len(row.get('clients') or []) for row in rows
+                              if isinstance(row, dict))
+            retained = {row.get('server_id') for row in rows if isinstance(row, dict)}
+            return {'servers': len(servers), 'inbounds': len(rows),
+                    'client_memberships': memberships, 'processed_client_rows': memberships,
+                    'inflight_work': 0, 'retained_server_results': len(retained)}
+
+        def _raw_counts(rows):
+            clients = 0
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                settings = row.get('settings')
+                if isinstance(settings, str):
+                    try:
+                        settings = json.loads(settings)
+                    except Exception:
+                        settings = {}
+                if isinstance(settings, dict) and isinstance(settings.get('clients'), list):
+                    clients += len(settings['clients'])
+                elif isinstance(row.get('clientStats'), list):
+                    clients += len(row['clientStats'])
+            return clients
 
         now_ts = time.time()
         skipped_ids = set()
@@ -930,6 +987,9 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
 
         now_iso = _utc_iso_now()
         new_by_server = dict(existing_by_server)
+        normalized_server_ids = set(
+            GLOBAL_SERVER_DATA.get('normalized_server_ids') or set())
+        normalized_indexes = dict(GLOBAL_SERVER_DATA.get('normalized_indexes') or {})
         servers_by_id = {int(s.id): s for s in servers}
         server_order = [int(s.id) for s in servers]
 
@@ -966,6 +1026,8 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 GLOBAL_SERVER_DATA['stats'] = stats
                 GLOBAL_SERVER_DATA['servers_status'] = statuses
                 GLOBAL_SERVER_DATA['last_update'] = _utc_iso_now()
+                GLOBAL_SERVER_DATA['normalized_server_ids'] = set(normalized_server_ids)
+                GLOBAL_SERVER_DATA['normalized_indexes'] = dict(normalized_indexes)
 
         def _apply_result(sid, res, ticket=None, duration_ms=None):
             # Ordering barrier FIRST: a panel that answered slowly must not overwrite
@@ -1027,6 +1089,36 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
             # read for a few seconds (panel/core/refresh_policy.py: client fences).
             if processed:
                 _apply_client_fences(sid, processed)
+            is_normalized = bool(srv is not None and server_is_v3(srv))
+            if is_normalized:
+                processed, normalized_block = snapshot_model.normalize_retained_block(
+                    processed, sid)
+                normalized_server_ids.add(sid)
+                normalized_indexes[sid] = snapshot_model.build_retained_index(processed)
+                probe_counts[sid] = {
+                    'inbounds': len(processed),
+                    'client_entities': len(normalized_block.get('clients') or {}),
+                    'client_memberships': sum(
+                        len(item.get('client_refs') or [])
+                        for item in normalized_block.get('inbounds') or []),
+                    'processed_client_rows': sum(
+                        len(item.get('client_refs') or [])
+                        for item in normalized_block.get('inbounds') or []),
+                    'inflight_work': 1,
+                    'retained_server_results': len(new_by_server),
+                }
+            else:
+                normalized_server_ids.discard(sid)
+                normalized_indexes.pop(sid, None)
+                probe_counts[sid] = {
+                    'inbounds': len(processed or []),
+                    'legacy_client_rows': sum(
+                        len(item.get('clients') or []) for item in processed or []),
+                    'processed_client_rows': sum(
+                        len(item.get('clients') or []) for item in processed or []),
+                    'inflight_work': 1,
+                    'retained_server_results': len(new_by_server),
+                }
             previous_signature = _block_signature(existing_by_server.get(sid) or [])
             changed = _block_signature(processed) != previous_signature
             new_by_server[sid] = list(processed or [])
@@ -1096,6 +1188,11 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                         'sync.server.publish', level='debug',
                         servers=len(publishable),
                         server_ids=','.join(str(sid) for sid in sorted(publishable))[:200])
+                    for sid in publishable:
+                        if sid in probe_cycles:
+                            memory_probe.record(
+                                probe_cycles[sid], 'after_redis_publish',
+                                counts=probe_counts.get(sid))
                 else:
                     # A CAS failure means at least one mutation won the race. Drop
                     # those stale candidates; successful panel data is fetched again
@@ -1113,6 +1210,10 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                 future_to_id = {}
                 for srv in server_dicts:
                     srv_id = int(srv['id'])
+                    probe_cycles[srv_id] = memory_probe.begin_cycle()
+                    memory_probe.record(
+                        probe_cycles[srv_id], 'idle_before_fetch',
+                        counts=_snapshot_counts())
                     # Take the ticket BEFORE the read starts: the result is applied
                     # under this ticket, so an older read that returns late loses.
                     fetch_tickets[srv_id] = fetch_sequence.begin(srv_id)
@@ -1128,6 +1229,14 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                             res = (sid, None, None, None, None, "Timeout", 'auto')
                     except Exception as e:
                         res = (sid, None, None, None, None, str(e) or "Timeout", 'auto')
+                    raw_inbounds = res[1] if isinstance(res, tuple) and len(res) > 1 else None
+                    memory_probe.record(
+                        probe_cycles[sid], 'after_panel_fetch',
+                        counts={'servers': 1,
+                                'inbounds': len(raw_inbounds) if isinstance(raw_inbounds, list) else 0,
+                                'raw_client_rows': _raw_counts(raw_inbounds),
+                                'inflight_work': 1,
+                                'retained_server_results': len(new_by_server)})
                     duration_ms = None
                     try:
                         duration_ms = int(
@@ -1141,7 +1250,13 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                     except Exception:
                         app.logger.exception("Failed to apply fetch result for server %s", sid)
                         applied = False
+                    memory_probe.record(
+                        probe_cycles[sid], 'after_process_inbounds',
+                        counts=probe_counts.get(sid))
                     _commit_snapshot()
+                    memory_probe.record(
+                        probe_cycles[sid], 'after_snapshot_commit',
+                        counts=probe_counts.get(sid))
                     if progress_callback:
                         try:
                             srv = servers_by_id.get(sid)
@@ -1158,6 +1273,10 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
                     nowt = time.time()
                     if nowt - last_publish >= 1.0:
                         _publish_dirty()
+                    res = None
+            future_to_id.clear()
+            future = None
+            raw_inbounds = None
 
         # Defensive: any server that never produced a result → timeout entry.
         for sid in list(pending_ids):
@@ -1166,6 +1285,13 @@ def _fetch_and_update_global_data_inner(force=False, server_ids=None, progress_c
         # Final authoritative commit + publish to the other workers (no-op w/o Redis).
         _commit_snapshot()
         _publish_dirty()
+        for sid, cycle_id in probe_cycles.items():
+            released_counts = dict(probe_counts.get(sid) or {})
+            released_counts['inflight_work'] = 0
+            memory_probe.record(
+                cycle_id, 'after_worker_result_release', counts=released_counts)
+            memory_probe.schedule_settled(
+                cycle_id, counts=released_counts, delay=30.0)
 
     except Exception as e:
         app.logger.error("Background fetch error: %s", e)

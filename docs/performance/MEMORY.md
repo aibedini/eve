@@ -29,6 +29,7 @@ document proposes a fix that has not been measured on the install it applies to.
 | Settings → Overview → Memory | the human-readable version: host, Eve PSS, account reconciliation, roles table, host-services table, snapshot, caches, trend, health notes |
 | `scripts/memory_attribution.py` | the same attribution as a read-only on-host command, for a before/after artifact |
 | `scripts/measure_snapshot_footprint.py` | how many bytes a row, `raw_client` and the `*_formatted` strings actually cost (deletion deltas), and with `--transient`: what publishing and re-hydrating one copy costs at its worst instant |
+| `panel/core/memory_probe.py` | a fixed 256-sample Redis ring (process-local fallback) of aggregate-only background fetch/process/commit/publish/release/settled PSS and USS, visible from the web memory endpoint; it never retains a panel payload or client identifier |
 | `health_watchdog` | one sample a minute into a Redis ring (`LPUSH` + `LTRIM`, capped at 1440 entries) |
 
 The trend is what separates the two very different explanations of a high number:
@@ -246,7 +247,41 @@ Still owed to the host: how many copies actually exist, and what `VmHWM` shows b
 after a real dashboard load (the RSS-peak column is `None` off Linux). This measurement says
 what one publish or hydrate costs; the host says how many of them happen at once.
 
-## Optimization plan (ranked, not implemented)
+### Schema-v2 normalization measurement (implemented 2026-09-20)
+
+The v3 representation is now isolated from the `raw_client`, formatted-string and lazy-web
+ideas: those fields are unchanged. A v3 server block retains one canonical entity per
+reliable UUID (email is the server-scoped fallback only when no reliable UUID exists), and
+each inbound stores a lightweight membership. Legacy server blocks stay expanded. Redis
+stores a versioned schema-v2 block; an unknown version is rejected per server and cannot
+replace the last good local block. External dashboard full/delta views expand only the
+requested inbounds and are not retained.
+
+The documented local command was run on CPython 3.11.6 with 3 servers x 4 inbounds x 50
+accounts, every account mirrored to all four inbounds (150 entities, 600 memberships):
+
+```bash
+python scripts/measure_snapshot_footprint.py --servers 3 --inbounds 4 --clients 50 --json
+python scripts/measure_snapshot_footprint.py --servers 3 --inbounds 4 --clients 50 --mirror --transient --json
+python scripts/measure_snapshot_footprint.py --servers 3 --inbounds 4 --clients 50 --mirror --transient --normalized --json
+```
+
+| Measurement | Expanded | Schema v2 | Change |
+|---|---:|---:|---:|
+| retained deep graph (including O(1) mutation/membership indexes) | 1,417,306 B | 439,266 B | **-69.0%** |
+| serialized JSON | 671,503 B | 220,720 B | **-67.1%** |
+| compressed JSON | 60,145 B | 20,411 B | **-66.1%** |
+| publish/hydrate absolute peak | 5,716,143 B | 2,191,240 B | **-61.7%** |
+| live allocations after hydrate | 4,700,611 B | 2,036,161 B | **-56.7%** |
+
+These are synthetic checkout measurements, not production RAM claims. The normalized peak
+ratio is higher relative to its much smaller retained graph because the processing path
+briefly receives expanded panel rows before collapsing them; the decision metric is the
+absolute peak, which fell 61.7%. The on-host lifecycle checkpoints determine whether that
+temporary expanded result is released at `after_worker_result_release` and remains released
+at `settled_30s_after_fetch`.
+
+## Remaining optimization plan (normalization implemented; other items not implemented)
 
 Measured impact can only come from the numbers above; the ordering below is by expected
 value and risk, and each item states what to measure before and after.

@@ -31,7 +31,14 @@ from panel.adapters.xui import (
     v3_reset_client,
     v3_update_client,
 )
-from panel.core import panel_limits, refresh_policy, snapshot_delta, subscription_cache
+from panel.core import (
+    memory_probe,
+    panel_limits,
+    refresh_policy,
+    snapshot_delta,
+    snapshot_model,
+    subscription_cache,
+)
 from panel.core.redis_client import (
     fetch_guard,
     GLOBAL_REFRESH_LOCK,
@@ -1776,6 +1783,8 @@ def _fetch_and_update_server_data_inner(server_id: int):
     caller can forget it.
     """
     from app import app, process_inbounds  # deferred: app-level helper, avoids circular import
+    probe_cycle = memory_probe.begin_cycle()
+    memory_probe.record(probe_cycle, 'idle_before_fetch', counts={'servers': 1})
     server = db.session.get(Server, int(server_id))
     if not server or not server.enabled:
         raise ValueError("Server not found or disabled")
@@ -1793,6 +1802,22 @@ def _fetch_and_update_server_data_inner(server_id: int):
     inbounds, fetch_error, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type)
     if fetch_error:
         raise RuntimeError(fetch_error)
+    raw_client_rows = 0
+    for raw_inbound in inbounds if isinstance(inbounds, list) else []:
+        settings = raw_inbound.get('settings') if isinstance(raw_inbound, dict) else None
+        if isinstance(settings, str):
+            try:
+                settings = json.loads(settings)
+            except Exception:
+                settings = {}
+        if isinstance(settings, dict) and isinstance(settings.get('clients'), list):
+            raw_client_rows += len(settings['clients'])
+        elif isinstance(raw_inbound, dict) and isinstance(raw_inbound.get('clientStats'), list):
+            raw_client_rows += len(raw_inbound['clientStats'])
+    memory_probe.record(
+        probe_cycle, 'after_panel_fetch',
+        counts={'servers': 1, 'inbounds': len(inbounds) if isinstance(inbounds, list) else 0,
+                'raw_client_rows': raw_client_rows, 'inflight_work': 1})
 
     online_index, _ = fetch_onlines(session_obj, server.host, server.panel_type)
     status_payload, status_error, _status_type = fetch_server_status(session_obj, server.host, server.panel_type)
@@ -1820,6 +1845,7 @@ def _fetch_and_update_server_data_inner(server_id: int):
     if not isinstance(inbounds, list):
         inbounds = []
     processed, stats = process_inbounds(inbounds, server, admin_user, '*', {}, online_index=online_index)
+    is_normalized = server_is_v3(server)
 
     # Mutation fence: a verified EVE write may still be propagating through the panel's
     # aggregate view. The guard rewrites those counters (and nothing else) before the
@@ -1830,6 +1856,29 @@ def _fetch_and_update_server_data_inner(server_id: int):
             processed = fenced
     except Exception:
         app.logger.exception('Client fence guard failed for server %s', server.id)
+
+    normalized_block = None
+    if is_normalized:
+        processed, normalized_block = snapshot_model.normalize_retained_block(
+            processed, server.id)
+        normalized_index = snapshot_model.build_retained_index(processed)
+    else:
+        normalized_index = None
+    probe_counts = {
+        'inbounds': len(processed or []),
+        'client_entities': (len(normalized_block.get('clients') or {})
+                            if normalized_block else 0),
+        'client_memberships': sum(len(item.get('clients') or [])
+                                  for item in processed or []),
+        'legacy_client_rows': (0 if normalized_block else sum(
+            len(item.get('clients') or []) for item in processed or [])),
+        'processed_client_rows': sum(len(item.get('clients') or [])
+                                     for item in processed or []),
+        'inflight_work': 1,
+        'retained_server_results': 1,
+    }
+    memory_probe.record(
+        probe_cycle, 'after_process_inbounds', counts=probe_counts)
 
     # Update the shared snapshot atomically: the read-modify-write of one
     # server's block is serialized with the background fan-out commits.
@@ -1925,6 +1974,15 @@ def _fetch_and_update_server_data_inner(server_id: int):
 
         GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(statuses)
         GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+        normalized_ids = set(GLOBAL_SERVER_DATA.get('normalized_server_ids') or set())
+        (normalized_ids.add if is_normalized else normalized_ids.discard)(int(server.id))
+        GLOBAL_SERVER_DATA['normalized_server_ids'] = normalized_ids
+        indexes = dict(GLOBAL_SERVER_DATA.get('normalized_indexes') or {})
+        if normalized_index is not None:
+            indexes[int(server.id)] = normalized_index
+        else:
+            indexes.pop(int(server.id), None)
+        GLOBAL_SERVER_DATA['normalized_indexes'] = indexes
 
         # Phase 7: this reconciler is the right place to keep the public subscription
         # responses warm, so a VPN client request is answered from the cache and never
@@ -1937,12 +1995,16 @@ def _fetch_and_update_server_data_inner(server_id: int):
         except Exception:
             pass
 
+    memory_probe.record(probe_cycle, 'after_snapshot_commit', counts=probe_counts)
+
     return {
         'server_id': int(server.id),
         'block': new_block,
         'stats': stats,
         'changed': bool(changed),
         'status_payload': status_payload or {},
+        '_memory_probe_cycle': probe_cycle,
+        '_memory_probe_counts': probe_counts,
     }
 
 
@@ -2305,6 +2367,12 @@ def _iter_cached_client_copies(server_id, email, client_uuid=None):
         return
     email_l = (email or '').strip().lower()
     uuid_l = (client_uuid or '').strip().lower()
+    if _normalized_server(sid):
+        key = snapshot_model.client_key({'id': uuid_l, 'email': email_l})
+        index = (GLOBAL_SERVER_DATA.get('normalized_indexes') or {}).get(sid) or {}
+        for inbound, client in (index.get('memberships') or {}).get(key, []):
+            yield inbound, client
+        return
     for ib in (GLOBAL_SERVER_DATA.get('inbounds') or []):
         try:
             if int(ib.get('server_id', -1)) != sid:
@@ -2316,6 +2384,20 @@ def _iter_cached_client_copies(server_id, email, client_uuid=None):
             cu = (cd.get('id') or '').strip().lower()
             if (email_l and ce == email_l) or (uuid_l and cu == uuid_l):
                 yield ib, cd
+
+
+def _normalized_server(server_id):
+    try:
+        return int(server_id) in (GLOBAL_SERVER_DATA.get('normalized_server_ids') or set())
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalized_index(server_id):
+    try:
+        return (GLOBAL_SERVER_DATA.get('normalized_indexes') or {}).get(int(server_id))
+    except (TypeError, ValueError):
+        return None
 
 
 def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
@@ -2343,6 +2425,7 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
     operation = operation or ('rotate' if new_email else 'update')
     revision_before = get_server_revision(server_id) if publish else None
     patched_row = None
+    affected_inbounds = set()
     if publish:
         # The panel mutation is authoritative even if this worker's local cache
         # has no matching row.  Invalidate stale refreshes before best-effort RAM sync.
@@ -2370,6 +2453,7 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
             thresholds = _get_dashboard_status_thresholds()
             lang = _get_panel_ui_lang()
             for _ib, cd in _iter_cached_client_copies(server_id, email, client_uuid):
+                affected_inbounds.add((int(server_id), _ib.get('id')))
                 raw = cd.get('raw_client')
                 if not isinstance(raw, dict):
                     raw = {}
@@ -2399,8 +2483,20 @@ def patch_cached_client(server_id, email, *, client_uuid=None, new_email=None,
                 changed = True
                 patched_row = cd
             if changed:
+                index = _normalized_index(server_id)
+                if index is not None and new_email is not None:
+                    old_key = snapshot_model.client_key(
+                        {'id': client_uuid, 'email': email})
+                    new_key = snapshot_model.client_key(
+                        {'id': client_uuid, 'email': new_email})
+                    if old_key != new_key and old_key in (index.get('entities') or {}):
+                        index['entities'][new_key] = index['entities'].pop(old_key)
+                        index['memberships'][new_key] = index['memberships'].pop(old_key, [])
                 _recompute_cached_server_stats(server_id)
-                snapshot_delta.mark_dirty(server_ids=[server_id])
+                if _normalized_server(server_id):
+                    snapshot_delta.mark_dirty(inbound_keys=affected_inbounds)
+                else:
+                    snapshot_delta.mark_dirty(server_ids=[server_id])
                 # Credentials changed: drop this server's cached subscription
                 # responses so the next client poll reads the new ones.
                 subscription_cache.invalidate_server(server_id)
@@ -2527,6 +2623,7 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
     """
     from app import _get_dashboard_status_thresholds, _get_panel_ui_lang, app, format_bytes  # deferred: app-level helper, avoids circular import
     changed = False
+    affected_inbounds = set()
     try:
         sid = int(server_id)
         target_ids = {int(iid) for iid in (inbound_ids or [])}
@@ -2547,6 +2644,8 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
         with write_context:
             thresholds = _get_dashboard_status_thresholds()
             lang = _get_panel_ui_lang()
+            normalized = _normalized_server(sid)
+            shared_cached = None
             for ib in (GLOBAL_SERVER_DATA.get('inbounds') or []):
                 try:
                     if int(ib.get('server_id', -1)) != sid or int(ib.get('id', -1)) not in target_ids:
@@ -2565,20 +2664,34 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
                 if duplicate:
                     continue
 
-                raw = copy.deepcopy(raw_client)
-                cached = {
-                    'server_id': sid,
-                    'inbound_id': int(ib.get('id')),
-                    'email': raw.get('email'),
-                    'id': raw.get('id'),
-                    'up': 0,
-                    'down': 0,
-                    'up_formatted': format_bytes(0),
-                    'down_formatted': format_bytes(0),
-                    'raw_client': raw,
-                }
-                _recompute_cached_client(cached, thresholds, lang, config_changed=True)
+                if normalized and shared_cached is not None:
+                    cached = shared_cached
+                else:
+                    raw = copy.deepcopy(raw_client)
+                    cached = {
+                        'server_id': sid,
+                        'email': raw.get('email'),
+                        'id': raw.get('id'),
+                        'up': 0,
+                        'down': 0,
+                        'up_formatted': format_bytes(0),
+                        'down_formatted': format_bytes(0),
+                        'raw_client': raw,
+                    }
+                    if not normalized:
+                        cached['inbound_id'] = int(ib.get('id'))
+                    _recompute_cached_client(cached, thresholds, lang, config_changed=True)
+                    if normalized:
+                        shared_cached = cached
                 clients.append(cached)
+                affected_inbounds.add((sid, ib.get('id')))
+                if normalized:
+                    index = _normalized_index(sid)
+                    if index is not None:
+                        key = snapshot_model.client_key(cached)
+                        index.setdefault('entities', {})[key] = cached
+                        index.setdefault('memberships', {}).setdefault(key, []).append(
+                            (ib, cached))
                 ib['client_count'] = len(clients)
                 if raw.get('enable', True):
                     ib['active_count'] = int(ib.get('active_count') or 0) + 1
@@ -2586,7 +2699,10 @@ def add_cached_client(server_id, inbound_ids, raw_client, *, publish=True):
 
             if changed:
                 _recompute_cached_server_stats(server_id)
-                snapshot_delta.mark_dirty(server_ids=[server_id])
+                if normalized:
+                    snapshot_delta.mark_dirty(inbound_keys=affected_inbounds)
+                else:
+                    snapshot_delta.mark_dirty(server_ids=[server_id])
                 # Credentials changed: drop this server's cached subscription
                 # responses so the next client poll reads the new ones.
                 subscription_cache.invalidate_server(server_id)
@@ -2604,6 +2720,7 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
     """Write-through: drop a client from cache (all inbounds, or just one)."""
     from app import app  # deferred: app-level helper, avoids circular import
     removed = False
+    affected_inbounds = set()
     try:
         if publish:
             bump_server_revision(server_id)
@@ -2644,9 +2761,25 @@ def remove_cached_client(server_id, email, *, client_uuid=None, inbound_id=None,
                     kept.append(cd)
                 if len(kept) != len(clients):
                     ib['clients'] = kept
+                    affected_inbounds.add((sid, ib.get('id')))
             if removed:
+                index = _normalized_index(sid)
+                if index is not None:
+                    key = snapshot_model.client_key({'id': uuid_l, 'email': email_l})
+                    kept_memberships = [
+                        pair for pair in (index.get('memberships') or {}).get(key, [])
+                        if (sid, pair[0].get('id')) not in affected_inbounds
+                    ]
+                    if kept_memberships:
+                        index['memberships'][key] = kept_memberships
+                    else:
+                        index.get('memberships', {}).pop(key, None)
+                        index.get('entities', {}).pop(key, None)
                 _recompute_cached_server_stats(server_id)
-                snapshot_delta.mark_dirty(server_ids=[server_id])
+                if _normalized_server(server_id):
+                    snapshot_delta.mark_dirty(inbound_keys=affected_inbounds)
+                else:
+                    snapshot_delta.mark_dirty(server_ids=[server_id])
                 # Credentials changed: drop this server's cached subscription
                 # responses so the next client poll reads the new ones.
                 subscription_cache.invalidate_server(server_id)
@@ -2720,11 +2853,23 @@ def clone_cached_client_into_inbound(server_id, inbound_id, email, client_uuid=N
             for cd in (target_ib.get('clients') or []):
                 if (cd.get('email') or '').strip().lower() == tgt_email:
                     return False  # already present
-            clone = copy.deepcopy(source)
-            clone['inbound_id'] = iid
+            normalized = _normalized_server(sid)
+            clone = source if normalized else copy.deepcopy(source)
+            if not normalized:
+                clone['inbound_id'] = iid
             target_ib.setdefault('clients', []).append(clone)
+            if normalized:
+                index = _normalized_index(sid)
+                if index is not None:
+                    key = snapshot_model.client_key(source)
+                    index.setdefault('entities', {})[key] = source
+                    index.setdefault('memberships', {}).setdefault(key, []).append(
+                        (target_ib, source))
             _recompute_cached_server_stats(server_id)
-            snapshot_delta.mark_dirty(server_ids=[server_id])
+            if normalized:
+                snapshot_delta.mark_dirty(inbound_keys=[(sid, iid)])
+            else:
+                snapshot_delta.mark_dirty(server_ids=[server_id])
             # Credentials changed: drop this server's cached subscription
             # responses so the next client poll reads the new ones.
             subscription_cache.invalidate_server(server_id)

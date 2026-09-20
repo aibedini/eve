@@ -336,10 +336,16 @@ def api_refresh():
                 "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
             }), 200
 
+        from panel.core import snapshot_model
         if sync['mode'] == 'delta':
-            inbounds = snapshot_delta.select_inbounds(GLOBAL_SERVER_DATA, sync['changed'])
+            inbounds = snapshot_model.materialize_retained_inbounds(
+                GLOBAL_SERVER_DATA.get('inbounds') or [],
+                GLOBAL_SERVER_DATA.get('normalized_server_ids') or set(),
+                keys=sync['changed'])
         else:
-            inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+            inbounds = snapshot_model.materialize_retained_inbounds(
+                GLOBAL_SERVER_DATA.get('inbounds') or [],
+                GLOBAL_SERVER_DATA.get('normalized_server_ids') or set())
 
         resp = {
             "success": True,
