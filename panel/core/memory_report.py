@@ -428,7 +428,7 @@ def eve_processes(*, include_other=False) -> dict:
         'eve_pss_bytes': eve_pss,
         'eve_pss_complete': eve_complete,
         'eve_pss_with_xray_bytes': eve_pss_with_xray,
-        'eve_pss_with_xray_complete': eve_complete and bool(xray.get('pss_complete', False)),
+        'eve_pss_with_xray_complete': eve_complete and bool(xray.get('pss_complete', True)),
         'service_pss_bytes': sum(bucket['pss_bytes'] for bucket in services.values()),
         'service_pss_complete': all(bucket.get('pss_complete', False)
                                     for bucket in services.values()),

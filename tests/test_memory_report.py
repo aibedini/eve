@@ -244,6 +244,30 @@ class EveAggregationTests(unittest.TestCase):
         self.assertEqual(report['other_pss_unavailable_processes'], 1)
         self.assertEqual(report['other_rss_bytes'], 90 * MiB)
 
+    def test_an_absent_or_unreadable_xray_role_is_handled_precisely(self):
+        # No managed Xray at all: nothing is missing, so the Eve figure is complete. An
+        # Xray group that exists but could not be read is the opposite case - and it makes
+        # the eve-with-xray figure incomplete while eve itself stays complete, because
+        # accounting sums the with-xray number.
+        web = {'available': True, 'pid': 100, 'role': 'web', 'rss_bytes': 400 * MiB,
+               'pss_bytes': 380 * MiB, 'pss_available': True, 'private_bytes': 350 * MiB,
+               'threads': 4, 'uptime_seconds': 10, 'peak_rss_bytes': 500 * MiB}
+        report = self._grouped({'100': web})
+        self.assertTrue(report['eve_pss_complete'])
+        self.assertTrue(report['eve_pss_with_xray_complete'])
+
+        xray = {'available': True, 'pid': 908, 'role': 'xray', 'rss_bytes': 30 * MiB,
+                'pss_bytes': None, 'pss_available': False, 'private_bytes': None,
+                'threads': 3, 'uptime_seconds': 99, 'peak_rss_bytes': 40 * MiB}
+        report = self._grouped({'100': web, '908': xray})
+        self.assertTrue(report['eve_pss_complete'])
+        self.assertFalse(report['eve_pss_with_xray_complete'])
+        row = memory_report.accounting(
+            {'total_bytes': 1000, 'free_bytes': 100, 'cache_bytes': 100}, report)
+        self.assertFalse(row['complete'])
+        self.assertEqual(row['incomplete_groups'], ['eve'])
+        self.assertIsNone(row['residual_bytes'])
+
     def test_host_services_are_attributed_separately_and_never_to_eve(self):
         report = self._grouped({
             '100': {'available': True, 'pid': 100, 'role': 'web',
