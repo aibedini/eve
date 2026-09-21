@@ -22,7 +22,9 @@ import unittest  # noqa: E402
 import app as app_module  # noqa: E402
 from app import Admin, ClientOperation, GLOBAL_SERVER_DATA, Server, app, db  # noqa: E402
 from panel.models import RenewalEvent  # noqa: E402
+from panel.adapters import xui as xui_adapter  # noqa: E402
 from panel.routes import clients as clients_module  # noqa: E402
+from panel.services import panel_capabilities  # noqa: E402
 from panel.services.usage_intelligence import events as event_service  # noqa: E402
 
 GB = 1024 ** 3
@@ -265,8 +267,19 @@ class RenewRouteRenewalEventTests(UsageIntelligenceTestCase):
             mock.patch.object(app_module, 'get_xui_session',
                               return_value=(self.session_obj, None)),
             mock.patch.object(app_module, 'server_is_v3', return_value=True),
+            # The renewal path asks the capability planner which API family this panel
+            # is (and reads the client record and traffic row as separate layers).
+            mock.patch.object(panel_capabilities, 'capabilities_for',
+                              return_value=(self._caps(), None)),
             mock.patch.object(app_module, 'v3_update_client', self.v3_update),
+            mock.patch.object(xui_adapter, 'v3_update_client_result',
+                              side_effect=self._panel_write_result),
             mock.patch.object(app_module, 'v3_enable_client', self.v3_enable),
+            mock.patch.object(xui_adapter, 'v3_get_client_details',
+                              side_effect=self._client_details),
+            mock.patch.object(xui_adapter, 'v3_client_traffic',
+                              return_value={'available': False,
+                                            'reason': 'not modelled by this fixture'}),
             mock.patch.object(app_module, 'fetch_inbounds', side_effect=fetch_inbounds),
             mock.patch.object(app_module, '_fire_automation_sms'),
             mock.patch.object(app_module, '_fire_cancel_stale_account_sms'),
@@ -280,6 +293,32 @@ class RenewRouteRenewalEventTests(UsageIntelligenceTestCase):
         self.addCleanup(self._stop_patches)
 
         self._seed_cache()
+
+    @staticmethod
+    def _caps():
+        return panel_capabilities.PanelClientCapabilities(
+            client_api_family=panel_capabilities.CLIENT_API_FIRST_CLASS,
+            client_get=True, client_update=True, client_traffic=True,
+            client_reset_traffic=True, bulk_adjust=True, bulk_enable=True,
+            node_pending_response=True, limit_hwid=True, scoped_tokens=True,
+            version='3.8.5', version_family=(3, 8), profile='xui_3_8',
+            probe_state=panel_capabilities.PROBE_SUPPORTED,
+            evidence={'fixture': 'v3.8 panel'})
+
+    def _panel_write_result(self, server, session, email, client, **_kwargs):
+        # The fixture's return value decides the outcome, so a test can model a panel
+        # that rejects the write; the production classifier turns it into a result.
+        ok, response, error = self.v3_update(server, session, email, client)
+        return xui_adapter.classify_mutation_result(ok, response, error,
+                                                    may_be_partial=not ok)
+
+    def _client_details(self, server, session, email, *_args, **_kwargs):
+        row = (dict(self.v3_update.call_args[0][3]) if self.v3_update.call_args
+               else dict(self.panel_raw))
+        if self.rewrite_readback:
+            row = dict(self.panel_raw)
+        return {'ok': True, 'client': row, 'inbound_ids': [1],
+                'raw': {'client': row, 'inboundIds': [1]}, 'error': None}
 
     def _stop_patches(self):
         for patch in self._patches:
