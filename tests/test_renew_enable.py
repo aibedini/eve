@@ -18,6 +18,7 @@ import panel.core.redis_client as redis_cache  # noqa: E402
 import panel.jobs.refresh as refresh_jobs  # noqa: E402
 import panel.routes.clients as clients_module  # noqa: E402
 import panel.routes.packages as packages_module  # noqa: E402
+from panel.services import panel_capabilities  # noqa: E402
 from app import (  # noqa: E402
     GLOBAL_SERVER_DATA,
     Admin,
@@ -232,6 +233,11 @@ class RenewEnableTests(unittest.TestCase):
         self.v3_update = mock.Mock(return_value=(True, {}, None))
         self.v3_enable = mock.Mock(return_value=(True, {}, None))
         self.postcheck = mock.Mock()
+        # The renewal path asks the capability planner (not a boolean) which API family
+        # this panel is; a fixture that leaves that unanswered models an unclassifiable
+        # panel, which the route now refuses to mutate. Tests may override this.
+        self.capabilities_override = None
+        self.node_pending = False
 
         def fetch_confirmed(*_args, **_kwargs):
             if not self.v3_update.call_args:
@@ -244,10 +250,21 @@ class RenewEnableTests(unittest.TestCase):
             mock.patch.object(app_module, 'get_xui_session',
                               return_value=(self.session_obj, None)),
             mock.patch.object(app_module, 'server_is_v3', return_value=True),
+            mock.patch.object(panel_capabilities, 'capabilities_for',
+                              side_effect=self._capabilities),
             mock.patch.object(app_module, 'v3_update_client', self.v3_update),
+            mock.patch.object(xui_adapter, 'v3_update_client_result',
+                              side_effect=self._panel_write_result),
             mock.patch.object(app_module, 'v3_enable_client', self.v3_enable),
             mock.patch.object(app_module, 'v3_reset_client',
                               return_value=(True, {}, None)),
+            # The layered verification reads the client record (with its membership
+            # list) and the traffic row separately from the aggregate read.
+            mock.patch.object(xui_adapter, 'v3_get_client_details',
+                              side_effect=self._client_details),
+            mock.patch.object(xui_adapter, 'v3_client_traffic',
+                              return_value={'available': False,
+                                            'reason': 'not modelled by this fixture'}),
             mock.patch.object(app_module, 'fetch_inbounds', side_effect=fetch_confirmed),
             mock.patch.object(app_module, '_fire_automation_sms'),
             mock.patch.object(app_module, '_fire_cancel_stale_account_sms'),
@@ -259,6 +276,51 @@ class RenewEnableTests(unittest.TestCase):
         ]
         for p in self._patches:
             p.start()
+
+    def _capabilities(self, *_args, **_kwargs):
+        """The capability answer this fixture's panel gives."""
+        if self.capabilities_override is not None:
+            return self.capabilities_override
+        caps = panel_capabilities.PanelClientCapabilities(
+            client_api_family=panel_capabilities.CLIENT_API_FIRST_CLASS,
+            client_get=True, client_update=True, client_traffic=True,
+            client_reset_traffic=True, bulk_adjust=True, bulk_enable=True,
+            node_pending_response=True, limit_hwid=True, scoped_tokens=True,
+            version='3.8.5', version_family=(3, 8), profile='xui_3_8',
+            probe_state=panel_capabilities.PROBE_SUPPORTED,
+            evidence={'fixture': 'v3.8 panel'})
+        return caps, None
+
+    def _panel_write_result(self, server, session, email, client, **_kwargs):
+        """Structured result for the route, recording the write on the legacy mock."""
+        self.v3_update(server, session, email, client)
+        return xui_adapter.PanelMutationResult(
+            transport_ok=True, panel_success=True,
+            node_pending=bool(self.node_pending))
+
+    def _client_details(self, server, session, email, *_args, **_kwargs):
+        """GET /clients/get/{email}: the client record plus its membership list.
+
+        The record is taken from whatever this fixture models as the panel's current
+        client: an explicit ``_v3_get_client`` patch when a test sets one (the Re-check
+        tests do), else the config the last write carried - which is what a real v3
+        client-level read reflects, and why the route prefers it for config fields.
+        """
+        client = None
+        try:
+            client = app_module._v3_get_client(server, session, email)
+        except Exception:
+            client = None
+        if not isinstance(client, dict):
+            if not self.v3_update.call_args:
+                return {'ok': False, 'client': None, 'inbound_ids': [], 'raw': None,
+                        'error': 'client not found'}
+            inbounds = _panel_inbounds(dict(self.v3_update.call_args[0][3]),
+                                       self.server.id)
+            client = json.loads(inbounds[0]['settings'])['clients'][0]
+            client['enable'] = True
+        return {'ok': True, 'client': client, 'inbound_ids': [1],
+                'raw': {'client': client, 'inboundIds': [1]}, 'error': None}
 
     def tearDown(self):
         for p in self._patches:
@@ -303,9 +365,11 @@ class RenewEnableTests(unittest.TestCase):
         self.assertTrue(payload['verify']['observed']['enable'])
         self.postcheck.assert_not_called()
 
-        # Cookie-authenticated v3 panels have no API token, so capability
-        # detection must receive the live authenticated session.
-        app_module.server_is_v3.assert_called_with(self.server, self.session_obj)
+        # Cookie-authenticated v3 panels have no API token, so the capability decision
+        # must be made from the live authenticated session - the planner receives it.
+        capability_calls = panel_capabilities.capabilities_for.call_args_list
+        self.assertTrue(capability_calls, 'the capability planner was never consulted')
+        self.assertIs(capability_calls[-1][0][1], self.session_obj)
 
     def test_volume_ended_renew_propagates_without_a_manual_refresh(self):
         """Phase 1 regression: the reported "subscription new / dashboard old" bug.
@@ -507,7 +571,8 @@ class RenewEnableTests(unittest.TestCase):
 
         # Explicit enable once immediately and once more after disabled read-back.
         self.assertEqual(self.v3_update.call_count, 1)
-        self.assertEqual(self.v3_enable.call_count, 2)
+        self.assertEqual(self.v3_enable.call_count, 2,
+                         'verify=%r' % (payload.get('verify'),))
         sent = self.v3_enable.call_args[0][3]
         self.assertTrue(sent['enable'])
         verify = payload.get('verify') or {}
@@ -617,9 +682,17 @@ class RenewEnableTests(unittest.TestCase):
             'enable': True,
         }}}
         with (
+            # The repair is modelled as a real panel: the SECOND read shows the client
+            # enabled in the inbound membership as well as in the client record. The
+            # old fixture flipped only the client-level read, which is exactly the
+            # collapse this change removes - a globally enabled client whose inbound
+            # row is still disabled must NOT verify as an applied renewal.
             mock.patch.object(
                 app_module, 'fetch_inbounds',
-                return_value=(_panel_inbounds(disabled, self.server.id), None, '3x-ui'),
+                side_effect=[
+                    (_panel_inbounds(disabled, self.server.id), None, '3x-ui'),
+                    (_panel_inbounds(enabled, self.server.id), None, '3x-ui'),
+                ],
             ),
             mock.patch.object(
                 app_module, '_v3_get_client', side_effect=[disabled, enabled],
@@ -715,10 +788,15 @@ class RenewEnableTests(unittest.TestCase):
         load.assert_called_once_with()
 
     def test_legacy_panel_update_carries_enable(self):
-        self._patches[1].stop()  # server_is_v3 -> use a fresh False mock
-        v3_flag = mock.patch.object(app_module, 'server_is_v3', return_value=False)
-        v3_flag.start()
-        self._patches[1] = v3_flag
+        # A genuinely legacy panel: the capability planner answers LEGACY_INBOUND (the
+        # same answer a v3.0.x panel gets), so the mutation must use updateClient.
+        self.capabilities_override = (
+            panel_capabilities.PanelClientCapabilities(
+                client_api_family=panel_capabilities.CLIENT_API_LEGACY,
+                version='3.0.0', version_family=(3, 0), profile='baseline_v3',
+                probe_state=panel_capabilities.PROBE_ROUTE_MISSING,
+                evidence={'fixture': 'legacy panel (v3.0 semantics)'}),
+            None)
 
         future = int(time.time() * 1000) + 5 * DAY_MS
         raw = _raw_client(expiry=future, total=5 * GB, enable=False)

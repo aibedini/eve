@@ -1,6 +1,8 @@
 # 3x-ui v3 API Reference
 
-> Compatibility audit refreshed against the upstream OpenAPI and source tags through **v3.5.0**. Older v3 and legacy encoded inbound JSON remain supported.
+> Compatibility audit refreshed against the upstream OpenAPI and source tags through **v3.8.5** (newest stable at the time of writing; `main` was route-identical for every controller endpoint). Older v3 and legacy encoded inbound JSON remain supported.
+>
+> یک audit نسخه‌به‌نسخهٔ **کل چرخهٔ عمر client** (read / update / enable / traffic / reset / membership / node sync) روی تگ‌های v2.5.8 … v3.8.5 انجام شده و نتیجه در بخش «Client lifecycle compatibility» پایین آمده است. هر ادعای آن بخش از سورس همان تگ استخراج شده، نه از release notes.
 
 > منبع: OpenAPI 3.0.3 زندهٔ پنل (`/{webBasePath}/panel/api/openapi.json`) — تست‌شده روی 3x-ui **v3.3.1**.
 > `info.title = "3X-UI Panel API"`, `version = "3.x"`.
@@ -8,6 +10,55 @@
 **Base:** همهٔ مسیرها نسبت به `webBasePath` پنل‌اند (مثال سرور: `/4FoPrVEMSWkUXilv3D`).
 **Auth:** `Authorization: Bearer <token>` (از Settings → Security → API Token) **یا** session cookie (نام کوکی `3x-ui`، از `/login`). همهٔ endpoint‌های `/panel/api/*` هر دو حالت را قبول می‌کنند.
 **Response shape:** `{"success": bool, "msg": "...", "obj": ...}`
+
+---
+
+## Client lifecycle compatibility (audited per source tag)
+
+ستون‌ها دقیقاً همان چیزهایی هستند که یک mutation باید بداند. **عدد نسخه به‌تنهایی هیچ‌وقت تصمیم نمی‌گیرد**: در EVE لایهٔ `panel/services/panel_capabilities.py` ابتدا capability را probe می‌کند و بعد `RenewStrategy` را انتخاب می‌کند.
+
+| خانواده | API خانوادهٔ client | enable primitive | traffic reset | `bulkAdjust` | `bulkEnable` | `nodePending` در پاسخ update | نکتهٔ auth |
+|---|---|---|---|---|---|---|---|
+| v2.x (تا v2.8.11) | فقط legacy inbound | `POST /inbounds/updateClient/{clientId}` با full client | `POST /inbounds/{id}/resetClientTraffic/{email}` | ندارد | ندارد | ندارد | خطای احراز هویت با **404** پاسخ داده می‌شود |
+| **v3.0.x** | **همان legacy inbound** (هیچ `/clients/*` وجود ندارد) | همان legacy update | همان legacy reset | ندارد | ندارد | ندارد | مثل v2: 404 روی احراز هویت ناموفق |
+| v3.1–3.2 | `first_class` (`/clients/*`) | full client update با `enable=true` (v3.1 فقط `subId/createdAt/id/password/auth` را carry می‌کند) | `POST /clients/resetTraffic/{email}` (v3.2: + `/clients/bulkResetTraffic`) | دارد (`{addDays, addBytes}`)، **auto re-enable ندارد** | ندارد | ندارد | ارائهٔ Bearer نامعتبر → **401**؛ بدون هدر → 404 |
+| v3.3–3.4 | `first_class` | همان full update | همان | دارد | ندارد | **دارد** (از v3.3.1) | همان |
+| v3.5–3.6 | `first_class` | `POST /clients/bulkEnable` (و `bulkDisable`) | همان + `POST /clients/groups/resetTraffic` | دارد + **auto re-enable فقط برای clientهایی که به‌خاطر depletion خاموش شده‌اند** | **دارد** (از v3.5) | دارد | همان |
+| v3.7 | `first_class` | `bulkEnable` | همان | دارد (+`flow`) | دارد | دارد | **scoped/expiring token** (`admin`/`monitor`/`node-sync`)، `limitHwid` روی body/model، 404 اگر Bearer رد شود و هدر `X-Requested-With` نباشد |
+| v3.8.x (تا ==v3.8.5) | `first_class` | `bulkEnable` | همان | دارد (+`limitHwid`, `adTag`) | دارد | دارد | Bearer رد‌شده → 401 |
+| future (3.9/4.x) | اثبات‌شده با probe | فقط primitive اثبات‌شده | فقط primitive اثبات‌شده | فقط اگر probe بگوید | فقط اگر probe بگوید | فقط اگر probe بگوید | رفتار 3.8 ارث‌بری **نمی‌شود** |
+
+نکات حیاتی که از سورس درآمدند و در کد EVE رعایت شده‌اند:
+
+1. **`POST /clients/update/{email}` یک replace کامل است، نه patch.** فقط `subId`، `createdAt`، `id/uuid`، `password`، `auth` و `secret` وقتی حذف شوند carry می‌شوند؛ `enable`، `totalGB`، `expiryTime` و `comment` **حذفشان یعنی صفر/خاموش شدن**. پس EVE همیشه کل client را می‌فرستد و `limitHwid` را از خواندن authoritative برمی‌گرداند.
+2. **`nodePending` فقط وقتی true است وجود دارد** (`pendingNodeObj` مقدار `nil` برمی‌گرداند و کلید حذف می‌شود). «نبودِ کلید» یعنی «پنل این را expose نمی‌کند / چیزی معلق نیست»، نه «false». معنی‌اش این است: کانفیگ در پنل commit شده ولی node هنوز sync نشده.
+3. **`/clients/onlines`، `/clients/activeInbounds` و `/clients/ips/{email}` همه POST هستند** (نه GET). و این‌ها **اثبات runtime برای یک credential مشخص نیستند**: `activeInbounds` می‌گوید کدام inboundها ترافیک داشتند و `onlines`/`lastOnline` دادهٔ فعالیت‌اند. اگر پنل وضعیت runtime را مستقیم expose نکند، EVE صادقانه `runtime_sync_state = not_exposed` می‌گذارد و از این endpointها «تأیید فعال بودن» نمی‌سازد.
+4. **404 به‌تنهایی legacy را ثابت نمی‌کند**: نسخه‌های v2.8.11/v3.0 روی احراز هویت ناموفق 404 می‌دهند و همهٔ نسخه‌ها به درخواست بدون هدر 404 می‌دهند. برای همین EVE بعد از 404 روی `/clients/get` یک probe **read** روی `POST /inbounds/onlines` می‌زند (فقط خانوادهٔ legacy جواب می‌دهد) و تنها با آن شاهد مثبت، `LEGACY_INBOUND` را انتخاب می‌کند؛ در غیر این‌صورت `BLOCKED` می‌شود.
+5. **`bulkAdjust` موتور renewal عمومی نیست**: delta-محور است، exact-cap/carry-over/unlimited/start-after-first-use/gift/reset را نمی‌تواند بیان کند، و auto re-enable آن clientهایی را که **دستی** خاموش شده‌اند برنمی‌گرداند. EVE فقط وقتی از آن استفاده می‌کند که `can_use_native_bulk_adjust()` هم‌ارزی را ثابت کند؛ در غیر این‌صورت full replacement.
+
+### Verification contract (چند لایه، هیچ لایه‌ای جای دیگری را نمی‌گیرد)
+
+```
+global client      GET /clients/get/{email}        -> enable, expiryTime, totalGB  + inboundIds (membership list)
+memberships        GET /inbounds/list (fresh)      -> برای هر inboundId: enable آن ردیف
+traffic            GET /clients/traffic/{email}    -> enable/up/down/total/expiry
+runtime            obj.nodePending از پاسخ write   -> converged | pending | not_exposed | failed
+```
+
+سه fact مستقل و یک state نهایی:
+
+* `config_applied` = `expiryTime` و `totalGB` همان چیزی هستند که خواسته شد؛
+* `activation_config_converged` = global enable + **همهٔ** membershipهای attached + traffic row مخالفتی ندارند؛
+* `runtime_sync_state`؛
+* final state ∈ `APPLIED_ACTIVE` | `CONFIG_APPLIED_ACTIVATION_PENDING` | `PARTIALLY_APPLIED` | `NOT_APPLIED` | `AUTH_DEGRADED` | `UNKNOWN`.
+
+**هیچ‌وقت** یک لایه جای دیگری را overwrite نمی‌کند: `enable=true` روی global client اثبات فعال بودن membership نیست، و HTTP 200 اثبات اعمال شدن نیست. activation repair هم یک عملیات **فقط-activation** و idempotent با همان operation است: نه روز و حجم دوباره، نه billing، نه notification.
+
+مسیرهای observability: هر trace تمدید فیلدهای ساختاری (بدون secret) دارد — `trace_id, operation_id, detected_version, compat_profile, strategy, capabilities, panel_success, node_pending, config_applied, global_enable, membership_count, disabled_membership_ids, missing_membership_ids, traffic_enable, runtime_sync_state, repair_attempt, final_state` — و برای بررسی روی هاست:
+
+```bash
+python scripts/forensic_renew_activation.py --server-id N --email EMAIL
+```
 
 ---
 

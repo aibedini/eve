@@ -35,9 +35,11 @@ os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
 import app as app_module  # noqa: E402
 from app import Admin, ClientOperation, GLOBAL_SERVER_DATA, Server, app, db  # noqa: E402
 from panel.core import client_events, refresh_policy, snapshot_delta  # noqa: E402
+from panel.adapters import xui as xui_adapter  # noqa: E402
 from panel.jobs import refresh as refresh_jobs  # noqa: E402
 from panel.jobs import schedulers  # noqa: E402
 from panel.routes import clients as clients_module  # noqa: E402
+from panel.services import panel_capabilities  # noqa: E402
 
 GB = 1024 ** 3
 DAY_MS = 24 * 60 * 60 * 1000
@@ -99,6 +101,10 @@ class MutationHarness(unittest.TestCase):
         self.v3_update = mock.Mock(return_value=(True, {}, None))
         self.v3_enable = mock.Mock(return_value=(True, {}, None))
         self.v3_delete = mock.Mock(return_value=(True, {}, None))
+        # The renewal path routes through the capability planner, and verification
+        # reads the client record plus the traffic row separately. This fixture models
+        # a v3.8 panel whose client-level read reflects the applied write.
+        self.capabilities_override = None
 
         def fetch_confirmed(*_args, **_kwargs):
             """The panel's answer: whatever the flow just wrote, else its own state."""
@@ -113,10 +119,19 @@ class MutationHarness(unittest.TestCase):
             mock.patch.object(app_module, 'get_xui_session',
                               return_value=(self.session_obj, None)),
             mock.patch.object(app_module, 'server_is_v3', return_value=True),
+            mock.patch.object(panel_capabilities, 'capabilities_for',
+                              side_effect=self._capabilities),
             mock.patch.object(app_module, 'v3_update_client', self.v3_update),
+            mock.patch.object(xui_adapter, 'v3_update_client_result',
+                              side_effect=self._panel_write_result),
             mock.patch.object(app_module, 'v3_enable_client', self.v3_enable),
             mock.patch.object(app_module, 'v3_delete_client', self.v3_delete),
             mock.patch.object(app_module, 'v3_reset_client', return_value=(True, {}, None)),
+            mock.patch.object(xui_adapter, 'v3_get_client_details',
+                              side_effect=self._client_details),
+            mock.patch.object(xui_adapter, 'v3_client_traffic',
+                              return_value={'available': False,
+                                            'reason': 'not modelled by this fixture'}),
             mock.patch.object(app_module, 'fetch_inbounds', side_effect=fetch_confirmed),
             mock.patch.object(app_module, '_fire_automation_sms'),
             mock.patch.object(app_module, '_fire_cancel_stale_account_sms'),
@@ -127,6 +142,37 @@ class MutationHarness(unittest.TestCase):
         ]
         for patch in self._patches:
             patch.start()
+
+    def _capabilities(self, *_args, **_kwargs):
+        if self.capabilities_override is not None:
+            return self.capabilities_override
+        caps = panel_capabilities.PanelClientCapabilities(
+            client_api_family=panel_capabilities.CLIENT_API_FIRST_CLASS,
+            client_get=True, client_update=True, client_traffic=True,
+            client_reset_traffic=True, bulk_adjust=True, bulk_enable=True,
+            node_pending_response=True, limit_hwid=True, scoped_tokens=True,
+            version='3.8.5', version_family=(3, 8), profile='xui_3_8',
+            probe_state=panel_capabilities.PROBE_SUPPORTED,
+            evidence={'fixture': 'v3.8 panel'})
+        return caps, None
+
+    def _panel_write_result(self, server, session, email, client, **_kwargs):
+        """Structured write result, recording the call on the legacy mock."""
+        self.v3_update(server, session, email, client)
+        return xui_adapter.PanelMutationResult(transport_ok=True, panel_success=True)
+
+    def _client_details(self, server, session, email, *_args, **_kwargs):
+        """The client-level read: the last write's config, as a real v3 panel shows."""
+        row = None
+        if self.v3_update.call_args:
+            row = dict(self.v3_update.call_args[0][3])
+        elif isinstance(self.panel_raw, dict):
+            row = dict(self.panel_raw)
+        if not isinstance(row, dict):
+            return {'ok': False, 'client': None, 'inbound_ids': [], 'raw': None,
+                    'error': 'client not found'}
+        return {'ok': True, 'client': row, 'inbound_ids': [1],
+                'raw': {'client': row, 'inboundIds': [1]}, 'error': None}
 
     def _restore(self):
         for patch in self._patches:

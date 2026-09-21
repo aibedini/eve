@@ -10,6 +10,7 @@ import json
 import re
 import secrets
 import time
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -42,6 +43,9 @@ XUI_SESSION_CACHE = {}  # server_id -> {'session': requests.Session, 'expiry': f
 XUI_SESSION_TTL = 600  # 10 minutes cache
 XUI_CAPABILITY_CACHE = {}  # server_id -> {'v3_clients': bool, 'expiry': float}
 XUI_CAPABILITY_TTL = 600
+#: server_id -> {'state': PROBE_*, 'expiry': float}. The legacy-family verdict, kept
+#: separately because it answers a different question than the v3 route probe.
+XUI_LEGACY_PROBE_CACHE = {}
 
 
 def session_tls_verify(session_obj, server=None):
@@ -71,6 +75,7 @@ def invalidate_xui_caches(server_id=None, host=None, username=None) -> None:
     if server_id is not None:
         XUI_SESSION_CACHE.pop(server_id, None)
         XUI_CAPABILITY_CACHE.pop(server_id, None)
+        XUI_LEGACY_PROBE_CACHE.pop(server_id, None)
         # The detected version and its profile are cached per server too: a
         # changed host or token must never leave a stale profile in place.
         xui_compat.invalidate_compatibility(server_id)
@@ -260,6 +265,52 @@ def probe_v3_client_api(server, session_obj, *, force=False) -> str:
     return outcome
 
 
+def _probe_legacy_inbound_api(server, session_obj, *, force=False) -> str:
+    """Typed probe for the LEGACY inbound client API. Returns a PROBE_* outcome.
+
+    Needed because a 404 is not proof of anything on its own: 3x-ui answers 404 both
+    for "this route does not exist" and for "authentication aborted" (upstream
+    answers 404 to a bare unauthenticated request on every version, and v2.8.11/v3.0
+    answer 404 on a failed credential too). Choosing the legacy write because the
+    first-class probe 404'd would therefore be a guess - and the guess lands a
+    mutation on a panel that may well be modern.
+
+    The probe is a READ: ``POST /panel/api/inbounds/onlines`` lists online clients on
+    every version that has the legacy family (<= v3.0.x) and is absent from v3.1.0
+    onwards, where client listing moved to /clients/onlines. So:
+        200  -> the legacy family exists (v2.x / v3.0.x), proven
+        404  -> neither family answered: unclassifiable, not "legacy"
+        401/403 -> credential or scope problem, not a version fact
+    """
+    try:
+        sid = int(getattr(server, "id"))
+    except (TypeError, ValueError):
+        sid = None
+    if not force and sid is not None:
+        cached = XUI_LEGACY_PROBE_CACHE.get(sid)
+        if cached and time.time() < float(cached.get("expiry") or 0):
+            return str(cached.get("state"))
+    base, webpath = extract_base_and_webpath(server.host)
+    url = "%s%s/panel/api/inbounds/onlines" % (base, webpath)
+    try:
+        resp = session_obj.post(url, json={}, timeout=(3, 8),
+                                verify=session_tls_verify(session_obj),
+                                headers=_probe_headers_for(server))
+        outcome = _classify_probe_response(resp)
+    except Exception:
+        return PROBE_TRANSPORT_ERROR
+    if sid is not None and outcome in (PROBE_SUPPORTED, PROBE_ROUTE_MISSING,
+                                       PROBE_AUTH_INVALID, PROBE_SCOPE_INSUFFICIENT):
+        XUI_LEGACY_PROBE_CACHE[sid] = {"state": outcome,
+                                       "expiry": time.time() + XUI_CAPABILITY_TTL}
+    return outcome
+
+
+def probe_legacy_inbound_api(server, session_obj, *, force=False) -> str:
+    """Public alias: the legacy-family verdict, for the capability planner."""
+    return _probe_legacy_inbound_api(server, session_obj, force=force)
+
+
 def _probe_v3_client_api(server, session_obj, *, force=False) -> bool:
     """Boolean view of probe_v3_client_api for existing callers.
 
@@ -416,17 +467,178 @@ def _v3_get(server, session_obj, path, *, timeout=(3, 20)):
 
 def _v3_get_client(server, session_obj, email):
     """Fetch one client via GET /clients/get/{email}. Returns the client dict or None."""
-    ok, j, _err = _v3_get(server, session_obj,
-                          f"/panel/api/clients/get/{quote(str(email or ''), safe='')}")
+    details = v3_get_client_details(server, session_obj, email)
+    return details.get('client') if details.get('ok') else None
+
+
+def v3_get_client_details(server, session_obj, email):
+    """Authoritative first-class client read, keeping the membership metadata.
+
+    ``/clients/get/{email}`` answers ``{"obj": {"client": {...}, "inboundIds": [...]}}``.
+    The inbound ids are the panel's own statement about which inbounds this client
+    belongs to, and every attached membership has to be verified separately: a
+    client can be enabled globally and disabled inside one inbound, which is
+    invisible if only the inner client object is read (that is the false-positive
+    renewal verification this helper exists to close).
+
+    Returns a dict:
+        {'ok': bool, 'client': dict|None, 'inbound_ids': list[int],
+         'raw': dict|None, 'error': str|None}
+    Never raises; a failed read is ``ok=False`` with a reason.
+    """
+    empty = {'ok': False, 'client': None, 'inbound_ids': [], 'raw': None,
+             'error': None}
+    ok, j, err = _v3_get(
+        server, session_obj,
+        f"/panel/api/clients/get/{quote(str(email or ''), safe='')}")
     if not ok or not isinstance(j, dict):
-        return None
+        empty['error'] = err or 'client read failed'
+        return empty
     obj = j.get('obj')
     if not isinstance(obj, dict):
-        return None
+        empty['error'] = 'client read returned no object'
+        return empty
     inner = obj.get('client')
-    if isinstance(inner, dict) and inner.get('email'):
-        return inner
-    return obj if obj.get('email') else None
+    client = inner if (isinstance(inner, dict) and inner.get('email')) else (
+        obj if obj.get('email') else None)
+    if client is None:
+        empty['error'] = 'client not found'
+        return empty
+    inbound_ids = []
+    for raw_id in (obj.get('inboundIds') or []):
+        value = _as_panel_int(raw_id)
+        if value is not None and value not in inbound_ids:
+            inbound_ids.append(value)
+    return {'ok': True, 'client': client, 'inbound_ids': inbound_ids,
+            'raw': obj, 'error': None}
+
+
+def _as_panel_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def v3_client_traffic(server, session_obj, email):
+    """Read a client's traffic row: GET /clients/traffic/{email}.
+
+    The traffic row is the panel's own view of consumption and of whether it has
+    disabled the client for depletion. It is a separate layer from the client
+    record, and EVE verifies it separately rather than assuming the two agree.
+    Returns a dict shaped for ``renew_activation.analyze_activation``; an
+    unsupported or unreadable endpoint reports ``available=False`` with a reason
+    instead of inventing zeroes.
+    """
+    ok, j, err = _v3_get(
+        server, session_obj,
+        f"/panel/api/clients/traffic/{quote(str(email or ''), safe='')}")
+    if not ok or not isinstance(j, dict):
+        return {'available': False, 'reason': err or 'traffic read failed'}
+    obj = j.get('obj')
+    if isinstance(obj, list):
+        row = None
+        for item in obj:
+            if isinstance(item, dict) and (
+                    str(item.get('email') or '').lower()
+                    == str(email or '').lower()):
+                row = item
+                break
+        obj = row
+    if not isinstance(obj, dict):
+        return {'available': False, 'reason': 'traffic row not present'}
+    return {
+        'available': True,
+        'enable': bool(obj.get('enable', True)),
+        'up': _as_panel_int(obj.get('up')) or 0,
+        'down': _as_panel_int(obj.get('down')) or 0,
+        'total': _as_panel_int(obj.get('total')),
+        'expiry': _as_panel_int(obj.get('expiryTime')),
+    }
+
+
+def _v3_node_pending(payload) -> bool:
+    """Extract ``obj.nodePending`` from a mutation response, when it is exposed.
+
+    From 3.3.1 a write can be committed in the panel's own database while the
+    backing node has not synchronised yet. That is the difference between "the
+    renewal was applied" and "the customer is online", so the flag is parsed
+    rather than discarded. Returns False when the panel does not expose it (an
+    older version is not "pending", it simply cannot say).
+    """
+    if not isinstance(payload, dict):
+        return False
+    obj = payload.get('obj')
+    if not isinstance(obj, dict):
+        return False
+    return bool(obj.get('nodePending') is True)
+
+
+@dataclass
+class PanelMutationResult:
+    """What one panel write actually did, as opposed to what it returned.
+
+    ``transport_ok`` is "the panel answered"; ``panel_success`` is "the panel said
+    it succeeded"; ``node_pending`` is "its node has not caught up yet";
+    ``skipped`` carries the upstream per-email skip list; ``partially_applied`` is
+    set when a failure may still have committed part of the change.
+    """
+
+    transport_ok: bool = False
+    panel_success: bool = False
+    node_pending: bool = False
+    skipped: list = field(default_factory=list)
+    partially_applied: bool = False
+    need_restart: bool = False
+    error: str | None = None
+    response: dict | None = None
+
+    @property
+    def ok(self) -> bool:
+        """The operation is applied on the panel (pending node sync is NOT a failure)."""
+        return bool(self.transport_ok and self.panel_success and not self.skipped)
+
+    def as_dict(self) -> dict:
+        """Credential-free summary for logs, the trace and the doctor."""
+        return {
+            'transport_ok': self.transport_ok,
+            'panel_success': self.panel_success,
+            'node_pending': self.node_pending,
+            'skipped': [str(item)[:120] for item in (self.skipped or [])],
+            'partially_applied': self.partially_applied,
+            'need_restart': self.need_restart,
+            'error': self.error,
+        }
+
+
+def classify_mutation_result(ok, response=None, error=None, *,
+                             may_be_partial=False) -> PanelMutationResult:
+    """Turn one (ok, response, error) triple into a structured mutation result."""
+    result = PanelMutationResult(transport_ok=bool(response is not None) or bool(ok),
+                                 response=response if isinstance(response, dict) else None)
+    if not ok:
+        result.error = str(error or 'panel write failed')[:500]
+        result.panel_success = False
+        # A transport-level failure may still have been applied upstream (the
+        # request can time out after the commit). The caller decides by reading the
+        # panel back; this flag says "do not assume nothing happened".
+        result.partially_applied = bool(may_be_partial)
+        return result
+    obj = response.get('obj') if isinstance(response, dict) else None
+    skipped = obj.get('skipped') if isinstance(obj, dict) else None
+    if isinstance(skipped, list):
+        result.skipped = [item for item in skipped]
+        if result.skipped:
+            result.error = 'panel skipped the requested client'
+    result.node_pending = _v3_node_pending(response)
+    result.need_restart = bool(isinstance(obj, dict) and obj.get('needRestart') is True)
+    # ``success`` is the panel's own verdict; a 200 with success=false is a failure.
+    if isinstance(response, dict) and response.get('success') is False:
+        result.panel_success = False
+        result.error = result.error or str(response.get('msg') or 'panel reported failure')
+    else:
+        result.panel_success = True
+    return result
 
 
 def _v3_rename_email_via_inbounds(server, session_obj, old_email, new_email):
@@ -603,6 +815,26 @@ def v3_update_client(server, session_obj, email, client: dict, *, limit_hwid=_UN
     otherwise reset it to 0. Pass limit_hwid explicitly to SET the device limit
     (an operator request), or preserved_client to reuse a read the caller already
     made. Never sends a guessed or defaulted 0.
+
+    Returns ``(ok, response, error)``. Callers that need the response's semantics
+    (``nodePending``, a per-email skip list, a possible partial apply) must use
+    :func:`v3_update_client_result` instead of throwing the response away.
+    """
+    result = v3_update_client_result(server, session_obj, email, client,
+                                     limit_hwid=limit_hwid,
+                                     preserved_client=preserved_client)
+    return result.ok, result.response, result.error
+
+
+def v3_update_client_result(server, session_obj, email, client: dict, *,
+                            limit_hwid=_UNSET, preserved_client=None,
+                            timeout=(3, 20)):
+    """The same update, reported as a structured :class:`PanelMutationResult`.
+
+    The response is parsed, not discarded: from 3.3.1 it can carry
+    ``obj.nodePending``, which means the panel committed the configuration but its
+    node has not synchronised - i.e. the renewal is applied and the customer may
+    still be offline. Reporting that as plain success is the bug this exists for.
     """
     email = _v3_fix_spaced_email(server, session_obj, email, client_obj=client)
     if limit_hwid is not _UNSET:
@@ -612,72 +844,109 @@ def v3_update_client(server, session_obj, email, client: dict, *, limit_hwid=_UN
         if not isinstance(snapshot, dict):
             ok, snapshot = read_authoritative_client_settings(server, session_obj, email)
             if not ok:
-                return False, None, (
+                return classify_mutation_result(
+                    False, None,
                     "could not read the client's current device limit; refusing to update "
                     "because the panel would reset it to 0")
         preserved = xui_compat.preserved_limit_hwid(snapshot)
-    return _v3_post(server, session_obj,
-                    f"/panel/api/clients/update/{quote(email, safe='')}",
-                    _v3_client_payload(client, limit_hwid=preserved))
+    ok, response, error = _v3_post(
+        server, session_obj,
+        f"/panel/api/clients/update/{quote(email, safe='')}",
+        _v3_client_payload(client, limit_hwid=preserved),
+        timeout=timeout)
+    return classify_mutation_result(ok, response, error, may_be_partial=not ok)
 
 
-def v3_enable_client(server, session_obj, email, client: dict):
-    """Force a v3 client active across panel versions.
+def v3_enable_client(server, session_obj, email, client: dict, *,
+                     capabilities=None, preserved_client=None):
+    """Force a v3 client active, using only the primitives this panel proves.
 
-    Newer panels expose ``bulkEnable``, which also synchronizes the running
-    Xray state. Older v3 panels do not have that endpoint, so fall back to the
-    traditional full-client update with ``enable=True``.
+    ``bulkEnable`` exists from 3.5 and also synchronises the running node; the
+    full client update with ``enable=true`` exists across the whole first-class
+    family. Which one is used is a capability decision, not a guess:
+
+    * capabilities say ``bulk_enable`` -> ``/clients/bulkEnable`` (whose response
+      is parsed, because upstream answers 200/success with the requested email in
+      ``obj.skipped`` when it refuses);
+    * capabilities do not prove it -> the full update, which cannot 404 on any
+      v3.1+ panel.
+
+    The unproven case keeps a narrow runtime fallback: if an endpoint EVE believed
+    in turns out to be absent (404/405), the update is used instead. That fallback
+    is a repair for a wrong capability claim, never a substitute for the claim.
     """
     enabled_client = dict(client or {})
     enabled_client['enable'] = True
     email = _v3_fix_spaced_email(
         server, session_obj, email, client_obj=enabled_client,
     )
-    ok, result, error = _v3_post(
-        server, session_obj, "/panel/api/clients/bulkEnable",
-        {"emails": [email]},
-    )
-    if ok:
-        # 3x-ui's bulk endpoint can return HTTP 200/success=true while putting
-        # the requested account in obj.skipped.  Treat that as a failed enable;
-        # the caller must never turn a transport acknowledgement into a fake
-        # active state in EVE.
-        obj = result.get('obj') if isinstance(result, dict) else None
-        skipped = obj.get('skipped') if isinstance(obj, dict) else None
-        if isinstance(skipped, list):
-            requested = str(email or '').strip()
-            for item in skipped:
-                if not isinstance(item, dict):
-                    continue
-                skipped_email = str(item.get('email') or '').strip()
-                if not skipped_email or skipped_email == requested:
-                    reason = item.get('reason') or 'client enable was skipped'
-                    return False, result, str(reason)
-        return ok, result, error
+    use_bulk = True
+    if capabilities is not None:
+        use_bulk = bool(getattr(capabilities, 'bulk_enable', False))
+    if use_bulk:
+        ok, result, error = _v3_post(
+            server, session_obj, "/panel/api/clients/bulkEnable",
+            {"emails": [email]},
+        )
+        if ok:
+            # 3x-ui's bulk endpoint can return HTTP 200/success=true while putting
+            # the requested account in obj.skipped.  Treat that as a failed enable;
+            # the caller must never turn a transport acknowledgement into a fake
+            # active state in EVE.
+            obj = result.get('obj') if isinstance(result, dict) else None
+            skipped = obj.get('skipped') if isinstance(obj, dict) else None
+            if isinstance(skipped, list):
+                requested = str(email or '').strip()
+                for item in skipped:
+                    if not isinstance(item, dict):
+                        continue
+                    skipped_email = str(item.get('email') or '').strip()
+                    if not skipped_email or skipped_email == requested:
+                        reason = item.get('reason') or 'client enable was skipped'
+                        return False, result, str(reason)
+            return ok, result, error
+        if not _looks_like_missing_route(error):
+            return ok, result, error
+    # Either the capability was not proven, or the panel answered "no such route".
+    # A full client update is the primitive that exists for every first-class panel.
+    return _v3_enable_via_update(server, session_obj, email, enabled_client,
+                                 preserved_client=preserved_client)
 
-    unavailable = str(error or '').strip().lower()
-    if (
-        unavailable in {'http 404', 'http 405'}
-        or 'status 404' in unavailable
-        or 'status 405' in unavailable
-        or 'not found' in unavailable
-        or 'method not allowed' in unavailable
-        or 'unsupported' in unavailable
-    ):
-        # The fallback re-issues a full client update, which would reset the
-        # device limit to 0 unless the authoritative value is echoed back.
-        _ok, _snapshot = read_authoritative_client_settings(server, session_obj, email)
+
+def _looks_like_missing_route(error) -> bool:
+    """True only for the transport-level answers that mean "this route is absent"."""
+    text = str(error or '').strip().lower()
+    if not text:
+        return False
+    return (text in {'http 404', 'http 405'}
+            or 'status 404' in text
+            or 'status 405' in text
+            or 'not found' in text
+            or 'method not allowed' in text
+            or 'unsupported' in text)
+
+
+def _v3_enable_via_update(server, session_obj, email, enabled_client,
+                          *, preserved_client=None):
+    """Enable by re-sending the client with ``enable=true`` (capability-safe).
+
+    The fallback re-issues a full client update, which would reset the device
+    limit to 0 unless the authoritative value is echoed back, so the read is
+    mandatory and a failure to read refuses the write (fail closed) instead of
+    silently clearing an operator's device cap.
+    """
+    snapshot = preserved_client if isinstance(preserved_client, dict) else None
+    if snapshot is None:
+        _ok, snapshot = read_authoritative_client_settings(server, session_obj, email)
         if not _ok:
             return False, None, (
                 "could not read the client's current device limit; refusing to re-enable "
                 "because the fallback update would reset it to 0")
-        return _v3_post(
-            server, session_obj,
-            f"/panel/api/clients/update/{quote(email, safe='')}",
-            _v3_client_payload(enabled_client,
-                                limit_hwid=xui_compat.preserved_limit_hwid(_snapshot)),
-        )
-    return ok, result, error
+    return _v3_post(
+        server, session_obj,
+        f"/panel/api/clients/update/{quote(email, safe='')}",
+        _v3_client_payload(enabled_client,
+                            limit_hwid=xui_compat.preserved_limit_hwid(snapshot)))
 
 
 def v3_delete_client(server, session_obj, email, keep_traffic=False):

@@ -408,6 +408,24 @@ class ClientDeviceLimitPreservationTests(unittest.TestCase):
 class LifecycleAutomationTests(unittest.TestCase):
     """EVE stays the lifecycle authority; panel-side automation is surfaced, not adopted."""
 
+    @classmethod
+    def setUpClass(cls):
+        # process_inbounds() reads the dashboard thresholds from SystemSetting, so this
+        # module needs a schema of its own. It used to rely on whichever module ran
+        # first having created one, which made it green in the full suite and red when
+        # a single file is run - including via scripts/affected_tests.py, the path that
+        # is supposed to catch a change to this area.
+        from app import app, db
+        cls._schema_ctx = app.app_context()
+        cls._schema_ctx.push()
+        db.create_all()
+
+    @classmethod
+    def tearDownClass(cls):
+        from app import db
+        db.session.remove()
+        cls._schema_ctx.pop()
+
     def test_quiet_clients_report_nothing(self):
         self.assertIsNone(detect_lifecycle_automation({'email': 'a@b.c', 'resetDay': 0, 'resetMax': 0, 'trafficReset': 'never'}))
         self.assertIsNone(detect_lifecycle_automation(None))

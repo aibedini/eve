@@ -117,8 +117,21 @@ MAPPING = (
         ['tests.test_subscription_scope', 'tests.test_static_deploy_contract'],
     )),
     ('panel/adapters/xui.py', (
-        ['tests.test_3xui_compat'],
-        ['tests.test_regression_matrix', 'tests.test_renew_enable'],
+        ['tests.test_3xui_compat', 'tests.test_panel_capabilities'],
+        ['tests.test_regression_matrix', 'tests.test_renew_enable',
+         'tests.test_renew_activation_layers'],
+    )),
+    ('panel/services/panel_capabilities.py', (
+        # The planner that decides which panel API a mutation may use. Nothing ran
+        # when it changed before this entry existed, which is how a capability
+        # regression reaches production with a green Tier 1/2.
+        ['tests.test_panel_capabilities'],
+        ['tests.test_3xui_compat', 'tests.test_renew_consistency',
+         'tests.test_renew_enable'],
+    )),
+    ('panel/services/renew_activation.py', (
+        ['tests.test_renew_activation_layers'],
+        ['tests.test_renew_consistency', 'tests.test_renew_enable'],
     )),
     ('panel/services/client_state.py', (
         ['tests.test_client_mutation_result'],
@@ -162,6 +175,12 @@ MAPPING = (
     ('scripts/memory_attribution.py', (
         ['tests.test_memory_attribution'],
         ['tests.test_memory_report'],
+    )),
+    ('scripts/forensic_renew_activation.py', (
+        # The operator's tool for "renewed but still inactive"; its classifications are
+        # the contract, so its own suite is the Tier 1 for an edit here.
+        ['tests.test_forensic_renew_activation'],
+        ['tests.test_panel_capabilities', 'tests.test_renew_activation_layers'],
     )),
     ('scripts/', (
         ['tests.test_ci_guards'],
