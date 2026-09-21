@@ -193,7 +193,15 @@ def render(data) -> str:
                                          + int(acct['residual_bytes'])),
                       human_bytes(total)))
     else:
-        out.append('  %-22s %s' % ('Sum', 'not reconciled (host total unknown)'))
+        # Two different reasons reach this branch, and they are not interchangeable: a
+        # host whose total is unknown, and a host whose PSS sum is incomplete because a
+        # process could not be read (the case 2.7.30 exists for). Naming the incomplete
+        # groups is what tells an operator which process to look at.
+        if acct.get('incomplete_groups'):
+            out.append('  %-22s %s' % ('Sum', 'not reconciled (PSS unavailable for: %s)'
+                                       % ', '.join(acct['incomplete_groups'])))
+        else:
+            out.append('  %-22s %s' % ('Sum', 'not reconciled (host total unknown)'))
 
     out.append('')
     out.append('EVE PROCESSES BY ROLE')

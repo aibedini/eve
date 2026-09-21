@@ -2,6 +2,12 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.33] - 2026-09-21
+
+### Fixed
+- **`main` was red since 2.7.30, on the attribution test rather than the attribution code.** `tests/test_memory_attribution.py`'s host fixture predates the completeness contract that 2.7.30 introduced, so it described a host with no `pss_complete`/`eve_pss_with_xray_complete`/`service_pss_complete`/`other_pss_complete` keys - i.e. an incomplete one - and then asserted a computed residual. `accounting()` correctly returns `residual_bytes: null` for that fixture, so the test failed on every run in CI and locally. The fixture now declares the fully readable host it means, asserts `complete`/`unreconciled` explicitly, and a new test covers the incomplete branch: an unreadable PostgreSQL group yields `residual_bytes: null`, `unreconciled: true`, `incomplete_groups: ['host services']` and a rendered line that names the group. The accounting contract itself is unchanged and remains covered by `tests/test_memory_report.py`.
+- `scripts/memory_attribution.py` blamed the wrong cause when it could not reconcile: an incomplete PSS sum printed "not reconciled (host total unknown)" even though the host total was present and the real problem was an unreadable group. It now prints "not reconciled (PSS unavailable for: <groups>)", and keeps the old wording only for the case it actually describes.
+
 ## [2.7.32] - 2026-09-21
 
 ### Fixed

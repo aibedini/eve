@@ -44,7 +44,8 @@ def _bucket(pss_bytes, *, processes=1, threads=4, pids=(10,)):
     return {'processes': processes, 'rss_bytes': pss_bytes + 40, 'pss_bytes': pss_bytes,
             'private_bytes': pss_bytes - 20, 'threads': threads,
             'peak_rss_bytes': pss_bytes + 80, 'pids': list(pids),
-            'max_uptime_seconds': 600.0, 'pss_approximated': False}
+            'max_uptime_seconds': 600.0, 'pss_approximated': False,
+            'pss_complete': True}
 
 
 EVE = {
@@ -66,6 +67,16 @@ EVE = {
     'eve_pss_bytes': 1030 * MB,
     'eve_pss_with_xray_bytes': 1072 * MB,
     'service_pss_bytes': 256 * MB,
+    # Completeness is part of the payload since 2.7.30: a group whose PSS could not be
+    # read reports it, and `accounting()` refuses to compute a residual from a partial
+    # sum (mixing an RSS into a PSS sum is how a host reports an impossible -1.4 GB
+    # residual). This fixture is the fully readable host, so it must say so - without
+    # these keys the reconciliation is correctly reported as incomplete and the
+    # residual is None, which is what this suite asserted against by accident.
+    'eve_pss_complete': True,
+    'eve_pss_with_xray_complete': True,
+    'service_pss_complete': True,
+    'other_pss_complete': True,
 }
 
 UNCLASSIFIED = {'available': True, 'count': 0, 'truncated': False, 'processes': []}
@@ -123,6 +134,12 @@ class CollectorReportTests(unittest.TestCase):
         self.assertEqual(acct['process_pss_bytes'],
                          EVE['eve_pss_with_xray_bytes'] + EVE['service_pss_bytes']
                          + EVE['other_pss_bytes'])
+        # The fixture is the fully readable host, so the reconciliation is complete and
+        # the residual is a number. The incomplete branch belongs to
+        # tests/test_memory_report.py, which owns the accounting contract.
+        self.assertTrue(acct['complete'])
+        self.assertFalse(acct['unreconciled'])
+        self.assertEqual(acct['incomplete_groups'], [])
         expected_residual = (HOST['total_bytes'] - HOST['free_bytes']
                              - HOST['cache_bytes'] - acct['process_pss_bytes'])
         self.assertEqual(acct['residual_bytes'], expected_residual)
@@ -131,6 +148,24 @@ class CollectorReportTests(unittest.TestCase):
         self.assertIn('no process owns it', text)
         self.assertIn('Sum', text)
         self.assertIn(collector.human_bytes(HOST['total_bytes']), text)
+
+    def test_an_unreadable_pss_group_never_prints_a_fabricated_residual(self):
+        # The production failure 2.7.30 fixed: PostgreSQL's smaps is unreadable to the
+        # web user, so its 26 processes report no PSS. The collector must say the
+        # reconciliation is incomplete instead of subtracting an RSS-mixed sum from
+        # total RAM and printing the impossible residual that produces.
+        eve = dict(EVE, service_pss_complete=False, service_pss_bytes=None)
+        data = self._data(eve=eve)
+        acct = data['accounting']
+        self.assertIsNone(acct['residual_bytes'])
+        self.assertTrue(acct['unreconciled'])
+        self.assertIn('host services', acct['incomplete_groups'])
+        text = collector.render(data)
+        self.assertIn('Residual', text)
+        # The reason names the incomplete group rather than blaming the host total,
+        # which is present in this case.
+        self.assertIn('not reconciled (PSS unavailable for: host services)', text)
+        self.assertNotIn('host total unknown', text)
 
     def test_an_unreadable_proc_says_unavailable_and_invents_no_counts(self):
         host, eve, unclassified = _patched(
