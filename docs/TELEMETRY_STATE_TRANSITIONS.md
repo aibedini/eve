@@ -71,6 +71,9 @@ event instead of a silence) and drains the same outbox.
 | Quiet hours and budgets do not lose a reminder | `mark_skipped(..., retry_in=...)` -> `next_attempt_at` | delivery tests |
 | A dashboard in the web process speeds up the loop in the background process | shared watch marks in Redis | `test_watch_propagation_crossprocess.py` |
 | The per-state trigger the operator configured is honoured | canonical state -> SMS vocabulary translation | `test_shadow_mode_records_instead_of_sending` and the trigger gate |
+| A warning cannot consume a terminal transition's budget | the cooldown is keyed by notification kind (`messaging.cooldown_events_for_state`) | `test_yesterdays_warning_does_not_consume_the_ended_transition` |
+| A cooldown defers an event, it never drops it | `mark_skipped(..., retry_in=<remaining>)` | `test_a_same_kind_cooldown_defers_with_the_remaining_time` |
+| An operator-disabled trigger still delivers when switched on | the trigger gate defers hourly instead of closing the event | `test_enabling_the_trigger_later_delivers_what_it_held` |
 | Introducing the ledger cannot text everyone at once | first fresh observation is a silent baseline | `test_first_observation_is_a_baseline_not_a_transition` |
 | ...while genuinely missed accounts are still caught | the reconciliation pass may raise an event for an already-actionable service, under every existing cap | `test_reconciliation_detects_a_transition_nobody_observed` |
 | The detector never blocks the dashboard | transition recording is best-effort; the snapshot publishes regardless | `schedulers._record_transitions` |
@@ -99,6 +102,46 @@ the newest one already applied for that server. The watermark lives in Redis so
 the web process, the background fetcher and the CLI share it. Without Redis the
 same semantics hold per process -- correct for a single-process install, and never
 silently reordered inside one process.
+
+## What may suppress a terminal notification
+
+Four different gates produce the same symptom -- the customer reaches
+`volume_ended` and no SMS arrives -- so the policy has to be stated, not inferred:
+
+| Gate | Effect on the event | Why |
+| --- | --- | --- |
+| no email / no recipient | terminal `skipped` | nothing can be sent, ever |
+| SMS automation disabled | defer 10 min | an operator usually turns it back on; the transition is real |
+| **this state's trigger is off** | defer 1 h | operator policy, but a material transition only creates an event once: closing it would leave a hole that switching the trigger on could never fill |
+| reseller-owned by policy | terminal `skipped` | the owner's automation is the one that should message |
+| lifecycle generation advanced | `superseded` | the renewal already answered it |
+| live state no longer matches | `superseded` | the claim is stale |
+| **same-kind cooldown active** | **defer to its expiry** | a duplicate within the window; the event is not wrong, only early |
+| quiet hours, hourly/daily budget, pace, gateway | defer | temporary by definition |
+| no template, opted out, unlimited skip, expired/ended too old | terminal `skipped` | configuration or policy, not a race |
+
+The cooldown is **per (account, server, notification kind)**, and a kind is the
+state plus its channel twins: `sms_low_volume` and `tg_low_volume` are the same
+notification, `sms_low_volume` and `sms_ended` are not. The legacy combined
+`depletion` row counts for the two warning kinds only, so an install that ran the
+pre-granular trigger does not re-text its warnings on upgrade while terminal
+transitions ignore it. The reason this matters is a real production case: a
+`low_volume` warning sent 24 h earlier made the `volume_ended` delivery branch
+close the event as a terminal `skipped` with no retry, so the terminal notice was
+lost permanently -- not delayed.
+
+### Forensics: "why did this account not get its SMS?"
+
+```bash
+python scripts/forensic_sms_delivery.py --email <account> --server-id <id> --hours 72
+```
+
+Read-only (it never sends, writes or claims anything) and prints the observed
+state, every notification event for the service, the pipeline mode, the settings
+that gate delivery, the automation log the cooldown reads, the SMS send log, and
+then walks the real delivery gates in their real order and names the one that
+refuses. Values only: no API key, template body or phone number is printable
+(`SAFE_SETTINGS` is a whitelist, and a test asserts it).
 
 ## Operational surface
 

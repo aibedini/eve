@@ -124,6 +124,22 @@ MAPPING = (
         ['tests.test_client_mutation_result'],
         ['tests.test_regression_matrix', 'tests.test_renew_consistency'],
     )),
+    ('panel/jobs/messaging.py', (
+        # The depletion delivery gates live here. The map had no entry for this module,
+        # so changing what may suppress a terminal SMS ran no notification test at all:
+        # the cross-state cooldown shipped because nothing exercised the gate.
+        ['tests.test_sms_terminal_transitions', 'tests.test_telemetry_state_transitions'],
+        ['tests.test_telemetry_pipeline_integration', 'tests.test_sms_lifecycle_invalidation',
+         'tests.test_sms_meta_generation'],
+    )),
+    ('panel/services/telemetry_state.py', (
+        ['tests.test_sms_terminal_transitions', 'tests.test_telemetry_state_transitions'],
+        ['tests.test_telemetry_pipeline_integration'],
+    )),
+    ('panel/services/depletion_pipeline.py', (
+        ['tests.test_telemetry_state_transitions'],
+        ['tests.test_telemetry_pipeline_integration', 'tests.test_sms_terminal_transitions'],
+    )),
     ('templates/', (
         ['tests.test_ui_design_system'],
         ['tests.test_subscription_scope', 'tests.test_static_deploy_contract',

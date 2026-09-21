@@ -15,6 +15,10 @@ _DB = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 _DB.close()
 os.environ.setdefault('DATABASE_URL',
                     'sqlite:///' + _DB.name.replace(os.sep, '/'))
+# Without this the import runs the alembic-backed migrations, which need an
+# environment this module does not control: in isolation it failed to import at all,
+# and every other test module sets the same flag for the same reason.
+os.environ.setdefault('EVE_SKIP_IMPORT_MIGRATIONS', '1')
 os.environ.setdefault('SESSION_SECRET', 'eve-test-session-secret')
 os.environ.setdefault(
     'SERVER_PASSWORD_KEY',
@@ -27,6 +31,28 @@ import panel.jobs.messaging as messaging  # noqa: E402
 from app import GLOBAL_SERVER_DATA, app, db  # noqa: E402
 from panel.models import ServiceLifecycleState, SmsSendLog  # noqa: E402
 from panel.services import lifecycle as lifecycle_service  # noqa: E402
+
+
+class _SchemaMixin:
+    """Create the schema this module queries.
+
+    It used to rely on whichever module ran first having called ``db.create_all()``,
+    so it passed in a shared process and failed with "no such table:
+    service_lifecycle_states" when run alone -- which is how the affected-tests tool
+    runs it, i.e. the module was never green on the path that is supposed to catch a
+    change to it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._schema_ctx = app.app_context()
+        cls._schema_ctx.push()
+        db.create_all()
+
+    @classmethod
+    def tearDownClass(cls):
+        db.session.remove()
+        cls._schema_ctx.pop()
 
 
 def _push_context(case):
@@ -44,7 +70,7 @@ def _seed_snapshot(server_id, email, client_uuid):
     }]
 
 
-class SendMetaContractTests(unittest.TestCase):
+class SendMetaContractTests(_SchemaMixin, unittest.TestCase):
     """The local assertion that replaces a wasted 400 from the gateway."""
 
     def test_a_complete_block_passes(self):
@@ -121,7 +147,7 @@ SMS_CFG = {
 }
 
 
-class DurableGenerationTests(unittest.TestCase):
+class DurableGenerationTests(_SchemaMixin, unittest.TestCase):
     """Canonical identity + durable baseline, end to end through the helpers."""
 
     server_id = 41

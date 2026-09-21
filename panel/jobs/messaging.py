@@ -2189,7 +2189,13 @@ def _recent_bot_message_within(email_l: str, sid_norm, hours: int) -> bool:
     """True if ANY automated message (SMS or WhatsApp, any state) went to this
     (account, server) within the last `hours`. Event-agnostic on purpose so the
     cooldown is shared across both channels. Reads the persisted WhatsappBotLog,
-    so it stays correct across crashes/restarts."""
+    so it stays correct across crashes/restarts.
+
+    This is the lane-fairness gate, not the depletion cooldown: the royalty lane
+    must not message somebody who was messaged for anything else. Delivery of a
+    depletion transition uses :func:`_cooldown_remaining_seconds`, which is
+    per-kind, because a warning must never consume a terminal transition's budget.
+    """
     try:
         cut = datetime.utcnow() - timedelta(hours=max(int(hours or 0), 0))
         return WhatsappBotLog.query.filter(
@@ -2199,6 +2205,71 @@ def _recent_bot_message_within(email_l: str, sid_norm, hours: int) -> bool:
         ).first() is not None
     except Exception:
         return False
+
+
+#: Which persisted log events represent the SAME logical notification as a monitor
+#: state. The cooldown is per (account, server, notification kind) and not per
+#: account: `low_volume` and `volume_ended` are two messages about two different
+#: facts, and the warning must not silence the terminal transition that follows it.
+#: Channels stay shared inside a kind -- the Telegram bot's row counts for the SMS
+#: about the same state -- because that sharing is what stops a customer being told
+#: the same thing twice on two channels. The lists are the exact `event` values the
+#: senders persist: `sms_<state>` (pipeline and scan) and `tg_<state>`.
+_COOLDOWN_EVENT_KINDS = {
+    'near_expiry': ('sms_near_expiry', 'tg_near_expiry'),
+    'low_volume': ('sms_low_volume', 'tg_low_volume'),
+    'expired': ('sms_expired',),
+    'ended': ('sms_ended',),
+}
+#: The legacy combined depletion trigger wrote one row for either warning state.
+#: Keeping it in the warning kinds means an install that ran it does not re-send a
+#: warning on upgrade, while terminal states still ignore it.
+_COOLDOWN_LEGACY_WARNING_EVENT = 'depletion'
+_COOLDOWN_WARNING_STATES = ('near_expiry', 'low_volume')
+
+
+def cooldown_events_for_state(state: str) -> tuple:
+    """The persisted events that mean 'this account was already told THIS'."""
+    events = _COOLDOWN_EVENT_KINDS.get(str(state or '').strip().lower(), ())
+    if not events:
+        return ()
+    if state in _COOLDOWN_WARNING_STATES:
+        return tuple(events) + (_COOLDOWN_LEGACY_WARNING_EVENT,)
+    return tuple(events)
+
+
+def _cooldown_remaining_seconds(email_l: str, sid_norm, state: str, hours) -> int:
+    """Seconds until the cooldown for this state's OWN kind expires (0 = eligible).
+
+    The remaining time, not just a boolean, is what lets the outbox DEFER a
+    transition to the moment it may be sent. Closing it instead is how a warning
+    sent yesterday permanently killed today's terminal notification.
+    """
+    try:
+        hours = int(hours or 0)
+    except (TypeError, ValueError):
+        hours = 0
+    events = cooldown_events_for_state(state)
+    if hours <= 0 or not events:
+        return 0
+    try:
+        now = datetime.utcnow()
+        cut = now - timedelta(hours=hours)
+        row = (WhatsappBotLog.query
+               .filter(WhatsappBotLog.email == email_l,
+                       WhatsappBotLog.server_id == (sid_norm or 0),
+                       func.lower(WhatsappBotLog.event).in_(list(events)),
+                       WhatsappBotLog.sent_at >= cut)
+               .order_by(WhatsappBotLog.sent_at.desc())
+               .first())
+    except Exception:
+        # A log read failure must not invent a cooldown: the send goes out, and the
+        # durable event's own idempotency key still prevents a duplicate delivery.
+        return 0
+    if row is None or row.sent_at is None:
+        return 0
+    elapsed = (now - row.sent_at).total_seconds()
+    return max(0, int(round(hours * 3600 - elapsed)))
 
 
 def _ended_first_contact(email_l: str, sid_norm) -> datetime | None:
@@ -3718,6 +3789,11 @@ _DEPLETION_TRIGGER_KEYS = {
     'expired': 'trigger_expired',
     'ended': 'trigger_ended',
 }
+#: How long a transition waits while its per-state trigger is switched off. Long
+#: enough that a disabled state is one cheap re-check per account per hour rather
+#: than a retry loop, short enough that switching the trigger on delivers what was
+#: created while it was off instead of leaving a silent gap in the account's history.
+_TRIGGER_DISABLED_RETRY_SECONDS = 3600
 
 
 def _server_display_name(server_id) -> str:
@@ -3805,7 +3881,17 @@ def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, s
         return 'deferred', False
     trigger_key = _DEPLETION_TRIGGER_KEYS.get(state)
     if trigger_key and not cfg.get(trigger_key):
-        telemetry_state.mark_skipped(event, 'trigger_disabled:%s' % state, retry_in=900)
+        # An operator-disabled trigger is not a duplicate and not a failure: the
+        # transition is real, the operator has asked not to be told about this state
+        # yet. It is deferred rather than closed, because closing it would mean the
+        # accounts that depleted while the trigger was off never get the terminal
+        # notice even after it is switched on -- and a material transition only
+        # creates an event once. The hourly re-check keeps one such account from
+        # turning into a 15-minute retry loop, and the reason names the exact setting
+        # an operator has to look at.
+        telemetry_state.mark_skipped(
+            event, 'trigger_disabled_by_operator:%s' % state,
+            retry_in=_TRIGGER_DISABLED_RETRY_SECONDS)
         return 'deferred', False
     if _account_has_reseller_owner(sid, email_l):
         telemetry_state.mark_skipped(event, 'reseller_owned')
@@ -3879,9 +3965,15 @@ def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, s
         telemetry_state.mark_skipped(event, 'manual_review_pending', retry_in=1800)
         return 'deferred', False
     cd_hours = int(cooldown_hours.get(state, 24) or 24)
-    if _recent_bot_message_within(email_l, sid, cd_hours):
-        telemetry_state.mark_skipped(event, 'cooldown_active')
-        return 'skipped', False
+    cooldown_left = _cooldown_remaining_seconds(email_l, sid, state, cd_hours)
+    if cooldown_left > 0:
+        # DEFERRED, not closed. The cooldown is per notification kind, so a warning
+        # sent yesterday no longer consumes the budget of the terminal transition
+        # that follows it -- and when a same-kind cooldown does still apply, the
+        # event waits for its expiry instead of becoming a terminal `skipped` that
+        # nobody (not even the operator) can recover.
+        telemetry_state.mark_skipped(event, 'cooldown_active', retry_in=cooldown_left)
+        return 'deferred', False
     recipient = _extract_iran_mobile_from_text(email, comment)
     if not recipient:
         telemetry_state.mark_skipped(event, 'no_recipient')
@@ -4357,9 +4449,11 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
                          'skipped', 'manual_review_pending')
             continue
-        # Per-state cooldown in hours, shared across SMS + WhatsApp (event-agnostic).
+        # Per-state cooldown in hours, keyed by this state's OWN notification kind:
+        # a low_volume warning must not suppress a later volume_ended transition. The
+        # lane stays shared across channels inside a kind.
         cd_hours = int(cooldown_hours.get(state, 24) or 24)
-        if _recent_bot_message_within(email_l, sid_norm, cd_hours):
+        if _cooldown_remaining_seconds(email_l, sid_norm, state, cd_hours) > 0:
             _sms_scan_inc('skipped_cooldown')
             continue
 
