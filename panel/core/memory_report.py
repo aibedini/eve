@@ -79,6 +79,10 @@ SAMPLE_KEY = 'eve:memory:samples'
 SAMPLE_INTERVAL_SECONDS = 60.0
 SAMPLE_MAX = 1440          # 24 h at one sample a minute
 SAMPLE_KEEP_MINUTES = 60   # the window the overview renders by default
+#: A "sustained growth" reading needs a long enough window and a process old enough that
+#: warm-up is over; below these, growth is only an observation, never a conclusion.
+SUSTAINED_WINDOW_MINUTES = 360
+SUSTAINED_UPTIME_SECONDS = 6 * 3600
 
 #: What a caller may ask the trend for. The ring holds one sample a minute up to
 #: ``SAMPLE_MAX``, so a longer request cannot be answered - and answering it with a short
@@ -242,6 +246,7 @@ def process_memory(pid) -> dict:
             if rest.strip():
                 fields[key.strip()] = _kb(rest)
     if fields:
+        row['pss_available'] = True
         row['pss_bytes'] = fields.get('Pss')
         row['pss_anon_bytes'] = fields.get('Pss_Anon')
         row['pss_file_bytes'] = fields.get('Pss_File')
@@ -251,9 +256,16 @@ def process_memory(pid) -> dict:
         # Reported as "private" because that is what the kernel gives us here.
         row['private_bytes'] = private or fields.get('Anonymous')
     else:
-        row['pss_bytes'] = row.get('rss_bytes')   # honest fallback: PSS unknown, RSS used
+        # PSS is a proportional share of shared pages and cannot be derived from RSS: RSS
+        # counts every shared page once per process, so a sum of RSS is not a sum of PSS.
+        # The reading is therefore *unavailable*, and the RSS value is kept under its own
+        # name. Substituting RSS for PSS here is what made PostgreSQL's 24 backends read as
+        # 1.6 GB of "PSS" (against a real ~220 MB) and drove the host residual to -1.4 GB.
+        row['pss_available'] = False
+        row['pss_bytes'] = None
         row['pss_is_rss_fallback'] = True
-        row['pss_note'] = 'smaps_rollup unavailable (permission or kernel); PSS approximated by RSS'
+        row['approximate_rss_bytes'] = row.get('rss_bytes')
+        row['pss_reason'] = 'smaps_rollup unavailable (permission or kernel); PSS is unknown'
     row['role'] = _role_for(pid)
     row['command'] = _command_for(pid)
     row['uptime_seconds'] = _uptime_for(pid)
@@ -313,6 +325,19 @@ def _uptime_for(pid):
     return max(0.0, round(time.time() - (btime + start_ticks / float(CLOCK_TICKS)), 1))
 
 
+def _has_real_pss(row) -> bool:
+    """True when a process row carries a PSS that was really read.
+
+    A row that declares ``pss_available`` False is never a PSS, whatever else it carries.
+    A row that does not declare it is treated as measured when it carries a value: the only
+    producer is :func:`process_memory`, which always declares, and this keeps a hand-built
+    row (a test fixture, a future adapter) from turning an RSS into a PSS.
+    """
+    if row.get('pss_available') is False:
+        return False
+    return row.get('pss_bytes') is not None
+
+
 def eve_processes(*, include_other=False) -> dict:
     """Eve's processes grouped by role, aggregated on PSS.
 
@@ -330,13 +355,16 @@ def eve_processes(*, include_other=False) -> dict:
         # different way. A count of None says "not measured", a count of 0 says "none".
         return {'available': False, 'reason': 'no /proc', 'roles': {}, 'services': {},
                 'other_processes': None, 'other_rss_bytes': None, 'other_pss_bytes': None,
+                'other_pss_complete': False, 'other_pss_unavailable_processes': None,
                 'other_private_bytes': None, 'other_threads': None,
-                'eve_pss_bytes': None, 'eve_pss_with_xray_bytes': None,
-                'service_pss_bytes': None}
+                'eve_pss_bytes': None, 'eve_pss_complete': False,
+                'eve_pss_with_xray_bytes': None, 'eve_pss_with_xray_complete': False,
+                'service_pss_bytes': None, 'service_pss_complete': False}
     roles = {}
     services = {}
     other = {'processes': 0, 'rss_bytes': 0, 'pss_bytes': 0, 'private_bytes': 0,
-             'threads': 0}
+             'threads': 0, 'pss_available_processes': 0, 'pss_unavailable_processes': 0,
+             'pss_complete': True}
     for name in os.listdir(PROC):
         if not name.isdigit():
             continue
@@ -346,27 +374,46 @@ def eve_processes(*, include_other=False) -> dict:
         role = row.get('role') or 'other'
         if role == 'other' and not include_other:
             other['processes'] += 1
-            for key in ('rss_bytes', 'pss_bytes', 'private_bytes'):
+            for key in ('rss_bytes', 'private_bytes'):
                 other[key] += int(row.get(key) or 0)
             other['threads'] += int(row.get('threads') or 0)
+            if _has_real_pss(row):
+                other['pss_bytes'] += int(row.get('pss_bytes') or 0)
+                other['pss_available_processes'] += 1
+            else:
+                other['pss_unavailable_processes'] += 1
+                other['pss_complete'] = False
             continue
         bucket = (services if role in SERVICE_ROLES else roles).setdefault(role, {
             'processes': 0, 'rss_bytes': 0, 'pss_bytes': 0, 'private_bytes': 0,
             'threads': 0, 'pids': [], 'max_uptime_seconds': 0.0,
             'peak_rss_bytes': 0, 'pss_approximated': False,
+            'pss_available_processes': 0, 'pss_unavailable_processes': 0,
+            'pss_complete': True,
         })
         bucket['processes'] += 1
         bucket['pids'].append(row['pid'])
-        for key in ('rss_bytes', 'pss_bytes', 'private_bytes', 'peak_rss_bytes'):
+        for key in ('rss_bytes', 'private_bytes', 'peak_rss_bytes'):
             bucket[key] += int(row.get(key) or 0)
         bucket['threads'] += int(row.get('threads') or 0)
         bucket['max_uptime_seconds'] = max(bucket['max_uptime_seconds'],
                                            float(row.get('uptime_seconds') or 0))
-        if row.get('pss_is_rss_fallback'):
+        if _has_real_pss(row):
+            bucket['pss_bytes'] += int(row.get('pss_bytes') or 0)
+            bucket['pss_available_processes'] += 1
+        else:
+            # Deliberately neither zero nor RSS. The bucket's pss_bytes stays a partial sum
+            # of what was readable, and pss_complete says so, so nothing downstream can add
+            # an RSS to a PSS and call the result a reconciliation.
             bucket['pss_approximated'] = True
+            bucket['pss_unavailable_processes'] += 1
+            bucket['pss_complete'] = False
     eve_pss = sum(bucket['pss_bytes'] for role, bucket in roles.items()
                   if role not in NON_EVE_ROLES)
-    eve_pss_with_xray = eve_pss + int((roles.get('xray') or {}).get('pss_bytes') or 0)
+    eve_complete = all(bucket.get('pss_complete', False)
+                       for role, bucket in roles.items() if role not in NON_EVE_ROLES)
+    xray = roles.get('xray') or {}
+    eve_pss_with_xray = eve_pss + int(xray.get('pss_bytes') or 0)
     return {
         'available': True,
         'roles': roles,
@@ -374,15 +421,23 @@ def eve_processes(*, include_other=False) -> dict:
         'other_processes': other['processes'],
         'other_rss_bytes': other['rss_bytes'],
         'other_pss_bytes': other['pss_bytes'],
+        'other_pss_complete': other['pss_complete'],
+        'other_pss_unavailable_processes': other['pss_unavailable_processes'],
         'other_private_bytes': other['private_bytes'],
         'other_threads': other['threads'],
         'eve_pss_bytes': eve_pss,
+        'eve_pss_complete': eve_complete,
         'eve_pss_with_xray_bytes': eve_pss_with_xray,
+        'eve_pss_with_xray_complete': eve_complete and bool(xray.get('pss_complete', False)),
         'service_pss_bytes': sum(bucket['pss_bytes'] for bucket in services.values()),
+        'service_pss_complete': all(bucket.get('pss_complete', False)
+                                    for bucket in services.values()),
         'note': ('EVE total is a sum of PSS, which counts shared pages once across the '
                  'processes that map them; summing RSS would double-count the interpreter '
                  'and the loaded libraries. Host services and unclassified processes are '
-                 'reported separately and are not part of the EVE figure.'),
+                 'reported separately and are not part of the EVE figure. A process whose '
+                 'smaps_rollup could not be read contributes nothing to these sums and '
+                 'marks its group incomplete (see pss_complete).'),
     }
 
 
@@ -419,6 +474,11 @@ def accounting(host, eve) -> dict:
     ``residual_bytes`` is reported rather than absorbed: kernel, slab, page tables and
     driver memory are real, belong to no process, and a breakdown that quietly buried them
     would be claiming an accuracy it does not have.
+
+    A residual is only computed when every additive part is a real PSS and the host numbers
+    are present. If any group's PSS is incomplete (a process whose ``smaps_rollup`` could
+    not be read), the reconciliation is marked incomplete and the residual is None: mixing
+    an RSS into a PSS sum is how a host ends up reporting an impossible -1.4 GB residual.
     """
     total = host.get('total_bytes')
     if not total:
@@ -428,12 +488,22 @@ def accounting(host, eve) -> dict:
                 'free_bytes': None, 'cache_bytes': None, 'process_pss_bytes': None,
                 'eve_pss_bytes': None, 'xray_pss_bytes': None, 'service_pss_bytes': None,
                 'other_pss_bytes': None, 'residual_bytes': None, 'used_bytes': None,
-                'available_bytes': None}
+                'available_bytes': None, 'complete': False, 'unreconciled': True,
+                'incomplete_groups': ['host']}
     free = host.get('free_bytes')
     cache = host.get('cache_bytes')
-    residue_parts = (free, cache)
     process_pss = sum(int(eve.get(key) or 0) for key in
                       ('eve_pss_with_xray_bytes', 'service_pss_bytes', 'other_pss_bytes'))
+    incomplete_groups = []
+    if not eve.get('eve_pss_with_xray_complete'):
+        incomplete_groups.append('eve')
+    if not eve.get('service_pss_complete'):
+        incomplete_groups.append('host services')
+    if not eve.get('other_pss_complete'):
+        incomplete_groups.append('unclassified processes')
+    if free is None or cache is None:
+        incomplete_groups.append('host availability')
+    complete = not incomplete_groups
     return {
         'available': True,
         'total_bytes': total,
@@ -444,8 +514,14 @@ def accounting(host, eve) -> dict:
         'xray_pss_bytes': int((eve.get('roles') or {}).get('xray', {}).get('pss_bytes') or 0),
         'service_pss_bytes': int(eve.get('service_pss_bytes') or 0),
         'other_pss_bytes': int(eve.get('other_pss_bytes') or 0),
-        'residual_bytes': (None if None in residue_parts
-                           else total - free - cache - process_pss),
+        'residual_bytes': (total - free - cache - process_pss) if complete else None,
+        'complete': complete,
+        'unreconciled': not complete,
+        'incomplete_groups': incomplete_groups,
+        'reason': (None if complete else
+                   'PSS is unavailable for: %s. The residual is not computed, because a '
+                   'partial PSS sum cannot be reconciled against total RAM.'
+                   % ', '.join(incomplete_groups)),
         'used_bytes': host.get('used_bytes'),
         'available_bytes': host.get('available_bytes'),
         'note': ('free + page cache + the PSS of every process = total; the residual is '
@@ -462,6 +538,13 @@ def snapshot_footprint(snapshot=None) -> dict:
     the call, so it is safe to run when the overview is opened. It deliberately does NOT
     measure the true retained size of nested objects: that is what the admin-only deep
     analysis is for.
+
+    The vocabulary is schema v2's. A **membership** is one client appearing on one inbound;
+    a **canonical entity** is the single retained client dict those memberships share, which
+    is what ``hydrate_server_block()`` hands to every membership that has no override.
+    Calling memberships "duplicate client rows" would describe the pre-v2 shape, where each
+    mirrored inbound really did hold its own copy. Distinct dicts are counted by ``id()``
+    while scanning and no reference is kept.
     """
     if snapshot is None:
         try:
@@ -470,41 +553,72 @@ def snapshot_footprint(snapshot=None) -> dict:
         except Exception as exc:
             return {'available': False, 'reason': 'snapshot unavailable: %s' % str(exc)[:120]}
     inbounds = snapshot.get('inbounds') or []
-    client_rows = 0
-    with_raw_client = 0
-    formatted_rows = 0
-    unique = set()
+    memberships = 0
+    raw_memberships = 0
+    formatted_memberships = 0
+    canonical = {}          # client key -> id() of the canonical dict (ids only)
+    client_objects = set()  # id() only: no references are retained
+    raw_objects = set()
+    shared_memberships = 0
+    overrides = 0
     for inbound in inbounds:
         if not isinstance(inbound, dict):
             continue
         for client in (inbound.get('clients') or []):
             if not isinstance(client, dict):
                 continue
-            client_rows += 1
-            if isinstance(client.get('raw_client'), dict):
-                with_raw_client += 1
-            if any(key.endswith('_formatted') for key in client.keys()):
-                formatted_rows += 1
+            memberships += 1
             uid = client.get('id') or client.get('uuid')
             if not uid:
                 uid = '%s|%s' % (inbound.get('server_id'), client.get('email'))
-            unique.add(str(uid))
-    unique_count = len(unique)
+            key = str(uid)
+            identity = id(client)
+            first = canonical.get(key)
+            if first is None:
+                canonical[key] = identity
+                shared_memberships += 1
+            elif first == identity:
+                shared_memberships += 1
+            else:
+                # The membership carries its own dict because it differs from the shared
+                # entity: a per-inbound override.
+                overrides += 1
+            client_objects.add(identity)
+            raw = client.get('raw_client')
+            if isinstance(raw, dict):
+                raw_memberships += 1
+                raw_objects.add(id(raw))
+            if any(name.endswith('_formatted') for name in client.keys()):
+                formatted_memberships += 1
+    entities = len(canonical)
+    ratio = round(memberships / entities, 2) if entities else None
     return {
         'available': True,
         'servers': len(snapshot.get('servers_status') or []),
         'inbounds': len(inbounds),
-        'client_rows': client_rows,
-        'unique_clients': unique_count,
-        'duplicate_rows': max(0, client_rows - unique_count),
-        'duplication_ratio': (round(client_rows / unique_count, 2) if unique_count else None),
-        'rows_with_raw_client': with_raw_client,
-        'rows_with_formatted_strings': formatted_rows,
+        # Schema-v2 vocabulary.
+        'canonical_client_entities': entities,
+        'client_memberships': memberships,
+        'membership_ratio': ratio,
+        'shared_memberships': shared_memberships,
+        'membership_overrides': overrides,
+        'distinct_client_object_count': len(client_objects),
+        'distinct_raw_client_object_count': len(raw_objects),
+        'memberships_with_raw_client': raw_memberships,
+        'memberships_with_formatted_strings': formatted_memberships,
+        # Pre-v2 aliases, kept so existing consumers and tests keep working.
+        'client_rows': memberships,
+        'unique_clients': entities,
+        'duplicate_rows': max(0, memberships - entities),
+        'duplication_ratio': ratio,
+        'rows_with_raw_client': raw_memberships,
+        'rows_with_formatted_strings': formatted_memberships,
         'last_update': snapshot.get('last_update'),
-        'note': ('client_rows counts what the snapshot holds; unique_clients counts '
-                 'distinct client ids. The difference is the same account appearing once '
-                 'per assigned inbound (a v3 characteristic), and rows_with_raw_client '
-                 'counts the config that is retained twice per row'),
+        'note': ('client_memberships counts a client appearing on an inbound; '
+                 'canonical_client_entities counts the distinct client dicts those '
+                 'memberships share. membership_overrides counts memberships whose dict is '
+                 'not the shared entity object, so distinct_client_object_count is the '
+                 'number of client dicts actually retained - not the membership count.'),
     }
 
 
@@ -722,20 +836,46 @@ def redis_snapshot_bytes() -> dict:
         return {'available': False, 'reason': str(exc)[:120]}
 
 
+def _snapshot_sizes() -> dict:
+    """Two cheap sums for the trend sample: no set, no per-client allocation."""
+    try:
+        from app import GLOBAL_SERVER_DATA  # deferred: app-level state
+        inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+    except Exception:
+        return {'client_rows': None, 'inbounds': None}
+    return {'client_rows': sum(len(row.get('clients') or []) for row in inbounds
+                               if isinstance(row, dict)),
+            'inbounds': len(inbounds)}
+
+
 def sample(now=None, *, process_scan=True) -> dict:
-    """One compact trend sample: host availability plus Eve's total PSS."""
+    """One compact trend sample: host availability plus Eve's total PSS.
+
+    Also records the two cheap aggregates (client rows, inbounds) and the oldest role
+    uptime, so a later reading can tell growth with a stable client count on an old process
+    from a process that is merely still warming up. These are sums over the inbound list,
+    not the counting pass in snapshot_footprint(): a sample every minute must not allocate a
+    50k-entry set, which is the kind of churn this module exists to measure.
+    """
     moment = time.time() if now is None else float(now)
     host = host_memory(now=moment)
     eves = eve_processes() if process_scan else {'available': False, 'roles': {}}
     by_role = {role: int(bucket.get('pss_bytes') or 0)
                for role, bucket in (eves.get('roles') or {}).items()}
+    uptimes = [float(bucket.get('max_uptime_seconds') or 0)
+               for bucket in (eves.get('roles') or {}).values()]
+    sizes = _snapshot_sizes()
     return {
         'at': round(moment, 1),
         'available_bytes': host.get('available_bytes'),
         'cache_bytes': host.get('cache_bytes'),
         'swap_used_bytes': host.get('swap_used_bytes'),
         'eve_pss_bytes': eves.get('eve_pss_bytes'),
+        'eve_pss_complete': eves.get('eve_pss_complete'),
         'roles': by_role,
+        'client_rows': sizes['client_rows'],
+        'inbounds': sizes['inbounds'],
+        'uptime_seconds': (max(uptimes) if uptimes else None),
     }
 
 
@@ -775,7 +915,9 @@ def _trend_unavailable(reason, minutes) -> dict:
     return {'available': False, 'reason': reason, 'samples': None,
             'window_minutes': minutes, 'max_samples': SAMPLE_MAX, 'current_bytes': None,
             'peak_bytes': None, 'window_start_bytes': None, 'delta_bytes': None,
-            'per_hour_bytes': None, 'trend': None, 'series': []}
+            'per_hour_bytes': None, 'trend': None, 'series': [], 'uptime_seconds': None,
+            'client_rows_start': None, 'client_rows_end': None, 'counts_stable': None,
+            'pss_continuous': None, 'incomplete_pss_samples': None}
 
 
 def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES, series_points=120) -> dict:
@@ -811,6 +953,8 @@ def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES, series_points=120) -> dict:
     if not marks:
         return {'available': True, 'samples': 0, 'window_minutes': minutes,
                 'max_samples': SAMPLE_MAX, 'series': [],
+                'uptime_seconds': None, 'client_rows_start': None, 'client_rows_end': None,
+                'counts_stable': None, 'pss_continuous': None, 'incomplete_pss_samples': 0,
                 'note': 'no samples yet in this window'}
     current = marks[-1]
     peak = max(marks)
@@ -826,6 +970,18 @@ def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES, series_points=120) -> dict:
     points = [row for row in window if row.get('eve_pss_bytes')]
     series = [{'at': round(float(row['at']), 1), 'bytes': int(row['eve_pss_bytes'])}
               for row in points[-max(2, int(series_points)):]]
+    # Context for the slope, so a growth reading is not read as a leak on its own: how many
+    # samples could not read every process PSS (a discontinuous series), whether the client
+    # count moved, and how old the process is.
+    incomplete = [row for row in window if row.get('eve_pss_complete') is False]
+    with_counts = [row for row in window if row.get('client_rows') is not None]
+    counts_stable = None
+    client_rows_start = client_rows_end = None
+    if len(with_counts) >= 2:
+        client_rows_start = int(with_counts[0]['client_rows'])
+        client_rows_end = int(with_counts[-1]['client_rows'])
+        counts_stable = abs(client_rows_end - client_rows_start) <= max(
+            1, int(0.02 * max(1, client_rows_start)))
     return {
         'available': True,
         'samples': len(marks),
@@ -838,8 +994,15 @@ def trend(now=None, *, minutes=SAMPLE_KEEP_MINUTES, series_points=120) -> dict:
         'per_hour_bytes': int(per_hour),
         'trend': direction,
         'series': series,
-        'note': ('a steady high value after a full dashboard load is retained snapshot, '
-                 'not a leak; a value that climbs while the client count is flat is a leak'),
+        'uptime_seconds': (window[-1].get('uptime_seconds') if window else None),
+        'client_rows_start': client_rows_start,
+        'client_rows_end': client_rows_end,
+        'counts_stable': counts_stable,
+        'pss_continuous': not incomplete,
+        'incomplete_pss_samples': len(incomplete),
+        'note': ('a steady high value after a full dashboard load is retained snapshot; a '
+                 'value that climbs while the client count is flat is growth that needs a '
+                 'longer window before it can be called anything more than that'),
     }
 
 
@@ -905,17 +1068,38 @@ def _health(payload) -> dict:
     eves = payload.get('eve') or {}
     eve_pss = eves.get('eve_pss_bytes')
     total = host.get('total_bytes')
-    if eve_pss and total and eve_pss > 0.6 * total:
+    # A partial PSS sum must not be compared against total RAM: if a process in Eve's own
+    # groups could not be read, the comparison would be made on a number that is missing a
+    # part of Eve.
+    if eve_pss and total and eve_pss > 0.6 * total and eves.get('eve_pss_complete') is not False:
         notes.append('Eve alone accounts for most of the host memory')
-    snapshot = payload.get('snapshot') or {}
-    if (snapshot.get('duplication_ratio') or 0) > 1.2:
-        notes.append('the snapshot holds %sx duplicate client rows'
-                     % snapshot.get('duplication_ratio'))
-    # A top-level verdict of "ok" must not hide the one shape that means a leak: the trend
-    # is what separates growth from a steady retained snapshot (see the module docstring).
-    if (payload.get('trend') or {}).get('trend') == 'growing':
-        notes.append("Eve's PSS is growing across the trend window, which is the shape a "
-                     "leak takes rather than retained snapshot")
+    # The membership ratio is deliberately NOT a health note: one client on several inbounds
+    # is what v3 looks like, not a condition. The numbers live in the snapshot group, worded
+    # in schema-v2 terms.
+    #
+    # Growth is an observation, not a diagnosis. A one-hour slope cannot tell warm-up or
+    # allocator high-water from a leak - the background probe measured exactly that shape (a
+    # restart rises for hours and then plateaus). So the note names its window and says what
+    # would settle it, and the stronger wording needs all of: a long enough window, a process
+    # past warm-up, a stable client count and a continuous series.
+    trend = payload.get('trend') or {}
+    if trend.get('trend') == 'growing':
+        if trend.get('pss_continuous') is False:
+            notes.append('EVE PSS trends up in the selected window, but %s sample(s) in it '
+                         'could not read every process PSS, so the slope is not comparable'
+                         % trend.get('incomplete_pss_samples'))
+        else:
+            notes.append('EVE PSS is growing in the selected %s-minute window; longer-lived '
+                         'samples are needed to distinguish warm-up or allocator high-water '
+                         'from sustained growth'
+                         % (trend.get('window_minutes') or '?'))
+            if ((trend.get('window_minutes') or 0) >= SUSTAINED_WINDOW_MINUTES
+                    and (trend.get('uptime_seconds') or 0) >= SUSTAINED_UPTIME_SECONDS
+                    and trend.get('counts_stable') is True):
+                notes.append('EVE PSS grew across a %s-hour window with a stable client '
+                             'count and a process older than %s h'
+                             % (round((trend.get('window_minutes') or 0) / 60),
+                                round(SUSTAINED_UPTIME_SECONDS / 3600)))
     return {'state': 'ok' if not notes else 'warning', 'notes': notes}
 
 

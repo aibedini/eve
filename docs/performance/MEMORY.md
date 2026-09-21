@@ -14,6 +14,15 @@ made the earlier reading unreliable:
 * **Page cache is not application memory.** Linux deliberately fills free RAM with cache.
   `used` is computed as `total - MemAvailable`, and the cache is reported separately, so
   reclaimable memory is never presented as pressure.
+* **An unreadable PSS is not an RSS.** A worker running as `evemgr` cannot read
+  `/proc/<pid>/smaps_rollup` for a process owned by another user (PostgreSQL, nginx), so that
+  reading is *unavailable*. Substituting RSS there is what made 24 PostgreSQL backends report
+  1.6 GB of "PSS" - against a real ~220 MB measured with permission - and drove the host
+  residual to **-1.4 GB**, arithmetic that cannot be true. A group now sums only real PSS
+  values, sets `pss_complete: false` when any member is unreadable, and the reconciliation
+  reports **no residual at all** (naming the incomplete groups) instead of a fabricated one.
+  The UI renders `PSS unavailable` beside the real RSS, never a PSS-shaped label on an RSS
+  number.
 
 The order is deliberate: measure, then rank, then change representation. Nothing in this
 document proposes a fix that has not been measured on the install it applies to.

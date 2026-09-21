@@ -7079,7 +7079,16 @@
             'uss': 'USS (private)',
             'threads': 'Threads',
             'uptime': 'Uptime',
-            'approximated': 'PSS approximated by RSS',
+            'approximated': 'PSS unavailable',
+            'pssUnreadable': 'process(es) with unreadable PSS',
+            'accountingIncomplete': 'Reconciliation incomplete: the residual is not computed because a partial PSS sum cannot be reconciled against total RAM',
+            'canonicalClients': 'Canonical client entities',
+            'memberships': 'Client memberships',
+            'membershipsPerClient': 'Memberships per client',
+            'sharedMemberships': 'Memberships sharing the canonical entity',
+            'membershipOverrides': 'Memberships with an override',
+            'distinctClientObjects': 'Distinct client dicts retained',
+            'distinctRawClientObjects': 'Distinct raw_client dicts',
             'sizeOrCount': 'Size / count',
             'detail': 'Detail',
             'redisSnapshot': 'Redis snapshot (compressed)',
@@ -7106,7 +7115,7 @@
             'rowsWithRawClient': 'Rows with raw_client',
             'rowsWithFormatted': 'Rows with formatted strings',
             'lastUpdate': 'Last update',
-            'duplicationNote': 'Duplicate rows are the same account appearing once per assigned inbound (a v3 characteristic), and raw_client is the client config retained twice per row. They are not separate clients.',
+            'duplicationNote': 'A membership is one client on one inbound; the canonical entities are the distinct client dicts those memberships share, so memberships are not independent client objects. A membership whose dict is not the shared entity carries an override.',
             'trend': 'Trend',
             'trendSub': 'Current EVE (PSS)',
             'peak': 'Peak',
@@ -7159,6 +7168,7 @@
             'residual': 'Residual',
             'residualNote': 'Kernel, slab, page tables and driver memory: real, and owned by no process. It is reported rather than absorbed into another row.',
             'sumLine': 'Free + page cache + process PSS + residual',
+            'sumLineIncomplete': 'Total RAM (not reconciled)',
             'collectorHint': 'For a copy-and-paste artifact, run python scripts/memory_attribution.py --json on the host.',
             'copies': 'Processes holding a copy',
             'copiesNote': 'Each process records what it holds when it adopts a new snapshot version, and the record expires, so a stopped process stops counting as a copy.',
@@ -7200,7 +7210,16 @@
             'uss': 'USS (خصوصی)',
             'threads': 'نخ‌ها',
             'uptime': 'زمان کارکرد',
-            'approximated': 'PSS تقریبی از روی RSS',
+            'approximated': 'PSS در دسترس نیست',
+            'pssUnreadable': 'پروسه با PSS ناخوانا',
+            'accountingIncomplete': 'تراز کامل نیست: residual محاسبه نمی‌شود چون جمع PSS ناقص را نمی‌توان با کل RAM تراز کرد',
+            'canonicalClients': 'موجودیت‌های کانونیک کلاینت',
+            'memberships': 'عضویت‌های کلاینت',
+            'membershipsPerClient': 'عضویت به ازای هر کلاینت',
+            'sharedMemberships': 'عضویت‌های مشترک روی موجودیت کانونیک',
+            'membershipOverrides': 'عضویت‌های دارای override',
+            'distinctClientObjects': 'دیکشنری‌های کلاینت نگه‌داشته‌شده',
+            'distinctRawClientObjects': 'دیکشنری‌های raw_client',
             'sizeOrCount': 'حجم / تعداد',
             'detail': 'جزئیات',
             'redisSnapshot': 'اسنپ‌شات Redis (فشرده)',
@@ -7227,7 +7246,7 @@
             'rowsWithRawClient': 'ردیف‌های دارای raw_client',
             'rowsWithFormatted': 'ردیف‌های دارای رشته‌های formatted',
             'lastUpdate': 'آخرین به‌روزرسانی',
-            'duplicationNote': 'ردیف‌های تکراری همان حساب‌اند که یک‌بار برای هر اینباند تخصیص‌یافته ظاهر می‌شوند (ویژگی نسخه v3)، و raw_client همان پیکربندی کلاینت است که در هر ردیف دو بار نگه داشته می‌شود. کلاینت جداگانه نیستند.',
+            'duplicationNote': 'هر عضویت یعنی یک کلاینت روی یک اینباند؛ موجودیت‌های کانونیک همان دیکشنری‌های متمایز کلاینت‌اند که این عضویت‌ها میان خودشان به اشتراک می‌گذارند، پس عضویت‌ها آبجکت‌های مستقل کلاینت نیستند. عضویتی که دیکشنری‌اش همان موجودیت مشترک نباشد، override دارد.',
             'trend': 'روند',
             'trendSub': 'EVE (PSS) کنونی',
             'peak': 'اوج',
@@ -7280,6 +7299,7 @@
             'residual': 'باقی‌مانده',
             'residualNote': 'کرنل، slab، جدول‌های صفحه و حافظه درایور: واقعی‌اند و مال هیچ فرایندی نیستند. گزارش می‌شوند تا در ردیف دیگری پنهان نشوند.',
             'sumLine': 'آزاد + کش صفحه + PSS فرایندها + باقی‌مانده',
+            'sumLineIncomplete': 'کل RAM (تراز نشده)',
             'collectorHint': 'برای خروجی قابل‌کپی، روی میزبان اجرا کنید: python scripts/memory_attribution.py --json',
             'copies': 'پروسه‌های دارای نسخه',
             'copiesNote': 'هر پروسه هنگام پذیرش نسخه جدید اسنپ‌شات، آنچه را نگه می‌دارد ثبت می‌کند و این ثبت منقضی می‌شود؛ پس پروسه متوقف‌شده دیگر نسخه شمرده نمی‌شود.',
@@ -7455,6 +7475,27 @@
 
     function memCountCell(value) {
         return '<td class="mem-num">' + memEsc(memOr(memNum(value))) + '</td>';
+    }
+
+    /* A PSS that could not be read is not a number, and it is not the RSS either. A group
+       with nothing readable shows "PSS unavailable"; a group with only some readable shows
+       the partial sum marked "+", so a partial number can never pass as the whole. */
+    function memPssCell(bucket) {
+        const missing = Number(bucket.pss_unavailable_processes) || 0;
+        const total = Number(bucket.processes) || 0;
+        if (!missing) return memByteCell(bucket.pss_bytes);
+        if (missing >= total) {
+            return '<td class="mem-num">' + memEsc(memT('approximated')) + '</td>';
+        }
+        return '<td class="mem-num"' + memExact(bucket.pss_bytes) + '>'
+            + memEsc(memOr(memBytes(bucket.pss_bytes)) + '+') + '</td>';
+    }
+
+    function memPssNote(bucket) {
+        const missing = Number(bucket.pss_unavailable_processes) || 0;
+        if (!missing) return '';
+        return ' <span class="label-note">(' + memEsc(missing + ' ' + memT('pssUnreadable'))
+            + ')</span>';
     }
 
     function memCard(parts) {
@@ -7677,12 +7718,10 @@
         let rows = '';
         keys.forEach(key => {
             const bucket = roles[key] || {};
-            const approximated = bucket.pss_approximated
-                ? ' <span class="label-note">(' + memEsc(memT('approximated')) + ')</span>' : '';
             rows += '<tr>'
-                + '<td>' + memEsc(memLabel(key, MEM_ROLE_LABELS)) + approximated + '</td>'
+                + '<td>' + memEsc(memLabel(key, MEM_ROLE_LABELS)) + memPssNote(bucket) + '</td>'
                 + memByteCell(bucket.rss_bytes)
-                + memByteCell(bucket.pss_bytes)
+                + memPssCell(bucket)
                 + memByteCell(bucket.private_bytes)
                 + memCountCell(bucket.processes)
                 + memCountCell(bucket.threads)
@@ -7768,13 +7807,17 @@
         const rows = [
             memRow(memT('servers'), memNum(snapshot.servers)),
             memRow(memT('inbounds'), memNum(snapshot.inbounds)),
-            memRow(memT('clientRows'), memNum(snapshot.client_rows)),
-            memRow(memT('uniqueClients'), memNum(snapshot.unique_clients)),
-            memRow(memT('duplicateRows'), memNum(snapshot.duplicate_rows)),
-            memKvRow(memT('duplicationRatio'), memEsc((ratio === null || ratio === undefined)
+            memRow(memT('canonicalClients'), memNum(snapshot.canonical_client_entities)),
+            memRow(memT('memberships'), memNum(snapshot.client_memberships)),
+            memKvRow(memT('membershipsPerClient'), memEsc((ratio === null || ratio === undefined)
                 ? memT('notMeasured') : Number(ratio).toFixed(2) + 'x')),
-            memRow(memT('rowsWithRawClient'), memNum(snapshot.rows_with_raw_client)),
-            memRow(memT('rowsWithFormatted'), memNum(snapshot.rows_with_formatted_strings)),
+            memRow(memT('sharedMemberships'), memNum(snapshot.shared_memberships)),
+            memRow(memT('membershipOverrides'), memNum(snapshot.membership_overrides)),
+            memRow(memT('distinctClientObjects'), memNum(snapshot.distinct_client_object_count)),
+            memRow(memT('distinctRawClientObjects'),
+                   memNum(snapshot.distinct_raw_client_object_count)),
+            memRow(memT('rowsWithFormatted'),
+                   memNum(snapshot.memberships_with_formatted_strings)),
             memRow(memT('lastUpdate'), memAgoStamp(snapshot.last_update)),
             memNote(memT('duplicationNote')),
             memKvRow(memT('copies'), memEsc(memCopiesText(copies)), '', 'mem-wrap'),
@@ -7795,12 +7838,10 @@
         let rows = '';
         keys.forEach(key => {
             const bucket = services[key] || {};
-            const approximated = bucket.pss_approximated
-                ? ' <span class="label-note">(' + memEsc(memT('approximated')) + ')</span>' : '';
             rows += '<tr>'
-                + '<td>' + memEsc(memLabel(key, MEM_SERVICE_LABELS)) + approximated + '</td>'
+                + '<td>' + memEsc(memLabel(key, MEM_SERVICE_LABELS)) + memPssNote(bucket) + '</td>'
                 + memByteCell(bucket.rss_bytes)
-                + memByteCell(bucket.pss_bytes)
+                + memPssCell(bucket)
                 + memByteCell(bucket.private_bytes)
                 + memCountCell(bucket.processes)
                 + memCountCell(bucket.threads)
@@ -7828,10 +7869,19 @@
             memBytesRow(memT('pageCache'), accounting.cache_bytes),
             memBytesRow(memT('freeMemory'), accounting.free_bytes),
             memBytesRow(memT('residual'), accounting.residual_bytes),
-            memBytesRow(memT('sumLine'), accounting.total_bytes),
+            memBytesRow(accounting.complete === false ? memT('sumLineIncomplete')
+                                                      : memT('sumLine'),
+                        accounting.total_bytes),
             memNote(memT('residualNote')),
             memNote(memT('collectorHint'))
         ];
+        if (accounting.complete === false) {
+            /* An incomplete reconciliation must say so where the numbers are, not only in a
+               log: the residual is deliberately not computed, so the row above reads
+               "not measured" instead of a fabricated -1.4 GB. */
+            rows.unshift(memNote(memT('accountingIncomplete')
+                + (accounting.reason ? ' - ' + accounting.reason : ''), 'field-note-warn'));
+        }
         return '<div class="mem-kv">' + rows.join('') + '</div>';
     }
 

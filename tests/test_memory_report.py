@@ -13,6 +13,8 @@ os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
 
 from panel.core import memory_report  # noqa: E402
 
+MiB = 1024 ** 2
+
 MEMINFO = """MemTotal:        3962752 kB
 MemFree:          118340 kB
 MemAvailable:     839680 kB
@@ -110,13 +112,18 @@ class ProcessMemoryTests(unittest.TestCase):
         self.assertEqual(row['role'], 'background')
         self.assertNotIn('pss_is_rss_fallback', row)
 
-    def test_without_smaps_pss_falls_back_to_rss_and_says_so(self):
+    def test_a_denied_smaps_reports_pss_unavailable_and_keeps_rss_apart(self):
+        # The permission case that produced the impossible report: a web worker (evemgr)
+        # cannot read postgres's smaps_rollup, so PSS is *unknown*. Substituting RSS for it
+        # is what made 24 PostgreSQL backends read as 1.6 GB of "PSS".
         files = {'/proc/4243/status': STATUS}
         with mock.patch.object(memory_report, '_read', _fake_read(files)):
             row = memory_report.process_memory(4243)
-        self.assertEqual(row['pss_bytes'], row['rss_bytes'])
+        self.assertIsNone(row['pss_bytes'])
+        self.assertFalse(row['pss_available'])
         self.assertTrue(row['pss_is_rss_fallback'])
-        self.assertIn('smaps_rollup', row['pss_note'])
+        self.assertEqual(row['approximate_rss_bytes'], row['rss_bytes'])
+        self.assertIn('smaps_rollup', row['pss_reason'])
 
     def test_role_detection_covers_every_launch_entry_point(self):
         for cmdline, expected in (
@@ -181,6 +188,62 @@ class EveAggregationTests(unittest.TestCase):
                 mock.patch.object(memory_report.os.path, 'isdir', return_value=True):
             return memory_report.eve_processes()
 
+    def test_a_service_whose_smaps_is_denied_contributes_no_pss(self):
+        # The production shape in one test: PostgreSQL runs as another user, the web worker
+        # cannot read its smaps_rollup, so the row carries RSS and no PSS. The RSS must not
+        # become a PSS and the group must declare itself incomplete.
+        rows = {
+            '100': {'available': True, 'pid': 100, 'role': 'web', 'rss_bytes': 400 * MiB,
+                    'pss_bytes': 380 * MiB, 'pss_available': True, 'private_bytes': 350 * MiB,
+                    'threads': 4, 'uptime_seconds': 10, 'peak_rss_bytes': 500 * MiB},
+            '200': {'available': True, 'pid': 200, 'role': 'postgres', 'rss_bytes': 1_600 * MiB,
+                    'pss_bytes': None, 'pss_available': False, 'pss_is_rss_fallback': True,
+                    'approximate_rss_bytes': 1_600 * MiB, 'private_bytes': None,
+                    'threads': 12, 'uptime_seconds': 99, 'peak_rss_bytes': 1_700 * MiB},
+        }
+        report = self._grouped(rows)
+        self.assertEqual(report['eve_pss_bytes'], 380 * MiB)
+        self.assertTrue(report['eve_pss_complete'])
+        postgres = report['services']['postgres']
+        self.assertEqual(postgres['pss_bytes'], 0)          # never the 1.6 GB of RSS
+        self.assertEqual(postgres['rss_bytes'], 1_600 * MiB)  # still visible as RSS
+        self.assertFalse(postgres['pss_complete'])
+        self.assertEqual(postgres['pss_unavailable_processes'], 1)
+        self.assertEqual(report['service_pss_bytes'], 0)
+        self.assertFalse(report['service_pss_complete'])
+
+    def test_a_group_mixing_real_and_unreadable_pss_is_partial_and_flagged(self):
+        rows = {
+            '301': {'available': True, 'pid': 301, 'role': 'redis', 'rss_bytes': 30 * MiB,
+                    'pss_bytes': 25 * MiB, 'pss_available': True, 'private_bytes': 24 * MiB,
+                    'threads': 5, 'uptime_seconds': 60, 'peak_rss_bytes': 40 * MiB},
+            '302': {'available': True, 'pid': 302, 'role': 'redis', 'rss_bytes': 20 * MiB,
+                    'pss_bytes': None, 'pss_available': False, 'pss_is_rss_fallback': True,
+                    'private_bytes': None, 'threads': 5, 'uptime_seconds': 60,
+                    'peak_rss_bytes': 25 * MiB},
+        }
+        report = self._grouped(rows)
+        redis_bucket = report['services']['redis']
+        self.assertEqual(redis_bucket['pss_bytes'], 25 * MiB)   # the readable one only
+        self.assertEqual(redis_bucket['pss_available_processes'], 1)
+        self.assertEqual(redis_bucket['pss_unavailable_processes'], 1)
+        self.assertFalse(redis_bucket['pss_complete'])
+        self.assertTrue(redis_bucket['pss_approximated'])
+        # Eve's own groups were fully readable, so the Eve figure is still complete.
+        self.assertTrue(report['eve_pss_complete'])
+
+    def test_unclassified_processes_with_unreadable_pss_are_flagged_too(self):
+        rows = {
+            '400': {'available': True, 'pid': 400, 'role': 'other', 'rss_bytes': 90 * MiB,
+                    'pss_bytes': None, 'pss_available': False, 'private_bytes': None,
+                    'threads': 2, 'uptime_seconds': 5},
+        }
+        report = self._grouped(rows)
+        self.assertEqual(report['other_pss_bytes'], 0)
+        self.assertFalse(report['other_pss_complete'])
+        self.assertEqual(report['other_pss_unavailable_processes'], 1)
+        self.assertEqual(report['other_rss_bytes'], 90 * MiB)
+
     def test_host_services_are_attributed_separately_and_never_to_eve(self):
         report = self._grouped({
             '100': {'available': True, 'pid': 100, 'role': 'web',
@@ -235,13 +298,39 @@ class EveAggregationTests(unittest.TestCase):
         host = {'total_bytes': 1000, 'free_bytes': 100, 'cache_bytes': 200,
                 'used_bytes': 700, 'available_bytes': 300}
         eve = {'eve_pss_bytes': 300, 'eve_pss_with_xray_bytes': 320,
+               'eve_pss_with_xray_complete': True, 'service_pss_complete': True,
+               'other_pss_complete': True,
                'service_pss_bytes': 100, 'other_pss_bytes': 50,
                'roles': {'xray': {'pss_bytes': 20}}}
         row = memory_report.accounting(host, eve)
         # Xray is already inside eve_pss_with_xray, so it is not summed a second time.
         self.assertEqual(row['process_pss_bytes'], 470)
         self.assertEqual(row['residual_bytes'], 230)
+        self.assertTrue(row['complete'])
+        self.assertFalse(row['unreconciled'])
         self.assertEqual(row['used_bytes'], 700)
+
+    def test_an_incomplete_pss_sum_never_invents_a_residual(self):
+        # Reproduces the production shape: PostgreSQL's PSS is unreadable, so the service
+        # group is incomplete. With RSS substituted for PSS the arithmetic produced a
+        # residual of about -1.4 GB; it must instead be None and say why.
+        host = {'total_bytes': 3968808 * 1024, 'free_bytes': 200 * MiB,
+                'cache_bytes': 668 * MiB, 'used_bytes': 3 * 1024 ** 3,
+                'available_bytes': 559 * MiB}
+        eve = {'eve_pss_bytes': 2 * 1024 ** 3, 'eve_pss_with_xray_bytes': 2 * 1024 ** 3,
+               'eve_pss_with_xray_complete': True, 'service_pss_complete': False,
+               'other_pss_complete': True,
+               'service_pss_bytes': 1_600 * MiB,   # every postgres process fell back to RSS
+               'other_pss_bytes': 100 * MiB,
+               'roles': {}}
+        row = memory_report.accounting(host, eve)
+        self.assertIsNone(row['residual_bytes'])
+        self.assertFalse(row['complete'])
+        self.assertTrue(row['unreconciled'])
+        self.assertEqual(row['incomplete_groups'], ['host services'])
+        self.assertIn('host services', row['reason'])
+        # The partial sum is still reported - it is just never reconciled.
+        self.assertEqual(row['process_pss_bytes'], 2 * 1024 ** 3 + 1_600 * MiB + 100 * MiB)
 
     def test_accounting_without_a_host_total_is_unavailable_not_zero(self):
         row = memory_report.accounting({'available': False}, {})
@@ -304,6 +393,35 @@ class SnapshotFootprintTests(unittest.TestCase):
         row = memory_report.snapshot_footprint(snapshot)
         self.assertEqual(row['client_rows'], 2)
         self.assertEqual(row['unique_clients'], 1)
+
+    def test_schema_v2_memberships_are_not_counted_as_duplicate_clients(self):
+        # One canonical entity shared by two inbounds, plus one membership that differs and
+        # therefore carries its own dict (an override). This is what v2 actually retains.
+        shared = {'id': 'uuid-a', 'email': 'a@x', 'up': 1, 'raw_client': {'id': 'uuid-a'},
+                  'up_formatted': '1 B'}
+        overridden = {'id': 'uuid-a', 'email': 'a@x', 'up': 2,
+                      'raw_client': {'id': 'uuid-a'}}
+        other = {'id': 'uuid-b', 'email': 'b@x', 'up': 3}
+        snapshot = {'inbounds': [
+            {'server_id': 1, 'id': 1, 'clients': [shared, other]},
+            {'server_id': 1, 'id': 2, 'clients': [shared, overridden]},
+        ]}
+        row = memory_report.snapshot_footprint(snapshot)
+        self.assertEqual(row['canonical_client_entities'], 2)
+        self.assertEqual(row['client_memberships'], 4)
+        self.assertEqual(row['membership_ratio'], 2.0)
+        self.assertEqual(row['shared_memberships'], 3)
+        self.assertEqual(row['membership_overrides'], 1)
+        self.assertEqual(row['distinct_client_object_count'], 3)
+        # raw_client is shared with the entity: two memberships point at one dict.
+        self.assertEqual(row['distinct_raw_client_object_count'], 2)
+        self.assertEqual(row['memberships_with_raw_client'], 3)
+        self.assertEqual(row['memberships_with_formatted_strings'], 2)
+        # The pre-v2 aliases keep their old meaning for existing consumers.
+        self.assertEqual(row['client_rows'], 4)
+        self.assertEqual(row['unique_clients'], 2)
+        self.assertEqual(row['duplicate_rows'], 2)
+        self.assertIn('memberships', row['note'])
 
     def test_a_snapshot_that_is_not_there_reports_unavailable(self):
         with mock.patch.dict('sys.modules', {'app': None}):
@@ -640,7 +758,66 @@ class ReportContractTests(unittest.TestCase):
         joined = ' '.join(health['notes'])
         self.assertIn('10%', joined)
         self.assertIn('swap', joined)
-        self.assertIn('duplicate', joined)
+        # The membership ratio is not a health condition: a client on several inbounds is
+        # what v3 looks like, so it is reported in the snapshot group, not as a warning.
+        self.assertNotIn('duplicate', joined)
+
+    def test_a_partial_eve_sum_is_not_compared_against_total_ram(self):
+        payload = {
+            'host': {'available': True, 'total_bytes': 1000, 'available_bytes': 500,
+                     'available_pct': 50.0, 'swap_used_bytes': 0},
+            'eve': {'eve_pss_bytes': 900, 'eve_pss_complete': False},
+        }
+        joined = ' '.join(memory_report._health(payload)['notes'])
+        self.assertNotIn('most of the host memory', joined)
+        payload['eve']['eve_pss_complete'] = True
+        joined = ' '.join(memory_report._health(payload)['notes'])
+        self.assertIn('most of the host memory', joined)
+
+    def test_a_one_hour_growth_reading_does_not_claim_a_leak(self):
+        payload = {
+            'host': {'available': True, 'total_bytes': 1000, 'available_bytes': 500,
+                     'available_pct': 50.0, 'swap_used_bytes': 0},
+            'eve': {'eve_pss_bytes': 100, 'eve_pss_complete': True},
+            'trend': {'trend': 'growing', 'window_minutes': 60, 'uptime_seconds': 600,
+                      'counts_stable': True, 'pss_continuous': True,
+                      'incomplete_pss_samples': 0},
+        }
+        joined = ' '.join(memory_report._health(payload)['notes'])
+        self.assertNotIn('leak', joined.lower())
+        self.assertIn('longer-lived samples', joined)
+        self.assertIn('60-minute window', joined)
+
+    def test_sustained_growth_needs_a_long_window_an_old_process_and_stable_counts(self):
+        base = {
+            'host': {'available': True, 'total_bytes': 1000, 'available_bytes': 500,
+                     'available_pct': 50.0, 'swap_used_bytes': 0},
+            'eve': {'eve_pss_bytes': 100, 'eve_pss_complete': True},
+            'trend': {'trend': 'growing', 'window_minutes': 1440,
+                      'uptime_seconds': 8 * 3600, 'counts_stable': True,
+                      'pss_continuous': True, 'incomplete_pss_samples': 0},
+        }
+        sustained = ' '.join(memory_report._health(base)['notes'])
+        self.assertIn('grew across a 24-hour window', sustained)
+        for field, value in (('window_minutes', 120), ('uptime_seconds', 600),
+                             ('counts_stable', False)):
+            trend = dict(base['trend'])
+            trend[field] = value
+            joined = ' '.join(memory_report._health({**base, 'trend': trend})['notes'])
+            self.assertNotIn('grew across a', joined, field)
+
+    def test_a_discontinuous_pss_series_is_not_read_as_growth(self):
+        payload = {
+            'host': {'available': True, 'total_bytes': 1000, 'available_bytes': 500,
+                     'available_pct': 50.0, 'swap_used_bytes': 0},
+            'eve': {'eve_pss_bytes': 100, 'eve_pss_complete': True},
+            'trend': {'trend': 'growing', 'window_minutes': 1440,
+                      'uptime_seconds': 8 * 3600, 'counts_stable': True,
+                      'pss_continuous': False, 'incomplete_pss_samples': 3},
+        }
+        joined = ' '.join(memory_report._health(payload)['notes'])
+        self.assertIn('not comparable', joined)
+        self.assertNotIn('longer-lived samples', joined)
 
     def test_an_unknown_host_is_not_reported_as_healthy(self):
         health = memory_report._health({'host': {'available': False, 'reason': 'no /proc'}})
