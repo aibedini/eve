@@ -240,6 +240,33 @@ def system_memory_analyze():
     return jsonify({'success': True, **memory_report.analyze_python_memory(limit=limit)})
 
 
+@bp.route('/api/system/memory/alloc-probe', methods=['POST'])
+@superadmin_required
+@step_up_required('system.update')
+def system_memory_alloc_probe_request():
+    """Ask the background process for one allocator diagnostic (explicit, never automatic).
+
+    The request travels through Redis because the process under investigation is the
+    background worker, not the one serving this call. One probe at a time: a second request
+    while one is pending is refused instead of queued. The result is bounded by a TTL and
+    carries counters and byte sizes only (see panel/core/alloc_probe.py).
+    """
+    from panel.core import alloc_probe  # deferred: keeps the route import light
+    outcome = alloc_probe.request_probe()
+    if not outcome.get('ok'):
+        return jsonify({'success': False, 'error': outcome.get('reason') or 'refused',
+                        'pending': outcome.get('pending')}), 409
+    return jsonify({'success': True, **outcome})
+
+
+@bp.route('/api/system/memory/alloc-probe', methods=['GET'])
+@superadmin_required
+def system_memory_alloc_probe_result():
+    """The pending request or the last bounded result of the allocator diagnostic."""
+    from panel.core import alloc_probe  # deferred: keeps the route import light
+    return jsonify({'success': True, **alloc_probe.read_result()})
+
+
 @bp.route('/api/system-update/start', methods=['POST'])
 @superadmin_required
 @step_up_required('system.update')

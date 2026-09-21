@@ -28,6 +28,21 @@ REQUIRED_KEYS = ('host', 'eve', 'accounting', 'snapshot', 'snapshot_copies',
                  'redis_snapshot', 'caches', 'trend', 'health')
 
 
+def _plain_admin_client():
+    """A signed-in non-superadmin client, for the permission negative tests."""
+    plain = Admin(username='mem-plain', role='admin', is_superadmin=False, enabled=True)
+    plain.set_password('CorrectHorseBattery1!')
+    db.session.add(plain)
+    db.session.commit()
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess.clear()
+        sess['admin_id'] = plain.id
+        sess['role'] = plain.role
+        sess['is_superadmin'] = False
+    return client
+
+
 class MemoryRouteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -101,6 +116,29 @@ class MemoryRouteTests(unittest.TestCase):
             sess['role'] = plain.role
             sess['is_superadmin'] = False
         self.assertIn(client.get('/api/system/memory').status_code, (302, 401, 403))
+
+    def test_the_alloc_probe_is_superadmin_only(self):
+        for client in (app.test_client(),
+                       _plain_admin_client()):
+            self.assertIn(client.get('/api/system/memory/alloc-probe').status_code,
+                          (302, 401, 403))
+            self.assertIn(client.post('/api/system/memory/alloc-probe').status_code,
+                          (302, 401, 403))
+
+    def test_the_alloc_probe_get_reports_a_state_and_never_crashes(self):
+        payload = self.client.get('/api/system/memory/alloc-probe').get_json()
+        self.assertTrue(payload['success'])
+        # The same keys on every branch: on a host without Redis this is available=False
+        # with a reason, and the state is None rather than missing.
+        self.assertIn('state', payload)
+        self.assertIn(payload['state'], (None, 'none', 'pending', 'done'))
+        if payload.get('available') is False:
+            self.assertIn('reason', payload)
+        # The POST is behind step-up and is a one-shot request: a refusal (guard, missing
+        # Redis, or one already pending) must be a clean status, never a traceback.
+        response = self.client.post('/api/system/memory/alloc-probe')
+        self.assertIn(response.status_code, (200, 400, 401, 403, 409, 503))
+        self.assertIn('success', response.get_json() or {})
 
     def test_deep_analysis_is_guarded_and_bounded(self):
         response = self.client.post('/api/system/memory/analyze', json={'limit': 3})

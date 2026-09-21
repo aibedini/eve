@@ -65,6 +65,11 @@ MAPPING = (
         ['tests.test_memory_probe'],
         ['tests.test_memory_report', 'tests.test_server_polling'],
     )),
+    ('panel/core/alloc_probe.py', (
+        # The one-shot allocator diagnostic: protocol, fallbacks and the no-PII contract.
+        ['tests.test_alloc_probe'],
+        ['tests.test_memory_routes'],
+    )),
     ('panel/core/memory_report.py', (
         # Attribution is the module the whole memory pass is read through: an edit here
         # can silently change what Settings -> Overview reports, so its own suite is

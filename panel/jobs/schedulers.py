@@ -2744,6 +2744,33 @@ def _security_maintenance_fallback_worker():
         app.logger.error('[MaintenanceFallback] failed: %s', exc)
 
 
+def alloc_probe_watcher():
+    """Run one operator-requested allocator diagnostic in THIS process.
+
+    The request arrives through Redis and is consumed exactly once, so this loop is a no-op
+    unless an operator asked for a probe: it is explicit, not automatic, and it never traces
+    or trims continuously. See panel/core/alloc_probe.py for why the experiment has to run in
+    the background process rather than in a web worker.
+    """
+    from app import app  # deferred: avoids circular import
+    interval = 5.0
+    while True:
+        ran = False
+        try:
+            from panel.core import alloc_probe
+            interval = float(alloc_probe.WATCH_INTERVAL_SECONDS)
+            ran = alloc_probe.watch_once()
+        except Exception:
+            try:
+                app.logger.warning('[AllocProbe] watcher tick failed', exc_info=True)
+            except Exception:
+                pass
+        try:
+            time.sleep(1.0 if ran else interval)
+        except Exception:
+            pass
+
+
 def ensure_background_threads_started():
     """Start background threads once per process.
 
@@ -2792,6 +2819,12 @@ def ensure_background_threads_started():
 
     # Singleton: only one worker runs health watchdog (DB logs, notifications)
     _start_worker('health_watchdog', health_watchdog, singleton=True)
+
+    # Operator-triggered, one-shot allocator diagnostic (panel/core/alloc_probe.py). It does
+    # nothing at all unless an operator requests a probe through Redis, runs it exactly once,
+    # and publishes a bounded result: the background process is the one under investigation,
+    # so the experiment has to execute here rather than in a web worker.
+    _start_worker('alloc_probe_watcher', alloc_probe_watcher, singleton=True)
 
     # Singleton: only one worker runs usage snapshots — no race conditions, no dedup needed
     _start_worker('snapshot_worker', usage_snapshot_worker, singleton=True)
