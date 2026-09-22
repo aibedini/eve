@@ -2860,6 +2860,14 @@ def ensure_background_threads_started():
     # Singleton: pulse health-check queue worker (web-triggered + scheduled probes).
     _start_worker('pulse_scheduler', pulse_scheduler_worker, singleton=True)
 
+    # Singleton: finish OPTIONAL activation for renewals whose config is already
+    # applied but whose client is not enabled everywhere yet (a slow node, or a
+    # nodePending write). Activation only: it never re-adds days/volume, never
+    # re-charges and never re-sends the renewal message -- that is exactly what makes
+    # the renewal resumable after the browser was answered.
+    from panel.jobs.renew_activation import renew_activation_worker  # deferred: light import
+    _start_worker('renew_activation', renew_activation_worker, singleton=True)
+
     # Singleton: BNQO link status/detection engine + retention rollup.
     from panel.jobs.bnqo import bnqo_scheduler_worker  # deferred: keeps module import light
     _start_worker('bnqo_scheduler', bnqo_scheduler_worker, singleton=True)

@@ -580,7 +580,14 @@ class RenewEnableTests(unittest.TestCase):
         self.assertTrue(verify.get('ok'))
         self.assertTrue((verify.get('observed') or {}).get('enable'))
 
-    def test_unconfirmed_disabled_client_is_not_reported_or_billed_as_success(self):
+    def test_an_applied_renewal_with_a_disabled_client_is_pending_not_a_failure(self):
+        """The panel accepted the config, the client is still disabled: PENDING.
+
+        This used to be reported as a 409 "not verified" with no transaction at all,
+        which is the production bug the operator hit: the panel showed the new expiry
+        and volume while EVE said the renewal was unconfirmed, so nobody knew whether
+        to charge, to message the customer, or to renew again.
+        """
         future = int(time.time() * 1000) + 5 * DAY_MS
         raw = _raw_client(expiry=future, total=5 * GB, enable=False)
         self._seed_cache(raw)
@@ -594,15 +601,24 @@ class RenewEnableTests(unittest.TestCase):
         ):
             resp = self._renew(mode='custom', days=30, volume=10, free=True)
 
-        # The app preserves JSON business errors through proxies as HTTP 200
-        # and carries the real status in X-Eve-Status.
-        self.assertEqual(resp.status_code, 200, resp.get_json())
-        self.assertEqual(resp.headers.get('X-Eve-Status'), '409')
         payload = resp.get_json()
-        self.assertFalse(payload['success'])
-        self.assertEqual(payload['code'], 'renew_not_verified')
+        self.assertTrue(payload['success'], payload)
+        self.assertEqual(payload['final_state'], 'CONFIG_APPLIED_ACTIVATION_PENDING')
+        self.assertEqual(payload['message_key'], 'renew_activation_pending')
+        self.assertTrue(payload['config_applied'])
+        self.assertFalse(payload['activation_config_converged'])
         self.assertFalse(payload['verify']['observed']['enable'])
-        self.assertEqual(Transaction.query.filter_by(client_email='bob').count(), 0)
+        # The financial and factual side IS recorded: the panel holds the new
+        # expiry/quota, so the renewal happened.
+        self.assertTrue(payload['business_finalized'])
+        self.assertEqual(Transaction.query.filter_by(client_email='bob').count(), 1)
+        self.assertEqual(ClientOperation.query.filter_by(
+            client_email='bob', state='activation_pending').count(), 1)
+        # ...but the customer is NOT told the account is ready while it is not.
+        self.assertTrue(payload['whatsapp']['withheld_until_active'])
+        self.assertEqual(
+            resp.headers.get('X-Eve-Status'), None,
+            'an applied-but-pending renewal must not be a business error')
 
     def test_recheck_reports_each_partially_applied_field(self):
         expected_expiry = int(time.time() * 1000) + 30 * DAY_MS

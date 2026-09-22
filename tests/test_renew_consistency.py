@@ -53,8 +53,10 @@ from app import (  # noqa: E402
 from panel.core import client_events, refresh_policy, snapshot_delta  # noqa: E402
 from panel.adapters import xui as xui_adapter  # noqa: E402
 from panel.jobs import refresh as refresh_jobs  # noqa: E402
+from panel.models import RenewalEvent  # noqa: E402
 from panel.routes import clients as clients_module  # noqa: E402
 from panel.services import panel_capabilities  # noqa: E402
+from panel.services import renew_finalization  # noqa: E402
 from panel.services import subscription as subscription_service  # noqa: E402
 
 GB = 1024 ** 3
@@ -187,6 +189,10 @@ class RenewConsistencyTests(unittest.TestCase):
                                    'last_update': None})
 
         self.panel = PanelState(self.server.id)
+        #: Tracked notification hooks, so a test can assert that a customer message was
+        #: WITHHELD while activation had not converged.
+        self.sms_fire = mock.Mock()
+        self.stale_sms_cancel = mock.Mock()
         #: Optional overrides for the capability answer and the panel's nodePending
         #: flag, so a test can model an older v3 panel or a node that is still syncing.
         self.capabilities_override = None
@@ -232,8 +238,9 @@ class RenewConsistencyTests(unittest.TestCase):
                               return_value={'available': False,
                                             'reason': 'not modelled by this fixture'}),
             mock.patch.object(app_module, 'fetch_inbounds', self.route_fetch),
-            mock.patch.object(app_module, '_fire_automation_sms'),
-            mock.patch.object(app_module, '_fire_cancel_stale_account_sms'),
+            mock.patch.object(app_module, '_fire_automation_sms', self.sms_fire),
+            mock.patch.object(app_module, '_fire_cancel_stale_account_sms',
+                              self.stale_sms_cancel),
             mock.patch.object(app_module, '_notify_customer_telegram'),
             mock.patch.object(clients_module, '_fire_renew_whatsapp'),
             mock.patch.object(clients_module, '_fire_renew_postcheck'),
@@ -405,6 +412,10 @@ class RenewConsistencyTests(unittest.TestCase):
         state = payload.get('client_state')
         self.assertIsNotNone(state, payload)
         return state
+
+    def sms_fired(self):
+        """Whether the customer renewal SMS was dispatched."""
+        return bool(self.sms_fire.called)
 
     # -- A. the stale cache must not be the baseline --------------------------
 
@@ -750,53 +761,75 @@ class RenewConsistencyTests(unittest.TestCase):
         return (response.headers.get('X-Eve-Status') or response.status_code,
                 response.get_json())
 
-    def test_f_a_disabled_membership_is_never_a_successful_renewal(self):
-        """Global client enabled, the SECOND inbound disabled: not applied-and-active.
+    def test_f_a_disabled_membership_is_applied_but_not_reported_active(self):
+        """Global client enabled, the SECOND inbound disabled: applied, NOT active.
 
         This is the mandatory regression for the reported bug. The old verification
         read the requested inbound, then let the global client record overwrite it, so
-        this exact shape reported `ok=true`, charged the customer and sent the renewal
-        SMS while the account was still inactive in the inbound it actually uses.
+        this exact shape reported `ok=true` and sent the renewal SMS while the account
+        was still inactive in the inbound it actually uses.
+
+        The corrected behaviour is NOT "fail everything": the panel really does hold
+        the new expiry and quota, so the renewal's business facts are recorded (one
+        transaction, one renewal event, a customer text) - but the final state is
+        ACTIVATION_PENDING, the customer success message is withheld, and the
+        operation stays resumable by the activation reconciler.
         """
         _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
         self.panel.cap = 5 * GB
         self.membership_ids = [INBOUND_ID, 24]
         self.membership_enable = {24: False}
 
-        status, payload = self._renew_response(volume=20, reset_traffic=False)
+        status, payload = self._renew_response(volume=20, reset_traffic=False,
+                                               operation_id='renew-op-pending')
 
-        self.assertEqual(str(status), '409', payload)
-        self.assertFalse(payload.get('success'))
-        self.assertEqual(payload.get('code'), 'renew_not_verified')
-        verify = payload['verify']
-        self.assertTrue(verify['config_applied'], verify)
-        self.assertFalse(verify['activation_config_converged'], verify)
-        self.assertEqual(verify['final_state'], 'CONFIG_APPLIED_ACTIVATION_PENDING')
-        self.assertEqual(verify['memberships']['disabled_ids'], [24])
-        self.assertEqual(verify['memberships']['missing_ids'], [])
-        self.assertEqual(verify['global']['enable'], True)
+        self.assertTrue(payload.get('success'), payload)
+        self.assertEqual(payload.get('operation_id'), 'renew-op-pending')
+        self.assertEqual(payload.get('final_state'),
+                         'CONFIG_APPLIED_ACTIVATION_PENDING')
+        self.assertEqual(payload.get('message_key'), 'renew_activation_pending')
+        self.assertTrue(payload.get('config_applied'))
+        self.assertFalse(payload.get('activation_config_converged'))
+        self.assertTrue(payload.get('business_finalized'))
+        # The customer text IS durable (the operator may still need it), but the
+        # customer message itself must not have gone out for an inactive account.
+        self.assertTrue(payload.get('copy_text'))
+        self.assertFalse(self.sms_fired(), 'a renewal SMS was sent while activation '
+                                           'had not converged')
+        # Business facts recorded exactly once, activation pending on the operation.
+        self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
+        self.assertEqual(RenewalEvent.query.filter_by(
+            operation_id='renew-op-pending').count(), 1)
+        operation = ClientOperation.query.filter_by(
+            idempotency_key='renew-op-pending').one()
+        self.assertEqual(operation.state, 'activation_pending')
+        self.assertTrue(operation.response_json)
         # The membership layer is reported separately and is NOT overwritten by the
         # global one, which is the whole point of the fix.
-        self.assertFalse(verify['observed']['enable'])
-        # Nothing may be charged or notified for an unverified renewal.
-        self.assertEqual(Transaction.query.count(), 0)
+        self.assertFalse(payload['verify']['observed']['enable'])
+        self.assertEqual(payload['verify']['memberships']['disabled_ids'], [24])
+        self.assertEqual(payload['verify']['memberships']['missing_ids'], [])
+        self.assertEqual(payload['verify']['global']['enable'], True)
+        # No internal code is the operator copy.
+        self.assertNotIn('error', {k: v for k, v in payload.items() if k == 'error'})
 
-    def test_g_node_pending_is_pending_not_success(self):
+    def test_g_node_pending_keeps_the_renewal_applied_and_waits(self):
         """nodePending: the panel committed the config, its node has not caught up."""
         _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
         self.panel.cap = 5 * GB
         self.node_pending = True
 
-        status, payload = self._renew_response(volume=20, reset_traffic=False)
+        status, payload = self._renew_response(volume=20, reset_traffic=False,
+                                               operation_id='renew-op-node')
 
-        self.assertEqual(str(status), '409', payload)
-        verify = payload['verify']
-        self.assertTrue(verify['config_applied'], verify)
-        self.assertEqual(verify['node_pending'], True)
-        self.assertEqual(verify['runtime_sync_state'], 'pending')
-        self.assertEqual(verify['final_state'], 'CONFIG_APPLIED_ACTIVATION_PENDING')
-        self.assertFalse(verify.get('ok'))
-        self.assertEqual(Transaction.query.count(), 0)
+        self.assertTrue(payload.get('success'), payload)
+        self.assertEqual(payload.get('final_state'),
+                         'CONFIG_APPLIED_ACTIVATION_PENDING')
+        self.assertEqual(payload['verify']['node_pending'], True)
+        self.assertEqual(payload.get('runtime_sync_state'), 'pending')
+        self.assertTrue(payload.get('config_applied'))
+        self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
+        self.assertFalse(self.sms_fired(), 'a renewal SMS was sent for a node-pending write')
 
     def test_h_a_fully_converged_renewal_still_succeeds(self):
         """The control: every layer agreeing must still renew, charge and return 200."""
@@ -807,10 +840,169 @@ class RenewConsistencyTests(unittest.TestCase):
         payload = self._renew(volume=20, reset_traffic=False)
 
         verify = payload['verify']
-        self.assertEqual(verify['final_state'], 'APPLIED_ACTIVE')
+        self.assertEqual(payload['final_state'], 'APPLIED_ACTIVE')
+        self.assertEqual(payload['message_key'], 'renew_applied_active')
         self.assertTrue(verify['config_applied'])
         self.assertTrue(verify['activation_config_converged'])
         self.assertEqual(payload['client_state']['total_bytes'], 25 * GB)
+
+    # -- I. the durable operation ledger (the screenshot bug) -----------------
+
+    def test_i_recheck_uses_the_durable_operation_when_redis_has_nothing(self):
+        """The exact production bug: Re-check said `renew_result_unavailable`.
+
+        The expected values were persisted on the operation row BEFORE the panel
+        write, so losing the 180-second Redis cache (expiry, restart, another worker,
+        a browser that dropped the values) can no longer make EVE forget what it
+        asked the panel for.
+        """
+        _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        self.membership_ids = [INBOUND_ID, 24]
+        self.membership_enable = {24: False}
+
+        # 1) the renewal is applied, activation pending, and Redis is wiped afterwards.
+        _status, first = self._renew_response(volume=20, reset_traffic=False,
+                                              operation_id='renew-op-durable')
+        self.assertEqual(first['final_state'], 'CONFIG_APPLIED_ACTIVATION_PENDING')
+        with mock.patch.object(clients_module, '_load_renew_result', return_value=None):
+            # 2) Re-check posts ONLY the operation id - no expected values at all.
+            resp = self.http.post(
+                '/api/client/%d/%d/%s/renew/verify' % (self.server.id, INBOUND_ID, EMAIL),
+                json={'operation_id': 'renew-op-durable', 'awaiting_result': True})
+        payload = resp.get_json()
+
+        self.assertTrue(payload.get('success'), payload)
+        self.assertEqual(payload.get('operation_id'), 'renew-op-durable')
+        self.assertNotEqual(payload['verify'].get('error'), 'renew_result_unavailable')
+        checks = payload['verify']['checks']
+        # Deterministic badges: expected values are known, so `?` cannot appear.
+        self.assertEqual(checks['expiryTime']['expected'], int(first['verify']['expected']['expiryTime']))
+        self.assertEqual(checks['totalGB']['expected'], int(first['verify']['expected']['totalGB']))
+        self.assertEqual(checks['expiryTime']['matches'], True)
+        self.assertEqual(checks['totalGB']['matches'], True)
+        self.assertEqual(checks['enable']['matches'], False)
+        self.assertEqual(payload['final_state'], 'CONFIG_APPLIED_ACTIVATION_PENDING')
+        self.assertTrue(payload['config_applied'])
+        self.assertTrue(payload['business_finalized'])
+        # The durable customer text is returned even though the cache is gone.
+        self.assertTrue(payload.get('copy_text'))
+
+    def test_j_recheck_rejects_an_operation_that_belongs_to_another_account(self):
+        _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        self._renew_response(volume=20, reset_traffic=False, operation_id='renew-op-scoped')
+
+        other = ClientOperation(
+            idempotency_key='renew-op-other', request_hash='x', action='renew',
+            admin_id=self.admin.id, server_id=self.server.id, inbound_id=INBOUND_ID,
+            client_email='somebody-else@example.com', amount=0, state='prepared')
+        db.session.add(other)
+        db.session.commit()
+
+        resp = self.http.post(
+            '/api/client/%d/%d/%s/renew/verify' % (self.server.id, INBOUND_ID, EMAIL),
+            json={'operation_id': 'renew-op-other'})
+        payload = resp.get_json()
+        self.assertFalse(payload.get('success'))
+        self.assertEqual(payload.get('code'), 'operation_not_found')
+
+    def test_k_the_finalizer_runs_once_however_often_it_is_called(self):
+        _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        self.membership_ids = [INBOUND_ID, 24]
+        self.membership_enable = {24: False}
+        self._renew_response(volume=20, reset_traffic=False, operation_id='renew-op-once')
+
+        operation = ClientOperation.query.filter_by(
+            idempotency_key='renew-op-once').one()
+        built = {'calls': 0}
+
+        def _build():
+            built['calls'] += 1
+            return {'copy_text': 'second build', 'transaction_id': 999}
+
+        for _ in range(3):
+            payload, already = renew_finalization.finalize_renewal_business_once(
+                operation, _build)
+            self.assertTrue(payload.get('business_finalized'))
+            self.assertTrue(already)
+
+        self.assertEqual(built['calls'], 0, 'a finalized operation must not be rebuilt')
+        self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
+        self.assertEqual(RenewalEvent.query.filter_by(
+            operation_id='renew-op-once').count(), 1)
+        stored = renew_finalization.public_business_view(operation)
+        self.assertTrue(stored.get('copy_text'))
+        self.assertTrue(stored.get('business_finalized'))
+
+    def test_l_a_replayed_request_does_not_charge_twice(self):
+        """The same operation id twice: one transaction, one event, same answer."""
+        _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        _status, first = self._renew_response(volume=20, reset_traffic=False,
+                                              operation_id='renew-op-replay')
+        writes_after_first = self.v3_update.call_count
+
+        _status2, second = self._renew_response(volume=20, reset_traffic=False,
+                                                operation_id='renew-op-replay')
+
+        self.assertTrue(second.get('idempotent_replay'), second)
+        self.assertEqual(self.v3_update.call_count, writes_after_first,
+                         'a replayed renewal wrote to the panel again')
+        self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
+        self.assertEqual(RenewalEvent.query.filter_by(
+            operation_id='renew-op-replay').count(), 1)
+        self.assertEqual(second.get('copy_text'), first.get('copy_text'))
+
+    def test_m_a_config_that_did_not_land_is_not_finalized(self):
+        """The panel kept the OLD config: no transaction, no event, needs a human.
+
+        The distinction that matters: "applied but not active" records the business
+        facts, "not applied" must not - otherwise EVE would charge for a renewal the
+        panel never accepted.
+        """
+        _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        # The client-level read still reports the pre-renewal cap and no expiry.
+        self.panel.direct = _raw_client(EMAIL, cap=5 * GB, expiry=0, up=0, down=0)
+
+        status, payload = self._renew_response(volume=20, reset_traffic=False,
+                                               operation_id='renew-op-unapplied')
+
+        self.assertEqual(str(status), '409', payload)
+        self.assertFalse(payload.get('success'))
+        self.assertIn(payload.get('final_state'),
+                      ('NOT_APPLIED', 'PARTIALLY_APPLIED'))
+        self.assertFalse(payload.get('config_applied'))
+        self.assertFalse(payload.get('business_finalized'))
+        self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 0)
+        self.assertEqual(RenewalEvent.query.filter_by(
+            operation_id='renew-op-unapplied').count(), 0)
+        # A failed write that may have partially landed must be reconciled by a human,
+        # never silently retried as a fresh renewal.
+        operation = ClientOperation.query.filter_by(
+            idempotency_key='renew-op-unapplied').one()
+        self.assertIn(operation.state, ('needs_reconciliation', 'failed', 'panel_applied'))
+        self.assertEqual(self.sms_fire.call_count, 0)
+
+    def test_n_recheck_picks_the_operation_id_it_was_given(self):
+        """Two renewals of the same account: the id decides, not (server, email)."""
+        _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        self._renew_response(volume=20, reset_traffic=False, operation_id='renew-old')
+        self._renew_response(volume=5, reset_traffic=False, operation_id='renew-new')
+
+        with mock.patch.object(clients_module, '_load_renew_result', return_value=None):
+            resp = self.http.post(
+                '/api/client/%d/%d/%s/renew/verify' % (self.server.id, INBOUND_ID, EMAIL),
+                json={'operation_id': 'renew-old'})
+        payload = resp.get_json()
+        self.assertEqual(payload.get('operation_id'), 'renew-old')
+        old = ClientOperation.query.filter_by(idempotency_key='renew-old').one()
+        expected = renew_finalization.public_business_view(old).get('expected') or {}
+        self.assertEqual(payload['verify']['checks']['totalGB']['expected'],
+                         int(expected['totalGB']))
 
 
 if __name__ == '__main__':

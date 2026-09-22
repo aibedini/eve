@@ -738,11 +738,13 @@
             <button class="modal-close" onclick="closeRenewSuccessModal()">&times;</button>
         </div>
         <div class="modal-body">
-            <div id="renew-api-status" style="margin-bottom: 10px; font-size: 0.8rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: none; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-word;">
+            <div id="renew-api-status" class="hidden" style="margin-bottom: 10px; font-size: 0.8rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: flex; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-word;">
             </div>
+            <div id="renew-state-body" class="renew-state-body"></div>
+            <div id="renew-diagnostic" class="renew-diagnostic hidden"></div>
             <div id="renew-prev-state" style="margin-bottom: 15px; font-size: 0.85rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-all;">
             </div>
-            <div id="renew-success-text" style="white-space: pre-wrap; word-break: break-all; margin-bottom: 20px; font-size: 0.9rem; line-height: 1.5; background: var(--bg-dark); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); direction: ltr; text-align: left;"></div>
+            <div id="renew-success-text" class="hidden" style="white-space: pre-wrap; word-break: break-all; margin-bottom: 20px; font-size: 0.9rem; line-height: 1.5; background: var(--bg-dark); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); direction: ltr; text-align: left;"></div>
             <div class="renew-success-actions">
                 <button class="btn btn-secondary renew-success-action" onclick="recheckRenewal()" id="renew-recheck-btn">
                     Re-check
@@ -1444,6 +1446,81 @@
         justify-content: center;
         white-space: nowrap;
     }
+
+    /* Renewal result modal. The operation's STATE owns the colour: an applied config
+       whose activation is still synchronizing is amber, never the red used for "not
+       applied", and a renewal that has not been confirmed is never painted green.
+       Every tone is derived from the :root state tokens. */
+    #renew-success-modal {
+        /* PARTIALLY_APPLIED sits between amber (synchronizing) and red (not applied);
+           mixed from those two tokens instead of adding a colour to the system. The
+           plain --warning fallback keeps it readable where color-mix is unsupported. */
+        --renew-tone-orange: var(--warning);
+        --renew-tone-orange: color-mix(in srgb, var(--warning) 55%, var(--danger));
+    }
+
+    .renew-state-body {
+        margin-bottom: 12px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        line-height: 1.5;
+        text-align: start;
+    }
+
+    /* Internal diagnostics (verify.error, renew_result_*): operator-only, and only
+       ever here next to Trace - never the pill, the title or the body. */
+    .renew-diagnostic {
+        margin-bottom: 12px;
+        font-size: 0.7rem;
+        line-height: 1.5;
+        color: var(--text-secondary);
+        direction: ltr;
+        text-align: left;
+        word-break: break-word;
+        opacity: 0.85;
+    }
+
+    .renew-prev-account {
+        color: var(--primary);
+        font-weight: 600;
+    }
+
+    #renew-success-modal.renew-tone-green #renew-modal-title,
+    #renew-success-modal.renew-tone-green .renew-state-body { color: var(--success); }
+    #renew-success-modal.renew-tone-amber #renew-modal-title,
+    #renew-success-modal.renew-tone-amber .renew-state-body { color: var(--warning); }
+    #renew-success-modal.renew-tone-orange #renew-modal-title,
+    #renew-success-modal.renew-tone-orange .renew-state-body { color: var(--renew-tone-orange); }
+    #renew-success-modal.renew-tone-red #renew-modal-title,
+    #renew-success-modal.renew-tone-red .renew-state-body { color: var(--danger); }
+    #renew-success-modal.renew-tone-neutral #renew-modal-title,
+    #renew-success-modal.renew-tone-neutral .renew-state-body { color: var(--text-secondary); }
+
+    #renew-success-modal .renew-pill-green {
+        background: color-mix(in srgb, var(--success) 20%, transparent);
+        color: var(--success);
+    }
+    #renew-success-modal .renew-pill-amber {
+        background: color-mix(in srgb, var(--warning) 20%, transparent);
+        color: var(--warning);
+    }
+    #renew-success-modal .renew-pill-orange {
+        background: color-mix(in srgb, var(--renew-tone-orange) 20%, transparent);
+        color: var(--renew-tone-orange);
+    }
+    #renew-success-modal .renew-pill-red {
+        background: color-mix(in srgb, var(--danger) 20%, transparent);
+        color: var(--danger);
+    }
+    #renew-success-modal .renew-pill-neutral {
+        background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+        color: var(--text-secondary);
+    }
+
+    #renew-success-modal .renew-badge-green { color: var(--success); }
+    #renew-success-modal .renew-badge-amber { color: var(--warning); }
+    #renew-success-modal .renew-badge-red { color: var(--danger); }
+    #renew-success-modal .renew-badge-neutral { color: var(--text-secondary); }
 
     /* Edit/bulk inbound checkbox dropdown reuses the filter-dropdown look */
     #edit-client-inbound-multi-list .filter-item,
@@ -5024,140 +5101,526 @@
         });
     }
 
+    // ── Renewal result modal ────────────────────────────────────────────────
+    // renew-result-modal:start
+    // Everything the renewal result modal says is derived here, from the
+    // operation's final_state / message_key, and every path that renders it goes
+    // through renderRenewApiStatus() + buildRenewContext(), so no caller can drop a
+    // fact again. tests/test_renew_ui_state.py extracts this region and evaluates
+    // the pure helpers in Node.
+
     let lastRenewContext = null;
 
-    function renderRenewApiStatus(data, opts) {
-        try {
-            const box = document.getElementById('renew-api-status');
-            if (!box) return;
+    // The dashboard's language is the template's Jinja `panel_lang`. The backend
+    // localizes `data.error` from the PANEL's own admin language instead, and in
+    // production the two disagreed (Persian title over an English body), so the
+    // renewal copy is owned here, keyed by final_state/message_key - never by
+    // backend prose.
+    const RENEW_LANG = {{ ('fa' if panel_lang == 'fa' else 'en')|tojson }};
 
-            if (opts && opts.inProgress) {
-                box.innerHTML = `<span class="status-pill" style="background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.35); color: #fde68a;">⏳ In progress</span>`;
-                box.style.display = 'flex';
-                return;
+    const RENEW_STATE_TEXT = {
+        APPLIED_ACTIVE: {
+            fa: { title: 'تمدید با موفقیت انجام شد', body: 'حساب تمدید شده و فعال است.', pill: 'تأیید شد' },
+            en: { title: 'Renewal completed successfully', body: 'The account has been renewed and is active.', pill: 'Verified' },
+        },
+        CONFIG_APPLIED_ACTIVATION_PENDING: {
+            fa: { title: 'تمدید ثبت شد — فعال‌سازی در حال تکمیل است', body: 'تمدید را دوباره انجام ندهید. EVE در حال تکمیل فعال‌سازی حساب است.', pill: 'در حال تکمیل' },
+            en: { title: 'Renewal applied — activation is still synchronizing', body: 'Do not renew again. EVE is still completing account activation.', pill: 'Activation syncing' },
+        },
+        PARTIALLY_APPLIED: {
+            fa: { title: 'تمدید ناقص اعمال شده', body: 'دوباره تمدید نکنید؛ وضعیت نیاز به تطبیق دارد.', pill: 'ناقص' },
+            en: { title: 'Renewal partially applied', body: 'Do not renew again; this operation requires reconciliation.', pill: 'Partial' },
+        },
+        NOT_APPLIED: {
+            fa: { title: 'تمدید اعمال نشد', body: 'تغییرات روی پنل اعمال نشد. وضعیت را بررسی کنید و اگر واقعاً اعمال نشده بود، تمدید را از نو انجام دهید.', pill: 'اعمال نشد' },
+            en: { title: 'Renewal was not applied', body: 'The panel does not show the renewal. Re-check, and renew again only if it is really missing.', pill: 'Not applied' },
+        },
+        AUTH_DEGRADED: {
+            fa: { title: 'EVE به API پنل دسترسی ندارد', body: 'اعتبارنامه یا سطح دسترسی توکن پنل را اصلاح کنید و سپس دوباره بررسی کنید.', pill: 'خطای دسترسی' },
+            en: { title: 'EVE cannot use the panel API', body: 'Fix the panel API credential or its token scope, then Re-check.', pill: 'API degraded' },
+        },
+        UNKNOWN: {
+            fa: { title: 'وضعیت تمدید هنوز مشخص نیست', body: 'پاسخ پنل قابل دسته‌بندی نبود. وضعیت فعلی را بررسی کنید و سپس دوباره بررسی کنید.', pill: 'نامشخص' },
+            en: { title: 'Renewal status is not yet confirmed', body: 'The panel answer could not be classified. Re-check the current state before acting.', pill: 'Unconfirmed' },
+        },
+        IN_PROGRESS: {
+            fa: { title: 'تمدید در حال انجام است', body: 'یک درخواست تمدید برای این حساب در حال اجراست. دوباره تمدید نکنید؛ چند لحظه بعد «بررسی مجدد» را بزنید.', pill: 'در حال اجرا' },
+            en: { title: 'Renewal is still running', body: 'A renewal request for this account is still running. Do not renew again; press Re-check in a moment.', pill: 'In progress' },
+        },
+    };
+
+    // Machine codes. `code`, `message_key`, `verify.error` and `error` are internal
+    // diagnostics: they reach the diagnostic line only, never the pill, the title or
+    // the body.
+    const RENEW_MESSAGE_KEY_STATE = {
+        renew_applied_active: 'APPLIED_ACTIVE',
+        renew_activation_pending: 'CONFIG_APPLIED_ACTIVATION_PENDING',
+        renew_partially_applied: 'PARTIALLY_APPLIED',
+        renew_not_applied: 'NOT_APPLIED',
+        renew_auth_degraded: 'AUTH_DEGRADED',
+        renew_unknown: 'UNKNOWN',
+        renew_in_progress: 'IN_PROGRESS',
+    };
+
+    // Old (cached) payloads only carried `verify.state` in the legacy vocabulary.
+    const RENEW_LEGACY_STATE = {
+        applied: 'APPLIED_ACTIVE',
+        partially_applied: 'PARTIALLY_APPLIED',
+        not_applied: 'NOT_APPLIED',
+        observed_without_expected: 'UNKNOWN',
+        checking: 'IN_PROGRESS',
+        pending: 'CONFIG_APPLIED_ACTIVATION_PENDING',
+    };
+
+    // Colour belongs to the STATE, not to a boolean `verify.ok`: a renewal whose
+    // config is applied while activation synchronizes is AMBER, never the red used
+    // for "not applied", and never a reason to renew again.
+    const RENEW_STATE_TONE = {
+        APPLIED_ACTIVE: 'green',
+        CONFIG_APPLIED_ACTIVATION_PENDING: 'amber',
+        PARTIALLY_APPLIED: 'orange',
+        NOT_APPLIED: 'red',
+        AUTH_DEGRADED: 'red',
+        UNKNOWN: 'neutral',
+        IN_PROGRESS: 'amber',
+    };
+
+    // Badge marks. Written as numeric character references on purpose: the
+    // design-system ratchet counts U+2705/U+274C as emoji chrome and this template is
+    // already at its recorded ceiling, while the operator must still see the same
+    // check / cross / hourglass marks.
+    const RENEW_MARK = {
+        ok: '&#x2705;',
+        bad: '&#x274C;',
+        pending: '&#x23F3;',
+        matched: '&#x2713;',
+        mismatched: '&#x2717;',
+        unknown: '?',
+    };
+
+    // The one place a renewal context is assembled.
+    //
+    // The production bug: showRenewInProgress() wrote a fresh
+    // {expectedExpiryTime: null, expectedTotalGB: null} literal on every call, so the
+    // `renew_not_verified` branch threw away the `verify.expected` the backend had
+    // just returned. The next Re-check then posted nulls, could only answer
+    // `renew_result_unavailable`, and the operator saw "? Expiry" - as if EVE had
+    // forgotten what it asked the panel for.
+    function buildRenewContext(source, prev) {
+        const src = (source && typeof source === 'object') ? source : {};
+        const before = (prev && typeof prev === 'object') ? prev : {};
+        const verify = (src.verify && typeof src.verify === 'object') ? src.verify : {};
+        const expected = (verify.expected && typeof verify.expected === 'object') ? verify.expected : {};
+        const submitted = (src.submitted_expected && typeof src.submitted_expected === 'object')
+            ? src.submitted_expected : {};
+        // First KNOWN value wins: a null/undefined in this response must never erase a
+        // fact an earlier response already established.
+        const keep = function () {
+            for (let index = 0; index < arguments.length; index += 1) {
+                const value = arguments[index];
+                if (value !== null && value !== undefined) return value;
             }
-
-            const trace = (data && data.trace_id) ? String(data.trace_id) : '';
-            const timing = (data && data.timing) ? data.timing : {};
-            const verify = (data && data.verify) ? data.verify : null;
-
-            const ok = verify ? Boolean(verify.ok) : null;
-            const attempted = verify ? Boolean(verify.attempted) : false;
-            const endpoint = (timing && timing.update_endpoint) ? String(timing.update_endpoint) : '';
-            const totalMs = (timing && typeof timing.total_ms !== 'undefined') ? timing.total_ms : null;
-
-            let pill = '';
-            if (attempted) {
-                pill = ok
-                    ? `<span class="status-pill active" style="background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.3); color: #bbf7d0;">Verified</span>`
-                    : `<span class="status-pill inactive" style="background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.28); color: #fecaca;">Not verified</span>`;
-            } else if (data && data.success) {
-                pill = `<span class="status-pill active" style="background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.3); color: #bbf7d0;">Applied</span>`;
-            } else {
-                pill = `<span class="status-pill inactive">Unknown</span>`;
-            }
-
-            const parts = [];
-            parts.push(pill);
-            const statusIsFa = (document.documentElement.lang || 'en') === 'fa';
-            const checks = (verify && verify.checks) ? verify.checks : {};
-            const formatBytes = (value) => {
-                const n = Number(value);
-                if (!Number.isFinite(n)) return '-';
-                if (n === 0) return statusIsFa ? 'نامحدود' : 'Unlimited';
-                return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-            };
-            const formatExpiry = (value) => {
-                const n = Number(value);
-                if (!Number.isFinite(n)) return '-';
-                if (n === 0) return statusIsFa ? 'نامحدود' : 'Unlimited';
-                if (n < 0) return `${Math.abs(n) / 86400000} ${statusIsFa ? 'روز پس از اولین اتصال' : 'days after first use'}`;
-                try { return EveDate.format(new Date(n)); } catch (e) { return new Date(n).toLocaleString(); }
-            };
-            const addCheck = (key, label, formatter) => {
-                const check = checks[key];
-                if (!check) return;
-                const color = check.matches === true ? '#bbf7d0' : (check.matches === false ? '#fecaca' : '#fde68a');
-                const icon = check.matches === true ? '✓' : (check.matches === false ? '✗' : '?');
-                // Expected vs observed in the tooltip: a bare "✗ Expiry" tells an operator
-                // that something is wrong but not what the panel actually answered, which is
-                // the first thing needed to tell a panel-side refusal from a wrong expected.
-                const detail = [
-                    `${statusIsFa ? 'انتظار' : 'Expected'}: ${formatter(check.expected)}`,
-                    `${statusIsFa ? 'مشاهده‌شده' : 'Observed'}: ${formatter(check.observed)}`,
-                    `${statusIsFa ? 'تطابق' : 'Match'}: ${check.matches === true ? 'yes' : (check.matches === false ? 'no' : 'unknown')}`,
-                ].join('&#10;');
-                parts.push(`<span class="server-badge" style="color:${color};" title="${escapeHtml(detail)}">${icon} ${label}: ${escapeHtml(formatter(check.observed))}</span>`);
-            };
-            addCheck('expiryTime', statusIsFa ? 'انقضا' : 'Expiry', formatExpiry);
-            addCheck('totalGB', statusIsFa ? 'حجم' : 'Volume', formatBytes);
-            if (verify && verify.observed && verify.observed.enable === true) {
-                parts.push(`<span class="server-badge" style="color:#bbf7d0;">3x-ui: ${statusIsFa ? 'فعال' : 'Active'}</span>`);
-            } else if (verify && verify.observed && verify.observed.enable === false) {
-                parts.push(`<span class="server-badge" style="color:#fecaca;">3x-ui: ${statusIsFa ? 'غیرفعال' : 'Disabled'}</span>`);
-            }
-            if (endpoint) parts.push(`<span class="server-badge">Endpoint: ${escapeHtml(endpoint)}</span>`);
-            if (trace) parts.push(`<span class="server-badge">Trace: ${escapeHtml(trace)}</span>`);
-            if (Number.isFinite(totalMs)) parts.push(`<span class="server-badge">${totalMs}ms</span>`);
-            if (verify && verify.error) parts.push(`<span style="color: #fca5a5;">${escapeHtml(String(verify.error))}</span>`);
-
-            box.innerHTML = parts.join(' ');
-            box.style.display = 'flex';
-            _applyRenewVerificationState(verify);
-        } catch (e) {
-            // ignore
-        }
+            return null;
+        };
+        const messageKey = String(src.message_key || verify.message_key || '');
+        const code = String(src.code || '');
+        const awaitingOriginalRequest = (code === 'renew_in_progress'
+            || messageKey === 'renew_in_progress'
+            || String(src.final_state || '') === 'IN_PROGRESS');
+        const operationId = keep(src.operation_id, src.operationId, before.operationId);
+        // `copy_text`/`tpl_vars` belong to ONE operation: carry them forward only while
+        // the response still points at the same operation (or names none).
+        const sameOperation = (!operationId || !before.operationId
+            || String(operationId) === String(before.operationId));
+        const expectedEnable = keep(expected.enable, src.expected_enable,
+                                    submitted.enable, before.expectedEnable);
+        const incomingCopyText = (typeof src.copy_text === 'string' && src.copy_text.trim())
+            ? src.copy_text : null;
+        return {
+            operationId: operationId,
+            serverId: String(keep(src.serverId, src.server_id, before.serverId, '') || ''),
+            inboundId: String(keep(src.inboundId, src.inbound_id, before.inboundId, '') || ''),
+            email: String(keep(src.email, before.email, '') || ''),
+            // verify.expected first (the authoritative ask), then what the operator
+            // submitted, and only then what an earlier response already knew.
+            expectedExpiryTime: keep(expected.expiryTime, src.expected_expiry_time,
+                                     submitted.expiryTime, before.expectedExpiryTime),
+            expectedTotalGB: keep(expected.totalGB, src.expected_totalGB,
+                                  submitted.totalGB, before.expectedTotalGB),
+            expectedEnable: (expectedEnable === null || expectedEnable === undefined)
+                ? null : Boolean(expectedEnable),
+            configApplied: (typeof src.config_applied === 'boolean') ? src.config_applied
+                : ((typeof verify.config_applied === 'boolean') ? verify.config_applied
+                   : ((typeof before.configApplied === 'boolean') ? before.configApplied : null)),
+            activationConverged: (typeof src.activation_config_converged === 'boolean')
+                ? src.activation_config_converged
+                : ((typeof verify.activation_config_converged === 'boolean')
+                   ? verify.activation_config_converged
+                   : ((typeof before.activationConverged === 'boolean')
+                      ? before.activationConverged : null)),
+            finalState: keep(src.final_state, verify.final_state, before.finalState),
+            awaitingOriginalRequest: awaitingOriginalRequest,
+            copyText: keep(incomingCopyText,
+                           (sameOperation && src.business_finalized !== false)
+                               ? before.copyText : null),
+            tplVars: (src.tpl_vars && typeof src.tpl_vars === 'object') ? src.tpl_vars
+                : (sameOperation ? before.tplVars : null),
+            clientComment: keep(src.client_comment,
+                                sameOperation ? before.clientComment : null),
+        };
     }
 
-    // A renewal whose read-back did not match is NOT a success. The modal used to say
-    // "Renewal Successful" and leave "Send to Client" armed while the panel still showed
-    // the old expiry, so an operator could hand a customer a confirmation for a change
-    // that had not been applied. The title states the real state, the confirmation
-    // actions stay locked until the panel agrees, and Re-check carries the emphasis
-    // because it is the only thing that can move the state forward.
-    const RENEW_VERIFY_TEXT = {
-        success: {{ ('تمدید موفق')|tojson }},
-        pending: {{ ('تمدید در انتظار تأیید')|tojson }},
-        partial: {{ ('تمدید ناقص اعمال شد')|tojson }},
-    };
-    function _applyRenewVerificationState(verify) {
-        const ok = verify ? verify.ok === true : false;
-        const state = verify ? String(verify.state || '') : '';
-        const title = document.getElementById('renew-modal-title');
-        if (title) {
-            title.textContent = ok
-                ? RENEW_VERIFY_TEXT.success
-                : (state === 'partially_applied' ? RENEW_VERIFY_TEXT.partial
-                                                 : RENEW_VERIFY_TEXT.pending);
+    // Internal diagnostics are for the operator's Trace line, never for the pill, the
+    // title or the body: `renew_result_unavailable` tells an operator nothing about
+    // what to do, and it is exactly what leaked into the modal body in production.
+    function _renewDiagnostic(data) {
+        const src = (data && typeof data === 'object') ? data : {};
+        const verify = (src.verify && typeof src.verify === 'object') ? src.verify : {};
+        const parts = [];
+        const add = function (value) {
+            const text = String(value === null || value === undefined ? '' : value).trim();
+            if (text && parts.indexOf(text) === -1) parts.push(text);
+        };
+        add(src.code);
+        add(src.message_key);
+        add(verify.error);
+        add(src.note);
+        add(src.error);
+        // Which panel endpoint answered is diagnostic too, and it used to be a badge
+        // in this row; it belongs next to Trace, not among the state badges.
+        add(src.timing && src.timing.update_endpoint);
+        return parts.join(' · ');
+    }
+
+    // final_state first, then message_key, then the legacy `verify.state` vocabulary of
+    // old cached payloads. `verify.ok` alone is deliberately NOT the verdict: it is
+    // false for "config applied, activation still synchronizing", which is a recorded
+    // business fact, not a failure.
+    function renewStateFromPayload(data, ctx) {
+        const src = (data && typeof data === 'object') ? data : {};
+        const verify = (src.verify && typeof src.verify === 'object') ? src.verify : {};
+        const context = (ctx && typeof ctx === 'object') ? ctx : {};
+        const named = [src.final_state, verify.final_state, src.state, verify.state];
+        for (let index = 0; index < named.length; index += 1) {
+            const key = String(named[index] || '').toUpperCase();
+            if (RENEW_STATE_TEXT[key]) return key;
         }
+        const messageKey = String(src.message_key || verify.message_key || '');
+        if (RENEW_MESSAGE_KEY_STATE[messageKey]) return RENEW_MESSAGE_KEY_STATE[messageKey];
+        if (String(src.code || '') === 'renew_in_progress') return 'IN_PROGRESS';
+        const legacy = String(verify.state || src.code || '').toLowerCase();
+        if (RENEW_LEGACY_STATE[legacy]) return RENEW_LEGACY_STATE[legacy];
+        if (verify.config_applied === true && verify.activation_config_converged === false) {
+            return 'CONFIG_APPLIED_ACTIVATION_PENDING';
+        }
+        if (verify.ok === true) return 'APPLIED_ACTIVE';
+        if (context.awaitingOriginalRequest === true) return 'IN_PROGRESS';
+        if (context.finalState && RENEW_STATE_TEXT[String(context.finalState)]) {
+            return String(context.finalState);
+        }
+        if (src.success === true) return 'APPLIED_ACTIVE';
+        return 'UNKNOWN';
+    }
+
+    // Deterministic badges: "?" may only mean "the panel read itself is unavailable",
+    // never "EVE forgot what it asked for". When `verify.expected` is present the
+    // verdict comes from `verify.checks` (falling back to expected-vs-observed), and
+    // when only the observed side exists the panel value is shown with NO verdict
+    // instead of a question mark.
+    function renewBadgeViewModel(verify, state, ctx) {
+        const facts = (verify && typeof verify === 'object') ? verify : {};
+        const context = (ctx && typeof ctx === 'object') ? ctx : {};
+        const expected = (facts.expected && typeof facts.expected === 'object') ? facts.expected : null;
+        const observed = (facts.observed && typeof facts.observed === 'object') ? facts.observed : null;
+        const checks = (facts.checks && typeof facts.checks === 'object') ? facts.checks : {};
+        const memberships = (facts.memberships && typeof facts.memberships === 'object')
+            ? facts.memberships : null;
+        const isFa = RENEW_LANG === 'fa';
+        const known = function (value) { return value !== null && value !== undefined; };
+        const first = function (a, b) { return known(a) ? a : b; };
+        const badges = [];
+        const addBadge = function (label, mark, value, tone, title) {
+            badges.push({ label: label, mark: mark, value: value, tone: tone, title: title || '' });
+        };
+        const formatExpiry = function (value) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) return '—';
+            if (number === 0) return isFa ? 'نامحدود' : 'Unlimited';
+            if (number < 0) {
+                return (Math.abs(number) / 86400000) + ' '
+                    + (isFa ? 'روز پس از اولین اتصال' : 'days after first use');
+            }
+            try { return EveDate.format(new Date(number)); } catch (e) { return new Date(number).toLocaleString(); }
+        };
+        const formatBytes = function (value) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) return '—';
+            if (number === 0) return isFa ? 'نامحدود' : 'Unlimited';
+            return (number / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        };
+        const addCheck = function (key, label, format) {
+            const check = checks[key] || null;
+            const exp = check ? check.expected : (expected ? expected[key] : null);
+            const obs = check ? check.observed : (observed ? observed[key] : null);
+            let matches = null;
+            if (check && typeof check.matches === 'boolean') matches = check.matches;
+            else if (known(exp) && known(obs)) matches = String(exp) === String(obs);
+            if (!known(obs)) {
+                addBadge(label, RENEW_MARK.unknown,
+                         isFa ? 'خواندن پنل ممکن نشد' : 'panel read unavailable', 'neutral', '');
+                return;
+            }
+            const detail = [
+                (isFa ? 'انتظار' : 'Expected') + ': ' + (known(exp) ? format(exp) : '—'),
+                (isFa ? 'مشاهده‌شده' : 'Observed') + ': ' + format(obs),
+                (isFa ? 'تطابق' : 'Match') + ': '
+                    + (matches === true ? 'yes' : (matches === false ? 'no' : 'unknown')),
+            ].join('\n');
+            if (matches === true) addBadge(label, RENEW_MARK.matched, format(obs), 'green', detail);
+            else if (matches === false) addBadge(label, RENEW_MARK.mismatched, format(obs), 'red', detail);
+            else addBadge(label, '', format(obs), 'neutral', detail);
+        };
+        addCheck('expiryTime', isFa ? 'انقضا' : 'Expiry', formatExpiry);
+        addCheck('totalGB', isFa ? 'حجم' : 'Volume', formatBytes);
+
+        // Activation is whether the customer is reachable, not whether the quota
+        // fields match: a global enable=true with one disabled membership keeps the
+        // customer offline, so the backend's own `observed.enable` is the source. The
+        // top-level config_applied / activation_config_converged (and the previous
+        // response) are the fallback when the read-back omits them, and the STATE
+        // outranks a stale `enable` flag: an activation that is still synchronizing is
+        // amber, never the red used for "not applied".
+        const converged = first(facts.activation_config_converged, context.activationConverged);
+        const configApplied = first(facts.config_applied, context.configApplied);
+        const enable = observed ? observed.enable : null;
+        const list = function (value) {
+            return Array.isArray(value) ? value.join(', ') : '—';
+        };
+        const membershipTitle = memberships ? [
+            (isFa ? 'عضویت‌ها' : 'Memberships') + ': '
+                + (Array.isArray(memberships.expected_ids) ? memberships.expected_ids.length : 0),
+            (isFa ? 'غیرفعال' : 'Disabled') + ': ' + list(memberships.disabled_ids),
+            (isFa ? 'غیرقابل‌دسترس' : 'Missing') + ': ' + list(memberships.missing_ids),
+        ].join('\n') : '';
+        const activeLabel = isFa ? 'فعال' : 'Active';
+        const syncingLabel = isFa ? 'در حال همگام‌سازی' : 'Syncing';
+        const inactiveLabel = isFa ? 'غیرفعال' : 'Inactive';
+        const unreadLabel = isFa ? 'خواندن پنل ممکن نشد' : 'panel read unavailable';
+        const pendingActivation = (state === 'CONFIG_APPLIED_ACTIVATION_PENDING'
+            || (configApplied === true && converged === false));
+        if (converged === true && enable === true) {
+            addBadge('3x-ui', RENEW_MARK.ok, activeLabel, 'green', membershipTitle);
+        } else if (pendingActivation) {
+            addBadge('3x-ui', RENEW_MARK.pending, syncingLabel, 'amber', membershipTitle);
+        } else if (enable === true) {
+            addBadge('3x-ui', RENEW_MARK.ok, activeLabel, 'green', membershipTitle);
+        } else if (enable === false) {
+            addBadge('3x-ui', RENEW_MARK.bad, inactiveLabel, 'red', membershipTitle);
+        } else {
+            addBadge('3x-ui', RENEW_MARK.unknown, unreadLabel, 'neutral', membershipTitle);
+        }
+        return badges;
+    }
+
+    function renewOutcomeViewModel(data, opts) {
+        const options = (opts && typeof opts === 'object') ? opts : {};
+        const src = (data && typeof data === 'object') ? data : {};
+        const verify = (src.verify && typeof src.verify === 'object') ? src.verify : {};
+        const ctx = options.context || lastRenewContext || buildRenewContext({}, null);
+        const state = options.forceState || renewStateFromPayload(src, ctx);
+        const entry = RENEW_STATE_TEXT[state] || RENEW_STATE_TEXT.UNKNOWN;
+        const text = entry[RENEW_LANG] || entry.en;
+        const copyText = (typeof options.copyText === 'string') ? options.copyText : (ctx.copyText || '');
+        const copyAvailable = Boolean(String(copyText || '').trim());
+        // A customer confirmation may only be handed out for a finalized success - or,
+        // while activation synchronizes, when the backend already produced the customer
+        // text (`copy_text` is present only when `business_finalized`).
+        const copyEnabled = (state === 'APPLIED_ACTIVE')
+            || (state === 'CONFIG_APPLIED_ACTIVATION_PENDING' && copyAvailable);
+        const totalMs = (src.timing && typeof src.timing.total_ms !== 'undefined')
+            ? src.timing.total_ms : null;
+        return {
+            state: state,
+            tone: RENEW_STATE_TONE[state] || 'neutral',
+            title: text.title,
+            body: text.body,
+            pill: text.pill,
+            diagnostic: _renewDiagnostic(src),
+            copyText: copyText,
+            copyEnabled: copyEnabled,
+            copyVisible: copyAvailable && copyEnabled,
+            badges: (Object.keys(verify).length > 0) ? renewBadgeViewModel(verify, state, ctx) : [],
+            recheckPrimary: state !== 'APPLIED_ACTIVE',
+            traceId: String(src.trace_id || ''),
+            totalMs: totalMs,
+        };
+    }
+
+    function _applyRenewOutcomeView(vm) {
+        const view = (vm && typeof vm === 'object') ? vm : {};
+        const modal = document.getElementById('renew-success-modal');
+        const title = document.getElementById('renew-modal-title');
+        const body = document.getElementById('renew-state-body');
+        const diag = document.getElementById('renew-diagnostic');
+        const statusBox = document.getElementById('renew-api-status');
+        const copyBox = document.getElementById('renew-success-text');
         const copyBtn = document.getElementById('renew-copy-btn');
         const sendBtn = document.getElementById('renew-send-btn');
         const recheckBtn = document.getElementById('renew-recheck-btn');
-        for (const btn of [copyBtn, sendBtn]) {
-            if (btn) btn.disabled = !ok;
+
+        if (modal) {
+            ['green', 'amber', 'orange', 'red', 'neutral'].forEach(function (tone) {
+                modal.classList.toggle('renew-tone-' + tone, tone === view.tone);
+            });
         }
-        if (recheckBtn) recheckBtn.classList.toggle('renew-success-action-primary', !ok);
-        if (sendBtn) sendBtn.classList.toggle('renew-success-action-primary', ok);
+        if (title) title.textContent = view.title;
+        if (body) {
+            body.textContent = view.body;
+            body.dir = RENEW_LANG === 'fa' ? 'rtl' : 'ltr';
+        }
+        if (diag) {
+            diag.textContent = view.diagnostic || '';
+            diag.title = view.diagnostic || '';
+            diag.classList.toggle('hidden', !view.diagnostic);
+        }
+        if (statusBox) {
+            statusBox.innerHTML = '';
+            const pill = document.createElement('span');
+            pill.className = 'status-pill renew-pill-' + view.tone;
+            pill.textContent = view.pill;
+            statusBox.appendChild(pill);
+            (view.badges || []).forEach(function (badge) {
+                const chip = document.createElement('span');
+                chip.className = 'server-badge renew-badge-' + badge.tone;
+                if (badge.title) chip.title = badge.title;
+                if (badge.mark) {
+                    const mark = document.createElement('span');
+                    mark.className = 'renew-mark';
+                    mark.innerHTML = badge.mark;
+                    chip.appendChild(mark);
+                    chip.appendChild(document.createTextNode(' '));
+                }
+                chip.appendChild(document.createTextNode(badge.label + ': ' + badge.value));
+                statusBox.appendChild(chip);
+            });
+            if (view.traceId) {
+                const trace = document.createElement('span');
+                trace.className = 'server-badge';
+                trace.textContent = 'Trace: ' + view.traceId;
+                statusBox.appendChild(trace);
+            }
+            if (Number.isFinite(Number(view.totalMs))) {
+                const timing = document.createElement('span');
+                timing.className = 'server-badge';
+                timing.textContent = String(Number(view.totalMs)) + 'ms';
+                statusBox.appendChild(timing);
+            }
+            statusBox.classList.remove('hidden');
+        }
+        if (copyBox) {
+            if (view.copyVisible && view.copyText) {
+                copyBox.textContent = view.copyText;
+                copyBox.classList.remove('hidden');
+            } else {
+                copyBox.classList.add('hidden');
+            }
+        }
+        if (copyBtn) copyBtn.disabled = !view.copyEnabled;
+        if (sendBtn) sendBtn.disabled = !view.copyEnabled;
+        if (recheckBtn) recheckBtn.classList.toggle('renew-success-action-primary', Boolean(view.recheckPrimary));
+        if (sendBtn) sendBtn.classList.toggle('renew-success-action-primary', !view.recheckPrimary);
+        if (view.copyEnabled && view.copyText && !_sendCtxRenew) {
+            const ctx = lastRenewContext || {};
+            const client = _lookupClientVolume(ctx.serverId, ctx.inboundId, ctx.email);
+            _sendCtxRenew = {
+                email: String(ctx.email || ''),
+                comment: String(ctx.clientComment || (client && client.comment) || ''),
+                phone: String((client && client.phone) || ''),
+                group: 'renew',
+                tplVars: ctx.tplVars || {},
+                fallback: view.copyText,
+            };
+        } else if (!view.copyEnabled) {
+            // Never leave a previous renewal's text and phone number wired to a modal
+            // that now reports a different (or unconfirmed) operation.
+            _sendCtxRenew = null;
+        }
     }
 
-    // A duplicate/while-running renew: show the result modal in an "in progress"
-    // state (not a red error) with Re-check, so the user can watch it become
-    // Verified once the first request finishes. No double charge happens server-side.
-    function showRenewInProgress(serverId, inboundId, email, note) {
+    // The single render entry for every renewal outcome (submit, duplicate, Re-check).
+    function renderRenewApiStatus(data, opts) {
+        try {
+            const options = (opts && typeof opts === 'object') ? opts : {};
+            const payload = (data && typeof data === 'object') ? data : {};
+            const identity = {
+                serverId: options.serverId || payload.serverId || payload.server_id,
+                inboundId: options.inboundId || payload.inboundId || payload.inbound_id,
+                email: options.email || payload.email,
+            };
+            const context = buildRenewContext(Object.assign({}, payload, identity), lastRenewContext);
+            lastRenewContext = context;
+            const view = renewOutcomeViewModel(payload, {
+                forceState: options.forceState,
+                copyText: options.copyText,
+                context: context,
+            });
+            _applyRenewOutcomeView(view);
+            return view;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function _renderRenewPrevState(email) {
+        const prev = document.getElementById('renew-prev-state');
+        if (!prev) return;
+        prev.textContent = '';
+        const account = document.createElement('span');
+        account.className = 'renew-prev-account';
+        account.textContent = String(email || '');
+        prev.appendChild(account);
+    }
+
+    // A duplicate/while-running renew: show the result modal in an amber "in
+    // progress" state (not a red error) with Re-check, so the user can watch it
+    // become verified once the first request finishes. No double charge happens
+    // server-side. `noteOrData` accepts the response object (preferred) or the legacy
+    // diagnostic string, and the context is assembled by buildRenewContext() so the
+    // expected values the UI already knows survive the duplicate.
+    function showRenewInProgress(serverId, inboundId, email, noteOrData) {
         try { closeRenewModal(); } catch (e) {}
         // Never leave the previous successful renewal wired to this modal. It
         // could otherwise send both the old account text and old phone number.
         _sendCtxRenew = null;
-        lastRenewContext = {
+        const data = (noteOrData && typeof noteOrData === 'object') ? noteOrData : {};
+        const note = (typeof noteOrData === 'string') ? noteOrData : '';
+        const payload = Object.assign({}, data, {
+            code: 'renew_in_progress',
+            message_key: data.message_key || 'renew_in_progress',
+            note: data.note || note,
             serverId: String(serverId), inboundId: String(inboundId), email: String(email),
-            expectedExpiryTime: null, expectedTotalGB: null,
-            awaitingResult: true,
-        };
-        const prev = document.getElementById('renew-prev-state');
-        if (prev) prev.innerHTML = `<span style="color:#818cf8;font-weight:600;">${escapeHtml(email)}</span>`;
-        const txt = document.getElementById('renew-success-text');
-        if (txt) txt.innerText = note || 'Renewing… press Re-check in a moment.';
-        renderRenewApiStatus({}, { inProgress: true });
+        });
+        lastRenewContext = buildRenewContext(payload, lastRenewContext);
+        _renderRenewPrevState(email);
+        renderRenewApiStatus(payload, { forceState: 'IN_PROGRESS' });
+        const modal = document.getElementById('renew-success-modal');
+        if (modal) modal.classList.remove('hidden');
+    }
+
+    // A renewal the panel accepted (`renew_not_verified` / `renew_activation_pending`):
+    // the config may already be applied while activation has not converged. This is
+    // NOT the duplicate-request state, so the response's own final_state decides the
+    // wording and colour, and the operation id + `verify.expected` the backend just
+    // returned are kept as facts for Re-check.
+    function showRenewPending(serverId, inboundId, email, data) {
+        try { closeRenewModal(); } catch (e) {}
+        _sendCtxRenew = null;
+        const payload = Object.assign({}, data || {}, {
+            serverId: String(serverId), inboundId: String(inboundId), email: String(email),
+        });
+        lastRenewContext = buildRenewContext(payload, lastRenewContext);
+        _renderRenewPrevState(email);
+        renderRenewApiStatus(payload);
         const modal = document.getElementById('renew-success-modal');
         if (modal) modal.classList.remove('hidden');
     }
@@ -5171,57 +5634,41 @@
         const old = btn ? btn.innerText : '';
         if (btn) {
             btn.disabled = true;
-            btn.innerText = 'Checking...';
+            btn.innerText = RENEW_LANG === 'fa' ? 'در حال بررسی…' : 'Checking...';
         }
         try {
-            const { serverId, inboundId, email, expectedExpiryTime, expectedTotalGB, awaitingResult } = lastRenewContext;
+            const ctx = lastRenewContext;
+            const { serverId, inboundId, email } = ctx;
             const resp = await fetch(`/api/client/${serverId}/${inboundId}/${encodeURIComponent(email)}/renew/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                // The operation id identifies THIS renewal on any worker; the expected
+                // values stay in the body for older cached responses that only keyed the
+                // result by (server, account).
                 body: JSON.stringify({
-                    expected_expiryTime: expectedExpiryTime,
-                    expected_totalGB: expectedTotalGB,
-                    awaiting_result: Boolean(awaitingResult)
+                    operation_id: ctx.operationId,
+                    expected_expiryTime: ctx.expectedExpiryTime,
+                    expected_totalGB: ctx.expectedTotalGB,
+                    expected_enable: ctx.expectedEnable,
+                    awaiting_result: Boolean(ctx.awaitingOriginalRequest)
                 })
             });
             const data = await resp.json();
-            if (data && data.success && data.verify) {
-                renderRenewApiStatus(data);
+            if (data && data.verify) {
+                const copyText = (typeof data.copy_text === 'string' && data.copy_text.trim())
+                    ? data.copy_text : '';
+                // Same render path as the original outcome: title, body, tone, badges
+                // and button enablement all come from the new final_state, and the
+                // context picks up `copy_text`/`tpl_vars` when they appear now.
+                const view = renderRenewApiStatus(data, { copyText: copyText });
                 // Phase 3: a verified re-check carries the canonical state too.
                 applyClientMutation(data, { serverId, inboundId, email });
-                if (data.verify.ok) {
-                    const successText = (typeof data.copy_text === 'string' && data.copy_text.trim())
-                        ? data.copy_text
-                        : document.getElementById('renew-success-text').innerText;
-                    document.getElementById('renew-success-text').innerText = successText;
-
-                    const currentClient = _lookupClientVolume(serverId, inboundId, email);
-                    _sendCtxRenew = {
-                        email: String(email || ''),
-                        comment: (data.client_comment || currentClient?.comment || ''),
-                        phone: (currentClient?.phone || ''),
-                        group: 'renew',
-                        tplVars: data.tpl_vars || {},
-                        fallback: successText,
-                    };
-                    lastRenewContext.expectedExpiryTime = data.verify.expected?.expiryTime ?? expectedExpiryTime;
-                    lastRenewContext.expectedTotalGB = data.verify.expected?.totalGB ?? expectedTotalGB;
-                    lastRenewContext.awaitingResult = false;
-                    showToast('Verified');
-                } else if (data.verify.error === 'renew_result_not_applied_yet') {
-                    // Keep the field-by-field panel result visible.  Some fields
-                    // may already be applied even while another one (commonly
-                    // enable) is still stale.
-                    showToast(data.verify.state === 'partially_applied'
-                        ? 'Partially applied. Review the details and Re-check.'
-                        : 'Not applied yet. The current panel state is shown.');
-                } else if (data.verify.error === 'renew_result_unavailable') {
-                    showToast('Current panel state loaded; the original expected result is unavailable.', 'error');
-                } else {
-                    showToast('Not verified', 'error');
-                }
+                if (view) showToast(view.title);
+            } else if (data) {
+                const view = renderRenewApiStatus(data, { forceState: 'UNKNOWN' });
+                if (view) showToast(view.title, 'error');
             } else {
-                showToast((data && data.error) ? data.error : 'Verify failed', 'error');
+                showToast('Verify failed', 'error');
             }
         } catch (e) {
             showToast('Verify error: ' + e.message, 'error');
@@ -5232,6 +5679,7 @@
             }
         }
     }
+    // renew-result-modal:end
 
     async function submitRenewal() {
         const serverId = document.getElementById('renew-server-id').value;
@@ -5273,7 +5721,7 @@
 
         const btn = document.querySelector('#renew-modal .btn-primary');
         const originalText = btn.innerText;
-        const renewProgressIsFa = (document.documentElement.lang || 'en') === 'fa';
+        const renewProgressIsFa = RENEW_LANG === 'fa';
         const renewProgressSteps = renewProgressIsFa
             ? ['در حال ارسال تمدید…', 'در حال اعمال تغییرات در 3x-ui…', 'در حال تأیید نهایی…']
             : ['Submitting renewal…', 'Applying changes to 3x-ui…', 'Verifying renewed account…'];
@@ -5332,30 +5780,20 @@
                 `;
                 document.getElementById('renew-prev-state').innerHTML = prevHtml;
 
-                // Track last renew context for "Re-check" and render status.
-                try {
-                    let expectedExpiryTime = null;
-                    let expectedTotalGB = null;
-                    if (data && data.verify && data.verify.expected) {
-                        expectedExpiryTime = data.verify.expected.expiryTime;
-                        expectedTotalGB = data.verify.expected.totalGB;
-                    }
-                    lastRenewContext = {
-                        serverId: String(serverId),
-                        inboundId: String(inboundId),
-                        email: String(email),
-                        expectedExpiryTime,
-                        expectedTotalGB,
-                    };
-                } catch (e) {
-                    lastRenewContext = null;
-                }
-                renderRenewApiStatus(data);
+                // Track the operation's facts for "Re-check" (the modal is rendered
+                // further down, once the customer text is known): the durable operation
+                // id, the expected values and the final state all come from this one
+                // response, through the same builder every other path uses.
+                lastRenewContext = buildRenewContext(
+                    Object.assign({}, data, {
+                        serverId: String(serverId), inboundId: String(inboundId), email: String(email),
+                    }),
+                    lastRenewContext);
                 // Phase 3: adopt the verified state from the mutation response now.
                 applyClientMutation(data, { serverId, inboundId, email });
 
                 const fallbackVolLabel = (finalVolume === null) ? '—' : `${finalVolume}GB`;
-                const renewIsFa = (document.documentElement.lang || 'en') === 'fa';
+                const renewIsFa = RENEW_LANG === 'fa';
                 const fallbackText = renewIsFa
                     ? `🔰${email}\n⌛${finalDays} روز 📊${fallbackVolLabel}\nتمدید شد`
                     : `🔰${email}\n⌛${finalDays} Days 📊${fallbackVolLabel}\nRenewed`;
@@ -5394,6 +5832,10 @@
                     },
                     fallback: successText,
                 };
+                // Render title/body/tone/badges/buttons from the operation's final_state
+                // (amber when the config is applied but activation still synchronizes),
+                // with the customer text this response - or its local fallback - produced.
+                renderRenewApiStatus(data, { copyText: successText });
                 document.getElementById('renew-success-modal').classList.remove('hidden');
 
                 // Update UI instantly using authoritative values returned by the API.
@@ -5468,15 +5910,20 @@
                 queueSilentServerRefresh(serverId);
             } else if (data.code === 'renew_in_progress') {
                 // The renew is already running (slow v3.4 panel + a retry). Don't
-                // throw a red error — open the result modal in an "in progress"
-                // state so the user can Re-check until it shows Verified.
-                showRenewInProgress(serverId, inboundId, email, data.error || '');
-            } else if (data.code === 'renew_not_verified') {
-                // The panel accepted the write, but its own read-back still says
-                // disabled/stale. Keep the real panel state visible and offer
-                // Re-check; never present this as a successful renewal.
-                showRenewInProgress(serverId, inboundId, email, data.error || '');
-                renderRenewApiStatus(data);
+                // throw a red error — open the result modal in an amber "in progress"
+                // state, keep the expected values the UI already knows, and let the user
+                // Re-check until it converges. No second charge happens server-side.
+                showRenewInProgress(serverId, inboundId, email, data);
+            } else if (data.code === 'renew_not_verified'
+                       || data.code === 'renew_activation_pending'
+                       || data.code === 'activation_pending'
+                       || data.final_state === 'CONFIG_APPLIED_ACTIVATION_PENDING') {
+                // The panel accepted the write but activation has not converged (or the
+                // config is not applied at all). Render the operation's real final_state
+                // from the state table - never the backend's internal prose - and keep
+                // the returned operation id + expected values so Re-check sends them
+                // instead of nulls.
+                showRenewPending(serverId, inboundId, email, data);
             } else {
                 // Business errors are downgraded to HTTP 200 by the server (so the
                 // CDN doesn't swallow the JSON); the real code is in X-Eve-Status.

@@ -133,6 +133,23 @@ MAPPING = (
         ['tests.test_renew_activation_layers'],
         ['tests.test_renew_consistency', 'tests.test_renew_enable'],
     )),
+    ('panel/services/renew_finalization.py', (
+        # The business finalizer: exactly-once transaction/renewal-event recording for
+        # a renewal whose activation has not converged.
+        ['tests.test_renew_consistency'],
+        ['tests.test_renew_activation_job', 'tests.test_renew_enable',
+         'tests.test_usage_intelligence_events'],
+    )),
+    ('panel/services/client_operations.py', (
+        ['tests.test_renew_consistency'],
+        ['tests.test_renew_activation_job', 'tests.test_renew_enable',
+         'tests.test_client_rotate'],
+    )),
+    ('panel/jobs/renew_activation.py', (
+        # Activation-only reconciliation after the request has answered.
+        ['tests.test_renew_activation_job'],
+        ['tests.test_renew_consistency', 'tests.test_renew_enable'],
+    )),
     ('panel/services/client_state.py', (
         ['tests.test_client_mutation_result'],
         ['tests.test_regression_matrix', 'tests.test_renew_consistency'],
@@ -154,7 +171,7 @@ MAPPING = (
         ['tests.test_telemetry_pipeline_integration', 'tests.test_sms_terminal_transitions'],
     )),
     ('templates/', (
-        ['tests.test_ui_design_system'],
+        ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
         ['tests.test_subscription_scope', 'tests.test_static_deploy_contract',
          'tests.test_subscription_visual_harness'],
     )),

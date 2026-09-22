@@ -26,13 +26,17 @@ from panel.models import (
 )
 from panel.routes.common import admin_is_superadmin, login_required, permission_required
 from panel.security import outbound_tls_verify, panel_tls_verify
+from panel.services import client_operations as client_operations_state
 from panel.services.client_operations import (
     begin_client_operation, complete_client_operation, fail_client_operation,
-    install_client_operation_response_guard, mark_client_operation_applied,
+    install_client_operation_response_guard, load_client_operation,
+    mark_client_operation_applied, mark_client_operation_activation_pending,
+    operation_context, operation_expected, operation_response,
+    prepare_client_operation_expected,
 )
 from panel.services.client_state import verified_state_from_panel
 from panel.services import lifecycle as lifecycle_service
-from panel.services import panel_capabilities, renew_activation
+from panel.services import panel_capabilities, renew_activation, renew_finalization
 from panel.services.usage_intelligence import record_verified_renewal
 
 bp = Blueprint('clients', __name__)
@@ -1532,6 +1536,10 @@ def renew_client(server_id, inbound_id, email):
     client_operation = None
     client_operation_completed = False
     client_operation_panel_applied = False
+    #: The stable public id of this renewal. Set as soon as the operation exists, and
+    #: echoed in EVERY outcome (success, in-progress, not-verified, activation-pending)
+    #: so a later Re-check can load the durable operation instead of a 3-minute cache.
+    operation_id_holder = {'key': None}
     timing = {
         "total_ms": None,
         "used_cache_client": False,
@@ -1556,6 +1564,12 @@ def renew_client(server_id, inbound_id, email):
         if isinstance(payload, dict):
             payload.setdefault("trace_id", renewal_trace_id)
             payload.setdefault("timing", timing)
+            # Every outcome of a renewal carries the SAME durable operation id, so a
+            # Re-check (on any worker, minutes or days later) can load the operation
+            # instead of depending on a 180-second Redis cache. Identifying a renewal
+            # by (server, email) is not enough: the same account is renewed many times.
+            if operation_id_holder['key']:
+                payload.setdefault("operation_id", operation_id_holder['key'])
         if client_operation is not None and not client_operation_completed and status_code >= 400:
             try:
                 fail_client_operation(
@@ -1702,6 +1716,7 @@ def renew_client(server_id, inbound_id, email):
     )
     operation_payload = dict(data)
     operation_payload.pop('operation_id', None)
+    operation_id_holder['key'] = operation_key
     client_operation, operation_disposition, operation_data = begin_client_operation(
         idempotency_key=operation_key,
         action='renew',
@@ -1715,14 +1730,40 @@ def renew_client(server_id, inbound_id, email):
     if operation_disposition == 'replay':
         client_operation = None
         operation_data.setdefault('idempotent_replay', True)
+        # The replay IS the answer for this operation, so it carries the same machine
+        # fields as a fresh response: the dashboard renders state, never prose.
+        operation_data.setdefault('final_state', renew_activation.STATE_APPLIED_ACTIVE
+                                  if operation_data.get('success') else
+                                  renew_activation.STATE_ACTIVATION_PENDING)
+        operation_data.setdefault('message_key', 'renew_applied_active'
+                                  if operation_data.get('success')
+                                  else 'renew_activation_pending')
+        operation_data.setdefault('config_applied', bool(operation_data.get('success')))
+        operation_data.setdefault('business_finalized', True)
         return _finish(operation_data)
     if operation_disposition != 'new':
+        _in_flight_expected = {}
+        try:
+            _in_flight_expected = operation_expected(client_operation) or {}
+        except Exception:
+            _in_flight_expected = {}
         client_operation = None
         code = 'renew_in_progress' if operation_disposition == 'in_progress' else 'renew_operation_rejected'
         status_code = 402 if operation_disposition == 'insufficient_credit' else 409
         return _finish({
             'success': False,
             'code': code,
+            'message_key': ('renew_in_progress' if code == 'renew_in_progress'
+                            else 'renew_not_applied'),
+            # The running operation's intent: the dashboard must be able to show WHAT is
+            # in flight instead of empty expectations (the old UI nulled them). Both
+            # spellings are sent because the modal reads `verify.expected` while the
+            # machine-state contract speaks `expected`.
+            'expected': _in_flight_expected,
+            'verify': {'expected': _in_flight_expected},
+            'config_applied': False,
+            'activation_config_converged': False,
+            'business_finalized': False,
             'error': operation_data.get('error') or 'Renew operation rejected',
         }, status_code)
 
@@ -2044,15 +2085,41 @@ def renew_client(server_id, inbound_id, email):
         # Re-check modal while this request is still inside 3x-ui. Without
         # these expected values Re-check can only report a generic pending
         # state if the original worker dies before storing its final result.
+        #
+        # This is DURABLE now (the operation row), not only a 180-second Redis cache:
+        # a Re-check after the cache expires, on another worker, or after a Redis
+        # restart must still know what this renewal asked the panel for.
+        _expected_intent = {
+            'expiryTime': new_expiry,
+            'totalGB': new_volume,
+            'enable': True,
+        }
+        _intent_context = {
+            'server_id': server.id,
+            'inbound_id': inbound_id,
+            'client_email': email,
+            'mode': data.get('mode'),
+            'days': data.get('days'),
+            'volume_gb': data.get('volume'),
+            'reset_traffic': bool(reset_traffic),
+            'start_after_first_use': bool(start_after_first_use),
+            'is_free': bool(is_free),
+            'price': locals().get('price'),
+            'source': _renewal_source_from_payload(data),
+            'renewal_trace_id': renewal_trace_id,
+        }
+        try:
+            prepare_client_operation_expected(client_operation, _expected_intent,
+                                              context=_intent_context)
+        except Exception:
+            app.logger.exception(
+                "Renew could not persist the expected state (trace=%s)", renewal_trace_id)
         _store_renew_result(_renew_lock_key, {
             'state': 'pending',
             'stored_at_ts': time.time(),
+            'operation_id': getattr(client_operation, 'idempotency_key', None),
             'verify': {
-                'expected': {
-                    'expiryTime': new_expiry,
-                    'totalGB': new_volume,
-                    'enable': True,
-                },
+                'expected': dict(_expected_intent),
             },
         })
 
@@ -2536,43 +2603,93 @@ def renew_client(server_id, inbound_id, email):
                     verify["layer_notes"] = list(verify.get("layer_notes") or []) + [
                         _depleted_reason or 'the account is still depleted']
 
-                if not verify.get("ok"):
-                    # Keep the lock/result so an operator can use Re-check without
-                    # accidentally submitting a second renewal while 3x-ui is
-                    # still settling.  Crucially, do not charge, notify, or write
-                    # expected values into the cache as if they were observed.
+                # ── The two facts, separated ──────────────────────────────────
+                # config_applied: the panel holds the expiry/quota we asked for.
+                # activation: the customer is enabled across every membership.
+                # The old code treated them as one boolean and RETURNED here as soon
+                # as activation had not converged - before the transaction, the
+                # renewal event, the customer text and complete_client_operation()
+                # below. An account whose quota and expiry HAD been applied was
+                # therefore left in EVE with no financial record and no message, and
+                # the operator could not tell whether to charge or to renew again.
+                _final_state = verify.get("final_state")
+                _config_applied = bool(verify.get("config_applied") or verify.get("ok"))
+                _activation_converged = (
+                    _final_state == renew_activation.STATE_APPLIED_ACTIVE)
+                if not _final_state:
+                    _final_state = (renew_activation.STATE_APPLIED_ACTIVE
+                                    if verify.get("ok") else
+                                    renew_activation.STATE_PARTIALLY_APPLIED
+                                    if verify.get("state") == 'partially_applied'
+                                    else renew_activation.STATE_NOT_APPLIED)
+                    _activation_converged = (_final_state
+                                             == renew_activation.STATE_APPLIED_ACTIVE)
+                _runtime_sync = verify.get("runtime_sync_state")
+
+                if not _config_applied:
+                    # Genuinely not applied: keep the failure path, but speak in the
+                    # machine vocabulary the UI renders (never a bare internal code).
                     _store_renew_result(_renew_lock_key, {"verify": verify})
-                    # The structured, non-secret trace of this attempt: capability
-                    # facts, the strategy, what each layer said and the final state.
-                    # This is what a later "why is this customer offline?" needs.
                     verify["trace"] = _activation_trace_fields(
                         trace_id=renewal_trace_id, strategy=strategy, caps=caps,
                         mutation=_mutation_result, layers=_layers,
                         operation_id=getattr(client_operation, 'id', None),
                         repair_attempts=verify.get("repair_attempts"))
                     app.logger.warning(
-                        "Renew not confirmed (trace=%s, server=%s, email=%s, state=%s): %s",
-                        renewal_trace_id, server.id, email,
-                        (verify.get("state") or verify.get("error")),
+                        "Renew not applied (trace=%s, server=%s, email=%s, state=%s): %s",
+                        renewal_trace_id, server.id, email, _final_state,
                         verify.get("trace"))
-                    detail = ("تمدید به پنل ارسال شد، اما فعال بودن کاربر در 3x-ui تأیید نشد. "
-                              "از Re-check استفاده کنید و قبل از تمدید دوباره وضعیت پنل را بررسی کنید."
-                              if panel_is_fa else
-                              "The renewal was sent, but the client was not confirmed active in 3x-ui. "
-                              "Use Re-check and inspect the panel before renewing again.")
                     return _finish({
                         "success": False,
                         "code": "renew_not_verified",
-                        "error": detail,
+                        "message_key": ("renew_partially_applied"
+                                        if _final_state == renew_activation.STATE_PARTIALLY_APPLIED
+                                        else "renew_not_applied"),
+                        "final_state": _final_state,
+                        "config_applied": False,
+                        "activation_config_converged": False,
+                        "runtime_sync_state": _runtime_sync,
+                        "business_finalized": False,
                         "verify": verify,
                     }, 409)
 
-                # Only a confirmed panel state may create financial records or
-                # trigger customer notifications.
+                # The config IS applied. Record the operation state before the
+                # business work so a crash in between leaves a resumable operation
+                # rather than a silent one.
+                try:
+                    if client_operation is not None and not _activation_converged:
+                        mark_client_operation_activation_pending(
+                            client_operation, expected=_expected_intent)
+                except Exception:
+                    app.logger.exception(
+                        "Renew could not mark the operation activation-pending (trace=%s)",
+                        renewal_trace_id)
+
+                # The panel holds the intended config, so the FINANCIAL and FACTUAL
+                # side is recorded now - exactly once - whether or not the customer is
+                # active yet. A retry/Re-check finds the recorded payload and reuses
+                # it instead of creating a second transaction.
+                _stored_business = None
+                try:
+                    _stored_business = renew_finalization.stored_business(client_operation)
+                except Exception:
+                    _stored_business = None
                 sender_card = data.get('sender_card', '') or ''
                 card_id = data.get('card_id')
                 transaction_record = None
-                if is_free:
+                if _stored_business is not None:
+                    # Already finalized by an earlier attempt of this same operation.
+                    _tx_id = _stored_business.get('transaction_id')
+                    if _tx_id:
+                        try:
+                            transaction_record = db.session.get(Transaction, int(_tx_id))
+                        except Exception:
+                            transaction_record = None
+                    app.logger.info(
+                        "Renew operation %s was already finalized; reusing its durable "
+                        "record (trace=%s)",
+                        getattr(client_operation, 'idempotency_key', None), renewal_trace_id)
+                elif is_free:
                     if user.role == 'reseller':
                         transaction_record = log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
                     else:
@@ -2738,7 +2855,7 @@ def renew_client(server_id, inbound_id, email):
                 # write or read-back can never create a cycle boundary, and a rolled
                 # over quota is stored as granted + carried_over instead of one number.
                 renewal_event = None
-                if verify.get('ok'):
+                if _config_applied:
                     try:
                         _granted_volume_bytes = None
                         if reset_traffic:
@@ -2772,7 +2889,7 @@ def renew_client(server_id, inbound_id, email):
                             renewal_trace_id, server_id, exc_info=True,
                         )
                 try:
-                    if verify.get('ok'):
+                    if _config_applied:
                         # Write through the panel's own numbers. Writing the intended
                         # values (or leaving the counters untouched unless a reset was
                         # requested) is what made the cache disagree with the panel
@@ -2819,6 +2936,15 @@ def renew_client(server_id, inbound_id, email):
                 # older reminders, and resets the local cooldowns (below).
                 _renewed_identity = (verify.get('observed') or {}).get('id') \
                     or target_client.get('id')
+                # ── Customer messaging: only for a fully active account ───────
+                # The renewal is APPLIED, but telling the customer "your account is
+                # renewed and ready" while activation has not converged is how EVE
+                # created the very ticket this change fixes. The stale-reminder
+                # cancellation below still runs: a depletion notice that is factually
+                # obsolete must not stay queued just because the node is behind.
+                _activation_ready = bool(_activation_converged)
+                _renewed_identity = (verify.get('observed') or {}).get('id') \
+                    or target_client.get('id')
                 _fire_cancel_stale_account_sms(
                     server.id, email, reason='renew_success',
                     client=target_client,
@@ -2827,23 +2953,30 @@ def renew_client(server_id, inbound_id, email):
                     operation_id=operation_key,
                     correlation_id=renewal_trace_id,
                 )
-                _fire_automation_sms('renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
-                                     DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,
-                                     server_name=getattr(server, 'name', '') or '')
-                # Telegram confirmation for bot-linked customers — reseller-owned
-                # accounts are messaged through the reseller's own bot.
-                try:
-                    telegram_runtime = _get_telegram_depletion_settings()
-                    _tg_bot, _tg_own = _notification_bot_for_account(server.id, email)
-                    _tg_text = _render_text_template(
-                        telegram_runtime.get('tpl_renew') or DEFAULT_TG_TPL_RENEW,
-                        _renew_tpl_vars,
-                    )
-                    if (telegram_runtime.get('trigger_renew_success', True)
-                            and _tg_own and _tg_bot and (_tg_text or '').strip()):
-                        _notify_customer_telegram(_tg_own.customer_id, _tg_text, bot=_tg_bot)
-                except Exception:
-                    pass
+                if _activation_ready:
+                    _fire_automation_sms('renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
+                                         DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,
+                                         server_name=getattr(server, 'name', '') or '')
+                    # Telegram confirmation for bot-linked customers — reseller-owned
+                    # accounts are messaged through the reseller's own bot.
+                    try:
+                        telegram_runtime = _get_telegram_depletion_settings()
+                        _tg_bot, _tg_own = _notification_bot_for_account(server.id, email)
+                        _tg_text = _render_text_template(
+                            telegram_runtime.get('tpl_renew') or DEFAULT_TG_TPL_RENEW,
+                            _renew_tpl_vars,
+                        )
+                        if (telegram_runtime.get('trigger_renew_success', True)
+                                and _tg_own and _tg_bot and (_tg_text or '').strip()):
+                            _notify_customer_telegram(_tg_own.customer_id, _tg_text, bot=_tg_bot)
+                    except Exception:
+                        pass
+                else:
+                    app.logger.info(
+                        "Renew applied but activation is pending for %s; the customer "
+                        "success message is withheld (trace=%s, disabled_memberships=%s)",
+                        email, renewal_trace_id,
+                        (verify.get('memberships') or {}).get('disabled_ids'))
                 whatsapp_meta = {
                     'enabled': whatsapp_runtime.get('enabled', False),
                     'deployment_region': whatsapp_runtime.get('deployment_region', 'outside'),
@@ -2851,12 +2984,13 @@ def renew_client(server_id, inbound_id, email):
                     'trigger_renew_success': whatsapp_runtime.get('trigger_renew_success', False),
                     'blocked_reason': whatsapp_runtime.get('blocked_reason') if not whatsapp_runtime.get('enabled', False) else None,
                     'delivery': whatsapp_delivery,
+                    'withheld_until_active': not _activation_ready,
                 }
 
                 # Reset send counter + automation cooldown so a renewed account can
                 # be messaged again from scratch (both SMS and WhatsApp).
                 _clear_message_cooldown(email, server_id)
-                if whatsapp_scheduled:
+                if whatsapp_scheduled and _activation_ready:
                     _fire_renew_whatsapp(server.id, email, _wa_text, _client_comment)
 
                 completed_payload = {
@@ -2867,7 +3001,26 @@ def renew_client(server_id, inbound_id, email):
                     "whatsapp": whatsapp_meta,
                     "was_reactivated": _was_disabled,
                     "cache_sync": bool(cache_sync),
+                    "final_state": _final_state,
+                    "config_applied": True,
+                    "activation_config_converged": bool(_activation_converged),
+                    "runtime_sync_state": _runtime_sync,
+                    "message_key": ("renew_applied_active" if _activation_converged
+                                    else "renew_activation_pending"),
+                    "business_finalized": True,
+                    "activation_pending": not _activation_converged,
+                    # The intent is part of the durable answer: a Re-check on another
+                    # worker must be able to render deterministic badges without the
+                    # Redis cache.
+                    "expected": dict(_expected_intent),
                 }
+                if not _activation_converged:
+                    # Machine-readable only: the dashboard renders localized text from
+                    # `final_state`/`message_key`. The backend must not decide the UI
+                    # language, and an internal code must never be the operator copy.
+                    completed_payload["code"] = "activation_pending"
+                    completed_payload["note"] = (
+                        "config_applied; activation is still synchronizing")
                 if mutation is not None:
                     # The canonical post-mutation state (null when the panel was not
                     # read back) plus the revision it landed at, for the browser.
@@ -2879,10 +3032,43 @@ def renew_client(server_id, inbound_id, email):
                     completed_payload["renewal_event"] = renewal_event.to_dict()
                 if user.role == 'reseller':
                     completed_payload['remaining_credit'] = user.credit
-                complete_client_operation(client_operation, completed_payload, transaction_record)
+                try:
+                    # Record the durable business facts (transaction id, renewal event
+                    # id, customer text) so a Re-check on ANY worker, minutes later,
+                    # can return the same answer without the Redis cache.
+                    renew_finalization.record_business_result(
+                        client_operation,
+                        {
+                            'transaction_id': getattr(transaction_record, 'id', None),
+                            'renewal_event_id': getattr(renewal_event, 'id', None),
+                            'copy_text': copy_text,
+                            'tpl_vars': _renew_tpl_vars,
+                            'client_comment': _client_comment,
+                            'was_reactivated': _was_disabled,
+                            'final_state': _final_state,
+                            'expected': _expected_intent,
+                        },
+                        final_state=_final_state,
+                        config_applied=True,
+                        activation_converged=bool(_activation_converged),
+                        runtime_sync_state=_runtime_sync)
+                except Exception:
+                    app.logger.exception(
+                        "Renew could not record its durable business result (trace=%s)",
+                        renewal_trace_id)
+                complete_client_operation(
+                    client_operation, completed_payload, transaction_record,
+                    # The operation stays resumable while activation has not converged:
+                    # the reconciler owns the rest, and the business facts above are
+                    # already durable.
+                    state=(client_operations_state.STATE_COMPLETED
+                           if _activation_converged
+                           else client_operations_state.STATE_ACTIVATION_PENDING))
                 client_operation_completed = True
                 _store_renew_result(_renew_lock_key, {
                     "state": "complete",
+                    "operation_id": getattr(client_operation, 'idempotency_key', None),
+                    "final_state": _final_state,
                     "copy_text": copy_text,
                     "tpl_vars": _renew_tpl_vars,
                     "verify": verify,
@@ -3235,11 +3421,21 @@ def rotate_client(server_id):
 @login_required
 @permission_required('clients.read')
 def verify_renew_client(server_id, inbound_id, email):
-    """Re-check a client's expiry, volume, and active state after a renew.
+    """Re-check a renewal: the same state machine the renew route drives.
 
-    Expected values are optional:
-      {"expected_expiryTime": <ms>, "expected_totalGB": <bytes>,
-       "expected_enable": true}
+    Input is the OPERATION first, not a set of expected values typed by a browser:
+
+      {"operation_id": "renew-<uuid>",            # durable, authoritative
+       "expected_expiryTime": <ms>,               # legacy/backward compatible
+       "expected_totalGB": <bytes>,
+       "expected_enable": true,
+       "awaiting_result": <bool>}
+
+    The operation row carries the intended state that was persisted BEFORE the panel
+    write, so this endpoint works after the 180-second Redis result expired, on a
+    different worker, or after a Redis restart. ``renew_result_unavailable`` is now
+    reachable only when neither the operation nor the cache knows anything - i.e. for
+    a renewal this EVE never recorded.
     """
     from app import (  # deferred: app-level helper, avoids circular import
         _has_client_access, _v3_sanitize_email, app, fetch_inbounds, find_client,
@@ -3274,6 +3470,7 @@ def verify_renew_client(server_id, inbound_id, email):
     expected_total = data.get('expected_totalGB', None)
     expected_enable = data.get('expected_enable', True)
     awaiting_result = bool(data.get('awaiting_result', False))
+    requested_operation_id = str(data.get('operation_id') or '').strip()
     try:
         expected_expiry = None if expected_expiry is None else int(expected_expiry)
     except Exception:
@@ -3291,6 +3488,48 @@ def verify_renew_client(server_id, inbound_id, email):
     if user.role == 'reseller':
         if not _has_client_access(user, server_id, email, inbound_id=inbound_id):
             return _finish({'success': False, 'error': 'Access denied'}, 403)
+
+    # ── The durable operation is the source of truth ──────────────────────────
+    # It is loaded by operation id (the same account can be renewed many times, so
+    # (server, email) cannot identify one renewal) and it must belong to this admin,
+    # this server and this account.
+    operation = None
+    operation_denied = False
+    if requested_operation_id:
+        try:
+            operation = load_client_operation(requested_operation_id, action='renew')
+        except Exception:
+            operation = None
+        if operation is not None:
+            email_l = (email or '').strip().lower()
+            owner_ok = (operation.admin_id == user.id) or bool(getattr(user, 'is_superadmin', False))
+            scope_ok = (operation.server_id == server_id
+                        and (operation.client_email or '').strip().lower() == email_l)
+            if not (owner_ok and scope_ok):
+                return _finish({
+                    'success': False,
+                    'code': 'operation_not_found',
+                    'error': 'This renewal operation does not belong to this account',
+                }, 403)
+        else:
+            operation_denied = True
+    if operation is not None:
+        _op_expected = operation_expected(operation)
+        if expected_expiry is None:
+            expected_expiry = _op_expected.get('expiryTime')
+        if expected_total is None:
+            expected_total = _op_expected.get('totalGB')
+        if 'enable' in _op_expected and expected_enable is True:
+            expected_enable = bool(_op_expected.get('enable', True))
+        # An operation exists, so this is NOT an "unknown expectation" case: the
+        # awaiting flag must not downgrade it to the Redis-only path.
+        if expected_expiry is not None or expected_total is not None:
+            awaiting_result = awaiting_result and not _op_expected
+    elif operation_denied and requested_operation_id:
+        # A supplied id that resolves to nothing is a stale browser, not a systemic
+        # failure: fall through to the legacy/cache path and say so in the payload.
+        app.logger.info("Re-check for unknown operation %s (trace=%s)",
+                        requested_operation_id, trace_id)
 
     t_login0 = time.perf_counter()
     session_obj, error = get_xui_session(server)
@@ -3459,6 +3698,19 @@ def verify_renew_client(server_id, inbound_id, email):
         completed_result = _load_renew_result(renew_lock_key)
         completed_verify = (completed_result or {}).get('verify') or {}
         completed_expected = completed_verify.get('expected') or {}
+        # The durable operation outranks the cache: it was written before the panel
+        # write, it survives Redis, and it is the same record the renew route used.
+        _op_stored = renew_finalization.stored_business(operation) if operation is not None else None
+        if _op_stored:
+            for key in ('copy_text', 'tpl_vars', 'client_comment', 'was_reactivated'):
+                if _op_stored.get(key) is not None:
+                    completed_result = completed_result or {}
+                    completed_result[key] = _op_stored.get(key)
+            _stored_expected = _op_stored.get('expected') or operation_expected(operation)
+            if _stored_expected:
+                completed_expected = _stored_expected
+        elif operation is not None and not completed_expected:
+            completed_expected = operation_expected(operation)
 
         def _set_check(name, expected, observed):
             if expected is None:
@@ -3482,7 +3734,11 @@ def verify_renew_client(server_id, inbound_id, email):
             cached_expiry = completed_expected.get('expiryTime')
             cached_total = completed_expected.get('totalGB')
             cached_enable = bool(completed_expected.get('enable', True))
-            if not completed_result or (cached_expiry is None and cached_total is None):
+            if (cached_expiry is None and cached_total is None):
+                # Nothing anywhere knows what this renewal asked for. With the durable
+                # operation this is now reachable only for a renewal EVE never
+                # recorded (an old browser session talking to a pruned row), never for
+                # a healthy renewal whose operation exists.
                 verify['ok'] = False
                 verify['error'] = 'renew_result_unavailable'
                 verify['state'] = 'observed_without_expected'
@@ -3580,13 +3836,57 @@ def verify_renew_client(server_id, inbound_id, email):
         if mutation is not None:
             payload['mutation'] = mutation.to_payload()
             payload['client_state'] = payload['mutation']['client_state']
-        if verify.get('ok') and completed_result:
+        # Machine state for the UI. The dashboard renders its own localized text from
+        # `final_state`/`message_key`; internal codes stay in `verify.error` for the
+        # diagnostic line only.
+        _state_for_ui = verify.get('final_state') or (
+            renew_activation.STATE_APPLIED_ACTIVE if verify.get('ok') else
+            renew_activation.STATE_PARTIALLY_APPLIED
+            if verify.get('state') == 'partially_applied' else
+            renew_activation.STATE_NOT_APPLIED
+            if verify.get('state') == 'not_applied' and verify.get('error') != 'renew_result_unavailable'
+            else renew_activation.STATE_UNKNOWN)
+        payload['final_state'] = _state_for_ui
+        payload['config_applied'] = bool(verify.get('config_applied') or verify.get('ok'))
+        payload['activation_config_converged'] = bool(
+            verify.get('activation_config_converged')
+            or _state_for_ui == renew_activation.STATE_APPLIED_ACTIVE)
+        payload['runtime_sync_state'] = verify.get('runtime_sync_state')
+        payload['message_key'] = {
+            renew_activation.STATE_APPLIED_ACTIVE: 'renew_applied_active',
+            renew_activation.STATE_ACTIVATION_PENDING: 'renew_activation_pending',
+            renew_activation.STATE_PARTIALLY_APPLIED: 'renew_partially_applied',
+            renew_activation.STATE_NOT_APPLIED: 'renew_not_applied',
+            renew_activation.STATE_AUTH_DEGRADED: 'renew_auth_degraded',
+        }.get(_state_for_ui, 'renew_unknown')
+        _durable = renew_finalization.public_business_view(operation) if operation is not None else {}
+        payload['business_finalized'] = bool(_durable.get('business_finalized'))
+        if operation is not None:
+            payload['operation_id'] = operation.idempotency_key
+        if _durable:
+            payload.setdefault('expected', _durable.get('expected'))
+        # The customer text is durable: it is returned whenever the business fact was
+        # recorded, which is now independent of activation. `Send to Client` decides
+        # on `final_state`, not on whether the text exists.
+        _copy_source = completed_result if completed_result else _durable
+        if _copy_source:
             payload.update({
-                'copy_text': completed_result.get('copy_text') or '',
-                'tpl_vars': completed_result.get('tpl_vars') or {},
-                'client_comment': completed_result.get('client_comment') or '',
-                'was_reactivated': bool(completed_result.get('was_reactivated', False)),
+                'copy_text': (_copy_source or {}).get('copy_text') or '',
+                'tpl_vars': (_copy_source or {}).get('tpl_vars') or {},
+                'client_comment': (_copy_source or {}).get('client_comment') or '',
+                'was_reactivated': bool((_copy_source or {}).get('was_reactivated', False)),
             })
+        # A config-applied/pending operation is a real progress state: make sure the
+        # caller can drive the same state machine from here (activation repair runs
+        # inside the layered verification above), and mark the operation completed
+        # once it has converged.
+        if operation is not None and _state_for_ui == renew_activation.STATE_APPLIED_ACTIVE:
+            try:
+                renew_finalization.mark_activation_converged(
+                    operation, payload={'runtime_sync_state': verify.get('runtime_sync_state')})
+            except Exception:
+                app.logger.exception("Re-check could not complete operation %s",
+                                     operation.idempotency_key)
         return _finish(payload)
     except Exception as exc:
         verify['ok'] = False
