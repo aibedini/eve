@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "consumer": "eve",
   "projectKeyDefaults": {
     "scopes": [
@@ -7,7 +7,8 @@
       "sms.status",
       "sms.cancel",
       "sms.capacity",
-      "sms.invalidate"
+      "sms.invalidate",
+      "transport:read"
     ],
     "ingressRatePerMinute": 30,
     "ingressRatePerHour": 1000
@@ -75,6 +76,12 @@
       "method": "POST",
       "path": "/send/invalidate",
       "scope": "sms.invalidate"
+    },
+    {
+      "key": "transport_health",
+      "method": "GET",
+      "path": "/eve/v1/transport-health",
+      "scope": "transport:read"
     }
   ],
   "sendRequest": {
@@ -199,6 +206,193 @@
       "revokedActive": 1,
       "revokedInflight": 1,
       "alreadyTerminal": 0
+    }
+  },
+  "transportHealthResponse": {
+    "contractVersion": 1,
+    "endpoint": "transport_health",
+    "description": "GMweb's self-report of the ACTIVE delivery transport. This body can only ever describe GMweb's own state; it can never describe whether the consumer reached GMweb. Reachability, authentication, scope and contract availability are the CONSUMER's probe result (see probeStates), never fields in this body.",
+    "topLevel": [
+      "contract_version",
+      "observed_at",
+      "gmweb",
+      "transport",
+      "device",
+      "queue",
+      "last_ack",
+      "diagnostics"
+    ],
+    "sections": {
+      "gmweb": ["ready", "reason"],
+      "transport": ["active", "mode", "state", "reason"],
+      "device": ["state", "reason", "last_seen_at", "last_seen_age_ms", "age_ms"],
+      "queue": ["pending", "inflight"],
+      "last_ack": ["at", "outcome"],
+      "diagnostics": ["androidPull"]
+    },
+    "fieldSemantics": {
+      "gmweb.ready": "The ACTIVE delivery transport is ready. It does NOT mean 'GMweb is reachable' - a 200 answer already proves reachability.",
+      "gmweb.reason": "The actionable reason the gateway is not ready: the operational reason (work is waiting on a device) when there is one, otherwise the transport's own machine reason.",
+      "transport.state": "The active transport's machine state.",
+      "transport.reason": "The active transport's own machine reason.",
+      "device.last_seen_at": "Most recent presence signal for the ACTIVE transport's device.",
+      "device.last_seen_age_ms": "Age of device.last_seen_at in milliseconds. Null when there has never been a presence signal or the active transport has no presence concept."
+    },
+    "deprecatedAliases": {
+      "device.age_ms": "Alias of device.last_seen_age_ms, kept so that a provider-first or consumer-first rollout cannot silently drop the field. Consumers MUST read last_seen_age_ms."
+    },
+    "deviceSemantics": [
+      "device describes the device of the ACTIVE transport and nothing else.",
+      "transport.active=android with transport.mode=pull: last_seen_at/last_seen_age_ms are the most recent Android pull and device.state is the pull bridge's state.",
+      "transport.active=chrome: Chrome has no pull presence, so last_seen_at and last_seen_age_ms are null and device.state is Chrome's pairing state. Android presence MUST NOT be promoted into these fields.",
+      "A non-active Android bridge is reported only under diagnostics.androidPull, marked authoritative=false."
+    ],
+    "forbiddenFields": [
+      "deviceKey",
+      "masterToken",
+      "apiKey",
+      "to",
+      "text",
+      "phoneNumber",
+      "conversationId",
+      "conversation"
+    ],
+    "states": [
+      "connected",
+      "stale",
+      "unconfigured",
+      "push_unreachable",
+      "not_paired",
+      "unknown"
+    ],
+    "reasons": [
+      "no_recent_device_pull",
+      "device_key_not_configured",
+      "android_gateway_unreachable",
+      "android_gateway_not_configured",
+      "chrome_not_paired",
+      "chrome_probe_failed",
+      "pull_bridge_unavailable",
+      "task_waiting_no_device",
+      "inflight_device_stale"
+    ],
+    "probeStates": [
+      "connected",
+      "gmweb_not_configured",
+      "gmweb_unreachable",
+      "contract_missing",
+      "contract_version_mismatch",
+      "auth_failed",
+      "scope_denied",
+      "invalid_response"
+    ],
+    "samples": {
+      "android_pull_connected": {
+        "contract_version": 1,
+        "observed_at": "2026-09-26T19:03:48.000Z",
+        "gmweb": { "ready": true, "reason": null },
+        "transport": { "active": "android", "mode": "pull", "state": "connected", "reason": null },
+        "device": {
+          "state": "connected",
+          "reason": null,
+          "last_seen_at": "2026-09-26T19:03:45.000Z",
+          "last_seen_age_ms": 3000,
+          "age_ms": 3000
+        },
+        "queue": { "pending": 4, "inflight": 1 },
+        "last_ack": { "at": "2026-09-26T19:03:41.000Z", "outcome": "completed" },
+        "diagnostics": { "androidPull": null }
+      },
+      "android_pull_stale": {
+        "contract_version": 1,
+        "observed_at": "2026-09-26T19:03:48.000Z",
+        "gmweb": { "ready": false, "reason": "no_recent_device_pull" },
+        "transport": { "active": "android", "mode": "pull", "state": "stale", "reason": "no_recent_device_pull" },
+        "device": {
+          "state": "stale",
+          "reason": "no_recent_device_pull",
+          "last_seen_at": "2026-09-26T18:46:26.000Z",
+          "last_seen_age_ms": 1042000,
+          "age_ms": 1042000
+        },
+        "queue": { "pending": 0, "inflight": 0 },
+        "last_ack": { "at": null, "outcome": null },
+        "diagnostics": { "androidPull": null }
+      },
+      "android_pull_stale_with_waiting_queue": {
+        "contract_version": 1,
+        "observed_at": "2026-09-26T19:03:48.000Z",
+        "gmweb": { "ready": false, "reason": "task_waiting_no_device" },
+        "transport": { "active": "android", "mode": "pull", "state": "stale", "reason": "no_recent_device_pull" },
+        "device": {
+          "state": "stale",
+          "reason": "no_recent_device_pull",
+          "last_seen_at": "2026-09-26T18:46:26.000Z",
+          "last_seen_age_ms": 1042000,
+          "age_ms": 1042000
+        },
+        "queue": { "pending": 14, "inflight": 0 },
+        "last_ack": { "at": null, "outcome": null },
+        "diagnostics": { "androidPull": null }
+      },
+      "android_pull_inflight_device_stale": {
+        "contract_version": 1,
+        "observed_at": "2026-09-26T19:03:48.000Z",
+        "gmweb": { "ready": false, "reason": "inflight_device_stale" },
+        "transport": { "active": "android", "mode": "pull", "state": "stale", "reason": "no_recent_device_pull" },
+        "device": {
+          "state": "stale",
+          "reason": "no_recent_device_pull",
+          "last_seen_at": "2026-09-26T18:46:26.000Z",
+          "last_seen_age_ms": 1042000,
+          "age_ms": 1042000
+        },
+        "queue": { "pending": 3, "inflight": 2 },
+        "last_ack": { "at": null, "outcome": null },
+        "diagnostics": { "androidPull": null }
+      },
+      "android_unconfigured": {
+        "contract_version": 1,
+        "observed_at": "2026-09-26T19:03:48.000Z",
+        "gmweb": { "ready": false, "reason": "device_key_not_configured" },
+        "transport": { "active": "android", "mode": "pull", "state": "unconfigured", "reason": "device_key_not_configured" },
+        "device": {
+          "state": "unconfigured",
+          "reason": "device_key_not_configured",
+          "last_seen_at": null,
+          "last_seen_age_ms": null,
+          "age_ms": null
+        },
+        "queue": { "pending": 0, "inflight": 0 },
+        "last_ack": { "at": null, "outcome": null },
+        "diagnostics": { "androidPull": null }
+      },
+      "chrome_active_with_android_diagnostics": {
+        "contract_version": 1,
+        "observed_at": "2026-09-26T19:03:48.000Z",
+        "gmweb": { "ready": true, "reason": null },
+        "transport": { "active": "chrome", "mode": null, "state": "connected", "reason": null },
+        "device": {
+          "state": "connected",
+          "reason": null,
+          "last_seen_at": null,
+          "last_seen_age_ms": null,
+          "age_ms": null
+        },
+        "queue": { "pending": 0, "inflight": 0 },
+        "last_ack": { "at": null, "outcome": null },
+        "diagnostics": {
+          "androidPull": {
+            "authoritative": false,
+            "state": "stale",
+            "reason": "no_recent_device_pull",
+            "last_seen_at": "2026-09-26T18:46:26.000Z",
+            "last_seen_age_ms": 1042000,
+            "pending": 14,
+            "inflight": 0
+          }
+        }
+      }
     }
   },
   "gateway": {

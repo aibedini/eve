@@ -182,7 +182,30 @@ class TerminalTransitionDeliveryTests(unittest.TestCase):
         outcome, _stop = self._deliver()
         self.assertEqual(outcome, 'sent')
         self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self._status(), 'gateway_accepted')
+
+    def test_unknown_existing_gateway_request_is_not_resubmitted(self):
+        self.event.gateway_request_id = 'existing-request'
+        db.session.commit()
+        with mock.patch.object(self.messaging, '_reconcile_depletion_request',
+                               return_value='unknown'):
+            outcome, _stop = self._deliver()
+        self.assertEqual(outcome, 'deferred')
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self._status(), 'retry')
+        self.assertIsNotNone(self.event.next_attempt_at)
+
+    def test_accepted_obligation_is_reconciled_without_send_log(self):
+        telemetry_state.mark_gateway_accepted(
+            self.event, gateway_request_id='accepted-request')
+        self.event.next_attempt_at = datetime.utcnow() - timedelta(seconds=1)
+        db.session.commit()
+        with mock.patch.object(self.messaging, '_reconcile_depletion_request',
+                               return_value='confirmed'):
+            count = self.messaging._reconcile_accepted_depletion_events({}, limit=1)
+        self.assertEqual(count, 1)
         self.assertEqual(self._status(), 'sent')
+        self.assertEqual(self.sent, [])
 
     def test_yesterdays_near_expiry_warning_does_not_consume_the_expired_transition(self):
         self.monitor_state = 'expired'

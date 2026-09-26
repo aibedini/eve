@@ -68,6 +68,8 @@ class _FakeResponse:
 
     def json(self):
         # The gateway contract is camelCase: requestId/jobId/status/statusUrl.
+        if self.status_code >= 400:
+            return json.loads(self.content)
         return {'success': True, 'requestId': 'req-1', 'jobId': 'job-1',
                 'status': 'queued', 'statusUrl': '/send/status/req-1'}
 
@@ -225,7 +227,7 @@ class PipelineIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(body['meta']['generation'])
         db.session.expire_all()
         event = ServiceNotificationEvent.query.one()
-        self.assertEqual(event.status, 'sent')
+        self.assertEqual(event.status, 'gateway_accepted')
         self.assertEqual(event.idempotency_key, body.get('idempotency_key')
                          or self.posts[0]['headers'].get('Idempotency-Key')
                          or event.idempotency_key)

@@ -695,7 +695,12 @@ NOTIFICATION_EVENT_STATUSES = (
     # 'sending' is the delivery lease a worker holds; 'shadowed' is what the
     # pipeline records in shadow mode, where it must be able to explain what it
     # WOULD have sent without sending it.
-    'sending', 'shadowed')
+    'sending', 'shadowed',
+    # 'gateway_accepted' is outstanding debt, not delivery: GMweb took the
+    # request and returned a request id, but nothing has confirmed delivery yet.
+    # It is listed here because every status the pipeline can durably write must
+    # be in this vocabulary, or a status filter silently cannot express it.
+    'gateway_accepted')
 NOTIFICATION_EVENT_SOURCES = ('transition', 'reconciliation')
 # Bounded retry ladder for a notification the gateway could not take, in seconds.
 NOTIFICATION_BACKOFF_SECONDS = (30, 120, 600, 1800, 3600, 10800)

@@ -59,6 +59,37 @@ def declared_scopes() -> list:
     return list(scopes) if isinstance(scopes, list) else []
 
 
+def _transport_health_contract() -> dict:
+    block = load_contract().get("transportHealthResponse")
+    return block if isinstance(block, dict) else {}
+
+
+def transport_health_contract_version() -> int:
+    """Declared version of the transport-health RESPONSE contract.
+
+    This is deliberately not the contract file's own `version`: the file version
+    describes the whole Eve<->GMweb surface, while this one is the version the
+    provider must echo in the response body so a half-upgraded deployment is
+    detectable instead of silently misread.
+    """
+    try:
+        return int(_transport_health_contract().get("contractVersion") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def transport_health_sections() -> dict:
+    """Declared section -> field names for the transport-health response."""
+    sections = _transport_health_contract().get("sections")
+    return sections if isinstance(sections, dict) else {}
+
+
+def transport_health_probe_states() -> list:
+    """The shared probe vocabulary, so both sides name the same failures."""
+    states = _transport_health_contract().get("probeStates")
+    return list(states) if isinstance(states, list) else []
+
+
 def endpoint_path(name: str, **params) -> str:
     """Declared path for one contract key, with path parameters quoted."""
     for entry in load_contract().get("endpoints") or []:

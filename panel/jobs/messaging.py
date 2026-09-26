@@ -41,6 +41,7 @@ from panel.models import (
     NotificationTemplate,
     PendingSms,
     ServiceOwnership,
+    ServiceNotificationEvent,
     SmsSendLog,
     SmsScanRun,
     SmsScanDecision,
@@ -3857,6 +3858,38 @@ def _depletion_event_mvars(event, row: dict, cfg: dict) -> dict:
     }
 
 
+def _reconcile_depletion_request(event, cfg):
+    """Never submit a second request while the gateway owns the first one."""
+    request_id = (event.gateway_request_id or '').strip()
+    if not request_id:
+        return 'new'
+    base = (cfg.get('base_url') or '').strip().rstrip('/')
+    key = (cfg.get('api_key') or '').strip()
+    if not base or not key:
+        return 'unknown'
+    try:
+        path = gmweb_contract.endpoint_path('send_status', requestId=request_id)
+        response = requests.get(
+            f"{base}/{path.lstrip('/')}",
+            headers={'Authorization': f'Bearer {key}', 'Accept': 'application/json'},
+            timeout=min(int(cfg.get('timeout_seconds') or 15), 15))
+        if response.status_code != 200:
+            return 'unknown'
+        data = response.json()
+        if not isinstance(data, dict):
+            return 'unknown'
+        status = str(data.get('status') or data.get('state') or '').lower()
+        if data.get('terminal') is True and data.get('successful') is True:
+            return 'confirmed'
+        if data.get('terminal') is True and data.get('successful') is False:
+            return 'failed'
+        if status in ('superseded', 'revoked', 'suppressed', 'cancelled'):
+            return 'superseded'
+        return 'inflight'
+    except Exception:
+        return 'unknown'
+
+
 def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, shadow):
     """Deliver ONE outbox event. Returns (outcome, stop_draining).
 
@@ -4007,6 +4040,20 @@ def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, s
         telemetry_state.mark_skipped(event, 'quiet_hours',
                                     retry_in=_sms_quiet_seconds_remaining(cfg))
         return 'deferred', False
+    if event.gateway_request_id:
+        request_state = _reconcile_depletion_request(event, cfg)
+        if request_state == 'confirmed':
+            telemetry_state.mark_sent(event, gateway_request_id=event.gateway_request_id)
+            return 'sent', False
+        if request_state == 'superseded':
+            telemetry_state.mark_superseded(event, 'gateway_superseded')
+            return 'superseded', False
+        if request_state != 'failed':
+            telemetry_state.mark_skipped(event, 'gateway_status_' + request_state,
+                                         retry_in=300)
+            return 'deferred', False
+        event.gateway_request_id = None
+        db.session.commit()
     ready, ready_reason, _gateway_status = _sms_gateway_ready(cfg)
     if not ready:
         telemetry_state.mark_skipped(event, ready_reason or 'gateway_not_ready',
@@ -4072,9 +4119,13 @@ def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, s
                      _lifecycle_audit(event.service_key, generation,
                                       meta.get('correlationId'), event.observed_at,
                                       last_change_at, idempotency_key=idem))
-        telemetry_state.mark_sent(event, response=res,
-                                  correlation_id=meta.get('correlationId'),
-                                  gateway_request_id=res.get('request_id'))
+        if res.get('request_id'):
+            telemetry_state.mark_gateway_accepted(
+                event, gateway_request_id=res['request_id'],
+                correlation_id=meta.get('correlationId'))
+        else:
+            telemetry_state.mark_sent(event, response=res,
+                                      correlation_id=meta.get('correlationId'))
         return 'sent', False
     _sms_refund_daily_segments(segments)
     reason = res.get('reason') or 'send_failed'
@@ -4083,6 +4134,8 @@ def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, s
                  _lifecycle_audit(event.service_key, generation,
                                   meta.get('correlationId'), event.observed_at,
                                   last_change_at, idempotency_key=idem))
+    if res.get('request_id'):
+        event.gateway_request_id = str(res['request_id'])[:128]
     delay = telemetry_state.mark_retry(event, reason)
     if res.get('status_code') == 429:
         # The gateway is rate limiting: stop draining this batch instead of
@@ -4092,6 +4145,33 @@ def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, s
 
 
 _MONITOR_SETTINGS_CACHE = {}
+
+
+def _reconcile_accepted_depletion_events(cfg, *, limit=25):
+    """Poll accepted obligations even if writing SmsSendLog previously failed."""
+    moment = datetime.utcnow()
+    events = (ServiceNotificationEvent.query
+              .filter_by(status='gateway_accepted')
+              .filter(ServiceNotificationEvent.next_attempt_at <= moment)
+              .order_by(ServiceNotificationEvent.next_attempt_at)
+              .limit(limit).all())
+    for event in events:
+        state = _reconcile_depletion_request(event, cfg)
+        if state == 'confirmed':
+            telemetry_state.mark_sent(event, gateway_request_id=event.gateway_request_id)
+        elif state == 'superseded':
+            telemetry_state.mark_superseded(event, 'gateway_superseded')
+        elif state == 'failed':
+            event.status = 'retry'
+            event.next_attempt_at = moment + timedelta(minutes=5)
+            event.last_error = 'gateway_failed'
+            db.session.commit()
+        else:
+            event.next_attempt_at = moment + timedelta(
+                minutes=5 if state == 'unknown' else 1)
+            event.last_error = 'gateway_status_' + state
+            db.session.commit()
+    return len(events)
 
 
 def _get_monitor_settings_cached(cfg) -> dict:
@@ -4126,11 +4206,13 @@ def run_depletion_event_outbox(limit: int = 10, *, job_id: str | None = None,
         reclaimed = telemetry_state.reclaim_expired_leases()
         if reclaimed:
             _log_warning('[sms-events] reclaimed %s expired lease(s)', reclaimed)
+        cfg = _get_sms_runtime_settings()
+        if not depletion_pipeline.shadow_mode():
+            _reconcile_accepted_depletion_events(cfg, limit=limit)
         events = telemetry_state.claim_events(limit=limit)
         result['claimed'] = len(events)
         if not events:
             return result
-        cfg = _get_sms_runtime_settings()
         mon = _get_monitor_settings_cached(cfg)
         templates = mon.get('templates', {}) if isinstance(mon, dict) else {}
         cooldown_hours = cfg.get('cooldown_hours') or {}
@@ -4850,8 +4932,14 @@ def _sms_record_scan_decision(job_id, row, lifecycle, state, recipient, status, 
     service_key = (lifecycle.get('serviceKey') or f'eve:{sid_norm}:{email_l}')[:255]
     if SmsScanDecision.query.filter_by(run_id=job_id, service_key=service_key).first():
         return
+    # A candidate deferred BEFORE any send attempt must still be recorded as
+    # deferred. 'waiting'/'delayed' already meant that, but the literal status
+    # 'deferred' was absent from this map, so the one call site that passes it
+    # fell through to failed_terminal - which is how deferred_count and
+    # suppressed_count ended up reading a disposition nothing ever wrote.
     disposition = {'sent': 'submitted', 'queued': 'inflight', 'active': 'inflight',
-                   'waiting': 'deferred', 'delayed': 'deferred', 'skipped': 'suppressed',
+                   'waiting': 'deferred', 'delayed': 'deferred', 'deferred': 'deferred',
+                   'skipped': 'suppressed',
                    'cancelled': 'cancelled', 'failed': 'failed_retryable'}.get(
                        (status or '').lower(), 'failed_terminal')
     reason_code = str(reason).strip().lower().replace(' ', '_')[:64] if reason else None
@@ -5130,6 +5218,23 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 row.reason = None
             row.updated_at = datetime.utcnow()
             _sync_sms_scan_decision_from_log(decisions.get(row.id), row)
+
+            obligation = ServiceNotificationEvent.query.filter_by(
+                gateway_request_id=row.request_id,
+                status='gateway_accepted').first()
+            if obligation and row.terminal:
+                if superseded or row.status in ('superseded', 'suppressed', 'cancelled'):
+                    obligation.status = 'superseded'
+                    obligation.superseded_reason = 'gateway_superseded'
+                    obligation.superseded_at = datetime.utcnow()
+                elif row.successful and row.verification_status == 'confirmed':
+                    obligation.status = 'sent'
+                    obligation.sent_at = datetime.utcnow()
+                elif row.successful is False and not manual_review:
+                    obligation.status = 'retry'
+                    obligation.next_attempt_at = datetime.utcnow() + timedelta(minutes=5)
+                    obligation.last_error = (row.reason or 'gateway_failed')[:255]
+                obligation.updated_at = datetime.utcnow()
 
             current = (row.status, row.gateway_state, row.stage, row.terminal,
                        row.successful, row.reason, row.gateway_job_id,

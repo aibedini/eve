@@ -109,13 +109,16 @@ class ContractFileTests(unittest.TestCase):
         # v3 adds the Android-bridge block and the lifecycle metric names on top
         # of the v2 invalidation surface; the consumer reads paths from the file,
         # so the only thing that must move is this expectation.
-        self.assertEqual(contract["version"], 3)
+        # v4 adds the consumer transport-health surface (endpoint + read-only
+        # scope + declared response contract) on top of v3's Android-bridge
+        # block and lifecycle metric names.
+        self.assertEqual(contract["version"], 4)
         self.assertEqual(contract["projectKeyDefaults"]["scopes"],
                          ["sms.send", "sms.status", "sms.cancel", "sms.capacity",
-                          "sms.invalidate"])
+                          "sms.invalidate", "transport:read"])
         keys = {entry["key"] for entry in contract["endpoints"]}
         self.assertEqual(keys, {"ready", "send", "send_status", "send_cancel",
-                                "send_capacity", "post_invalidate"})
+                                "send_capacity", "post_invalidate", "transport_health"})
         for entry in contract["endpoints"]:
             self.assertIn(entry["scope"], contract["projectKeyDefaults"]["scopes"])
         self.assertEqual(contract["transport"]["idempotencyHeader"], "Idempotency-Key")
@@ -132,10 +135,57 @@ class ContractFileTests(unittest.TestCase):
             self.assertNotIn(literal, source, literal)
 
     def test_declared_scopes_are_exposed_by_the_module(self):
-        self.assertEqual(gmweb_contract.contract_version(), 3)
+        self.assertEqual(gmweb_contract.contract_version(), 4)
         self.assertEqual(gmweb_contract.declared_scopes(),
                          ["sms.send", "sms.status", "sms.cancel", "sms.capacity",
-                          "sms.invalidate"])
+                          "sms.invalidate", "transport:read"])
+
+    def test_the_transport_health_endpoint_is_declared_with_its_scope(self):
+        entry = next(item for item in gmweb_contract.load_contract()["endpoints"]
+                     if item["key"] == "transport_health")
+        self.assertEqual(entry["method"], "GET")
+        self.assertEqual(entry["path"], "/eve/v1/transport-health")
+        self.assertEqual(entry["scope"], "transport:read")
+        self.assertEqual(gmweb_contract.endpoint_path("transport_health"),
+                         "/eve/v1/transport-health")
+
+    def test_the_device_age_field_the_route_consumes_is_declared(self):
+        """The projection copies only the keys it names, so a field missing from
+        this list is dropped without any error. It used to ask for
+        device.age_ms and would have silently dropped device.last_seen_age_ms."""
+        sections = gmweb_contract.transport_health_sections()
+        self.assertIn("last_seen_age_ms", sections["device"])
+        self.assertIn("age_ms", sections["device"])
+        self.assertIn("ready", sections["gmweb"])
+        self.assertEqual(gmweb_contract.transport_health_contract_version(), 1)
+
+    def test_the_probe_vocabulary_is_shared_and_unambiguous(self):
+        states = gmweb_contract.transport_health_probe_states()
+        for expected in ("connected", "gmweb_not_configured", "gmweb_unreachable",
+                         "contract_missing", "contract_version_mismatch",
+                         "auth_failed", "scope_denied", "invalid_response"):
+            self.assertIn(expected, states)
+        self.assertEqual(len(states), len(set(states)))
+
+    def test_the_transport_health_route_resolves_through_the_contract(self):
+        """The route must not restate the path or the auth header. It used to
+        hard-code both, and sent X-API-Key while every other GMweb call sent
+        `Authorization: Bearer` - a mismatch the contract test never saw."""
+        source = (ROOT / "panel" / "routes" / "messaging.py").read_text(encoding="utf-8")
+        self.assertIn("gmweb_contract.endpoint_path('transport_health')", source)
+        self.assertIn("gmweb_contract.request_headers(", source)
+        self.assertNotIn("'/eve/v1/transport-health'", source)
+
+    def test_the_probe_vocabulary_is_defined_in_exactly_one_place(self):
+        """The states live in one module and the route imports them. Restating
+        them per caller is how the same failure ends up with two names."""
+        route_source = (ROOT / "panel" / "routes" / "messaging.py").read_text(encoding="utf-8")
+        probe_source = (ROOT / "panel" / "services" / "gmweb_transport_probe.py").read_text(
+            encoding="utf-8")
+        self.assertIn("from panel.services.gmweb_transport_probe import", route_source)
+        self.assertNotIn("PROBE_CONNECTED = ", route_source)
+        for state in gmweb_contract.transport_health_probe_states():
+            self.assertIn("'%s'" % state, probe_source)
 
     def test_the_invalidation_endpoint_is_declared_with_its_scope(self):
         entry = next(item for item in gmweb_contract.load_contract()["endpoints"]

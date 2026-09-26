@@ -288,6 +288,86 @@ def doctor_summary():
         checks['telemetry_pipeline'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        import requests
+
+        from app import _get_sms_runtime_settings
+        from panel.security import outbound_tls_verify
+        from panel.services import gmweb_contract
+        from panel.services.gmweb_transport_probe import (
+            PROBE_CONNECTED, PROBE_INVALID, PROBE_NOT_CONFIGURED, PROBE_UNREACHABLE,
+            PROBE_VERSION_MISMATCH, PROBE_TIMEOUT_SECONDS,
+            probe_state_for_status, summarize,
+        )
+
+        # Cross-version probe: a deployment where GMweb and Eve disagree about the
+        # transport-health contract must be obvious HERE, not surface later as an
+        # unexplained "unknown" delivery card. PII-free by construction - state
+        # names, counters, ages and the contract version, never a key, a recipient
+        # or message content.
+        cfg = _get_sms_runtime_settings()
+        validated = gmweb_contract.validate_base_url(cfg.get('base_url'))
+        base_url = validated.get('base')
+        api_key = (cfg.get('api_key') or '').strip()
+        probe_state = None
+        http_status = None
+        contract_version = None
+        payload = None
+        detail = None
+        if not base_url or not api_key:
+            probe_state = PROBE_NOT_CONFIGURED
+            detail = validated.get('reason')
+        else:
+            try:
+                response = requests.get(
+                    base_url + gmweb_contract.endpoint_path('transport_health'),
+                    headers=gmweb_contract.request_headers(api_key),
+                    timeout=PROBE_TIMEOUT_SECONDS,
+                    verify=outbound_tls_verify())
+            except Exception as exc:
+                probe_state = PROBE_UNREACHABLE
+                detail = '%s: %s' % (type(exc).__name__, exc)
+            else:
+                http_status = response.status_code
+                if http_status >= 400:
+                    probe_state = probe_state_for_status(http_status)
+                else:
+                    try:
+                        parsed = response.json() if response.content else {}
+                    except ValueError:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        payload = parsed
+                        contract_version = parsed.get('contract_version')
+                        expected = gmweb_contract.transport_health_contract_version()
+                        readiness = parsed.get('gmweb')
+                        if contract_version != expected:
+                            probe_state = PROBE_VERSION_MISMATCH
+                        elif not isinstance(readiness, dict) or not isinstance(readiness.get('ready'), bool):
+                            probe_state = PROBE_INVALID
+                        else:
+                            probe_state = PROBE_CONNECTED
+                    else:
+                        probe_state = PROBE_INVALID
+        summary = summarize(payload, state=probe_state, status=http_status,
+                            contract=contract_version)
+        if summary.get('last_ack_at'):
+            try:
+                from datetime import datetime, timezone
+                acked = datetime.fromisoformat(str(summary['last_ack_at']).replace('Z', '+00:00'))
+                summary['last_ack_age_ms'] = max(
+                    0, int((datetime.now(timezone.utc) - acked).total_seconds() * 1000))
+            except Exception:
+                summary['last_ack_age_ms'] = None
+        checks['gmweb_transport_health'] = {
+            'state': 'ok' if probe_state == PROBE_CONNECTED else 'warning',
+            **summary,
+        }
+        if detail:
+            checks['gmweb_transport_health']['detail'] = str(detail)[:200]
+    except Exception as exc:
+        checks['gmweb_transport_health'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.services.usage_intelligence import observability, shadow
         from panel.services.usage_intelligence.recommendation import recommendation_mode
         checks['usage_intelligence'] = {

@@ -1753,13 +1753,23 @@
                             </div>
                             <div class="sms-audit-actions">
                                 <small id="sms-logs-updated" class="text-secondary" aria-live="polite"></small>
-                                <button type="button" class="btn btn-secondary" id="sms-audit-auto" onclick="toggleSmsAuditAuto()" aria-pressed="true">{{ 'خودکار: روشن' if panel_lang == 'fa' else 'Auto on' }}</button>
+                    <button type="button" class="btn btn-secondary" id="sms-audit-auto" onclick="toggleSmsAuditAuto()" aria-pressed="true">{{ 'تازه‌سازی خودکار: روشن' if panel_lang == 'fa' else 'Auto-refresh on' }}</button>
                                 <button type="button" class="btn btn-secondary" id="sms-logs-refresh-btn" onclick="refreshSmsPanel()">{{ 'تازه‌سازی' if panel_lang == 'fa' else 'Refresh' }}</button>
                             </div>
                         </header>
                         <div id="sms-health-strip" class="sms-health-strip" aria-live="polite"></div>
-                        <div id="sms-audit-kpis" class="sms-audit-kpis" aria-live="polite"></div>
-                        <div id="sms-audit-gap" class="sms-audit-gap hidden" role="alert"></div>
+            <div id="sms-audit-kpis" class="sms-audit-kpis" aria-live="polite"></div>
+            <section class="sms-audit-stream" aria-labelledby="sms-debt-title">
+                <div class="sms-audit-stream-head">
+                    <div>
+                        <h3 id="sms-debt-title">{{ 'بدهی اطلاع‌رسانی' if panel_lang == 'fa' else 'Notification debt' }}</h3>
+                        <p class="text-secondary">{{ 'تعهدهای ارسال‌نشده، مستقل از گزارش ارسال‌ها' if panel_lang == 'fa' else 'Outstanding obligations, independent of send history' }}</p>
+                    </div>
+                </div>
+                <div id="sms-debt-kpis" class="sms-audit-kpis" aria-live="polite"></div>
+                <div id="sms-debt-rows" class="sms-audit-rows" aria-live="polite"></div>
+            </section>
+            <div id="sms-audit-gap" class="sms-audit-gap hidden" role="alert"></div>
                         <section class="sms-audit-stream" aria-labelledby="sms-stream-title">
                             <div class="sms-audit-stream-head">
                                 <div>
@@ -6432,6 +6442,26 @@
         details.append(content); return details;
     }
 
+    const SMS_PROBE_LABELS = {
+        gmweb_not_configured: ['پیکربندی‌نشده', 'Not configured'],
+        gmweb_unreachable: ['غیرقابل دسترس', 'Unreachable'],
+        contract_missing: ['قرارداد در دسترس نیست', 'Contract unavailable'],
+        contract_version_mismatch: ['نسخهٔ قرارداد ناسازگار', 'Contract version mismatch'],
+        auth_failed: ['احراز هویت ناموفق', 'Authentication failed'],
+        scope_denied: ['دسترسی transport:read موجود نیست', 'Missing transport:read scope'],
+        invalid_response: ['پاسخ نامعتبر', 'Invalid response']
+    };
+    // A failed probe names its own failure. A generic "unknown" hid a missing
+    // GMweb route, a rejected key and a dead host behind the same dash, so an
+    // operator could not tell an upgrade problem from a credential problem.
+    function smsAuditProbeState(probeState, health) {
+        if (probeState && SMS_PROBE_LABELS[probeState]) {
+            return smsAuditLabel(SMS_PROBE_LABELS[probeState][0], SMS_PROBE_LABELS[probeState][1]);
+        }
+        if (!health) return smsAuditLabel('نامشخص', 'Unknown');
+        return health.gmweb?.ready === false ? smsAuditLabel('آماده نیست', 'Not ready') : smsAuditLabel('پاسخ‌گو', 'Reachable');
+    }
+
     async function loadSmsIntelligence() {
         const healthStrip = document.getElementById('sms-health-strip');
         const kpis = document.getElementById('sms-audit-kpis');
@@ -6446,12 +6476,14 @@
                 fetch('/api/sms/reports?' + new URLSearchParams({group_by: 'state', start: range.from || '', end: range.to || ''}), {cache: 'no-store'}).then(r => r.json()),
                 selectedRun ? fetch(`/api/sms/scan/runs/${encodeURIComponent(selectedRun)}?limit=1`, {cache: 'no-store'}).then(r => r.json()) : Promise.resolve(null)
             ]);
-            const health = healthResult.status === 'fulfilled' && healthResult.value.success ? healthResult.value.health : null;
+            const healthBody = healthResult.status === 'fulfilled' ? healthResult.value : null;
+            const probeState = (healthBody && healthBody.probe_state) || null;
+            const health = healthBody && healthBody.success ? healthBody.health : null;
             const runs = runsResult.status === 'fulfilled' && runsResult.value.success ? runsResult.value.runs : [];
             const report = reportResult.status === 'fulfilled' && reportResult.value.success ? reportResult.value : null;
             healthStrip.replaceChildren(); kpis.replaceChildren();
             const healthItems = [
-                [smsAuditLabel('درگاه GMweb', 'GMweb API'), health ? (health.gmweb?.ready === false ? smsAuditLabel('آماده نیست', 'Not ready') : smsAuditLabel('پاسخ‌گو', 'Reachable')) : smsAuditLabel('نامشخص', 'Unknown')],
+                [smsAuditLabel('درگاه GMweb', 'GMweb API'), smsAuditProbeState(probeState, health)],
                 [smsAuditLabel('مسیر فعال', 'Active transport'), health?.transport?.active || smsAuditLabel('نامشخص', 'Unknown')],
                 [smsAuditLabel('دستگاه', 'Device'), smsAuditDeviceState(health?.device?.state)],
                 [smsAuditLabel('در انتظار / در جریان', 'Pending / in flight'), health?.queue ? `${Number(health.queue.pending || 0)} / ${Number(health.queue.inflight || 0)}` : '—'],
@@ -6465,20 +6497,93 @@
             runPicker.value = selectedRun;
             const currentRun = detailResult.status === 'fulfilled' && detailResult.value?.success ? detailResult.value.run : runs.find(run => run.run_id === selectedRun);
             const totals = report?.totals || {};
-            const matched = currentRun ? currentRun.matched_count : Object.values(totals).reduce((sum, count) => sum + Number(count || 0), 0);
+            // A run manifest is the only auditable candidate source. With no run
+            // at all these six KPIs would be derived from legacy send rows and
+            // would read as "0 candidates" - a different claim from "no
+            // candidate audit data exists". Never render the latter as the former.
+            const noAuditData = !currentRun && runs.length === 0;
+            const legacySends = Number(totals.confirmed || 0) + Number(totals.deferred || 0)
+                + Number(totals.suppressed || 0) + Number(totals.failed_retryable || 0)
+                + Number(totals.failed_terminal || 0);
+            if (noAuditData) {
+                const note = document.createElement('p');
+                note.className = 'field-note';
+                note.textContent = legacySends > 0
+                    ? smsAuditLabel('هنوز دادهٔ بررسی نامزدی وجود ندارد. ارسال‌های گذشته «سابقهٔ ارسال قدیمی» هستند و فهرست نامزد ندارند؛ این صفرها نبود نامزد را اثبات نمی‌کنند.', 'No candidate audit data yet. Past sends are legacy send history with no candidate manifest, so these counts do not prove there were no candidates.')
+                    : smsAuditLabel('هنوز دادهٔ بررسی نامزدی وجود ندارد.', 'No candidate audit data yet.');
+                kpis.append(note);
+            } else {
+            const matched = currentRun ? currentRun.matched_count : legacySends;
             const metrics = currentRun ? [currentRun.eligible_count, currentRun.confirmed_count, currentRun.deferred_count, currentRun.suppressed_count, currentRun.failed_count] : [null, totals.confirmed || 0, totals.deferred || 0, totals.suppressed || 0, Number(totals.failed_retryable || 0) + Number(totals.failed_terminal || 0)];
             [[smsAuditLabel('ثبت‌شده در بررسی', 'Recorded candidates'), matched, ''], [smsAuditLabel('واجد شرایط', 'Eligible'), metrics[0], ''], [smsAuditLabel('تأییدشده', 'Confirmed'), metrics[1], 'confirmed'], [smsAuditLabel('موکول‌شده', 'Deferred'), metrics[2], 'deferred'], [smsAuditLabel('ارسال‌نشده', 'Suppressed'), metrics[3], 'suppressed'], [smsAuditLabel('ناموفق', 'Failed'), metrics[4], 'failed']].forEach(([label, value, outcome]) => smsAuditCard(kpis, label, value, null, outcome));
+            }
             const gap = document.getElementById('sms-audit-gap');
-            gap.classList.toggle('hidden', !currentRun);
-            if (currentRun) gap.textContent = currentRun.audit_gap_count ? smsAuditLabel(`هشدار: ${currentRun.audit_gap_count} تصمیم ثبت‌نشده در این اجرا.`, `Audit gap: ${currentRun.audit_gap_count} candidates without a recorded decision.`) : smsAuditLabel('پوشش کامل این اجرا هنوز قابل تأیید نیست؛ فقط تصمیم‌های ثبت‌شده نشان داده می‌شوند.', 'Full run coverage is not yet verifiable; showing recorded decisions only.');
+            const probeDiagnostic = healthBody && healthBody.success === false
+                ? (healthBody.diagnostic || healthBody.error || null) : null;
+            gap.classList.toggle('hidden', !probeDiagnostic && Boolean(currentRun && health));
+            if (probeDiagnostic) {
+                gap.textContent = smsAuditLabel('بررسی سلامت GMweb: ', 'GMweb health probe: ') + probeDiagnostic;
+            } else if (!currentRun && !health) {
+                gap.textContent = smsAuditLabel('دادهٔ اجرا و سلامت GMweb در دسترس نیست؛ صفرها به معنی نبود بدهی اعلان نیستند.', 'No run or GMweb health data is available; zero scan counts do not mean there is no notification debt.');
+            }
+            if (currentRun && !probeDiagnostic) gap.textContent = currentRun.audit_gap_count ? smsAuditLabel(`هشدار: ${currentRun.audit_gap_count} تصمیم ثبت‌نشده در این اجرا.`, `Audit gap: ${currentRun.audit_gap_count} candidates without a recorded decision.`) : smsAuditLabel('پوشش کامل این اجرا هنوز قابل تأیید نیست؛ فقط تصمیم‌های ثبت‌شده نشان داده می‌شوند.', 'Full run coverage is not yet verifiable; showing recorded decisions only.');
         } catch (_) { healthStrip.textContent = smsAuditLabel('اطلاعات سلامت در دسترس نیست.', 'Health information unavailable.'); }
+    }
+
+    async function loadSmsDebt() {
+        const kpis = document.getElementById('sms-debt-kpis');
+        const body = document.getElementById('sms-debt-rows');
+        if (!kpis || !body) return;
+        try {
+            const response = await fetch('/api/sms/notification-debt?limit=100', {cache: 'no-store'});
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'unavailable');
+            kpis.replaceChildren();
+            body.replaceChildren();
+            [
+                [smsAuditLabel('تعهدهای باز', 'Outstanding'), data.active],
+                [smsAuditLabel('وضعیت‌های پایان‌یافته', 'Terminal-state debt'), data.terminal],
+                [smsAuditLabel('در انتظار تلاش دوباره', 'Retrying'), data.retrying],
+                [smsAuditLabel('نیازمند بررسی', 'Needs attention'), data.needs_attention]
+            ].forEach(([label, value]) => smsAuditCard(kpis, label, value, null, ''));
+            for (const row of data.obligations || []) {
+                const detail = document.createElement('details');
+                detail.className = 'sms-audit-row';
+                const summary = document.createElement('summary');
+                summary.className = 'sms-debt-summary';
+                for (const value of [row.account || row.service_key, row.state,
+                                     row.status, String(row.attempt_count || 0),
+                                     row.last_error || '—']) {
+                    const cell = document.createElement('span');
+                    cell.textContent = value;
+                    summary.append(cell);
+                }
+                const facts = document.createElement('div');
+                facts.className = 'sms-audit-detail';
+                facts.textContent = [
+                    `Server ${row.server_id}`, `Generation ${row.lifecycle_generation}`,
+                    `Next retry ${row.next_attempt_at || '—'}`,
+                    `Gateway request ${row.gateway_request_id || '—'}`
+                ].join(' · ');
+                detail.append(summary, facts);
+                body.append(detail);
+            }
+            if (!body.childElementCount) {
+                const empty = document.createElement('div');
+                empty.className = 'sms-audit-empty';
+                empty.textContent = smsAuditLabel('تعهد باز ثبت نشده است.', 'No outstanding obligations recorded.');
+                body.append(empty);
+            }
+        } catch (error) {
+            body.textContent = smsAuditLabel('دادهٔ بدهی اعلان در دسترس نیست.', 'Notification debt unavailable.');
+        }
     }
 
     async function loadSmsLogs() {
         const body = document.getElementById('sms-logs-body');
         if (!body) return;
         const requestId = ++smsAuditRequest;
-        loadSmsCapacity(); loadSmsIntelligence();
+        loadSmsCapacity(); loadSmsIntelligence(); loadSmsDebt();
         const params = new URLSearchParams({limit: String(SMS_LOG_PAGE_SIZE), offset: String(smsLogPage * SMS_LOG_PAGE_SIZE), ...smsAuditRange()});
         const q = document.getElementById('sms-audit-search').value.trim();
         const run = document.getElementById('sms-audit-run').value;
@@ -10589,7 +10694,7 @@
         smsAuditAutoEnabled = !smsAuditAutoEnabled;
         const button = document.getElementById('sms-audit-auto');
         button.setAttribute('aria-pressed', String(smsAuditAutoEnabled));
-        button.textContent = smsAuditAutoEnabled ? smsAuditLabel('خودکار: روشن', 'Auto on') : smsAuditLabel('خودکار: خاموش', 'Auto off');
+        button.textContent = smsAuditAutoEnabled ? smsAuditLabel('تازه‌سازی خودکار: روشن', 'Auto-refresh on') : smsAuditLabel('تازه‌سازی خودکار: خاموش', 'Auto-refresh off');
         if (smsAuditAutoEnabled) startSmsLogAuto(); else stopSmsLogAuto();
     }
     let _smsLogAutoTimer = null;

@@ -12,10 +12,21 @@ from flask import Blueprint, jsonify, request, session
 from panel.core.phone import _extract_iran_mobile_from_text
 from panel.core.redis_client import get_redis
 from panel.extensions import db
-from panel.models import Admin, PendingSms, SmsSendLog, SmsScanRun, SmsScanDecision, SystemConfig
+from panel.models import Admin, PendingSms, SmsSendLog, SmsScanRun, SmsScanDecision, SystemConfig, ServiceNotificationEvent
 from sqlalchemy import or_, func
 from panel.routes.common import permission_required
 from panel.security import outbound_tls_verify
+from panel.services import gmweb_contract
+from panel.services.gmweb_transport_probe import (
+    PROBE_AUTH_FAILED, PROBE_CONNECTED, PROBE_CONTRACT_MISSING, PROBE_DIAGNOSTICS,
+    PROBE_INVALID, PROBE_NOT_CONFIGURED, PROBE_SCOPE_DENIED, PROBE_UNREACHABLE,
+    PROBE_VERSION_MISMATCH,
+)
+from panel.services.gmweb_transport_probe import PROBE_TIMEOUT_SECONDS as _PROBE_TIMEOUT_SECONDS
+from panel.services.gmweb_transport_probe import (
+    probe_state_for_status as _sms_transport_probe_state,
+    project_sections as _sms_transport_health_sections,
+)
 
 
 bp = Blueprint('messaging', __name__)
@@ -369,34 +380,116 @@ def sms_scan_preview():
                     'error': 'SMS audience preview is temporarily unavailable.'}), 503
 
 
+@bp.route('/api/sms/notification-debt', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_notification_debt():
+    """Outstanding durable obligations, independent of scan/send-log history."""
+    active = ('pending', 'retry', 'sending', 'gateway_accepted')
+    query = ServiceNotificationEvent.query.filter(
+        ServiceNotificationEvent.status.in_(active))
+    total = query.count()
+    terminal = query.filter(ServiceNotificationEvent.notification_kind.in_(
+        ('volume_ended', 'expired'))).count()
+    oldest = query.with_entities(func.min(ServiceNotificationEvent.created_at)).scalar()
+    try:
+        limit = min(max(int(request.args.get('limit', 50)), 1), 200)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Invalid limit.'}), 400
+    rows = query.order_by(ServiceNotificationEvent.created_at.asc()).limit(limit).all()
+    data = []
+    for row in rows:
+        item = row.to_dict()
+        item['account'] = row.client_email
+        item['needs_attention'] = (row.notification_kind in ('volume_ended', 'expired')
+                                   and int(row.attempt_count or 0) >= 7)
+        data.append(item)
+    response = jsonify({
+        'success': True, 'active': total, 'terminal': terminal,
+        'retrying': query.filter(ServiceNotificationEvent.status == 'retry').count(),
+        'needs_attention': query.filter(
+            ServiceNotificationEvent.notification_kind.in_(('volume_ended', 'expired')),
+            ServiceNotificationEvent.attempt_count >= 7).count(),
+        'oldest_age_seconds': (max(0, int((datetime.utcnow() - oldest).total_seconds()))
+                               if oldest else None),
+        'obligations': data,
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @bp.route('/api/sms/transport-health', methods=['GET'])
 @permission_required('secrets.manage')
 def sms_transport_health():
-    """Read the GMweb-safe transport contract without exposing master credentials."""
+    """Probe the GMweb transport-health contract and report the real verdict.
+
+    A failed probe is reported as a machine-readable probe_state plus a
+    diagnostic, never as an anonymous "unknown" the operator cannot act on. The
+    request goes through panel.services.gmweb_contract so the path, the
+    Authorization: Bearer header and the base-URL rules are the same ones every
+    other GMweb call uses.
+    """
     from app import _get_sms_runtime_settings
     cfg = _get_sms_runtime_settings()
-    base_url = (cfg.get('base_url') or '').rstrip('/')
+    validated = gmweb_contract.validate_base_url(cfg.get('base_url'))
+    base_url = validated.get('base')
     api_key = (cfg.get('api_key') or '').strip()
+    expected_version = gmweb_contract.transport_health_contract_version()
+
+    def verdict(state, *, status=None, contract=None, health=None, error=None):
+        payload = {
+            'success': False,
+            'probe_state': state,
+            'diagnostic': error or PROBE_DIAGNOSTICS.get(state),
+            'http_status': status,
+            'contract_version': contract,
+            'contract_supported': contract is not None and contract == expected_version,
+            'health': health,
+        }
+        if state == PROBE_CONNECTED:
+            payload['success'] = True
+            payload.pop('diagnostic')
+        response = jsonify(payload)
+        response.headers['Cache-Control'] = 'no-store'
+        if state == PROBE_CONNECTED:
+            return response
+        return response, 400 if state == PROBE_NOT_CONFIGURED else 502
+
     if not base_url or not api_key:
-        return jsonify({'success': False, 'error': 'SMS gateway is not configured.'}), 400
+        return verdict(PROBE_NOT_CONFIGURED,
+                       error=validated.get('reason') or PROBE_DIAGNOSTICS[PROBE_NOT_CONFIGURED])
+
     try:
-        response = requests.get(base_url + '/eve/v1/transport-health',
-                                headers={'X-API-Key': api_key, 'Accept': 'application/json'},
-                                timeout=5, verify=outbound_tls_verify())
-        if response.status_code >= 400:
-            return jsonify({'success': False, 'error': f'GMweb transport health returned HTTP {response.status_code}.'}), 502
-        payload = response.json() if response.content else {}
-        fields = {'gmweb': ('ready',),
-                  'transport': ('active', 'mode', 'state', 'reason'),
-                  'device': ('state', 'reason', 'last_seen_at', 'age_ms'),
-                  'queue': ('pending', 'inflight'),
-                  'last_ack': ('at', 'outcome')}
-        safe = {section: {key: value.get(key) for key in keys if key in value}
-                for section, keys in fields.items()
-                if isinstance(value := payload.get(section), dict)}
-        return jsonify({'success': True, 'health': safe})
+        response = requests.get(
+            base_url + gmweb_contract.endpoint_path('transport_health'),
+            headers=gmweb_contract.request_headers(api_key),
+            timeout=_PROBE_TIMEOUT_SECONDS,
+            verify=outbound_tls_verify())
     except Exception as exc:
-        return jsonify({'success': False, 'error': 'GMweb transport health unavailable.', 'reason': type(exc).__name__}), 502
+        return verdict(PROBE_UNREACHABLE, error='%s: %s' % (type(exc).__name__, exc))
+
+    if response.status_code >= 400:
+        return verdict(_sms_transport_probe_state(response.status_code),
+                       status=response.status_code)
+    try:
+        payload = response.json() if response.content else {}
+    except ValueError:
+        return verdict(PROBE_INVALID, status=response.status_code,
+                       error='GMweb answered with a body that is not JSON.')
+    if not isinstance(payload, dict):
+        return verdict(PROBE_INVALID, status=response.status_code,
+                       error='GMweb answered with a %s, not an object.' % type(payload).__name__)
+
+    version = payload.get('contract_version')
+    if version != expected_version:
+        return verdict(PROBE_VERSION_MISMATCH, status=response.status_code, contract=version,
+                       error='GMweb reports contract_version %r, expected %r.'
+                             % (version, expected_version))
+
+    health = _sms_transport_health_sections(payload)
+    if not isinstance(health.get('gmweb', {}).get('ready'), bool):
+        return verdict(PROBE_INVALID, status=response.status_code, contract=version,
+                       error='GMweb transport-health response has no readiness data.')
+    return verdict(PROBE_CONNECTED, status=response.status_code, contract=version, health=health)
 
 
 @bp.route('/api/sms/reports', methods=['GET'])

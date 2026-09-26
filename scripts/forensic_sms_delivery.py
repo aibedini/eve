@@ -119,6 +119,37 @@ def collect(email: str, server_id: int, hours: int) -> dict:
                   .order_by(ServiceNotificationEvent.created_at.desc())
                   .limit(25).all())
         report['events'] = _dump(events, EVENT_FIELDS)
+        current = states[0]
+        generation = lifecycle.generation_state(current.service_key).get('generation')
+        expected_kind = telemetry_state.SERVICE_STATE_TO_NOTIFICATION_KIND.get(
+            current.last_state)
+        matching = next((event for event in events
+                         if event.notification_kind == expected_kind
+                         and int(event.lifecycle_generation or 0) == int(generation or 0)),
+                        None)
+        if not expected_kind:
+            classification = 'NOT_APPLICABLE'
+        elif matching is None:
+            classification = 'COVERAGE_GAP'
+        elif matching.status == 'sent':
+            classification = 'CONFIRMED_OR_LEGACY_ACCEPTED'
+        elif matching.status == 'gateway_accepted':
+            classification = 'GATEWAY_ACCEPTED_UNCONFIRMED'
+        elif matching.status == 'superseded':
+            classification = 'STALE_SUPERSEDED'
+        elif matching.status == 'skipped':
+            classification = 'POLICY_SUPPRESSED'
+        elif matching.status in ('pending', 'retry', 'sending'):
+            classification = 'RETRY_SCHEDULED'
+        else:
+            classification = 'NEEDS_ATTENTION'
+        report['notification_coverage'] = {
+            'current_state': current.last_state,
+            'generation': generation,
+            'expected_kind': expected_kind,
+            'obligation_present': matching is not None,
+            'classification': classification,
+        }
 
         cutoff = datetime.utcnow() - timedelta(hours=max(1, int(hours)))
         logs = (WhatsappBotLog.query

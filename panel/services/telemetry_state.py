@@ -281,6 +281,27 @@ def record_observations(server_id, observations, *, observed_at=None,
                 "expiry_time": row.last_expiry_ms,
             }
             if not is_material_change(previous, state):
+                # A missed outbox INSERT must not stay invisible forever. Only
+                # transitions already observed by this ledger are repaired here;
+                # first-observation historical baselines require operator review.
+                if (source == 'reconciliation' and int(row.state_version or 0) > 0
+                        and state.get('service_state') in NOTIFIABLE_STATES):
+                    event_id = transition_event_id(
+                        service_key, state['service_state'], row.state_version)
+                    obligation = ServiceNotificationEvent.query.filter_by(
+                        event_id=event_id).first()
+                    if obligation is None:
+                        if _open_event(
+                                service_key=service_key, server_id=server_id,
+                                identity=identity, state=state,
+                                previous_state=None, state_version=row.state_version,
+                                moment=moment, source='reconciliation_recovery'):
+                            result['events_created'] += 1
+                    elif (obligation.status == 'failed_terminal'
+                          and obligation.notification_kind in ('volume_ended', 'expired')):
+                        obligation.status = 'retry'
+                        obligation.next_attempt_at = moment
+                        obligation.updated_at = moment
                 # Traffic moved but the state did not: refresh the observation stamp
                 # only (and only when it is actually stale), and do NOT create a
                 # version or an event. This is the write floor that keeps a poll loop
@@ -310,6 +331,15 @@ def record_observations(server_id, observations, *, observed_at=None,
             result["transitions"] += 1
 
             new_state = state.get("service_state")
+            weaker = {'volume_ended': 'volume_low', 'expired': 'expiring_soon'}.get(new_state)
+            if weaker:
+                (ServiceNotificationEvent.query
+                 .filter_by(service_key=service_key, state=weaker)
+                 .filter(ServiceNotificationEvent.status.in_(('pending', 'retry', 'gateway_accepted')))
+                 .update({'status': 'superseded', 'superseded_reason':
+                          'stronger_state_observed', 'superseded_at': moment,
+                          'next_attempt_at': None, 'updated_at': moment},
+                         synchronize_session=False))
             if new_state not in NOTIFIABLE_STATES:
                 continue
             created = _open_event(
@@ -456,7 +486,9 @@ def claim_events(limit: int = 5, *, owner=None, now=None) -> list:
     try:
         due_query = (db.session.query(ServiceNotificationEvent.id)
                      .filter(ServiceNotificationEvent.status.in_(CLAIMABLE_STATUSES))
-                     .filter(ServiceNotificationEvent.attempt_count < MAX_ATTEMPTS)
+                     .filter(or_(ServiceNotificationEvent.attempt_count < MAX_ATTEMPTS,
+                                 ServiceNotificationEvent.notification_kind.in_(
+                                     ('volume_ended', 'expired'))))
                      .filter(or_(ServiceNotificationEvent.next_attempt_at.is_(None),
                                  ServiceNotificationEvent.next_attempt_at <= moment))
                      .order_by(ServiceNotificationEvent.next_attempt_at,
@@ -543,6 +575,18 @@ def mark_sent(event, *, response=None, correlation_id=None, gateway_request_id=N
     db.session.commit()
 
 
+def mark_gateway_accepted(event, *, gateway_request_id, correlation_id=None) -> None:
+    """Gateway acceptance is outstanding debt, not delivery confirmation."""
+    event.status = 'gateway_accepted'
+    event.gateway_request_id = str(gateway_request_id)[:128]
+    event.correlation_id = str(correlation_id or event.correlation_id or '')[:64] or None
+    event.next_attempt_at = datetime.utcnow() + timedelta(minutes=1)
+    event.claimed_by = None
+    event.claimed_at = None
+    event.updated_at = datetime.utcnow()
+    db.session.commit()
+
+
 def mark_skipped(event, reason, *, retry_in=None, status_code=None) -> None:
     """Close an event that must not be sent, or defer it without losing it.
 
@@ -567,17 +611,19 @@ def mark_skipped(event, reason, *, retry_in=None, status_code=None) -> None:
 
 
 def mark_retry(event, reason, *, now=None) -> int:
-    """Bounded exponential retry; returns the delay in seconds (0 == terminal)."""
+    """Retry terminal notices indefinitely at a low frequency; bound warnings."""
     moment = now or datetime.utcnow()
     attempt = int(event.attempt_count or 1)
-    if attempt >= MAX_ATTEMPTS:
+    durable = event.notification_kind in ('volume_ended', 'expired')
+    if attempt >= MAX_ATTEMPTS and not durable:
         event.status = 'failed_terminal'
         event.next_attempt_at = None
     else:
         index = min(max(0, attempt - 1), len(NOTIFICATION_BACKOFF_SECONDS) - 1)
         event.status = 'retry'
         event.next_attempt_at = moment + timedelta(
-            seconds=NOTIFICATION_BACKOFF_SECONDS[index])
+            seconds=3600 if durable and attempt >= MAX_ATTEMPTS
+            else NOTIFICATION_BACKOFF_SECONDS[index])
     event.last_error = str(reason or 'retry')[:255]
     event.updated_at = moment
     event.claimed_by = None
@@ -613,7 +659,7 @@ def supersede_pending(service_key, reason, *, exclude_event_id=None,
     query = (db.session.query(ServiceNotificationEvent)
              .filter(ServiceNotificationEvent.service_key == str(service_key))
              .filter(ServiceNotificationEvent.status.in_(
-                 CLAIMABLE_STATUSES + (LEASE_STATUS,))))
+                 CLAIMABLE_STATUSES + (LEASE_STATUS, 'gateway_accepted'))))
     if exclude_event_id:
         query = query.filter(ServiceNotificationEvent.event_id != str(exclude_event_id))
     if max_generation is not None:
@@ -641,7 +687,7 @@ def supersede_pending(service_key, reason, *, exclude_event_id=None,
 def pending_events(service_key=None, *, limit=20) -> list:
     query = (db.session.query(ServiceNotificationEvent)
              .filter(ServiceNotificationEvent.status.in_(
-                 CLAIMABLE_STATUSES + (LEASE_STATUS,))))
+                 CLAIMABLE_STATUSES + (LEASE_STATUS, 'gateway_accepted'))))
     if service_key:
         query = query.filter(ServiceNotificationEvent.service_key == str(service_key))
     return (query.order_by(ServiceNotificationEvent.next_attempt_at,
@@ -670,8 +716,8 @@ def metrics(*, now=None) -> dict:
                 .group_by(ServiceNotificationEvent.status).all())
         by_status = {str(status): int(count) for status, count in rows}
         oldest = (db.session.query(func.min(ServiceNotificationEvent.created_at))
-                  .filter(ServiceNotificationEvent.status.in_(
-                      CLAIMABLE_STATUSES + (LEASE_STATUS,)))
+             .filter(ServiceNotificationEvent.status.in_(
+                 CLAIMABLE_STATUSES + (LEASE_STATUS, 'gateway_accepted')))
                   .scalar())
         observed = db.session.query(func.count(ServiceObservedState.id)).scalar() or 0
         overdue = (db.session.query(func.count(ServiceNotificationEvent.id))
@@ -692,7 +738,7 @@ def metrics(*, now=None) -> dict:
         'observed_services': int(observed),
         'by_status': by_status,
         'pending': sum(by_status.get(key, 0)
-                       for key in CLAIMABLE_STATUSES + (LEASE_STATUS,)),
+                       for key in CLAIMABLE_STATUSES + (LEASE_STATUS, 'gateway_accepted')),
         'pending_only': int(by_status.get('pending', 0)),
         'retry': int(by_status.get('retry', 0)),
         'leased': int(by_status.get(LEASE_STATUS, 0)),

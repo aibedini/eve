@@ -5759,6 +5759,8 @@ html[data-theme="light"] .server-icon {
 .sms-audit-filters .search-input, .sms-audit-filters .form-select { width: 100%; min-height: 36px; }
 .sms-audit-capacity { padding: 8px 16px; font-size: .75rem; border-bottom: 1px solid var(--border-color); }
 .sms-audit-rows { min-height: 90px; }
+.sms-debt-summary { display: grid; grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(80px, 1fr)) minmax(120px, 2fr); gap: 10px; align-items: center; padding: 12px 14px; cursor: pointer; font-size: .78rem; overflow-wrap: anywhere; }
+@media (max-width: 768px) { .sms-debt-summary { grid-template-columns: 1fr 1fr; } }
 .sms-audit-row { border-bottom: 1px solid var(--border-color); border-inline-start: 3px solid var(--primary); }
 .sms-audit-row[data-tone="success"] { border-inline-start-color: var(--success); }
 .sms-audit-row[data-tone="warning"] { border-inline-start-color: var(--warning); }

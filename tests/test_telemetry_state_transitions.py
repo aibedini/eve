@@ -127,6 +127,29 @@ class TelemetryTransitionTests(unittest.TestCase):
         states = sorted(e.state for e in ServiceNotificationEvent.query.all())
         self.assertEqual(states, ['volume_ended', 'volume_low'])
 
+    def test_stronger_terminal_state_supersedes_queued_warning(self):
+        self._record(_state('active', remaining_gb=5))
+        self._record(_state('volume_low', remaining_gb=1))
+        self._record(_state('volume_ended', remaining_gb=0))
+        events = {event.state: event for event in ServiceNotificationEvent.query.all()}
+        self.assertEqual(events['volume_low'].status, 'superseded')
+        self.assertEqual(events['volume_ended'].status, 'pending')
+
+    def test_reconciliation_repairs_missing_transition_obligation_once(self):
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_ended', remaining_gb=0))
+        ServiceNotificationEvent.query.delete()
+        db.session.commit()
+        first = self._record(_state('volume_ended', remaining_gb=0),
+                             source='reconciliation')
+        second = self._record(_state('volume_ended', remaining_gb=0),
+                              source='reconciliation')
+        self.assertEqual(first['events_created'], 1)
+        self.assertEqual(second['events_created'], 0)
+        self.assertEqual(ServiceNotificationEvent.query.count(), 1)
+        self.assertEqual(ServiceNotificationEvent.query.one().source,
+                         'reconciliation_recovery')
+
     def test_out_of_order_response_is_refused_by_the_ticket(self):
         # A slow read of an EARLIER state must not be applied after a newer one: it
         # would revert the ledger to "active", and the next fresh read would then
@@ -151,13 +174,12 @@ class TelemetryTransitionTests(unittest.TestCase):
         self.assertEqual(telemetry_state.claim_events(limit=5, owner='worker-b')[0].status,
                          'sending')
 
-    def test_retry_ladder_is_bounded_and_terminal(self):
+    def test_terminal_notice_keeps_retrying_after_backoff_ladder(self):
         self._record(_state('active', remaining_gb=2))
         self._record(_state('volume_ended', remaining_gb=0))
         event_id = ServiceNotificationEvent.query.one().event_id
         delays = []
-        # Bounded by MAX_ATTEMPTS by construction: this is the ladder, and a ladder
-        # without a top rung is an infinite retry loop against a broken gateway.
+        # Terminal notices continue at a low frequency after the initial ladder.
         clock = datetime.utcnow()
         for _ in range(telemetry_state.MAX_ATTEMPTS + 2):
             # Step past every rung of the ladder so this exercises the LADDER, not
@@ -168,10 +190,11 @@ class TelemetryTransitionTests(unittest.TestCase):
                 break
             delays.append(telemetry_state.mark_retry(claimed[0], 'http_429', now=clock))
         final = ServiceNotificationEvent.query.filter_by(event_id=event_id).one()
-        self.assertEqual(final.status, 'failed_terminal')
-        self.assertEqual(final.attempt_count, telemetry_state.MAX_ATTEMPTS)
+        self.assertEqual(final.status, 'retry')
+        self.assertEqual(final.attempt_count, telemetry_state.MAX_ATTEMPTS + 2)
         self.assertEqual(delays[0], 30)
-        self.assertEqual(len(delays), telemetry_state.MAX_ATTEMPTS)
+        self.assertEqual(delays[-1], 3600)
+        self.assertEqual(len(delays), telemetry_state.MAX_ATTEMPTS + 2)
 
     def test_renewal_retires_queued_reminders(self):
         self._record(_state('active', remaining_gb=2))
