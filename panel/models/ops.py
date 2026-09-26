@@ -1325,7 +1325,6 @@ class AdminPermission(db.Model):
 class SmsScanRun(db.Model):
     """Durable, run-centric manifest for SMS automation audits."""
     __tablename__ = 'sms_scan_runs'
-    __table_args__ = (db.Index('ix_sms_scan_runs_started_at', 'started_at'),)
     id = db.Column(db.Integer, primary_key=True)
     run_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
     triggered_by = db.Column(db.String(24), nullable=False, default='manual')
