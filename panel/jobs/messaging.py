@@ -42,6 +42,8 @@ from panel.models import (
     PendingSms,
     ServiceOwnership,
     SmsSendLog,
+    SmsScanRun,
+    SmsScanDecision,
     TelegramAnnouncement,
     TelegramAnnouncementDelivery,
     TelegramBotInstance,
@@ -4192,7 +4194,8 @@ def depletion_event_worker(interval_seconds: int = 5) -> None:
         time.sleep(max(2, int(interval_seconds)))
 
 def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto',
-                            states: list[str] | tuple[str, ...] | None = None) -> dict:
+                            states: list[str] | tuple[str, ...] | None = None,
+                            preview: bool = False) -> dict:
     """State-based automated SMS scan. For each non-reseller-owned account, derive
     the Monitor service-state (near_expiry / low_volume / expired / ended), and if
     that state's trigger is enabled, send the Monitor per-state template via GMweb —
@@ -4425,6 +4428,14 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         generations = {}
 
     _sms_scan_set(total_clients=total_clients, candidates=len(candidates))
+    if preview:
+        rows = [{'server_id': item[0], 'email': item[2], 'server_name': item[3],
+                 'state': item[4], 'recipient': _mask_mobile(item[5]),
+                 'service_key': item[8]} for item in candidates]
+        _sms_scan_set(state='idle', reason='preview', finished_at=_utc_iso_now(), current=None)
+        return {'scanned': total_clients, 'matched': len(candidates),
+                'eligible': len(candidates), 'deferred': 0, 'suppressed': 0,
+                'candidates': rows, 'preview': True}
 
     sent = 0
     # Pass 2 — cooldown gate + rate-limit + send + log per candidate.
@@ -4829,6 +4840,31 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
     return {'scanned': len(idle), 'sent': sent, 'candidates': len(candidates)}
 
 
+def _sms_record_scan_decision(job_id, row, lifecycle, state, recipient, status, reason,
+                              sid_norm, server_name, email_l):
+    """Mirror a send-log outcome into the run manifest, idempotently."""
+    run = SmsScanRun.query.filter_by(run_id=job_id).first()
+    if not run:
+        return
+    lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
+    service_key = (lifecycle.get('serviceKey') or f'eve:{sid_norm}:{email_l}')[:255]
+    if SmsScanDecision.query.filter_by(run_id=job_id, service_key=service_key).first():
+        return
+    disposition = {'sent': 'submitted', 'queued': 'inflight', 'active': 'inflight',
+                   'waiting': 'deferred', 'delayed': 'deferred', 'skipped': 'suppressed',
+                   'cancelled': 'cancelled', 'failed': 'failed_retryable'}.get(
+                       (status or '').lower(), 'failed_terminal')
+    reason_code = str(reason).strip().lower().replace(' ', '_')[:64] if reason else None
+    db.session.add(SmsScanDecision(
+        run_id=job_id, service_key=service_key, server_id=int(sid_norm or 0),
+        server_name=(server_name or '')[:255], client_email=email_l, state=state,
+        lifecycle_generation=(int(lifecycle['generation'])
+                              if lifecycle.get('generation') is not None else None),
+        recipient_masked=_mask_mobile(recipient), disposition=disposition,
+        reason_code=reason_code, sms_send_log_id=row.id,
+        gateway_request_id=row.request_id, gateway_job_id=row.gateway_job_id))
+
+
 def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, status, reason,
                  gateway_result: dict | None = None, lifecycle: dict | None = None):
     """Persist one audit row for the SMS send-log history. Best-effort.
@@ -4913,6 +4949,8 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
                         if lifecycle.get('revokedAt') else None),
         )
         db.session.add(row)
+        db.session.flush()
+        _sms_record_scan_decision(job_id, row, lifecycle, state, recipient, status, reason, sid_norm, server_name, email_l)
         db.session.commit()
         return row.id
     except Exception:

@@ -1,5 +1,7 @@
 """SMS and WhatsApp gateway API routes (extracted from app.py)."""
 import os
+import json
+from datetime import datetime
 import requests
 import threading
 import time
@@ -10,7 +12,8 @@ from flask import Blueprint, jsonify, request, session
 from panel.core.phone import _extract_iran_mobile_from_text
 from panel.core.redis_client import get_redis
 from panel.extensions import db
-from panel.models import Admin, PendingSms, SmsSendLog, SystemConfig
+from panel.models import Admin, PendingSms, SmsSendLog, SmsScanRun, SmsScanDecision, SystemConfig
+from sqlalchemy import or_, func
 from panel.routes.common import permission_required
 from panel.security import outbound_tls_verify
 
@@ -335,6 +338,12 @@ def sms_scan_run():
                         'job': running_job}), 409
 
     jid = uuid.uuid4().hex
+    run = SmsScanRun(run_id=jid, triggered_by='manual',
+                     selected_states=json.dumps(requested_states),
+                     priority_order=json.dumps(requested_states),
+                     started_at=datetime.utcnow(), updated_at=datetime.utcnow())
+    db.session.add(run)
+    db.session.commit()
 
     def _worker():
         with app.app_context():
@@ -350,6 +359,150 @@ def sms_scan_run():
 
     threading.Thread(target=_worker, daemon=True).start()
     return jsonify({'success': True, 'job_id': jid, 'states': requested_states})
+
+
+@bp.route('/api/sms/scan/preview', methods=['POST'])
+@permission_required('secrets.manage')
+def sms_scan_preview():
+    """Read-only audience preview. It deliberately performs no gateway calls."""
+    from app import _normalize_sms_scan_states, SMS_SCAN_STATES, _run_sms_depletion_scan, app
+    payload = request.get_json(silent=True) or {}
+    states = _normalize_sms_scan_states(payload.get('states'))
+    if not states:
+        states = [s for s in SMS_SCAN_STATES if payload.get('trigger_' + s)]
+    if not states:
+        return jsonify({'success': False, 'error': 'Select at least one state.'}), 400
+    try:
+        result = _run_sms_depletion_scan(job_id='preview-' + uuid.uuid4().hex,
+                                         triggered_by='preview', states=states, preview=True)
+        return jsonify({'success': True, 'snapshot_at': datetime.utcnow().isoformat() + 'Z',
+                        'states': states, 'scanned_count': result.get('scanned', 0),
+                        'matched_count': result.get('matched', 0),
+                        'eligible_count': result.get('eligible', 0),
+                        'deferred_count': result.get('deferred', 0),
+                        'suppressed_count': result.get('suppressed', 0),
+                        'candidates': result.get('candidates', [])})
+    except Exception as exc:
+        app.logger.exception('[sms-scan/preview] failed')
+        return jsonify({'success': False, 'error': 'Could not build SMS preview.',
+                        'reason': type(exc).__name__}), 500
+
+
+@bp.route('/api/sms/transport-health', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_transport_health():
+    """Read the GMweb-safe transport contract without exposing master credentials."""
+    from app import _get_sms_runtime_settings
+    cfg = _get_sms_runtime_settings()
+    base_url = (cfg.get('base_url') or '').rstrip('/')
+    api_key = (cfg.get('api_key') or '').strip()
+    if not base_url or not api_key:
+        return jsonify({'success': False, 'error': 'SMS gateway is not configured.'}), 400
+    try:
+        response = requests.get(base_url + '/eve/v1/transport-health',
+                                headers={'X-API-Key': api_key, 'Accept': 'application/json'},
+                                timeout=5, verify=outbound_tls_verify())
+        if response.status_code >= 400:
+            return jsonify({'success': False, 'error': f'GMweb transport health returned HTTP {response.status_code}.'}), 502
+        payload = response.json() if response.content else {}
+        safe = {key: payload.get(key) for key in ('gmweb', 'transport', 'device', 'queue', 'last_ack') if key in payload}
+        return jsonify({'success': True, 'health': safe})
+    except Exception as exc:
+        return jsonify({'success': False, 'error': 'GMweb transport health unavailable.', 'reason': type(exc).__name__}), 502
+
+
+@bp.route('/api/sms/reports', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_reports():
+    """Server-side aggregates for the SMS intelligence/reporting view."""
+    start_text = (request.args.get('start') or '').strip()
+    end_text = (request.args.get('end') or '').strip()
+    group = (request.args.get('group_by') or 'state').strip().lower()
+    allowed_groups = {'hour': func.strftime('%Y-%m-%d %H:00', SmsScanDecision.created_at),
+                      'day': func.strftime('%Y-%m-%d', SmsScanDecision.created_at),
+                      'month': func.strftime('%Y-%m', SmsScanDecision.created_at),
+                      'year': func.strftime('%Y', SmsScanDecision.created_at),
+                      'run': SmsScanDecision.run_id, 'state': SmsScanDecision.state,
+                      'reason': SmsScanDecision.reason_code,
+                      'server': SmsScanDecision.server_id}
+    if group not in allowed_groups:
+        return jsonify({'success': False, 'error': 'Invalid group_by.'}), 400
+    query = SmsScanDecision.query
+    try:
+        if start_text:
+            query = query.filter(SmsScanDecision.created_at >= datetime.fromisoformat(start_text.replace('Z', '+00:00')).replace(tzinfo=None))
+        if end_text:
+            query = query.filter(SmsScanDecision.created_at <= datetime.fromisoformat(end_text.replace('Z', '+00:00')).replace(tzinfo=None))
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Invalid date range.'}), 400
+    totals = dict(query.with_entities(SmsScanDecision.disposition, func.count(SmsScanDecision.id)).group_by(SmsScanDecision.disposition).all())
+    grouped = query.with_entities(allowed_groups[group].label('bucket'), SmsScanDecision.disposition, func.count(SmsScanDecision.id)).group_by(allowed_groups[group], SmsScanDecision.disposition).order_by(allowed_groups[group]).all()
+    buckets = {}
+    for bucket, disposition, count in grouped:
+        buckets.setdefault(str(bucket), {})[disposition or 'unknown'] = count
+    reasons = dict(query.with_entities(SmsScanDecision.reason_code, func.count(SmsScanDecision.id)).filter(SmsScanDecision.reason_code.isnot(None)).group_by(SmsScanDecision.reason_code).order_by(func.count(SmsScanDecision.id).desc()).all())
+    return jsonify({'success': True, 'group_by': group, 'totals': totals, 'groups': buckets, 'reasons': reasons})
+
+
+@bp.route('/api/sms/scan/runs/<run_id>', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_scan_run_detail(run_id):
+    run = SmsScanRun.query.filter_by(run_id=run_id).first_or_404()
+    counts = dict(db.session.query(SmsScanDecision.disposition, func.count(SmsScanDecision.id))
+                  .filter(SmsScanDecision.run_id == run_id)
+                  .group_by(SmsScanDecision.disposition).all())
+    run.matched_count = sum(counts.values())
+    run.submitted_count = counts.get('submitted', 0)
+    run.confirmed_count = counts.get('confirmed', 0)
+    run.inflight_count = counts.get('inflight', 0)
+    run.deferred_count = counts.get('deferred', 0)
+    run.suppressed_count = counts.get('suppressed', 0)
+    run.failed_count = sum(counts.get(k, 0) for k in ('failed_retryable', 'failed_terminal'))
+    run.cancelled_count = sum(counts.get(k, 0) for k in ('cancelled', 'superseded'))
+    run.audit_gap_count = max(0, run.matched_count - sum((
+        run.confirmed_count, run.inflight_count, run.deferred_count,
+        run.suppressed_count, run.failed_count, run.cancelled_count)))
+    query = SmsScanDecision.query.filter_by(run_id=run_id).order_by(SmsScanDecision.created_at.desc())
+    limit = min(max(int(request.args.get('limit', 100)), 1), 500)
+    decisions = query.limit(limit).all()
+    data = run.to_dict()
+    data['decisions'] = [d.to_dict() for d in decisions]
+    return jsonify({'success': True, 'run': data})
+
+
+@bp.route('/api/sms/scan/runs/<run_id>/decisions', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_scan_run_decisions(run_id):
+    SmsScanRun.query.filter_by(run_id=run_id).first_or_404()
+    try:
+        limit = min(max(int(request.args.get('limit', 100)), 1), 500)
+        offset = max(int(request.args.get('offset', 0)), 0)
+    except (TypeError, ValueError):
+        limit, offset = 100, 0
+    query = SmsScanDecision.query.filter_by(run_id=run_id)
+    for field in ('state', 'disposition', 'reason_code', 'server_id'):
+        value = (request.args.get(field) or '').strip()
+        if value:
+            query = query.filter(getattr(SmsScanDecision, field) == value)
+    q = (request.args.get('q') or '').strip().lower()
+    if q:
+        term = f'%{q}%'
+        query = query.filter(or_(func.lower(SmsScanDecision.client_email).like(term),
+                                func.lower(SmsScanDecision.service_key).like(term),
+                                func.lower(SmsScanDecision.gateway_request_id).like(term),
+                                func.lower(SmsScanDecision.gateway_job_id).like(term)))
+    total = query.count()
+    rows = query.order_by(SmsScanDecision.created_at.desc()).offset(offset).limit(limit).all()
+    return jsonify({'success': True, 'decisions': [row.to_dict() for row in rows],
+                    'total': total, 'offset': offset, 'limit': limit})
+
+
+@bp.route('/api/sms/scan/runs', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_scan_runs():
+    limit = min(max(int(request.args.get('limit', 50)), 1), 200)
+    rows = SmsScanRun.query.order_by(SmsScanRun.started_at.desc()).limit(limit).all()
+    return jsonify({'success': True, 'runs': [r.to_dict() for r in rows]})
 
 
 @bp.route('/api/sms/scan/status', methods=['GET'])
@@ -375,9 +528,19 @@ def sms_scan_status():
         hour_segments_used = _sms_db_segments_used_this_hour()
     except Exception:
         hour_segments_used = 0
+    job_snapshot = _sms_scan_snapshot()
+    if job_snapshot.get('id'):
+        run = SmsScanRun.query.filter_by(run_id=job_snapshot['id']).first()
+        if run:
+            if job_snapshot.get('state') not in ('running', 'starting'):
+                run.status = 'completed' if job_snapshot.get('state') == 'done' else str(job_snapshot.get('state') or 'finished')
+                run.finished_at = run.finished_at or datetime.utcnow()
+            run.scanned_count = int(job_snapshot.get('total_clients') or 0)
+            run.updated_at = datetime.utcnow()
+            db.session.commit()
     return jsonify({
         'success': True,
-        'job': _sms_scan_snapshot(),
+        'job': job_snapshot,
         'pending_high': pending_high,
         'segments_used_today': segment_stats.get('completed', 0),
         'segments_completed_today': segment_stats.get('completed', 0),
@@ -481,12 +644,33 @@ def sms_logs():
         offset = 0
     status_filter = (request.args.get('status') or '').strip().lower()
     state_filter = (request.args.get('state') or '').strip().lower()
+    disposition_filter = (request.args.get('disposition') or '').strip().lower()
+    reason_filter = (request.args.get('reason_code') or '').strip().lower()
+    run_filter = (request.args.get('run_id') or '').strip()
+    server_filter = (request.args.get('server_id') or '').strip()
+    search = (request.args.get('q') or '').strip()
     q = SmsSendLog.query
     if status_filter in ('queued', 'active', 'sent', 'failed', 'skipped',
                          'cancelled', 'manual_review'):
         q = q.filter(SmsSendLog.status == status_filter)
     if state_filter in ('near_expiry', 'low_volume', 'expired', 'ended'):
         q = q.filter(SmsSendLog.state == state_filter)
+    if run_filter:
+        q = q.filter(SmsSendLog.job_id == run_filter)
+    if server_filter.isdigit():
+        q = q.filter(SmsSendLog.server_id == int(server_filter))
+    if reason_filter:
+        q = q.filter(func.lower(SmsSendLog.reason).contains(reason_filter))
+    if disposition_filter:
+        q = q.filter(func.lower(SmsSendLog.status) == disposition_filter)
+    if search:
+        term = f'%{search.lower()}%'
+        q = q.filter(or_(func.lower(SmsSendLog.email).like(term),
+                         func.lower(SmsSendLog.server_name).like(term),
+                         func.lower(SmsSendLog.request_id).like(term),
+                         func.lower(SmsSendLog.gateway_job_id).like(term),
+                         func.lower(SmsSendLog.job_id).like(term),
+                         func.lower(SmsSendLog.recipient).like(term)))
     total = q.count()
     rows = q.order_by(SmsSendLog.created_at.desc()).offset(offset).limit(limit).all()
     resp = jsonify({'success': True, 'logs': [r.to_dict() for r in rows],

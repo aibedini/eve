@@ -1322,3 +1322,82 @@ class AdminPermission(db.Model):
         }
 
 
+class SmsScanRun(db.Model):
+    """Durable, run-centric manifest for SMS automation audits."""
+    __tablename__ = 'sms_scan_runs'
+    __table_args__ = (db.Index('ix_sms_scan_runs_started_at', 'started_at'),)
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    triggered_by = db.Column(db.String(24), nullable=False, default='manual')
+    selected_states = db.Column(db.Text, nullable=True)
+    priority_order = db.Column(db.Text, nullable=True)
+    snapshot_revision = db.Column(db.String(128), nullable=True)
+    started_by_admin_id = db.Column(db.Integer, nullable=True, index=True)
+    started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(24), nullable=False, default='running', index=True)
+    scanned_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_count = db.Column(db.Integer, nullable=False, default=0)
+    eligible_count = db.Column(db.Integer, nullable=False, default=0)
+    submitted_count = db.Column(db.Integer, nullable=False, default=0)
+    confirmed_count = db.Column(db.Integer, nullable=False, default=0)
+    inflight_count = db.Column(db.Integer, nullable=False, default=0)
+    deferred_count = db.Column(db.Integer, nullable=False, default=0)
+    suppressed_count = db.Column(db.Integer, nullable=False, default=0)
+    failed_count = db.Column(db.Integer, nullable=False, default=0)
+    cancelled_count = db.Column(db.Integer, nullable=False, default=0)
+    audit_gap_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def to_dict(self):
+        data = {c.name: getattr(self, c.name) for c in self.__table__.columns}
+        for key in ('selected_states', 'priority_order'):
+            try:
+                data[key] = json.loads(data[key]) if data[key] else []
+            except (TypeError, ValueError):
+                data[key] = []
+        for key in ('started_at', 'finished_at', 'created_at', 'updated_at'):
+            if data.get(key):
+                data[key] = data[key].isoformat() + 'Z'
+        return data
+
+
+class SmsScanDecision(db.Model):
+    """Exactly one durable disposition for each matched candidate in a run."""
+    __tablename__ = 'sms_scan_decisions'
+    __table_args__ = (
+        db.UniqueConstraint('run_id', 'service_key', name='uq_sms_decision_run_service'),
+        db.Index('ix_sms_decisions_run_created', 'run_id', 'created_at'),
+        db.Index('ix_sms_decisions_disposition_reason', 'disposition', 'reason_code'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.String(64), nullable=False, index=True)
+    service_key = db.Column(db.String(255), nullable=False, index=True)
+    server_id = db.Column(db.Integer, nullable=False, default=0, index=True)
+    server_name = db.Column(db.String(255), nullable=True)
+    client_uuid = db.Column(db.String(100), nullable=True)
+    client_email = db.Column(db.String(255), nullable=False, index=True)
+    state = db.Column(db.String(32), nullable=False, index=True)
+    state_version = db.Column(db.Integer, nullable=True)
+    lifecycle_generation = db.Column(db.Integer, nullable=True)
+    candidate_observed_at = db.Column(db.DateTime, nullable=True)
+    recipient_masked = db.Column(db.String(32), nullable=True)
+    disposition = db.Column(db.String(32), nullable=False, index=True)
+    reason_code = db.Column(db.String(64), nullable=True, index=True)
+    reason_detail_safe = db.Column(db.String(255), nullable=True)
+    next_attempt_at = db.Column(db.DateTime, nullable=True)
+    notification_event_id = db.Column(db.String(160), nullable=True, index=True)
+    sms_send_log_id = db.Column(db.Integer, nullable=True, index=True)
+    gateway_request_id = db.Column(db.String(128), nullable=True, index=True)
+    gateway_job_id = db.Column(db.String(64), nullable=True, index=True)
+    decision_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def to_dict(self):
+        data = {c.name: getattr(self, c.name) for c in self.__table__.columns}
+        for key in ('candidate_observed_at', 'next_attempt_at', 'decision_at', 'created_at', 'updated_at'):
+            if data.get(key):
+                data[key] = data[key].isoformat() + 'Z'
+        return data

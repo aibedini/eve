@@ -6205,6 +6205,22 @@
             .catch(() => { /* keep UI calm on transient errors */ });
     }
 
+    async function previewSmsScan() {
+        const states = Array.from(document.querySelectorAll('.sms-run-state:checked')).map(el => el.value);
+        const button = document.getElementById('sms-scan-preview-btn');
+        if (button) button.disabled = true;
+        try {
+            const response = await fetch('/api/sms/scan/preview', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({states}) });
+            const data = await response.json();
+            const panel = document.getElementById('sms-scan-preview');
+            if (panel) {
+                panel.classList.remove('hidden');
+                panel.textContent = data.success ? `Preview: ${data.scanned_count} scanned, ${data.matched_count} matched, ${data.eligible_count} eligible now, ${data.deferred_count} deferred, ${data.suppressed_count} suppressed.` : (data.error || 'Preview failed');
+            }
+        } catch (_) { showToast('Could not build SMS preview.', 'error'); }
+        finally { if (button) button.disabled = false; }
+    }
+
     async function runSmsScanNow() {
         // "Start now" means turn the SMS system ON: enable automation, then run
         // immediately. Symmetric with "Stop & disable". Reflect it on the toggle
@@ -6306,10 +6322,54 @@
         }
     }
 
-    async function loadSmsLogs() {
+ async function loadSmsIntelligence() {
+     const host = document.getElementById('sms-logs-body');
+     if (!host) return;
+     const startButton = document.getElementById('sms-scan-run-btn');
+     if (startButton && !document.getElementById('sms-scan-preview-btn')) {
+         const previewButton = document.createElement('button');
+         previewButton.type = 'button';
+         previewButton.id = 'sms-scan-preview-btn';
+         previewButton.className = 'btn btn-secondary';
+         previewButton.textContent = 'Preview audience';
+         previewButton.addEventListener('click', previewSmsScan);
+         startButton.parentNode.insertBefore(previewButton, startButton);
+     }
+     if (!document.getElementById('sms-scan-preview')) {
+         const preview = document.createElement('div');
+         preview.id = 'sms-scan-preview';
+         preview.className = 'hidden';
+         preview.setAttribute('aria-live', 'polite');
+         host.closest('.panel-card')?.insertBefore(preview, host.closest('.panel-card').firstChild);
+     }
+     let strip = document.getElementById('sms-intelligence-strip');
+     if (!strip) {
+         strip = document.createElement('div');
+         strip.id = 'sms-intelligence-strip';
+         strip.className = 'stat-grid';
+         host.closest('.panel-card')?.insertBefore(strip, host.closest('.panel-card').firstChild);
+     }
+     try {
+         const [healthResponse, reportResponse] = await Promise.all([
+             fetch('/api/sms/transport-health', {cache: 'no-store'}),
+             fetch('/api/sms/reports?group_by=state', {cache: 'no-store'})
+         ]);
+         const health = await healthResponse.json();
+         const report = await reportResponse.json();
+         const totals = (report && report.totals) || {};
+         const device = health && health.health && health.health.device;
+         const transport = health && health.health && health.health.transport;
+         const healthText = health && health.success ? `GMweb ${transport?.state || 'reachable'} · Android ${device?.state || 'unknown'}` : 'GMweb health unavailable';
+         strip.innerHTML = `<div class="stat-card"><div class="stat-label">SMS DELIVERY HEALTH</div><div class="stat-value">${escapeHtml(healthText)}</div></div>` +
+             ['submitted','confirmed','inflight','deferred','suppressed','failed_retryable'].map(key => `<div class="stat-card"><div class="stat-label">${escapeHtml(key.replace('_',' ').toUpperCase())}</div><div class="stat-value">${Number(totals[key] || 0)}</div></div>`).join('');
+     } catch (_) { /* log view remains usable if optional intelligence endpoints fail */ }
+ }
+
+ async function loadSmsLogs() {
         const body = document.getElementById('sms-logs-body');
         if (!body) return;
-        loadSmsCapacity();
+     loadSmsCapacity();
+     loadSmsIntelligence();
         try {
             const offset = smsLogPage * SMS_LOG_PAGE_SIZE;
             // cache-bust + no-store so the browser never serves a stale log.

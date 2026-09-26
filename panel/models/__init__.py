@@ -99,6 +99,8 @@ from panel.models.ops import (
     AdminPermission,
     WhatsappBotLog,
     SmsSendLog,
+    SmsScanRun,
+    SmsScanDecision,
     PendingSms,
     ServiceLifecycleState,
     ServiceNotificationOutbox,
