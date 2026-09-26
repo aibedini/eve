@@ -4975,6 +4975,28 @@ def _sms_status_endpoint(base_url: str, row) -> str:
     return f"{base_url.rstrip('/')}/{status_url.lstrip('/')}"
 
 
+def _sync_sms_scan_decision_from_log(decision, row):
+    """Keep the candidate outcome aligned with factual gateway reconciliation."""
+    if not decision:
+        return
+    if row.terminal and row.successful and row.verification_status == 'confirmed':
+        disposition = 'confirmed'
+    elif row.terminal and row.status in ('superseded', 'suppressed'):
+        disposition = 'superseded'
+    elif row.terminal and row.status == 'cancelled':
+        disposition = 'cancelled'
+    elif row.terminal and row.successful:
+        disposition = 'submitted'
+    elif row.terminal:
+        disposition = 'failed_terminal'
+    else:
+        disposition = 'inflight'
+    decision.disposition = disposition
+    decision.reason_code = row.reason[:64] if row.reason else None
+    decision.gateway_job_id = row.gateway_job_id
+    decision.updated_at = datetime.utcnow()
+
+
 def _refresh_pending_sms_statuses(limit: int = 100) -> int:
     """Poll accepted gateway tasks using the provider recorded for each send.
 
@@ -4993,6 +5015,9 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
     ).order_by(SmsSendLog.created_at.desc()).limit(max(1, min(int(limit), 500))).all()
     if not rows:
         return 0
+
+    decisions = {item.sms_send_log_id: item for item in SmsScanDecision.query.filter(
+        SmsScanDecision.sms_send_log_id.in_([row.id for row in rows])).all()}
 
     changed = 0
     affected_campaign_ids = set()
@@ -5017,6 +5042,7 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 row.reason = 'gateway_status_expired'
                 row.last_http_status = 404
                 row.updated_at = datetime.utcnow()
+                _sync_sms_scan_decision_from_log(decisions.get(row.id), row)
                 changed += 1
                 continue
             if resp.status_code != 200:
@@ -5103,6 +5129,7 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
             elif row.terminal and row.successful:
                 row.reason = None
             row.updated_at = datetime.utcnow()
+            _sync_sms_scan_decision_from_log(decisions.get(row.id), row)
 
             current = (row.status, row.gateway_state, row.stage, row.terminal,
                        row.successful, row.reason, row.gateway_job_id,

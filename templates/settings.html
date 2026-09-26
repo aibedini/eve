@@ -1690,11 +1690,11 @@
                 <!-- Send queue / progress + history -->
                 <div class="form-group">
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-                        <label style="margin:0;">Send queue &amp; log</label>
+                        <label style="margin:0;">{{ 'صف ارسال و گزارش' if panel_lang == 'fa' else 'Send queue & log' }}</label>
                         <div style="display:flex;gap:8px;align-items:center;">
-                            <button class="btn btn-success" id="sms-promote-high-btn" onclick="promoteDelayedHighSms()" title="Release all delayed high-priority messages and move them to the front">⚡ High first</button>
-                            <button class="btn btn-primary" id="sms-scan-run-btn" onclick="runSmsScanNow()">▶ Start now</button>
-                            <button class="btn btn-danger" id="sms-scan-stop-btn" onclick="stopSmsScan()" style="display:none;">⏹ Stop &amp; disable</button>
+                            <button class="btn btn-success" id="sms-promote-high-btn" onclick="promoteDelayedHighSms()" title="{{ 'انتقال پیام‌های فوری به ابتدای صف' if panel_lang == 'fa' else 'Move delayed high-priority messages to the front' }}">{{ 'اولویت با فوری‌ها' if panel_lang == 'fa' else 'High first' }}</button>
+                            <button class="btn btn-primary" id="sms-scan-run-btn" onclick="runSmsScanNow()">{{ 'شروع بررسی و ارسال' if panel_lang == 'fa' else 'Start now' }}</button>
+                            <button class="btn btn-danger" id="sms-scan-stop-btn" onclick="stopSmsScan()" style="display:none;">{{ 'توقف و غیرفعال‌سازی' if panel_lang == 'fa' else 'Stop & disable' }}</button>
                         </div>
                     </div>
                     <p class="text-secondary" style="margin:4px 0 10px; font-size:0.82rem;">
@@ -1744,41 +1744,50 @@
                         <div id="sms-scan-counts" class="text-secondary" style="font-size:0.82rem;display:flex;gap:14px;flex-wrap:wrap;"></div>
                     </div>
 
-                    <div id="sms-gmweb-capacity" class="text-secondary" style="font-size:.78rem;margin-bottom:8px;" aria-live="polite">SMS gateway capacity: loading…</div>
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-                        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
-                            <small class="text-secondary">Recent sends</small>
-                            <small id="sms-logs-updated" class="text-secondary" aria-live="polite" style="font-size:0.72rem;opacity:0.8;"></small>
-                        </div>
-                        <button class="btn btn-secondary" id="sms-logs-refresh-btn" style="padding:3px 10px;font-size:0.78rem;" onclick="refreshSmsPanel()">Refresh log</button>
-                    </div>
-                    <div style="overflow-x:auto;border:1px solid var(--border-color,#2a2a3a);border-radius:8px;">
-                        <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
-                            <thead>
-                                <tr style="text-align:start;color: var(--text-secondary);">
-                                    <th style="padding:8px 10px;text-align:start;">Time</th>
-                                    <th style="padding:8px 10px;text-align:start;">User</th>
-                                    <th style="padding:8px 10px;text-align:start;">Server</th>
-                                    <th style="padding:8px 10px;text-align:start;">State</th>
-                                    <th style="padding:8px 10px;text-align:start;">To</th>
-                                    <th style="padding:8px 10px;text-align:start;">SMS</th>
-                                    <th style="padding:8px 10px;text-align:start;">Status</th>
-                                </tr>
-                            </thead>
-                            <tbody id="sms-logs-body" aria-live="polite">
-                                <tr><td colspan="7" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                    <!-- Pagination -->
-                    <div id="sms-logs-pager" style="display:none;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap;">
-                        <small id="sms-logs-range" class="text-secondary" style="font-size:0.78rem;"></small>
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <button class="btn btn-secondary" id="sms-logs-prev" style="padding:4px 12px;font-size:0.8rem;" onclick="smsLogsGo(-1)" aria-label="Previous page">‹ Prev</button>
-                            <small id="sms-logs-pageinfo" class="text-secondary" style="font-size:0.78rem;min-width:84px;text-align:center;"></small>
-                            <button class="btn btn-secondary" id="sms-logs-next" style="padding:4px 12px;font-size:0.8rem;" onclick="smsLogsGo(1)" aria-label="Next page">Next ›</button>
-                        </div>
-                    </div>
+                    <section class="sms-audit" aria-labelledby="sms-audit-title">
+                        <header class="sms-audit-header">
+                            <div>
+                                <span class="sms-audit-eyebrow">{{ 'پایش زنده پیامک' if panel_lang == 'fa' else 'LIVE SMS TELEMETRY' }}</span>
+                                <h2 id="sms-audit-title">{{ 'هوشمندی ارسال پیامک' if panel_lang == 'fa' else 'SMS Delivery Intelligence' }}</h2>
+                                <p>{{ 'تصمیم‌ها، درخواست‌های درگاه و تأییدهای واقعی در یک مسیر قابل بررسی.' if panel_lang == 'fa' else 'Decisions, gateway requests and factual confirmations in one audit trail.' }}</p>
+                            </div>
+                            <div class="sms-audit-actions">
+                                <small id="sms-logs-updated" class="text-secondary" aria-live="polite"></small>
+                                <button type="button" class="btn btn-secondary" id="sms-audit-auto" onclick="toggleSmsAuditAuto()" aria-pressed="true">{{ 'خودکار: روشن' if panel_lang == 'fa' else 'Auto on' }}</button>
+                                <button type="button" class="btn btn-secondary" id="sms-logs-refresh-btn" onclick="refreshSmsPanel()">{{ 'تازه‌سازی' if panel_lang == 'fa' else 'Refresh' }}</button>
+                            </div>
+                        </header>
+                        <div id="sms-health-strip" class="sms-health-strip" aria-live="polite"></div>
+                        <div id="sms-audit-kpis" class="sms-audit-kpis" aria-live="polite"></div>
+                        <div id="sms-audit-gap" class="sms-audit-gap hidden" role="alert"></div>
+                        <section class="sms-audit-stream" aria-labelledby="sms-stream-title">
+                            <div class="sms-audit-stream-head">
+                                <div>
+                                    <h3 id="sms-stream-title">{{ 'جریان بررسی پیامک' if panel_lang == 'fa' else 'SMS audit stream' }}</h3>
+                                    <p id="sms-stream-scope" class="text-secondary"></p>
+                                </div>
+                                <div class="sms-audit-tabs" role="group" aria-label="{{ 'نوع رویداد' if panel_lang == 'fa' else 'Activity type' }}">
+                                    <button type="button" class="sms-audit-tab" id="sms-tab-decisions" onclick="setSmsAuditMode('decisions')">{{ 'تصمیم‌ها' if panel_lang == 'fa' else 'Decisions' }}</button>
+                                    <button type="button" class="sms-audit-tab" id="sms-tab-sends" onclick="setSmsAuditMode('sends')">{{ 'ارسال‌ها' if panel_lang == 'fa' else 'Sends' }}</button>
+                                </div>
+                            </div>
+                            <div class="sms-audit-filters">
+                                <div class="form-group sms-audit-search"><label for="sms-audit-search">{{ 'جستجو' if panel_lang == 'fa' else 'Search' }}</label><input id="sms-audit-search" class="search-input" type="search" placeholder="{{ 'اکانت، سرور، درخواست یا شناسه درگاه' if panel_lang == 'fa' else 'Account, server, request or gateway job' }}"></div>
+                                <div class="form-group"><label for="sms-audit-run">{{ 'اجرا' if panel_lang == 'fa' else 'Run' }}</label><select id="sms-audit-run" class="form-select"><option value="">{{ 'همه اجراها' if panel_lang == 'fa' else 'All runs' }}</option></select></div>
+                                <div class="form-group"><label for="sms-audit-state">{{ 'وضعیت اکانت' if panel_lang == 'fa' else 'Account state' }}</label><select id="sms-audit-state" class="form-select"><option value="">{{ 'همه وضعیت‌ها' if panel_lang == 'fa' else 'All states' }}</option><option value="low_volume">{{ 'حجم کم' if panel_lang == 'fa' else 'Low volume' }}</option><option value="ended">{{ 'حجم تمام‌شده' if panel_lang == 'fa' else 'Volume ended' }}</option><option value="near_expiry">{{ 'نزدیک انقضا' if panel_lang == 'fa' else 'Near expiry' }}</option><option value="expired">{{ 'منقضی' if panel_lang == 'fa' else 'Expired' }}</option></select></div>
+                                <div class="form-group"><label for="sms-audit-outcome">{{ 'نتیجه' if panel_lang == 'fa' else 'Outcome' }}</label><select id="sms-audit-outcome" class="form-select"><option value="">{{ 'همه نتایج' if panel_lang == 'fa' else 'All outcomes' }}</option><option value="confirmed">{{ 'تأییدشده' if panel_lang == 'fa' else 'Confirmed' }}</option><option value="inflight">{{ 'در جریان' if panel_lang == 'fa' else 'In flight' }}</option><option value="submitted">{{ 'ثبت‌شده در درگاه' if panel_lang == 'fa' else 'Submitted' }}</option><option value="deferred">{{ 'موکول‌شده' if panel_lang == 'fa' else 'Deferred' }}</option><option value="suppressed">{{ 'ارسال‌نشده' if panel_lang == 'fa' else 'Suppressed' }}</option><option value="failed">{{ 'ناموفق' if panel_lang == 'fa' else 'Failed' }}</option></select></div>
+                                <div class="form-group"><label for="sms-audit-reason">{{ 'دلیل' if panel_lang == 'fa' else 'Reason code' }}</label><input id="sms-audit-reason" type="search" placeholder="{{ 'کد دلیل' if panel_lang == 'fa' else 'Reason code' }}"></div>
+                                <div class="form-group"><label for="sms-audit-server">{{ 'شناسه سرور' if panel_lang == 'fa' else 'Server ID' }}</label><input id="sms-audit-server" type="number" min="1" placeholder="ID"></div>
+                                <div class="form-group"><label for="sms-audit-range">{{ 'بازه زمانی' if panel_lang == 'fa' else 'Date range' }}</label><select id="sms-audit-range" class="form-select"><option value="all">{{ 'همه زمان‌ها' if panel_lang == 'fa' else 'All time' }}</option><option value="today">{{ 'امروز' if panel_lang == 'fa' else 'Today' }}</option><option value="yesterday">{{ 'دیروز' if panel_lang == 'fa' else 'Yesterday' }}</option><option value="7d">{{ '۷ روز اخیر' if panel_lang == 'fa' else 'Last 7 days' }}</option><option value="30d">{{ '۳۰ روز اخیر' if panel_lang == 'fa' else 'Last 30 days' }}</option></select></div>
+                            </div>
+                            <div id="sms-gmweb-capacity" class="sms-audit-capacity text-secondary" aria-live="polite"></div>
+                            <div id="sms-logs-body" class="sms-audit-rows" aria-live="polite"></div>
+                            <div id="sms-logs-pager" class="sms-audit-pager hidden">
+                                <small id="sms-logs-range" class="text-secondary"></small>
+                                <div class="sms-audit-pager-actions"><button type="button" class="btn btn-secondary" id="sms-logs-prev" onclick="smsLogsGo(-1)">{{ 'قبلی' if panel_lang == 'fa' else 'Previous' }}</button><small id="sms-logs-pageinfo" class="text-secondary"></small><button type="button" class="btn btn-secondary" id="sms-logs-next" onclick="smsLogsGo(1)">{{ 'بعدی' if panel_lang == 'fa' else 'Next' }}</button></div>
+                            </div>
+                        </section>
+                    </section>
                 </div>
             </div>
         </div>
@@ -6150,8 +6159,8 @@
     function _renderSmsLogPager() {
         const pager = document.getElementById('sms-logs-pager');
         if (!pager) return;
-        if (smsLogTotal <= SMS_LOG_PAGE_SIZE) { pager.style.display = 'none'; return; }
-        pager.style.display = 'flex';
+        if (smsLogTotal <= SMS_LOG_PAGE_SIZE) { pager.classList.add('hidden'); return; }
+        pager.classList.remove('hidden');
         const pages = Math.max(1, Math.ceil(smsLogTotal / SMS_LOG_PAGE_SIZE));
         const from = smsLogPage * SMS_LOG_PAGE_SIZE + 1;
         const to = Math.min(smsLogTotal, (smsLogPage + 1) * SMS_LOG_PAGE_SIZE);
@@ -6160,7 +6169,7 @@
         const prevBtn = document.getElementById('sms-logs-prev');
         const nextBtn = document.getElementById('sms-logs-next');
         if (rangeEl) rangeEl.textContent = `${from}–${to} of ${smsLogTotal}`;
-        if (infoEl) infoEl.textContent = `Page ${smsLogPage + 1} / ${pages}`;
+        if (infoEl) infoEl.textContent = SMS_AUDIT_LANG === 'fa' ? `صفحه ${smsLogPage + 1} از ${pages}` : `Page ${smsLogPage + 1} / ${pages}`;
         if (prevBtn) prevBtn.disabled = smsLogPage <= 0;
         if (nextBtn) nextBtn.disabled = smsLogPage >= pages - 1;
     }
@@ -6203,22 +6212,6 @@
                 }
             })
             .catch(() => { /* keep UI calm on transient errors */ });
-    }
-
-    async function previewSmsScan() {
-        const states = Array.from(document.querySelectorAll('.sms-run-state:checked')).map(el => el.value);
-        const button = document.getElementById('sms-scan-preview-btn');
-        if (button) button.disabled = true;
-        try {
-            const response = await fetch('/api/sms/scan/preview', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({states}) });
-            const data = await response.json();
-            const panel = document.getElementById('sms-scan-preview');
-            if (panel) {
-                panel.classList.remove('hidden');
-                panel.textContent = data.success ? `Preview: ${data.scanned_count} scanned, ${data.matched_count} matched, ${data.eligible_count} eligible now, ${data.deferred_count} deferred, ${data.suppressed_count} suppressed.` : (data.error || 'Preview failed');
-            }
-        } catch (_) { showToast('Could not build SMS preview.', 'error'); }
-        finally { if (button) button.disabled = false; }
     }
 
     async function runSmsScanNow() {
@@ -6322,107 +6315,208 @@
         }
     }
 
- async function loadSmsIntelligence() {
-     const host = document.getElementById('sms-logs-body');
-     if (!host) return;
-     const startButton = document.getElementById('sms-scan-run-btn');
-     if (startButton && !document.getElementById('sms-scan-preview-btn')) {
-         const previewButton = document.createElement('button');
-         previewButton.type = 'button';
-         previewButton.id = 'sms-scan-preview-btn';
-         previewButton.className = 'btn btn-secondary';
-         previewButton.textContent = 'Preview audience';
-         previewButton.addEventListener('click', previewSmsScan);
-         startButton.parentNode.insertBefore(previewButton, startButton);
-     }
-     if (!document.getElementById('sms-scan-preview')) {
-         const preview = document.createElement('div');
-         preview.id = 'sms-scan-preview';
-         preview.className = 'hidden';
-         preview.setAttribute('aria-live', 'polite');
-         host.closest('.panel-card')?.insertBefore(preview, host.closest('.panel-card').firstChild);
-     }
-     let strip = document.getElementById('sms-intelligence-strip');
-     if (!strip) {
-         strip = document.createElement('div');
-         strip.id = 'sms-intelligence-strip';
-         strip.className = 'stat-grid';
-         host.closest('.panel-card')?.insertBefore(strip, host.closest('.panel-card').firstChild);
-     }
-     try {
-         const [healthResponse, reportResponse] = await Promise.all([
-             fetch('/api/sms/transport-health', {cache: 'no-store'}),
-             fetch('/api/sms/reports?group_by=state', {cache: 'no-store'})
-         ]);
-         const health = await healthResponse.json();
-         const report = await reportResponse.json();
-         const totals = (report && report.totals) || {};
-         const device = health && health.health && health.health.device;
-         const transport = health && health.health && health.health.transport;
-         const healthText = health && health.success ? `GMweb ${transport?.state || 'reachable'} · Android ${device?.state || 'unknown'}` : 'GMweb health unavailable';
-         strip.innerHTML = `<div class="stat-card"><div class="stat-label">SMS DELIVERY HEALTH</div><div class="stat-value">${escapeHtml(healthText)}</div></div>` +
-             ['submitted','confirmed','inflight','deferred','suppressed','failed_retryable'].map(key => `<div class="stat-card"><div class="stat-label">${escapeHtml(key.replace('_',' ').toUpperCase())}</div><div class="stat-value">${Number(totals[key] || 0)}</div></div>`).join('');
-     } catch (_) { /* log view remains usable if optional intelligence endpoints fail */ }
- }
+    const SMS_AUDIT_LANG = {{ panel_lang|tojson }};
+    const smsAuditLabel = (fa, en) => SMS_AUDIT_LANG === 'fa' ? fa : en;
+    let smsAuditMode = 'sends';
+    let smsAuditRequest = 0;
 
- async function loadSmsLogs() {
+    function smsAuditValue(value) { return value === null || value === undefined || value === '' ? '—' : String(value); }
+    function smsAuditState(state) {
+        const fa = {low_volume: 'حجم کم', ended: 'حجم تمام‌شده', expired: 'منقضی', near_expiry: 'نزدیک انقضا', renew: 'تمدید', created: 'ایجاد'};
+        return SMS_AUDIT_LANG === 'fa' ? (fa[state] || state || '—') : (SMS_STATE_LABELS[state] || state || '—');
+    }
+    function smsAuditDisposition(row) {
+        const value = row.disposition || row.status || 'unknown';
+        const names = {confirmed: ['تأییدشده', 'Confirmed'], submitted: ['ثبت‌شده در درگاه', 'Submitted'], sent: ['پذیرفته‌شده', 'Accepted'], completed: ['تکمیل‌شده', 'Completed'], inflight: ['در جریان', 'In flight'], queued: ['در صف', 'Queued'], deferred: ['موکول‌شده', 'Deferred'], suppressed: ['ارسال‌نشده', 'Suppressed'], skipped: ['ارسال‌نشده', 'Skipped'], failed: ['ناموفق', 'Failed'], failed_retryable: ['خطا، قابل تکرار', 'Retryable failure'], failed_terminal: ['خطای نهایی', 'Final failure'], cancelled: ['لغوشده', 'Cancelled'], superseded: ['جایگزین‌شده', 'Superseded'], eligible: ['واجد شرایط', 'Eligible']};
+        return names[value] ? (SMS_AUDIT_LANG === 'fa' ? names[value][0] : names[value][1]) : value;
+    }
+    function smsAuditDeviceState(state) {
+        const names = {connected: ['متصل', 'Connected'], stale: ['ارتباط قدیمی', 'Stale'], unconfigured: ['پیکربندی‌نشده', 'Unconfigured'], push_unreachable: ['غیرقابل دسترس', 'Unreachable'], not_paired: ['جفت‌نشده', 'Not paired'], unknown: ['نامشخص', 'Unknown']};
+        return names[state] ? (SMS_AUDIT_LANG === 'fa' ? names[state][0] : names[state][1]) : (state || smsAuditLabel('نامشخص', 'Unknown'));
+    }
+    function smsAuditTone(value) {
+        if (['confirmed', 'completed'].includes(value)) return 'success';
+        if (['failed', 'failed_terminal', 'cancelled'].includes(value)) return 'danger';
+        if (['deferred', 'suppressed', 'skipped', 'failed_retryable', 'manual_review'].includes(value)) return 'warning';
+        return 'primary';
+    }
+    function smsAuditPair(parent, label, value) {
+        if (value === null || value === undefined || value === '') return;
+        const cell = document.createElement('div'); cell.className = 'sms-audit-fact';
+        const key = document.createElement('span'); key.textContent = label;
+        const val = document.createElement('strong'); val.textContent = smsAuditValue(value);
+        cell.append(key, val); parent.append(cell);
+    }
+    function smsAuditCard(parent, label, value, tone, outcome) {
+        const card = document.createElement(outcome !== undefined ? 'button' : 'div'); card.className = 'stat-card sms-audit-kpi';
+        if (outcome !== undefined) {
+            card.type = 'button';
+            card.addEventListener('click', () => {
+                document.getElementById('sms-audit-outcome').value = outcome;
+                setSmsAuditMode('decisions');
+            });
+        }
+        const key = document.createElement('span'); key.className = 'sms-audit-kpi-label'; key.textContent = label;
+        const number = document.createElement('strong'); number.className = 'sms-audit-kpi-value' + (tone ? ` sms-tone-${tone}` : ''); number.textContent = smsAuditValue(value);
+        card.append(key, number); parent.append(card);
+    }
+    function smsAuditTime(value) {
+        if (!value) return '—';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(SMS_AUDIT_LANG === 'fa' ? 'fa-IR' : 'en-GB', {dateStyle: 'short', timeStyle: 'medium'});
+    }
+    function smsAuditRange() {
+        const value = document.getElementById('sms-audit-range').value;
+        if (value === 'all') return {};
+        const start = new Date(); start.setHours(0, 0, 0, 0);
+        const end = new Date(start); end.setDate(end.getDate() + 1);
+        if (value === 'yesterday') { end.setTime(start.getTime()); start.setDate(start.getDate() - 1); }
+        if (value === '7d') start.setDate(start.getDate() - 6);
+        if (value === '30d') start.setDate(start.getDate() - 29);
+        return {from: start.toISOString(), to: end.toISOString()};
+    }
+    function setSmsAuditMode(mode) {
+        smsAuditMode = mode;
+        smsLogPage = 0;
+        document.getElementById('sms-tab-decisions').classList.toggle('active', mode === 'decisions');
+        document.getElementById('sms-tab-sends').classList.toggle('active', mode === 'sends');
+        loadSmsLogs();
+    }
+    function smsAuditRow(row) {
+        const decision = smsAuditMode === 'decisions';
+        const details = document.createElement('details'); details.className = 'sms-audit-row';
+        details.dataset.tone = smsAuditTone(row.disposition || row.status);
+        const summary = document.createElement('summary'); summary.className = 'sms-audit-row-summary';
+        const arrow = document.createElement('span'); arrow.className = 'sms-audit-chevron'; arrow.textContent = '›';
+        const time = document.createElement('time'); time.textContent = smsAuditTime(row.decision_at || row.created_at);
+        const account = document.createElement('span'); account.className = 'sms-audit-account'; account.textContent = row.client_email || row.email || '—';
+        const meta = document.createElement('span'); meta.className = 'sms-audit-row-meta'; meta.textContent = [row.server_name, smsAuditState(row.state)].filter(Boolean).join(' · ');
+        const badge = document.createElement('span'); badge.className = 'badge sms-audit-outcome'; badge.textContent = smsAuditDisposition(row);
+        const reason = document.createElement('span'); reason.className = 'sms-audit-reason'; reason.textContent = row.reason_code || row.reason || row.stage || '—';
+        const ref = document.createElement('span'); ref.className = 'sms-audit-ref'; ref.textContent = row.gateway_request_id || row.request_id || (decision ? row.run_id : row.gateway_job_id) || '—';
+        summary.append(arrow, time, account, meta, badge, reason, ref); details.append(summary);
+        const content = document.createElement('div'); content.className = 'sms-audit-detail';
+        const heading = document.createElement('h4'); heading.textContent = smsAuditLabel('جزئیات ثبت‌شده', 'Recorded details'); content.append(heading);
+        const facts = document.createElement('div'); facts.className = 'sms-audit-facts';
+        smsAuditPair(facts, smsAuditLabel('اکانت', 'Account'), row.client_email || row.email);
+        smsAuditPair(facts, smsAuditLabel('سرور', 'Server'), row.server_name);
+        smsAuditPair(facts, smsAuditLabel('وضعیت', 'State'), smsAuditState(row.state));
+        smsAuditPair(facts, smsAuditLabel('گیرنده', 'Recipient'), row.recipient_masked || row.recipient);
+        smsAuditPair(facts, smsAuditLabel('دلیل', 'Reason'), row.reason_code || row.reason);
+        smsAuditPair(facts, smsAuditLabel('اجرای اسکن', 'Scan run'), row.run_id || row.job_id);
+        smsAuditPair(facts, smsAuditLabel('شناسه سرویس', 'Service key'), row.service_key);
+        smsAuditPair(facts, smsAuditLabel('شناسه رویداد', 'Event ID'), row.notification_event_id || row.lifecycle_event_id);
+        smsAuditPair(facts, smsAuditLabel('درخواست درگاه', 'Gateway request'), row.gateway_request_id || row.request_id);
+        smsAuditPair(facts, smsAuditLabel('شناسه کار درگاه', 'Gateway job'), row.gateway_job_id);
+        smsAuditPair(facts, smsAuditLabel('مرحله درگاه', 'Gateway stage'), row.stage || row.gateway_state);
+        smsAuditPair(facts, smsAuditLabel('تأیید', 'Verification'), row.verification_status);
+        smsAuditPair(facts, smsAuditLabel('اولویت', 'Priority'), row.priority);
+        smsAuditPair(facts, smsAuditLabel('جایگاه صف', 'Queue position'), row.queue_position);
+        smsAuditPair(facts, smsAuditLabel('بخش‌های پیامک', 'SMS segments'), row.segment_count);
+        smsAuditPair(facts, smsAuditLabel('نسل سرویس', 'Lifecycle generation'), row.lifecycle_generation);
+        smsAuditPair(facts, smsAuditLabel('تلاش بعدی', 'Next attempt'), row.next_attempt_at && smsAuditTime(row.next_attempt_at));
+        content.append(facts);
+        const timeline = document.createElement('ol'); timeline.className = 'sms-audit-timeline';
+        const addStep = (at, label) => { if (!at) return; const step = document.createElement('li'); step.textContent = `${smsAuditTime(at)} · ${label}`; timeline.append(step); };
+        if (decision) {
+            addStep(row.candidate_observed_at, smsAuditLabel('وضعیت مشاهده شد', 'State observed'));
+            addStep(row.decision_at, smsAuditDisposition(row));
+        } else {
+            addStep(row.candidate_observed_at, smsAuditLabel('وضعیت مشاهده شد', 'State observed'));
+            addStep(row.created_at, row.request_id ? smsAuditLabel('درخواست در درگاه ثبت شد', 'Gateway request recorded') : smsAuditDisposition(row));
+            addStep(row.gateway_sent_at, smsAuditLabel('درگاه زمان ارسال را ثبت کرد', 'Gateway recorded send time'));
+            addStep(row.invalidated_at, smsAuditLabel('اعلان باطل شد', 'Notification invalidated'));
+        }
+        if (timeline.childElementCount) content.append(timeline);
+        if (!row.gateway_request_id && !row.request_id) { const note = document.createElement('p'); note.className = 'field-note'; note.textContent = smsAuditLabel('درخواستی برای درگاه ثبت نشده است.', 'No gateway request is recorded.'); content.append(note); }
+        details.append(content); return details;
+    }
+
+    async function loadSmsIntelligence() {
+        const healthStrip = document.getElementById('sms-health-strip');
+        const kpis = document.getElementById('sms-audit-kpis');
+        const runPicker = document.getElementById('sms-audit-run');
+        if (!healthStrip || !kpis) return;
+        const selectedRun = runPicker.value;
+        const range = smsAuditRange();
+        try {
+            const [healthResult, runsResult, reportResult, detailResult] = await Promise.allSettled([
+                fetch('/api/sms/transport-health', {cache: 'no-store'}).then(r => r.json()),
+                fetch('/api/sms/scan/runs?limit=50', {cache: 'no-store'}).then(r => r.json()),
+                fetch('/api/sms/reports?' + new URLSearchParams({group_by: 'state', start: range.from || '', end: range.to || ''}), {cache: 'no-store'}).then(r => r.json()),
+                selectedRun ? fetch(`/api/sms/scan/runs/${encodeURIComponent(selectedRun)}?limit=1`, {cache: 'no-store'}).then(r => r.json()) : Promise.resolve(null)
+            ]);
+            const health = healthResult.status === 'fulfilled' && healthResult.value.success ? healthResult.value.health : null;
+            const runs = runsResult.status === 'fulfilled' && runsResult.value.success ? runsResult.value.runs : [];
+            const report = reportResult.status === 'fulfilled' && reportResult.value.success ? reportResult.value : null;
+            healthStrip.replaceChildren(); kpis.replaceChildren();
+            const healthItems = [
+                [smsAuditLabel('درگاه GMweb', 'GMweb API'), health ? (health.gmweb?.ready === false ? smsAuditLabel('آماده نیست', 'Not ready') : smsAuditLabel('پاسخ‌گو', 'Reachable')) : smsAuditLabel('نامشخص', 'Unknown')],
+                [smsAuditLabel('مسیر فعال', 'Active transport'), health?.transport?.active || smsAuditLabel('نامشخص', 'Unknown')],
+                [smsAuditLabel('دستگاه', 'Device'), smsAuditDeviceState(health?.device?.state)],
+                [smsAuditLabel('در انتظار / در جریان', 'Pending / in flight'), health?.queue ? `${Number(health.queue.pending || 0)} / ${Number(health.queue.inflight || 0)}` : '—'],
+                [smsAuditLabel('آخرین مشاهده دستگاه', 'Device last seen'), health?.device?.last_seen_at ? smsAuditTime(health.device.last_seen_at) : '—'],
+                [smsAuditLabel('آخرین تأیید', 'Last ACK'), health?.last_ack?.at ? smsAuditTime(health.last_ack.at) : '—']
+            ];
+            for (const [label, value] of healthItems) smsAuditCard(healthStrip, label, value);
+            const previousOptions = Array.from(runPicker.options).slice(1);
+            previousOptions.forEach(option => option.remove());
+            for (const run of runs) { const option = document.createElement('option'); option.value = run.run_id; option.textContent = `${smsAuditTime(run.started_at)} · ${run.run_id.slice(0, 8)}`; runPicker.append(option); }
+            runPicker.value = selectedRun;
+            const currentRun = detailResult.status === 'fulfilled' && detailResult.value?.success ? detailResult.value.run : runs.find(run => run.run_id === selectedRun);
+            const totals = report?.totals || {};
+            const matched = currentRun ? currentRun.matched_count : Object.values(totals).reduce((sum, count) => sum + Number(count || 0), 0);
+            const metrics = currentRun ? [currentRun.eligible_count, currentRun.confirmed_count, currentRun.deferred_count, currentRun.suppressed_count, currentRun.failed_count] : [null, totals.confirmed || 0, totals.deferred || 0, totals.suppressed || 0, Number(totals.failed_retryable || 0) + Number(totals.failed_terminal || 0)];
+            [[smsAuditLabel('ثبت‌شده در بررسی', 'Recorded candidates'), matched, ''], [smsAuditLabel('واجد شرایط', 'Eligible'), metrics[0], ''], [smsAuditLabel('تأییدشده', 'Confirmed'), metrics[1], 'confirmed'], [smsAuditLabel('موکول‌شده', 'Deferred'), metrics[2], 'deferred'], [smsAuditLabel('ارسال‌نشده', 'Suppressed'), metrics[3], 'suppressed'], [smsAuditLabel('ناموفق', 'Failed'), metrics[4], 'failed']].forEach(([label, value, outcome]) => smsAuditCard(kpis, label, value, null, outcome));
+            const gap = document.getElementById('sms-audit-gap');
+            gap.classList.toggle('hidden', !currentRun);
+            if (currentRun) gap.textContent = currentRun.audit_gap_count ? smsAuditLabel(`هشدار: ${currentRun.audit_gap_count} تصمیم ثبت‌نشده در این اجرا.`, `Audit gap: ${currentRun.audit_gap_count} candidates without a recorded decision.`) : smsAuditLabel('پوشش کامل این اجرا هنوز قابل تأیید نیست؛ فقط تصمیم‌های ثبت‌شده نشان داده می‌شوند.', 'Full run coverage is not yet verifiable; showing recorded decisions only.');
+        } catch (_) { healthStrip.textContent = smsAuditLabel('اطلاعات سلامت در دسترس نیست.', 'Health information unavailable.'); }
+    }
+
+    async function loadSmsLogs() {
         const body = document.getElementById('sms-logs-body');
         if (!body) return;
-     loadSmsCapacity();
-     loadSmsIntelligence();
-        try {
-            const offset = smsLogPage * SMS_LOG_PAGE_SIZE;
-            // cache-bust + no-store so the browser never serves a stale log.
-            const res = await fetch(`/api/sms/logs?limit=${SMS_LOG_PAGE_SIZE}&offset=${offset}&_=${Date.now()}`, { cache: 'no-store' });
-            const data = await res.json();
-            const logs = (data && data.logs) || [];
-            smsLogTotal = Number((data && data.total) || logs.length);
-            const stampEl = document.getElementById('sms-logs-updated');
-            if (stampEl) stampEl.textContent = 'Updated ' + EveDate.formatTime(new Date());
-            if (!logs.length) {
-                body.innerHTML = '<tr><td colspan="7" class="text-secondary" style="padding:12px;text-align:center;">No sends logged yet.</td></tr>';
-                _renderSmsLogPager();
-                return;
-            }
-            const statusColor = {
-                sent: '#22c55e', completed: '#22c55e', failed: '#ef4444',
-                cancelled: '#94a3b8',
-                skipped: '#f59e0b', queued: '#38bdf8', waiting: '#38bdf8',
-                processing: '#a78bfa', sending: '#a78bfa', active: '#a78bfa',
-                delayed: '#f59e0b', manual_review: '#f97316', unverified: '#f97316'
-            };
-            body.innerHTML = logs.map(row => {
-                const when = formatJalaliTehran(row.created_at);
-                const sc = statusColor[row.status] || '#94a3b8';
-                const taskParts = [row.status || ''];
-                if (row.gateway_state && row.gateway_state !== row.status) taskParts.push(row.gateway_state);
-                if (row.stage) taskParts.push(row.stage);
-                if (row.verification_status) taskParts.push(row.verification_status);
-                let statusTxt = taskParts.filter(Boolean).join(' · ');
-                if (row.reason) statusTxt += ` (${row.reason})`;
-                const priorityTxt = row.priority
-                    ? `${row.priority}${row.priority_level ? ` L${row.priority_level}` : ''}${row.queue_position ? ` #${row.queue_position}` : ''}`
-                    : '';
-                const taskRef = row.request_id
-                    ? `<div style="font-size:10px;color: var(--text-secondary);margin-top:2px;">${escapeHtml(priorityTxt)}${priorityTxt ? ' · ' : ''}${escapeHtml(row.request_id)}${row.gateway_job_id ? ` / job ${escapeHtml(row.gateway_job_id)}` : ''}${row.sent_to ? ` · verified ${escapeHtml(row.sent_to)}` : ''}</div>`
-                    : '';
-                const segmentText = row.segment_count
-                    ? `${Number(row.segment_count)} × ${escapeHtml(row.message_encoding || 'SMS')}`
-                    : '—';
-                return `<tr style="border-top:1px solid var(--border-color,#2a2a3a);">
-                    <td data-label="Time" style="padding:7px 10px;white-space:nowrap;">${escapeHtml(when)}</td>
-                    <td data-label="User" style="padding:7px 10px;">${escapeHtml(row.email || '')}</td>
-                    <td data-label="Server" style="padding:7px 10px;">${escapeHtml(row.server_name || '')}</td>
-                    <td data-label="State" style="padding:7px 10px;white-space:nowrap;">${SMS_STATE_LABELS[row.state] || escapeHtml(row.state || '')}</td>
-                    <td data-label="To" style="padding:7px 10px;white-space:nowrap;">${escapeHtml(row.recipient || '')}</td>
-                    <td data-label="SMS" style="padding:7px 10px;white-space:nowrap;font-weight:600;">${segmentText}</td>
-                    <td data-label="Status" style="padding:7px 10px;color:${sc};white-space:nowrap;">${escapeHtml(statusTxt)}${taskRef}</td>
-                </tr>`;
-            }).join('');
-            _renderSmsLogPager();
-        } catch (e) {
-            body.innerHTML = '<tr><td colspan="7" class="text-secondary" style="padding:12px;text-align:center;">Could not load log.</td></tr>';
+        const requestId = ++smsAuditRequest;
+        loadSmsCapacity(); loadSmsIntelligence();
+        const params = new URLSearchParams({limit: String(SMS_LOG_PAGE_SIZE), offset: String(smsLogPage * SMS_LOG_PAGE_SIZE), ...smsAuditRange()});
+        const q = document.getElementById('sms-audit-search').value.trim();
+        const run = document.getElementById('sms-audit-run').value;
+        const state = document.getElementById('sms-audit-state').value;
+        const outcome = document.getElementById('sms-audit-outcome').value;
+        const reason = document.getElementById('sms-audit-reason').value.trim();
+        const server = document.getElementById('sms-audit-server').value.trim();
+        if (q) params.set('q', q);
+        if (run) params.set('run_id', run);
+        if (state) params.set('state', state);
+        if (reason) params.set('reason_code', reason);
+        if (server) params.set('server_id', server);
+        if (outcome) {
+            if (smsAuditMode === 'decisions') params.set('disposition', outcome);
+            else params.set('status', outcome === 'submitted' ? 'sent' : outcome === 'suppressed' ? 'skipped' : outcome === 'inflight' ? 'queued' : outcome);
         }
+        const endpoint = smsAuditMode === 'decisions' ? '/api/sms/decisions' : '/api/sms/logs';
+        body.textContent = smsAuditLabel('در حال دریافت رویدادها…', 'Loading activity…');
+        try {
+            const response = await fetch(`${endpoint}?${params}`, {cache: 'no-store'});
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Request failed');
+            if (requestId !== smsAuditRequest) return;
+            const rows = smsAuditMode === 'decisions' ? (data.decisions || []) : (data.logs || []);
+            smsLogTotal = Number(data.total || 0);
+            const openRows = new Set(Array.from(body.querySelectorAll('details[open]')).map(el => el.dataset.rowKey));
+            body.replaceChildren();
+            if (!rows.length) { const empty = document.createElement('div'); empty.className = 'sms-audit-empty'; empty.textContent = smsAuditLabel('برای این فیلترها رویدادی ثبت نشده است.', 'No activity matches these filters.'); body.append(empty); }
+            else rows.forEach(row => {
+                const item = smsAuditRow(row);
+                item.dataset.rowKey = `${smsAuditMode}:${row.id}`;
+                item.open = openRows.has(item.dataset.rowKey);
+                body.append(item);
+            });
+            document.getElementById('sms-stream-scope').textContent = smsAuditMode === 'decisions' ? smsAuditLabel('تصمیم‌های ثبت‌شده برای اکانت‌های منطبق', 'Recorded decisions for matched accounts') : smsAuditLabel('ارسال‌های درگاه، شامل سوابق قدیمی', 'Gateway sends, including legacy history');
+            document.getElementById('sms-logs-updated').textContent = smsAuditLabel('به‌روزرسانی: ', 'Updated ') + smsAuditTime(new Date().toISOString());
+            _renderSmsLogPager();
+        } catch (error) { if (requestId === smsAuditRequest) body.textContent = smsAuditLabel('دریافت گزارش ناموفق بود.', 'Could not load activity.'); }
     }
 
     async function loadSmsCapacity() {
@@ -6435,11 +6529,13 @@
             const ann = data.announcement || {};
             const lanes = data.priorities || {};
             const provider = ((document.getElementById('sms-provider') || {}).value || 'gmweb') === 'custom_http' ? 'Custom HTTP' : 'GMweb';
-            el.textContent = `${provider} queues — critical ${Number(lanes.critical || 0)}, expired ${Number(lanes.expired || 0)}, expiring ${Number(lanes.expiring || 0)}, announcement ${Number(lanes.announcement || 0)} · announcement capacity ${Number(ann.available || 0)}/${Number(ann.limit || 0)} free`;
-            el.style.color = Number(ann.available || 0) > 0 ? 'var(--text-secondary)' : '#f59e0b';
+            el.textContent = SMS_AUDIT_LANG === 'fa'
+                ? `صف‌های ${provider}: فوری ${Number(lanes.critical || 0)}، منقضی ${Number(lanes.expired || 0)}، نزدیک انقضا ${Number(lanes.expiring || 0)}، اطلاعیه ${Number(lanes.announcement || 0)} · ظرفیت آزاد اطلاعیه ${Number(ann.available || 0)} از ${Number(ann.limit || 0)}`
+                : `${provider} queues — critical ${Number(lanes.critical || 0)}, expired ${Number(lanes.expired || 0)}, expiring ${Number(lanes.expiring || 0)}, announcement ${Number(lanes.announcement || 0)} · announcement capacity ${Number(ann.available || 0)}/${Number(ann.limit || 0)} free`;
+            el.classList.toggle('sms-tone-warning', Number(ann.available || 0) <= 0);
         } catch (error) {
-            el.textContent = `SMS gateway capacity unavailable: ${error.message}`;
-            el.style.color = '#f59e0b';
+            el.textContent = smsAuditLabel('ظرفیت درگاه پیامک در دسترس نیست.', 'SMS gateway capacity unavailable.');
+            el.classList.add('sms-tone-warning');
         }
     }
 
@@ -10474,9 +10570,32 @@
     // Keep the log live while the SMS tab is open: refresh every 5s, newest page
     // only (don't yank the user off a page they paged back to), paused when the
     // tab/window is hidden. No-store fetch already prevents stale browser cache.
+    let smsAuditSearchTimer = null;
+    const smsAuditSearchInput = document.getElementById('sms-audit-search');
+    if (smsAuditSearchInput) smsAuditSearchInput.addEventListener('input', () => {
+        clearTimeout(smsAuditSearchTimer);
+        smsAuditSearchTimer = setTimeout(() => { smsLogPage = 0; loadSmsLogs(); }, 300);
+    });
+    for (const id of ['sms-audit-run', 'sms-audit-state', 'sms-audit-outcome', 'sms-audit-range', 'sms-audit-reason', 'sms-audit-server']) {
+        const control = document.getElementById(id);
+        if (control) control.addEventListener(control.tagName === 'INPUT' ? 'input' : 'change', () => {
+            clearTimeout(smsAuditSearchTimer);
+            smsAuditSearchTimer = setTimeout(() => { smsLogPage = 0; loadSmsLogs(); }, control.tagName === 'INPUT' ? 300 : 0);
+        });
+    }
+    setSmsAuditMode('sends');
+    let smsAuditAutoEnabled = true;
+    function toggleSmsAuditAuto() {
+        smsAuditAutoEnabled = !smsAuditAutoEnabled;
+        const button = document.getElementById('sms-audit-auto');
+        button.setAttribute('aria-pressed', String(smsAuditAutoEnabled));
+        button.textContent = smsAuditAutoEnabled ? smsAuditLabel('خودکار: روشن', 'Auto on') : smsAuditLabel('خودکار: خاموش', 'Auto off');
+        if (smsAuditAutoEnabled) startSmsLogAuto(); else stopSmsLogAuto();
+    }
     let _smsLogAutoTimer = null;
     function startSmsLogAuto() {
         stopSmsLogAuto();
+        if (!smsAuditAutoEnabled) return;
         _smsLogAutoTimer = setInterval(() => {
             if (document.hidden) return;
             if (typeof smsLogPage === 'number' && smsLogPage !== 0) return;

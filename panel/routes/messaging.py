@@ -364,28 +364,9 @@ def sms_scan_run():
 @bp.route('/api/sms/scan/preview', methods=['POST'])
 @permission_required('secrets.manage')
 def sms_scan_preview():
-    """Read-only audience preview. It deliberately performs no gateway calls."""
-    from app import _normalize_sms_scan_states, SMS_SCAN_STATES, _run_sms_depletion_scan, app
-    payload = request.get_json(silent=True) or {}
-    states = _normalize_sms_scan_states(payload.get('states'))
-    if not states:
-        states = [s for s in SMS_SCAN_STATES if payload.get('trigger_' + s)]
-    if not states:
-        return jsonify({'success': False, 'error': 'Select at least one state.'}), 400
-    try:
-        result = _run_sms_depletion_scan(job_id='preview-' + uuid.uuid4().hex,
-                                         triggered_by='preview', states=states, preview=True)
-        return jsonify({'success': True, 'snapshot_at': datetime.utcnow().isoformat() + 'Z',
-                        'states': states, 'scanned_count': result.get('scanned', 0),
-                        'matched_count': result.get('matched', 0),
-                        'eligible_count': result.get('eligible', 0),
-                        'deferred_count': result.get('deferred', 0),
-                        'suppressed_count': result.get('suppressed', 0),
-                        'candidates': result.get('candidates', [])})
-    except Exception as exc:
-        app.logger.exception('[sms-scan/preview] failed')
-        return jsonify({'success': False, 'error': 'Could not build SMS preview.',
-                        'reason': type(exc).__name__}), 500
+    """Fail closed until preview can evaluate candidates without reconciliation."""
+    return jsonify({'success': False,
+                    'error': 'SMS audience preview is temporarily unavailable.'}), 503
 
 
 @bp.route('/api/sms/transport-health', methods=['GET'])
@@ -405,7 +386,14 @@ def sms_transport_health():
         if response.status_code >= 400:
             return jsonify({'success': False, 'error': f'GMweb transport health returned HTTP {response.status_code}.'}), 502
         payload = response.json() if response.content else {}
-        safe = {key: payload.get(key) for key in ('gmweb', 'transport', 'device', 'queue', 'last_ack') if key in payload}
+        fields = {'gmweb': ('ready',),
+                  'transport': ('active', 'mode', 'state', 'reason'),
+                  'device': ('state', 'reason', 'last_seen_at', 'age_ms'),
+                  'queue': ('pending', 'inflight'),
+                  'last_ack': ('at', 'outcome')}
+        safe = {section: {key: value.get(key) for key in keys if key in value}
+                for section, keys in fields.items()
+                if isinstance(value := payload.get(section), dict)}
         return jsonify({'success': True, 'health': safe})
     except Exception as exc:
         return jsonify({'success': False, 'error': 'GMweb transport health unavailable.', 'reason': type(exc).__name__}), 502
@@ -503,6 +491,56 @@ def sms_scan_runs():
     limit = min(max(int(request.args.get('limit', 50)), 1), 200)
     rows = SmsScanRun.query.order_by(SmsScanRun.started_at.desc()).limit(limit).all()
     return jsonify({'success': True, 'runs': [r.to_dict() for r in rows]})
+
+
+@bp.route('/api/sms/decisions', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_decisions():
+    """Search the durable candidate audit across runs, including non-sends."""
+    try:
+        limit = min(max(int(request.args.get('limit', 20)), 1), 100)
+        offset = max(int(request.args.get('offset', 0)), 0)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Invalid pagination.'}), 400
+    query = SmsScanDecision.query
+    for field in ('run_id', 'state', 'reason_code'):
+        value = (request.args.get(field) or '').strip()
+        if value:
+            query = query.filter(getattr(SmsScanDecision, field) == value)
+    server_id = (request.args.get('server_id') or '').strip()
+    if server_id:
+        if not server_id.isdigit():
+            return jsonify({'success': False, 'error': 'Invalid server_id.'}), 400
+        query = query.filter(SmsScanDecision.server_id == int(server_id))
+    disposition = (request.args.get('disposition') or '').strip()
+    if disposition == 'failed':
+        query = query.filter(SmsScanDecision.disposition.in_(('failed_retryable', 'failed_terminal')))
+    elif disposition:
+        query = query.filter(SmsScanDecision.disposition == disposition)
+    for argument, operator in (('from', lambda value: SmsScanDecision.created_at >= value),
+                               ('to', lambda value: SmsScanDecision.created_at < value)):
+        value = (request.args.get(argument) or '').strip()
+        if value:
+            try:
+                parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            except ValueError:
+                return jsonify({'success': False, 'error': f'Invalid {argument} timestamp.'}), 400
+            query = query.filter(operator(parsed.replace(tzinfo=None)))
+    search = (request.args.get('q') or '').strip().lower()
+    if search:
+        term = f'%{search}%'
+        query = query.filter(or_(func.lower(SmsScanDecision.client_email).like(term),
+                                 func.lower(SmsScanDecision.server_name).like(term),
+                                 func.lower(SmsScanDecision.service_key).like(term),
+                                 func.lower(SmsScanDecision.gateway_request_id).like(term),
+                                 func.lower(SmsScanDecision.gateway_job_id).like(term),
+                                 func.lower(SmsScanDecision.run_id).like(term)))
+    total = query.count()
+    rows = query.order_by(SmsScanDecision.created_at.desc(), SmsScanDecision.id.desc()).offset(offset).limit(limit).all()
+    response = jsonify({'success': True, 'decisions': [row.to_dict() for row in rows],
+                        'total': total, 'offset': offset, 'limit': limit})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/api/sms/scan/status', methods=['GET'])
@@ -650,13 +688,24 @@ def sms_logs():
     server_filter = (request.args.get('server_id') or '').strip()
     search = (request.args.get('q') or '').strip()
     q = SmsSendLog.query
-    if status_filter in ('queued', 'active', 'sent', 'failed', 'skipped',
-                         'cancelled', 'manual_review'):
+    if status_filter == 'confirmed':
+        q = q.filter(SmsSendLog.verification_status == 'confirmed')
+    elif status_filter in ('queued', 'active', 'sent', 'completed', 'failed', 'skipped',
+                           'cancelled', 'manual_review'):
         q = q.filter(SmsSendLog.status == status_filter)
     if state_filter in ('near_expiry', 'low_volume', 'expired', 'ended'):
         q = q.filter(SmsSendLog.state == state_filter)
     if run_filter:
         q = q.filter(SmsSendLog.job_id == run_filter)
+    for argument, operator in (('from', lambda value: SmsSendLog.created_at >= value),
+                               ('to', lambda value: SmsSendLog.created_at < value)):
+        value = (request.args.get(argument) or '').strip()
+        if value:
+            try:
+                parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            except ValueError:
+                return jsonify({'success': False, 'error': f'Invalid {argument} timestamp.'}), 400
+            q = q.filter(operator(parsed.replace(tzinfo=None)))
     if server_filter.isdigit():
         q = q.filter(SmsSendLog.server_id == int(server_filter))
     if reason_filter:
