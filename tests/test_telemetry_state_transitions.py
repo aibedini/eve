@@ -150,6 +150,117 @@ class TelemetryTransitionTests(unittest.TestCase):
         self.assertEqual(ServiceNotificationEvent.query.one().source,
                          'reconciliation_recovery')
 
+    def test_fresh_terminal_transition_without_obligation_is_coverage_gap(self):
+        from panel.routes.messaging import _notification_coverage_gaps
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_ended', remaining_gb=0))
+        self.assertEqual(_notification_coverage_gaps(), 0)
+        ServiceNotificationEvent.query.delete()
+        db.session.commit()
+        self.assertEqual(_notification_coverage_gaps(), 1)
+
+    def test_unconfirmed_legacy_sent_event_is_still_a_coverage_gap(self):
+        from panel.routes.messaging import _notification_coverage_gaps
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_ended', remaining_gb=0))
+        event = ServiceNotificationEvent.query.one()
+        event.status = 'sent'
+        db.session.commit()
+        self.assertEqual(_notification_coverage_gaps(), 1)
+
+    def test_historical_recovery_does_not_reopen_a_gateway_request(self):
+        from panel.services import notification_recovery
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('expired', remaining_gb=0,
+                            expiry_ms=int((datetime.utcnow() - timedelta(days=1)).timestamp() * 1000)))
+        event = ServiceNotificationEvent.query.one()
+        event.status = 'failed_terminal'
+        event.gateway_request_id = 'gateway-123'
+        db.session.commit()
+        item = notification_recovery.preview(window='3d')['candidates'][0]
+        self.assertEqual(item['reason'], 'gateway_request_needs_review')
+        self.assertFalse(item['recoverable'])
+
+    def test_historical_recovery_preview_is_read_only_and_activation_is_idempotent(self):
+        from panel.services import notification_recovery
+        from panel.jobs import messaging
+        now = datetime.utcnow()
+        expiry_ms = int((now - timedelta(days=2)).timestamp() * 1000)
+        self._record(_state('expired', remaining_gb=0, expiry_ms=expiry_ms),
+                     observed_at=now)
+        before = ServiceNotificationEvent.query.count()
+        report = notification_recovery.preview(window='7d', now=now)
+        self.assertEqual(ServiceNotificationEvent.query.count(), before)
+        candidate = next(item for item in report['candidates']
+                         if item['service_key'] == self.key)
+        self.assertTrue(candidate['recoverable'])
+        identity = {key: candidate[key] for key in
+                    ('service_key', 'state', 'generation', 'state_version')}
+        with mock.patch.object(messaging, '_cached_snapshot_clients',
+                               return_value=[{'comment': '09123456789'}]), \
+             mock.patch.object(messaging, '_classify_cached_client_state',
+                               return_value='expired'), \
+             mock.patch.object(messaging, '_sms_depletion_state_still_valid',
+                               return_value=(True, '')), \
+             mock.patch.object(messaging, '_sms_account_opted_out',
+                               return_value=False):
+            self.assertEqual(notification_recovery.activate(
+                identity, window='7d', now=now), 'created')
+            self.assertEqual(notification_recovery.activate(
+                identity, window='7d', now=now), 'active_obligation')
+        self.assertEqual(ServiceNotificationEvent.query.count(), before + 1)
+
+    def test_unknown_age_ended_baseline_requires_explicit_manual_review(self):
+        from panel.services import notification_recovery
+        self._record(_state('volume_ended', remaining_gb=0))
+        ordinary = notification_recovery.preview(window='7d')
+        item = next(row for row in ordinary['candidates']
+                    if row['service_key'] == self.key)
+        self.assertTrue(item['age_unknown'])
+        self.assertFalse(item['recoverable'])
+        manual = notification_recovery.preview(
+            window='custom', allow_unknown_age=True)
+        item = next(row for row in manual['candidates']
+                    if row['service_key'] == self.key)
+        self.assertTrue(item['recoverable'])
+        self.assertEqual(ServiceNotificationEvent.query.count(), 0)
+
+    def test_historical_recovery_does_not_require_a_fresh_observation_timestamp(self):
+        from panel.services import notification_recovery
+        now = datetime.utcnow()
+        self._record(_state('expired', remaining_gb=0,
+                            expiry_ms=int((now - timedelta(days=2)).timestamp() * 1000)),
+                     observed_at=now - timedelta(days=2))
+        report = notification_recovery.preview(window='7d', now=now)
+        self.assertTrue(report['candidates'][0]['recoverable'])
+        self.assertEqual(ServiceNotificationEvent.query.count(), 0)
+
+    def test_recovery_preview_can_page_past_the_first_batch(self):
+        from panel.services import notification_recovery
+        self._record(_state('volume_ended', remaining_gb=0))
+        first = notification_recovery.preview(window='custom',
+                                               allow_unknown_age=True, limit=1)
+        self.assertEqual(first['offset'], 0)
+        self.assertFalse(first['has_more'])
+        later = notification_recovery.preview(window='custom',
+                                               allow_unknown_age=True, limit=1, offset=1)
+        self.assertEqual(later['candidates'], [])
+
+    def test_custom_recovery_range_uses_actual_expiry_date(self):
+        from panel.services import notification_recovery
+        now = datetime.utcnow()
+        expiry = now - timedelta(days=12)
+        self._record(_state('expired', remaining_gb=0,
+                            expiry_ms=int(expiry.timestamp() * 1000)),
+                     observed_at=now)
+        ordinary = notification_recovery.preview(window='7d', now=now)
+        self.assertFalse(ordinary['candidates'][0]['recoverable'])
+        custom = notification_recovery.preview(
+            window='custom', date_from=expiry.date().isoformat(),
+            date_to=expiry.date().isoformat(), now=now)
+        self.assertTrue(custom['candidates'][0]['recoverable'])
+        self.assertEqual(ServiceNotificationEvent.query.count(), 0)
+
     def test_out_of_order_response_is_refused_by_the_ticket(self):
         # A slow read of an EARLIER state must not be applied after a newer one: it
         # would revert the ledger to "active", and the next fresh read would then

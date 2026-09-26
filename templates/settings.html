@@ -1766,9 +1766,22 @@
                         <p class="text-secondary">{{ 'تعهدهای ارسال‌نشده، مستقل از گزارش ارسال‌ها' if panel_lang == 'fa' else 'Outstanding obligations, independent of send history' }}</p>
                     </div>
                 </div>
-                <div id="sms-debt-kpis" class="sms-audit-kpis" aria-live="polite"></div>
-                <div id="sms-debt-rows" class="sms-audit-rows" aria-live="polite"></div>
-            </section>
+                        <div id="sms-debt-kpis" class="sms-audit-kpis" aria-live="polite"></div>
+                        <div id="sms-debt-rows" class="sms-audit-rows" aria-live="polite"></div>
+                        <div class="sms-audit-filters" aria-labelledby="sms-recovery-title">
+                            <div class="form-group"><label id="sms-recovery-title" for="sms-recovery-window">{{ 'بازیابی اعلان‌های جامانده' if panel_lang == 'fa' else 'Recover missed notifications' }}</label><select id="sms-recovery-window" class="form-select"><option value="24h">{{ '۲۴ ساعت اخیر' if panel_lang == 'fa' else 'Last 24 hours' }}</option><option value="3d">{{ '۳ روز اخیر' if panel_lang == 'fa' else 'Last 3 days' }}</option><option value="7d" selected>{{ '۷ روز اخیر' if panel_lang == 'fa' else 'Last 7 days' }}</option><option value="custom">{{ 'بازه دلخواه / بازبینی دستی' if panel_lang == 'fa' else 'Custom range / manual review' }}</option></select></div>
+                            <div class="form-group"><label for="sms-recovery-state">{{ 'وضعیت' if panel_lang == 'fa' else 'State' }}</label><select id="sms-recovery-state" class="form-select"><option value="">{{ 'همه' if panel_lang == 'fa' else 'All' }}</option><option value="volume_ended">{{ 'حجم تمام‌شده' if panel_lang == 'fa' else 'Volume ended' }}</option><option value="expired">{{ 'منقضی' if panel_lang == 'fa' else 'Expired' }}</option></select></div>
+                            <div class="form-group"><label for="sms-recovery-server">{{ 'شناسه سرور' if panel_lang == 'fa' else 'Server ID' }}</label><input id="sms-recovery-server" type="number" min="1" placeholder="ID"></div>
+                            <div class="form-group"><label for="sms-recovery-from">{{ 'انقضا از تاریخ (بازه دلخواه)' if panel_lang == 'fa' else 'Expiry from (custom)' }}</label><input id="sms-recovery-from" type="date"></div>
+                            <div class="form-group"><label for="sms-recovery-to">{{ 'انقضا تا تاریخ (بازه دلخواه)' if panel_lang == 'fa' else 'Expiry to (custom)' }}</label><input id="sms-recovery-to" type="date"></div>
+                            <label class="checkbox-label"><input type="checkbox" id="sms-recovery-unknown"><span class="checkmark"></span><span>{{ 'نمایش سن نامعلوم (فقط بازبینی دستی)' if panel_lang == 'fa' else 'Include unknown age (manual review only)' }}</span></label>
+                            <button type="button" class="btn btn-secondary" onclick="previewSmsRecovery()">{{ 'پیش‌نمایش بدون ارسال' if panel_lang == 'fa' else 'Preview without sending' }}</button>
+                        </div>
+                        <div id="sms-recovery-status" class="field-note" role="status" aria-live="polite"></div>
+                        <div id="sms-recovery-rows" class="sms-audit-rows" aria-live="polite"></div>
+                        <div class="sms-audit-pager"><button type="button" class="btn btn-secondary" id="sms-recovery-prev" onclick="previewSmsRecovery(-1)" disabled>{{ 'قبلی' if panel_lang == 'fa' else 'Previous' }}</button><button type="button" class="btn btn-secondary" id="sms-recovery-next" onclick="previewSmsRecovery(1)" disabled>{{ 'بعدی' if panel_lang == 'fa' else 'Next' }}</button></div>
+                        <div class="sms-audit-pager"><button type="button" class="btn btn-primary" id="sms-recovery-activate" onclick="activateSmsRecovery()" disabled>{{ 'ایجاد تعهد برای موارد انتخاب‌شده' if panel_lang == 'fa' else 'Create obligations for selected' }}</button></div>
+                    </section>
             <div id="sms-audit-gap" class="sms-audit-gap hidden" role="alert"></div>
                         <section class="sms-audit-stream" aria-labelledby="sms-stream-title">
                             <div class="sms-audit-stream-head">
@@ -6530,6 +6543,94 @@
         } catch (_) { healthStrip.textContent = smsAuditLabel('اطلاعات سلامت در دسترس نیست.', 'Health information unavailable.'); }
     }
 
+    let smsRecoveryCandidates = [];
+    let smsRecoveryOffset = 0;
+
+    async function previewSmsRecovery(pageChange = 0) {
+        const status = document.getElementById('sms-recovery-status');
+        const body = document.getElementById('sms-recovery-rows');
+        const activate = document.getElementById('sms-recovery-activate');
+        const windowValue = document.getElementById('sms-recovery-window').value;
+        const unknown = document.getElementById('sms-recovery-unknown').checked;
+        smsRecoveryOffset = pageChange ? Math.max(0, smsRecoveryOffset + pageChange * 200) : 0;
+        smsRecoveryCandidates = [];
+        activate.disabled = true;
+        body.replaceChildren();
+        if (unknown && windowValue !== 'custom') {
+            status.textContent = smsAuditLabel('برای سن نامعلوم، بازبینی دستی را انتخاب کنید.', 'Select manual review for unknown-age accounts.');
+            return;
+        }
+        status.textContent = smsAuditLabel('در حال بررسی؛ هیچ پیامکی ارسال نمی‌شود…', 'Reviewing; no SMS is being sent…');
+        const params = new URLSearchParams({window: windowValue, offset: String(smsRecoveryOffset)});
+        const state = document.getElementById('sms-recovery-state').value;
+        const server = document.getElementById('sms-recovery-server').value;
+        if (state) params.set('state', state);
+        if (server) params.set('server_id', server);
+        if (unknown) params.set('allow_unknown_age', 'true');
+        if (windowValue === 'custom') {
+            const dateFrom = document.getElementById('sms-recovery-from').value;
+            const dateTo = document.getElementById('sms-recovery-to').value;
+            if (dateFrom) params.set('date_from', dateFrom);
+            if (dateTo) params.set('date_to', dateTo);
+        }
+        try {
+            const response = await fetch(`/api/sms/recovery/preview?${params}`, {cache: 'no-store'});
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Preview failed');
+            smsRecoveryCandidates = data.candidates || [];
+            document.getElementById('sms-recovery-prev').disabled = !data.offset;
+            document.getElementById('sms-recovery-next').disabled = !data.has_more;
+            const eligible = smsRecoveryCandidates.filter(row => row.recoverable).length;
+            status.textContent = smsAuditLabel(`اکانت پایان‌یافته: ${data.current_terminal_accounts} · صفحه ${Math.floor(data.offset / 200) + 1} · قابل انتخاب در این صفحه: ${eligible}`, `Terminal accounts: ${data.current_terminal_accounts} · page ${Math.floor(data.offset / 200) + 1} · selectable on this page: ${eligible}`);
+            for (const [index, row] of smsRecoveryCandidates.entries()) {
+                const label = document.createElement('label');
+                label.className = 'checkbox-label sms-audit-row';
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.value = String(index);
+                input.disabled = !row.preview_token;
+                input.addEventListener('change', () => {
+                    activate.disabled = !body.querySelector('input:checked');
+                });
+                const checkmark = document.createElement('span');
+                checkmark.className = 'checkmark';
+                const content = document.createElement('span');
+                content.textContent = `${row.account || row.service_key} · ${row.state} · ${row.reason} · ${row.age_unknown ? smsAuditLabel('سن نامعلوم', 'age unknown') : Math.ceil(row.age_seconds / 3600) + 'h'}`;
+                label.append(input, checkmark, content);
+                body.append(label);
+            }
+        } catch (error) {
+            status.textContent = error.message || smsAuditLabel('پیش‌نمایش ناموفق بود.', 'Preview failed.');
+        }
+    }
+
+    async function activateSmsRecovery() {
+        const body = document.getElementById('sms-recovery-rows');
+        const status = document.getElementById('sms-recovery-status');
+        const activate = document.getElementById('sms-recovery-activate');
+        const tokens = Array.from(body.querySelectorAll('input:checked')).map(input =>
+            smsRecoveryCandidates[Number(input.value)]?.preview_token).filter(Boolean);
+        if (!tokens.length || tokens.length > 20) {
+            status.textContent = smsAuditLabel('در هر مرحله ۱ تا ۲۰ اکانت انتخاب کنید.', 'Select 1 to 20 accounts per batch.');
+            return;
+        }
+        if (!window.confirm(smsAuditLabel(`برای ${tokens.length} اکانت فقط تعهد ارسال ایجاد شود؟ ارسال مستقیم انجام نمی‌شود.`, `Create delivery obligations for ${tokens.length} accounts? This does not send SMS directly.`))) return;
+        activate.disabled = true;
+        try {
+            const response = await fetch('/api/sms/recovery/activate', {
+                method: 'POST', headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+                body: JSON.stringify({preview_tokens: tokens})
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Recovery failed');
+            await previewSmsRecovery();
+            status.textContent = smsAuditLabel(`${data.created} تعهد ایجاد یا فعال شد؛ ارسال از مسیر عادی انجام می‌شود.`, `${data.created} obligations created or reactivated; normal delivery will handle sending.`);
+            loadSmsDebt();
+        } catch (error) {
+            status.textContent = error.message || smsAuditLabel('بازیابی ناموفق بود.', 'Recovery failed.');
+        }
+    }
+
     async function loadSmsDebt() {
         const kpis = document.getElementById('sms-debt-kpis');
         const body = document.getElementById('sms-debt-rows');
@@ -6544,7 +6645,8 @@
                 [smsAuditLabel('تعهدهای باز', 'Outstanding'), data.active],
                 [smsAuditLabel('وضعیت‌های پایان‌یافته', 'Terminal-state debt'), data.terminal],
                 [smsAuditLabel('در انتظار تلاش دوباره', 'Retrying'), data.retrying],
-                [smsAuditLabel('نیازمند بررسی', 'Needs attention'), data.needs_attention]
+                [smsAuditLabel('نیازمند بررسی', 'Needs attention'), data.needs_attention],
+                [smsAuditLabel('شکاف گذارهای اخیر', 'Recent transition gaps'), data.coverage_gap_count]
             ].forEach(([label, value]) => smsAuditCard(kpis, label, value, null, ''));
             for (const row of data.obligations || []) {
                 const detail = document.createElement('details');

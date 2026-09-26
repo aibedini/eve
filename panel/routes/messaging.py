@@ -1,20 +1,22 @@
 """SMS and WhatsApp gateway API routes (extracted from app.py)."""
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import threading
 import time
 import uuid
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, current_app, jsonify, request, session
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from panel.core.phone import _extract_iran_mobile_from_text
 from panel.core.redis_client import get_redis
 from panel.extensions import db
-from panel.models import (Admin, OPEN_NOTIFICATION_STATUSES, PendingSms, ServiceNotificationEvent,
-                          SmsScanDecision, SmsScanRun, SmsSendLog, SystemConfig)
-from sqlalchemy import or_, func
+from panel.models import (Admin, OPEN_NOTIFICATION_STATUSES, PendingSms, ServiceLifecycleState,
+                          ServiceNotificationEvent, ServiceObservedState, SmsScanDecision,
+                          SmsScanRun, SmsSendLog, SystemConfig)
+from sqlalchemy import and_, case, or_, func
 from panel.routes.common import permission_required
 from panel.security import outbound_tls_verify
 from panel.services import gmweb_contract
@@ -413,6 +415,125 @@ def sms_scan_preview():
     return response
 
 
+def _recovery_signer():
+    return URLSafeTimedSerializer(current_app.secret_key, salt='sms-recovery-preview-v1')
+
+
+@bp.route('/api/sms/recovery/preview', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_recovery_preview():
+    """Bounded, read-only review; tokens bind each row to a 15-minute preview."""
+    from panel.services import notification_recovery
+    window = (request.args.get('window') or '7d').strip()
+    state = (request.args.get('state') or '').strip() or None
+    server_text = (request.args.get('server_id') or '').strip()
+    if server_text and not server_text.isdigit():
+        return jsonify({'success': False, 'error': 'Invalid server_id.'}), 400
+    allow_unknown = request.args.get('allow_unknown_age') == 'true'
+    date_from = (request.args.get('date_from') or '').strip() or None
+    date_to = (request.args.get('date_to') or '').strip() or None
+    try:
+        offset = max(0, int(request.args.get('offset') or 0))
+        result = notification_recovery.preview(
+            window=window, state=state,
+            server_id=int(server_text) if server_text else None,
+            allow_unknown_age=allow_unknown, date_from=date_from,
+            date_to=date_to, limit=200, offset=offset)
+    except (TypeError, ValueError) as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    signer = _recovery_signer()
+    for item in result['candidates']:
+        if item['recoverable']:
+            item['preview_token'] = signer.dumps({
+                'service_key': item['service_key'], 'state': item['state'],
+                'generation': item['generation'], 'state_version': item['state_version'],
+                'window': window, 'allow_unknown_age': allow_unknown,
+                'date_from': date_from, 'date_to': date_to})
+    response = jsonify({'success': True, **result})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/api/sms/recovery/activate', methods=['POST'])
+@permission_required('secrets.manage')
+def sms_recovery_activate():
+    """Create reviewed obligations only; the normal worker owns actual delivery."""
+    from panel.services import notification_recovery
+    payload = request.get_json(silent=True) or {}
+    tokens = payload.get('preview_tokens') if isinstance(payload, dict) else None
+    if not isinstance(tokens, list) or not 1 <= len(tokens) <= 20:
+        return jsonify({'success': False, 'error': 'Select 1 to 20 previewed accounts.'}), 400
+    signer = _recovery_signer()
+    identities = []
+    try:
+        for token in tokens:
+            if not isinstance(token, str):
+                raise BadSignature('Invalid preview token')
+            identity = signer.loads(token, max_age=900)
+            if not isinstance(identity, dict):
+                raise BadSignature('Invalid preview payload')
+            identities.append(identity)
+    except (BadSignature, SignatureExpired):
+        return jsonify({'success': False, 'error': 'Preview expired; review accounts again.'}), 409
+    results = []
+    seen = set()
+    for identity in identities:
+        service_key = identity.get('service_key')
+        if not isinstance(service_key, str) or service_key in seen:
+            continue
+        seen.add(service_key)
+        try:
+            outcome = notification_recovery.activate(
+                identity, window=identity['window'],
+                allow_unknown_age=bool(identity.get('allow_unknown_age')))
+        except (KeyError, TypeError, ValueError):
+            outcome = 'invalid_preview'
+        results.append({'service_key': service_key, 'outcome': outcome})
+    response = jsonify({'success': True, 'created': sum(
+        row['outcome'] in ('created', 'reactivated') for row in results),
+        'results': results, 'direct_sends': 0})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def _notification_coverage_gaps(*, now=None):
+    """Count fresh terminal transitions without coverage in their generation.
+
+    Historical silent baselines (state_version=0) are deliberately outside this
+    automatic repair SLO; they require the operator recovery workflow.
+    """
+    moment = now or datetime.utcnow()
+    from panel.services.notification_recovery import SUPPRESSION_REASONS
+    generation = func.coalesce(ServiceLifecycleState.generation, 0)
+    covered = (db.session.query(ServiceNotificationEvent.id)
+               .filter(ServiceNotificationEvent.service_key == ServiceObservedState.service_key,
+                       ServiceNotificationEvent.state == ServiceObservedState.last_state,
+                       ServiceNotificationEvent.state_version == ServiceObservedState.state_version,
+                       ServiceNotificationEvent.lifecycle_generation == generation)
+               .filter(or_(ServiceNotificationEvent.status.in_(
+                   OPEN_NOTIFICATION_STATUSES),
+                   and_(ServiceNotificationEvent.status == 'skipped',
+                        ServiceNotificationEvent.last_error.in_(
+                            SUPPRESSION_REASONS))))
+               .exists())
+    confirmed = (db.session.query(SmsSendLog.id)
+                 .filter(SmsSendLog.service_key == ServiceObservedState.service_key,
+                         SmsSendLog.lifecycle_generation == generation,
+                         SmsSendLog.state == case(
+                             (ServiceObservedState.last_state == 'volume_ended', 'ended'),
+                             else_=ServiceObservedState.last_state),
+                         SmsSendLog.successful.is_(True),
+                         SmsSendLog.verification_status == 'confirmed')
+                 .exists())
+    return int(db.session.query(func.count(ServiceObservedState.id))
+               .outerjoin(ServiceLifecycleState,
+                          ServiceLifecycleState.service_key == ServiceObservedState.service_key)
+               .filter(ServiceObservedState.last_state.in_(('volume_ended', 'expired')),
+                       ServiceObservedState.state_version > 0,
+                       ServiceObservedState.last_observed_at >= moment - timedelta(hours=1))
+               .filter(~covered, ~confirmed).scalar() or 0)
+
+
 @bp.route('/api/sms/notification-debt', methods=['GET'])
 @permission_required('secrets.manage')
 def sms_notification_debt():
@@ -444,6 +565,8 @@ def sms_notification_debt():
             ServiceNotificationEvent.attempt_count >= 7).count(),
         'oldest_age_seconds': (max(0, int((datetime.utcnow() - oldest).total_seconds()))
                                if oldest else None),
+        'coverage_gap_count': _notification_coverage_gaps(),
+        'coverage_scope': 'fresh_terminal_transitions_last_hour',
         'obligations': data,
     })
     response.headers['Cache-Control'] = 'no-store'
