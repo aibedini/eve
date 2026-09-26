@@ -3891,6 +3891,45 @@ def _reconcile_depletion_request(event, cfg):
 
 
 def _deliver_depletion_event(event, *, cfg, templates, cooldown_hours, job_id, shadow):
+    """Deliver ONE outbox event, recording the candidate's decision FIRST.
+
+    The decision row is opened before any gate runs, so a candidate that ends up
+    deferred, suppressed or shadowed has durable evidence even though no send was
+    ever attempted, and a process death mid-evaluation still leaves a decision
+    behind. The outcome is then written back onto that same row. Everything else
+    is unchanged - the delivery itself is _deliver_depletion_event_impl.
+    """
+    email = (event.client_email or '').strip().lower()
+    if not email:
+        # No identity means no candidate: the impl records the skip on the event.
+        return _deliver_depletion_event_impl(
+            event, cfg=cfg, templates=templates, cooldown_hours=cooldown_hours,
+            job_id=job_id, shadow=shadow)
+    run_id = job_id or ('evt-%s' % event.event_id[:24])
+    state = telemetry_state.sms_state_for(event.state) or str(event.state or '')
+    # Same derivation the send-log path uses (_lifecycle_audit carries
+    # event.service_key), so one candidate cannot end up with two decisions.
+    service_key = (event.service_key or f'eve:{int(event.server_id or 0)}:{email}')[:255]
+    decision_id = None
+    try:
+        decision = _sms_open_candidate_decision(
+            run_id, service_key=service_key, state=state,
+            server_id=int(event.server_id or 0), client_email=email,
+            generation=event.lifecycle_generation,
+            candidate_observed_at=event.observed_at)
+        decision_id = decision.id
+    except Exception:
+        db.session.rollback()
+    try:
+        return _deliver_depletion_event_impl(
+            event, cfg=cfg, templates=templates, cooldown_hours=cooldown_hours,
+            job_id=job_id, shadow=shadow)
+    finally:
+        if decision_id is not None:
+            _sms_finalize_candidate_decision(decision_id, event)
+
+
+def _deliver_depletion_event_impl(event, *, cfg, templates, cooldown_hours, job_id, shadow):
     """Deliver ONE outbox event. Returns (outcome, stop_draining).
 
     Every gate the scan used is applied here, in the same order, and for the same
@@ -4922,35 +4961,118 @@ def _run_sms_royalty_scan(job_id: str | None = None, triggered_by: str = 'auto')
     return {'scanned': len(idle), 'sent': sent, 'candidates': len(candidates)}
 
 
+# Candidate dispositions. A deferral or a suppression is a DECISION, not a
+# failure, and it must be durable even though no send was ever attempted:
+# SmsSendLog is attempt evidence, SmsScanDecision is decision evidence.
+_DECISION_FROM_SEND_STATUS = {
+    'sent': 'submitted', 'queued': 'inflight', 'active': 'inflight',
+    'waiting': 'deferred', 'delayed': 'deferred', 'deferred': 'deferred',
+    'skipped': 'suppressed', 'cancelled': 'cancelled', 'failed': 'failed_retryable',
+}
+
+# ServiceNotificationEvent.status -> the disposition that outcome represents.
+_DECISION_FROM_EVENT_STATUS = {
+    'sent': 'confirmed',
+    'gateway_accepted': 'submitted',
+    'sending': 'inflight',
+    'skipped': 'suppressed',
+    'shadowed': 'suppressed',
+    'superseded': 'superseded',
+    'retry': 'deferred',
+    'pending': 'deferred',
+    'failed_terminal': 'failed_terminal',
+}
+
+# The reason a decision carries until a gate has actually decided something.
+DECISION_PENDING_REASON = 'evaluation_pending'
+
+
+def _sms_decision_reason_code(reason):
+    return str(reason).strip().lower().replace(' ', '_')[:64] if reason else None
+
+
+def _sms_open_candidate_decision(run_id, *, service_key, state, server_id=0,
+                                 server_name=None, client_email=None, generation=None,
+                                 candidate_observed_at=None,
+                                 reason_code=DECISION_PENDING_REASON,
+                                 disposition='deferred'):
+    """Create the candidate's decision BEFORE any gate is evaluated.
+
+    Idempotent on (run_id, service_key). Deliberately requires neither a
+    SmsScanRun row nor a send log: the pipeline that actually sends uses
+    'evt-<event_id>' run ids that have no SmsScanRun, and the previous early
+    return on a missing run is why it recorded no decisions at all.
+    """
+    existing = SmsScanDecision.query.filter_by(run_id=run_id, service_key=service_key).first()
+    if existing is not None:
+        return existing
+    decision = SmsScanDecision(
+        run_id=run_id, service_key=service_key, server_id=int(server_id or 0),
+        server_name=(server_name or '')[:255], client_email=client_email, state=state,
+        disposition=disposition, reason_code=reason_code, decision_at=datetime.utcnow())
+    if generation is not None:
+        decision.lifecycle_generation = int(generation)
+    if isinstance(candidate_observed_at, datetime):
+        decision.candidate_observed_at = candidate_observed_at
+    db.session.add(decision)
+    db.session.commit()
+    return decision
+
+
+def _sms_finalize_candidate_decision(decision_id, event):
+    """Write the outcome the event finally reached back onto its decision row."""
+    for _ in (1, 2):
+        try:
+            decision = db.session.get(SmsScanDecision, decision_id)
+            if decision is None:
+                return
+            disposition = _DECISION_FROM_EVENT_STATUS.get(str(event.status or ''))
+            if disposition:
+                decision.disposition = disposition
+            reason_code = _sms_decision_reason_code(event.last_error)
+            if reason_code:
+                decision.reason_code = reason_code
+            decision.notification_event_id = event.event_id
+            if event.gateway_request_id:
+                decision.gateway_request_id = str(event.gateway_request_id)[:128]
+            decision.next_attempt_at = event.next_attempt_at
+            decision.updated_at = datetime.utcnow()
+            db.session.commit()
+            return
+        except Exception:
+            db.session.rollback()
+
+
 def _sms_record_scan_decision(job_id, row, lifecycle, state, recipient, status, reason,
                               sid_norm, server_name, email_l):
-    """Mirror a send-log outcome into the run manifest, idempotently."""
-    run = SmsScanRun.query.filter_by(run_id=job_id).first()
-    if not run:
-        return
+    """Attach a send-log outcome to the candidate's decision, creating it if absent.
+
+    This used to insert and then refuse to touch an existing row, and to return
+    early whenever no SmsScanRun matched the run id. Together those meant a
+    candidate the pipeline had already deferred or suppressed could never gain
+    its attempt evidence, and the depletion pipeline recorded nothing at all.
+    """
     lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
     service_key = (lifecycle.get('serviceKey') or f'eve:{sid_norm}:{email_l}')[:255]
-    if SmsScanDecision.query.filter_by(run_id=job_id, service_key=service_key).first():
-        return
-    # A candidate deferred BEFORE any send attempt must still be recorded as
-    # deferred. 'waiting'/'delayed' already meant that, but the literal status
-    # 'deferred' was absent from this map, so the one call site that passes it
-    # fell through to failed_terminal - which is how deferred_count and
-    # suppressed_count ended up reading a disposition nothing ever wrote.
-    disposition = {'sent': 'submitted', 'queued': 'inflight', 'active': 'inflight',
-                   'waiting': 'deferred', 'delayed': 'deferred', 'deferred': 'deferred',
-                   'skipped': 'suppressed',
-                   'cancelled': 'cancelled', 'failed': 'failed_retryable'}.get(
-                       (status or '').lower(), 'failed_terminal')
-    reason_code = str(reason).strip().lower().replace(' ', '_')[:64] if reason else None
-    db.session.add(SmsScanDecision(
-        run_id=job_id, service_key=service_key, server_id=int(sid_norm or 0),
-        server_name=(server_name or '')[:255], client_email=email_l, state=state,
-        lifecycle_generation=(int(lifecycle['generation'])
-                              if lifecycle.get('generation') is not None else None),
-        recipient_masked=_mask_mobile(recipient), disposition=disposition,
-        reason_code=reason_code, sms_send_log_id=row.id,
-        gateway_request_id=row.request_id, gateway_job_id=row.gateway_job_id))
+    decision = SmsScanDecision.query.filter_by(run_id=job_id, service_key=service_key).first()
+    if decision is None:
+        decision = SmsScanDecision(run_id=job_id, service_key=service_key,
+                                   decision_at=datetime.utcnow())
+        db.session.add(decision)
+    decision.server_id = int(sid_norm or 0)
+    decision.server_name = (server_name or '')[:255]
+    decision.client_email = email_l
+    decision.state = state
+    decision.disposition = _DECISION_FROM_SEND_STATUS.get((status or '').lower(),
+                                                          'failed_terminal')
+    decision.reason_code = _sms_decision_reason_code(reason)
+    decision.recipient_masked = _mask_mobile(recipient)
+    decision.sms_send_log_id = row.id
+    decision.gateway_request_id = row.request_id
+    decision.gateway_job_id = row.gateway_job_id
+    if lifecycle.get('generation') is not None:
+        decision.lifecycle_generation = int(lifecycle['generation'])
+    decision.updated_at = datetime.utcnow()
 
 
 def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, status, reason,

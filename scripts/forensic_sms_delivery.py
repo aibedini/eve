@@ -326,6 +326,10 @@ def main():
     args = parser.parse_args()
 
     report = collect(args.email, args.server_id, args.hours)
+    # Read-only workspace counts. A send log with no candidate decision is a
+    # wiring defect - it does not prove that no candidate existed.
+    from panel.services.sms_audit_state import candidate_audit_snapshot
+    report['candidate_audit'] = candidate_audit_snapshot()
     if args.json:
         print(json.dumps(report, indent=2, default=str))
         return 0 if report.get('found') else 2

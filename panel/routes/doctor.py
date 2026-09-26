@@ -368,6 +368,21 @@ def doctor_summary():
         checks['gmweb_transport_health'] = {'state': 'unknown', 'error': str(exc)[:200]}
 
     try:
+        from panel.services.sms_audit_state import candidate_audit_snapshot
+
+        # Pulls the four SMS audit tables apart, because `send_logs > 0` together
+        # with `scan_decisions == 0` is a wiring defect, not evidence that no
+        # candidate existed - and the delivery panel cannot tell those apart.
+        # Counts and dispositions only: no recipient, no address, no message.
+        audit = candidate_audit_snapshot()
+        checks['candidate_audit'] = {
+            'state': 'warning' if audit['legacy_send_history_without_manifest'] else 'ok',
+            **audit,
+        }
+    except Exception as exc:
+        checks['candidate_audit'] = {'state': 'unknown', 'error': str(exc)[:200]}
+
+    try:
         from panel.services.usage_intelligence import observability, shadow
         from panel.services.usage_intelligence.recommendation import recommendation_mode
         checks['usage_intelligence'] = {

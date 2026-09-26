@@ -6501,19 +6501,19 @@
             // at all these six KPIs would be derived from legacy send rows and
             // would read as "0 candidates" - a different claim from "no
             // candidate audit data exists". Never render the latter as the former.
-            const noAuditData = !currentRun && runs.length === 0;
-            const legacySends = Number(totals.confirmed || 0) + Number(totals.deferred || 0)
-                + Number(totals.suppressed || 0) + Number(totals.failed_retryable || 0)
-                + Number(totals.failed_terminal || 0);
+            // "No audit data" and "zero candidates" are different claims. The
+            // pipeline that actually sends opens decisions keyed by
+            // evt-<event_id>, so decision totals - not the manual-run list - are
+            // what prove auditable data exists.
+            const auditTotal = Object.values(totals).reduce((sum, count) => sum + Number(count || 0), 0);
+            const noAuditData = !currentRun && runs.length === 0 && auditTotal === 0;
             if (noAuditData) {
                 const note = document.createElement('p');
                 note.className = 'field-note';
-                note.textContent = legacySends > 0
-                    ? smsAuditLabel('هنوز دادهٔ بررسی نامزدی وجود ندارد. ارسال‌های گذشته «سابقهٔ ارسال قدیمی» هستند و فهرست نامزد ندارند؛ این صفرها نبود نامزد را اثبات نمی‌کنند.', 'No candidate audit data yet. Past sends are legacy send history with no candidate manifest, so these counts do not prove there were no candidates.')
-                    : smsAuditLabel('هنوز دادهٔ بررسی نامزدی وجود ندارد.', 'No candidate audit data yet.');
+                note.textContent = smsAuditLabel('هنوز دادهٔ بررسی نامزدی وجود ندارد. ارسال‌های قدیمی (اگر باشند) پیش از فهرست نامزدها هستند و نبود نامزد را اثبات نمی‌کنند.', 'No candidate audit data yet. Older SMS sends, if any, predate the candidate manifest and do not prove there were no candidates.');
                 kpis.append(note);
             } else {
-            const matched = currentRun ? currentRun.matched_count : legacySends;
+            const matched = currentRun ? currentRun.matched_count : auditTotal;
             const metrics = currentRun ? [currentRun.eligible_count, currentRun.confirmed_count, currentRun.deferred_count, currentRun.suppressed_count, currentRun.failed_count] : [null, totals.confirmed || 0, totals.deferred || 0, totals.suppressed || 0, Number(totals.failed_retryable || 0) + Number(totals.failed_terminal || 0)];
             [[smsAuditLabel('ثبت‌شده در بررسی', 'Recorded candidates'), matched, ''], [smsAuditLabel('واجد شرایط', 'Eligible'), metrics[0], ''], [smsAuditLabel('تأییدشده', 'Confirmed'), metrics[1], 'confirmed'], [smsAuditLabel('موکول‌شده', 'Deferred'), metrics[2], 'deferred'], [smsAuditLabel('ارسال‌نشده', 'Suppressed'), metrics[3], 'suppressed'], [smsAuditLabel('ناموفق', 'Failed'), metrics[4], 'failed']].forEach(([label, value, outcome]) => smsAuditCard(kpis, label, value, null, outcome));
             }
