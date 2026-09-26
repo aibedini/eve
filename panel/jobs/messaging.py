@@ -64,6 +64,7 @@ from panel.routes.templates_api import (
 )
 from panel.services import depletion_pipeline, telemetry_state
 from panel.services import gmweb_contract
+from panel.services import sms_candidate_evaluator as candidate_evaluator
 from panel.services import lifecycle as lifecycle_service
 from panel.services.lifecycle import flush_invalidation_outbox
 from panel.services.backup import _get_system_setting_value, _parse_int
@@ -4549,14 +4550,72 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         generations = {}
 
     _sms_scan_set(total_clients=total_clients, candidates=len(candidates))
+
+    def _facts_for(item, _lifecycle=None):
+        """Resolve the facts the evaluator needs. ONE resolution, so the preview
+        and the real run cannot disagree about whether a candidate is eligible.
+
+        The send budget is deliberately absent: checking it CONSUMES it, so only
+        the run may do that, and it re-enters the evaluator afterwards.
+        """
+        (sid_norm, email, email_l, server_name, state, recipient, mvars,
+         queued_comment, service_key, observed_generation, observed_at) = item
+        cd_hours = int(cooldown_hours.get(state, 24) or 24)
+        tpl = (mtemplates.get(SMS_STATE_TO_MONITOR_TPL[state]) or '').strip()
+        render_vars = dict(mvars)
+        text = ''
+        if tpl:
+            try:
+                if _template_wants_recommendation(tpl):
+                    render_vars.update(_recommendation_template_vars(
+                        sid_norm, render_vars.get('_sub_id'), email,
+                        terminal=state in ('expired', 'ended')))
+                text = _render_monitor_state_template(tpl, render_vars) or ''
+            except Exception:
+                # A preview must never fail a candidate it cannot render: treat it
+                # as renderable and let the real run meet the same problem.
+                text = 'unrenderable'
+        return (candidate_evaluator.CandidateFacts(
+            has_recipient=bool(recipient),
+            opted_out=_sms_account_opted_out(sid_norm, email, queued_comment,
+                                             refresh_shared=True),
+            manual_review=_sms_has_manual_review(email_l, sid_norm, state),
+            obligation_outstanding=_sms_outstanding_obligation(service_key, state),
+            cooldown_seconds_remaining=_cooldown_remaining_seconds(
+                email_l, sid_norm, state, cd_hours),
+            template_present=bool(tpl),
+            message_empty=not text.strip()), tpl, text)
+
     if preview:
-        rows = [{'server_id': item[0], 'email': item[2], 'server_name': item[3],
-                 'state': item[4], 'recipient': _mask_mobile(item[5]),
-                 'service_key': item[8]} for item in candidates]
+        # The SAME evaluator the run uses, without sending and without touching
+        # the send budget. `matched == eligible == len(candidates)` is exactly
+        # what this replaces.
+        evaluations = []
+        rows = []
+        for item in candidates:
+            try:
+                facts, _tpl, _text = _facts_for(item, generations.get(item[8]) or {})
+                evaluation = candidate_evaluator.evaluate_candidate(facts)
+            except Exception:
+                db.session.rollback()
+                evaluation = candidate_evaluator.Evaluation(
+                    candidate_evaluator.DEFERRED, 'evaluation_failed', False)
+            evaluations.append(evaluation)
+            rows.append({'server_id': item[0], 'email': item[2], 'server_name': item[3],
+                         'state': item[4], 'recipient': _mask_mobile(item[5]),
+                         'service_key': item[8],
+                         'disposition': evaluation.disposition,
+                         'reason_code': evaluation.reason_code})
+        summary = candidate_evaluator.summarize(
+            evaluations, run_state=candidate_evaluator.RUN_READY)
+        # `eligible_now` means "passed every gate that does not mutate state".
+        # The run revalidates the budget immediately before submitting.
+        summary['budget_checked'] = False
+        summary['scanned'] = total_clients
+        summary['candidates'] = rows
+        summary['preview'] = True
         _sms_scan_set(state='idle', reason='preview', finished_at=_utc_iso_now(), current=None)
-        return {'scanned': total_clients, 'matched': len(candidates),
-                'eligible': len(candidates), 'deferred': 0, 'suppressed': 0,
-                'candidates': rows, 'preview': True}
+        return summary
 
     sent = 0
     # Pass 2 — cooldown gate + rate-limit + send + log per candidate.
@@ -4571,47 +4630,82 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         _sms_scan_set(current=email)
         _sms_scan_inc('processed')
 
-        if _sms_account_opted_out(sid_norm, email, queued_comment, refresh_shared=True):
-            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
-                         'skipped', 'opted_out_recheck')
-            continue
+        # Kept in loop scope: the post-send cooldown bookkeeping below still needs
+        # it, and it is the same value _facts_for resolves for the evaluator.
+        cd_hours = int(cooldown_hours.get(state, 24) or 24)
+
+        # The decision is durable BEFORE any gate runs: a candidate the pipeline
+        # defers must exist in the manifest with its reason, and a process death
+        # mid-evaluation must still leave the decision behind. The cooldown branch
+        # below used to `continue` with no durable row of any kind.
+        decision_id = None
+        try:
+            decision = _sms_open_candidate_decision(
+                jid, service_key=_candidate_service_key(sid_norm, email_l, service_key),
+                state=state, server_id=sid_norm, server_name=server_name,
+                client_email=email_l, generation=expected_generation,
+                candidate_observed_at=observed_at)
+            decision_id = decision.id
+        except Exception:
+            db.session.rollback()
+
+        def _record_decided(evaluation):
+            """Write the evaluator's verdict onto the candidate's decision row."""
+            if decision_id is None:
+                return
+            try:
+                stored = db.session.get(SmsScanDecision, decision_id)
+                if stored is None:
+                    return
+                stored.disposition = evaluation.disposition
+                stored.reason_code = evaluation.reason_code
+                stored.updated_at = datetime.utcnow()
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
 
         event = f'sms_{state}'
-        if _sms_has_manual_review(email_l, sid_norm, state):
-            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
-                         'skipped', 'manual_review_pending')
-            continue
-        # Per-state cooldown in hours, keyed by this state's OWN notification kind:
-        # a low_volume warning must not suppress a later volume_ended transition. The
-        # lane stays shared across channels inside a kind.
-        cd_hours = int(cooldown_hours.get(state, 24) or 24)
-        if _cooldown_remaining_seconds(email_l, sid_norm, state, cd_hours) > 0:
-            _sms_scan_inc('skipped_cooldown')
+        try:
+            facts, tpl, text_msg = _facts_for(
+                (sid_norm, email, email_l, server_name, state, recipient, mvars,
+                 queued_comment, service_key, observed_generation, observed_at))
+        except Exception:
+            db.session.rollback()
+            _record_decided(candidate_evaluator.Evaluation(
+                candidate_evaluator.DEFERRED, 'evaluation_failed', False))
             continue
 
-        tpl = (mtemplates.get(SMS_STATE_TO_MONITOR_TPL[state]) or '').strip()
-        if not tpl:
-            _sms_scan_inc('skipped_rate')  # no template configured for this state
-            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', 'no_template')
-            continue
-        if _template_wants_recommendation(tpl):
-            mvars.update(_recommendation_template_vars(
-                sid_norm, mvars.get('_sub_id'), email,
-                terminal=state in ('expired', 'ended'),
-            ))
-        text_msg = _render_monitor_state_template(tpl, mvars)
-        if not (text_msg or '').strip():
-            _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', 'empty_message')
+        evaluation = candidate_evaluator.evaluate_candidate(facts)
+        if not evaluation.sendable:
+            _record_decided(evaluation)
+            # The counter names are the ones this scan already published, so the
+            # operator's existing charts keep meaning what they meant.
+            if evaluation.reason_code == 'no_template':
+                _sms_scan_inc('skipped_rate')
+            elif evaluation.reason_code == 'cooldown_active':
+                _sms_scan_inc('skipped_cooldown')
+            if evaluation.disposition == candidate_evaluator.SUPPRESSED:
+                # Only a suppression is a send-log event; a deferral is not an
+                # attempt and belongs in the decision manifest alone.
+                _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
+                             'skipped', evaluation.reason_code)
             continue
 
         segment_info = _sms_segment_info(text_msg)
         segments = segment_info['sms_segments']
         slot_ok, slot_reason = _sms_take_send_slot(recipient, cfg, segments, priority=state)
         if not slot_ok:
+            # The budget is the ONE gate the evaluator cannot check FOR the caller:
+            # checking it consumes it. So the run asks about it only now, and gets
+            # the same verdict a preview reports as budget_checked=False.
+            facts.budget_available = False
+            facts.budget_stop_reason = slot_reason
+            budget_verdict = candidate_evaluator.evaluate_candidate(facts)
+            _record_decided(budget_verdict)
             # Daily OR hourly budget exhausted → stop this run cleanly. Candidates
             # already messaged keep their cooldown; everyone else keeps waiting,
             # and the next scheduled scan picks the work back up.
-            if slot_reason in ('daily_limit_reached', 'hourly_limit_reached'):
+            if budget_verdict.stop_reason:
                 _sms_scan_set(stopped=slot_reason, state='done', finished_at=_utc_iso_now(), current=None)
                 _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient, 'skipped', slot_reason, segment_info)
                 return {'scanned': total_clients, 'sent': sent, 'stopped': slot_reason}
@@ -4987,6 +5081,44 @@ _DECISION_FROM_EVENT_STATUS = {
 DECISION_PENDING_REASON = 'evaluation_pending'
 
 
+def _candidate_service_key(sid_norm, email_l, service_key=None):
+    """ONE derivation of a candidate's identity.
+
+    The send-log path, the outbox path and the preview must agree, or a single
+    candidate becomes two rows and every count doubles.
+    """
+    if service_key:
+        return str(service_key)[:255]
+    return ('eve:%s:%s' % (int(sid_norm or 0), email_l))[:255]
+
+
+def _sms_outstanding_obligation(service_key, monitor_state):
+    """True when a durable obligation for this service and kind is still owed.
+
+    Read-only, and asked by BOTH the preview and the real run: a reminder that is
+    already outstanding must not be sent again, and the preview must say so
+    instead of promising it would go out.
+    """
+    from panel.models import OPEN_NOTIFICATION_STATUSES, ServiceNotificationEvent
+    if not service_key or not monitor_state:
+        return False
+    try:
+        kind = lifecycle_service.sms_notification_kind(monitor_state)
+    except Exception:
+        return False
+    if not kind:
+        return False
+    try:
+        return ServiceNotificationEvent.query.filter(
+            ServiceNotificationEvent.service_key == service_key,
+            ServiceNotificationEvent.notification_kind == kind,
+            ServiceNotificationEvent.status.in_(OPEN_NOTIFICATION_STATUSES),
+        ).first() is not None
+    except Exception:
+        db.session.rollback()
+        return False
+
+
 def _sms_decision_reason_code(reason):
     return str(reason).strip().lower().replace(' ', '_')[:64] if reason else None
 
@@ -5051,28 +5183,47 @@ def _sms_record_scan_decision(job_id, row, lifecycle, state, recipient, status, 
     early whenever no SmsScanRun matched the run id. Together those meant a
     candidate the pipeline had already deferred or suppressed could never gain
     its attempt evidence, and the depletion pipeline recorded nothing at all.
+
+    It is called from the MIDDLE of the send-log transaction, so it must never be
+    able to destroy the caller's work. The write runs inside a SAVEPOINT and a
+    failure to store the decision leaves the send-log row intact: losing attempt
+    evidence in order to save candidate evidence would be exactly backwards,
+    because SmsSendLog is the record that a message was actually sent.
     """
+    if not job_id:
+        # No run identity to attach to, and run_id is NOT NULL. A transactional
+        # send (a renewal confirmation, a test SMS) owns no candidate manifest
+        # entry, and inventing one would inflate the candidate counts.
+        return False
     lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
-    service_key = (lifecycle.get('serviceKey') or f'eve:{sid_norm}:{email_l}')[:255]
-    decision = SmsScanDecision.query.filter_by(run_id=job_id, service_key=service_key).first()
-    if decision is None:
-        decision = SmsScanDecision(run_id=job_id, service_key=service_key,
-                                   decision_at=datetime.utcnow())
-        db.session.add(decision)
-    decision.server_id = int(sid_norm or 0)
-    decision.server_name = (server_name or '')[:255]
-    decision.client_email = email_l
-    decision.state = state
-    decision.disposition = _DECISION_FROM_SEND_STATUS.get((status or '').lower(),
-                                                          'failed_terminal')
-    decision.reason_code = _sms_decision_reason_code(reason)
-    decision.recipient_masked = _mask_mobile(recipient)
-    decision.sms_send_log_id = row.id
-    decision.gateway_request_id = row.request_id
-    decision.gateway_job_id = row.gateway_job_id
-    if lifecycle.get('generation') is not None:
-        decision.lifecycle_generation = int(lifecycle['generation'])
-    decision.updated_at = datetime.utcnow()
+    try:
+        with db.session.begin_nested():
+            service_key = (lifecycle.get('serviceKey')
+                           or f'eve:{sid_norm}:{email_l}')[:255]
+            decision = SmsScanDecision.query.filter_by(
+                run_id=job_id, service_key=service_key).first()
+            if decision is None:
+                decision = SmsScanDecision(run_id=job_id, service_key=service_key,
+                                           decision_at=datetime.utcnow())
+                db.session.add(decision)
+            decision.server_id = int(sid_norm or 0)
+            decision.server_name = (server_name or '')[:255]
+            decision.client_email = email_l
+            decision.state = state
+            decision.disposition = _DECISION_FROM_SEND_STATUS.get(
+                (status or '').lower(), 'failed_terminal')
+            decision.reason_code = _sms_decision_reason_code(reason)
+            decision.recipient_masked = _mask_mobile(recipient)
+            decision.sms_send_log_id = row.id
+            decision.gateway_request_id = row.request_id
+            decision.gateway_job_id = row.gateway_job_id
+            if lifecycle.get('generation') is not None:
+                decision.lifecycle_generation = int(lifecycle['generation'])
+            decision.updated_at = datetime.utcnow()
+    except Exception:
+        # The savepoint has already been rolled back; the caller's row is intact.
+        return False
+    return True
 
 
 def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, status, reason,

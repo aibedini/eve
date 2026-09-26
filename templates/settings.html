@@ -6488,7 +6488,7 @@
                 [smsAuditLabel('دستگاه', 'Device'), smsAuditDeviceState(health?.device?.state)],
                 [smsAuditLabel('در انتظار / در جریان', 'Pending / in flight'), health?.queue ? `${Number(health.queue.pending || 0)} / ${Number(health.queue.inflight || 0)}` : '—'],
                 [smsAuditLabel('آخرین مشاهده دستگاه', 'Device last seen'), health?.device?.last_seen_at ? smsAuditTime(health.device.last_seen_at) : '—'],
-                [smsAuditLabel('آخرین تأیید', 'Last ACK'), health?.last_ack?.at ? smsAuditTime(health.last_ack.at) : '—']
+                [smsAuditLabel('آخرین تأیید', 'Last ACK'), health ? (health.last_ack?.at ? smsAuditTime(health.last_ack.at) : smsAuditLabel('هنوز تأییدی ثبت نشده', 'No ACK yet')) : '—']
             ];
             for (const [label, value] of healthItems) smsAuditCard(healthStrip, label, value);
             const previousOptions = Array.from(runPicker.options).slice(1);

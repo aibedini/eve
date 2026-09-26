@@ -266,5 +266,37 @@ class CandidateDecisionTests(unittest.TestCase):
         self.assertEqual(SmsScanDecision.query.count(), 1)
 
 
+    def test_a_transactional_send_owns_no_candidate_decision(self):
+        """job_id=None is the transactional path (renewal confirmations, test SMS).
+        There is no run identity to attach to and run_id is NOT NULL, so the
+        decision is skipped - and inventing one would inflate candidate counts."""
+        row = self._send_log(status='sent')
+        stored = self.messaging._sms_record_scan_decision(
+            None, row, {'serviceKey': self.key}, 'renew', '09195758193', 'sent',
+            None, SERVER_ID, 'Srv', EMAIL)
+        db.session.commit()
+        self.assertFalse(stored)
+        self.assertIsNotNone(db.session.get(SmsSendLog, row.id))
+        self.assertEqual(SmsScanDecision.query.count(), 0)
+
+    def test_a_failed_decision_write_cannot_destroy_the_send_log(self):
+        """The regression this pins.
+
+        The decision write runs in the MIDDLE of the send-log transaction. It used
+        to raise (here: client_email is NOT NULL, so the row cannot store), and
+        _sms_log_row's own except rolled back the SEND LOG with it -- silently
+        losing the record that a message was actually sent. The write now runs
+        inside a SAVEPOINT, so the attempt evidence survives.
+        """
+        row = self._send_log(status='sent')
+        stored = self.messaging._sms_record_scan_decision(
+            'run-forced', row, {'serviceKey': self.key}, 'ended', '09195758193',
+            'sent', None, SERVER_ID, 'Srv', None)
+        db.session.commit()
+        self.assertFalse(stored)
+        self.assertIsNotNone(db.session.get(SmsSendLog, row.id))
+        self.assertEqual(SmsScanDecision.query.count(), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

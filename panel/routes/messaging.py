@@ -12,7 +12,8 @@ from flask import Blueprint, jsonify, request, session
 from panel.core.phone import _extract_iran_mobile_from_text
 from panel.core.redis_client import get_redis
 from panel.extensions import db
-from panel.models import Admin, PendingSms, SmsSendLog, SmsScanRun, SmsScanDecision, SystemConfig, ServiceNotificationEvent
+from panel.models import (Admin, OPEN_NOTIFICATION_STATUSES, PendingSms, ServiceNotificationEvent,
+                          SmsScanDecision, SmsScanRun, SmsSendLog, SystemConfig)
 from sqlalchemy import or_, func
 from panel.routes.common import permission_required
 from panel.security import outbound_tls_verify
@@ -375,16 +376,48 @@ def sms_scan_run():
 @bp.route('/api/sms/scan/preview', methods=['POST'])
 @permission_required('secrets.manage')
 def sms_scan_preview():
-    """Fail closed until preview can evaluate candidates without reconciliation."""
-    return jsonify({'success': False,
-                    'error': 'SMS audience preview is temporarily unavailable.'}), 503
+    """Evaluate the current audience with the SAME evaluator the real run uses.
+
+    Nothing is sent and the send budget is not consumed, so `eligible_now` means
+    "passed every gate that does not mutate state"; the run revalidates the
+    budget immediately before submitting. The old behaviour was
+    ``matched == eligible == len(candidates)`` with zero deferred and zero
+    suppressed, which promised eligibility it had never evaluated.
+    """
+    from app import _get_sms_runtime_settings, _normalize_sms_scan_states, _run_sms_depletion_scan
+    try:
+        cfg = _get_sms_runtime_settings()
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'Could not load SMS settings: {exc}'}), 500
+    if not cfg.get('enabled'):
+        return jsonify({'success': False,
+                        'error': 'SMS automation is disabled. Enable it (and Save) first.'}), 400
+    if not (cfg.get('base_url') and cfg.get('api_key')):
+        return jsonify({'success': False,
+                        'error': 'The selected SMS gateway is not configured.'}), 400
+    payload = request.get_json(silent=True) or {}
+    requested_states = _normalize_sms_scan_states(
+        payload.get('states') if isinstance(payload, dict) else None)
+    try:
+        result = _run_sms_depletion_scan(
+            triggered_by='preview',
+            states=requested_states if isinstance(payload, dict) and payload.get('states') is not None else None,
+            preview=True)
+    except Exception as exc:
+        return jsonify({'success': False,
+                        'error': 'SMS audience preview is temporarily unavailable.',
+                        'reason': type(exc).__name__}), 503
+    response = jsonify({'success': True, **result})
+    # A preview must never be served from a cache: it answers "right now".
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/api/sms/notification-debt', methods=['GET'])
 @permission_required('secrets.manage')
 def sms_notification_debt():
     """Outstanding durable obligations, independent of scan/send-log history."""
-    active = ('pending', 'retry', 'sending', 'gateway_accepted')
+    active = OPEN_NOTIFICATION_STATUSES
     query = ServiceNotificationEvent.query.filter(
         ServiceNotificationEvent.status.in_(active))
     total = query.count()

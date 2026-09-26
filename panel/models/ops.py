@@ -702,6 +702,10 @@ NOTIFICATION_EVENT_STATUSES = (
     # be in this vocabulary, or a status filter silently cannot express it.
     'gateway_accepted')
 NOTIFICATION_EVENT_SOURCES = ('transition', 'reconciliation')
+#: Statuses that mean "this obligation is still owed". ONE definition: the debt
+#: route, the doctor probe and the duplicate-suppression gate all ask this, and a
+#: fourth restatement is how a status silently drops out of a filter.
+OPEN_NOTIFICATION_STATUSES = ('pending', 'retry', 'sending', 'gateway_accepted')
 # Bounded retry ladder for a notification the gateway could not take, in seconds.
 NOTIFICATION_BACKOFF_SECONDS = (30, 120, 600, 1800, 3600, 10800)
 
