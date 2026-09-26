@@ -1,18 +1,28 @@
 """Durable SMS scan runs and candidate decisions.
 
 Revision ID: g4b5c6d7e8f9
-Revises: f3a8b9c0d1e2
+Revises: f1d4a6b8c9e2
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = 'g4b5c6d7e8f9'
-down_revision = 'f3a8b9c0d1e2'
+down_revision = 'f1d4a6b8c9e2'
 branch_labels = None
 depends_on = None
 
 
 def upgrade():
+    # The migration runner calls db.create_all() before Alembic. On existing
+    # installations the model may therefore have created both tables already.
+    existing_tables = set(sa.inspect(op.get_bind()).get_table_names())
+    if 'sms_scan_runs' not in existing_tables:
+        _create_runs_table()
+    if 'sms_scan_decisions' not in existing_tables:
+        _create_decisions_table()
+
+
+def _create_runs_table():
     op.create_table(
         'sms_scan_runs',
         sa.Column('id', sa.Integer(), primary_key=True),
@@ -30,6 +40,9 @@ def upgrade():
     )
     for name, cols in [('ix_sms_scan_runs_started_at', ['started_at']), ('ix_sms_scan_runs_status', ['status'])]:
         op.create_index(name, 'sms_scan_runs', cols)
+
+
+def _create_decisions_table():
     op.create_table(
         'sms_scan_decisions',
         sa.Column('id', sa.Integer(), primary_key=True), sa.Column('run_id', sa.String(64), nullable=False),
