@@ -57,10 +57,6 @@
     <div class="sms-audit-stream-head"><div><h3>Gateway diagnostics</h3><p>Active transport only; historical delivery must be read from message evidence.</p></div></div>
     <dl class="sms-center-facts" id="sms-center-gateway-facts"></dl>
   </section>
-  <div class="modal-overlay hidden" id="sms-center-modal" role="dialog" aria-modal="true" aria-label="SMS timeline">
-    <div class="modal modal-lg"><div class="modal-header"><h3 id="sms-center-modal-title">Timeline</h3><button class="modal-close" id="sms-center-modal-close" type="button" aria-label="Close">×</button></div>
-      <div class="modal-body"><ol class="sms-audit-timeline" id="sms-center-timeline"></ol></div></div>
-  </div>
 </main>
 {% endblock %}
 {% block scripts %}<script src="{{ url_for('static', filename='sms-center.js') }}" defer></script>{% endblock %}

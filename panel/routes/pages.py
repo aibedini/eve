@@ -141,7 +141,13 @@ def admins_page():
 @permission_required('secrets.manage')
 def sms_center_page():
     """Operational SMS evidence; configuration remains in Settings."""
-    return render_template('sms_center.html')
+    user = current_admin()
+    return render_template(
+        'sms_center.html',
+        admin_username=(user.username if user else session.get('admin_username')),
+        is_superadmin=bool(user and (user.role == 'superadmin' or user.is_superadmin)),
+        role=(user.role if user else session.get('role', 'admin')),
+    )
 
 
 @bp.route('/settings')

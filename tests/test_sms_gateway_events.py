@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 import tempfile
 import time
 import unittest
@@ -23,7 +24,10 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 from app import app  # noqa: E402
 from panel.extensions import db  # noqa: E402
-from panel.models import SmsGatewayEvent  # noqa: E402
+from panel.models import Admin, SmsGatewayEvent  # noqa: E402
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class GatewayEventTests(unittest.TestCase):
@@ -98,6 +102,39 @@ class GatewayEventTests(unittest.TestCase):
     def test_sms_center_template_compiles(self):
         template = app.jinja_env.get_template('sms_center.html')
         self.assertIsNotNone(template)
+
+    def test_sms_center_keeps_superadmin_navigation(self):
+        admin = Admin.query.filter_by(username='sms-center-shell-admin').first()
+        if admin is None:
+            admin = Admin(username='sms-center-shell-admin', password_hash='x',
+                          role='superadmin', is_superadmin=True, enabled=True)
+            db.session.add(admin)
+            db.session.commit()
+        with self.client.session_transaction() as browser_session:
+            browser_session['admin_id'] = admin.id
+            browser_session['admin_username'] = admin.username
+            browser_session['role'] = admin.role
+            browser_session['is_superadmin'] = True
+        response = self.client.get('/sms-center')
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('>Servers</span>', html)
+        self.assertIn('>Settings</span>', html)
+
+    def test_sms_center_ui_uses_human_account_and_inline_disclosure(self):
+        source = (ROOT / 'static' / 'sms-center.js').read_text(encoding='utf-8')
+        self.assertIn('item.account || item.service_key', source)
+        self.assertIn('sms-center-expansion hidden', source)
+        self.assertIn('inlineDecisionLimit = 5', source)
+        self.assertIn('statusField("EVE", log.status)', source)
+        self.assertNotIn('openModal(', source)
+
+    def test_sms_settings_deep_link_is_hash_aware(self):
+        source = (ROOT / 'templates' / 'settings.html').read_text(encoding='utf-8')
+        self.assertIn('data-settings-tab="sms"', source)
+        self.assertIn("window.location.hash.startsWith('#tab-')", source)
+        self.assertIn("switchTab('sms', this)", source)
+        self.assertNotIn('event.currentTarget.classList.add', source)
 
     def test_outbound_notification_identity_is_preserved(self):
         from panel.jobs.messaging import _notification_meta

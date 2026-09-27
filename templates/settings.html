@@ -6,51 +6,51 @@
 {% block content %}
 <div class="settings-layout">
     <div class="settings-sidebar">
-        <button class="settings-tab active" onclick="switchTab('overview')">
+        <button class="settings-tab active" data-settings-tab="overview" onclick="switchTab('overview', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
             Overview
         </button>
-        <button class="settings-tab" onclick="switchTab('general')">
+        <button class="settings-tab" data-settings-tab="general" onclick="switchTab('general', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             General
         </button>
-        <button class="settings-tab" onclick="switchTab('templates')">
+        <button class="settings-tab" data-settings-tab="templates" onclick="switchTab('templates', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
             Notification Templates
         </button>
-        <button class="settings-tab" onclick="switchTab('renew_template')">
+        <button class="settings-tab" data-settings-tab="renew_template" onclick="switchTab('renew_template', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><polyline points="21 3 21 9 15 9"></polyline><path d="M12 7v5l4 2"></path></svg>
             Renew Template
         </button>
-        <button class="settings-tab" onclick="switchTab('backups')">
+        <button class="settings-tab" data-settings-tab="backups" onclick="switchTab('backups', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             Backup & Restore
         </button>
-        <button class="settings-tab" onclick="switchTab('telegram')">
+        <button class="settings-tab" data-settings-tab="telegram" onclick="switchTab('telegram', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path></svg>
             Telegram
         </button>
-        <button class="settings-tab" onclick="switchTab('whatsapp')">
+        <button class="settings-tab" data-settings-tab="whatsapp" onclick="switchTab('whatsapp', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.38 7.55L3 21l1.98-5.44A8.5 8.5 0 1 1 21 11.5z"></path></svg>
             WhatsApp
         </button>
-        <button class="settings-tab" onclick="switchTab('sms')">
+        <button class="settings-tab" data-settings-tab="sms" onclick="switchTab('sms', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.17L4 17.17V4z"></path><path d="M8 9h8"></path><path d="M8 12h5"></path></svg>
             SMS Automation
         </button>
-        <button class="settings-tab" onclick="switchTab('account_message')">
+        <button class="settings-tab" data-settings-tab="account_message" onclick="switchTab('account_message', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path></svg>
             Account Message
         </button>
-        <button class="settings-tab" onclick="switchTab('ssl')">
+        <button class="settings-tab" data-settings-tab="ssl" onclick="switchTab('ssl', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
             SSL Settings
         </button>
-        <button class="settings-tab" onclick="switchTab('session')">
+        <button class="settings-tab" data-settings-tab="session" onclick="switchTab('session', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
             Session Settings
         </button>
-        <button class="settings-tab" onclick="switchTab('health_logs')">
+        <button class="settings-tab" data-settings-tab="health_logs" onclick="switchTab('health_logs', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
             System Logs
         </button>
@@ -58,7 +58,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
             Traffic Check ↗
         </a>
-        <button class="settings-tab" onclick="switchTab('supported_apps')">
+        <button class="settings-tab" data-settings-tab="supported_apps" onclick="switchTab('supported_apps', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
             Supported Apps
         </button>
@@ -1413,9 +1413,10 @@
                 <div class="panel-card-header">
                     <div class="header-content">
                         <h2>SMS Automation</h2>
-                        <p class="text-secondary">Auto-send SMS on create / renew / near-expiry through the selected gateway, using the existing SMS templates.</p>
+                        <p class="text-secondary">Configure eligibility, templates, limits, and gateway access here. Delivery evidence and recipient decisions live in SMS Center.</p>
                     </div>
-                    <div style="display: flex; gap: 10px; align-items: center;">
+                    <div class="sms-settings-actions">
+                        <a class="btn btn-outline" href="{{ url_for('pages.sms_center_page') }}#overview">Open SMS Center</a>
                         <button id="sms-test-connection" class="btn btn-secondary" onclick="testSmsConnectionSettings()">Test Connection</button>
                         <button id="sms-test-send" class="btn btn-primary" onclick="sendTestSms()">Send Test SMS</button>
                     </div>
@@ -4026,24 +4027,18 @@
     document.addEventListener('DOMContentLoaded', () => {
         syncThemeToggleUI();
         updateSmsProviderFields();
-
-        const activeTab = document.querySelector('.settings-tab.active');
-        if (activeTab) {
-            const onclick = activeTab.getAttribute('onclick');
-            if (onclick.includes("'overview'")) { loadOverview(); loadMemory(); }
-            else
-            if (onclick.includes("'general'")) syncThemeToggleUI();
-            else if (onclick.includes("'templates'")) { loadTemplates(); loadAccountMessageTemplates(); }
-            else if (onclick.includes("'renew_template'")) { loadRenewTemplates(); loadAccountMessageTemplates(); }
-            else if (onclick.includes("'account_message'")) loadAccountMessageTemplates();
-            else if (onclick.includes("'backups'")) { loadBackups(); loadBackupSettings(); }
-            else if (onclick.includes("'telegram'")) switchTelegramTab(telegramActiveSubtab);
-            else if (onclick.includes("'whatsapp'")) loadWhatsAppSettings();
-            else if (onclick.includes("'ssl'")) loadSSLSettings();
-            else if (onclick.includes("'session'")) loadSessionSettings();
-            else if (onclick.includes("'health_logs'")) { loadHealthLogs(); loadTlsReport(); }
-        }
+        activateSettingsHash();
+        window.addEventListener('hashchange', activateSettingsHash);
     });
+
+    function activateSettingsHash() {
+        const requested = window.location.hash.startsWith('#tab-')
+            ? window.location.hash.slice(5)
+            : 'overview';
+        const trigger = Array.from(document.querySelectorAll('[data-settings-tab]'))
+            .find(button => button.dataset.settingsTab === requested);
+        switchTab(trigger ? requested : 'overview', trigger || document.querySelector('[data-settings-tab="overview"]'), false);
+    }
 
     function getSavedTheme() {
         try {
@@ -4097,12 +4092,17 @@
         else if (tabName === 'backup') loadTelegramBackupSettings();
     }
 
-    function switchTab(tabName) {
+    function switchTab(tabName, trigger, updateHash = true) {
+        const pane = document.getElementById(`tab-${tabName}`);
+        const tabButton = trigger || Array.from(document.querySelectorAll('[data-settings-tab]'))
+            .find(button => button.dataset.settingsTab === tabName);
+        if (!pane || !tabButton) return;
         document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-        
-        event.currentTarget.classList.add('active');
-        document.getElementById(`tab-${tabName}`).classList.add('active');
+
+        tabButton.classList.add('active');
+        pane.classList.add('active');
+        if (updateHash) history.replaceState(null, '', `#tab-${tabName}`);
 
         if (tabName === 'overview') {
             loadOverview();

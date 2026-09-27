@@ -7,6 +7,7 @@
   let total = 0;
   let visibleLogs = [];
   const pageSize = 30;
+  const inlineDecisionLimit = 5;
 
   function node(tag, className, value) {
     const item = document.createElement(tag);
@@ -38,16 +39,55 @@
     cell.append(node("span", "sms-audit-kpi-label", label), node("strong", "", fmt(value)));
     return cell;
   }
-  function openModal(title, entries) {
-    $("sms-center-modal-title").textContent = title;
-    const list = $("sms-center-timeline");
-    list.replaceChildren();
-    if (!entries.length) list.append(node("li", "field-note", "No recorded events yet."));
-    for (const entry of entries) list.append(node("li", "", entry));
-    $("sms-center-modal").classList.remove("hidden");
-    $("sms-center-modal-close").focus();
+  function statusTone(value) {
+    const status = String(value || "").toLowerCase();
+    if (["sent", "completed", "confirmed", "gateway_accepted", "accepted", "ready", "active", "delivered"].includes(status)
+      || /\.(sent|completed|accepted|delivered)$/.test(status)) return "success";
+    if (["failed", "failed_terminal", "cancelled", "expired", "ended"].includes(status)
+      || /\.(failed|cancelled|expired)$/.test(status)) return "danger";
+    if (["retry", "failed_retryable", "deferred", "manual_review", "queued", "pending", "suppressed", "skipped", "degraded", "unavailable"].includes(status)
+      || /(pending|queued|retry|deferred|suppressed)/.test(status)) return "warning";
+    return "neutral";
   }
-  function closeModal() { $("sms-center-modal").classList.add("hidden"); }
+  function statusField(label, value) {
+    const cell = node("div", "sms-center-fact");
+    const display = value == null || value === ""
+      ? "—"
+      : String(value).replaceAll("_", " ").replaceAll(".", " · ");
+    cell.append(node("span", "sms-audit-kpi-label", label),
+      node("strong", `sms-status sms-status-${statusTone(value)}`, display));
+    return cell;
+  }
+  function setKpi(id, value, tone = "neutral") {
+    const target = $(id);
+    target.textContent = value;
+    target.classList.remove("sms-kpi-success", "sms-kpi-warning", "sms-kpi-danger", "sms-kpi-neutral");
+    target.classList.add(`sms-kpi-${tone}`);
+  }
+  function expandableRow(fields, label) {
+    const entry = node("article", "sms-center-entry");
+    const button = node("button", "sms-center-row", "");
+    const panel = node("div", "sms-center-expansion hidden");
+    const panelId = `sms-center-detail-${Math.random().toString(36).slice(2)}`;
+    button.type = "button";
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-controls", panelId);
+    panel.id = panelId;
+    button.append(...fields, node("span", "sms-center-disclosure", label || "View details"));
+    entry.append(button, panel);
+    return { entry, button, panel };
+  }
+  function toggleExpansion(button, panel, open) {
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    panel.classList.toggle("hidden", !open);
+    const disclosure = button.querySelector(".sms-center-disclosure");
+    if (disclosure) disclosure.textContent = open ? "Hide details" : "View details";
+  }
+  function detailRow(fields) {
+    const row = node("div", "sms-center-detail-row");
+    row.append(...fields);
+    return row;
+  }
 
   async function loadHealth() {
     try {
@@ -56,12 +96,15 @@
       const transport = health.transport || {};
       const device = health.device || {};
       const queue = health.queue || {};
-      $("sms-center-health").textContent = report.success
+      setKpi("sms-center-health", report.success
         ? (health.gmweb?.ready ? "Ready" : `Degraded · ${health.gmweb?.reason || "no reason provided"}`)
-        : `${report.probe_state || "Unavailable"} · ${report.diagnostic || "No diagnostic"}`;
-      $("sms-center-device").textContent = report.success
-        ? `${device.state || "unreported"}${device.reason ? ` · ${device.reason}` : ""}` : "Not reachable";
-      $("sms-center-queue").textContent = report.success ? fmt(queue.pending) : "—";
+        : `${report.probe_state || "Unavailable"} · ${report.diagnostic || "No diagnostic"}`,
+      report.success && health.gmweb?.ready ? "success" : "warning");
+      setKpi("sms-center-device", report.success
+        ? `${device.state || "unreported"}${device.reason ? ` · ${device.reason}` : ""}` : "Transport health unavailable",
+      report.success ? statusTone(device.state) : "neutral");
+      setKpi("sms-center-queue", report.success ? fmt(queue.pending) : "Transport health unavailable",
+        report.success ? "neutral" : "neutral");
       const facts = $("sms-center-gateway-facts");
       facts.replaceChildren(
         field("Probe", report.probe_state), field("Active transport", transport.active),
@@ -71,9 +114,10 @@
         field("Last ACK", date(health.last_ack?.at)), field("ACK outcome", health.last_ack?.outcome)
       );
     } catch (error) {
-      $("sms-center-health").textContent = `Unavailable · ${error.message}`;
-      $("sms-center-device").textContent = "—";
-      $("sms-center-queue").textContent = "—";
+      const missingScope = error.message.includes("scope_denied") || error.message.includes("transport:read");
+      setKpi("sms-center-health", `Unavailable · ${error.message}`, "danger");
+      setKpi("sms-center-device", missingScope ? "Requires transport:read" : "Health probe unavailable", "neutral");
+      setKpi("sms-center-queue", missingScope ? "Requires transport:read" : "Queue unavailable", "neutral");
       showError($("sms-center-gateway-facts"), error);
     }
   }
@@ -102,19 +146,48 @@
       target.replaceChildren();
       if (!data.runs?.length) { target.append(node("p", "field-note", "No runs recorded.")); return; }
       for (const run of data.runs) {
-        const row = node("button", "sms-center-row", "");
-        row.type = "button";
-        row.append(field("Run", run.run_id), field("Started", date(run.started_at)),
+        const disclosure = expandableRow([
+          field("Run", run.run_id), field("Started", date(run.started_at)),
           field("Targets", run.matched_count), field("Submitted", run.submitted_count),
-          field("Skipped / deferred", (run.suppressed_count || 0) + (run.deferred_count || 0)));
-        row.addEventListener("click", async () => {
+          field("Skipped / deferred", (run.suppressed_count || 0) + (run.deferred_count || 0))
+        ], "View recipient decisions");
+        let loaded = false;
+        disclosure.button.addEventListener("click", async () => {
+          const opening = disclosure.panel.classList.contains("hidden");
+          toggleExpansion(disclosure.button, disclosure.panel, opening);
+          if (!opening || loaded) return;
+          disclosure.panel.replaceChildren(node("p", "field-note", "Loading recipient decisions…"));
           try {
             const result = await json(`/api/sms/scan/runs/${encodeURIComponent(run.run_id)}/decisions?limit=100`);
-            openModal(`Run ${run.run_id} · recipient decisions`, (result.decisions || []).map((decision) =>
-              `${decision.client_email || decision.service_key || "Account"} · ${decision.disposition || "unrecorded"} · ${decision.reason_code || "no reason code"}`));
-          } catch (error) { openModal(`Run ${run.run_id}`, [`Unable to load recipients: ${error.message}`]); }
+            const decisions = result.decisions || [];
+            const list = node("div", "sms-center-detail-list");
+            if (!decisions.length) list.append(node("p", "field-note", "No recipient decisions were recorded for this run."));
+            decisions.forEach((decision, index) => {
+              const item = detailRow([
+                field("Account", decision.client_email || decision.service_key || "Account"),
+                statusField("Decision", decision.disposition || "unrecorded"),
+                field("Reason", decision.reason_code || "No reason code"),
+                field("Recipient", decision.recipient_masked),
+                field("Decided", date(decision.decision_at))
+              ]);
+              if (index >= inlineDecisionLimit) item.classList.add("sms-center-overflow", "hidden");
+              list.append(item);
+            });
+            disclosure.panel.replaceChildren(list);
+            if (decisions.length > inlineDecisionLimit) {
+              const toggle = node("button", "btn btn-outline sms-center-more", `Show all ${result.total || decisions.length} decisions`);
+              toggle.type = "button";
+              toggle.addEventListener("click", () => {
+                const hidden = list.querySelector(".sms-center-overflow.hidden");
+                list.querySelectorAll(".sms-center-overflow").forEach((item) => item.classList.toggle("hidden", !hidden));
+                toggle.textContent = hidden ? "Show fewer decisions" : `Show all ${result.total || decisions.length} decisions`;
+              });
+              disclosure.panel.append(toggle);
+            }
+            loaded = true;
+          } catch (error) { showError(disclosure.panel, error); }
         });
-        target.append(row);
+        target.append(disclosure.entry);
       }
     } catch (error) { showError(target, error); }
   }
@@ -138,21 +211,39 @@
       target.replaceChildren();
       if (!data.logs?.length) target.append(node("p", "field-note", "No matching messages."));
       for (const log of data.logs || []) {
-        const row = node("button", "sms-center-row", "");
-        row.type = "button";
-        row.append(field("Account", log.email), field("Phone", log.recipient),
-          field("Trigger", log.state), field("EVE", log.status),
-          field("GMweb", log.gateway_state || (log.request_id ? "accepted / pending" : "not submitted")),
-          field("Last event", date(log.updated_at)), field("Reason", log.reason));
-        row.addEventListener("click", async () => {
+        const gatewayStatus = log.gateway_state || (log.request_id ? "accepted / pending" : "not submitted");
+        const disclosure = expandableRow([
+          field("Account", log.email), field("Phone", log.recipient),
+          field("Trigger", log.state), statusField("EVE", log.status),
+          statusField("GMweb", gatewayStatus), field("Last event", date(log.updated_at)),
+          field("Reason", log.reason)
+        ], "View delivery timeline");
+        let loaded = false;
+        disclosure.button.addEventListener("click", async () => {
+          const opening = disclosure.panel.classList.contains("hidden");
+          toggleExpansion(disclosure.button, disclosure.panel, opening);
+          if (!opening || loaded) return;
+          disclosure.panel.replaceChildren(node("p", "field-note", "Loading delivery timeline…"));
           try {
             const result = await json(`/api/sms/messages/${log.id}/timeline`);
-            const events = (result.gateway_events || []).map((event) =>
-              `${date(event.occurred_at)} · ${event.type} · attempt ${fmt(event.attempt)} · ${event.device_id || "no device"}${event.reason_code ? ` · ${event.reason_code}` : ""}`);
-            openModal(`${log.email} · ${log.request_id || "not submitted"}`, events);
-          } catch (error) { openModal(log.email, [`Unable to load timeline: ${error.message}`]); }
+            const timeline = node("div", "sms-center-timeline");
+            const events = result.gateway_events || [];
+            if (!events.length) timeline.append(node("p", "field-note", "No gateway events are recorded yet. EVE's state above is still authoritative."));
+            for (const event of events) timeline.append(detailRow([
+              statusField("Event", event.type), field("Occurred", date(event.occurred_at)),
+              field("Attempt", event.attempt), field("Device", event.device_id || "Not reported"),
+              field("Reason", event.reason_code)
+            ]));
+            const identity = detailRow([
+              field("EVE message", log.id), field("Request", log.request_id),
+              field("Gateway job", log.gateway_job_id), field("Correlation", log.correlation_id)
+            ]);
+            identity.classList.add("sms-center-identity");
+            disclosure.panel.replaceChildren(identity, timeline);
+            loaded = true;
+          } catch (error) { showError(disclosure.panel, error); }
         });
-        target.append(row);
+        target.append(disclosure.entry);
       }
       $("sms-center-page-label").textContent = `${total ? offset + 1 : 0}–${Math.min(total, offset + pageSize)} of ${total}`;
       $("sms-center-prev").disabled = offset === 0;
@@ -168,8 +259,8 @@
       if (!data.obligations?.length) target.append(node("p", "field-note", "No outstanding obligations in this page."));
       for (const item of data.obligations || []) {
         const row = node("div", "sms-center-row");
-        row.append(field("Account", item.client_email || item.service_key),
-          field("Notification", item.notification_kind), field("State", item.status),
+        row.append(field("Account", item.account || item.service_key),
+          field("Notification", item.notification_kind), statusField("State", item.status),
           field("Attempts", item.attempt_count), field("Reason", item.last_error || item.reason_code),
           field("Next retry", date(item.next_attempt_at)));
         target.append(row);
@@ -209,11 +300,6 @@
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 0);
   });
-  $("sms-center-modal-close").addEventListener("click", closeModal);
-  $("sms-center-modal").addEventListener("click", (event) => {
-    if (event.target === $("sms-center-modal")) closeModal();
-  });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeModal(); });
   selectTab(location.hash.slice(1) || "overview");
   refresh();
   setInterval(() => { if (!document.hidden) refresh(); }, 30000);

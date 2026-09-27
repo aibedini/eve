@@ -5726,23 +5726,45 @@ html[data-theme="light"] .server-icon {
 }
 
 /* SMS delivery intelligence — Settings / SMS */
+.sms-settings-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
 .sms-center-nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; margin-bottom: 20px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); }
 .sms-center-pane { min-width: 0; }
 .sms-center-pane.hidden { display: none; }
 .sms-center-pane > h3 { margin-bottom: 4px; }
 .sms-center-pane > .field-note { margin-bottom: 14px; }
 .sms-center-list { display: grid; gap: 8px; margin-top: 14px; }
-.sms-center-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 12px; width: 100%; padding: 14px 16px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); text-align: start; font: inherit; }
+.sms-center-entry { min-width: 0; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); overflow: hidden; transition: border-color .2s ease, box-shadow .2s ease; }
+.sms-center-entry:hover { border-color: color-mix(in srgb, var(--primary) 65%, var(--border-color)); box-shadow: var(--shadow); }
+.sms-center-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); align-items: center; gap: 12px; width: 100%; padding: 14px 16px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); text-align: start; font: inherit; }
+.sms-center-entry > .sms-center-row { border: 0; border-radius: 0; background: transparent; }
 button.sms-center-row { cursor: pointer; }
 button.sms-center-row:hover { border-color: var(--primary); background: var(--bg-card-hover); }
 button.sms-center-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.sms-center-entry > button.sms-center-row[aria-expanded="true"] { background: var(--bg-card-hover); }
 .sms-center-fact { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; font-size: .8rem; }
 .sms-center-fact strong { font-weight: 600; }
+.sms-center-disclosure { display: inline-flex; align-items: center; justify-content: flex-end; gap: 7px; color: var(--primary); font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.sms-center-disclosure::after { content: ""; width: 7px; height: 7px; border-inline-end: 2px solid currentColor; border-block-end: 2px solid currentColor; transform: rotate(45deg) translateY(-2px); transition: transform .2s ease; }
+[dir="rtl"] .sms-center-disclosure::after { transform: rotate(45deg) translateY(-2px); }
+.sms-center-row[aria-expanded="true"] .sms-center-disclosure::after { transform: rotate(225deg) translate(-1px, -1px); }
+.sms-center-expansion { padding: 14px 16px 16px; border-top: 1px solid var(--border-color); background: color-mix(in srgb, var(--bg-dark) 38%, var(--bg-card)); }
+.sms-center-detail-list, .sms-center-timeline { display: grid; gap: 8px; }
+.sms-center-detail-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card); }
+.sms-center-identity { margin-bottom: 10px; }
+.sms-center-more { margin-top: 12px; }
+.sms-status { display: inline-flex; align-items: center; align-self: flex-start; max-width: 100%; padding: 3px 8px; border: 1px solid var(--border-color); border-radius: 9999px; background: color-mix(in srgb, var(--secondary) 12%, transparent); color: var(--text-secondary); font-size: .7rem; line-height: 1.3; overflow-wrap: anywhere; }
+.sms-status-success { border-color: color-mix(in srgb, var(--success) 42%, transparent); background: color-mix(in srgb, var(--success) 13%, transparent); color: var(--success); }
+.sms-status-warning { border-color: color-mix(in srgb, var(--warning) 42%, transparent); background: color-mix(in srgb, var(--warning) 13%, transparent); color: var(--warning); }
+.sms-status-danger { border-color: color-mix(in srgb, var(--danger) 42%, transparent); background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger); }
+.sms-kpi-success { color: var(--success); }
+.sms-kpi-warning { color: var(--warning); }
+.sms-kpi-danger { color: var(--danger); }
+.sms-kpi-neutral { color: var(--text-primary); }
 .sms-center-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 16px; }
 .sms-center-filters .form-group { flex: 1 1 180px; margin: 0; }
 .sms-center-filters .search-input, .sms-center-filters .form-select { width: 100%; }
 .sms-center-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
-@media (max-width: 600px) { .sms-center-nav .sms-audit-tab { flex: 1 1 40%; } .sms-center-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .sms-settings-actions { width: 100%; } .sms-settings-actions .btn { flex: 1 1 140px; } .sms-center-nav .sms-audit-tab { flex: 1 1 40%; } .sms-center-row, .sms-center-detail-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .sms-center-disclosure { grid-column: 1 / -1; justify-content: flex-start; padding-top: 4px; } }
 .sms-audit { margin-top: 20px; color: var(--text-primary); }
 .sms-audit .hidden { display: none; }
 .sms-audit-header, .sms-audit-stream-head, .sms-audit-pager { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
