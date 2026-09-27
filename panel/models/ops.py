@@ -733,6 +733,8 @@ class ServiceObservedState(db.Model):
     last_total_bytes = db.Column(db.BigInteger, nullable=True)
     last_expiry_ms = db.Column(db.BigInteger, nullable=True)
     last_observed_at = db.Column(db.DateTime, nullable=True, index=True)
+    state_entered_at = db.Column(db.DateTime, nullable=True)
+    state_entered_at_quality = db.Column(db.String(32), nullable=True)
     last_telemetry_updated_at = db.Column(db.DateTime, nullable=True)
     state_version = db.Column(db.Integer, nullable=False, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -750,6 +752,9 @@ class ServiceObservedState(db.Model):
             'last_expiry_ms': self.last_expiry_ms,
             'last_observed_at': (self.last_observed_at.isoformat() + 'Z'
                                  if self.last_observed_at else None),
+            'state_entered_at': (self.state_entered_at.isoformat() + 'Z'
+                                 if self.state_entered_at else None),
+            'state_entered_at_quality': self.state_entered_at_quality or 'unknown_baseline',
             'state_version': int(self.state_version or 0),
         }
 
@@ -826,6 +831,8 @@ class ServiceNotificationEvent(db.Model):
             'attempt_count': int(self.attempt_count or 0),
             'next_attempt_at': (self.next_attempt_at.isoformat() + 'Z'
                                 if self.next_attempt_at else None),
+            'last_attempt_at': (self.last_attempt_at.isoformat() + 'Z'
+                                if self.last_attempt_at else None),
             'idempotency_key': self.idempotency_key,
             'correlation_id': self.correlation_id,
             'gateway_request_id': self.gateway_request_id,

@@ -1,7 +1,7 @@
 """SMS and WhatsApp gateway API routes (extracted from app.py)."""
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 import threading
 import time
@@ -13,10 +13,10 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from panel.core.phone import _extract_iran_mobile_from_text
 from panel.core.redis_client import get_redis
 from panel.extensions import db
-from panel.models import (Admin, OPEN_NOTIFICATION_STATUSES, PendingSms, ServiceLifecycleState,
+from panel.models import (Admin, OPEN_NOTIFICATION_STATUSES, PendingSms,
                           ServiceNotificationEvent, ServiceObservedState, SmsScanDecision,
                           SmsScanRun, SmsSendLog, SystemConfig)
-from sqlalchemy import and_, case, or_, func
+from sqlalchemy import or_, func
 from panel.routes.common import permission_required
 from panel.security import outbound_tls_verify
 from panel.services import gmweb_contract
@@ -497,47 +497,16 @@ def sms_recovery_activate():
 
 
 def _notification_coverage_gaps(*, now=None):
-    """Count fresh terminal transitions without coverage in their generation.
-
-    Historical silent baselines (state_version=0) are deliberately outside this
-    automatic repair SLO; they require the operator recovery workflow.
-    """
-    moment = now or datetime.utcnow()
-    from panel.services.notification_recovery import SUPPRESSION_REASONS
-    generation = func.coalesce(ServiceLifecycleState.generation, 0)
-    covered = (db.session.query(ServiceNotificationEvent.id)
-               .filter(ServiceNotificationEvent.service_key == ServiceObservedState.service_key,
-                       ServiceNotificationEvent.state == ServiceObservedState.last_state,
-                       ServiceNotificationEvent.state_version == ServiceObservedState.state_version,
-                       ServiceNotificationEvent.lifecycle_generation == generation)
-               .filter(or_(ServiceNotificationEvent.status.in_(
-                   OPEN_NOTIFICATION_STATUSES),
-                   and_(ServiceNotificationEvent.status == 'skipped',
-                        ServiceNotificationEvent.last_error.in_(
-                            SUPPRESSION_REASONS))))
-               .exists())
-    confirmed = (db.session.query(SmsSendLog.id)
-                 .filter(SmsSendLog.service_key == ServiceObservedState.service_key,
-                         SmsSendLog.lifecycle_generation == generation,
-                         SmsSendLog.state == case(
-                             (ServiceObservedState.last_state == 'volume_ended', 'ended'),
-                             else_=ServiceObservedState.last_state),
-                         SmsSendLog.successful.is_(True),
-                         SmsSendLog.verification_status == 'confirmed')
-                 .exists())
-    return int(db.session.query(func.count(ServiceObservedState.id))
-               .outerjoin(ServiceLifecycleState,
-                          ServiceLifecycleState.service_key == ServiceObservedState.service_key)
-               .filter(ServiceObservedState.last_state.in_(('volume_ended', 'expired')),
-                       ServiceObservedState.state_version > 0,
-                       ServiceObservedState.last_observed_at >= moment - timedelta(hours=1))
-               .filter(~covered, ~confirmed).scalar() or 0)
+    """Fresh transition SLO from the same five-bucket coverage classifier."""
+    from panel.services import notification_recovery
+    return notification_recovery.accounting(now=now, limit=0)['fresh_gap_count']
 
 
 @bp.route('/api/sms/notification-debt', methods=['GET'])
 @permission_required('secrets.manage')
 def sms_notification_debt():
     """Outstanding durable obligations, independent of scan/send-log history."""
+    from panel.services import notification_recovery
     active = OPEN_NOTIFICATION_STATUSES
     query = ServiceNotificationEvent.query.filter(
         ServiceNotificationEvent.status.in_(active))
@@ -547,13 +516,78 @@ def sms_notification_debt():
     oldest = query.with_entities(func.min(ServiceNotificationEvent.created_at)).scalar()
     try:
         limit = min(max(int(request.args.get('limit', 50)), 1), 200)
+        offset = max(0, int(request.args.get('offset', 0)))
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': 'Invalid limit.'}), 400
-    rows = query.order_by(ServiceNotificationEvent.created_at.asc()).limit(limit).all()
+    obligation_filter = request.args.get('filter') or None
+    if obligation_filter == 'waiting_policy':
+        listed = query.filter(ServiceNotificationEvent.last_error.in_(
+            ('quiet_hours', 'hourly_limit_reached', 'daily_limit_reached',
+             'cooldown_active', 'manual_review_pending')))
+    elif obligation_filter == 'waiting_gateway':
+        listed = query.filter(ServiceNotificationEvent.status != 'gateway_accepted',
+                              or_(ServiceNotificationEvent.last_error.like('gateway_%'),
+                                  ServiceNotificationEvent.last_error.like('gmweb_%')))
+    elif obligation_filter == 'waiting_device':
+        listed = query.filter(or_(
+            ServiceNotificationEvent.status == 'gateway_accepted',
+            ServiceNotificationEvent.last_error.in_(
+                ('android_offline', 'android_stale', 'no_recent_device_pull',
+                 'task_waiting_no_device'))))
+    elif obligation_filter == 'needs_attention':
+        listed = query.filter(
+            ServiceNotificationEvent.notification_kind.in_(('volume_ended', 'expired')),
+            ServiceNotificationEvent.attempt_count >= 7)
+    elif obligation_filter == 'retrying':
+        listed = query.filter(ServiceNotificationEvent.status == 'retry')
+    elif obligation_filter is None:
+        listed = query
+    else:
+        return jsonify({'success': False, 'error': 'Invalid filter.'}), 400
+    search = (request.args.get('q') or '').strip()[:100]
+    if search:
+        listed = listed.filter(or_(ServiceNotificationEvent.client_email.ilike(f'%{search}%'),
+                                   ServiceNotificationEvent.service_key.ilike(f'%{search}%')))
+    server_filter = request.args.get('server_id') or None
+    state_filter = request.args.get('state') or None
+    if server_filter:
+        if not server_filter.isdigit():
+            return jsonify({'success': False, 'error': 'Invalid server_id.'}), 400
+        listed = listed.filter(ServiceNotificationEvent.server_id == int(server_filter))
+    if state_filter:
+        if state_filter not in ('volume_ended', 'expired'):
+            return jsonify({'success': False, 'error': 'Invalid state.'}), 400
+        listed = listed.filter(ServiceNotificationEvent.state == state_filter)
+    listed_total = listed.count()
+    rows = listed.order_by(ServiceNotificationEvent.created_at.asc()).offset(offset).limit(limit).all()
+    observed = {row.service_key: row for row in ServiceObservedState.query.filter(
+        ServiceObservedState.service_key.in_([event.service_key for event in rows])).all()}
+    coverage = notification_recovery.accounting(limit=0)
+    coverage_counts = coverage['counts']
+    policy_reasons = ('quiet_hours', 'hourly_limit_reached', 'daily_limit_reached',
+                      'cooldown_active', 'manual_review_pending')
+    device_reasons = ('android_offline', 'android_stale', 'no_recent_device_pull',
+                      'task_waiting_no_device')
+    waiting_policy = query.filter(ServiceNotificationEvent.last_error.in_(policy_reasons)).count()
+    waiting_gateway = query.filter(
+        ServiceNotificationEvent.status != 'gateway_accepted',
+        or_(ServiceNotificationEvent.last_error.like('gateway_%'),
+            ServiceNotificationEvent.last_error.like('gmweb_%'))).count()
+    waiting_device = query.filter(or_(
+        ServiceNotificationEvent.status == 'gateway_accepted',
+        ServiceNotificationEvent.last_error.in_(device_reasons))).count()
     data = []
     for row in rows:
         item = row.to_dict()
         item['account'] = row.client_email
+        current = observed.get(row.service_key)
+        if current:
+            entered, quality, age_seconds = notification_recovery.state_entry(
+                current, now=datetime.utcnow())
+            item['current_state'] = current.last_state
+            item['state_entered_at'] = entered.isoformat() + 'Z' if entered else None
+            item['age_quality'] = quality
+            item['age_seconds'] = age_seconds
         item['needs_attention'] = (row.notification_kind in ('volume_ended', 'expired')
                                    and int(row.attempt_count or 0) >= 7)
         data.append(item)
@@ -565,12 +599,82 @@ def sms_notification_debt():
             ServiceNotificationEvent.attempt_count >= 7).count(),
         'oldest_age_seconds': (max(0, int((datetime.utcnow() - oldest).total_seconds()))
                                if oldest else None),
-        'coverage_gap_count': _notification_coverage_gaps(),
+        'coverage_gap_count': coverage['fresh_gap_count'],
         'coverage_scope': 'fresh_terminal_transitions_last_hour',
+        'needs_notification': coverage['needs_notification'],
+        'obligation_summary': {
+            'total': total, 'waiting_policy': waiting_policy,
+            'waiting_gateway': waiting_gateway,
+            'waiting_device': waiting_device,
+            'retrying': query.filter(ServiceNotificationEvent.status == 'retry').count(),
+            'needs_attention': query.filter(
+                ServiceNotificationEvent.notification_kind.in_(('volume_ended', 'expired')),
+                ServiceNotificationEvent.attempt_count >= 7).count(),
+        },
+        'coverage': {
+            'current_terminal_accounts': coverage['current_terminal_accounts'],
+            **coverage_counts,
+            'fresh_gap_count': coverage['fresh_gap_count'],
+            'historical_gap_count': coverage['historical_missing_obligations'],
+            'known_age_missing_obligations': coverage['known_age_missing_obligations'],
+            'unknown_age_missing_obligations': coverage['unknown_age_missing_obligations'],
+            'by_state': coverage['by_state'],
+        },
+        'oldest': {
+            'known_outstanding_age_seconds': coverage['oldest_known_outstanding_age_seconds'],
+            'unknown_age_count': coverage['unknown_age_outstanding_count'],
+        },
         'obligations': data,
+        'obligations_total': listed_total,
+        'obligations_offset': offset,
+        'obligations_has_more': offset + len(data) < listed_total,
     })
     response.headers['Cache-Control'] = 'no-store'
     return response
+
+
+@bp.route('/api/sms/notification-coverage', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_notification_coverage():
+    """Read-only, exhaustive terminal-account classification and bounded rows."""
+    from panel.services import notification_recovery
+    try:
+        limit = min(max(int(request.args.get('limit', 50)), 0), 100)
+        offset = max(0, int(request.args.get('offset', 0)))
+        server = request.args.get('server_id') or None
+        if server is not None:
+            server = int(server)
+        result = notification_recovery.accounting(
+            bucket=request.args.get('bucket') or None,
+            state=request.args.get('state') or None,
+            server_id=server, limit=limit, offset=offset,
+            age_filter=request.args.get('age') or None,
+            fresh_gap=request.args.get('fresh_gap') == 'true',
+            historical_missing_only=request.args.get('historical_missing') == 'true',
+            oldest_only=request.args.get('oldest_only') == 'true',
+            q=request.args.get('q'))
+    except (TypeError, ValueError) as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    response = jsonify({'success': True, **result})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/api/sms/notification-obligations/<event_id>/retry-now', methods=['POST'])
+@permission_required('secrets.manage')
+def sms_notification_retry_now(event_id):
+    """Wake the existing obligation; the worker reconciles requests before POST."""
+    event = ServiceNotificationEvent.query.filter_by(event_id=event_id).first()
+    if event is None:
+        return jsonify({'success': False, 'error': 'Obligation not found.'}), 404
+    if event.status not in ('pending', 'retry', 'gateway_accepted'):
+        return jsonify({'success': False, 'error': 'Obligation is not retryable.'}), 409
+    event.next_attempt_at = datetime.utcnow()
+    event.updated_at = event.next_attempt_at
+    db.session.commit()
+    return jsonify({'success': True, 'event_id': event.event_id,
+                    'action': 'reconcile_existing_request' if event.gateway_request_id
+                    else 'retry_existing_obligation', 'direct_sends': 0})
 
 
 @bp.route('/api/sms/transport-health', methods=['GET'])

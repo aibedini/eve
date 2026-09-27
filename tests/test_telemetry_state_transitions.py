@@ -86,6 +86,145 @@ class TelemetryTransitionTests(unittest.TestCase):
         self.assertEqual(counts['events_created'], 0)
         self.assertEqual(ServiceNotificationEvent.query.count(), 0)
 
+    def test_baseline_ended_age_remains_unknown_after_refresh(self):
+        from panel.services import notification_recovery
+        start = datetime.utcnow() - timedelta(days=2)
+        self._record(_state('volume_ended', remaining_gb=0), observed_at=start)
+        row = ServiceObservedState.query.one()
+        self.assertIsNone(row.state_entered_at)
+        self.assertEqual(row.state_entered_at_quality, 'unknown_baseline')
+        self._record(_state('volume_ended', remaining_gb=0), observed_at=datetime.utcnow())
+        db.session.refresh(row)
+        self.assertIsNone(row.state_entered_at)
+        self._record(_state('volume_ended', remaining_gb=0, total_gb=55),
+                     observed_at=datetime.utcnow() + timedelta(minutes=1))
+        self._record(_state('volume_ended', remaining_gb=0, total_gb=55),
+                     source='reconciliation',
+                     observed_at=datetime.utcnow() + timedelta(minutes=2))
+        self.assertEqual(ServiceNotificationEvent.query.count(), 0)
+        item = notification_recovery.preview(window='7d')['candidates'][0]
+        self.assertFalse(item['age_known'])
+        self.assertFalse(item['recoverable'])
+
+    def test_observed_ended_transition_keeps_true_age_on_refresh(self):
+        from panel.services import notification_recovery
+        from panel.routes.messaging import _notification_coverage_gaps
+        now = datetime.utcnow()
+        entered = now - timedelta(days=2)
+        self._record(_state('active', remaining_gb=2), observed_at=entered - timedelta(hours=1))
+        self._record(_state('volume_ended', remaining_gb=0), observed_at=entered)
+        row = ServiceObservedState.query.one()
+        self.assertEqual(row.state_entered_at, entered)
+        self.assertEqual(row.state_entered_at_quality, 'observed_transition')
+        ServiceNotificationEvent.query.delete()
+        db.session.commit()
+        self._record(_state('volume_ended', remaining_gb=0), observed_at=now)
+        self.assertEqual(row.state_entered_at, entered)
+        self.assertEqual(row.last_observed_at, now)
+        self._record(_state('volume_ended', remaining_gb=0, total_gb=55),
+                     observed_at=now + timedelta(minutes=1))
+        self.assertEqual(row.state_entered_at, entered)
+        ServiceNotificationEvent.query.delete()
+        db.session.commit()
+        self.assertFalse(notification_recovery.preview(window='24h', now=now)['candidates'][0]['recoverable'])
+        preview = notification_recovery.preview(window='3d', now=now)
+        self.assertTrue(preview['candidates'][0]['recoverable'])
+        self.assertEqual(preview['summary']['selected_known_age_missing'], 1)
+        self.assertEqual(_notification_coverage_gaps(now=now), 0)
+        census = notification_recovery.accounting(now=now, limit=0)
+        self.assertEqual(census['historical_missing_obligations'], 1)
+
+    def test_expired_baseline_infers_only_valid_past_expiry(self):
+        now = datetime.utcnow()
+        expiry = now - timedelta(days=2)
+        expiry_ms = int((expiry - datetime(1970, 1, 1)).total_seconds() * 1000)
+        self._record(_state('expired', remaining_gb=0, expiry_ms=expiry_ms), observed_at=now)
+        row = ServiceObservedState.query.one()
+        self.assertEqual(row.state_entered_at_quality, 'inferred_expiry')
+        self.assertAlmostEqual((row.state_entered_at - expiry).total_seconds(), 0, delta=1)
+
+    def test_expired_transition_uses_observation_not_expiry_as_entry(self):
+        now = datetime.utcnow()
+        expiry = now - timedelta(days=3)
+        expiry_ms = int((expiry - datetime(1970, 1, 1)).total_seconds() * 1000)
+        self._record(_state('active', remaining_gb=2, expiry_ms=expiry_ms),
+                     observed_at=now - timedelta(hours=1))
+        self._record(_state('expired', remaining_gb=0, expiry_ms=expiry_ms), observed_at=now)
+        row = ServiceObservedState.query.one()
+        self.assertEqual(row.state_entered_at, now)
+        self.assertEqual(row.state_entered_at_quality, 'observed_transition')
+
+    def test_terminal_coverage_buckets_partition_current_accounts(self):
+        from types import SimpleNamespace
+        from panel.services import notification_recovery
+        self._record(_state('volume_ended', remaining_gb=0))
+        key = self.key
+        now = datetime.utcnow()
+        event = SimpleNamespace(lifecycle_generation=0, notification_kind='volume_ended',
+                                status='pending', last_error=None, gateway_request_id=None,
+                                attempt_count=0, last_attempt_at=None, next_attempt_at=None,
+                                event_id='test-event')
+        confirmed = SimpleNamespace(lifecycle_generation=0, state='ended',
+                                    successful=True, verification_status='confirmed', request_id=None)
+        cases = [([], [], 'missing_obligation'),
+                 ([event], [], 'active_obligation'),
+                 ([event], [confirmed], 'confirmed')]
+        for events, logs, expected in cases:
+            with mock.patch.object(notification_recovery, '_evidence',
+                                   return_value=({}, {key: events}, {key: logs})):
+                report = notification_recovery.accounting(now=now, limit=0)
+            self.assertEqual(report['counts'][expected], 1)
+            self.assertEqual(sum(report['counts'].values()),
+                             report['current_terminal_accounts'])
+        event.status = 'skipped'
+        event.last_error = 'opted_out_recheck'
+        with mock.patch.object(notification_recovery, '_evidence',
+                               return_value=({}, {key: [event]}, {})):
+            self.assertEqual(notification_recovery.accounting(now=now, limit=0)
+                             ['counts']['valid_suppression'], 1)
+        event.status = 'sent'
+        with mock.patch.object(notification_recovery, '_evidence',
+                               return_value=({}, {key: [event]}, {})):
+            self.assertEqual(notification_recovery.accounting(now=now, limit=0)
+                             ['counts']['needs_review'], 1)
+        legacy_log = SimpleNamespace(service_key=None, lifecycle_generation=None,
+                                     state='ended', successful=False,
+                                     verification_status=None, request_id=None,
+                                     status='queued')
+        with mock.patch.object(notification_recovery, '_evidence',
+                               return_value=({}, {}, {key: [legacy_log]})):
+            self.assertEqual(notification_recovery.accounting(now=now, limit=0)
+                             ['counts']['needs_review'], 1)
+
+    def test_five_coverage_buckets_sum_to_terminal_total_together(self):
+        from types import SimpleNamespace
+        from panel.services import notification_recovery
+        now = datetime.utcnow()
+        keys = [f'coverage-{number}' for number in range(5)]
+        db.session.add_all(ServiceObservedState(
+            service_key=key, server_id=4, last_state='volume_ended',
+            state_version=0, last_observed_at=now, created_at=now, updated_at=now)
+            for key in keys)
+        db.session.commit()
+        def event(status, reason=None):
+            return SimpleNamespace(lifecycle_generation=0,
+                                   notification_kind='volume_ended', status=status,
+                                   last_error=reason, gateway_request_id=None,
+                                   attempt_count=0, last_attempt_at=None,
+                                   next_attempt_at=None, event_id='test')
+        events = {keys[1]: [event('pending')],
+                  keys[2]: [event('skipped', 'opted_out_recheck')],
+                  keys[3]: [event('sent')]}
+        logs = {keys[4]: [SimpleNamespace(
+            lifecycle_generation=0, state='ended', successful=True,
+            verification_status='confirmed', request_id=None)]}
+        with mock.patch.object(notification_recovery, '_evidence',
+                               return_value=({}, events, logs)):
+            result = notification_recovery.accounting(now=now, limit=0)
+        self.assertEqual(result['current_terminal_accounts'], 5)
+        self.assertEqual(list(result['counts'].values()), [1, 1, 1, 1, 1])
+        self.assertEqual(result['needs_notification'], 2)
+
     def test_the_reported_bug_two_gigabytes_to_ended_creates_one_event(self):
         self._record(_state('active', remaining_gb=2))
         counts = self._record(_state('volume_ended', remaining_gb=0))
@@ -159,6 +298,36 @@ class TelemetryTransitionTests(unittest.TestCase):
         db.session.commit()
         self.assertEqual(_notification_coverage_gaps(), 1)
 
+    def test_reconciliation_does_not_duplicate_active_recovery_obligation(self):
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_ended', remaining_gb=0))
+        event = ServiceNotificationEvent.query.one()
+        event.event_id = 'rc:existing-current-obligation'
+        event.idempotency_key = 'depletion-rc:existing-current-obligation'
+        db.session.commit()
+        result = self._record(_state('volume_ended', remaining_gb=0),
+                              source='reconciliation')
+        self.assertEqual(result['events_created'], 0)
+        self.assertEqual(ServiceNotificationEvent.query.count(), 1)
+
+    def test_reconciliation_repairs_current_generation_when_old_event_id_collides(self):
+        from panel.services import notification_recovery
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_ended', remaining_gb=0))
+        old = ServiceNotificationEvent.query.one()
+        self.assertEqual(old.lifecycle_generation, 0)
+        with mock.patch.object(lifecycle, 'generation_state',
+                               return_value={'generation': 1}), \
+             mock.patch.object(notification_recovery, '_evidence',
+                               return_value=({self.key: 1}, {}, {})):
+            result = self._record(_state('volume_ended', remaining_gb=0),
+                                  source='reconciliation')
+        self.assertEqual(result['events_created'], 1)
+        events = ServiceNotificationEvent.query.order_by(ServiceNotificationEvent.id).all()
+        self.assertEqual(len(events), 2)
+        self.assertTrue(events[-1].event_id.startswith('rc:'))
+        self.assertEqual(events[-1].lifecycle_generation, 1)
+
     def test_unconfirmed_legacy_sent_event_is_still_a_coverage_gap(self):
         from panel.routes.messaging import _notification_coverage_gaps
         self._record(_state('active', remaining_gb=2))
@@ -209,6 +378,26 @@ class TelemetryTransitionTests(unittest.TestCase):
             self.assertEqual(notification_recovery.activate(
                 identity, window='7d', now=now), 'active_obligation')
         self.assertEqual(ServiceNotificationEvent.query.count(), before + 1)
+        event = ServiceNotificationEvent.query.one()
+        self.assertEqual(event.event_id, telemetry_state.transition_event_id(
+            self.key, 'expired', candidate['state_version']))
+
+    def test_recovery_rejects_state_or_generation_change_after_preview(self):
+        from panel.services import notification_recovery
+        self._record(_state('volume_ended', remaining_gb=0))
+        item = notification_recovery.preview(window='custom',
+                                             allow_unknown_age=True)['candidates'][0]
+        identity = {key: item[key] for key in
+                    ('service_key', 'state', 'generation', 'state_version')}
+        with mock.patch.object(notification_recovery, '_evidence',
+                               return_value=({self.key: item['generation'] + 1}, {}, {})):
+            self.assertEqual(notification_recovery.activate(
+                identity, window='custom', allow_unknown_age=True), 'identity_changed')
+        self._record(_state('active', remaining_gb=3))
+        self.assertEqual(notification_recovery.activate(
+            identity, window='custom', allow_unknown_age=True), 'state_changed')
+        self.assertEqual(ServiceNotificationEvent.query.filter_by(
+            source='reconciliation_recovery').count(), 0)
 
     def test_unknown_age_ended_baseline_requires_explicit_manual_review(self):
         from panel.services import notification_recovery
@@ -251,7 +440,7 @@ class TelemetryTransitionTests(unittest.TestCase):
         now = datetime.utcnow()
         expiry = now - timedelta(days=12)
         self._record(_state('expired', remaining_gb=0,
-                            expiry_ms=int(expiry.timestamp() * 1000)),
+                            expiry_ms=int((expiry - datetime(1970, 1, 1)).total_seconds() * 1000)),
                      observed_at=now)
         ordinary = notification_recovery.preview(window='7d', now=now)
         self.assertFalse(ordinary['candidates'][0]['recoverable'])
@@ -260,6 +449,20 @@ class TelemetryTransitionTests(unittest.TestCase):
             date_to=expiry.date().isoformat(), now=now)
         self.assertTrue(custom['candidates'][0]['recoverable'])
         self.assertEqual(ServiceNotificationEvent.query.count(), 0)
+
+    def test_custom_recovery_range_uses_known_ended_entry_date(self):
+        from panel.services import notification_recovery
+        now = datetime.utcnow()
+        entered = now - timedelta(days=4)
+        self._record(_state('active', remaining_gb=2),
+                     observed_at=entered - timedelta(hours=1))
+        self._record(_state('volume_ended', remaining_gb=0), observed_at=entered)
+        ServiceNotificationEvent.query.delete()
+        db.session.commit()
+        report = notification_recovery.preview(
+            window='custom', date_from=entered.date().isoformat(),
+            date_to=entered.date().isoformat(), now=now)
+        self.assertTrue(report['candidates'][0]['recoverable'])
 
     def test_out_of_order_response_is_refused_by_the_ticket(self):
         # A slow read of an EARLIER state must not be applied after a newer one: it

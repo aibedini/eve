@@ -56,7 +56,7 @@ EVENT_FIELDS = (
 STATE_FIELDS = (
     'service_key', 'client_uuid', 'client_email', 'last_state',
     'last_remaining_bytes', 'last_total_bytes', 'last_expiry_ms', 'state_version',
-    'last_observed_at', 'updated_at',
+    'last_observed_at', 'state_entered_at', 'state_entered_at_quality', 'updated_at',
 )
 
 
@@ -87,7 +87,7 @@ def collect(email: str, server_id: int, hours: int) -> dict:
         SmsSendLog,
         WhatsappBotLog,
     )
-    from panel.services import depletion_pipeline, lifecycle, telemetry_state
+    from panel.services import depletion_pipeline, lifecycle, notification_recovery, telemetry_state
 
     email_l = email.strip().lower()
     report = {'account': {'email': email_l, 'server_id': server_id,
@@ -123,33 +123,38 @@ def collect(email: str, server_id: int, hours: int) -> dict:
         generation = lifecycle.generation_state(current.service_key).get('generation')
         expected_kind = telemetry_state.SERVICE_STATE_TO_NOTIFICATION_KIND.get(
             current.last_state)
-        matching = next((event for event in events
-                         if event.notification_kind == expected_kind
-                         and int(event.lifecycle_generation or 0) == int(generation or 0)),
-                        None)
-        if not expected_kind:
-            classification = 'NOT_APPLICABLE'
-        elif matching is None:
-            classification = 'COVERAGE_GAP'
-        elif matching.status == 'sent':
-            classification = 'CONFIRMED_OR_LEGACY_ACCEPTED'
-        elif matching.status == 'gateway_accepted':
-            classification = 'GATEWAY_ACCEPTED_UNCONFIRMED'
-        elif matching.status == 'superseded':
-            classification = 'STALE_SUPERSEDED'
-        elif matching.status == 'skipped':
-            classification = 'POLICY_SUPPRESSED'
-        elif matching.status in ('pending', 'retry', 'sending'):
-            classification = 'RETRY_SCHEDULED'
-        else:
-            classification = 'NEEDS_ATTENTION'
         report['notification_coverage'] = {
             'current_state': current.last_state,
             'generation': generation,
             'expected_kind': expected_kind,
-            'obligation_present': matching is not None,
-            'classification': classification,
+            'state_version': int(current.state_version or 0),
+            'obligation_present': False,
+            'classification': 'NOT_APPLICABLE',
         }
+        if expected_kind:
+            evidence = notification_recovery._evidence([current])
+            facts = notification_recovery.classify(
+                current, now=datetime.utcnow(), generation=int(generation or 0),
+                events=evidence[1].get(current.service_key, ()),
+                logs=evidence[2].get(current.service_key, ()))
+            classification = {
+                'confirmed': 'CONFIRMED',
+                'active_obligation': 'ACTIVE_OBLIGATION',
+                'valid_suppression': 'VALID_SUPPRESSION',
+                'needs_review': 'NEEDS_REVIEW',
+                'missing_obligation': ('MISSING_OBLIGATION' if facts['age_known']
+                                       else 'UNKNOWN_AGE_MISSING_OBLIGATION'),
+            }[facts['coverage_bucket']]
+            if classification == 'ACTIVE_OBLIGATION':
+                if facts['obligation_status'] == 'gateway_accepted':
+                    classification = 'WAITING_DEVICE'
+                elif (facts['last_error'] or '').startswith(('android_', 'no_recent_device_pull')):
+                    classification = 'WAITING_DEVICE'
+                elif (facts['last_error'] or '').startswith(('gateway_', 'gmweb_')):
+                    classification = 'WAITING_GATEWAY'
+            report['notification_coverage'].update(
+                classification=classification, state_version=int(current.state_version or 0),
+                obligation_present=bool(facts['obligation_status']), facts=facts)
 
         cutoff = datetime.utcnow() - timedelta(hours=max(1, int(hours)))
         logs = (WhatsappBotLog.query
@@ -172,6 +177,9 @@ def collect(email: str, server_id: int, hours: int) -> dict:
         report['sms_send_log'] = [
             {'state': row.state, 'status': row.status, 'reason': row.reason,
              'job_id': row.job_id, 'created_at': _iso(row.created_at),
+             'request_id': row.request_id,
+             'verification_status': row.verification_status,
+             'gateway_state': row.gateway_state, 'stage': row.stage,
              'gateway_sent_at': row.gateway_sent_at,
              'gateway_outcome': row.gateway_outcome}
             for row in send_log]

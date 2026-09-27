@@ -190,6 +190,18 @@ def _existing_states(service_keys) -> dict:
     return {row.service_key: row for row in rows}
 
 
+def _baseline_state_entry(state, moment):
+    """Only a past expiry boundary can date an initial terminal baseline."""
+    if state.get('service_state') == 'expired':
+        try:
+            expiry = datetime.utcfromtimestamp(int(state.get('expiry_time')) / 1000)
+            if datetime(2000, 1, 1) <= expiry <= moment:
+                return expiry, 'inferred_expiry'
+        except (TypeError, ValueError, OverflowError, OSError):
+            pass
+    return None, 'unknown_baseline'
+
+
 def record_observations(server_id, observations, *, observed_at=None,
                         source="transition", commit=True,
                         notify_baseline=False) -> dict:
@@ -202,13 +214,10 @@ def record_observations(server_id, observations, *, observed_at=None,
     Returns counters only -- the caller publishes the snapshot regardless, because
     dashboard freshness must never depend on SMS bookkeeping succeeding.
 
-    notify_baseline is what separates the two callers, and the difference is
-    deliberate. A fresh read establishes a silent baseline (the default), so
-    introducing the ledger cannot text every already-expired account in the install
-    at once. The RECONCILIATION pass sets it, because "make sure nothing was missed"
-    has to include the account that was already depleted when the pipeline started --
-    and the caps, cooldowns, quiet hours and lifecycle fences that already bounded
-    the old scan still bound what that produces.
+    Fresh reads establish silent baselines. Historical terminal baselines are
+    operator-reviewed through notification_recovery, not automatically sent.
+    ``notify_baseline`` remains for explicit legacy callers, but the scheduler
+    never enables it for the automatic reconciliation pass.
     """
     moment = observed_at or datetime.utcnow()
     prepared = []
@@ -241,6 +250,7 @@ def record_observations(server_id, observations, *, observed_at=None,
                 # FIRST EVER observation: a baseline, never a transition. This is
                 # what keeps introducing the ledger from texting every expired
                 # account in the install at deploy time.
+                entered_at, entered_quality = _baseline_state_entry(state, moment)
                 row = ServiceObservedState(
                     service_key=service_key,
                     server_id=_as_int(server_id, 0) or 0,
@@ -254,6 +264,8 @@ def record_observations(server_id, observations, *, observed_at=None,
                     last_total_bytes=state.get("total_bytes"),
                     last_expiry_ms=state.get("expiry_time"),
                     last_observed_at=moment,
+                    state_entered_at=entered_at,
+                    state_entered_at_quality=entered_quality,
                     last_telemetry_updated_at=state.get("telemetry_updated_at"),
                     state_version=0,
                     created_at=moment,
@@ -284,24 +296,43 @@ def record_observations(server_id, observations, *, observed_at=None,
                 # A missed outbox INSERT must not stay invisible forever. Only
                 # transitions already observed by this ledger are repaired here;
                 # first-observation historical baselines require operator review.
-                if (source == 'reconciliation' and int(row.state_version or 0) > 0
+                if (source == 'reconciliation'
+                        and row.state_entered_at_quality == 'observed_transition'
+                        and int(row.state_version or 0) > 0
                         and state.get('service_state') in NOTIFIABLE_STATES):
                     event_id = transition_event_id(
                         service_key, state['service_state'], row.state_version)
                     obligation = ServiceNotificationEvent.query.filter_by(
                         event_id=event_id).first()
-                    if obligation is None:
-                        if _open_event(
-                                service_key=service_key, server_id=server_id,
-                                identity=identity, state=state,
-                                previous_state=None, state_version=row.state_version,
-                                moment=moment, source='reconciliation_recovery'):
-                            result['events_created'] += 1
-                    elif (obligation.status == 'failed_terminal'
-                          and obligation.notification_kind in ('volume_ended', 'expired')):
-                        obligation.status = 'retry'
-                        obligation.next_attempt_at = moment
-                        obligation.updated_at = moment
+                    lifecycle_state = lifecycle_service.generation_state(service_key)
+                    generation = int(lifecycle_state.get('generation') or 0)
+                    lifecycle_changed = lifecycle_state.get('last_lifecycle_change_at')
+                    if (lifecycle_changed and row.last_observed_at
+                            and lifecycle_changed > row.last_observed_at):
+                        # The snapshot predates a renewal; it cannot prove this
+                        # generation is depleted even if its old state was.
+                        continue
+                    if (obligation is None or obligation.status == 'failed_terminal'
+                            or obligation.lifecycle_generation != generation):
+                        from panel.services import notification_recovery
+                        generations, events, logs = notification_recovery._evidence([row])
+                        coverage = notification_recovery.classify(
+                            row, now=moment,
+                            generation=generations.get(service_key, 0),
+                            events=events.get(service_key, ()),
+                            logs=logs.get(service_key, ()))
+                    else:
+                        coverage = {'coverage_bucket': 'active_obligation'}
+                    if coverage['coverage_bucket'] == 'missing_obligation':
+                        if obligation is None or obligation.lifecycle_generation != generation:
+                            if notification_recovery.open_obligation(
+                                    row, generation=generation, moment=moment):
+                                result['events_created'] += 1
+                        elif (obligation.status == 'failed_terminal'
+                              and obligation.notification_kind in ('volume_ended', 'expired')):
+                            obligation.status = 'retry'
+                            obligation.next_attempt_at = moment
+                            obligation.updated_at = moment
                 # Traffic moved but the state did not: refresh the observation stamp
                 # only (and only when it is actually stale), and do NOT create a
                 # version or an event. This is the write floor that keeps a poll loop
@@ -325,6 +356,9 @@ def record_observations(server_id, observations, *, observed_at=None,
             row.last_total_bytes = state.get("total_bytes")
             row.last_expiry_ms = state.get("expiry_time")
             row.last_observed_at = moment
+            if state.get('service_state') != previous.get('service_state'):
+                row.state_entered_at = moment
+                row.state_entered_at_quality = 'observed_transition'
             row.last_telemetry_updated_at = (
                 state.get("telemetry_updated_at") or row.last_telemetry_updated_at)
             row.updated_at = moment
@@ -340,7 +374,10 @@ def record_observations(server_id, observations, *, observed_at=None,
                           'stronger_state_observed', 'superseded_at': moment,
                           'next_attempt_at': None, 'updated_at': moment},
                          synchronize_session=False))
-            if new_state not in NOTIFIABLE_STATES:
+            # A quota/expiry edit can bump the telemetry version without beginning a
+            # new state episode. A historical terminal baseline stays SMS-silent.
+            if (new_state not in NOTIFIABLE_STATES
+                    or new_state == previous.get("service_state")):
                 continue
             created = _open_event(
                 service_key=service_key, server_id=server_id, identity=identity,
