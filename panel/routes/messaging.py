@@ -1072,7 +1072,13 @@ def sms_logs():
                          func.lower(SmsSendLog.request_id).like(term),
                          func.lower(SmsSendLog.gateway_job_id).like(term),
                          func.lower(SmsSendLog.job_id).like(term),
-                         func.lower(SmsSendLog.recipient).like(term)))
+                         func.lower(SmsSendLog.recipient).like(term),
+                         func.lower(SmsSendLog.requested_to).like(term),
+                         func.lower(SmsSendLog.sent_to).like(term),
+                         func.lower(SmsSendLog.service_key).like(term),
+                         func.lower(SmsSendLog.correlation_id).like(term),
+                         func.lower(SmsSendLog.lifecycle_event_id).like(term),
+                         func.lower(SmsSendLog.reason).like(term)))
     total = q.count()
     rows = q.order_by(SmsSendLog.created_at.desc()).offset(offset).limit(limit).all()
     resp = jsonify({'success': True, 'logs': [r.to_dict() for r in rows],

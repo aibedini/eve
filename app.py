@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.7.43"
+APP_VERSION = "2.7.44"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -3123,6 +3123,7 @@ from panel.routes.content import bp as content_bp
 from panel.routes.doctor import bp as doctor_bp
 from panel.routes.files import bp as files_bp
 from panel.routes.messaging import bp as messaging_bp
+from panel.routes.sms_gateway_events import bp as sms_gateway_events_bp
 from panel.routes.settings import bp as settings_bp
 from panel.routes.templates_api import bp as templates_api_bp
 
@@ -3149,6 +3150,7 @@ app.register_blueprint(settings_bp)
 app.register_blueprint(content_bp)
 app.register_blueprint(files_bp)
 app.register_blueprint(messaging_bp)
+app.register_blueprint(sms_gateway_events_bp)
 app.register_blueprint(templates_api_bp)
 app.register_blueprint(backups_bp)
 app.register_blueprint(doctor_bp)

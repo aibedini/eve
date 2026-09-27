@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}SMS Center · Eve{% endblock %}
+{% block page_title %}SMS Center{% endblock %}
+{% block content %}
+<main class="sms-center sms-audit">
+  <header class="sms-audit-header">
+    <div><span class="sms-audit-eyebrow">OPERATIONS / SMS</span><h2>SMS Center</h2>
+      <p>Eligibility, gateway acceptance, and physical send are separate facts. Carrier delivery is unavailable without a receipt.</p></div>
+    <div class="sms-audit-actions"><button class="btn btn-secondary" id="sms-center-refresh" type="button">Refresh</button>
+      <a class="btn btn-outline" href="{{ url_for('pages.settings_page') }}#tab-sms">Automation settings</a></div>
+  </header>
+  <div class="sms-health-strip" aria-live="polite">
+    <div class="stat-card"><span class="sms-audit-kpi-label">GMweb</span><strong class="sms-audit-kpi-value" id="sms-center-health">Checking…</strong></div>
+    <div class="stat-card"><span class="sms-audit-kpi-label">Device</span><strong class="sms-audit-kpi-value" id="sms-center-device">—</strong></div>
+    <div class="stat-card"><span class="sms-audit-kpi-label">Queue</span><strong class="sms-audit-kpi-value" id="sms-center-queue">—</strong></div>
+    <div class="stat-card"><span class="sms-audit-kpi-label">Notification debt</span><strong class="sms-audit-kpi-value" id="sms-center-debt-count">—</strong></div>
+  </div>
+  <nav class="sms-center-nav" aria-label="SMS Center sections">
+    <button class="sms-audit-tab active" type="button" data-sms-tab="overview">Overview</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="runs">Runs</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="delivery">Delivery log</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="debt">Notification debt</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="gateway">Gateway</button>
+  </nav>
+  <section class="sms-center-pane" id="sms-center-overview">
+    <h3>Recent audit sample</h3><p class="field-note">Counts cover up to 1,000 newest EVE audit rows, not an all-time total. “Accepted” does not mean sent; carrier confirmation is unavailable.</p>
+    <div class="sms-audit-kpis">
+      <div class="stat-card"><span class="sms-audit-kpi-label">Audited attempts</span><strong class="sms-audit-kpi-value" id="sms-center-attempts">—</strong></div>
+      <div class="stat-card"><span class="sms-audit-kpi-label">Gateway accepted</span><strong class="sms-audit-kpi-value" id="sms-center-accepted">—</strong></div>
+      <div class="stat-card"><span class="sms-audit-kpi-label">Failed</span><strong class="sms-audit-kpi-value" id="sms-center-failed">—</strong></div>
+      <div class="stat-card"><span class="sms-audit-kpi-label">Carrier receipts today (UTC)</span><strong class="sms-audit-kpi-value" id="sms-center-delivered">Checking…</strong></div>
+    </div>
+    <div class="panel-card"><div class="panel-card-header"><h3>Operational boundary</h3></div>
+      <p class="field-note">EVE decides who should receive a notification. GMweb records acceptance and the send path. A 200/202 response never proves handset submission or carrier delivery.</p></div>
+  </section>
+  <section class="sms-center-pane hidden" id="sms-center-runs">
+    <div class="sms-audit-stream-head"><div><h3>Recorded runs</h3><p>Decisions for matched candidates, including skips, remain inspectable.</p></div></div>
+    <div class="sms-center-list" id="sms-center-run-list" aria-live="polite">Loading runs…</div>
+  </section>
+  <section class="sms-center-pane hidden" id="sms-center-delivery">
+    <div class="sms-audit-stream-head"><div><h3>Delivery log</h3><p>Click a row for its recorded timeline.</p></div></div>
+    <div class="sms-center-filters">
+      <div class="form-group"><label for="sms-center-search">Account, phone, or gateway ID</label><input class="search-input" id="sms-center-search" type="search" autocomplete="off"></div>
+      <div class="form-group"><label for="sms-center-status">EVE status</label><select class="form-select" id="sms-center-status"><option value="">All statuses</option><option value="queued">Queued</option><option value="sent">Sent</option><option value="failed">Failed</option><option value="skipped">Skipped</option></select></div>
+      <div class="form-group"><label for="sms-center-from">From date</label><input class="search-input" id="sms-center-from" type="date"></div>
+      <div class="form-group"><label for="sms-center-to">Through date</label><input class="search-input" id="sms-center-to" type="date"></div>
+      <button class="btn btn-primary" type="button" id="sms-center-filter">Apply filters</button>
+    </div>
+    <div class="sms-center-list" id="sms-center-delivery-list" aria-live="polite">Loading messages…</div>
+    <div class="sms-audit-pager"><span id="sms-center-page-label"></span><div class="sms-audit-pager-actions"><button class="btn btn-secondary" type="button" id="sms-center-export">Export this page CSV</button><button class="btn btn-secondary" type="button" id="sms-center-prev">Previous</button><button class="btn btn-secondary" type="button" id="sms-center-next">Next</button></div></div>
+  </section>
+  <section class="sms-center-pane hidden" id="sms-center-debt">
+    <div class="sms-audit-stream-head"><div><h3>Notification debt</h3><p>Outstanding obligations and their next action.</p></div></div>
+    <div class="sms-center-list" id="sms-center-debt-list" aria-live="polite">Loading obligations…</div>
+  </section>
+  <section class="sms-center-pane hidden" id="sms-center-gateway">
+    <div class="sms-audit-stream-head"><div><h3>Gateway diagnostics</h3><p>Active transport only; historical delivery must be read from message evidence.</p></div></div>
+    <dl class="sms-center-facts" id="sms-center-gateway-facts"></dl>
+  </section>
+  <div class="modal-overlay hidden" id="sms-center-modal" role="dialog" aria-modal="true" aria-label="SMS timeline">
+    <div class="modal modal-lg"><div class="modal-header"><h3 id="sms-center-modal-title">Timeline</h3><button class="modal-close" id="sms-center-modal-close" type="button" aria-label="Close">×</button></div>
+      <div class="modal-body"><ol class="sms-audit-timeline" id="sms-center-timeline"></ol></div></div>
+  </div>
+</main>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='sms-center.js') }}" defer></script>{% endblock %}

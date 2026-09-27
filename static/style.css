@@ -5726,6 +5726,23 @@ html[data-theme="light"] .server-icon {
 }
 
 /* SMS delivery intelligence — Settings / SMS */
+.sms-center-nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; margin-bottom: 20px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); }
+.sms-center-pane { min-width: 0; }
+.sms-center-pane.hidden { display: none; }
+.sms-center-pane > h3 { margin-bottom: 4px; }
+.sms-center-pane > .field-note { margin-bottom: 14px; }
+.sms-center-list { display: grid; gap: 8px; margin-top: 14px; }
+.sms-center-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 12px; width: 100%; padding: 14px 16px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); text-align: start; font: inherit; }
+button.sms-center-row { cursor: pointer; }
+button.sms-center-row:hover { border-color: var(--primary); background: var(--bg-card-hover); }
+button.sms-center-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.sms-center-fact { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; font-size: .8rem; }
+.sms-center-fact strong { font-weight: 600; }
+.sms-center-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 16px; }
+.sms-center-filters .form-group { flex: 1 1 180px; margin: 0; }
+.sms-center-filters .search-input, .sms-center-filters .form-select { width: 100%; }
+.sms-center-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
+@media (max-width: 600px) { .sms-center-nav .sms-audit-tab { flex: 1 1 40%; } .sms-center-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .sms-audit { margin-top: 20px; color: var(--text-primary); }
 .sms-audit .hidden { display: none; }
 .sms-audit-header, .sms-audit-stream-head, .sms-audit-pager { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }

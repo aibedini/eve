@@ -400,6 +400,23 @@ class WhatsappBotLog(db.Model):
     sent_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
+class SmsGatewayEvent(db.Model):
+    """Privacy-safe gateway evidence, deduplicated by GMweb event identity."""
+
+    __tablename__ = 'sms_gateway_events'
+    event_id = db.Column(db.String(160), primary_key=True)
+    trace_id = db.Column(db.String(64), nullable=False, index=True)
+    message_id = db.Column(db.String(128), nullable=False, index=True)
+    eve_notification_id = db.Column(db.String(128), nullable=True, index=True)
+    event_type = db.Column(db.String(64), nullable=False, index=True)
+    occurred_at = db.Column(db.DateTime, nullable=False)
+    received_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    attempt = db.Column(db.Integer, nullable=True)
+    device_id = db.Column(db.String(64), nullable=True)
+    reason_code = db.Column(db.String(64), nullable=True)
+    stage = db.Column(db.String(64), nullable=True)
+
+
 class SmsSendLog(db.Model):
     """Human-facing audit trail for the automated, state-based SMS scan. One row
     per processed recipient (sent / failed / skipped) so the operator can see who

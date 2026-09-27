@@ -2730,6 +2730,9 @@ def _notification_meta(meta: dict | None) -> dict:
     correlation = str(meta.get('correlationId') or '').strip()
     if correlation:
         out['correlationId'] = correlation[:64]
+    notification_id = str(meta.get('eveNotificationId') or '').strip()
+    if notification_id:
+        out['eveNotificationId'] = notification_id[:128]
     out['requiresValidation'] = bool(meta.get('requiresValidation', True))
     return out
 
@@ -4143,6 +4146,7 @@ def _deliver_depletion_event_impl(event, *, cfg, templates, cooldown_hours, job_
     idem = telemetry_state.idempotency_key_for(event)
     meta = _depletion_notification_meta(
         event.service_key, generation, notification_kind, last_change_at=last_change_at)
+    meta['eveNotificationId'] = f'eve_notif_{event.id}'
     res = _send_sms_via_gmweb(recipient, text_msg, cfg,
                               priority=_gmweb_sms_priority(state),
                               idempotency_key=idem, meta=meta)

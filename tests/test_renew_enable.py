@@ -3,6 +3,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from unittest import mock
 
 
@@ -330,9 +331,23 @@ class RenewEnableTests(unittest.TestCase):
         db.session.remove()
 
     def _seed_cache(self, raw):
+        """Seed the shared snapshot as a FRESH read.
+
+        The snapshot's age is what the renewal's baseline gate reads. Without a stamp
+        the row inherits whatever ``last_update`` the previous test (or module) left
+        behind, so the same fixture passed in isolation and failed in the full suite
+        with ``cache_baseline_rejected`` + "Failed to fetch inbounds" - a
+        time-dependent fixture, not a product bug. Stamping both the row and the
+        snapshot to "now" makes the seeded state mean what it says.
+        """
+        row = _cached_client_row(self.server.id, raw)
+        now_iso = datetime.utcnow().isoformat()
+        row['telemetry_updated_at'] = now_iso
+        row['config_updated_at'] = now_iso
         GLOBAL_SERVER_DATA['inbounds'] = [
-            _cached_inbound(self.server.id, [_cached_client_row(self.server.id, raw)]),
+            _cached_inbound(self.server.id, [row]),
         ]
+        GLOBAL_SERVER_DATA['last_update'] = now_iso
 
     def _renew(self, email='bob', **payload):
         return self.client.post(

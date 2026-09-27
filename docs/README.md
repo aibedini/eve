@@ -83,6 +83,7 @@ relative link does not resolve.
 - [SMS lifecycle: renewal vs depletion-reminder consistency](SMS_LIFECYCLE_INVALIDATION.md) - SMS_LIFECYCLE_INVALIDATION.md
 - [Telemetry state transitions and the depletion notification pipeline](TELEMETRY_STATE_TRANSITIONS.md) - TELEMETRY_STATE_TRANSITIONS.md
 - [📨 SMS Gateway — Delivery-Confirmation Integration Spec](SMS_GATEWAY_DELIVERY_SPEC.md) - SMS_GATEWAY_DELIVERY_SPEC.md
+- [SMS operations trace: EVE run → gateway → device → carrier → callback](sms-operations-trace-v1.md) - sms-operations-trace-v1.md
 
 ## BNQO control plane
 

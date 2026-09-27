@@ -99,6 +99,7 @@ from panel.models.ops import (
     AdminPermission,
     WhatsappBotLog,
     SmsSendLog,
+    SmsGatewayEvent,
     SmsScanRun,
     SmsScanDecision,
     PendingSms,

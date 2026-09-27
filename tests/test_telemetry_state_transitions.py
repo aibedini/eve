@@ -67,6 +67,7 @@ class TelemetryTransitionTests(unittest.TestCase):
         cls.ctx.pop()
 
     def setUp(self):
+        db.session.remove()
         ServiceNotificationEvent.query.delete()
         ServiceObservedState.query.delete()
         db.session.commit()

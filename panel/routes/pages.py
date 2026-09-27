@@ -137,6 +137,13 @@ def admins_page():
                          panel_lang=_get_panel_ui_lang(),
                          role=session.get('role', 'admin'))
 
+@bp.route('/sms-center')
+@permission_required('secrets.manage')
+def sms_center_page():
+    """Operational SMS evidence; configuration remains in Settings."""
+    return render_template('sms_center.html')
+
+
 @bp.route('/settings')
 @login_required
 def settings_page():
