@@ -132,13 +132,15 @@
         const tpl = (templateObj && templateObj.content) ? templateObj.content : DEFAULT_TEMPLATE;
         const telegramCh = (templateObj && templateObj.telegram_channel) || '';
         const whatsappCh = (templateObj && templateObj.whatsapp_channel) || '';
+        const dashboardLink = absoluteUrl(client.dash_sub_url || client.sub_url || '');
         const values = Object.assign({}, EMPTY_RECOMMENDATION, client.recommendation_vars || {}, {
             email: client.email || '-',
             account_name: client.email || '-',
             service_name: client.email || '-',
             remaining_time: client.expiryTime || '-',
             remaining_volume: client.remaining_formatted || '-',
-            dashboard_link: absoluteUrl(client.dash_sub_url || client.sub_url || ''),
+            dashboard_link: dashboardLink,
+            dashboard_link_no_https: dashboardLink.replace(/^https?:\/\//i, ''),
             sub_link: absoluteUrl(client.sub_url || ''),
             server_name: client.server_name || '',
             telegram_channel: telegramCh,

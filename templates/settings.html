@@ -2261,6 +2261,7 @@
                     <span class="var-chip" onclick="insertVar('{days}')">{days}</span>
                     <span class="var-chip" onclick="insertVar('{sub_link}')">{sub_link}</span>
                     <span class="var-chip" onclick="insertVar('{dashboard_link}')">{dashboard_link}</span>
+                    <span class="var-chip" onclick="insertVar('{dashboard_link_no_https}')" title="Dashboard link without http:// or https://">{dashboard_link_no_https}</span>
                     <span class="var-chip" onclick="insertVar('{gift_volume}')">{gift_volume}</span>
                     <span class="var-chip" onclick="insertVar('{if_gift}...{/if_gift}')" title="Shown only when a gift volume was given">{if_gift}...{/if_gift}</span>
                 </div>
@@ -2294,6 +2295,7 @@
                     <span class="var-chip" onclick="insertRenewVar('{volume_label}')">{volume_label}</span>
                     <span class="var-chip" onclick="insertRenewVar('{date}')">{date}</span>
                     <span class="var-chip" onclick="insertRenewVar('{dashboard_link}')">{dashboard_link}</span>
+                    <span class="var-chip" onclick="insertRenewVar('{dashboard_link_no_https}')" title="Dashboard link without http:// or https://">{dashboard_link_no_https}</span>
                 </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                     <textarea id="renew-template-content" class="form-input" rows="15" style="font-family: 'Vazirmatn', sans-serif; direction: rtl;" oninput="updateRenewModalPreview(this.value)"></textarea>
@@ -2344,6 +2346,7 @@
                     <span class="var-chip" onclick="insertAccountMessageVar('{remaining_time}')">{remaining_time}</span>
                     <span class="var-chip" onclick="insertAccountMessageVar('{remaining_volume}')">{remaining_volume}</span>
                     <span class="var-chip" onclick="insertAccountMessageVar('{dashboard_link}')">{dashboard_link}</span>
+                    <span class="var-chip" onclick="insertAccountMessageVar('{dashboard_link_no_https}')" title="Dashboard link without http:// or https://">{dashboard_link_no_https}</span>
                     <span class="var-chip" onclick="insertAccountMessageVar('{sub_link}')">{sub_link}</span>
                     <span class="var-chip" onclick="insertAccountMessageVar('{server_name}')">{server_name}</span>
                     <span class="var-chip" onclick="insertAccountMessageVar('{telegram_channel}')" title="Telegram channel — uses reseller's if reseller, otherwise panel owner's">{telegram_channel}</span>
@@ -9968,6 +9971,7 @@
         server_name: 'Main Server',
         mode: 'custom',
         dashboard_link: 'https://example.com/s/1/uuid',
+        dashboard_link_no_https: 'example.com/s/1/uuid',
         gift_volume: '5',
         gift_given: true,
         recommendation_given: true,
@@ -10190,6 +10194,7 @@
             '{remaining_time}':    '30 Days',
             '{remaining_volume}':  '110GB',
             '{dashboard_link}':    'https://example.com/s/1/uuid',
+            '{dashboard_link_no_https}': 'example.com/s/1/uuid',
             '{sub_link}':          'https://example.com/sub/uuid',
             '{server_name}':       'Germany 1',
             '{telegram_channel}':  accountMessageChannelLinks?.telegram_channel || 't.me/yourchannel',

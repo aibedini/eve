@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.7.46"
+APP_VERSION = "2.7.47"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -1604,14 +1604,20 @@ def _render_text_template(template: str | None, variables: dict) -> str:
     placeholders are blanked rather than raising, so a partially-matching template
     never leaks raw {tokens} into the message.
     """
+    render_vars = dict(variables or {})
+    dashboard_link = str(render_vars.get('dashboard_link') or '')
+    render_vars.setdefault(
+        'dashboard_link_no_https',
+        re.sub(r'^https?://', '', dashboard_link, flags=re.IGNORECASE),
+    )
     raw = (template or '').strip() or DEFAULT_RENEW_TEMPLATE
-    raw = _apply_template_conditionals(raw, variables)
+    raw = _apply_template_conditionals(raw, render_vars)
     try:
-        return raw.format_map(_SafeFormatDict(variables))
+        return raw.format_map(_SafeFormatDict(render_vars))
     except Exception:
         # Last resort if the template has malformed syntax (e.g. a stray single brace).
         try:
-            return _apply_template_conditionals(DEFAULT_RENEW_TEMPLATE, variables).format_map(_SafeFormatDict(variables))
+            return _apply_template_conditionals(DEFAULT_RENEW_TEMPLATE, render_vars).format_map(_SafeFormatDict(render_vars))
         except Exception:
             return DEFAULT_RENEW_TEMPLATE
 

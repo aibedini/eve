@@ -182,7 +182,7 @@ def get_active_template():
 def _account_info_template_vars():
     return [
         '{email}', '{account_name}', '{remaining_time}', '{remaining_volume}',
-        '{dashboard_link}', '{sub_link}', '{server_name}',
+        '{dashboard_link}', '{dashboard_link_no_https}', '{sub_link}', '{server_name}',
         '{telegram_channel}', '{whatsapp_channel}',
         '{gift_volume}', '{if_gift}...{/if_gift}',
         '{recommended_package}', '{recommended_volume}', '{recommended_days}',
@@ -533,7 +533,7 @@ def get_renew_templates():
         'success': True, 
         'templates': [t.to_dict() for t in templates],
         'available_vars': [
-            '{email}', '{days}', '{days_label}', '{volume}', '{volume_label}', '{date}', '{server_name}', '{mode}', '{dashboard_link}',
+            '{email}', '{days}', '{days_label}', '{volume}', '{volume_label}', '{date}', '{server_name}', '{mode}', '{dashboard_link}', '{dashboard_link_no_https}',
             '{gift_volume}', '{if_gift}...{/if_gift}',
             '{recommended_package}', '{recommended_volume}', '{recommended_days}',
             '{recommended_price}', '{recommended_daily_usage}', '{recommended_31d_usage}',

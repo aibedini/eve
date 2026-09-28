@@ -1950,6 +1950,7 @@
             const telegramCh = (typeof templateObj === 'object') ? (templateObj?.telegram_channel || '') : '';
             const whatsappCh = (typeof templateObj === 'object') ? (templateObj?.whatsapp_channel || '') : '';
 
+            const dashboardLink = absolutePanelUrl(client?.dash_sub_url || client?.sub_url || '');
             const values = Object.assign({
                 recommendation: '', recommendation_given: false,
                 recommended_package: '', recommended_volume: '', recommended_days: '',
@@ -1962,7 +1963,8 @@
                 service_name:      client?.email || '-',
                 remaining_time:    client?.expiryTime || '-',
                 remaining_volume:  client?.remaining_formatted || '-',
-                dashboard_link:    absolutePanelUrl(client?.dash_sub_url || client?.sub_url || ''),
+                dashboard_link:    dashboardLink,
+                dashboard_link_no_https: dashboardLink.replace(/^https?:\/\//i, ''),
                 sub_link:          absolutePanelUrl(client?.sub_url || ''),
                 server_name:       client?.server_name || '',
                 telegram_channel:  telegramCh,
@@ -2165,8 +2167,12 @@
         }
 
         function _renderTplVars(templateStr, vars) {
-            return _applyTplConditionals(templateStr, vars).replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) =>
-                (vars && Object.prototype.hasOwnProperty.call(vars, k)) ? vars[k] : m);
+            const renderVars = Object.assign({}, vars || {});
+            if (!Object.prototype.hasOwnProperty.call(renderVars, 'dashboard_link_no_https')) {
+                renderVars.dashboard_link_no_https = String(renderVars.dashboard_link || '').replace(/^https?:\/\//i, '');
+            }
+            return _applyTplConditionals(templateStr, renderVars).replace(/\{([a-zA-Z0-9_]+)\}/g, (m, k) =>
+                Object.prototype.hasOwnProperty.call(renderVars, k) ? renderVars[k] : m);
         }
 
         // Channel-aware send for Client-Created / Renew. Picks phone, then channel,
@@ -6928,7 +6934,8 @@ Connection links
             .replace(/{volume}/g, (client.volume == 0 || client.volume == null) ? '♾️' : client.volume)
             .replace(/{days}/g,   (client.days   == 0 || client.days   == null) ? '♾️' : client.days)
             .replace(/{sub_link}/g, client.sub_link || '')
-            .replace(/{dashboard_link}/g, client.dashboard_link || '');
+            .replace(/{dashboard_link}/g, client.dashboard_link || '')
+            .replace(/{dashboard_link_no_https}/g, String(client.dashboard_link || '').replace(/^https?:\/\//i, ''));
     }
 
     const _IS_FA_PANEL = (document.documentElement.lang || 'en') === 'fa';
