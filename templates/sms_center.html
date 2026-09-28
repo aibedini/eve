@@ -28,7 +28,7 @@
       <div class="stat-card"><span class="sms-audit-kpi-label">Audited attempts</span><strong class="sms-audit-kpi-value" id="sms-center-attempts">—</strong></div>
       <div class="stat-card"><span class="sms-audit-kpi-label">Gateway accepted</span><strong class="sms-audit-kpi-value" id="sms-center-accepted">—</strong></div>
       <div class="stat-card"><span class="sms-audit-kpi-label">Failed</span><strong class="sms-audit-kpi-value" id="sms-center-failed">—</strong></div>
-      <div class="stat-card"><span class="sms-audit-kpi-label">Carrier receipts today (UTC)</span><strong class="sms-audit-kpi-value" id="sms-center-delivered">Checking…</strong></div>
+      <div class="stat-card"><span class="sms-audit-kpi-label">Carrier outcomes today (UTC)</span><strong class="sms-audit-kpi-value" id="sms-center-delivered">Checking…</strong></div>
     </div>
     <div class="panel-card"><div class="panel-card-header"><h3>Operational boundary</h3></div>
       <p class="field-note">EVE decides who should receive a notification. GMweb records acceptance and the send path. A 200/202 response never proves handset submission or carrier delivery.</p></div>
@@ -56,6 +56,16 @@
   <section class="sms-center-pane hidden" id="sms-center-gateway">
     <div class="sms-audit-stream-head"><div><h3>Gateway diagnostics</h3><p>Active transport only; historical delivery must be read from message evidence.</p></div></div>
     <dl class="sms-center-facts" id="sms-center-gateway-facts"></dl>
+    <div class="panel-card sms-center-reconciliation">
+      <div class="panel-card-header"><div><h3>Carrier reconciliation</h3><p class="field-note">Read-only Contract v5 lookup for missed-callback diagnosis. Signed callbacks remain EVE's authority.</p></div></div>
+      <div class="sms-center-filters">
+        <div class="form-group"><label for="sms-center-reconcile-request">Request ID</label><input class="search-input" id="sms-center-reconcile-request" type="search" maxlength="120" autocomplete="off" placeholder="Optional"></div>
+        <div class="form-group"><label for="sms-center-reconcile-status">Carrier status</label><select class="form-select" id="sms-center-reconcile-status"><option value="">All statuses</option><option value="delivered">Delivered</option><option value="failed">Failed</option></select></div>
+        <div class="form-group"><label for="sms-center-reconcile-limit">Result limit</label><select class="form-select" id="sms-center-reconcile-limit"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></div>
+        <button class="btn btn-secondary" type="button" id="sms-center-reconcile">Check GMweb evidence</button>
+      </div>
+      <div class="sms-center-list" id="sms-center-reconciliation-results" aria-live="polite"><p class="field-note">Run this check only when investigating missing callback evidence.</p></div>
+    </div>
   </section>
 </main>
 {% endblock %}

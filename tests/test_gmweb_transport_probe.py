@@ -87,6 +87,27 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(probe.project_sections(None), {})
         self.assertEqual(probe.project_sections(['nope']), {})
 
+    def test_optional_v5_diagnostics_are_bounded_and_do_not_change_readiness(self):
+        payload = dict(SAMPLE)
+        payload['diagnostics'] = {
+            'androidActivity': {'authoritative': False, 'lastSuccessfulPullAt': '2026-09-28T00:00:00Z',
+                                'private': 'drop-me'},
+            'carrierReports': {'total': 9, 'delivered': 7, 'failed': 2,
+                               'duplicates': -2, 'conflicts': '3', 'unknownRequests': 1,
+                               'lastReportAt': '2026-09-28T00:00:00Z', 'to': '0912'},
+            'callbackOutbox': {'pending': 0, 'retry_wait': 0, 'delivering': 0,
+                               'delivered': 4, 'dead_letter': 99,
+                               'oldest_pending_age_ms': None, 'callbackBody': 'drop-me'},
+            'unknown': {'secret': 'drop-me'},
+        }
+        safe = probe.project_sections(payload)
+        self.assertTrue(safe['gmweb']['ready'])
+        self.assertEqual(safe['diagnostics']['callbackOutbox']['dead_letter'], 99)
+        self.assertEqual(safe['diagnostics']['carrierReports']['duplicates'], 0)
+        serialized = json.dumps(safe)
+        self.assertNotIn('drop-me', serialized)
+        self.assertNotIn('0912', serialized)
+
 
 class SummaryTests(unittest.TestCase):
     def test_a_connected_probe_reports_the_scalars(self):

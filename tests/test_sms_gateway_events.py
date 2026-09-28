@@ -9,6 +9,8 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -25,6 +27,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 from app import app  # noqa: E402
 from panel.extensions import db  # noqa: E402
 from panel.models import Admin, SmsGatewayEvent  # noqa: E402
+from panel.routes.sms_gateway_events import _project_evidence  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +60,7 @@ class GatewayEventTests(unittest.TestCase):
     def _post(self, *, body=None, timestamp=None, signature=None):
         raw = json.dumps(body or self.payload, separators=(',', ':')).encode()
         timestamp = str(timestamp or int(time.time()))
-        delivery_id = 'dlv_evt_test_1'
+        delivery_id = 'dlv_' + (body or self.payload)['event_id']
         digest = hmac.new(self.secret.encode(),
                           timestamp.encode() + b'.' + delivery_id.encode() + b'.' + raw,
                           hashlib.sha256).hexdigest()
@@ -67,6 +70,19 @@ class GatewayEventTests(unittest.TestCase):
         with patch.dict(os.environ, {'EVE_SMS_EVENTS_SECRET': self.secret}):
             return self.client.post('/internal/gmweb/sms/events', data=raw,
                                     headers=headers, content_type='application/json')
+
+    def _login_superadmin(self):
+        admin = Admin.query.filter_by(username='sms-center-shell-admin').first()
+        if admin is None:
+            admin = Admin(username='sms-center-shell-admin', password_hash='x',
+                          role='superadmin', is_superadmin=True, enabled=True)
+            db.session.add(admin)
+            db.session.commit()
+        with self.client.session_transaction() as browser_session:
+            browser_session['admin_id'] = admin.id
+            browser_session['admin_username'] = admin.username
+            browser_session['role'] = admin.role
+            browser_session['is_superadmin'] = True
 
     def test_signed_event_and_identical_replay(self):
         self.assertEqual(self._post().json, {'accepted': True, 'duplicate': False})
@@ -94,27 +110,82 @@ class GatewayEventTests(unittest.TestCase):
 
     def test_carrier_receipt_is_separate_positive_evidence(self):
         self.payload['type'] = 'sms.delivered'
+        self.payload.update(request_id='send_42', gateway_request_id='android_42',
+                            carrier_status='delivered', evidence='android_dlr')
         self.payload['occurred_at'] = '2026-09-27T09:00:00.000Z'
         self.assertEqual(self._post().status_code, 200)
         row = db.session.get(SmsGatewayEvent, 'evt_test_1')
         self.assertEqual(row.event_type, 'sms.delivered')
+        self.assertEqual(row.gateway_request_id, 'android_42')
+        self.assertEqual(row.carrier_status, 'delivered')
+
+    def test_submission_and_carrier_projection_remain_independent_and_ordered(self):
+        def event(event_id, kind, minute, carrier=None):
+            return SimpleNamespace(
+                event_id=event_id, event_type=kind,
+                occurred_at=datetime(2026, 9, 27, 9, minute),
+                carrier_status=carrier, evidence='android_dlr' if carrier else None)
+
+        normal = [event('evt_1', 'gateway.accepted', 0),
+                  event('evt_2', 'send.sent', 1),
+                  event('evt_3', 'sms.delivered', 2, 'delivered')]
+        submission, carrier = _project_evidence(normal)
+        self.assertEqual(submission['state'], 'sent')
+        self.assertEqual(carrier['state'], 'delivered')
+        self.assertTrue(carrier['confirmed'])
+
+        # Arrival order cannot override occurred_at ordering.
+        submission, carrier = _project_evidence(list(reversed(normal)))
+        self.assertEqual((submission['state'], carrier['state']), ('sent', 'delivered'))
+
+        late_weaker = normal + [event('evt_5', 'gateway.accepted', 4),
+                                event('evt_6', 'sms.delivery_failed', 5, 'failed')]
+        submission, carrier = _project_evidence(late_weaker)
+        self.assertEqual((submission['state'], carrier['state']), ('sent', 'delivered'))
+
+        submission, carrier = _project_evidence(normal[:2])
+        self.assertEqual(carrier['state'], 'pending')
+        self.assertFalse(carrier['confirmed'])
+
+        failed = normal[:2] + [event('evt_4', 'sms.delivery_failed', 3, 'failed')]
+        submission, carrier = _project_evidence(failed)
+        self.assertEqual((submission['state'], carrier['state']), ('sent', 'failed'))
+
+    def test_conflicting_carrier_state_is_rejected(self):
+        self.payload.update(type='sms.delivered', carrier_status='failed')
+        self.assertEqual(self._post().status_code, 400)
+        self.assertEqual(SmsGatewayEvent.query.count(), 0)
+
+    def test_delivery_reconciliation_compares_without_mutating_callback_journal(self):
+        self._login_superadmin()
+        self.payload.update(type='sms.delivered', carrier_status='delivered')
+        self.assertEqual(self._post().status_code, 200)
+        before = SmsGatewayEvent.query.count()
+        remote = {
+            'ok': True, 'available': True, 'limit': 25,
+            'events': [
+                {'eventId': 'evt_test_1', 'status': 'delivered'},
+                {'eventId': 'evt_remote_only', 'status': 'failed'},
+            ],
+        }
+        with patch('app._get_sms_runtime_settings', return_value={
+                'base_url': 'https://gmweb.example', 'api_key': 'secret'}), patch(
+                'panel.routes.messaging.gmweb_contract.fetch_delivery_events',
+                return_value=remote):
+            response = self.client.get('/api/sms/delivery-events?limit=25')
+        self.assertEqual(response.status_code, 200)
+        comparison = response.json['comparison']
+        self.assertEqual(comparison['matched'], 1)
+        self.assertEqual(comparison['remote_only_event_ids'], ['evt_remote_only'])
+        self.assertEqual(comparison['mutated_local_events'], 0)
+        self.assertEqual(SmsGatewayEvent.query.count(), before)
 
     def test_sms_center_template_compiles(self):
         template = app.jinja_env.get_template('sms_center.html')
         self.assertIsNotNone(template)
 
     def test_sms_center_keeps_superadmin_navigation(self):
-        admin = Admin.query.filter_by(username='sms-center-shell-admin').first()
-        if admin is None:
-            admin = Admin(username='sms-center-shell-admin', password_hash='x',
-                          role='superadmin', is_superadmin=True, enabled=True)
-            db.session.add(admin)
-            db.session.commit()
-        with self.client.session_transaction() as browser_session:
-            browser_session['admin_id'] = admin.id
-            browser_session['admin_username'] = admin.username
-            browser_session['role'] = admin.role
-            browser_session['is_superadmin'] = True
+        self._login_superadmin()
         response = self.client.get('/sms-center')
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
@@ -127,6 +198,8 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('sms-center-expansion hidden', source)
         self.assertIn('inlineDecisionLimit = 5', source)
         self.assertIn('statusField("EVE", log.status)', source)
+        self.assertIn('statusField("Carrier", log.carrier_state || "unavailable")', source)
+        self.assertIn('mutated_local_events', source)
         self.assertNotIn('openModal(', source)
 
     def test_sms_settings_deep_link_is_hash_aware(self):

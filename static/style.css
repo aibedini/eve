@@ -5764,6 +5764,8 @@ button.sms-center-row:focus-visible { outline: 2px solid var(--primary); outline
 .sms-center-filters .form-group { flex: 1 1 180px; margin: 0; }
 .sms-center-filters .search-input, .sms-center-filters .form-select { width: 100%; }
 .sms-center-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
+.sms-center-reconciliation { margin-top: 18px; }
+.sms-center-reconciliation .panel-card-header { align-items: flex-start; }
 @media (max-width: 600px) { .sms-settings-actions { width: 100%; } .sms-settings-actions .btn { flex: 1 1 140px; } .sms-center-nav .sms-audit-tab { flex: 1 1 40%; } .sms-center-row, .sms-center-detail-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .sms-center-disclosure { grid-column: 1 / -1; justify-content: flex-start; padding-top: 4px; } }
 .sms-audit { margin-top: 20px; color: var(--text-primary); }
 .sms-audit .hidden { display: none; }

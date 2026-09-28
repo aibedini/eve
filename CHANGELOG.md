@@ -2,6 +2,20 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.48] - 2026-09-28
+
+### Added
+- Adopted the byte-identical GMweb Contract v5 fixture, including opaque EVE notification correlation, authenticated carrier-delivery evidence, optional transport diagnostics, and bounded read-only delivery-event reconciliation.
+- SMS Center now separates gateway/device submission from carrier outcome, displays callback/carrier diagnostics, and provides an on-demand reconciliation view that never mutates signed callback evidence.
+- Added an additive Alembic migration for bounded carrier correlation/evidence fields and their query indexes, with a documented mixed v4/v5 rollout and rollback path.
+
+### Fixed
+- A gateway acceptance or device submission can no longer be presented as carrier delivery; only signed DLR or bounded status evidence can confirm `delivered` or `failed`.
+- Retry attempts now retain one deterministic, privacy-safe `eveNotificationId` without embedding account, phone, or message content.
+
+### Tests
+- Added Contract v5 hash/schema, migration upgrade/downgrade, delivery-event client privacy/bounds, carrier projection ordering, stable notification identity, and optional diagnostic projection coverage.
+
 ## [2.7.35] - 2026-09-22
 
 ### Fixed

@@ -78,6 +78,9 @@ event instead of a silence) and drains the same outbox.
 | ...while genuinely missed accounts are still caught | the reconciliation pass may raise an event for an already-actionable service, under every existing cap | `test_reconciliation_detects_a_transition_nobody_observed` |
 | The detector never blocks the dashboard | transition recording is best-effort; the snapshot publishes regardless | `schedulers._record_transitions` |
 | No PII in telemetry counters | doctor block carries counts only | `test_metrics_never_carry_customer_identifiers` |
+| Gateway submission never masquerades as carrier delivery | separate `submission` and `carrier` evidence projections; only signed DLR/status evidence can terminate carrier state | `GatewayEventTests.test_submission_and_carrier_projection_remain_independent_and_ordered` |
+| Carrier evidence never triggers an automatic resend | DLR updates audit projection only; delivery obligation state is unchanged | SMS callback and notification-debt tests |
+| Reconciliation cannot rewrite callback truth | `/api/sms/delivery-events` compares bounded provider rows and always reports `mutated_local_events: 0` | `DeliveryEventClientTests` plus route tests |
 
 ## Rollout: `EVE_DEPLETION_EVENT_PIPELINE`
 

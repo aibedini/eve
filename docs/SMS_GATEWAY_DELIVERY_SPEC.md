@@ -2,6 +2,14 @@
 
 > **For the GMweb-API gateway project.** Hand this whole file to Claude on the **gateway** side. It explains how Eve currently talks to the gateway, what is missing (real delivery confirmation), and exactly what the gateway must add so Eve can show **delivered / failed** instead of just **accepted**. The end has a **"What to send back to Eve"** checklist — answer it.
 
+> **Implementation status (Contract v5):** the normative implemented interface
+> is now `shared/eve-gmweb-contract-v1.json`. GMweb accepts authenticated Android
+> DLRs at `POST /gateway/delivery-report`, emits signed `sms.delivered` and
+> `sms.delivery_failed` callbacks, exposes carrier state from send status, and
+> offers bounded read-only reconciliation at `GET /eve/v1/sms-delivery-events`.
+> The proposal below is retained as design history; where it differs, Contract
+> v5 wins.
+
 > 🇮🇷 خلاصه فارسی: الان وقتی Eve یک SMS می‌فرسته، gateway فقط `200/202` (یعنی «درخواست رو قبول کردم») برمی‌گردونه. Eve همین رو به‌عنوان «sent» ثبت می‌کنه — ولی این **رسیدن واقعی به گوشی مقصد نیست**. این داکیومنت می‌گه gateway چه چیزی باید برگردونه تا Eve وضعیت واقعی (delivered/failed) رو بفهمه. این فایل رو به Claude پروژه‌ی gateway بده و جواب بخش آخر رو برگردون.
 
 ---

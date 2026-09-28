@@ -15,7 +15,7 @@ from panel.core.redis_client import get_redis
 from panel.extensions import db
 from panel.models import (Admin, OPEN_NOTIFICATION_STATUSES, PendingSms,
                           ServiceNotificationEvent, ServiceObservedState, SmsScanDecision,
-                          SmsScanRun, SmsSendLog, SystemConfig)
+                          SmsGatewayEvent, SmsScanRun, SmsSendLog, SystemConfig)
 from sqlalchemy import or_, func
 from panel.routes.common import permission_required
 from panel.security import outbound_tls_verify
@@ -750,6 +750,73 @@ def sms_transport_health():
         return verdict(PROBE_INVALID, status=response.status_code, contract=version,
                        error='GMweb transport-health response has no readiness data.')
     return verdict(PROBE_CONNECTED, status=response.status_code, contract=version, health=health)
+
+
+@bp.route('/api/sms/delivery-events', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_delivery_events_search():
+    """Bounded v5 diagnostics; never a replacement for signed callbacks."""
+    from app import _get_sms_runtime_settings
+
+    cfg = _get_sms_runtime_settings()
+    filters = {key: request.args.get(key) for key in gmweb_contract.delivery_event_filters()
+               if request.args.get(key) is not None}
+    result = gmweb_contract.fetch_delivery_events(
+        cfg.get('base_url'), cfg.get('api_key'), filters,
+        timeout=_PROBE_TIMEOUT_SECONDS, verify=outbound_tls_verify())
+    if not result.get('ok'):
+        response = jsonify({'success': False, **result})
+        response.headers['Cache-Control'] = 'no-store'
+        if result.get('reason', '').startswith('invalid_'):
+            return response, 400
+        return response, 200 if not result.get('available') else 502
+
+    remote_events = result.get('events') or []
+    remote_ids = {row.get('eventId') for row in remote_events if row.get('eventId')}
+    local_query = SmsGatewayEvent.query.filter(
+        SmsGatewayEvent.event_type.in_(('sms.delivered', 'sms.delivery_failed')))
+    try:
+        normalized = gmweb_contract.normalize_delivery_event_filters(filters)
+        if normalized.get('from') is not None:
+            local_query = local_query.filter(
+                SmsGatewayEvent.occurred_at >= datetime.utcfromtimestamp(
+                    normalized['from'] / 1000))
+        if normalized.get('to') is not None:
+            local_query = local_query.filter(
+                SmsGatewayEvent.occurred_at <= datetime.utcfromtimestamp(
+                    normalized['to'] / 1000))
+        if normalized.get('status') == 'delivered':
+            local_query = local_query.filter_by(event_type='sms.delivered')
+        elif normalized.get('status') == 'failed':
+            local_query = local_query.filter_by(event_type='sms.delivery_failed')
+        if normalized.get('eventId'):
+            local_query = local_query.filter_by(event_id=normalized['eventId'])
+        if normalized.get('requestId'):
+            local_query = local_query.filter(or_(
+                SmsGatewayEvent.message_id == normalized['requestId'],
+                SmsGatewayEvent.request_id == normalized['requestId'],
+                SmsGatewayEvent.gateway_request_id == normalized['requestId']))
+        local_rows = local_query.order_by(
+            SmsGatewayEvent.occurred_at.desc(), SmsGatewayEvent.event_id.desc()
+        ).limit(normalized['limit']).all()
+    except (OverflowError, OSError, ValueError):
+        return jsonify({'success': False, 'error': 'invalid_time_range'}), 400
+    local_ids = {row.event_id for row in local_rows}
+    response = jsonify({
+        'success': True,
+        'available': True,
+        'events': remote_events,
+        'limit': result.get('limit'),
+        'comparison': {
+            'remote_only_event_ids': sorted(remote_ids - local_ids),
+            'local_only_event_ids': sorted(local_ids - remote_ids),
+            'matched': len(remote_ids & local_ids),
+            'authoritative_source': 'signed_callbacks',
+            'mutated_local_events': 0,
+        },
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/api/sms/reports', methods=['GET'])

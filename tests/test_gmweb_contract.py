@@ -7,6 +7,7 @@ fake gateway and assert the wire contract, and they fail if an endpoint path is
 hardcoded again instead of coming from shared/eve-gmweb-contract-v1.json.
 """
 import http.client
+import hashlib
 import json
 import os
 import tempfile
@@ -106,19 +107,14 @@ class ContractFileTests(unittest.TestCase):
     def test_the_contract_declares_the_version_scopes_and_endpoints(self):
         contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
         self.assertEqual(contract["consumer"], "eve")
-        # v3 adds the Android-bridge block and the lifecycle metric names on top
-        # of the v2 invalidation surface; the consumer reads paths from the file,
-        # so the only thing that must move is this expectation.
-        # v4 adds the consumer transport-health surface (endpoint + read-only
-        # scope + declared response contract) on top of v3's Android-bridge
-        # block and lifecycle metric names.
-        self.assertEqual(contract["version"], 4)
+        self.assertEqual(contract["version"], 5)
         self.assertEqual(contract["projectKeyDefaults"]["scopes"],
                          ["sms.send", "sms.status", "sms.cancel", "sms.capacity",
                           "sms.invalidate", "transport:read"])
         keys = {entry["key"] for entry in contract["endpoints"]}
         self.assertEqual(keys, {"ready", "send", "send_status", "send_cancel",
-                                "send_capacity", "post_invalidate", "transport_health"})
+                                "send_capacity", "post_invalidate", "transport_health",
+                                "sms_delivery_events"})
         for entry in contract["endpoints"]:
             self.assertIn(entry["scope"], contract["projectKeyDefaults"]["scopes"])
         self.assertEqual(contract["transport"]["idempotencyHeader"], "Idempotency-Key")
@@ -126,6 +122,8 @@ class ContractFileTests(unittest.TestCase):
                          {"critical": 1, "expired": 3, "expiring": 6,
                           "announcement": 10})
         self.assertEqual(contract["errorResponse"]["rateLimitStatus"], 429)
+        self.assertEqual(hashlib.sha256(CONTRACT_PATH.read_bytes()).hexdigest().upper(),
+                         "A2881C7F44605BC7D981BBA78DCC620A75049F340E0BBCC69D166F356F349D78")
 
     def test_the_consumer_reads_the_paths_from_the_contract(self):
         source = (ROOT / "panel" / "jobs" / "messaging.py").read_text(encoding="utf-8")
@@ -135,7 +133,7 @@ class ContractFileTests(unittest.TestCase):
             self.assertNotIn(literal, source, literal)
 
     def test_declared_scopes_are_exposed_by_the_module(self):
-        self.assertEqual(gmweb_contract.contract_version(), 4)
+        self.assertEqual(gmweb_contract.contract_version(), 5)
         self.assertEqual(gmweb_contract.declared_scopes(),
                          ["sms.send", "sms.status", "sms.cancel", "sms.capacity",
                           "sms.invalidate", "transport:read"])
@@ -148,6 +146,20 @@ class ContractFileTests(unittest.TestCase):
         self.assertEqual(entry["scope"], "transport:read")
         self.assertEqual(gmweb_contract.endpoint_path("transport_health"),
                          "/eve/v1/transport-health")
+
+    def test_delivery_event_search_and_carrier_status_are_declared(self):
+        entry = next(item for item in gmweb_contract.load_contract()["endpoints"]
+                     if item["key"] == "sms_delivery_events")
+        self.assertEqual(entry, {
+            "key": "sms_delivery_events", "method": "GET",
+            "path": "/eve/v1/sms-delivery-events", "scope": "sms.status",
+        })
+        search = gmweb_contract.load_contract()["deliveryEventSearch"]
+        self.assertEqual(search["maximumLimit"], 100)
+        self.assertEqual(search["forbiddenData"],
+                         ["to", "text", "phoneNumber", "credentials", "callbackBody"])
+        self.assertEqual(gmweb_contract.load_contract()["sendStatusCarrier"]["states"],
+                         ["unavailable", "pending", "delivered", "failed"])
 
     def test_the_device_age_field_the_route_consumes_is_declared(self):
         """The projection copies only the keys it names, so a field missing from
@@ -201,7 +213,7 @@ class ContractFileTests(unittest.TestCase):
         self.assertEqual(
             set(meta["fields"]),
             {"source", "serviceKey", "notificationKind", "generation",
-             "correlationId", "requiresValidation"})
+             "correlationId", "eveNotificationId", "requiresValidation"})
         self.assertEqual(meta["invalidationEligibleKinds"],
                          ["near_expiry", "low_volume", "expired", "volume_ended"])
 

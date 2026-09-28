@@ -86,6 +86,28 @@ class SendMetaContractTests(_SchemaMixin, unittest.TestCase):
         })
         self.assertEqual(reason, 'meta_generation_missing')
 
+    def test_notification_identity_is_stable_opaque_and_privacy_safe(self):
+        identity = 'event:account@example.com:09121234567:42'
+        first = messaging._depletion_notification_meta(
+            'eve:1:uuid-a', 7, 'volume_ended', notification_id=identity)
+        retry = messaging._depletion_notification_meta(
+            'eve:1:uuid-a', 7, 'volume_ended', notification_id=identity)
+        notification_id = first['eveNotificationId']
+        self.assertEqual(notification_id, retry['eveNotificationId'])
+        self.assertRegex(notification_id, r'^[A-Za-z][A-Za-z0-9_-]{0,119}$')
+        self.assertNotIn('account', notification_id)
+        self.assertNotIn('0912', notification_id)
+        self.assertIsNone(lifecycle_service.validate_send_meta(first))
+
+    def test_invalid_notification_identity_is_refused_locally(self):
+        base = {'source': 'eve', 'serviceKey': 'eve:1:uuid-a',
+                'notificationKind': 'renew', 'generation': 1}
+        for bad in ('1starts_with_number', 'contains space', 'x' * 121, 'شناسه'):
+            self.assertEqual(
+                lifecycle_service.validate_send_meta(
+                    dict(base, eveNotificationId=bad)),
+                'meta_eve_notification_id_invalid')
+
     def test_every_required_field_is_enforced(self):
         base = {'source': 'eve', 'serviceKey': 'eve:1:uuid-a',
                 'notificationKind': 'renew', 'generation': 0}

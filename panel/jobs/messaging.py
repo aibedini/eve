@@ -2585,6 +2585,8 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
     out = {
         'sent': False, 'reason': None, 'status_code': None,
         'request_id': None, 'job_id': None, 'status_url': None,
+        'gateway_request_id': None,
+        'carrier_state': None, 'carrier_occurred_at': None, 'carrier_evidence': None,
         'status': None, 'accepted': False, 'terminal': None, 'successful': None,
         'manual_review': False, 'error_code': None, 'retry_after_seconds': None,
         'priority': None, 'priority_level': None, 'queue_position': None,
@@ -2635,6 +2637,7 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
                 if isinstance(body.get('result'), dict):
                     response_data.update(body['result'])
                 out['request_id'] = body.get('requestId')
+                out['gateway_request_id'] = response_data.get('gatewayRequestId')
                 out['job_id'] = str(body.get('jobId')) if body.get('jobId') is not None else None
                 out['status_url'] = body.get('statusUrl')
                 out['status'] = body.get('status')
@@ -2649,6 +2652,12 @@ def _send_sms_via_gmweb(to: str, text: str, cfg: dict | None = None, priority: s
                 out['sent_to'] = response_data.get('sentTo')
                 out['recipient_evidence'] = response_data.get('recipientEvidence')
                 out['conversation_url'] = response_data.get('conversationUrl')
+                carrier = response_data.get('carrierStatus')
+                if isinstance(carrier, dict) and carrier.get('status') in (
+                        'unavailable', 'pending', 'delivered', 'failed'):
+                    out['carrier_state'] = carrier.get('status')
+                    out['carrier_occurred_at'] = carrier.get('occurredAt')
+                    out['carrier_evidence'] = carrier.get('evidence')
                 if response_data.get('terminal') is not None:
                     out['terminal'] = bool(response_data.get('terminal'))
                 if response_data.get('successful') is not None:
@@ -2732,7 +2741,7 @@ def _notification_meta(meta: dict | None) -> dict:
         out['correlationId'] = correlation[:64]
     notification_id = str(meta.get('eveNotificationId') or '').strip()
     if notification_id:
-        out['eveNotificationId'] = notification_id[:128]
+        out['eveNotificationId'] = notification_id
     out['requiresValidation'] = bool(meta.get('requiresValidation', True))
     return out
 
@@ -3303,7 +3312,7 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 # transactional and is NEVER revoked by a lifecycle invalidation.
                 tx_meta = _transactional_notification_meta(
                     service_key, event_name, generation=generation,
-                    correlation_id=audit.get('correlationId'))
+                    correlation_id=audit.get('correlationId'), notification_id=idem)
                 res = _send_sms_via_gmweb(
                     recipient, text, cfg,
                     priority=_gmweb_sms_priority(event_name), idempotency_key=idem,
@@ -3311,7 +3320,8 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 audit = _lifecycle_audit(
                     service_key, audit.get('generation'),
                     tx_meta.get('correlationId'), None, audit.get('lastLifecycleChangeAt'),
-                    idempotency_key=idem)
+                    idempotency_key=idem,
+                    eve_notification_id=tx_meta.get('eveNotificationId'))
                 if res.get('sent'):
                     _log(recipient, _sms_accepted_status(res), None, res, audit)
                 elif res.get('manual_review'):
@@ -3601,7 +3611,8 @@ _SNAPSHOT_REFRESHABLE_REASONS = (
 
 def _lifecycle_audit(service_key, generation, correlation_id, observed_at,
                      last_change_at, idempotency_key=None, gateway_outcome=None,
-                     revocation_reason=None, revoked_at=None) -> dict:
+                     revocation_reason=None, revoked_at=None,
+                     eve_notification_id=None) -> dict:
     """The audit bundle written next to every scan attempt.
 
     Deliberately carries no SMS body: the operator needs to know WHICH lifecycle
@@ -3614,6 +3625,7 @@ def _lifecycle_audit(service_key, generation, correlation_id, observed_at,
         'lastLifecycleChangeAt': (
             last_change_at if isinstance(last_change_at, datetime) else None),
         'idempotencyKey': idempotency_key,
+        'eveNotificationId': eve_notification_id,
         # Gateway verdict for a revoked reminder (see _refresh_pending_sms_statuses).
         'gatewayOutcome': gateway_outcome,
         'revocationReason': revocation_reason,
@@ -3621,8 +3633,15 @@ def _lifecycle_audit(service_key, generation, correlation_id, observed_at,
     }
 
 
+def _eve_notification_id(identity) -> str:
+    """Opaque deterministic identity; input may never be recoverable from it."""
+    raw = str(identity or '').encode('utf-8')
+    return 'notif_' + hashlib.sha256(raw).hexdigest()[:40]
+
+
 def _depletion_notification_meta(service_key, generation, notification_kind, *,
-                                 correlation_id=None, last_change_at=None) -> dict:
+                                 correlation_id=None, last_change_at=None,
+                                 notification_id=None) -> dict:
     """The contract meta block for an automated depletion reminder.
 
     ``generation`` must be a real durable integer: this helper is never called with
@@ -3634,7 +3653,7 @@ def _depletion_notification_meta(service_key, generation, notification_kind, *,
     to False so an invalidation can never cancel them."""
     if generation is None:
         raise ValueError('depletion_notification_meta_requires_a_durable_generation')
-    return {
+    meta = {
         'source': 'eve',
         'serviceKey': service_key,
         'notificationKind': notification_kind,
@@ -3642,10 +3661,13 @@ def _depletion_notification_meta(service_key, generation, notification_kind, *,
         'correlationId': correlation_id or lifecycle_service.new_correlation_id(),
         'requiresValidation': True,
     }
+    if notification_id:
+        meta['eveNotificationId'] = _eve_notification_id(notification_id)
+    return meta
 
 
 def _transactional_notification_meta(service_key, event_name, generation,
-                                      correlation_id=None) -> dict:
+                                      correlation_id=None, notification_id=None) -> dict:
     """The contract meta block for a create/renew confirmation.
 
     ``generation`` is REQUIRED and has no default: the gateway refuses a
@@ -3660,7 +3682,7 @@ def _transactional_notification_meta(service_key, event_name, generation,
     paid must still receive the confirmation that their renewal worked."""
     if generation is None:
         raise ValueError('transactional_notification_meta_requires_a_generation')
-    return {
+    meta = {
         'source': 'eve',
         'serviceKey': service_key,
         'notificationKind': lifecycle_service.sms_notification_kind(event_name),
@@ -3668,6 +3690,9 @@ def _transactional_notification_meta(service_key, event_name, generation,
         'correlationId': correlation_id or lifecycle_service.new_correlation_id(),
         'requiresValidation': False,
     }
+    if notification_id:
+        meta['eveNotificationId'] = _eve_notification_id(notification_id)
+    return meta
 
 
 def _targeted_candidate_refresh(server_id, email: str) -> tuple[bool, object]:
@@ -4145,8 +4170,8 @@ def _deliver_depletion_event_impl(event, *, cfg, templates, cooldown_hours, job_
     notification_kind = lifecycle_service.sms_notification_kind(state)
     idem = telemetry_state.idempotency_key_for(event)
     meta = _depletion_notification_meta(
-        event.service_key, generation, notification_kind, last_change_at=last_change_at)
-    meta['eveNotificationId'] = f'eve_notif_{event.id}'
+        event.service_key, generation, notification_kind, last_change_at=last_change_at,
+        notification_id=event.event_id)
     res = _send_sms_via_gmweb(recipient, text_msg, cfg,
                               priority=_gmweb_sms_priority(state),
                               idempotency_key=idem, meta=meta)
@@ -4162,7 +4187,8 @@ def _deliver_depletion_event_impl(event, *, cfg, templates, cooldown_hours, job_
                      _sms_accepted_status(res), None, res,
                      _lifecycle_audit(event.service_key, generation,
                                       meta.get('correlationId'), event.observed_at,
-                                      last_change_at, idempotency_key=idem))
+                                      last_change_at, idempotency_key=idem,
+                                      eve_notification_id=meta.get('eveNotificationId')))
         if res.get('request_id'):
             telemetry_state.mark_gateway_accepted(
                 event, gateway_request_id=res['request_id'],
@@ -4177,7 +4203,8 @@ def _deliver_depletion_event_impl(event, *, cfg, templates, cooldown_hours, job_
                  'failed', reason, res,
                  _lifecycle_audit(event.service_key, generation,
                                   meta.get('correlationId'), event.observed_at,
-                                  last_change_at, idempotency_key=idem))
+                                  last_change_at, idempotency_key=idem,
+                                  eve_notification_id=meta.get('eveNotificationId')))
     if res.get('request_id'):
         event.gateway_request_id = str(res['request_id'])[:128]
     delay = telemetry_state.mark_retry(event, reason)
@@ -4789,7 +4816,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         gmweb_priority = _gmweb_sms_priority(state)
         sms_meta = _depletion_notification_meta(
             service_key, expected_generation, notification_kind,
-            last_change_at=last_change_at)
+            last_change_at=last_change_at, notification_id=scan_idem)
         res = _send_sms_via_gmweb(
             recipient, text_msg, cfg, priority=gmweb_priority,
             idempotency_key=scan_idem, meta=sms_meta)
@@ -4845,7 +4872,8 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                          _lifecycle_audit(service_key, expected_generation,
                                           sms_meta.get('correlationId'),
                                           observed_at, last_change_at,
-                                          idempotency_key=scan_idem))
+                                          idempotency_key=scan_idem,
+                                          eve_notification_id=sms_meta.get('eveNotificationId')))
         elif res.get('manual_review'):
             _sms_scan_inc('failed')
             _sms_log_row(jid, email_l, sid_norm, server_name, state, recipient,
@@ -4853,7 +4881,8 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                          _lifecycle_audit(service_key, expected_generation,
                                           sms_meta.get('correlationId'),
                                           observed_at, last_change_at,
-                                          idempotency_key=scan_idem))
+                                          idempotency_key=scan_idem,
+                                          eve_notification_id=sms_meta.get('eveNotificationId')))
         else:
             _sms_refund_daily_segments(segments)
             _sms_scan_inc('failed')
@@ -4862,7 +4891,8 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                          _lifecycle_audit(service_key, expected_generation,
                                           sms_meta.get('correlationId'),
                                           observed_at, last_change_at,
-                                          idempotency_key=scan_idem))
+                                          idempotency_key=scan_idem,
+                                          eve_notification_id=sms_meta.get('eveNotificationId')))
 
     _sms_scan_set(state='done', finished_at=_utc_iso_now(), current=None)
     return {'scanned': total_clients, 'sent': sent, 'candidates': len(candidates)}
@@ -5254,6 +5284,10 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
             reason=(str(reason)[:255] if reason else None), job_id=job_id,
             request_id=(str(gateway_result.get('request_id'))[:128]
                         if gateway_result.get('request_id') else None),
+            eve_notification_id=(str(lifecycle.get('eveNotificationId'))[:120]
+                                 if lifecycle.get('eveNotificationId') else None),
+            gateway_request_id=(str(gateway_result.get('gateway_request_id'))[:120]
+                                if gateway_result.get('gateway_request_id') else None),
             gateway_provider=(str(gateway_result.get('provider') or 'gmweb')[:24]),
             gateway_job_id=(str(gateway_result.get('job_id'))[:64]
                             if gateway_result.get('job_id') else None),
@@ -5266,6 +5300,12 @@ def _sms_log_row(job_id, email_l, sid_norm, server_name, state, recipient, statu
                       else False if gateway_result.get('request_id') else None),
             successful=(bool(gateway_result.get('successful'))
                         if gateway_result.get('successful') is not None else None),
+            carrier_state=(str(gateway_result.get('carrier_state'))[:16]
+                           if gateway_result.get('carrier_state') else None),
+            carrier_occurred_at=(str(gateway_result.get('carrier_occurred_at'))[:64]
+                                 if gateway_result.get('carrier_occurred_at') else None),
+            carrier_evidence=(str(gateway_result.get('carrier_evidence'))[:64]
+                              if gateway_result.get('carrier_evidence') else None),
             priority=(str(gateway_result.get('priority'))[:24]
                       if gateway_result.get('priority') else None),
             priority_level=(int(gateway_result.get('priority_level'))
@@ -5419,7 +5459,10 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
             previous = (row.status, row.gateway_state, row.stage, row.terminal,
                         row.successful, row.reason, row.gateway_job_id,
                         row.priority, row.priority_level, row.verification_status,
-                        row.verification_attempts, row.submitted_once, row.sent_to)
+                        row.verification_attempts, row.submitted_once, row.sent_to,
+                        row.gateway_request_id, row.eve_notification_id,
+                        row.carrier_state, row.carrier_occurred_at,
+                        row.carrier_evidence)
             gateway_status = str(data.get('status') or '').strip().lower()
             gateway_state = str(data.get('state') or '').strip().lower()
             verification_status = str(data.get('verificationStatus') or '').strip()
@@ -5457,6 +5500,22 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
             row.stage = str(data['stage'])[:64] if data.get('stage') is not None else None
             if data.get('jobId') is not None:
                 row.gateway_job_id = str(data['jobId'])[:64]
+            if data.get('gatewayRequestId') is not None:
+                row.gateway_request_id = str(data['gatewayRequestId'])[:120]
+            if data.get('eveNotificationId') is not None:
+                notification_id = str(data['eveNotificationId'])
+                if re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,119}', notification_id):
+                    row.eve_notification_id = notification_id
+            carrier = data.get('carrierStatus')
+            if isinstance(carrier, dict) and carrier.get('status') in (
+                    'unavailable', 'pending', 'delivered', 'failed'):
+                row.carrier_state = str(carrier['status'])[:16]
+                row.carrier_occurred_at = (
+                    str(carrier.get('occurredAt'))[:64]
+                    if carrier.get('occurredAt') is not None else None)
+                row.carrier_evidence = (
+                    str(carrier.get('evidence'))[:64]
+                    if carrier.get('evidence') is not None else None)
             if data.get('terminal') is not None:
                 row.terminal = bool(data['terminal'])
             if data.get('successful') is not None:
@@ -5516,7 +5575,10 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
             current = (row.status, row.gateway_state, row.stage, row.terminal,
                        row.successful, row.reason, row.gateway_job_id,
                        row.priority, row.priority_level, row.verification_status,
-                       row.verification_attempts, row.submitted_once, row.sent_to)
+                       row.verification_attempts, row.submitted_once, row.sent_to,
+                       row.gateway_request_id, row.eve_notification_id,
+                       row.carrier_state, row.carrier_occurred_at,
+                       row.carrier_evidence)
             if current != previous:
                 changed += 1
 

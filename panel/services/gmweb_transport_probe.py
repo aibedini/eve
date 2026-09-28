@@ -40,6 +40,54 @@ PROBE_DIAGNOSTICS = {
 PROBE_TIMEOUT_SECONDS = 5
 
 
+def _count(value):
+    try:
+        return max(0, min(1_000_000_000, int(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _text(value, maximum=64):
+    return str(value)[:maximum] if value is not None else None
+
+
+def _project_optional_diagnostic(name, value):
+    if not isinstance(value, dict):
+        return None
+    if name == 'androidActivity':
+        return {
+            'authoritative': bool(value.get('authoritative')),
+            'lastSuccessfulPullAt': _text(value.get('lastSuccessfulPullAt')),
+            'lastTaskPulledAt': _text(value.get('lastTaskPulledAt')),
+            'lastValidateAt': _text(value.get('lastValidateAt')),
+            'lastValidateResult': _text(value.get('lastValidateResult')),
+        }
+    if name == 'carrierReports':
+        return {
+            'total': _count(value.get('total')),
+            'delivered': _count(value.get('delivered')),
+            'failed': _count(value.get('failed')),
+            'duplicates': _count(value.get('duplicates')),
+            'conflicts': _count(value.get('conflicts')),
+            'unknownRequests': _count(value.get('unknownRequests')),
+            'lastReportAt': _text(value.get('lastReportAt')),
+        }
+    if name == 'callbackOutbox':
+        return {
+            'pending': _count(value.get('pending')),
+            'retry_wait': _count(value.get('retry_wait')),
+            'delivering': _count(value.get('delivering')),
+            'delivered': _count(value.get('delivered')),
+            'dead_letter': _count(value.get('dead_letter')),
+            'oldest_pending_age_ms': (
+                _count(value.get('oldest_pending_age_ms'))
+                if value.get('oldest_pending_age_ms') is not None else None),
+            'last_success_at': _text(value.get('last_success_at')),
+            'last_failure_at': _text(value.get('last_failure_at')),
+        }
+    return None
+
+
 def probe_states():
     """The declared vocabulary, or our own constants when the file is unreadable."""
     declared = gmweb_contract.transport_health_probe_states()
@@ -87,6 +135,13 @@ def project_sections(payload):
         value = payload.get(section)
         if isinstance(value, dict):
             safe[section] = {key: value.get(key) for key in keys if key in value}
+    diagnostics = payload.get('diagnostics')
+    if isinstance(diagnostics, dict):
+        target = safe.setdefault('diagnostics', {})
+        for name in gmweb_contract.transport_health_optional_diagnostics():
+            projected = _project_optional_diagnostic(name, diagnostics.get(name))
+            if projected is not None:
+                target[name] = projected
     return safe
 
 

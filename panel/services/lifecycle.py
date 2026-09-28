@@ -25,6 +25,7 @@ Contract with the gateway: see ``shared/eve-gmweb-contract-v1.json``
 (``post_invalidate``) and ``docs/GMWEB_CONTRACT.md``.
 """
 import logging
+import re
 import threading
 import time
 import uuid
@@ -245,6 +246,10 @@ def validate_send_meta(meta):
         return 'meta_generation_not_an_integer'
     if generation < 0:
         return 'meta_generation_negative'
+    notification_id = meta.get('eveNotificationId')
+    if notification_id is not None and not re.fullmatch(
+            r'[A-Za-z][A-Za-z0-9_-]{0,119}', str(notification_id)):
+        return 'meta_eve_notification_id_invalid'
     return None
 
 

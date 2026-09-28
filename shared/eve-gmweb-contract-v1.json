@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "consumer": "eve",
   "projectKeyDefaults": {
     "scopes": [
@@ -82,6 +82,12 @@
       "method": "GET",
       "path": "/eve/v1/transport-health",
       "scope": "transport:read"
+    },
+    {
+      "key": "sms_delivery_events",
+      "method": "GET",
+      "path": "/eve/v1/sms-delivery-events",
+      "scope": "sms.status"
     }
   ],
   "sendRequest": {
@@ -104,6 +110,7 @@
         "notificationKind": "near_expiry|low_volume|expired|volume_ended|created|renew",
         "generation": "integer >= 0 - the service lifecycle generation this message was computed from",
         "correlationId": "string (max 64)",
+        "eveNotificationId": "optional opaque string matching ^[A-Za-z][A-Za-z0-9_-]{0,119}$; echoed only in signed events and must not encode recipient data",
         "requiresValidation": "boolean - true for every automated depletion reminder, false for transactional created/renew confirmations"
       },
       "invalidationEligibleKinds": [
@@ -142,6 +149,21 @@
       "superseded",
       "suppressed"
     ]
+  },
+  "sendStatusCarrier": {
+    "field": "carrierStatus",
+    "states": ["unavailable", "pending", "delivered", "failed"],
+    "semantics": "Separate from gateway status. sent is device submission; delivered and failed require authenticated Android carrier receipts. pending means Android submission recorded but no receipt. unavailable means no receipt capability or evidence.",
+    "fields": ["status", "occurredAt", "evidence"],
+    "timeline": "GET /send/status/{requestId} also returns gatewayRequestId and up to 50 carrierEvents containing eventId, status, occurredAt, receivedAt and evidence"
+  },
+  "deliveryEventSearch": {
+    "endpoint": "sms_delivery_events",
+    "filters": ["from", "to", "status", "requestId", "eventId", "callbackState", "limit"],
+    "timeFormat": "Unix milliseconds",
+    "maximumLimit": 100,
+    "projectIsolation": "sms.status keys see only sends created by that project key",
+    "forbiddenData": ["to", "text", "phoneNumber", "credentials", "callbackBody"]
   },
   "capacityResponse": {
     "required": [
@@ -230,6 +252,7 @@
       "last_ack": ["at", "outcome"],
       "diagnostics": ["androidPull"]
     },
+    "optionalDiagnostics": ["androidActivity", "carrierReports", "callbackOutbox"],
     "fieldSemantics": {
       "gmweb.ready": "The ACTIVE delivery transport is ready. It does NOT mean 'GMweb is reachable' - a 200 answer already proves reachability.",
       "gmweb.reason": "The actionable reason the gateway is not ready: the operational reason (work is waiting on a device) when there is one, otherwise the transport's own machine reason.",
@@ -428,6 +451,20 @@
         "not a gateway/device failure"
       ],
       "lateRealSendIsAuditedAs": "sent_after_revocation"
+    },
+    "deliveryReport": {
+      "method": "POST",
+      "path": "/gateway/delivery-report",
+      "auth": "X-API-Key gateway device key",
+      "required": ["eventId", "requestId", "status", "occurredAt"],
+      "eventId": "dlr_ followed by 1-192 ASCII letters, digits, underscore or hyphen",
+      "requestId": "existing Android gateway request ID, max 120 printable ASCII characters",
+      "status": ["delivered", "failed"],
+      "occurredAt": "Unix milliseconds, 2020-01-01 or later and no more than 24 hours in the future",
+      "duplicate": "Same eventId, requestId, status and occurredAt returns 200 duplicate true without a second event",
+      "errors": { "unknownRequestId": "404 unknown_request_id", "conflict": "409 event_id_conflict" },
+      "callbackEvents": ["sms.delivered", "sms.delivery_failed"],
+      "commitBarrier": "DLR row and immutable Eve callback are committed in one SQLite transaction before HTTP 200"
     }
   },
   "lifecycleMetrics": [

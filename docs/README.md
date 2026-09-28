@@ -80,6 +80,8 @@ relative link does not resolve.
 ## GMweb and SMS gateway
 
 - [GMweb gateway contract](GMWEB_CONTRACT.md) - GMWEB_CONTRACT.md
+- [GMweb requirements for Eve SMS Center](GMWEB_SMS_CENTER_REQUIREMENTS.md) - GMWEB_SMS_CENTER_REQUIREMENTS.md
+- [GMweb Contract v5 rollout and rollback](operations/GMWEB_CONTRACT_V5_ROLLOUT.md) - operations/GMWEB_CONTRACT_V5_ROLLOUT.md
 - [SMS lifecycle: renewal vs depletion-reminder consistency](SMS_LIFECYCLE_INVALIDATION.md) - SMS_LIFECYCLE_INVALIDATION.md
 - [Telemetry state transitions and the depletion notification pipeline](TELEMETRY_STATE_TRANSITIONS.md) - TELEMETRY_STATE_TRANSITIONS.md
 - [📨 SMS Gateway — Delivery-Confirmation Integration Spec](SMS_GATEWAY_DELIVERY_SPEC.md) - SMS_GATEWAY_DELIVERY_SPEC.md

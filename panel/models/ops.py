@@ -404,12 +404,16 @@ class SmsGatewayEvent(db.Model):
     """Privacy-safe gateway evidence, deduplicated by GMweb event identity."""
 
     __tablename__ = 'sms_gateway_events'
-    event_id = db.Column(db.String(160), primary_key=True)
+    event_id = db.Column(db.String(196), primary_key=True)
     trace_id = db.Column(db.String(64), nullable=False, index=True)
     message_id = db.Column(db.String(128), nullable=False, index=True)
-    eve_notification_id = db.Column(db.String(128), nullable=True, index=True)
+    eve_notification_id = db.Column(db.String(120), nullable=True, index=True)
+    request_id = db.Column(db.String(120), nullable=True, index=True)
+    gateway_request_id = db.Column(db.String(120), nullable=True, index=True)
+    carrier_status = db.Column(db.String(16), nullable=True)
+    evidence = db.Column(db.String(64), nullable=True)
     event_type = db.Column(db.String(64), nullable=False, index=True)
-    occurred_at = db.Column(db.DateTime, nullable=False)
+    occurred_at = db.Column(db.DateTime, nullable=False, index=True)
     received_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     attempt = db.Column(db.Integer, nullable=True)
     device_id = db.Column(db.String(64), nullable=True)
@@ -433,6 +437,8 @@ class SmsSendLog(db.Model):
     reason = db.Column(db.String(255))                 # failure/skip detail
     job_id = db.Column(db.String(64), index=True)
     request_id = db.Column(db.String(128), index=True)
+    eve_notification_id = db.Column(db.String(120), nullable=True, index=True)
+    gateway_request_id = db.Column(db.String(120), nullable=True, index=True)
     gateway_provider = db.Column(db.String(24), nullable=False, default='gmweb', index=True)
     gateway_job_id = db.Column(db.String(64))
     status_url = db.Column(db.String(512))
@@ -440,6 +446,9 @@ class SmsSendLog(db.Model):
     stage = db.Column(db.String(64))
     terminal = db.Column(db.Boolean)
     successful = db.Column(db.Boolean)
+    carrier_state = db.Column(db.String(16), nullable=True)
+    carrier_occurred_at = db.Column(db.String(64), nullable=True)
+    carrier_evidence = db.Column(db.String(64), nullable=True)
     gateway_current_at = db.Column(db.String(64))
     gateway_sent_at = db.Column(db.String(64))
     priority = db.Column(db.String(24))
@@ -502,12 +511,17 @@ class SmsSendLog(db.Model):
             'reason': self.reason,
             'job_id': self.job_id,
             'request_id': self.request_id,
+            'eve_notification_id': self.eve_notification_id,
+            'gateway_request_id': self.gateway_request_id,
             'gateway_provider': self.gateway_provider,
             'gateway_job_id': self.gateway_job_id,
             'gateway_state': self.gateway_state,
             'stage': self.stage,
             'terminal': self.terminal,
             'successful': self.successful,
+            'carrier_state': self.carrier_state or 'unavailable',
+            'carrier_occurred_at': self.carrier_occurred_at,
+            'carrier_evidence': self.carrier_evidence,
             'gateway_current_at': self.gateway_current_at,
             'gateway_sent_at': self.gateway_sent_at,
             'priority': self.priority,

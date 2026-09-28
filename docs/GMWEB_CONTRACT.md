@@ -1,7 +1,7 @@
 # GMweb gateway contract
 
 The consumer side of the SMS gateway integration is defined by
-`shared/eve-gmweb-contract-v1.json` (contract version 3). The file is
+`shared/eve-gmweb-contract-v1.json` (contract version 5). The file is
 byte-identical to the gateway's own copy of the same name, so the two sides
 cannot drift silently.
 `panel/services/gmweb_contract.py` is the only code that reads it, so endpoint
@@ -19,6 +19,8 @@ production.
 | send_cancel | POST | /send/cancel/{requestId} | sms.cancel |
 | send_capacity | GET | /send/capacity | sms.capacity |
 | post_invalidate | POST | /send/invalidate | sms.invalidate |
+| transport_health | GET | /eve/v1/transport-health | transport:read |
+| sms_delivery_events | GET | /eve/v1/sms-delivery-events | sms.status |
 
 Every authenticated call sends `Authorization: Bearer <projectKey>` and
 `Accept: application/json`; `/send` and `/send/invalidate` also send
@@ -48,6 +50,7 @@ Every automated depletion reminder is tagged so a later renewal can revoke it:
     "notificationKind": "volume_ended",
     "generation": 17,
     "correlationId": "<uuid>",
+    "eveNotificationId": "notif_<opaque deterministic hash>",
     "requiresValidation": true
   }
 }
@@ -63,6 +66,28 @@ The transactional `created` / `renew` confirmations carry
 `requiresValidation: false` and are **not** in the invalidation-eligible set.
 That is what stops a renewal from cancelling the message telling the customer
 the renewal worked.
+
+`eveNotificationId` is a stable, opaque correlation key matching
+`^[A-Za-z][A-Za-z0-9_-]{0,119}$`. Eve derives it from durable notification
+identity, never from a recipient, phone number or message body. Retries reuse
+the same value; GMweb echoes it only in status and signed evidence.
+
+## Submission status and carrier outcome
+
+Contract v5 keeps two independent projections. Gateway `sent`/`completed`
+means the Android device recorded submission. `carrierStatus` is independently
+`unavailable`, `pending`, `delivered` or `failed`; only an authenticated Android
+delivery report may create the last two states. HTTP 200/202, queue acceptance,
+or successful modem submission never imply carrier delivery.
+
+Signed callbacks are Eve's durable authority. The read-only
+`GET /eve/v1/sms-delivery-events` endpoint is an operator reconciliation tool
+for finding missed callbacks. It accepts bounded contract filters, returns at
+most 100 project-isolated events, and omits recipients, content, credentials
+and raw callback bodies. Reading it never inserts or changes an Eve event.
+
+Carrier failure is evidence, not a send retry instruction. Eve records and
+surfaces it but does not automatically send another SMS.
 
 ## Lifecycle invalidation: POST /send/invalidate
 
@@ -175,7 +200,7 @@ should-never-happen rather than routine.
 `tests/test_gmweb_contract.py` runs the real client functions against a local
 fake gateway and asserts the wire contract:
 
-* the contract file declares version 3, the five scopes and the six endpoints,
+* the contract file declares version 5, the six scopes and the eight endpoints,
   and `messaging.py` no longer hardcodes any of the paths;
 * URL validation accepts https and local http, warns on remote http, and refuses
   non-http schemes, credentials, missing hosts and query/fragment URLs;
@@ -187,6 +212,8 @@ fake gateway and asserts the wire contract:
 * cancel quotes the reference into the declared path;
 * an invalid base URL never reaches the gateway;
 * a status URL from a foreign origin is not followed.
+* carrier evidence remains separate from gateway submission, callback replay is
+  idempotent, and delivery-event search is bounded, projected and read-only.
 
 ## Lifecycle consistency docs
 

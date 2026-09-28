@@ -88,6 +88,32 @@
     row.append(...fields);
     return row;
   }
+  function appendDiagnosticFacts(container, diagnostics) {
+    const android = diagnostics?.androidActivity;
+    const reports = diagnostics?.carrierReports;
+    const outbox = diagnostics?.callbackOutbox;
+    if (android) container.append(
+      statusField("Android activity", android.authoritative ? "authoritative" : "informational"),
+      field("Last successful pull", date(android.lastSuccessfulPullAt)),
+      field("Last validate", `${date(android.lastValidateAt)} / ${fmt(android.lastValidateResult)}`)
+    );
+    if (reports) container.append(
+      field("Carrier reports", reports.total),
+      statusField("Carrier delivered", reports.delivered),
+      statusField("Carrier failed", reports.failed),
+      field("DLR duplicates / conflicts", `${fmt(reports.duplicates)} / ${fmt(reports.conflicts)}`),
+      field("Unknown requests", reports.unknownRequests),
+      field("Last carrier report", date(reports.lastReportAt))
+    );
+    if (outbox) container.append(
+      field("Callback pending / retry", `${fmt(outbox.pending)} / ${fmt(outbox.retry_wait)}`),
+      field("Callback delivering", outbox.delivering),
+      field("Callback delivered", outbox.delivered),
+      statusField("Callback dead letter", outbox.dead_letter),
+      field("Oldest callback age", outbox.oldest_pending_age_ms == null ? null : `${outbox.oldest_pending_age_ms} ms`),
+      field("Last callback success", date(outbox.last_success_at))
+    );
+  }
 
   async function loadHealth() {
     try {
@@ -113,6 +139,7 @@
         field("Pending / inflight", report.success ? `${fmt(queue.pending)} / ${fmt(queue.inflight)}` : "—"),
         field("Last ACK", date(health.last_ack?.at)), field("ACK outcome", health.last_ack?.outcome)
       );
+      appendDiagnosticFacts(facts, health.diagnostics || {});
     } catch (error) {
       const missingScope = error.message.includes("scope_denied") || error.message.includes("transport:read");
       setKpi("sms-center-health", `Unavailable · ${error.message}`, "danger");
@@ -125,7 +152,7 @@
     try {
       const evidence = await json("/api/sms/overview");
       $("sms-center-delivered").textContent = evidence.evidence_available
-        ? Number(evidence.carrier_delivered || 0).toLocaleString()
+        ? `${Number(evidence.carrier_delivered || 0).toLocaleString()} delivered / ${Number(evidence.carrier_failed || 0).toLocaleString()} failed / ${Number(evidence.carrier_pending || 0).toLocaleString()} pending`
         : "No callback evidence";
     } catch (error) { $("sms-center-delivered").textContent = `Unavailable · ${error.message}`; }
     try {
@@ -215,7 +242,8 @@
         const disclosure = expandableRow([
           field("Account", log.email), field("Phone", log.recipient),
           field("Trigger", log.state), statusField("EVE", log.status),
-          statusField("GMweb", gatewayStatus), field("Last event", date(log.updated_at)),
+          statusField("Submission", gatewayStatus), statusField("Carrier", log.carrier_state || "unavailable"),
+          field("Last event", date(log.updated_at)),
           field("Reason", log.reason)
         ], "View delivery timeline");
         let loaded = false;
@@ -228,6 +256,12 @@
             const result = await json(`/api/sms/messages/${log.id}/timeline`);
             const timeline = node("div", "sms-center-timeline");
             const events = result.gateway_events || [];
+            timeline.append(detailRow([
+              statusField("Gateway submission", result.submission?.state || "unknown"),
+              field("Submission evidence", result.submission?.evidence),
+              statusField("Carrier outcome", result.carrier?.state || "unavailable"),
+              field("Carrier evidence", result.carrier?.evidence)
+            ]));
             if (!events.length) timeline.append(node("p", "field-note", "No gateway events are recorded yet. EVE's state above is still authoritative."));
             for (const event of events) timeline.append(detailRow([
               statusField("Event", event.type), field("Occurred", date(event.occurred_at)),
@@ -236,7 +270,8 @@
             ]));
             const identity = detailRow([
               field("EVE message", log.id), field("Request", log.request_id),
-              field("Gateway job", log.gateway_job_id), field("Correlation", log.correlation_id)
+              field("Gateway request", log.gateway_request_id), field("Gateway job", log.gateway_job_id),
+              field("Notification", log.eve_notification_id), field("Correlation", log.correlation_id)
             ]);
             identity.classList.add("sms-center-identity");
             disclosure.panel.replaceChildren(identity, timeline);
@@ -270,6 +305,39 @@
       showError(target, error);
     }
   }
+  async function reconcileDeliveryEvents() {
+    const target = $("sms-center-reconciliation-results");
+    const params = new URLSearchParams({ limit: $("sms-center-reconcile-limit").value });
+    const requestId = $("sms-center-reconcile-request").value.trim();
+    const status = $("sms-center-reconcile-status").value;
+    if (requestId) params.set("requestId", requestId);
+    if (status) params.set("status", status);
+    target.replaceChildren(node("p", "field-note", "Checking GMweb delivery evidence..."));
+    try {
+      const result = await json(`/api/sms/delivery-events?${params}`);
+      if (!result.available) {
+        target.replaceChildren(node("p", "field-note field-note-warn", "Contract v5 delivery search is unavailable on the configured GMweb deployment."));
+        return;
+      }
+      const comparison = result.comparison || {};
+      const list = node("div", "sms-center-detail-list");
+      list.append(detailRow([
+        field("Remote events", result.events?.length || 0),
+        field("Matched callbacks", comparison.matched || 0),
+        statusField("Missing locally", comparison.remote_only_event_ids?.length || 0),
+        field("Local only", comparison.local_only_event_ids?.length || 0),
+        field("Authority", comparison.authoritative_source),
+        field("Local mutations", comparison.mutated_local_events)
+      ]));
+      for (const event of result.events || []) list.append(detailRow([
+        statusField("Carrier", event.status), field("Event", event.eventId),
+        field("Request", event.requestId), field("Gateway request", event.gatewayRequestId),
+        field("Occurred", date(event.occurredAt)), statusField("Callback", event.callbackState)
+      ]));
+      if (!result.events?.length) list.append(node("p", "field-note", "No matching carrier delivery events."));
+      target.replaceChildren(list);
+    } catch (error) { showError(target, error); }
+  }
   function selectTab(name) {
     if (!tabs.includes(name)) return;
     for (const tab of tabs) $("sms-center-" + tab).classList.toggle("hidden", tab !== name);
@@ -284,6 +352,7 @@
     button.addEventListener("click", () => selectTab(button.dataset.smsTab)));
   $("sms-center-refresh").addEventListener("click", refresh);
   $("sms-center-filter").addEventListener("click", () => { offset = 0; loadDelivery(); });
+  $("sms-center-reconcile").addEventListener("click", reconcileDeliveryEvents);
   $("sms-center-search").addEventListener("keydown", (event) => {
     if (event.key === "Enter") { offset = 0; loadDelivery(); }
   });
