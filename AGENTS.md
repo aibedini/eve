@@ -125,3 +125,65 @@ checkboxes, emoji): `scripts/ui_design_audit.py` counts it per template,
 scripts/ui_design_audit.py --check` must pass. A page may go below its baseline (rerun
 the tool with `--write-baseline`), never above it.
 
+<!-- BEGIN MANAGED: SPEC_KIT_REPOSITORY_POLICY -->
+
+## Spec-Driven Development (Spec Kit)
+
+This repository is initialized with GitHub Spec Kit **1.0.6** through the `dsh`
+integration. The binding engineering constitution is
+`.specify/memory/constitution.md`; it encodes the lifecycle, notification,
+telemetry and migration invariants that previous production incidents violated.
+Where convenience and the constitution disagree, the constitution wins.
+
+- Skills live in `.dsh/skills/speckit-*/` and are invoked in DSH as
+  `/speckit-specify`, `/speckit-plan`, `/speckit-bug-assess`, and so on.
+- Health: `specify integration status --json` (expect `"status": "ok"`).
+- Artifacts: features in `specs/<NNN-slug>/`, bug reports in
+  `.specify/bugs/<slug>/`, idea assessments in `.specify/assessments/<slug>/`.
+- After an approved Spec Kit upgrade: `specify integration upgrade dsh` and
+  review the generated diff before continuing application work.
+
+### Change classification
+
+| Request | Workflow |
+| --- | --- |
+| Typo, comment, label, colour, version bump | No Spec Kit ceremony. Every rule below still applies. |
+| Non-trivial bug | `/speckit-bug-assess` then `/speckit-bug-fix` then `/speckit-bug-test` |
+| Feature, refactor, schema, security, or notification-lifecycle change | `/speckit-specify` then `/speckit-clarify` (when ambiguous) then `/speckit-plan` then `/speckit-tasks` then `/speckit-analyze` then `/speckit-implement` then `/speckit-converge` |
+| Uncertain architecture idea | `/speckit-assess-intake` then `/speckit-assess-research` then `/speckit-assess-define` then `/speckit-assess-shape` then `/speckit-assess-decide` |
+
+Do not begin `/speckit-implement` before `/speckit-analyze` reports the
+artifacts are coherent enough to proceed. Repeat implement/converge until the
+result is CONVERGED.
+
+### Cross-repository work
+
+EVE decides *why* a notification should exist and owns service identity,
+lifecycle generation and business state. GMweb decides whether that logical
+notification is currently deliverable. Messages Android performs the
+irreversible modem submission. A change touching more than one of those
+repositories must carry one shared feature ID (for example
+`stale-sms-revocation-v4`) through its spec, plan, ADR references and
+acceptance report, and must follow the Cross-Repository Contract section of the
+constitution.
+
+### Evidence commands
+
+- UI design-system drift ratchet: `python scripts/ui_design_audit.py --check`
+- UI guard suite: `python -m pytest tests/test_ui_design_system.py -q`
+- Focused suite (mirrors the CI "Unit tests" job):
+  `python -m pytest -q tests/test_security_hardening.py tests/test_wallet_ledger.py tests/test_backup_policy.py tests/test_ci_guards.py tests/test_package_visibility.py tests/test_finance_filters.py tests/test_regression_matrix.py`
+- Run pytest from the repository root: `pyproject.toml` sets
+  `pythonpath = ["."]`, and the suite imports the top-level `app` module.
+- Use the checkout's test interpreter, `.venv-test\Scripts\python.exe` (pytest
+  9.1.1); the system `python` has no pytest installed.
+- Version and metadata consistency: `python scripts/release_check.py --json`
+- Documentation tree guard: `python -m pytest tests/test_docs_index.py -q`
+  (every `docs/**/*.md` must be linked from `docs/README.md`)
+
+Notification, lifecycle, telemetry and migration work additionally requires the
+integration, concurrency and production-acceptance evidence described in the
+constitution. Green CI alone is not acceptance.
+
+<!-- END MANAGED: SPEC_KIT_REPOSITORY_POLICY -->
+
