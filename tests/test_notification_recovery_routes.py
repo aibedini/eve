@@ -17,6 +17,7 @@ class RecoveryRouteTests(unittest.TestCase):
                           role='superadmin', is_superadmin=True, enabled=True)
         db.session.add(cls.admin)
         db.session.commit()
+        cls.admin_id = cls.admin.id
         cls.client = app_module.app.test_client()
 
     @classmethod
@@ -30,7 +31,7 @@ class RecoveryRouteTests(unittest.TestCase):
 
     def _login(self):
         with self.client.session_transaction() as sess:
-            sess['admin_id'] = self.admin.id
+            sess['admin_id'] = self.admin_id
             sess['role'] = 'superadmin'
             sess['is_superadmin'] = True
 
