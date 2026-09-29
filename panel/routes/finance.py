@@ -306,8 +306,8 @@ def update_transaction(tx_id):
         tx.card_id = data.get('card_id') or None
     if 'sender_card' in data:
         submitted_card = str(data.get('sender_card') or '').strip() or None
-        # The edit form is pre-filled with the masked value; never persist a mask
-        # over the real customer card number.
+        # Older clients may still resubmit a cached mask; never persist it over
+        # the real customer card number.
         if not is_masked_value(submitted_card, tx.sender_card, mask_card_number):
             tx.sender_card = submitted_card
     if 'sender_name' in data:
@@ -575,7 +575,7 @@ def get_payments():
                 'username': admin.username,
                 'role': admin.role
             } if admin else None,
-            'sender_card': mask_card_number(t.sender_card) or '',
+            'sender_card': t.sender_card or '',
             'sender_name': getattr(t, 'sender_name', None) or None,
             'card_id': t.card_id,
             'card': {
@@ -989,12 +989,11 @@ def delete_payment(payment_id):
 @permission_required('finance.manage')
 @step_up_required('finance.manage')
 def reveal_payment_sender_card(payment_id):
-    """Return the full sender card of one payment - the only unmasked read path.
+    """Compatibility endpoint for explicitly revealing one payment sender card.
 
-    Payment rows carry only the masked identifier. Reconciling a bank statement
-    sometimes needs the full number, so it is returned here behind a permission,
-    a fresh MFA step-up and the payment owner scope, and the access is audited
-    without ever writing the number itself into the audit row or a log line.
+    Finance list rows now expose sender cards within their existing owner scope.
+    This stricter legacy path remains for API compatibility and keeps its fresh
+    MFA step-up plus an audit event that never contains the card number itself.
     """
     from app import _log_audit  # deferred: app-level helper, avoids circular import
     user = db.session.get(Admin, session.get('admin_id'))
@@ -1016,7 +1015,7 @@ def reveal_payment_sender_card(payment_id):
 @permission_required('finance.manage')
 @step_up_required('finance.manage')
 def reveal_transaction_sender_card(tx_id):
-    """Return the full sender card of one transaction - the only unmasked read path.
+    """Compatibility endpoint for explicitly revealing one transaction sender card.
 
     Mirrors the payment reveal: permission, fresh step-up, owner scope and an
     audit row that records the reveal event only.

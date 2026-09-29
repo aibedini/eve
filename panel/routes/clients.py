@@ -17,7 +17,6 @@ import requests
 from flask import Blueprint, jsonify, request, session
 from sqlalchemy import func, or_
 
-from panel.core.finance_privacy import mask_card_number
 from panel.adapters import xui as xui_adapter
 from panel.extensions import db, limiter
 from panel.models import (
@@ -1203,7 +1202,7 @@ def client_last_renewal(email):
             'date_iso': created.isoformat() if created else None,
             'days_ago': days_ago,
             'hours_ago': hours_ago,
-            'sender_card': mask_card_number(t.sender_card) or '',
+            'sender_card': t.sender_card or '',
             'dest_card': card_label,
             'description': t.description or '',
             'admin_username': (t.admin.username if getattr(t, 'admin', None) else ''),

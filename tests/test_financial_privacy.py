@@ -1,13 +1,14 @@
-"""Phase 6 tests: financial identifier masking and the audited reveal paths.
+"""Financial identifier visibility, masking, and audited reveal-path tests.
 
-Covers the pure masking helpers, the model serializers, the list endpoints that
-must never leak a full card number, the mask round-trip guard on update, and the
-permission/scope/audit behaviour of the reveal endpoints.
+Covers destination-account masking, complete sender-card visibility in scoped
+operator APIs, the mask round-trip guard on update, and the permission/scope/audit
+behaviour of the compatibility reveal endpoints.
 """
 import os
 import tempfile
 import unittest
 from datetime import datetime
+from pathlib import Path
 
 _DB_FILE = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 _DB_FILE.close()
@@ -91,7 +92,7 @@ class ModelMaskingTests(unittest.TestCase):
         self.assertEqual(revealed['card_number'], CARD)
         self.assertTrue(revealed['revealed'])
 
-    def test_payment_and_transaction_dicts_mask_the_sender_card(self):
+    def test_payment_and_transaction_dicts_return_the_full_sender_card(self):
         admin = Admin(username='privacy-owner', role='superadmin', is_superadmin=True,
                       enabled=True)
         admin.set_password('CorrectHorseBattery1!')
@@ -99,10 +100,17 @@ class ModelMaskingTests(unittest.TestCase):
         payment = self._round_trip(Payment(admin_id=admin.id, amount=10_000,
                                            payment_date=datetime.utcnow(),
                                            sender_card=CARD))
-        self.assertEqual(payment.to_dict()['sender_card'], MASKED)
+        self.assertEqual(payment.to_dict()['sender_card'], CARD)
         tx = self._round_trip(Transaction(admin_id=admin.id, amount=10_000,
                                           category='income', sender_card=CARD))
-        self.assertEqual(tx.to_dict()['sender_card'], MASKED)
+        self.assertEqual(tx.to_dict()['sender_card'], CARD)
+
+    def test_finance_editor_prefills_the_complete_sender_card(self):
+        source = (Path(__file__).resolve().parents[1] / 'templates' / 'finance.html').read_text(
+            encoding='utf-8',
+        )
+        self.assertIn("senderCardInput.value = entry.sender_card || '';", source)
+        self.assertNotIn('senderCardInput.dataset.masked', source)
 
 
 class FinancialPrivacyApiTests(unittest.TestCase):
@@ -172,17 +180,34 @@ class FinancialPrivacyApiTests(unittest.TestCase):
         self.assertEqual(cards[self.card.id]['card_number'], MASKED)
         self.assertFalse(cards[self.card.id]['revealed'])
 
-    def test_transaction_list_never_contains_a_full_number(self):
+    def test_transaction_list_contains_the_full_sender_card(self):
         self._login(self.admin)
         body = self.client.get('/api/transactions').get_data(as_text=True)
-        self.assertNotIn(CARD, body)
-        self.assertIn(MASKED, body)
+        self.assertIn(CARD, body)
+        self.assertNotIn(MASKED, body)
 
-    def test_payment_list_never_contains_a_full_number(self):
+    def test_payment_list_contains_the_full_sender_card(self):
         self._login(self.admin)
         body = self.client.get('/api/payments').get_data(as_text=True)
-        self.assertNotIn(CARD, body)
-        self.assertIn(MASKED, body)
+        self.assertIn(CARD, body)
+        self.assertNotIn(MASKED, body)
+
+    def test_last_renewal_contains_the_full_sender_card(self):
+        renewal = Transaction(
+            admin_id=self.admin.id,
+            amount=25_000,
+            category='income',
+            type='renew',
+            client_email='sender-visible@example.com',
+            sender_card=CARD,
+        )
+        db.session.add(renewal)
+        db.session.commit()
+        self._login(self.superadmin)
+        response = self.client.get('/api/client/sender-visible@example.com/last-renewal')
+        self.assertEqual(response.status_code, 200, response.data)
+        payload = response.get_json()
+        self.assertEqual(payload['renewals'][0]['sender_card'], CARD)
 
     def test_resubmitting_the_mask_keeps_the_stored_number(self):
         self._login(self.admin)
