@@ -4475,6 +4475,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     #  service_key, observed_generation, observed_at)
     candidates = []
     preview_excluded = []
+    detected_states = {state: 0 for state in SMS_SCAN_STATES}
     owner_types = None
     if preview:
         try:
@@ -4541,6 +4542,8 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             state = SMS_MONITOR_TAG_TO_STATE.get(status or '')
             if not state:
                 continue
+            if preview:
+                detected_states[state] += 1
 
             recipient = _extract_iran_mobile_from_text(
                 email, client.get('comment') or '')
@@ -4726,6 +4729,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         # The run revalidates the budget immediately before submitting.
         summary['budget_checked'] = False
         summary['scanned'] = total_clients
+        summary['detected_states'] = detected_states
         summary['candidates'] = rows
         summary['preview'] = True
         return summary

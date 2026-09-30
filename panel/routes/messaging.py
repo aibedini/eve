@@ -418,6 +418,10 @@ def sms_scan_preview():
         'age_ms': age_ms,
         'inbounds': len(inbounds),
         'refreshed': refreshed,
+        'thresholds': {
+            'expiry_days': cfg.get('depletion_expiry_days'),
+            'volume_gb': cfg.get('depletion_volume_gb'),
+        },
     }
     if source_state != 'ready':
         response = jsonify({'success': False, 'error': 'Audience source unavailable or stale.', 'source': source})

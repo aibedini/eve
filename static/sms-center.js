@@ -7,6 +7,7 @@
   let total = 0;
   let visibleLogs = [];
   let audienceRows = [];
+  let audienceDiagnostics = null;
   let audienceExpanded = false;
   let selectedTab = "overview";
   const pageSize = 30;
@@ -138,7 +139,13 @@
     });
     target.replaceChildren();
     if (!rows.length) {
-      target.append(node("p", "field-note", "No current accounts match these filters."));
+      const scanned = Number(audienceDiagnostics?.scanned || 0);
+      const detected = Object.values(audienceDiagnostics?.detected_states || {})
+        .reduce((sum, count) => sum + Number(count || 0), 0);
+      const message = !scanned ? "The snapshot contains no clients to evaluate."
+        : !detected ? `Evaluated ${scanned.toLocaleString()} clients; none meet the SMS thresholds.`
+          : "No current accounts match these filters.";
+      target.append(node("p", "field-note", message));
       return;
     }
     const visible = audienceExpanded ? rows : rows.slice(0, pageSize);
@@ -155,14 +162,14 @@
       target.append(toggle);
     }
   }
-  async function loadAudience(refreshSource = false) {
+  async function loadAudience() {
     const target = $("sms-center-audience-list");
     target.replaceChildren(node("p", "field-note", "Evaluating current audience…"));
     try {
       const response = await fetch("/api/sms/scan/preview", {
         method: "POST", credentials: "same-origin", cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_source: refreshSource === true })
+        body: "{}"
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
@@ -174,6 +181,7 @@
             : data?.error || `HTTP ${response.status}`);
       }
       audienceRows = data.candidates || [];
+      audienceDiagnostics = data;
       audienceExpanded = false;
       const summary = $("sms-center-audience-summary");
       summary.replaceChildren(
@@ -184,13 +192,48 @@
         summaryCard("Invalid / outstanding", Number((data.invalid_recipient || 0) + (data.active_obligation || 0)).toLocaleString(), "warning")
       );
       const source = data.source || {};
-      summary.append(node("p", "field-note",
-        `Live Monitor snapshot: ${source.last_update ? date(source.last_update) : "unknown"} · ${Number(source.inbounds || 0).toLocaleString()} inbounds`));
+      const states = data.detected_states || {};
+      $("sms-center-audience-source").replaceChildren(
+        node("p", "field-note",
+          `Live Monitor: ${source.last_update ? date(source.last_update) : "unknown"} · ${Number(source.inbounds || 0).toLocaleString()} inbounds · ${Number(data.scanned || 0).toLocaleString()} clients scanned · SMS thresholds: ${source.thresholds?.expiry_days ?? "?"} days / ${source.thresholds?.volume_gb ?? "?"} GB`),
+        node("p", "field-note",
+          `Detected: near expiry ${states.near_expiry || 0} · low volume ${states.low_volume || 0} · expired ${states.expired || 0} · ended ${states.ended || 0}`));
       renderAudience();
     } catch (error) {
       audienceRows = [];
+      audienceDiagnostics = null;
       $("sms-center-audience-summary").replaceChildren();
+      $("sms-center-audience-source").replaceChildren();
       showError(target, error);
+    }
+  }
+  async function refreshAudienceSource() {
+    const button = $("sms-center-audience-refresh");
+    const target = $("sms-center-audience-list");
+    button.disabled = true;
+    $("sms-center-audience-summary").replaceChildren();
+    $("sms-center-audience-source").replaceChildren();
+    target.replaceChildren(node("p", "field-note", "Refreshing Live Monitor before re-evaluation…"));
+    try {
+      const response = await fetch("/api/monitor/refresh", {
+        method: "POST", credentials: "same-origin", cache: "no-store"
+      });
+      const started = await response.json().catch(() => null);
+      if (!response.ok || !started?.job_id) throw new Error(started?.error || `HTTP ${response.status}`);
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const status = await json(`/api/monitor/job/${encodeURIComponent(started.job_id)}`);
+        if (status.job?.state === "done") {
+          await loadAudience();
+          return;
+        }
+        if (status.job?.state === "error") throw new Error(status.job.error || "Monitor refresh failed");
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      throw new Error("Monitor refresh is still running. Re-evaluate after it finishes.");
+    } catch (error) {
+      showError(target, error);
+    } finally {
+      button.disabled = false;
     }
   }
   function appendDiagnosticFacts(container, diagnostics) {
@@ -463,7 +506,7 @@
   document.querySelectorAll("[data-sms-tab]").forEach((button) =>
     button.addEventListener("click", () => selectTab(button.dataset.smsTab)));
   $("sms-center-refresh").addEventListener("click", refresh);
-  $("sms-center-audience-refresh").addEventListener("click", () => loadAudience(true));
+  $("sms-center-audience-refresh").addEventListener("click", refreshAudienceSource);
   $("sms-center-audience-search").addEventListener("input", renderAudience);
   $("sms-center-audience-decision").addEventListener("change", renderAudience);
   $("sms-center-filter").addEventListener("click", () => { offset = 0; loadDelivery(); });

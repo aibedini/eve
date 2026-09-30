@@ -250,6 +250,31 @@ class GatewayEventTests(unittest.TestCase):
             GLOBAL_SERVER_DATA.clear()
             GLOBAL_SERVER_DATA.update(original)
 
+    def test_audience_preview_reports_scanned_clients_and_detected_states(self):
+        from panel.core.redis_client import GLOBAL_SERVER_DATA
+        from panel.jobs.messaging import _run_sms_depletion_scan
+        original = dict(GLOBAL_SERVER_DATA)
+        try:
+            GLOBAL_SERVER_DATA['inbounds'] = [{
+                'server_id': 1, 'server_name': 'test',
+                'clients': [{'email': 'expired-09120000000', 'enable': True,
+                             'totalGB': 1024 ** 3, 'up': 0, 'down': 0,
+                             'expiryTimestamp': 1}],
+            }]
+            with patch('panel.jobs.messaging._get_sms_runtime_settings', return_value={
+                    'enabled': True, 'trigger_expired': True,
+                    'depletion_expiry_days': 3, 'depletion_volume_gb': 2,
+                    'cooldown_hours': {}, 'expired_max_age_days': 0,
+                }), patch('panel.jobs.messaging._sms_gateway_ready', return_value=(True, None, 200)), patch(
+                    'panel.jobs.messaging._sms_scan_snapshot', return_value={'state': 'idle'}), patch(
+                    'app._get_monitor_settings', return_value={'filters': {}, 'templates': {}}):
+                result = _run_sms_depletion_scan(preview=True)
+            self.assertEqual(result['scanned'], 1)
+            self.assertEqual(result['detected_states']['expired'], 1)
+        finally:
+            GLOBAL_SERVER_DATA.clear()
+            GLOBAL_SERVER_DATA.update(original)
+
     def test_sms_center_keeps_superadmin_navigation(self):
         self._login_superadmin()
         response = self.client.get('/sms-center')
