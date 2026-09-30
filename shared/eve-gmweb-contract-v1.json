@@ -159,7 +159,7 @@
   },
   "deliveryEventSearch": {
     "endpoint": "sms_delivery_events",
-    "filters": ["from", "to", "status", "requestId", "eventId", "callbackState", "limit"],
+    "filters": ["from", "to", "status", "requestId", "eventId", "eveNotificationId", "callbackState", "limit"],
     "timeFormat": "Unix milliseconds",
     "maximumLimit": 100,
     "projectIsolation": "sms.status keys see only sends created by that project key",
