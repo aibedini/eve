@@ -17,6 +17,7 @@
   </div>
   <nav class="sms-center-nav" aria-label="SMS Center sections">
     <button class="sms-audit-tab active" type="button" data-sms-tab="overview">Overview</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="audience">Current audience</button>
     <button class="sms-audit-tab" type="button" data-sms-tab="runs">Runs</button>
     <button class="sms-audit-tab" type="button" data-sms-tab="delivery">Delivery log</button>
     <button class="sms-audit-tab" type="button" data-sms-tab="debt">Notification debt</button>
@@ -32,6 +33,17 @@
     </div>
     <div class="panel-card"><div class="panel-card-header"><h3>Operational boundary</h3></div>
       <p class="field-note">EVE decides who should receive a notification. GMweb records acceptance and the send path. A 200/202 response never proves handset submission or carrier delivery.</p></div>
+  </section>
+  <section class="sms-center-pane hidden" id="sms-center-audience">
+    <div class="sms-audit-stream-head"><div><h3>Current SMS audience</h3><p>Live Monitor matches evaluated against the same rules as an actual run. This preview never sends or changes state.</p></div></div>
+    <div class="sms-audit-kpis sms-center-audience-summary" id="sms-center-audience-summary" aria-live="polite"></div>
+    <div class="sms-center-filters">
+      <div class="form-group"><label for="sms-center-audience-search">Account or server</label><input class="search-input" id="sms-center-audience-search" type="search" autocomplete="off"></div>
+      <div class="form-group"><label for="sms-center-audience-decision">Decision</label><select class="form-select" id="sms-center-audience-decision"><option value="">All decisions</option><option value="eligible_now">Eligible now</option><option value="deferred">Deferred</option><option value="suppressed">Suppressed</option><option value="invalid_recipient">Invalid recipient</option><option value="active_obligation">Active obligation</option></select></div>
+      <button class="btn btn-secondary" type="button" id="sms-center-audience-refresh">Re-evaluate now</button>
+    </div>
+    <p class="field-note">“Eligible now” means the account passed every read-only rule. The real send rechecks mutable limits immediately before submission.</p>
+    <div class="sms-center-list" id="sms-center-audience-list" aria-live="polite">Evaluating current audience…</div>
   </section>
   <section class="sms-center-pane hidden" id="sms-center-runs">
     <div class="sms-audit-stream-head"><div><h3>Recorded runs</h3><p>Decisions for matched candidates, including skips, remain inspectable.</p></div></div>

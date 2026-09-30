@@ -184,6 +184,22 @@ class GatewayEventTests(unittest.TestCase):
         template = app.jinja_env.get_template('sms_center.html')
         self.assertIsNotNone(template)
 
+    def test_current_audience_preview_remains_available_when_automation_is_disabled(self):
+        self._login_superadmin()
+        result = {
+            'preview': True, 'matched': 1, 'eligible_now': 0, 'deferred': 1,
+            'suppressed': 0, 'invalid_recipient': 0, 'active_obligation': 0,
+            'run_state': 'sms_disabled', 'reasons': {'sms_disabled': 1},
+            'candidates': [{'email': 'x1', 'state': 'ended',
+                            'disposition': 'deferred', 'reason_code': 'sms_disabled'}],
+        }
+        with patch('app._get_sms_runtime_settings', return_value={'enabled': False}), patch(
+                'app._run_sms_depletion_scan', return_value=result) as preview:
+            response = self.client.post('/api/sms/scan/preview', json={})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['candidates'][0]['reason_code'], 'sms_disabled')
+        preview.assert_called_once_with(triggered_by='preview', states=None, preview=True)
+
     def test_sms_center_keeps_superadmin_navigation(self):
         self._login_superadmin()
         response = self.client.get('/sms-center')
@@ -200,6 +216,10 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('statusField("EVE", log.status)', source)
         self.assertIn('statusField("Carrier", log.carrier_state || "unavailable")', source)
         self.assertIn('mutated_local_events', source)
+        self.assertIn('loadAudience()', source)
+        self.assertIn('/api/sms/scan/preview', source)
+        self.assertIn('Show all ${rows.length} accounts', source)
+        self.assertIn('No signed GMweb callback matches this message', source)
         self.assertNotIn('openModal(', source)
 
     def test_sms_settings_deep_link_is_hash_aware(self):

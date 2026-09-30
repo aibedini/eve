@@ -2,10 +2,13 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const tabs = ["overview", "runs", "delivery", "debt", "gateway"];
+  const tabs = ["overview", "audience", "runs", "delivery", "debt", "gateway"];
   let offset = 0;
   let total = 0;
   let visibleLogs = [];
+  let audienceRows = [];
+  let audienceExpanded = false;
+  let selectedTab = "overview";
   const pageSize = 30;
   const inlineDecisionLimit = 5;
 
@@ -41,9 +44,9 @@
   }
   function statusTone(value) {
     const status = String(value || "").toLowerCase();
-    if (["sent", "completed", "confirmed", "gateway_accepted", "accepted", "ready", "active", "delivered"].includes(status)
+    if (["sent", "completed", "confirmed", "gateway_accepted", "accepted", "ready", "active", "delivered", "eligible_now"].includes(status)
       || /\.(sent|completed|accepted|delivered)$/.test(status)) return "success";
-    if (["failed", "failed_terminal", "cancelled", "expired", "ended"].includes(status)
+    if (["failed", "failed_terminal", "cancelled", "expired", "ended", "invalid_recipient"].includes(status)
       || /\.(failed|cancelled|expired)$/.test(status)) return "danger";
     if (["retry", "failed_retryable", "deferred", "manual_review", "queued", "pending", "suppressed", "skipped", "degraded", "unavailable"].includes(status)
       || /(pending|queued|retry|deferred|suppressed)/.test(status)) return "warning";
@@ -87,6 +90,96 @@
     const row = node("div", "sms-center-detail-row");
     row.append(...fields);
     return row;
+  }
+  const audienceReasonLabels = {
+    sms_disabled: "SMS automation is disabled or no state trigger is enabled",
+    gateway_not_ready: "Gateway is not ready",
+    quiet_hours: "Quiet hours are active",
+    trigger_disabled_by_operator: "This state trigger is disabled",
+    reseller_owned: "Owned by a reseller",
+    unlimited_skipped: "Unlimited-account policy excludes it",
+    expired_too_old: "Expired longer than the configured age limit",
+    ended_too_old: "Ended longer than the configured age limit",
+    opted_out_recheck: "Account opted out of SMS",
+    no_recipient: "No valid Iranian mobile was found",
+    manual_review_pending: "A previous uncertain send needs manual review",
+    obligation_outstanding: "The same notification is already outstanding",
+    cooldown_active: "A message was sent inside the cooldown window",
+    no_template: "No template is configured for this state",
+    empty_message: "The rendered message is empty",
+    daily_limit_reached: "Daily send limit reached",
+    hourly_limit_reached: "Hourly send limit reached",
+    evaluation_failed: "Eligibility evaluation failed"
+  };
+  function audienceReason(code) {
+    if (!code) return "All read-only checks passed";
+    return audienceReasonLabels[code] || String(code).replaceAll("_", " ");
+  }
+  function evidenceLabel(value) {
+    if (value === "not_available") return "Not recorded (no signed callback)";
+    if (value === "awaiting_carrier_receipt") return "Waiting for carrier receipt";
+    return value;
+  }
+  function summaryCard(label, value, tone = "neutral") {
+    const card = node("div", "stat-card");
+    card.append(node("span", "sms-audit-kpi-label", label),
+      node("strong", `sms-audit-kpi-value sms-kpi-${tone}`, value));
+    return card;
+  }
+  function renderAudience() {
+    const target = $("sms-center-audience-list");
+    const search = $("sms-center-audience-search").value.trim().toLowerCase();
+    const decision = $("sms-center-audience-decision").value;
+    const rows = audienceRows.filter((row) => {
+      if (decision && row.disposition !== decision) return false;
+      if (!search) return true;
+      return [row.email, row.server_name, row.service_key, row.state, row.reason_code]
+        .some((value) => String(value || "").toLowerCase().includes(search));
+    });
+    target.replaceChildren();
+    if (!rows.length) {
+      target.append(node("p", "field-note", "No current accounts match these filters."));
+      return;
+    }
+    const visible = audienceExpanded ? rows : rows.slice(0, pageSize);
+    visible.forEach((row) => target.append(detailRow([
+      field("Account", row.email || row.service_key), field("Server", row.server_name),
+      statusField("Monitor state", row.state), statusField("Decision", row.disposition),
+      field("Reason", audienceReason(row.reason_code)), field("Recipient", row.recipient)
+    ])));
+    if (rows.length > pageSize) {
+      const toggle = node("button", "btn btn-outline sms-center-more",
+        audienceExpanded ? "Show first 30" : `Show all ${rows.length} accounts`);
+      toggle.type = "button";
+      toggle.addEventListener("click", () => { audienceExpanded = !audienceExpanded; renderAudience(); });
+      target.append(toggle);
+    }
+  }
+  async function loadAudience() {
+    const target = $("sms-center-audience-list");
+    target.replaceChildren(node("p", "field-note", "Evaluating current audience…"));
+    try {
+      const response = await fetch("/api/sms/scan/preview", {
+        method: "POST", credentials: "same-origin", cache: "no-store",
+        headers: { "Content-Type": "application/json" }, body: "{}"
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      audienceRows = data.candidates || [];
+      audienceExpanded = false;
+      const summary = $("sms-center-audience-summary");
+      summary.replaceChildren(
+        summaryCard("Current matches", Number(data.matched || 0).toLocaleString()),
+        summaryCard("Eligible now", Number(data.eligible_now || 0).toLocaleString(), "success"),
+        summaryCard("Deferred", Number(data.deferred || 0).toLocaleString(), "warning"),
+        summaryCard("Suppressed", Number(data.suppressed || 0).toLocaleString(), "danger"),
+        summaryCard("Invalid / outstanding", Number((data.invalid_recipient || 0) + (data.active_obligation || 0)).toLocaleString(), "warning")
+      );
+      renderAudience();
+    } catch (error) {
+      audienceRows = [];
+      showError(target, error);
+    }
   }
   function appendDiagnosticFacts(container, diagnostics) {
     const android = diagnostics?.androidActivity;
@@ -258,11 +351,12 @@
             const events = result.gateway_events || [];
             timeline.append(detailRow([
               statusField("Gateway submission", result.submission?.state || "unknown"),
-              field("Submission evidence", result.submission?.evidence),
+              field("Submission evidence", evidenceLabel(result.submission?.evidence)),
               statusField("Carrier outcome", result.carrier?.state || "unavailable"),
-              field("Carrier evidence", result.carrier?.evidence)
+              field("Carrier evidence", evidenceLabel(result.carrier?.evidence))
             ]));
-            if (!events.length) timeline.append(node("p", "field-note", "No gateway events are recorded yet. EVE's state above is still authoritative."));
+            if (!events.length) timeline.append(node("p", "field-note field-note-warn",
+              "No signed GMweb callback matches this message. Gateway acceptance is recorded, but Android submission and carrier delivery cannot be proven. Check the callback URL/secret and GMweb callback outbox."));
             for (const event of events) timeline.append(detailRow([
               statusField("Event", event.type), field("Occurred", date(event.occurred_at)),
               field("Attempt", event.attempt), field("Device", event.device_id || "Not reported"),
@@ -338,19 +432,26 @@
       target.replaceChildren(list);
     } catch (error) { showError(target, error); }
   }
-  function selectTab(name) {
+  function selectTab(name, load = true) {
     if (!tabs.includes(name)) return;
+    selectedTab = name;
     for (const tab of tabs) $("sms-center-" + tab).classList.toggle("hidden", tab !== name);
     for (const button of document.querySelectorAll("[data-sms-tab]"))
       button.classList.toggle("active", button.dataset.smsTab === name);
     history.replaceState(null, "", `#${name}`);
+    if (load && name === "audience") loadAudience();
   }
   async function refresh() {
-    await Promise.allSettled([loadHealth(), loadOverview(), loadRuns(), loadDelivery(), loadDebt()]);
+    const tasks = [loadHealth(), loadOverview(), loadRuns(), loadDelivery(), loadDebt()];
+    if (selectedTab === "audience") tasks.push(loadAudience());
+    await Promise.allSettled(tasks);
   }
   document.querySelectorAll("[data-sms-tab]").forEach((button) =>
     button.addEventListener("click", () => selectTab(button.dataset.smsTab)));
   $("sms-center-refresh").addEventListener("click", refresh);
+  $("sms-center-audience-refresh").addEventListener("click", loadAudience);
+  $("sms-center-audience-search").addEventListener("input", renderAudience);
+  $("sms-center-audience-decision").addEventListener("change", renderAudience);
   $("sms-center-filter").addEventListener("click", () => { offset = 0; loadDelivery(); });
   $("sms-center-reconcile").addEventListener("click", reconcileDeliveryEvents);
   $("sms-center-search").addEventListener("keydown", (event) => {
@@ -369,7 +470,7 @@
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 0);
   });
-  selectTab(location.hash.slice(1) || "overview");
+  selectTab(location.hash.slice(1) || "overview", false);
   refresh();
   setInterval(() => { if (!document.hidden) refresh(); }, 30000);
 })();
