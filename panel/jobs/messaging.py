@@ -4475,6 +4475,17 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     #  service_key, observed_generation, observed_at)
     candidates = []
     preview_excluded = []
+    owner_types = None
+    if preview:
+        try:
+            owner_types = _announcement_account_owner_types([
+                (None, None, {'server_id': inbound.get('server_id'),
+                              'email': client.get('email')})
+                for inbound in inbounds for client in (inbound.get('clients') or [])
+                if inbound.get('server_id') is not None and client.get('email')
+            ])
+        except Exception:
+            db.session.rollback()
     total_clients = 0
 
     def _preview_exclusion(*, sid, email, server_name, state, recipient,
@@ -4542,7 +4553,8 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                     reason_code='trigger_disabled_by_operator')
                 continue
 
-            if _account_has_reseller_owner(sid_norm, email):
+            if ((owner_types.get((sid_norm, email_l)) == 'reseller') if owner_types is not None
+                    else _account_has_reseller_owner(sid_norm, email)):
                 _preview_exclusion(
                     sid=sid_norm, email=email, server_name=server_name, state=state,
                     recipient=recipient, service_key=preview_service_key,
@@ -4669,8 +4681,9 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 text = 'unrenderable'
         return (candidate_evaluator.CandidateFacts(
             has_recipient=bool(recipient),
-            opted_out=_sms_account_opted_out(sid_norm, email, queued_comment,
-                                             refresh_shared=True),
+            opted_out=(_sms_comment_opted_out(queued_comment) if preview else
+                       _sms_account_opted_out(sid_norm, email, queued_comment,
+                                              refresh_shared=True)),
             manual_review=_sms_has_manual_review(email_l, sid_norm, state),
             obligation_outstanding=_sms_outstanding_obligation(service_key, state),
             cooldown_seconds_remaining=_cooldown_remaining_seconds(

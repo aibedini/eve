@@ -444,6 +444,8 @@
       target.replaceChildren(list);
     } catch (error) { showError(target, error); }
   }
+  const tabLoaders = { overview: loadOverview, audience: loadAudience, runs: loadRuns,
+    delivery: loadDelivery, debt: loadDebt };
   function selectTab(name, load = true) {
     if (!tabs.includes(name)) return;
     selectedTab = name;
@@ -451,11 +453,11 @@
     for (const button of document.querySelectorAll("[data-sms-tab]"))
       button.classList.toggle("active", button.dataset.smsTab === name);
     history.replaceState(null, "", `#${name}`);
-    if (load && name === "audience") loadAudience();
+    if (load) tabLoaders[name]?.();
   }
   async function refresh() {
-    const tasks = [loadHealth(), loadOverview(), loadRuns(), loadDelivery(), loadDebt()];
-    if (selectedTab === "audience") tasks.push(loadAudience());
+    const tasks = [loadHealth()];
+    if (tabLoaders[selectedTab]) tasks.push(tabLoaders[selectedTab]());
     await Promise.allSettled(tasks);
   }
   document.querySelectorAll("[data-sms-tab]").forEach((button) =>
@@ -484,5 +486,8 @@
   });
   selectTab(location.hash.slice(1) || "overview", false);
   refresh();
-  setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+  setInterval(() => {
+    if (document.hidden) return;
+    loadHealth();
+  }, 30000);
 })();

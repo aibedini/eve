@@ -394,9 +394,8 @@ def sms_scan_preview():
     except Exception as exc:
         return jsonify({'success': False, 'error': f'Could not load SMS settings: {exc}'}), 500
     payload = request.get_json(silent=True) or {}
-    refresh_source = isinstance(payload, dict) and payload.get('refresh_source') is True
     try:
-        refreshed = load_snapshot_from_redis(force=refresh_source)
+        refreshed = load_snapshot_from_redis(force=False)
     except Exception:
         current_app.logger.exception('SMS audience snapshot load failed')
         refreshed = False

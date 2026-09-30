@@ -224,7 +224,7 @@ class GatewayEventTests(unittest.TestCase):
                 self.assertEqual(response.json['source']['inbounds'], 2)
                 load.assert_called_once_with(force=False)
                 self.client.post('/api/sms/scan/preview', json={'refresh_source': True})
-                self.assertEqual(load.call_args.kwargs, {'force': True})
+                self.assertEqual(load.call_args.kwargs, {'force': False})
                 self.assertEqual(scan.call_count, 2)
             GLOBAL_SERVER_DATA.update({'last_update': None, 'inbounds': []})
             with patch('app._get_sms_runtime_settings', return_value={}), patch(
@@ -266,7 +266,7 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('statusField("EVE", log.status)', source)
         self.assertIn('statusField("Carrier", log.carrier_state || "unavailable")', source)
         self.assertIn('mutated_local_events', source)
-        self.assertIn('loadAudience()', source)
+        self.assertIn('audience: loadAudience', source)
         self.assertIn('/api/sms/scan/preview', source)
         self.assertIn('Show all ${rows.length} accounts', source)
         self.assertIn('No signed GMweb callback matches this message', source)
