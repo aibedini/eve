@@ -248,6 +248,16 @@ class SingleEvaluatorTests(unittest.TestCase):
         self.assertIn("_run_sms_depletion_scan(", source)
         self.assertIn("no-store", source)
 
+    def test_preview_bypasses_mutating_pipeline_and_keeps_exclusion_reasons(self):
+        source = self._jobs_source()
+        self.assertIn("depletion_pipeline.detection_enabled() and not preview", source)
+        preview_block = source.split("    if preview:", 1)[1].split("    sent = 0", 1)[0]
+        self.assertNotIn("_sms_scan_set(", preview_block)
+        for reason in ("trigger_disabled_by_operator", "reseller_owned",
+                       "unlimited_skipped", "expired_too_old", "ended_too_old",
+                       "opted_out_recheck", "no_recipient"):
+            self.assertIn("reason_code='%s'" % reason, source)
+
     def test_the_ladder_has_no_second_definition(self):
         source = self._jobs_source()
         # The outcome literals must not be re-derived in the caller.

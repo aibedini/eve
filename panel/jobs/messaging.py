@@ -4382,7 +4382,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         'mode': depletion_pipeline.mode(),
         'detection': depletion_pipeline.detection_enabled(),
     }
-    if depletion_pipeline.detection_enabled():
+    if depletion_pipeline.detection_enabled() and not preview:
         reconciled = depletion_pipeline.reconcile_snapshot(source='reconciliation')
         drained = {'sent': 0, 'claimed': 0}
         if cfg.get('enabled') and any(state_enabled.values()):
@@ -4400,26 +4400,35 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 'reason': 'reconciled',
                 'pipeline': pipeline,
             }
-    if not cfg.get('enabled') or not any(state_enabled.values()):
+    if not preview and (not cfg.get('enabled') or not any(state_enabled.values())):
         _sms_scan_set(state='idle', reason='disabled', finished_at=now_iso)
         return {'scanned': 0, 'sent': 0, 'reason': 'disabled'}
-    if not (cfg.get('base_url') and cfg.get('api_key')):
+    gateway_configured = bool(cfg.get('base_url') and cfg.get('api_key'))
+    if not preview and not gateway_configured:
         _sms_scan_set(state='idle', reason='gateway_not_configured', finished_at=now_iso)
         return {'scanned': 0, 'sent': 0, 'reason': 'gateway_not_configured'}
-    ready, ready_reason, ready_status = _sms_gateway_ready(cfg)
-    if not ready:
+    ready, ready_reason, ready_status = (
+        _sms_gateway_ready(cfg) if gateway_configured else
+        (False, 'gateway_not_configured', None))
+    if not preview and not ready:
         _sms_scan_set(state='idle', reason=ready_reason or 'gateway_not_ready',
                       gateway_status=ready_status, finished_at=now_iso)
         return {'scanned': 0, 'sent': 0, 'reason': ready_reason or 'gateway_not_ready',
                 'gateway_status': ready_status}
     # Quiet hours: don't send now. Candidates keep their cooldown untouched, so the
     # next run after the window picks them up — a true "send after 8am" queue.
-    if _sms_in_quiet_hours(cfg):
+    quiet_hours = _sms_in_quiet_hours(cfg)
+    if not preview and quiet_hours:
         _sms_scan_set(state='idle', reason='quiet_hours', finished_at=now_iso)
         return {'scanned': 0, 'sent': 0, 'reason': 'quiet_hours'}
 
     jid = job_id or uuid.uuid4().hex
     cooldown_hours = cfg.get('cooldown_hours') or {}
+    preview_run_state = candidate_evaluator.evaluate_run(
+        sms_enabled=bool(cfg.get('enabled')) and any(state_enabled.values()),
+        gateway_ready=ready,
+        quiet_hours=quiet_hours,
+    )
 
     # Reuse Monitor templates and its long-expired fallback, but classify reminder
     # candidates with the SMS-specific thresholds exposed in Settings. Keep direct
@@ -4465,7 +4474,19 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     # (sid_norm, email, email_l, server_name, state, recipient, mvars, comment,
     #  service_key, observed_generation, observed_at)
     candidates = []
+    preview_excluded = []
     total_clients = 0
+
+    def _preview_exclusion(*, sid, email, server_name, state, recipient,
+                           service_key, disposition, reason_code):
+        if not preview:
+            return
+        preview_excluded.append({
+            'server_id': sid, 'email': email.lower(), 'server_name': server_name,
+            'state': state, 'recipient': _mask_mobile(recipient),
+            'service_key': service_key, 'disposition': disposition,
+            'reason_code': reason_code,
+        })
 
     # Pass 1 — classify and collect everyone eligible (matching an enabled state +
     # has a mobile + not reseller-owned). This gives the "will message up to N" count.
@@ -4487,9 +4508,6 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             seen.add(key)
             total_clients += 1
 
-            if _account_has_reseller_owner(sid_norm, email):
-                continue
-
             enabled = bool(client.get('enable', True))
             total_bytes = int(client.get('totalGB') or 0)
             try:
@@ -4510,13 +4528,40 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 warning_days=warning_days, warning_gb=warning_gb,
             )
             state = SMS_MONITOR_TAG_TO_STATE.get(status or '')
-            if not state or not state_enabled.get(state):
+            if not state:
                 continue
+
+            recipient = _extract_iran_mobile_from_text(
+                email, client.get('comment') or '')
+            preview_service_key = _candidate_service_key(sid_norm, email_l)
+            if not state_enabled.get(state):
+                _preview_exclusion(
+                    sid=sid_norm, email=email, server_name=server_name, state=state,
+                    recipient=recipient, service_key=preview_service_key,
+                    disposition=candidate_evaluator.SUPPRESSED,
+                    reason_code='trigger_disabled_by_operator')
+                continue
+
+            if _account_has_reseller_owner(sid_norm, email):
+                _preview_exclusion(
+                    sid=sid_norm, email=email, server_name=server_name, state=state,
+                    recipient=recipient, service_key=preview_service_key,
+                    disposition=candidate_evaluator.SUPPRESSED,
+                    reason_code='reseller_owned')
+                continue
+
+            service_key = lifecycle_service.service_key_for_client(
+                sid_norm, client, email=email)
 
             # Operator option: skip accounts that are unlimited in either dimension
             # (no volume cap or no expiry date). total_bytes<=0 ⇒ unlimited volume,
             # expiry_ts<=0 ⇒ unlimited/no time.
             if cfg.get('skip_unlimited') and (total_bytes <= 0 or expiry_ts <= 0):
+                _preview_exclusion(
+                    sid=sid_norm, email=email, server_name=server_name, state=state,
+                    recipient=recipient, service_key=service_key,
+                    disposition=candidate_evaluator.SUPPRESSED,
+                    reason_code='unlimited_skipped')
                 continue
 
             # Skip long-expired accounts: never text someone who expired ages ago.
@@ -4526,6 +4571,11 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                 except Exception:
                     days_ago = 0
                 if days_ago > expired_max_age:
+                    _preview_exclusion(
+                        sid=sid_norm, email=email, server_name=server_name, state=state,
+                        recipient=recipient, service_key=service_key,
+                        disposition=candidate_evaluator.SUPPRESSED,
+                        reason_code='expired_too_old')
                     continue
 
             # Stop nagging a volume-ended (no-date) account once it's been more than
@@ -4533,22 +4583,33 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             if status == 'ended' and ended_max_age:
                 first = _ended_first_contact(email_l, sid_norm)
                 if first and (datetime.utcnow() - first).days > ended_max_age:
+                    _preview_exclusion(
+                        sid=sid_norm, email=email, server_name=server_name, state=state,
+                        recipient=recipient, service_key=service_key,
+                        disposition=candidate_evaluator.SUPPRESSED,
+                        reason_code='ended_too_old')
                     continue
 
             # Operator opt-out: client comment tagged #nosms ⇒ never SMS them,
             # regardless of state/enable/expiry (e.g. user said "won't renew").
             if _sms_comment_opted_out(client.get('comment')):
+                _preview_exclusion(
+                    sid=sid_norm, email=email, server_name=server_name, state=state,
+                    recipient=recipient, service_key=service_key,
+                    disposition=candidate_evaluator.SUPPRESSED,
+                    reason_code='opted_out_recheck')
                 continue
 
-            recipient = _extract_iran_mobile_from_text(email, client.get('comment') or '')
             if not recipient:
+                _preview_exclusion(
+                    sid=sid_norm, email=email, server_name=server_name, state=state,
+                    recipient=None, service_key=service_key,
+                    disposition=candidate_evaluator.INVALID_RECIPIENT,
+                    reason_code='no_recipient')
                 continue
 
             # The canonical, durable service identity. Centralised in the lifecycle
             # service so the renewal side and this scan can never disagree.
-            service_key = lifecycle_service.service_key_for_client(
-                sid_norm, client, email=email)
-
             expiry_date = None
             if expiry_ts and expiry_ts > 0:
                 try:
@@ -4637,15 +4698,23 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
                          'service_key': item[8],
                          'disposition': evaluation.disposition,
                          'reason_code': evaluation.reason_code})
+        rows.extend(preview_excluded)
+        for item in preview_excluded:
+            evaluations.append(candidate_evaluator.Evaluation(
+                item['disposition'], item['reason_code'], False))
         summary = candidate_evaluator.summarize(
-            evaluations, run_state=candidate_evaluator.RUN_READY)
+            evaluations, run_state=preview_run_state)
+        if preview_run_state != candidate_evaluator.RUN_READY:
+            blocked_reason = candidate_evaluator.RUN_BLOCKS[preview_run_state]
+            for row in rows:
+                row['disposition'] = candidate_evaluator.DEFERRED
+                row['reason_code'] = blocked_reason
         # `eligible_now` means "passed every gate that does not mutate state".
         # The run revalidates the budget immediately before submitting.
         summary['budget_checked'] = False
         summary['scanned'] = total_clients
         summary['candidates'] = rows
         summary['preview'] = True
-        _sms_scan_set(state='idle', reason='preview', finished_at=_utc_iso_now(), current=None)
         return summary
 
     sent = 0

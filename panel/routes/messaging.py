@@ -391,12 +391,6 @@ def sms_scan_preview():
         cfg = _get_sms_runtime_settings()
     except Exception as exc:
         return jsonify({'success': False, 'error': f'Could not load SMS settings: {exc}'}), 500
-    if not cfg.get('enabled'):
-        return jsonify({'success': False,
-                        'error': 'SMS automation is disabled. Enable it (and Save) first.'}), 400
-    if not (cfg.get('base_url') and cfg.get('api_key')):
-        return jsonify({'success': False,
-                        'error': 'The selected SMS gateway is not configured.'}), 400
     payload = request.get_json(silent=True) or {}
     requested_states = _normalize_sms_scan_states(
         payload.get('states') if isinstance(payload, dict) else None)
