@@ -387,11 +387,43 @@ def sms_scan_preview():
     suppressed, which promised eligibility it had never evaluated.
     """
     from app import _get_sms_runtime_settings, _normalize_sms_scan_states, _run_sms_depletion_scan
+    from panel.core.redis_client import GLOBAL_SERVER_DATA, load_snapshot_from_redis
+    from datetime import datetime, timezone
     try:
         cfg = _get_sms_runtime_settings()
     except Exception as exc:
         return jsonify({'success': False, 'error': f'Could not load SMS settings: {exc}'}), 500
     payload = request.get_json(silent=True) or {}
+    refresh_source = isinstance(payload, dict) and payload.get('refresh_source') is True
+    try:
+        refreshed = load_snapshot_from_redis(force=refresh_source)
+    except Exception:
+        current_app.logger.exception('SMS audience snapshot load failed')
+        refreshed = False
+    last_update = GLOBAL_SERVER_DATA.get('last_update')
+    inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+    age_ms = None
+    if last_update:
+        try:
+            updated_at = datetime.fromisoformat(str(last_update).replace('Z', '+00:00'))
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            age_ms = max(0, int((datetime.now(timezone.utc) - updated_at).total_seconds() * 1000))
+        except ValueError:
+            pass
+    source_state = 'unavailable' if age_ms is None else ('stale' if age_ms > 300000 else 'ready')
+    source = {
+        'state': source_state,
+        'provider': 'redis' if refreshed else 'local',
+        'last_update': last_update,
+        'age_ms': age_ms,
+        'inbounds': len(inbounds),
+        'refreshed': refreshed,
+    }
+    if source_state != 'ready':
+        response = jsonify({'success': False, 'error': 'Audience source unavailable or stale.', 'source': source})
+        response.headers['Cache-Control'] = 'no-store'
+        return response, 503
     requested_states = _normalize_sms_scan_states(
         payload.get('states') if isinstance(payload, dict) else None)
     try:
@@ -403,7 +435,7 @@ def sms_scan_preview():
         return jsonify({'success': False,
                         'error': 'SMS audience preview is temporarily unavailable.',
                         'reason': type(exc).__name__}), 503
-    response = jsonify({'success': True, **result})
+    response = jsonify({'success': True, 'source': source, **result})
     # A preview must never be served from a cache: it answers "right now".
     response.headers['Cache-Control'] = 'no-store'
     return response

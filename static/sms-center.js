@@ -155,16 +155,24 @@
       target.append(toggle);
     }
   }
-  async function loadAudience() {
+  async function loadAudience(refreshSource = false) {
     const target = $("sms-center-audience-list");
     target.replaceChildren(node("p", "field-note", "Evaluating current audience…"));
     try {
       const response = await fetch("/api/sms/scan/preview", {
         method: "POST", credentials: "same-origin", cache: "no-store",
-        headers: { "Content-Type": "application/json" }, body: "{}"
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_source: refreshSource === true })
       });
       const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      if (!response.ok) {
+        const source = data?.source;
+        throw new Error(source?.state === "stale"
+          ? `Live Monitor snapshot is stale (last updated ${date(source.last_update)}).`
+          : source?.state === "unavailable"
+            ? "Audience source unavailable. Live Monitor snapshot has not been loaded."
+            : data?.error || `HTTP ${response.status}`);
+      }
       audienceRows = data.candidates || [];
       audienceExpanded = false;
       const summary = $("sms-center-audience-summary");
@@ -175,9 +183,13 @@
         summaryCard("Suppressed", Number(data.suppressed || 0).toLocaleString(), "danger"),
         summaryCard("Invalid / outstanding", Number((data.invalid_recipient || 0) + (data.active_obligation || 0)).toLocaleString(), "warning")
       );
+      const source = data.source || {};
+      summary.append(node("p", "field-note",
+        `Live Monitor snapshot: ${source.last_update ? date(source.last_update) : "unknown"} · ${Number(source.inbounds || 0).toLocaleString()} inbounds`));
       renderAudience();
     } catch (error) {
       audienceRows = [];
+      $("sms-center-audience-summary").replaceChildren();
       showError(target, error);
     }
   }
@@ -449,7 +461,7 @@
   document.querySelectorAll("[data-sms-tab]").forEach((button) =>
     button.addEventListener("click", () => selectTab(button.dataset.smsTab)));
   $("sms-center-refresh").addEventListener("click", refresh);
-  $("sms-center-audience-refresh").addEventListener("click", loadAudience);
+  $("sms-center-audience-refresh").addEventListener("click", () => loadAudience(true));
   $("sms-center-audience-search").addEventListener("input", renderAudience);
   $("sms-center-audience-decision").addEventListener("change", renderAudience);
   $("sms-center-filter").addEventListener("click", () => { offset = 0; loadDelivery(); });

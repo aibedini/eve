@@ -194,11 +194,61 @@ class GatewayEventTests(unittest.TestCase):
                             'disposition': 'deferred', 'reason_code': 'sms_disabled'}],
         }
         with patch('app._get_sms_runtime_settings', return_value={'enabled': False}), patch(
-                'app._run_sms_depletion_scan', return_value=result) as preview:
+                'app._run_sms_depletion_scan', return_value=result) as preview, patch(
+                'panel.core.redis_client.load_snapshot_from_redis', return_value=False), patch.dict(
+                'panel.core.redis_client.GLOBAL_SERVER_DATA', {'last_update': datetime.utcnow().isoformat()}):
             response = self.client.post('/api/sms/scan/preview', json={})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json['candidates'][0]['reason_code'], 'sms_disabled')
         preview.assert_called_once_with(triggered_by='preview', states=None, preview=True)
+
+    def test_audience_preview_hydrates_shared_snapshot_and_distinguishes_missing_source(self):
+        from panel.core.redis_client import GLOBAL_SERVER_DATA
+        self._login_superadmin()
+        result = {'matched': 2, 'eligible_now': 2, 'candidates': []}
+        original = dict(GLOBAL_SERVER_DATA)
+        try:
+            GLOBAL_SERVER_DATA.update({'last_update': None, 'inbounds': []})
+            def hydrate(*, force=False):
+                GLOBAL_SERVER_DATA.update({
+                    'last_update': datetime.utcnow().isoformat(),
+                    'inbounds': [{'id': 1}, {'id': 2}],
+                })
+                return True
+            with patch('app._get_sms_runtime_settings', return_value={}), patch(
+                    'app._run_sms_depletion_scan', return_value=result) as scan, patch(
+                    'panel.core.redis_client.load_snapshot_from_redis', side_effect=hydrate) as load:
+                response = self.client.post('/api/sms/scan/preview', json={})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json['matched'], 2)
+                self.assertEqual(response.json['source']['inbounds'], 2)
+                load.assert_called_once_with(force=False)
+                self.client.post('/api/sms/scan/preview', json={'refresh_source': True})
+                self.assertEqual(load.call_args.kwargs, {'force': True})
+                self.assertEqual(scan.call_count, 2)
+            GLOBAL_SERVER_DATA.update({'last_update': None, 'inbounds': []})
+            with patch('app._get_sms_runtime_settings', return_value={}), patch(
+                    'app._run_sms_depletion_scan', return_value=result) as scan, patch(
+                    'panel.core.redis_client.load_snapshot_from_redis', return_value=False):
+                response = self.client.post('/api/sms/scan/preview', json={})
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.json['source']['state'], 'unavailable')
+                scan.assert_not_called()
+                GLOBAL_SERVER_DATA['last_update'] = '2020-01-01T00:00:00'
+                response = self.client.post('/api/sms/scan/preview', json={})
+                self.assertEqual(response.json['source']['state'], 'stale')
+                scan.assert_not_called()
+            GLOBAL_SERVER_DATA['last_update'] = datetime.utcnow().isoformat()
+            with patch('app._get_sms_runtime_settings', return_value={}), patch(
+                    'app._run_sms_depletion_scan', return_value={'matched': 0, 'candidates': []}), patch(
+                    'panel.core.redis_client.load_snapshot_from_redis', return_value=False):
+                response = self.client.post('/api/sms/scan/preview', json={})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json['source']['state'], 'ready')
+                self.assertEqual(response.json['matched'], 0)
+        finally:
+            GLOBAL_SERVER_DATA.clear()
+            GLOBAL_SERVER_DATA.update(original)
 
     def test_sms_center_keeps_superadmin_navigation(self):
         self._login_superadmin()
