@@ -375,6 +375,83 @@ def sms_scan_run():
     return jsonify({'success': True, 'job_id': jid, 'states': requested_states})
 
 
+def _paginate_sms_audience_preview(result, payload):
+    """Bound preview payload and attach the latest send evidence for this page."""
+    from datetime import timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    try:
+        page = max(1, int(payload.get('page') or 1))
+        per_page = min(100, max(10, int(payload.get('per_page') or 30)))
+    except (TypeError, ValueError):
+        page, per_page = 1, 30
+    search = str(payload.get('search') or '').strip().lower()
+    decision = str(payload.get('decision') or '').strip()
+    rows = result.get('candidates') or []
+    if decision:
+        rows = [row for row in rows if row.get('disposition') == decision]
+    if search:
+        fields = ('email', 'server_name', 'service_key', 'state', 'reason_code')
+        rows = [row for row in rows if any(
+            search in str(row.get(field) or '').lower() for field in fields)]
+
+    total = len(rows)
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, pages)
+    start = (page - 1) * per_page
+    page_rows = rows[start:start + per_page]
+
+    service_keys = {row.get('service_key') for row in page_rows if row.get('service_key')}
+    identities = {(str(row.get('email') or '').lower(), int(row.get('server_id') or 0))
+                  for row in page_rows if row.get('email')}
+    emails = {email for email, _server_id in identities}
+    latest_by_key = {}
+    latest_by_identity = {}
+    if service_keys or emails:
+        filters = []
+        if service_keys:
+            filters.append(SmsSendLog.service_key.in_(service_keys))
+        if emails:
+            filters.append(func.lower(SmsSendLog.email).in_(emails))
+        logs = (SmsSendLog.query.filter(or_(*filters))
+                .order_by(SmsSendLog.created_at.desc(), SmsSendLog.id.desc()).all())
+        for log in logs:
+            if log.service_key:
+                latest_by_key.setdefault(log.service_key, log)
+            latest_by_identity.setdefault((log.email.lower(), int(log.server_id or 0)), log)
+    for row in page_rows:
+        identity = (str(row.get('email') or '').lower(), int(row.get('server_id') or 0))
+        log = latest_by_key.get(row.get('service_key')) or latest_by_identity.get(identity)
+        row['last_sms'] = None if log is None else {
+            'id': log.id,
+            'status': log.status,
+            'created_at': log.created_at.isoformat() + 'Z',
+        }
+
+    now_utc = datetime.now(timezone.utc)
+    local_now = now_utc.astimezone(ZoneInfo('Asia/Tehran'))
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    utc_end = (local_start + timedelta(days=1)).astimezone(timezone.utc).replace(tzinfo=None)
+    today_rows = (db.session.query(SmsSendLog.status, func.count(SmsSendLog.id))
+                  .filter(SmsSendLog.created_at >= utc_start,
+                          SmsSendLog.created_at < utc_end)
+                  .group_by(SmsSendLog.status).all())
+    today = {status: count for status, count in today_rows}
+    result['candidates'] = page_rows
+    result['pagination'] = {
+        'page': page, 'per_page': per_page, 'total': total, 'pages': pages,
+    }
+    result['today'] = {
+        'sent': int(today.get('sent', 0)),
+        'failed': int(today.get('failed', 0)),
+        'queued': int(today.get('queued', 0)),
+        'skipped': int(today.get('skipped', 0)),
+        'total': sum(int(value) for value in today.values()),
+    }
+    return result
+
+
 @bp.route('/api/sms/scan/preview', methods=['POST'])
 @permission_required('secrets.manage')
 def sms_scan_preview():
@@ -434,6 +511,7 @@ def sms_scan_preview():
             triggered_by='preview',
             states=requested_states if isinstance(payload, dict) and payload.get('states') is not None else None,
             preview=True)
+        result = _paginate_sms_audience_preview(result, payload)
     except Exception as exc:
         return jsonify({'success': False,
                         'error': 'SMS audience preview is temporarily unavailable.',

@@ -5888,3 +5888,22 @@ button.sms-center-row:focus-visible { outline: 2px solid var(--primary); outline
 .inbound-mini-badge.vmess { background: rgba(59,130,246,0.15); color: #60a5fa; }
 .inbound-mini-badge.trojan { background: rgba(245,158,11,0.15); color: #fbbf24; }
 .inbound-mini-badge.shadowsocks { background: rgba(16,185,129,0.15); color: #34d399; }
+.sms-audience-skeleton .skeleton-line {
+  width: 100%;
+  min-width: 4rem;
+  height: 1rem;
+}
+
+.sms-audience-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+}
+
+@media (max-width: 640px) {
+  .sms-audience-pagination {
+    flex-wrap: wrap;
+  }
+}

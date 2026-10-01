@@ -8,7 +8,8 @@
   let visibleLogs = [];
   let audienceRows = [];
   let audienceDiagnostics = null;
-  let audienceExpanded = false;
+  let audiencePage = 1;
+  let audiencePagination = null;
   let selectedTab = "overview";
   const pageSize = 30;
   const inlineDecisionLimit = 5;
@@ -127,16 +128,30 @@
       node("strong", `sms-audit-kpi-value sms-kpi-${tone}`, value));
     return card;
   }
+  function showAudienceSkeleton() {
+    const target = $("sms-center-audience-list");
+    target.replaceChildren();
+    for (let index = 0; index < 6; index += 1) {
+      const row = node("div", "sms-center-detail-row sms-audience-skeleton");
+      for (let cell = 0; cell < 6; cell += 1) row.append(node("span", "skeleton skeleton-line"));
+      target.append(row);
+    }
+  }
+  async function renderAudienceTimeline(panel, logId) {
+    panel.replaceChildren(node("p", "field-note", "Loading delivery timeline…"));
+    try {
+      const result = await json(`/api/sms/messages/${logId}/timeline`);
+      panel.replaceChildren(detailRow([
+        statusField("Gateway submission", result.submission?.state || "unknown"),
+        field("Submission evidence", evidenceLabel(result.submission?.evidence)),
+        statusField("Carrier outcome", result.carrier?.state || "unavailable"),
+        field("Carrier evidence", evidenceLabel(result.carrier?.evidence))
+      ]));
+    } catch (error) { showError(panel, error); }
+  }
   function renderAudience() {
     const target = $("sms-center-audience-list");
-    const search = $("sms-center-audience-search").value.trim().toLowerCase();
-    const decision = $("sms-center-audience-decision").value;
-    const rows = audienceRows.filter((row) => {
-      if (decision && row.disposition !== decision) return false;
-      if (!search) return true;
-      return [row.email, row.server_name, row.service_key, row.state, row.reason_code]
-        .some((value) => String(value || "").toLowerCase().includes(search));
-    });
+    const rows = audienceRows;
     target.replaceChildren();
     if (!rows.length) {
       const scanned = Number(audienceDiagnostics?.scanned || 0);
@@ -148,28 +163,56 @@
       target.append(node("p", "field-note", message));
       return;
     }
-    const visible = audienceExpanded ? rows : rows.slice(0, pageSize);
-    visible.forEach((row) => target.append(detailRow([
-      field("Account", row.email || row.service_key), field("Server", row.server_name),
-      statusField("Monitor state", row.state), statusField("Decision", row.disposition),
-      field("Reason", audienceReason(row.reason_code)), field("Recipient", row.recipient)
-    ])));
-    if (rows.length > pageSize) {
-      const toggle = node("button", "btn btn-outline sms-center-more",
-        audienceExpanded ? "Show first 30" : `Show all ${rows.length} accounts`);
-      toggle.type = "button";
-      toggle.addEventListener("click", () => { audienceExpanded = !audienceExpanded; renderAudience(); });
-      target.append(toggle);
+    rows.forEach((row) => {
+      const lastSms = row.last_sms;
+      const disclosure = expandableRow([
+        field("Account", row.email || row.service_key), field("Server", row.server_name),
+        statusField("Monitor state", row.state), statusField("Decision", row.disposition),
+        statusField("Last SMS", lastSms?.status || "not sent"),
+        field("Last SMS time", date(lastSms?.created_at))
+      ], lastSms ? "Delivery timeline" : "Decision details");
+      disclosure.panel.append(detailRow([
+        field("Reason", audienceReason(row.reason_code)), field("Recipient", row.recipient)
+      ]));
+      let loaded = false;
+      disclosure.button.addEventListener("click", async () => {
+        const opening = disclosure.button.getAttribute("aria-expanded") !== "true";
+        toggleExpansion(disclosure.button, disclosure.panel, opening);
+        if (opening && lastSms && !loaded) {
+          await renderAudienceTimeline(disclosure.panel, lastSms.id);
+          loaded = true;
+        }
+      });
+      target.append(disclosure.entry);
+    });
+    if (audiencePagination?.pages > 1) {
+      const nav = node("div", "sms-audience-pagination");
+      const previous = node("button", "btn btn-outline", "Previous");
+      const next = node("button", "btn btn-outline", "Next");
+      previous.type = next.type = "button";
+      previous.disabled = audiencePagination.page <= 1;
+      next.disabled = audiencePagination.page >= audiencePagination.pages;
+      previous.addEventListener("click", () => { audiencePage -= 1; loadAudience(false); });
+      next.addEventListener("click", () => { audiencePage += 1; loadAudience(false); });
+      nav.append(previous, node("span", "field-note",
+        `Page ${audiencePagination.page.toLocaleString()} of ${audiencePagination.pages.toLocaleString()} · ${audiencePagination.total.toLocaleString()} accounts`), next);
+      target.append(nav);
     }
   }
-  async function loadAudience() {
+  async function loadAudience(resetPage = true) {
     const target = $("sms-center-audience-list");
-    target.replaceChildren(node("p", "field-note", "Evaluating current audience…"));
+    if (resetPage) audiencePage = 1;
+    showAudienceSkeleton();
     try {
       const response = await fetch("/api/sms/scan/preview", {
         method: "POST", credentials: "same-origin", cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: "{}"
+        body: JSON.stringify({
+          page: audiencePage,
+          per_page: pageSize,
+          search: $("sms-center-audience-search").value.trim(),
+          decision: $("sms-center-audience-decision").value
+        })
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
@@ -182,14 +225,16 @@
       }
       audienceRows = data.candidates || [];
       audienceDiagnostics = data;
-      audienceExpanded = false;
+      audiencePagination = data.pagination || null;
       const summary = $("sms-center-audience-summary");
       summary.replaceChildren(
         summaryCard("Current matches", Number(data.matched || 0).toLocaleString()),
         summaryCard("Eligible now", Number(data.eligible_now || 0).toLocaleString(), "success"),
         summaryCard("Deferred", Number(data.deferred || 0).toLocaleString(), "warning"),
         summaryCard("Suppressed", Number(data.suppressed || 0).toLocaleString(), "danger"),
-        summaryCard("Invalid / outstanding", Number((data.invalid_recipient || 0) + (data.active_obligation || 0)).toLocaleString(), "warning")
+        summaryCard("Sent today", Number(data.today?.sent || 0).toLocaleString(), "success"),
+        summaryCard("Failed today", Number(data.today?.failed || 0).toLocaleString(), "danger"),
+        summaryCard("Queued today", Number(data.today?.queued || 0).toLocaleString(), "warning")
       );
       const source = data.source || {};
       const states = data.detected_states || {};
@@ -202,6 +247,7 @@
     } catch (error) {
       audienceRows = [];
       audienceDiagnostics = null;
+      audiencePagination = null;
       $("sms-center-audience-summary").replaceChildren();
       $("sms-center-audience-source").replaceChildren();
       showError(target, error);
@@ -507,8 +553,12 @@
     button.addEventListener("click", () => selectTab(button.dataset.smsTab)));
   $("sms-center-refresh").addEventListener("click", refresh);
   $("sms-center-audience-refresh").addEventListener("click", refreshAudienceSource);
-  $("sms-center-audience-search").addEventListener("input", renderAudience);
-  $("sms-center-audience-decision").addEventListener("change", renderAudience);
+  let audienceSearchTimer = null;
+  $("sms-center-audience-search").addEventListener("input", () => {
+    clearTimeout(audienceSearchTimer);
+    audienceSearchTimer = setTimeout(() => loadAudience(), 350);
+  });
+  $("sms-center-audience-decision").addEventListener("change", () => loadAudience());
   $("sms-center-filter").addEventListener("click", () => { offset = 0; loadDelivery(); });
   $("sms-center-reconcile").addEventListener("click", reconcileDeliveryEvents);
   $("sms-center-search").addEventListener("keydown", (event) => {

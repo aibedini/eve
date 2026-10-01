@@ -252,7 +252,7 @@ class SingleEvaluatorTests(unittest.TestCase):
         source = self._jobs_source()
         self.assertIn("depletion_pipeline.detection_enabled() and not preview", source)
         preview_block = source.split("    if preview:", 1)[1].split("    sent = 0", 1)[0]
-        self.assertNotIn("_sms_scan_set(", preview_block)
+        self.assertNotIn("_sms_scan_set(", preview_block.split("        return summary", 1)[0])
         for reason in ("trigger_disabled_by_operator", "reseller_owned",
                        "unlimited_skipped", "expired_too_old", "ended_too_old",
                        "opted_out_recheck", "no_recipient"):

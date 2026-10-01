@@ -4450,23 +4450,24 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
 
     # One scan at a time across ALL workers (worker + manual "run now" must not
     # clobber each other). Check the shared Redis snapshot, not just local state.
-    if _sms_scan_snapshot().get('state') == 'running':
+    if not preview and _sms_scan_snapshot().get('state') == 'running':
         return {'scanned': 0, 'sent': 0, 'reason': 'already_running'}
 
     # Reset progress for this run (also clear any leftover cancel signal).
-    _sms_scan_cancel_clear()
-    with SMS_SCAN_JOB_LOCK:
-        SMS_SCAN_JOB.clear()
-        SMS_SCAN_JOB.update({
-            'id': jid, 'state': 'running', 'triggered_by': triggered_by,
-            'started_at': now_iso, 'finished_at': None,
-            'states_enabled': [k for k, v in state_enabled.items() if v],
-            'manual_states': manual_states if states is not None else None,
-            'total_clients': 0, 'candidates': 0, 'processed': 0,
-            'sent': 0, 'failed': 0, 'skipped_cooldown': 0, 'skipped_rate': 0,
-            'per_state': {k: 0 for k in state_enabled},
-            'current': None, 'stopped': None,
-        })
+    if not preview:
+        _sms_scan_cancel_clear()
+        with SMS_SCAN_JOB_LOCK:
+            SMS_SCAN_JOB.clear()
+            SMS_SCAN_JOB.update({
+                'id': jid, 'state': 'running', 'triggered_by': triggered_by,
+                'started_at': now_iso, 'finished_at': None,
+                'states_enabled': [k for k, v in state_enabled.items() if v],
+                'manual_states': manual_states if states is not None else None,
+                'total_clients': 0, 'candidates': 0, 'processed': 0,
+                'sent': 0, 'failed': 0, 'skipped_cooldown': 0, 'skipped_rate': 0,
+                'per_state': {k: 0 for k in state_enabled},
+                'current': None, 'stopped': None,
+            })
 
     inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
     seen = set()
@@ -4656,8 +4657,6 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     except Exception:
         generations = {}
 
-    _sms_scan_set(total_clients=total_clients, candidates=len(candidates))
-
     def _facts_for(item, _lifecycle=None):
         """Resolve the facts the evaluator needs. ONE resolution, so the preview
         and the real run cannot disagree about whether a candidate is eligible.
@@ -4734,6 +4733,7 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
         summary['preview'] = True
         return summary
 
+    _sms_scan_set(total_clients=total_clients, candidates=len(candidates))
     sent = 0
     # Pass 2 — cooldown gate + rate-limit + send + log per candidate.
     for (sid_norm, email, email_l, server_name, state, recipient, mvars, queued_comment,
