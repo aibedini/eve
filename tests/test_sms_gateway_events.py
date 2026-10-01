@@ -60,7 +60,7 @@ class GatewayEventTests(unittest.TestCase):
     def _post(self, *, body=None, timestamp=None, signature=None):
         raw = json.dumps(body or self.payload, separators=(',', ':')).encode()
         timestamp = str(timestamp or int(time.time()))
-        delivery_id = 'dlv_' + (body or self.payload)['event_id']
+        delivery_id = (body or self.payload)['event_id']
         digest = hmac.new(self.secret.encode(),
                           timestamp.encode() + b'.' + delivery_id.encode() + b'.' + raw,
                           hashlib.sha256).hexdigest()

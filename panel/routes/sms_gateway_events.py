@@ -172,7 +172,7 @@ def ingest_sms_event():
     signature = request.headers.get('X-GMweb-Signature', '')
     if not timestamp.isascii() or not timestamp.isdecimal() or len(timestamp) > 12:
         return jsonify({'error': 'invalid_signature'}), 401
-    if not _valid_text(delivery_id, 200, re.compile(r'^dlv_[A-Za-z0-9:_-]+$')):
+    if not _valid_text(delivery_id, 196, _TOKEN):
         return jsonify({'error': 'invalid_signature'}), 401
     if abs(int(time.time()) - int(timestamp)) > 300:
         return jsonify({'error': 'stale_signature'}), 401
@@ -185,7 +185,7 @@ def ingest_sms_event():
         values = _parse_event(json.loads(raw))
     except (ValueError, UnicodeDecodeError):
         return jsonify({'error': 'invalid_event'}), 400
-    if delivery_id != f"dlv_{values['event_id']}":
+    if delivery_id != values['event_id']:
         return jsonify({'error': 'delivery_id_mismatch'}), 400
     existing = db.session.get(SmsGatewayEvent, values['event_id'])
     if existing:
