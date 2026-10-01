@@ -411,7 +411,7 @@
               field("Carrier evidence", evidenceLabel(result.carrier?.evidence))
             ]));
             if (!events.length) timeline.append(node("p", "field-note field-note-warn",
-              "No signed GMweb callback matches this message. Gateway acceptance is recorded, but Android submission and carrier delivery cannot be proven. Check the callback URL/secret and GMweb callback outbox."));
+              "No signed GMweb callback matches this message. Check the send result, callback URL/secret, and GMweb callback outbox."));
             for (const event of events) timeline.append(detailRow([
               statusField("Event", event.type), field("Occurred", date(event.occurred_at)),
               field("Attempt", event.attempt), field("Device", event.device_id || "Not reported"),

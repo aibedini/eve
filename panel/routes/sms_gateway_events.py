@@ -12,7 +12,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 
-from panel.extensions import db
+from panel.extensions import db, limiter
 from panel.models import SmsGatewayEvent, SmsSendLog
 from panel.routes.common import permission_required
 
@@ -159,6 +159,7 @@ def _project_evidence(rows, log=None):
 
 
 @bp.route('/internal/gmweb/sms/events', methods=['POST'])
+@limiter.exempt
 def ingest_sms_event():
     secret = os.environ.get('EVE_SMS_EVENTS_SECRET', '')
     if len(secret) < 32:
