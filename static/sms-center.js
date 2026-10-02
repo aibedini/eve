@@ -122,8 +122,22 @@
     if (value === "awaiting_carrier_receipt") return "Waiting for carrier receipt";
     return value;
   }
-  function summaryCard(label, value, tone = "neutral") {
-    const card = node("div", "stat-card");
+  function summaryCard(label, value, tone = "neutral", filter = null) {
+    const card = node(filter ? "button" : "div", `stat-card${filter ? " sms-summary-filter" : ""}`);
+    if (filter) {
+      card.type = "button";
+      card.dataset.filterKind = filter.kind;
+      card.dataset.filterValue = filter.value;
+      card.setAttribute("aria-pressed", "false");
+      card.addEventListener("click", () => {
+        const decision = $("sms-center-audience-decision");
+        const activity = $("sms-center-audience-activity");
+        if (filter.kind === "all") { decision.value = ""; activity.value = ""; }
+        if (filter.kind === "decision") { decision.value = filter.value; activity.value = ""; }
+        if (filter.kind === "activity") { activity.value = filter.value; decision.value = ""; }
+        loadAudience();
+      });
+    }
     card.append(node("span", "sms-audit-kpi-label", label),
       node("strong", `sms-audit-kpi-value sms-kpi-${tone}`, value));
     return card;
@@ -172,7 +186,11 @@
         field("Last SMS time", date(lastSms?.created_at))
       ], lastSms ? "Delivery timeline" : "Decision details");
       disclosure.panel.append(detailRow([
-        field("Reason", audienceReason(row.reason_code)), field("Recipient", row.recipient)
+        field("Reason", audienceReason(row.reason_code)), field("Recipient", row.recipient),
+        statusField("Account", row.account_enabled ? "enabled" : "disabled"),
+        field("Expiry", date(row.expiry_at)),
+        field("Today's outcomes", row.today_statuses?.length ? row.today_statuses.join(" · ") : "None"),
+        field("Today's events", row.today_events || 0)
       ]));
       let loaded = false;
       disclosure.button.addEventListener("click", async () => {
@@ -211,7 +229,17 @@
           page: audiencePage,
           per_page: pageSize,
           search: $("sms-center-audience-search").value.trim(),
-          decision: $("sms-center-audience-decision").value
+          decision: $("sms-center-audience-decision").value,
+          activity: $("sms-center-audience-activity").value,
+          state: $("sms-center-audience-state").value,
+          date_from: $("sms-center-audience-from").value,
+          date_to: $("sms-center-audience-to").value,
+          hide_disabled: $("sms-center-hide-disabled").checked,
+          hide_reseller: $("sms-center-hide-reseller").checked,
+          hide_no_recipient: $("sms-center-hide-no-recipient").checked,
+          hide_opted_out: $("sms-center-hide-opted-out").checked,
+          hide_unlimited: $("sms-center-hide-unlimited").checked,
+          hide_expired_days: $("sms-center-hide-expired-days").value
         })
       });
       const data = await response.json().catch(() => null);
@@ -228,14 +256,24 @@
       audiencePagination = data.pagination || null;
       const summary = $("sms-center-audience-summary");
       summary.replaceChildren(
-        summaryCard("Current matches", Number(data.matched || 0).toLocaleString()),
-        summaryCard("Eligible now", Number(data.eligible_now || 0).toLocaleString(), "success"),
-        summaryCard("Deferred", Number(data.deferred || 0).toLocaleString(), "warning"),
+        summaryCard("Current matches", Number(data.matched || 0).toLocaleString(), "neutral", { kind: "all", value: "" }),
+        summaryCard("Eligible now", Number(data.eligible_now || 0).toLocaleString(), "success", { kind: "decision", value: "eligible_now" }),
+        summaryCard("Deferred", Number(data.deferred || 0).toLocaleString(), "warning", { kind: "decision", value: "deferred" }),
         summaryCard("Suppressed", Number(data.suppressed || 0).toLocaleString(), "danger"),
-        summaryCard("Sent today", Number(data.today?.sent || 0).toLocaleString(), "success"),
-        summaryCard("Failed today", Number(data.today?.failed || 0).toLocaleString(), "danger"),
-        summaryCard("Queued today", Number(data.today?.queued || 0).toLocaleString(), "warning")
+        summaryCard("Sent today", Number(data.today?.sent || 0).toLocaleString(), "success", { kind: "activity", value: "sent" }),
+        summaryCard("Failed today", Number(data.today?.failed || 0).toLocaleString(), "danger", { kind: "activity", value: "failed" }),
+        summaryCard("Queued today", Number(data.today?.queued || 0).toLocaleString(), "warning", { kind: "activity", value: "queued" })
       );
+      const activeFilters = [];
+      if ($("sms-center-audience-decision").value) activeFilters.push($("sms-center-audience-decision").selectedOptions[0].textContent);
+      if ($("sms-center-audience-activity").value) activeFilters.push($("sms-center-audience-activity").selectedOptions[0].textContent);
+      if ($("sms-center-audience-state").value) activeFilters.push($("sms-center-audience-state").selectedOptions[0].textContent);
+      if ($("sms-center-audience-from").value || $("sms-center-audience-to").value) activeFilters.push("Last SMS date range");
+      const filterState = $("sms-center-audience-filter-state");
+      filterState.textContent = activeFilters.length
+        ? `${Number(data.pagination?.total || 0).toLocaleString()} accounts · ${activeFilters.join(" · ")}`
+        : "";
+      filterState.classList.toggle("hidden", !activeFilters.length);
       const source = data.source || {};
       const states = data.detected_states || {};
       $("sms-center-audience-source").replaceChildren(
@@ -350,13 +388,30 @@
         : "No callback evidence";
     } catch (error) { $("sms-center-delivered").textContent = `Unavailable · ${error.message}`; }
     try {
-      const data = await json("/api/sms/logs?limit=1000");
-      const logs = data.logs || [];
-      $("sms-center-attempts").textContent = logs.length.toLocaleString();
-      $("sms-center-accepted").textContent = logs.filter((row) => row.request_id).length.toLocaleString();
-      $("sms-center-failed").textContent = logs.filter((row) => row.status === "failed").length.toLocaleString();
+      const data = await json("/api/sms/daily-summary");
+      const statuses = data.statuses || {};
+      $("sms-center-attempts").textContent = Number(data.attempts || 0).toLocaleString();
+      $("sms-center-unique").textContent = `${Number(data.unique_accounts || 0).toLocaleString()} unique accounts`;
+      $("sms-center-sent").textContent = Number(statuses.sent || 0).toLocaleString();
+      $("sms-center-segments").textContent = `${Number(data.segments || 0).toLocaleString()} segments`;
+      $("sms-center-accepted").textContent = Number(data.gateway_accepted || 0).toLocaleString();
+      $("sms-center-not-sent").textContent = `${Number(statuses.queued || 0).toLocaleString()} / ${Number(statuses.failed || 0).toLocaleString()} / ${Number(statuses.skipped || 0).toLocaleString()}`;
+      $("sms-center-day-window").textContent = `${new Date(data.window_start).toLocaleDateString()} · 00:00–23:59 Tehran`;
+      $("sms-center-purpose").replaceChildren(
+        field("Created", data.transactional?.created || 0), field("Renewed", data.transactional?.renew || 0),
+        field("Purchased", data.transactional?.purchase || 0), field("Royalty", data.royalty || 0),
+        field("Announcements", data.announcement || 0), field("Other", data.other || 0));
+      $("sms-center-reminders").replaceChildren(
+        field("Near expiry", data.reminders?.near_expiry || 0), field("Low volume", data.reminders?.low_volume || 0),
+        field("Expired", data.reminders?.expired || 0), field("Ended", data.reminders?.ended || 0));
+      const reasons = $("sms-center-reasons");
+      reasons.replaceChildren();
+      for (const item of data.top_non_send_reasons || []) reasons.append(detailRow([
+        field("Reason", audienceReason(item.reason)), field("Count", item.count)
+      ]));
+      if (!data.top_non_send_reasons?.length) reasons.append(node("p", "field-note", "No non-send reasons recorded today."));
     } catch (error) {
-      for (const id of ["sms-center-attempts", "sms-center-accepted", "sms-center-failed"])
+      for (const id of ["sms-center-attempts", "sms-center-sent", "sms-center-accepted", "sms-center-not-sent"])
         $(id).textContent = `Unavailable · ${error.message}`;
     }
   }
@@ -559,6 +614,12 @@
     audienceSearchTimer = setTimeout(() => loadAudience(), 350);
   });
   $("sms-center-audience-decision").addEventListener("change", () => loadAudience());
+  for (const id of ["sms-center-audience-activity", "sms-center-audience-state",
+    "sms-center-audience-from", "sms-center-audience-to", "sms-center-hide-disabled",
+    "sms-center-hide-reseller", "sms-center-hide-no-recipient", "sms-center-hide-opted-out",
+    "sms-center-hide-unlimited", "sms-center-hide-expired-days"]) {
+    $(id).addEventListener("change", () => loadAudience());
+  }
   $("sms-center-filter").addEventListener("click", () => { offset = 0; loadDelivery(); });
   $("sms-center-reconcile").addEventListener("click", reconcileDeliveryEvents);
   $("sms-center-search").addEventListener("keydown", (event) => {

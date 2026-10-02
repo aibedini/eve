@@ -6,7 +6,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timezone, time as datetime_time
+from datetime import datetime, timedelta, timezone, time as datetime_time
 
 from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import IntegrityError
@@ -221,19 +221,25 @@ def sms_gateway_events():
 @bp.route('/api/sms/overview', methods=['GET'])
 @permission_required('secrets.manage')
 def sms_transport_overview():
-    """Count only gateway events actually ingested today; no inferred deliveries."""
-    start = datetime.combine(datetime.utcnow().date(), datetime_time.min)
+    """Count gateway events in the current Tehran day; no inferred deliveries."""
+    tehran_offset = timedelta(hours=3, minutes=30)
+    local_date = (datetime.utcnow() + tehran_offset).date()
+    start = datetime.combine(local_date, datetime_time.min) - tehran_offset
+    end = start + timedelta(days=1)
     counts = dict(db.session.query(SmsGatewayEvent.event_type,
                                    func.count(func.distinct(SmsGatewayEvent.message_id)))
-                  .filter(SmsGatewayEvent.occurred_at >= start)
+                  .filter(SmsGatewayEvent.occurred_at >= start,
+                          SmsGatewayEvent.occurred_at < end)
                   .group_by(SmsGatewayEvent.event_type).all())
     terminal_message_ids = (db.session.query(SmsGatewayEvent.message_id)
-                            .filter(SmsGatewayEvent.occurred_at >= start)
+          .filter(SmsGatewayEvent.occurred_at >= start,
+                  SmsGatewayEvent.occurred_at < end)
                             .filter(SmsGatewayEvent.event_type.in_(
                                 ('sms.delivered', 'sms.delivery_failed'))))
     carrier_pending = (db.session.query(
         func.count(func.distinct(SmsGatewayEvent.message_id)))
         .filter(SmsGatewayEvent.occurred_at >= start,
+                SmsGatewayEvent.occurred_at < end,
                 SmsGatewayEvent.event_type == 'send.sent',
                 ~SmsGatewayEvent.message_id.in_(terminal_message_ids))
         .scalar() or 0)

@@ -293,7 +293,7 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('mutated_local_events', source)
         self.assertIn('audience: loadAudience', source)
         self.assertIn('/api/sms/scan/preview', source)
-        self.assertIn('Show all ${rows.length} accounts', source)
+        self.assertIn('Show all ${result.total || decisions.length} decisions', source)
         self.assertIn('No signed GMweb callback matches this message', source)
         self.assertNotIn('openModal(', source)
 

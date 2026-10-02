@@ -24,15 +24,19 @@
     <button class="sms-audit-tab" type="button" data-sms-tab="gateway">Gateway</button>
   </nav>
   <section class="sms-center-pane" id="sms-center-overview">
-    <h3>Recent audit sample</h3><p class="field-note">Counts cover up to 1,000 newest EVE audit rows, not an all-time total. “Accepted” does not mean sent; carrier confirmation is unavailable.</p>
-    <div class="sms-audit-kpis">
-      <div class="stat-card"><span class="sms-audit-kpi-label">Audited attempts</span><strong class="sms-audit-kpi-value" id="sms-center-attempts">—</strong></div>
-      <div class="stat-card"><span class="sms-audit-kpi-label">Gateway accepted</span><strong class="sms-audit-kpi-value" id="sms-center-accepted">—</strong></div>
-      <div class="stat-card"><span class="sms-audit-kpi-label">Failed</span><strong class="sms-audit-kpi-value" id="sms-center-failed">—</strong></div>
-      <div class="stat-card"><span class="sms-audit-kpi-label">Carrier outcomes today (UTC)</span><strong class="sms-audit-kpi-value" id="sms-center-delivered">Checking…</strong></div>
+    <div class="sms-audit-stream-head"><div><h3>Today at a glance</h3><p>Complete Tehran-day totals, always from 00:00 through 23:59. This is not a limited sample.</p></div><span class="badge neutral" id="sms-center-day-window">Asia/Tehran</span></div>
+    <div class="sms-audit-kpis sms-overview-primary">
+      <div class="stat-card"><span class="sms-audit-kpi-label">Attempts today</span><strong class="sms-audit-kpi-value" id="sms-center-attempts">—</strong><small class="field-note" id="sms-center-unique">— unique accounts</small></div>
+      <div class="stat-card"><span class="sms-audit-kpi-label">Sent</span><strong class="sms-audit-kpi-value" id="sms-center-sent">—</strong><small class="field-note" id="sms-center-segments">— segments</small></div>
+      <div class="stat-card"><span class="sms-audit-kpi-label">Gateway accepted</span><strong class="sms-audit-kpi-value" id="sms-center-accepted">—</strong><small class="field-note">Accepted is not carrier delivery</small></div>
+      <div class="stat-card"><span class="sms-audit-kpi-label">Queued / failed / skipped</span><strong class="sms-audit-kpi-value" id="sms-center-not-sent">—</strong><small class="field-note">Current EVE outcomes</small></div>
     </div>
-    <div class="panel-card"><div class="panel-card-header"><h3>Operational boundary</h3></div>
-      <p class="field-note">EVE decides who should receive a notification. GMweb records acceptance and the send path. A 200/202 response never proves handset submission or carrier delivery.</p></div>
+    <div class="sms-overview-grid">
+      <div class="panel-card sms-overview-panel"><div class="panel-card-header"><h3>Message purpose</h3></div><dl class="sms-center-facts" id="sms-center-purpose"></dl></div>
+      <div class="panel-card sms-overview-panel"><div class="panel-card-header"><h3>Reminder states</h3></div><dl class="sms-center-facts" id="sms-center-reminders"></dl></div>
+      <div class="panel-card sms-overview-panel"><div class="panel-card-header"><h3>Why messages did not send</h3></div><div class="sms-overview-reasons" id="sms-center-reasons"></div></div>
+      <div class="panel-card sms-overview-panel"><div class="panel-card-header"><h3>Carrier evidence today</h3></div><strong class="sms-audit-kpi-value" id="sms-center-delivered">Checking…</strong><p class="field-note">Only signed callback evidence is counted. Acceptance never implies handset delivery.</p></div>
+    </div>
   </section>
   <section class="sms-center-pane hidden" id="sms-center-audience">
     <div class="sms-audit-stream-head"><div><h3>Current SMS audience</h3><p>Live Monitor matches evaluated against the same rules as an actual run. This preview never sends or changes state.</p></div></div>
@@ -41,8 +45,24 @@
     <div class="sms-center-filters">
       <div class="form-group"><label for="sms-center-audience-search">Account or server</label><input class="search-input" id="sms-center-audience-search" type="search" autocomplete="off"></div>
       <div class="form-group"><label for="sms-center-audience-decision">Decision</label><select class="form-select" id="sms-center-audience-decision"><option value="">All decisions</option><option value="eligible_now">Eligible now</option><option value="deferred">Deferred</option><option value="suppressed">Suppressed</option><option value="invalid_recipient">Invalid recipient</option><option value="active_obligation">Active obligation</option></select></div>
+      <div class="form-group"><label for="sms-center-audience-activity">Today's outcome</label><select class="form-select" id="sms-center-audience-activity"><option value="">Any outcome</option><option value="sent">Sent today</option><option value="failed">Failed today</option><option value="queued">Queued today</option></select></div>
+      <div class="form-group"><label for="sms-center-audience-state">Monitor state</label><select class="form-select" id="sms-center-audience-state"><option value="">All states</option><option value="near_expiry">Near expiry</option><option value="low_volume">Low volume</option><option value="expired">Expired</option><option value="ended">Ended</option></select></div>
+      <div class="form-group"><label for="sms-center-audience-from">Last SMS from</label><input class="search-input" id="sms-center-audience-from" type="date"></div>
+      <div class="form-group"><label for="sms-center-audience-to">Last SMS through</label><input class="search-input" id="sms-center-audience-to" type="date"></div>
       <button class="btn btn-secondary" type="button" id="sms-center-audience-refresh">Refresh Monitor &amp; re-evaluate</button>
     </div>
+    <details class="sms-audience-visibility">
+      <summary>Visibility filters</summary>
+      <div class="sms-audience-visibility-grid">
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-disabled"><span class="checkmark"></span><span>Hide disabled accounts</span></label>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-reseller"><span class="checkmark"></span><span>Hide reseller-owned</span></label>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-no-recipient"><span class="checkmark"></span><span>Hide accounts without a valid mobile</span></label>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-opted-out"><span class="checkmark"></span><span>Hide SMS opt-outs</span></label>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-unlimited"><span class="checkmark"></span><span>Hide unlimited accounts</span></label>
+        <div class="form-group"><label for="sms-center-hide-expired-days">Hide expired more than N days</label><input id="sms-center-hide-expired-days" type="number" min="0" max="3650" value="0"><small class="field-note">0 keeps every expired account visible.</small></div>
+      </div>
+    </details>
+    <div class="sms-audience-filter-state hidden" id="sms-center-audience-filter-state" aria-live="polite"></div>
     <p class="field-note">“Eligible now” means the account passed every read-only rule. The real send rechecks mutable limits immediately before submission.</p>
     <div class="sms-center-list" id="sms-center-audience-list" aria-live="polite">Evaluating current audience…</div>
   </section>

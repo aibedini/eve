@@ -378,7 +378,6 @@ def sms_scan_run():
 def _paginate_sms_audience_preview(result, payload):
     """Bound preview payload and attach the latest send evidence for this page."""
     from datetime import timedelta, timezone
-    from zoneinfo import ZoneInfo
 
     try:
         page = max(1, int(payload.get('page') or 1))
@@ -387,39 +386,76 @@ def _paginate_sms_audience_preview(result, payload):
         page, per_page = 1, 30
     search = str(payload.get('search') or '').strip().lower()
     decision = str(payload.get('decision') or '').strip()
+    activity = str(payload.get('activity') or '').strip()
+    state = str(payload.get('state') or '').strip()
+    date_from = str(payload.get('date_from') or '').strip()
+    date_to = str(payload.get('date_to') or '').strip()
+    hide_disabled = bool(payload.get('hide_disabled'))
+    hide_reseller = bool(payload.get('hide_reseller'))
+    hide_no_recipient = bool(payload.get('hide_no_recipient'))
+    hide_opted_out = bool(payload.get('hide_opted_out'))
+    hide_unlimited = bool(payload.get('hide_unlimited'))
+    try:
+        hide_expired_days = max(0, int(payload.get('hide_expired_days') or 0))
+    except (TypeError, ValueError):
+        hide_expired_days = 0
     rows = result.get('candidates') or []
-    if decision:
-        rows = [row for row in rows if row.get('disposition') == decision]
-    if search:
-        fields = ('email', 'server_name', 'service_key', 'state', 'reason_code')
-        rows = [row for row in rows if any(
-            search in str(row.get(field) or '').lower() for field in fields)]
-
-    total = len(rows)
-    pages = max(1, (total + per_page - 1) // per_page)
-    page = min(page, pages)
-    start = (page - 1) * per_page
-    page_rows = rows[start:start + per_page]
-
-    service_keys = {row.get('service_key') for row in page_rows if row.get('service_key')}
+    service_keys = {row.get('service_key') for row in rows if row.get('service_key')}
     identities = {(str(row.get('email') or '').lower(), int(row.get('server_id') or 0))
-                  for row in page_rows if row.get('email')}
-    emails = {email for email, _server_id in identities}
+                  for row in rows if row.get('email')}
     latest_by_key = {}
     latest_by_identity = {}
-    if service_keys or emails:
-        filters = []
-        if service_keys:
-            filters.append(SmsSendLog.service_key.in_(service_keys))
-        if emails:
-            filters.append(func.lower(SmsSendLog.email).in_(emails))
-        logs = (SmsSendLog.query.filter(or_(*filters))
-                .order_by(SmsSendLog.created_at.desc(), SmsSendLog.id.desc()).all())
-        for log in logs:
-            if log.service_key:
+    if service_keys or identities:
+        logs = SmsSendLog.query.order_by(SmsSendLog.created_at.desc(), SmsSendLog.id.desc())
+        for log in logs.yield_per(500):
+            identity = (str(log.email or '').lower(), int(log.server_id or 0))
+            relevant_key = log.service_key and log.service_key in service_keys
+            relevant_identity = identity in identities
+            if not relevant_key and not relevant_identity:
+                continue
+            if relevant_key:
                 latest_by_key.setdefault(log.service_key, log)
-            latest_by_identity.setdefault((log.email.lower(), int(log.server_id or 0)), log)
-    for row in page_rows:
+            if relevant_identity:
+                latest_by_identity.setdefault(identity, log)
+            if (len(latest_by_key) >= len(service_keys)
+                    and len(latest_by_identity) >= len(identities)):
+                break
+
+    snapshot_meta = {}
+    from panel.core.redis_client import GLOBAL_SERVER_DATA
+    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+        if not isinstance(inbound, dict):
+            continue
+        try:
+            inbound_server_id = int(inbound.get('server_id') or 0)
+        except (TypeError, ValueError):
+            inbound_server_id = 0
+        for client in (inbound.get('clients') or []):
+            if not isinstance(client, dict):
+                continue
+            email = str(client.get('email') or '').strip().lower()
+            if email:
+                snapshot_meta[(email, inbound_server_id)] = client
+
+    now_utc = datetime.now(timezone.utc)
+    tehran_tz = timezone(timedelta(hours=3, minutes=30))
+    local_now = now_utc.astimezone(tehran_tz)
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    utc_end = (local_start + timedelta(days=1)).astimezone(timezone.utc).replace(tzinfo=None)
+    today_by_key = {}
+    today_by_identity = {}
+    today_logs = (SmsSendLog.query
+                  .filter(SmsSendLog.created_at >= utc_start, SmsSendLog.created_at < utc_end)
+                  .order_by(SmsSendLog.created_at.desc(), SmsSendLog.id.desc()).all())
+    for log in today_logs:
+        identity = (str(log.email or '').lower(), int(log.server_id or 0))
+        if log.service_key in service_keys:
+            today_by_key.setdefault(log.service_key, []).append(log)
+        if identity in identities:
+            today_by_identity.setdefault(identity, []).append(log)
+
+    for row in rows:
         identity = (str(row.get('email') or '').lower(), int(row.get('server_id') or 0))
         log = latest_by_key.get(row.get('service_key')) or latest_by_identity.get(identity)
         row['last_sms'] = None if log is None else {
@@ -427,27 +463,85 @@ def _paginate_sms_audience_preview(result, payload):
             'status': log.status,
             'created_at': log.created_at.isoformat() + 'Z',
         }
+        account = snapshot_meta.get(identity) or {}
+        try:
+            expiry_ms = int(account.get('expiryTimestamp') or 0)
+        except (TypeError, ValueError):
+            expiry_ms = 0
+        expiry_at = datetime.utcfromtimestamp(expiry_ms / 1000) if expiry_ms > 0 else None
+        enabled_value = account.get('enable', True)
+        row['account_enabled'] = (enabled_value if isinstance(enabled_value, bool) else
+                                  str(enabled_value).strip().lower() not in
+                                  ('0', 'false', 'no', 'off', 'disabled'))
+        row['expiry_at'] = expiry_at.isoformat() + 'Z' if expiry_at else None
+        row['expired_days'] = max(0, (now_utc.replace(tzinfo=None) - expiry_at).days) if expiry_at else None
+        account_today = today_by_key.get(row.get('service_key')) or today_by_identity.get(identity) or []
+        row['today_statuses'] = sorted({item.status for item in account_today if item.status})
+        row['today_events'] = len(account_today)
 
-    now_utc = datetime.now(timezone.utc)
-    local_now = now_utc.astimezone(ZoneInfo('Asia/Tehran'))
-    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
-    utc_end = (local_start + timedelta(days=1)).astimezone(timezone.utc).replace(tzinfo=None)
-    today_rows = (db.session.query(SmsSendLog.status, func.count(SmsSendLog.id))
-                  .filter(SmsSendLog.created_at >= utc_start,
-                          SmsSendLog.created_at < utc_end)
-                  .group_by(SmsSendLog.status).all())
-    today = {status: count for status, count in today_rows}
+    audience_today = {
+        status: sum(1 for row in rows if status in (row.get('today_statuses') or []))
+        for status in ('sent', 'failed', 'queued', 'skipped')
+    }
+    audience_today_total = sum(1 for row in rows if row.get('today_statuses'))
+
+    if decision:
+        rows = [row for row in rows if row.get('disposition') == decision]
+    if activity in ('sent', 'failed', 'queued'):
+        rows = [row for row in rows if activity in (row.get('today_statuses') or [])]
+    if state:
+        rows = [row for row in rows if row.get('state') == state]
+    if search:
+        fields = ('email', 'server_name', 'service_key', 'state', 'reason_code')
+        rows = [row for row in rows if any(
+            search in str(row.get(field) or '').lower() for field in fields)]
+    if date_from:
+        try:
+            lower = datetime.fromisoformat(date_from)
+            rows = [row for row in rows if row.get('last_sms') and
+                    datetime.fromisoformat(row['last_sms']['created_at'].rstrip('Z')) >= lower]
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            upper = datetime.fromisoformat(date_to) + timedelta(days=1)
+            rows = [row for row in rows if row.get('last_sms') and
+                    datetime.fromisoformat(row['last_sms']['created_at'].rstrip('Z')) < upper]
+        except ValueError:
+            pass
+    if hide_disabled:
+        rows = [row for row in rows if row.get('account_enabled')]
+    if hide_expired_days:
+        rows = [row for row in rows if row.get('expired_days') is None
+                or row.get('expired_days') <= hide_expired_days]
+    if hide_reseller:
+        rows = [row for row in rows if row.get('reason_code') != 'reseller_owned']
+    if hide_no_recipient:
+        rows = [row for row in rows if row.get('reason_code') != 'no_recipient']
+    if hide_opted_out:
+        rows = [row for row in rows if row.get('reason_code') != 'opted_out_recheck']
+    if hide_unlimited:
+        rows = [row for row in rows if row.get('reason_code') != 'unlimited_skipped']
+
+    rows.sort(key=lambda row: (
+        (row.get('last_sms') or {}).get('created_at') or '', row.get('email') or ''),
+        reverse=True)
+    total = len(rows)
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, pages)
+    start = (page - 1) * per_page
+    page_rows = rows[start:start + per_page]
+
     result['candidates'] = page_rows
     result['pagination'] = {
         'page': page, 'per_page': per_page, 'total': total, 'pages': pages,
     }
     result['today'] = {
-        'sent': int(today.get('sent', 0)),
-        'failed': int(today.get('failed', 0)),
-        'queued': int(today.get('queued', 0)),
-        'skipped': int(today.get('skipped', 0)),
-        'total': sum(int(value) for value in today.values()),
+        **audience_today,
+        'total': audience_today_total,
+        'events_total': len(today_logs),
+        'window_start': local_start.isoformat(),
+        'window_end': (local_start + timedelta(days=1) - timedelta(microseconds=1)).isoformat(),
     }
     return result
 
@@ -513,6 +607,7 @@ def sms_scan_preview():
             preview=True)
         result = _paginate_sms_audience_preview(result, payload)
     except Exception as exc:
+        current_app.logger.exception('SMS audience preview evaluation failed')
         return jsonify({'success': False,
                         'error': 'SMS audience preview is temporarily unavailable.',
                         'reason': type(exc).__name__}), 503
@@ -1261,6 +1356,74 @@ def sms_logs():
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'
     return resp
+
+
+@bp.route('/api/sms/daily-summary', methods=['GET'])
+@permission_required('secrets.manage')
+def sms_daily_summary():
+    """Complete operational summary for the current Tehran calendar day."""
+    from datetime import timedelta, timezone
+
+    now_utc = datetime.now(timezone.utc)
+    tehran_tz = timezone(timedelta(hours=3, minutes=30))
+    local_start = now_utc.astimezone(tehran_tz).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    utc_end = (local_start + timedelta(days=1)).astimezone(timezone.utc).replace(tzinfo=None)
+    query = SmsSendLog.query.filter(
+        SmsSendLog.created_at >= utc_start, SmsSendLog.created_at < utc_end)
+
+    status_counts = dict(query.with_entities(
+        SmsSendLog.status, func.count(SmsSendLog.id)
+    ).group_by(SmsSendLog.status).all())
+    state_counts = dict(query.with_entities(
+        SmsSendLog.state, func.count(SmsSendLog.id)
+    ).group_by(SmsSendLog.state).all())
+    reason_rows = (query.with_entities(SmsSendLog.reason, func.count(SmsSendLog.id))
+                   .filter(SmsSendLog.status != 'sent')
+                   .filter(SmsSendLog.reason.isnot(None), SmsSendLog.reason != '')
+                   .group_by(SmsSendLog.reason)
+                   .order_by(func.count(SmsSendLog.id).desc()).limit(8).all())
+    attempts = query.count()
+    unique_accounts = (query.with_entities(
+        func.count(func.distinct(func.lower(SmsSendLog.email)))).scalar() or 0)
+    gateway_accepted = (query.filter(or_(
+        SmsSendLog.request_id.isnot(None),
+        SmsSendLog.gateway_request_id.isnot(None),
+        SmsSendLog.submitted_once.is_(True))).count())
+    segment_total = (query.with_entities(func.sum(SmsSendLog.segment_count)).scalar() or 0)
+
+    transactional = {
+        'created': int(state_counts.get('created', 0)),
+        'renew': int(state_counts.get('renew', 0)),
+        'purchase': int(state_counts.get('purchase', 0)),
+    }
+    reminder_states = ('near_expiry', 'low_volume', 'expired', 'ended')
+    reminders = {state: int(state_counts.get(state, 0)) for state in reminder_states}
+    known = set(transactional) | set(reminder_states) | {'royalty', 'announcement', 'test'}
+    other = sum(int(count) for state, count in state_counts.items() if state not in known)
+    response = jsonify({
+        'success': True,
+        'timezone': 'Asia/Tehran',
+        'window_start': local_start.isoformat(),
+        'window_end': (local_start + timedelta(days=1) - timedelta(microseconds=1)).isoformat(),
+        'attempts': attempts,
+        'unique_accounts': int(unique_accounts),
+        'segments': int(segment_total),
+        'gateway_accepted': gateway_accepted,
+        'statuses': {key: int(value) for key, value in status_counts.items()},
+        'transactional': transactional,
+        'reminders': reminders,
+        'royalty': int(state_counts.get('royalty', 0)),
+        'announcement': int(state_counts.get('announcement', 0)),
+        'test': int(state_counts.get('test', 0)),
+        'other': other,
+        'top_non_send_reasons': [
+            {'reason': reason, 'count': int(count)} for reason, count in reason_rows
+        ],
+    })
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    return response
 
 
 @bp.route('/api/sms/capacity', methods=['GET'])
