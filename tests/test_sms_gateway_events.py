@@ -143,13 +143,59 @@ class GatewayEventTests(unittest.TestCase):
         submission, carrier = _project_evidence(late_weaker)
         self.assertEqual((submission['state'], carrier['state']), ('sent', 'delivered'))
 
+        # Physical submission is not a carrier DLR. Without an explicit pending
+        # DLR signal the carrier layer is honestly "not exposed".
         submission, carrier = _project_evidence(normal[:2])
-        self.assertEqual(carrier['state'], 'pending')
+        self.assertEqual(carrier['state'], 'not_exposed')
         self.assertFalse(carrier['confirmed'])
 
         failed = normal[:2] + [event('evt_4', 'sms.delivery_failed', 3, 'failed')]
         submission, carrier = _project_evidence(failed)
         self.assertEqual((submission['state'], carrier['state']), ('sent', 'failed'))
+
+    def test_legacy_history_and_missing_callback_are_not_conflated(self):
+        now = datetime(2026, 10, 2, 10, 0, 0)
+        legacy = SimpleNamespace(
+            eve_notification_id=None, created_at=datetime(2026, 9, 9, 10, 0, 0),
+            carrier_state=None, carrier_evidence=None)
+        submission, carrier = _project_evidence([], legacy, now=now)
+        self.assertEqual(submission['state'], 'legacy_record')
+        self.assertFalse(submission['actionable'])
+        self.assertEqual(submission['evidence'], 'historical_evidence_unavailable')
+        self.assertEqual(carrier['state'], 'historical_unavailable')
+        self.assertFalse(carrier['actionable'])
+
+        recent = SimpleNamespace(
+            eve_notification_id='eve_notif_recent', created_at=datetime(2026, 10, 2, 9, 58, 0),
+            carrier_state=None, carrier_evidence=None)
+        with patch.dict(os.environ, {'EVE_SMS_EVIDENCE_GRACE_SECONDS': '300'}):
+            submission, carrier = _project_evidence([], recent, now=now)
+        self.assertEqual(submission['state'], 'pending')
+        self.assertFalse(submission['actionable'])
+        self.assertEqual(carrier['state'], 'not_exposed')
+
+        stale = SimpleNamespace(
+            eve_notification_id='eve_notif_stale', created_at=datetime(2026, 10, 2, 9, 45, 0),
+            carrier_state=None, carrier_evidence=None)
+        with patch.dict(os.environ, {'EVE_SMS_EVIDENCE_GRACE_SECONDS': '300'}):
+            submission, carrier = _project_evidence([], stale, now=now)
+        self.assertEqual(submission['state'], 'callback_missing')
+        self.assertTrue(submission['actionable'])
+        self.assertEqual(submission['evidence'], 'callback_missing')
+        self.assertEqual(carrier['state'], 'not_exposed')
+
+    def test_explicit_carrier_pending_is_distinct_from_submission(self):
+        event = SimpleNamespace(
+            event_id='evt_sent', event_type='send.sent',
+            occurred_at=datetime(2026, 10, 2, 9, 0), carrier_status='pending',
+            evidence='android_dlr_pending')
+        log = SimpleNamespace(
+            eve_notification_id='eve_notif_10', created_at=datetime(2026, 10, 2, 8, 59),
+            carrier_state=None, carrier_evidence=None)
+        submission, carrier = _project_evidence([event], log, now=datetime(2026, 10, 2, 9, 2))
+        self.assertEqual(submission['state'], 'sent')
+        self.assertEqual(carrier['state'], 'pending')
+        self.assertFalse(carrier['confirmed'])
 
     def test_conflicting_carrier_state_is_rejected(self):
         self.payload.update(type='sms.delivered', carrier_status='failed')
@@ -289,12 +335,15 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('sms-center-expansion hidden', source)
         self.assertIn('inlineDecisionLimit = 5', source)
         self.assertIn('statusField("EVE", log.status)', source)
-        self.assertIn('statusField("Carrier", log.carrier_state || "unavailable")', source)
+        self.assertIn('statusField("Carrier", log.carrier_state || "not_exposed")', source)
         self.assertIn('mutated_local_events', source)
         self.assertIn('audience: loadAudience', source)
         self.assertIn('/api/sms/scan/preview', source)
         self.assertIn('Show all ${rows.length} accounts', source)
-        self.assertIn('No signed GMweb callback matches this message', source)
+        self.assertIn('Historical message: signed callback evidence was not collected', source)
+        self.assertIn('Expected signed GMweb callback is missing', source)
+        self.assertIn('/api/sms/evidence-health', source)
+        self.assertIn('EVE send log', source)
         self.assertNotIn('openModal(', source)
 
     def test_sms_settings_deep_link_is_hash_aware(self):
