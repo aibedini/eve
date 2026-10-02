@@ -46,11 +46,11 @@
   }
   function statusTone(value) {
     const status = String(value || "").toLowerCase();
-    if (["sent", "completed", "confirmed", "gateway_accepted", "accepted", "ready", "active", "delivered", "eligible_now"].includes(status)
+    if (["sent", "completed", "confirmed", "gateway_accepted", "accepted", "ready", "active", "delivered", "eligible_now", "healthy"].includes(status)
       || /\.(sent|completed|accepted|delivered)$/.test(status)) return "success";
     if (["failed", "failed_terminal", "cancelled", "expired", "ended", "invalid_recipient"].includes(status)
       || /\.(failed|cancelled|expired)$/.test(status)) return "danger";
-    if (["retry", "failed_retryable", "deferred", "manual_review", "queued", "pending", "suppressed", "skipped", "degraded", "unavailable"].includes(status)
+    if (["retry", "failed_retryable", "deferred", "manual_review", "queued", "pending", "suppressed", "skipped", "degraded", "unavailable", "callback_missing", "not_configured"].includes(status)
       || /(pending|queued|retry|deferred|suppressed)/.test(status)) return "warning";
     return "neutral";
   }
@@ -118,7 +118,11 @@
     return audienceReasonLabels[code] || String(code).replaceAll("_", " ");
   }
   function evidenceLabel(value) {
-    if (value === "not_available") return "Not recorded (no signed callback)";
+    if (value === "not_available") return "No evidence recorded";
+    if (value === "historical_evidence_unavailable") return "Historical evidence was not collected for this message";
+    if (value === "callback_pending") return "Waiting for signed GMweb callback";
+    if (value === "callback_missing") return "Expected signed GMweb callback was not received";
+    if (value === "carrier_not_exposed") return "Carrier delivery reports are not exposed for this message";
     if (value === "awaiting_carrier_receipt") return "Waiting for carrier receipt";
     return value;
   }
@@ -137,16 +141,31 @@
       target.append(row);
     }
   }
+  function noCallbackMessage(result) {
+    const state = result.submission?.state;
+    if (state === "legacy_record") {
+      return { tone: "field-note", text: "Historical message: signed callback evidence was not collected when this send was recorded." };
+    }
+    if (state === "callback_missing" || result.submission?.actionable) {
+      return { tone: "field-note field-note-warn", text: "Expected signed GMweb callback is missing. Check the callback URL/secret and GMweb callback outbox." };
+    }
+    return { tone: "field-note", text: "No signed callback has been recorded yet." };
+  }
   async function renderAudienceTimeline(panel, logId) {
     panel.replaceChildren(node("p", "field-note", "Loading delivery timeline…"));
     try {
       const result = await json(`/api/sms/messages/${logId}/timeline`);
-      panel.replaceChildren(detailRow([
+      const content = [detailRow([
         statusField("Gateway submission", result.submission?.state || "unknown"),
         field("Submission evidence", evidenceLabel(result.submission?.evidence)),
-        statusField("Carrier outcome", result.carrier?.state || "unavailable"),
+        statusField("Carrier outcome", result.carrier?.state || "not_exposed"),
         field("Carrier evidence", evidenceLabel(result.carrier?.evidence))
-      ]));
+      ])];
+      if (!(result.gateway_events || []).length) {
+        const note = noCallbackMessage(result);
+        content.push(node("p", note.tone, note.text));
+      }
+      panel.replaceChildren(...content);
     } catch (error) { showError(panel, error); }
   }
   function renderAudience() {
@@ -168,8 +187,8 @@
       const disclosure = expandableRow([
         field("Account", row.email || row.service_key), field("Server", row.server_name),
         statusField("Monitor state", row.state), statusField("Decision", row.disposition),
-        statusField("Last SMS", lastSms?.status || "not sent"),
-        field("Last SMS time", date(lastSms?.created_at))
+        statusField("EVE send log", lastSms?.status || "not sent"),
+        field("EVE log time", date(lastSms?.created_at))
       ], lastSms ? "Delivery timeline" : "Decision details");
       disclosure.panel.append(detailRow([
         field("Reason", audienceReason(row.reason_code)), field("Recipient", row.recipient)
@@ -299,27 +318,43 @@
       field("Unknown requests", reports.unknownRequests),
       field("Last carrier report", date(reports.lastReportAt))
     );
-    if (outbox) container.append(
-      field("Callback pending / retry", `${fmt(outbox.pending)} / ${fmt(outbox.retry_wait)}`),
-      field("Callback delivering", outbox.delivering),
-      field("Callback delivered", outbox.delivered),
-      statusField("Callback dead letter", outbox.dead_letter),
-      field("Oldest callback age", outbox.oldest_pending_age_ms == null ? null : `${outbox.oldest_pending_age_ms} ms`),
-      field("Last callback success", date(outbox.last_success_at))
-    );
+    if (outbox) {
+      const outboxState = !outbox.validConfig ? "not_configured"
+        : Number(outbox.dead_letter || 0) > 0 ? "degraded" : "healthy";
+      container.append(
+        statusField("Callback outbox", outboxState),
+        field("Callback pending / retry", `${fmt(outbox.pending)} / ${fmt(outbox.retry_wait)}`),
+        field("Callback delivering", outbox.delivering),
+        field("Callback delivered", outbox.delivered),
+        statusField("Callback dead letter", outbox.dead_letter),
+        field("Oldest callback age", outbox.oldest_pending_age_ms == null ? null : `${outbox.oldest_pending_age_ms} ms`),
+        field("Last callback success", date(outbox.last_success_at)),
+        field("Last callback failure", date(outbox.last_failure_at))
+      );
+    }
   }
 
   async function loadHealth() {
     try {
-      const report = await json("/api/sms/transport-health");
+      const [report, evidenceHealth] = await Promise.all([
+        json("/api/sms/transport-health"),
+        json("/api/sms/evidence-health").catch(() => null)
+      ]);
       const health = report.health || {};
       const transport = health.transport || {};
       const device = health.device || {};
       const queue = health.queue || {};
-      setKpi("sms-center-health", report.success
-        ? (health.gmweb?.ready ? "Ready" : `Degraded · ${health.gmweb?.reason || "no reason provided"}`)
-        : `${report.probe_state || "Unavailable"} · ${report.diagnostic || "No diagnostic"}`,
-      report.success && health.gmweb?.ready ? "success" : "warning");
+      const callbackOutbox = health.diagnostics?.callbackOutbox;
+      const callbackProblem = evidenceHealth?.state === "degraded"
+        || evidenceHealth?.state === "not_configured"
+        || (callbackOutbox && (!callbackOutbox.validConfig || Number(callbackOutbox.dead_letter || 0) > 0));
+      const fullyReady = report.success && health.gmweb?.ready && !callbackProblem;
+      setKpi("sms-center-health", fullyReady
+        ? "Ready"
+        : report.success
+          ? `Degraded · ${evidenceHealth?.state === "degraded" ? `${evidenceHealth.missing_after_grace} callback(s) missing` : health.gmweb?.reason || evidenceHealth?.state || "evidence pipeline needs attention"}`
+          : `${report.probe_state || "Unavailable"} · ${report.diagnostic || "No diagnostic"}`,
+      fullyReady ? "success" : "warning");
       setKpi("sms-center-device", report.success
         ? `${device.state || "unreported"}${device.reason ? ` · ${device.reason}` : ""}` : "Transport health unavailable",
       report.success ? statusTone(device.state) : "neutral");
@@ -334,6 +369,12 @@
         field("Last ACK", date(health.last_ack?.at)), field("ACK outcome", health.last_ack?.outcome)
       );
       appendDiagnosticFacts(facts, health.diagnostics || {});
+      if (evidenceHealth) facts.append(
+        statusField("EVE callback evidence", evidenceHealth.state),
+        field("Expected / received (24h)", `${fmt(evidenceHealth.expected_after_grace)} / ${fmt(evidenceHealth.with_signed_callback)}`),
+        field("Missing after grace", evidenceHealth.missing_after_grace),
+        field("Last EVE callback", date(evidenceHealth.last_callback_received_at))
+      );
     } catch (error) {
       const missingScope = error.message.includes("scope_denied") || error.message.includes("transport:read");
       setKpi("sms-center-health", `Unavailable · ${error.message}`, "danger");
@@ -346,8 +387,8 @@
     try {
       const evidence = await json("/api/sms/overview");
       $("sms-center-delivered").textContent = evidence.evidence_available
-        ? `${Number(evidence.carrier_delivered || 0).toLocaleString()} delivered / ${Number(evidence.carrier_failed || 0).toLocaleString()} failed / ${Number(evidence.carrier_pending || 0).toLocaleString()} pending`
-        : "No callback evidence";
+        ? `${Number(evidence.carrier_delivered || 0).toLocaleString()} delivered / ${Number(evidence.carrier_failed || 0).toLocaleString()} failed / ${Number(evidence.carrier_pending || 0).toLocaleString()} pending / ${Number(evidence.carrier_not_exposed || 0).toLocaleString()} DLR not exposed`
+        : "No signed callback evidence today";
     } catch (error) { $("sms-center-delivered").textContent = `Unavailable · ${error.message}`; }
     try {
       const data = await json("/api/sms/logs?limit=1000");
@@ -436,7 +477,7 @@
         const disclosure = expandableRow([
           field("Account", log.email), field("Phone", log.recipient),
           field("Trigger", log.state), statusField("EVE", log.status),
-          statusField("Submission", gatewayStatus), statusField("Carrier", log.carrier_state || "unavailable"),
+          statusField("Submission", gatewayStatus), statusField("Carrier", log.carrier_state || "not_exposed"),
           field("Last event", date(log.updated_at)),
           field("Reason", log.reason)
         ], "View delivery timeline");
@@ -453,11 +494,13 @@
             timeline.append(detailRow([
               statusField("Gateway submission", result.submission?.state || "unknown"),
               field("Submission evidence", evidenceLabel(result.submission?.evidence)),
-              statusField("Carrier outcome", result.carrier?.state || "unavailable"),
+              statusField("Carrier outcome", result.carrier?.state || "not_exposed"),
               field("Carrier evidence", evidenceLabel(result.carrier?.evidence))
             ]));
-            if (!events.length) timeline.append(node("p", "field-note field-note-warn",
-              "No signed GMweb callback matches this message. Check the send result, callback URL/secret, and GMweb callback outbox."));
+            if (!events.length) {
+              const note = noCallbackMessage(result);
+              timeline.append(node("p", note.tone, note.text));
+            }
             for (const event of events) timeline.append(detailRow([
               statusField("Event", event.type), field("Occurred", date(event.occurred_at)),
               field("Attempt", event.attempt), field("Device", event.device_id || "Not reported"),
