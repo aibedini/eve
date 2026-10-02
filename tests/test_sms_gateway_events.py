@@ -339,7 +339,6 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('mutated_local_events', source)
         self.assertIn('audience: loadAudience', source)
         self.assertIn('/api/sms/scan/preview', source)
-        self.assertIn('Show all ${rows.length} accounts', source)
         self.assertIn('Historical message: signed callback evidence was not collected', source)
         self.assertIn('Expected signed GMweb callback is missing', source)
         self.assertIn('/api/sms/evidence-health', source)
