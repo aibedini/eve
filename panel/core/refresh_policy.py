@@ -1717,6 +1717,7 @@ SERVER_SYNC_TTL = 900
 #: refreshes its row within ~a minute, so anything past this is a fetcher that stopped
 #: publishing rather than a panel that is merely idle.
 SERVER_SYNC_STALE_SECONDS = 30.0
+SERVER_SYNC_STALE_GRACE_SECONDS = 5.0
 _server_sync_cache = {'at': 0.0, 'rows': {}}
 SERVER_SYNC_CACHE_SECONDS = 2.0
 
@@ -1739,6 +1740,7 @@ def publish_server_sync(server_id, *, now=None) -> bool:
     moment = time.time() if now is None else float(now)
     row = {
         'mode': server_mode(sid, now=moment),
+        'poll_interval_seconds': server_interval(sid, now=moment),
         'watched': bool(state.get('watched')) or is_server_watched(sid, now=moment),
         'watch_reason': state.get('watch_reason'),
         'inflight': bool(state.get('inflight')),
@@ -1842,7 +1844,17 @@ def _public_sync_row(sid, row, *, now) -> dict:
             return None
 
     report_age = _age(row.get('updated_at'))
-    stale_report = report_age is not None and report_age > SERVER_SYNC_STALE_SECONDS
+    try:
+        report_interval = max(0.0, float(row.get('poll_interval_seconds') or 0.0))
+    except (TypeError, ValueError):
+        report_interval = 0.0
+    # The report is emitted after a completed read. Its deadline must allow the
+    # cadence it describes; a fixed 30s deadline incorrectly marks the 45s IDLE
+    # cadence stale between successful reads. Keep a bounded grace for dispatch and
+    # publish latency, while retaining the old floor for legacy rows.
+    report_deadline = max(SERVER_SYNC_STALE_SECONDS,
+                          report_interval + SERVER_SYNC_STALE_GRACE_SECONDS)
+    stale_report = report_age is not None and report_age > report_deadline
     next_due = row.get('next_due')
     health = row.get('sync_health') or 'down'
     if stale_report and health in ('live', 'fresh'):

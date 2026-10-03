@@ -859,3 +859,4 @@ This project was built with careful attention to:
 - **1.0.0** - December 1, 2024 (Current)
 
 For feature requests and bug reports, please visit the GitHub issues page.
+- Fixed cadence-aware sync report freshness so IDLE panels are not marked stale during their 45-second polling interval.

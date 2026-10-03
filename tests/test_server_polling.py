@@ -1046,6 +1046,21 @@ class CadenceBandTests(OfflinePolicyTests):
         self.assertGreater(row['report_age_seconds'],
                            refresh_policy.SERVER_SYNC_STALE_SECONDS)
 
+    def test_idle_report_uses_its_cadence_before_marking_stale(self):
+        now = BASE
+        idle_interval = 45.0
+        row = {'mode': 'idle', 'watched': False, 'next_due': now + 1.0,
+               'poll_interval_seconds': idle_interval,
+               'last_success_at': now - 40.0, 'updated_at': now - 40.0,
+               'sync_health': 'fresh', 'failures': 0}
+        report = refresh_policy._public_sync_row(3, row, now=now)
+        self.assertFalse(report['report_stale'])
+        self.assertEqual(report['sync_health'], 'fresh')
+        old = dict(row, updated_at=now - idle_interval -
+                   refresh_policy.SERVER_SYNC_STALE_GRACE_SECONDS - 0.1)
+        report = refresh_policy._public_sync_row(4, old, now=now)
+        self.assertTrue(report['report_stale'])
+
     def test_a_busy_idle_panel_is_not_promoted_into_the_warm_band(self):
         # A busy install has traffic moving on every panel between two of its own polls.
         # If "changed" promoted an IDLE panel to WARM, the whole install would settle on
