@@ -5734,6 +5734,8 @@ html[data-theme="light"] .server-icon {
 .sms-center-pane > .field-note { margin-bottom: 14px; }
 .sms-center-list { display: grid; gap: 8px; margin-top: 14px; }
 .sms-center-day-heading { margin: 12px 0 2px; color: var(--text-secondary); font-size: .85rem; font-weight: 600; }
+.sms-center-pipeline { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-color); }
+.sms-center-pipeline h4 { margin: 0 0 8px; color: var(--text-primary); font-size: .9rem; }
 .sms-center-entry { min-width: 0; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); overflow: hidden; transition: border-color .2s ease, box-shadow .2s ease; }
 .sms-center-entry:hover { border-color: color-mix(in srgb, var(--primary) 65%, var(--border-color)); box-shadow: var(--shadow); }
 .sms-center-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); align-items: center; gap: 12px; width: 100%; padding: 14px 16px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); text-align: start; font: inherit; }

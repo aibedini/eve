@@ -27,7 +27,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 from app import app  # noqa: E402
 from panel.extensions import db  # noqa: E402
 from panel.models import Admin, SmsGatewayEvent, SmsSendLog  # noqa: E402
-from panel.routes.sms_gateway_events import _project_evidence  # noqa: E402
+from panel.routes.sms_gateway_events import _project_evidence, _delivery_pipeline  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -212,6 +212,95 @@ class GatewayEventTests(unittest.TestCase):
             db.session.delete(log)
             db.session.commit()
 
+    def test_list_and_timeline_share_delivered_projection_and_pipeline(self):
+        self._login_superadmin()
+        log = SmsSendLog(email='delivery@example.test', server_id=0,
+                         state='ended', status='sent', request_id='send_42',
+                         gateway_job_id='job_42', carrier_state='unavailable')
+        db.session.add(log)
+        db.session.commit()
+        try:
+            self.assertEqual(self._post().status_code, 200)
+            delivered = dict(self.payload, event_id='evt_delivery_42',
+                             type='sms.delivered', carrier_status='delivered',
+                             evidence='android_dlr', segment_index=0,
+                             segment_count=1, all_segments_delivered=True,
+                             carrier_result_code=0, carrier_result='DELIVRD',
+                             android_delivery_received_at='2026-09-27T06:00:10Z',
+                             gmweb_delivery_received_at='2026-09-27T06:00:11Z')
+            self.assertEqual(self._post(body=delivered).status_code, 200)
+            list_response = self.client.get('/api/sms/logs?q=delivery@example.test')
+            timeline = self.client.get(f'/api/sms/messages/{log.id}/timeline')
+            self.assertEqual(list_response.status_code, 200)
+            self.assertEqual(timeline.status_code, 200)
+            summary = next(row for row in list_response.json['logs'] if row['id'] == log.id)
+            self.assertEqual(summary['carrier_state'], 'delivered')
+            self.assertEqual(summary['delivery']['carrier'], timeline.json['carrier'])
+            self.assertEqual(timeline.json['submission']['state'], 'sent')
+            self.assertEqual(timeline.json['carrier']['diagnostics']['carrier_result_code'], 0)
+            self.assertEqual(timeline.json['carrier']['diagnostics']['gmweb_delivery_received_at'],
+                             '2026-09-27T06:00:11Z')
+            self.assertEqual(timeline.json['pipeline'][-1]['state'], 'confirmed')
+            self.assertEqual(timeline.json['pipeline'][-2]['state'], 'confirmed')
+            self.assertEqual(self._post(body=delivered).json,
+                             {'accepted': True, 'duplicate': True})
+            timeline = self.client.get(f'/api/sms/messages/{log.id}/timeline')
+            self.assertEqual(sum(row['type'] == 'sms.delivered'
+                                 for row in timeline.json['gateway_events']), 1)
+        finally:
+            db.session.delete(log)
+            db.session.commit()
+
+    def test_submission_only_pipeline_waits_for_carrier_without_fake_confirmations(self):
+        self._login_superadmin()
+        log = SmsSendLog(email='submission@example.test', server_id=0,
+                         state='ended', status='sent', request_id='send_42',
+                         gateway_job_id='job_42', carrier_state='unavailable')
+        db.session.add(log)
+        db.session.commit()
+        try:
+            self.assertEqual(self._post().status_code, 200)
+            timeline = self.client.get(f'/api/sms/messages/{log.id}/timeline').json
+            self.assertEqual(timeline['carrier']['state'], 'pending')
+            states = [step['state'] for step in timeline['pipeline']]
+            self.assertEqual(states[:2], ['confirmed', 'confirmed'])
+            self.assertEqual(states[5:], ['waiting', 'waiting', 'waiting'])
+            self.assertEqual(timeline['pipeline'][5]['at'], None)
+        finally:
+            db.session.delete(log)
+            db.session.commit()
+
+    def test_explicit_unsupported_and_old_pending_remain_distinct(self):
+        sent = SimpleNamespace(event_id='evt_sent', event_type='send.sent',
+                               occurred_at=datetime(2020, 1, 1),
+                               carrier_status=None, evidence=None)
+        waiting_log = SimpleNamespace(status='sent', carrier_state='unavailable',
+                                      carrier_evidence=None)
+        self.assertEqual(_project_evidence([sent], waiting_log)[1]['state'], 'pending')
+        unsupported_log = SimpleNamespace(status='sent', carrier_state='unavailable',
+                                          carrier_evidence='device_unsupported')
+        self.assertEqual(_project_evidence([sent], unsupported_log)[1]['state'], 'unavailable')
+
+    def test_late_failure_cannot_erase_verified_delivered_log(self):
+        failure = SimpleNamespace(event_id='evt_failure', event_type='sms.delivery_failed',
+                                  occurred_at=datetime(2026, 9, 27),
+                                  carrier_status='failed', evidence='android_dlr')
+        log = SimpleNamespace(status='sent', carrier_state='delivered',
+                              carrier_evidence='carrier_dlr', carrier_occurred_at=None)
+        self.assertEqual(_project_evidence([failure], log)[1]['state'], 'delivered')
+
+    def test_multipart_receipt_requires_explicit_aggregate_completion(self):
+        sent = SimpleNamespace(event_id='evt_sent', event_type='send.sent',
+                               occurred_at=datetime(2026, 9, 27, 6),
+                               carrier_status=None, evidence=None)
+        part = SimpleNamespace(event_id='evt_part', event_type='sms.delivered',
+                               occurred_at=datetime(2026, 9, 27, 6, 1),
+                               carrier_status='delivered', evidence='android_dlr',
+                               diagnostics_json=json.dumps({'all_segments_delivered': False}))
+        self.assertEqual(_project_evidence([sent, part])[1]['state'], 'pending')
+        part.diagnostics_json = json.dumps({'all_segments_delivered': True})
+        self.assertEqual(_project_evidence([sent, part])[1]['state'], 'delivered')
+
     def test_log_date_filter_converts_offset_before_querying_utc(self):
         self._login_superadmin()
         log = SmsSendLog(email='midnight@example.test', server_id=0,
@@ -335,7 +424,7 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('sms-center-expansion hidden', source)
         self.assertIn('inlineDecisionLimit = 5', source)
         self.assertIn('statusField("EVE", log.status)', source)
-        self.assertIn('statusField("Carrier", log.carrier_state || "unavailable")', source)
+        self.assertIn('statusField("Carrier", carrierStateForCard(log))', source)
         self.assertIn('mutated_local_events', source)
         self.assertIn('audience: loadAudience', source)
         self.assertIn('/api/sms/scan/preview', source)

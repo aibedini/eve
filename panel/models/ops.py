@@ -419,6 +419,7 @@ class SmsGatewayEvent(db.Model):
     device_id = db.Column(db.String(64), nullable=True)
     reason_code = db.Column(db.String(64), nullable=True)
     stage = db.Column(db.String(64), nullable=True)
+    diagnostics_json = db.Column(db.Text, nullable=True)
 
 
 class SmsSendLog(db.Model):

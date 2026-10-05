@@ -30,6 +30,41 @@ def _valid_text(value, maximum, pattern=None):
             and (pattern is None or bool(pattern.fullmatch(value))))
 
 
+def _parse_delivery_diagnostics(data):
+    """Keep only bounded delivery metadata; never retain body, recipient or secrets."""
+    fields = {}
+    for name in ('schema_version', 'carrier_result_code', 'segment_index',
+                 'segment_count', 'eve_dispatch_attempts'):
+        value = data.get(name)
+        if value is not None:
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1000000:
+                raise ValueError(f'invalid_{name}')
+            fields[name] = value
+    for name in ('carrier_result', 'last_error'):
+        value = data.get(name)
+        if value is not None:
+            if not _valid_text(value, 120, _CODE):
+                raise ValueError(f'invalid_{name}')
+            fields[name] = value
+    for name in ('android_delivery_received_at', 'gmweb_delivery_received_at',
+                 'eve_last_attempt_at', 'eve_ack_at'):
+        value = data.get(name)
+        if value is not None:
+            try:
+                stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                if stamp.tzinfo is None:
+                    raise ValueError
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError(f'invalid_{name}') from exc
+            fields[name] = stamp.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+    value = data.get('all_segments_delivered')
+    if value is not None:
+        if not isinstance(value, bool):
+            raise ValueError('invalid_all_segments_delivered')
+        fields['all_segments_delivered'] = value
+    return json.dumps(fields, sort_keys=True, separators=(',', ':')) if fields else None
+
+
 def _parse_event(data):
     if not isinstance(data, dict):
         raise ValueError('invalid_event')
@@ -89,6 +124,7 @@ def _parse_event(data):
         occurred_at=occurred_at.astimezone(timezone.utc).replace(tzinfo=None),
         attempt=attempt, device_id=data.get('device_id'),
         reason_code=data.get('reason_code'), stage=data.get('stage'),
+        diagnostics_json=_parse_delivery_diagnostics(data),
     )
 
 
@@ -102,12 +138,14 @@ def _event_dict(row):
         carrier_status=row.carrier_status, evidence=row.evidence,
         attempt=row.attempt, device_id=row.device_id,
         reason_code=row.reason_code, stage=row.stage,
+        diagnostics=json.loads(row.diagnostics_json) if row.diagnostics_json else {},
     )
 
 
 def _project_evidence(rows, log=None):
     """Derive transport submission and carrier truth from immutable evidence."""
-    submission = {'state': 'unknown', 'confirmed': False, 'evidence': 'not_available'}
+    submission = {'state': 'unknown', 'confirmed': False, 'evidence': 'not_available',
+                  'occurred_at': None, 'received_at': None}
     submission_map = {
         'gateway.accepted': (1, 'queued', False, 'gateway_acceptance'),
         'send.queued': (1, 'queued', False, 'gateway_queue'),
@@ -123,24 +161,37 @@ def _project_evidence(rows, log=None):
         mapped = submission_map.get(row.event_type)
         if mapped:
             submission_events.append((mapped[0], row.occurred_at, row.event_id,
-                                      mapped[1], mapped[2], mapped[3]))
+                                      mapped[1], mapped[2], mapped[3],
+                                      getattr(row, 'received_at', row.occurred_at)))
         carrier_state = row.carrier_status
         if row.event_type == 'sms.delivered':
             carrier_state = 'delivered'
         elif row.event_type == 'sms.delivery_failed':
             carrier_state = 'failed'
+        raw_diagnostics = getattr(row, 'diagnostics_json', None)
+        diagnostics = json.loads(raw_diagnostics) if raw_diagnostics else {}
+        if carrier_state == 'delivered' and diagnostics.get('all_segments_delivered') is False:
+            carrier_state = 'pending'
         if carrier_state in ('delivered', 'failed'):
             carrier_events.append((row.occurred_at, row.event_id, carrier_state,
-                                   row.evidence or 'carrier_dlr'))
+                                   row.evidence or 'carrier_dlr',
+                                   getattr(row, 'received_at', row.occurred_at),
+                                   getattr(row, 'reason_code', None), diagnostics))
     if submission_events:
         latest = max(submission_events, key=lambda item: (item[0], item[1], item[2]))
-        submission = dict(state=latest[3], confirmed=latest[4], evidence=latest[5])
+        submission = dict(state=latest[3], confirmed=latest[4], evidence=latest[5],
+                          occurred_at=latest[1].isoformat() + 'Z',
+                          received_at=latest[6].isoformat() + 'Z')
     if carrier_events:
         # A positive receipt is stronger than a failure report and cannot be
         # downgraded by delayed/conflicting weaker evidence.
         latest = max(carrier_events, key=lambda item: (
             1 if item[2] == 'delivered' else 0, item[0], item[1]))
-        carrier = {'state': latest[2], 'confirmed': True, 'evidence': latest[3]}
+        carrier = {'state': latest[2], 'confirmed': True, 'evidence': latest[3],
+                   'occurred_at': latest[0].isoformat() + 'Z',
+                   'received_at': latest[4].isoformat() + 'Z',
+                   'event_id': latest[1], 'reason_code': latest[5],
+                   'diagnostics': latest[6]}
     else:
         polled_state = str(getattr(log, 'carrier_state', '') or '').lower()
         if polled_state in ('delivered', 'failed'):
@@ -148,14 +199,93 @@ def _project_evidence(rows, log=None):
                 'state': polled_state,
                 'confirmed': True,
                 'evidence': getattr(log, 'carrier_evidence', None) or 'carrier_dlr',
+                'occurred_at': getattr(log, 'carrier_occurred_at', None),
             }
-        elif polled_state == 'pending' or submission['state'] == 'sent':
+        elif (polled_state == 'unavailable' and getattr(log, 'carrier_evidence', None)
+              in ('device_unsupported', 'carrier_unsupported', 'dlr_disabled')):
+            carrier = {'state': 'unavailable', 'confirmed': False,
+                       'evidence': log.carrier_evidence}
+        elif polled_state == 'pending' or submission['state'] == 'sent' or getattr(log, 'status', None) == 'sent':
             carrier = {'state': 'pending', 'confirmed': False,
                        'evidence': 'awaiting_carrier_receipt'}
         else:
-            carrier = {'state': 'unavailable', 'confirmed': False,
-                       'evidence': 'not_available'}
+            carrier = {'state': 'unknown', 'confirmed': False,
+                       'evidence': 'not_reported'}
+    if (getattr(log, 'carrier_state', None) == 'delivered'
+            and carrier['state'] != 'delivered'):
+        carrier = {'state': 'delivered', 'confirmed': True,
+                   'evidence': getattr(log, 'carrier_evidence', None) or 'carrier_dlr',
+                   'occurred_at': getattr(log, 'carrier_occurred_at', None)}
     return submission, carrier
+
+
+def _events_for_logs(logs):
+    """Read the latest 500 events per message; a busy message cannot starve another."""
+    result = {}
+    for log in logs:
+        if log.request_id:
+            query = SmsGatewayEvent.query.filter_by(message_id=log.request_id)
+        elif log.correlation_id:
+            query = SmsGatewayEvent.query.filter_by(trace_id=log.correlation_id)
+        elif log.eve_notification_id:
+            query = SmsGatewayEvent.query.filter_by(eve_notification_id=log.eve_notification_id)
+        else:
+            result[log.id] = []
+            continue
+        matched = (query.order_by(SmsGatewayEvent.occurred_at.desc(), SmsGatewayEvent.event_id.desc())
+                   .limit(500).all())
+        terminal = (query.filter(SmsGatewayEvent.event_type.in_(('sms.delivered', 'sms.delivery_failed')))
+                    .order_by(SmsGatewayEvent.occurred_at.desc(), SmsGatewayEvent.event_id.desc())
+                    .limit(500).all())
+        matched = list({row.event_id: row for row in matched + terminal}.values())
+        matched.sort(key=lambda row: (row.occurred_at, row.event_id), reverse=True)
+        result[log.id] = list(reversed(matched))
+    return result
+
+
+def _delivery_pipeline(log, rows, submission, carrier):
+    """Only confirm a stage when its own EVE-side evidence is present."""
+    sent = next((row for row in reversed(rows) if row.event_type in ('send.sent', 'send.completed')), None)
+    receipt = next((row for row in reversed(rows)
+                    if row.event_id == carrier.get('event_id')), None)
+    diagnostics = carrier.get('diagnostics') or {}
+    waiting = carrier['state'] == 'pending'
+
+    def stage(name, state, at=None, evidence=None, reason=None):
+        return {'name': name, 'state': state, 'at': at, 'evidence': evidence,
+                'reason': reason}
+
+    return [
+        stage('EVE request created', 'confirmed',
+              log.created_at.isoformat() + 'Z' if log.created_at else None, 'sms_send_log'),
+        stage('GMweb job created', 'confirmed' if log.gateway_job_id else 'not_reported',
+              None, 'gateway_job_id' if log.gateway_job_id else None),
+        stage('Android accepted job', 'not_reported'),
+        stage('SmsManager submission', 'confirmed' if submission['state'] == 'sent' else
+              'failed' if submission['state'] == 'failed' else 'waiting' if log.request_id else 'not_reported',
+              submission.get('occurred_at'), submission.get('evidence')),
+        stage('SENT callback ingested', 'confirmed' if sent else 'waiting' if log.request_id else 'not_reported',
+              sent.received_at.isoformat() + 'Z' if sent else None,
+              sent.event_id if sent else None),
+        stage('Carrier DELIVERY callback', 'failed' if receipt and carrier['state'] == 'failed' else
+              'confirmed' if receipt else 'waiting' if waiting else 'not_reported',
+              diagnostics.get('android_delivery_received_at') or carrier.get('occurred_at') if receipt else None,
+              carrier.get('evidence') if receipt else None, carrier.get('reason_code')),
+        stage('GMweb delivery report received',
+              'confirmed' if diagnostics.get('gmweb_delivery_received_at') else
+              'waiting' if waiting else 'not_reported',
+              diagnostics.get('gmweb_delivery_received_at'),
+              carrier.get('event_id') if diagnostics.get('gmweb_delivery_received_at') else None),
+        stage('EVE delivery receipt ingested', 'confirmed' if receipt else 'waiting' if waiting else 'not_reported',
+              carrier.get('received_at') if receipt else None,
+              carrier.get('event_id') if receipt else None),
+    ]
+
+
+def _delivery_view(log, rows):
+    submission, carrier = _project_evidence(rows, log)
+    return {'submission': submission, 'carrier': carrier,
+            'pipeline': _delivery_pipeline(log, rows, submission, carrier)}
 
 
 @bp.route('/internal/gmweb/sms/events', methods=['POST'])
@@ -263,22 +393,18 @@ def sms_message_timeline(log_id):
     log = db.session.get(SmsSendLog, log_id)
     if log is None:
         return jsonify({'error': 'not_found'}), 404
-    query = SmsGatewayEvent.query
-    if log.request_id:
-        query = query.filter_by(message_id=log.request_id)
-    elif log.correlation_id:
-        query = query.filter_by(trace_id=log.correlation_id)
-    elif log.eve_notification_id:
-        query = query.filter_by(eve_notification_id=log.eve_notification_id)
-    else:
-        query = query.filter(SmsGatewayEvent.event_id == '')
-    rows = query.order_by(SmsGatewayEvent.occurred_at, SmsGatewayEvent.event_id).limit(500).all()
-    submission, carrier = _project_evidence(rows, log)
+    rows = _events_for_logs([log])[log.id]
+    delivery = _delivery_view(log, rows)
+    submission, carrier = delivery['submission'], delivery['carrier']
+    log_view = log.to_dict()
+    log_view['carrier_state'] = carrier['state']
+    log_view['carrier_evidence'] = carrier['evidence']
     response = jsonify({
-        'log': log.to_dict(),
+        'log': log_view,
         'gateway_events': [_event_dict(row) for row in rows],
         'submission': submission,
         'carrier': carrier,
+        'pipeline': delivery['pipeline'],
         'delivery_confirmed': (True if carrier['state'] == 'delivered'
                                else False if carrier['state'] == 'failed' else None),
         'delivery_evidence': carrier['evidence'],

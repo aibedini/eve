@@ -1357,12 +1357,15 @@ def sms_logs():
                          func.lower(SmsSendLog.reason).like(term)))
     total = q.count()
     rows = q.order_by(SmsSendLog.created_at.desc()).offset(offset).limit(limit).all()
+    from panel.routes.sms_gateway_events import _delivery_view, _events_for_logs
+    events_by_log = _events_for_logs(rows)
     logs = []
     for row in rows:
         log = row.to_dict()
-        if row.carrier_state in (None, 'unavailable') and not row.carrier_evidence and row.status == 'sent':
-            log['carrier_state'] = 'pending'
-            log['carrier_evidence'] = 'awaiting_carrier_receipt'
+        delivery = _delivery_view(row, events_by_log[row.id])
+        log['carrier_state'] = delivery['carrier']['state']
+        log['carrier_evidence'] = delivery['carrier']['evidence']
+        log['delivery'] = delivery
         logs.append(log)
     resp = jsonify({'success': True, 'logs': logs,
                     'total': total, 'offset': offset, 'limit': limit})

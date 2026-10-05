@@ -2,6 +2,16 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.8.0] - 2026-10-05
+
+### Fixed
+- SMS Center uses one carrier projection for message cards and timelines. Submission without a carrier receipt remains pending; explicit unsupported capability remains unavailable.
+- Signed GMweb delivery callbacks retain bounded diagnostic metadata and preserve delivered evidence across later conflicting events.
+- Message details show submission, carrier outcome, and an evidence-based delivery pipeline separately from next-send eligibility.
+
+### Upgrade
+- Apply the additive `k8f9a0b1c2d3` migration before starting web workers. Older callbacks and historical rows remain readable.
+
 ## [2.7.59] - 2026-10-05
 
 ### Fixed

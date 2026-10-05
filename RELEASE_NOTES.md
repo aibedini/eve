@@ -1,3 +1,7 @@
+# Eve - Xui Manager v2.8.0
+
+SMS delivery now distinguishes a successful submission from a carrier delivery receipt. The SMS Center uses the same normalized carrier state in cards and detail, and its timeline shows each stage only when supporting evidence exists. The existing signed GMweb callback accepts optional bounded delivery diagnostics; a database migration adds nullable storage for those diagnostics. Existing payloads remain valid. Carrier DLR still requires validation with a real device, SIM, and recipient.
+
 # Eve - Xui Manager v2.7.0
 
 ## [2.7.0] - 2026-09-14

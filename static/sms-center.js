@@ -39,8 +39,8 @@
     const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     return `${values.year}-${values.month}-${values.day}`;
   }
-  function dayHeading(value) {
-    const today = dayKey(new Date());
+  function dayHeading(value, todayInstant = new Date()) {
+    const today = dayKey(todayInstant);
     const [year, month, day] = today.split("-").map(Number);
     const yesterday = new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
     const key = dayKey(value);
@@ -54,6 +54,9 @@
     const parsed = window.EveDate.parseInput(through ? `${value} 23:59:59` : value);
     if (!parsed) throw new Error("Invalid date filter");
     return new Date(parsed.getTime() + (through ? 1000 : 0)).toISOString();
+  }
+  function carrierStateForCard(log) {
+    return log.delivery?.carrier?.state || "unknown";
   }
   async function json(url) {
     const response = await fetch(url, { credentials: "same-origin", cache: "no-store" });
@@ -74,7 +77,7 @@
       || /\.(sent|completed|accepted|delivered)$/.test(status)) return "success";
     if (["failed", "failed_terminal", "cancelled", "expired", "ended", "invalid_recipient"].includes(status)
       || /\.(failed|cancelled|expired)$/.test(status)) return "danger";
-    if (["retry", "failed_retryable", "deferred", "manual_review", "queued", "pending", "suppressed", "skipped", "degraded", "unavailable"].includes(status)
+    if (["retry", "failed_retryable", "deferred", "manual_review", "queued", "pending", "waiting", "suppressed", "skipped", "degraded", "unavailable"].includes(status)
       || /(pending|queued|retry|deferred|suppressed)/.test(status)) return "warning";
     return "neutral";
   }
@@ -138,13 +141,54 @@
     evaluation_failed: "Eligibility evaluation failed"
   };
   function audienceReason(code) {
-    if (!code) return "All read-only checks passed";
+    if (!code) return "Not reported";
     return audienceReasonLabels[code] || String(code).replaceAll("_", " ");
   }
   function evidenceLabel(value) {
     if (value === "not_available") return "Not recorded (no signed callback)";
     if (value === "awaiting_carrier_receipt") return "Waiting for carrier receipt";
     return value;
+  }
+  function deliveryDetail(result) {
+    const container = node("div", "sms-center-timeline");
+    container.append(detailRow([
+      statusField("Gateway submission", result.submission?.state || "unknown"),
+      field("Submission evidence", evidenceLabel(result.submission?.evidence)),
+      field("Submitted at", date(result.submission?.occurred_at))
+    ]), detailRow([
+      statusField("Carrier delivery", result.carrier?.state || "unknown"),
+      field("Carrier evidence", evidenceLabel(result.carrier?.evidence)),
+      field("Carrier at", date(result.carrier?.occurred_at))
+    ]));
+    const pipeline = node("div", "sms-center-pipeline");
+    pipeline.append(node("h4", "", "Delivery pipeline"));
+    for (const step of result.pipeline || []) pipeline.append(detailRow([
+      field("Stage", step.name), statusField("State", step.state),
+      field("At", date(step.at)), field("Evidence", step.evidence || "Not reported"),
+      field("Reason", step.reason || "—")
+    ]));
+    container.append(pipeline);
+    const diagnostics = result.carrier?.diagnostics || {};
+    const reported = [
+      ["Carrier result", diagnostics.carrier_result],
+      ["Carrier code", diagnostics.carrier_result_code],
+      ["Segment", diagnostics.segment_index],
+      ["Segment count", diagnostics.segment_count],
+      ["All segments delivered", diagnostics.all_segments_delivered],
+      ["Android delivery received", diagnostics.android_delivery_received_at && date(diagnostics.android_delivery_received_at)],
+      ["GMweb delivery received", diagnostics.gmweb_delivery_received_at && date(diagnostics.gmweb_delivery_received_at)],
+      ["EVE relay attempts", diagnostics.eve_dispatch_attempts],
+      ["EVE relay last attempt", diagnostics.eve_last_attempt_at && date(diagnostics.eve_last_attempt_at)],
+      ["EVE relay acknowledged", diagnostics.eve_ack_at && date(diagnostics.eve_ack_at)],
+      ["Relay error category", diagnostics.last_error],
+      ["Event ID", result.carrier?.event_id]
+    ].filter(([, value]) => value !== undefined && value !== null && value !== "");
+    if (reported.length) {
+      const facts = node("div", "sms-center-pipeline");
+      facts.append(node("h4", "", "Carrier diagnostics"), detailRow(reported.map(([label, value]) => field(label, value))));
+      container.append(facts);
+    }
+    return container;
   }
   function summaryCard(label, value, tone = "neutral", filter = null) {
     const card = node(filter ? "button" : "div", `stat-card${filter ? " sms-summary-filter" : ""}`);
@@ -181,12 +225,7 @@
     timeline.replaceChildren(node("p", "field-note", "Loading delivery timeline…"));
     try {
       const result = await json(`/api/sms/messages/${logId}/timeline`);
-      timeline.replaceChildren(detailRow([
-        statusField("Gateway submission", result.submission?.state || "unknown"),
-        field("Submission evidence", evidenceLabel(result.submission?.evidence)),
-        statusField("Carrier outcome", result.carrier?.state || "unavailable"),
-        field("Carrier evidence", evidenceLabel(result.carrier?.evidence))
-      ]));
+      timeline.replaceChildren(deliveryDetail(result));
     } catch (error) { showError(timeline, error); }
   }
   function renderAudience() {
@@ -522,7 +561,7 @@
         const disclosure = expandableRow([
           field("Account", log.email), field("Phone", log.recipient),
           field("Trigger", log.state), statusField("EVE", log.status),
-          statusField("Submission", gatewayStatus), statusField("Carrier", log.carrier_state || "unavailable"),
+          statusField("Submission", gatewayStatus), statusField("Carrier", carrierStateForCard(log)),
           field("Last event", date(log.updated_at)),
           field("Reason", log.reason)
         ], "View delivery timeline");
@@ -536,12 +575,7 @@
             const result = await json(`/api/sms/messages/${log.id}/timeline`);
             const timeline = node("div", "sms-center-timeline");
             const events = result.gateway_events || [];
-            timeline.append(detailRow([
-              statusField("Gateway submission", result.submission?.state || "unknown"),
-              field("Submission evidence", evidenceLabel(result.submission?.evidence)),
-              statusField("Carrier outcome", result.carrier?.state || "unavailable"),
-              field("Carrier evidence", evidenceLabel(result.carrier?.evidence))
-            ]));
+            timeline.append(deliveryDetail(result));
             if (!events.length) timeline.append(node("p", "field-note field-note-warn",
               "No signed GMweb callback matches this message. Check the send result, callback URL/secret, and GMweb callback outbox."));
             for (const event of events) timeline.append(detailRow([
@@ -634,6 +668,10 @@
     const tasks = [loadHealth()];
     if (tabLoaders[selectedTab]) tasks.push(tabLoaders[selectedTab]());
     await Promise.allSettled(tasks);
+  }
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { dayKey, dayHeading, filterBoundary, carrierStateForCard };
+    return;
   }
   document.querySelectorAll("[data-sms-tab]").forEach((button) =>
     button.addEventListener("click", () => selectTab(button.dataset.smsTab)));
