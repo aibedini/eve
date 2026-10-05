@@ -5759,6 +5759,9 @@ button.sms-center-row:focus-visible { outline: 2px solid var(--primary); outline
 .sms-status-success { border-color: color-mix(in srgb, var(--success) 42%, transparent); background: color-mix(in srgb, var(--success) 13%, transparent); color: var(--success); }
 .sms-status-warning { border-color: color-mix(in srgb, var(--warning) 42%, transparent); background: color-mix(in srgb, var(--warning) 13%, transparent); color: var(--warning); }
 .sms-status-danger { border-color: color-mix(in srgb, var(--danger) 42%, transparent); background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger); }
+/* Past the carrier wait window with no receipt: muted, not an alarm (it is an
+   absence of evidence, not a failure), and distinct from the amber "pending". */
+.sms-status-unconfirmed { border-color: color-mix(in srgb, var(--text-secondary) 45%, transparent); background: color-mix(in srgb, var(--secondary) 8%, transparent); color: var(--text-secondary); }
 .sms-kpi-success { color: var(--success); }
 .sms-kpi-warning { color: var(--warning); }
 .sms-kpi-danger { color: var(--danger); }

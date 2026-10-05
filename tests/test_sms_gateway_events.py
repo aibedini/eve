@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -33,6 +33,18 @@ from panel.routes.sms_gateway_events import _project_evidence, _delivery_pipelin
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _now_iso():
+    return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+
+
+def _event(event_id, kind, minute, carrier=None, received_minute=None):
+    return SimpleNamespace(
+        event_id=event_id, event_type=kind,
+        occurred_at=datetime(2026, 9, 27, 9, minute),
+        received_at=datetime(2026, 9, 27, 9, received_minute if received_minute is not None else minute),
+        carrier_status=carrier, evidence='android_dlr' if carrier else None)
+
+
 class GatewayEventTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -50,10 +62,13 @@ class GatewayEventTests(unittest.TestCase):
         db.session.commit()
         self.client = app.test_client()
         self.secret = 'test-gmweb-callback-secret-at-least-32-bytes'
+        # Clock-relative: the carrier projection derives an `unconfirmed` reading
+        # after the wait window, so a fixed submission time would make these
+        # assertions depend on when the suite runs.
         self.payload = {
             'event_id': 'evt_test_1', 'trace_id': 'trc_test_1',
             'message_id': 'send_42', 'eve_notification_id': 'eve_notif_7',
-            'type': 'send.sent', 'occurred_at': '2026-09-27T06:00:00.000Z',
+            'type': 'send.sent', 'occurred_at': _now_iso(),
             'attempt': 1, 'device_id': 'android-02', 'reason_code': None, 'stage': None,
         }
 
@@ -120,35 +135,32 @@ class GatewayEventTests(unittest.TestCase):
         self.assertEqual(row.carrier_status, 'delivered')
 
     def test_submission_and_carrier_projection_remain_independent_and_ordered(self):
-        def event(event_id, kind, minute, carrier=None):
-            return SimpleNamespace(
-                event_id=event_id, event_type=kind,
-                occurred_at=datetime(2026, 9, 27, 9, minute),
-                carrier_status=carrier, evidence='android_dlr' if carrier else None)
-
-        normal = [event('evt_1', 'gateway.accepted', 0),
-                  event('evt_2', 'send.sent', 1),
-                  event('evt_3', 'sms.delivered', 2, 'delivered')]
-        submission, carrier = _project_evidence(normal)
+        # A fixed `now` keeps the derived unconfirmed window out of this test:
+        # 09:10 is inside the 900 s window that opened at the 09:01 submission.
+        now = datetime(2026, 9, 27, 9, 10)
+        normal = [_event('evt_1', 'gateway.accepted', 0),
+                  _event('evt_2', 'send.sent', 1),
+                  _event('evt_3', 'sms.delivered', 2, 'delivered')]
+        submission, carrier = _project_evidence(normal, now=now)
         self.assertEqual(submission['state'], 'sent')
         self.assertEqual(carrier['state'], 'delivered')
         self.assertTrue(carrier['confirmed'])
 
         # Arrival order cannot override occurred_at ordering.
-        submission, carrier = _project_evidence(list(reversed(normal)))
+        submission, carrier = _project_evidence(list(reversed(normal)), now=now)
         self.assertEqual((submission['state'], carrier['state']), ('sent', 'delivered'))
 
-        late_weaker = normal + [event('evt_5', 'gateway.accepted', 4),
-                                event('evt_6', 'sms.delivery_failed', 5, 'failed')]
-        submission, carrier = _project_evidence(late_weaker)
+        late_weaker = normal + [_event('evt_5', 'gateway.accepted', 4),
+                                _event('evt_6', 'sms.delivery_failed', 5, 'failed')]
+        submission, carrier = _project_evidence(late_weaker, now=now)
         self.assertEqual((submission['state'], carrier['state']), ('sent', 'delivered'))
 
-        submission, carrier = _project_evidence(normal[:2])
+        submission, carrier = _project_evidence(normal[:2], now=now)
         self.assertEqual(carrier['state'], 'pending')
         self.assertFalse(carrier['confirmed'])
 
-        failed = normal[:2] + [event('evt_4', 'sms.delivery_failed', 3, 'failed')]
-        submission, carrier = _project_evidence(failed)
+        failed = normal[:2] + [_event('evt_4', 'sms.delivery_failed', 3, 'failed')]
+        submission, carrier = _project_evidence(failed, now=now)
         self.assertEqual((submission['state'], carrier['state']), ('sent', 'failed'))
 
     def test_conflicting_carrier_state_is_rejected(self):
@@ -266,20 +278,39 @@ class GatewayEventTests(unittest.TestCase):
             self.assertEqual(states[:2], ['confirmed', 'confirmed'])
             self.assertEqual(states[5:], ['waiting', 'waiting', 'waiting'])
             self.assertEqual(timeline['pipeline'][5]['at'], None)
+            # Android cannot have submitted to SmsManager without accepting the
+            # job, so this stage must never contradict the submission below it.
+            self.assertEqual(timeline['pipeline'][2]['state'], 'confirmed')
+            self.assertEqual(timeline['pipeline'][2]['evidence'],
+                             'implied_by_android_submission')
+            self.assertNotIn('not_reported', states[3:5])
         finally:
             db.session.delete(log)
             db.session.commit()
 
-    def test_explicit_unsupported_and_old_pending_remain_distinct(self):
+    def test_explicit_unsupported_and_within_window_pending_remain_distinct(self):
         sent = SimpleNamespace(event_id='evt_sent', event_type='send.sent',
                                occurred_at=datetime(2020, 1, 1),
+                               received_at=datetime(2020, 1, 1),
                                carrier_status=None, evidence=None)
         waiting_log = SimpleNamespace(status='sent', carrier_state='unavailable',
                                       carrier_evidence=None)
-        self.assertEqual(_project_evidence([sent], waiting_log)[1]['state'], 'pending')
+        # Inside the wait window the message is still simply pending ...
+        self.assertEqual(_project_evidence([sent], waiting_log,
+                                           now=datetime(2020, 1, 1, 0, 5))[1]['state'], 'pending')
         unsupported_log = SimpleNamespace(status='sent', carrier_state='unavailable',
                                           carrier_evidence='device_unsupported')
-        self.assertEqual(_project_evidence([sent], unsupported_log)[1]['state'], 'unavailable')
+        self.assertEqual(_project_evidence([sent], unsupported_log,
+                                           now=datetime(2020, 1, 1, 0, 5))[1]['state'],
+                         'unavailable')
+        # ... and past it the same missing evidence reads as unconfirmed, never
+        # as delivered, failed or unavailable.
+        carrier = _project_evidence([sent], waiting_log, now=datetime(2020, 1, 1, 1))[1]
+        self.assertEqual(carrier['state'], 'unconfirmed')
+        self.assertFalse(carrier['confirmed'])
+        self.assertEqual(carrier['evidence'], 'no_carrier_receipt_within_window')
+        self.assertEqual(carrier['timeout_seconds'], 900)
+        self.assertIsNone(carrier.get('occurred_at'))
 
     def test_late_failure_cannot_erase_verified_delivered_log(self):
         failure = SimpleNamespace(event_id='evt_failure', event_type='sms.delivery_failed',
@@ -292,14 +323,209 @@ class GatewayEventTests(unittest.TestCase):
     def test_multipart_receipt_requires_explicit_aggregate_completion(self):
         sent = SimpleNamespace(event_id='evt_sent', event_type='send.sent',
                                occurred_at=datetime(2026, 9, 27, 6),
+                               received_at=datetime(2026, 9, 27, 6),
                                carrier_status=None, evidence=None)
         part = SimpleNamespace(event_id='evt_part', event_type='sms.delivered',
                                occurred_at=datetime(2026, 9, 27, 6, 1),
+                               received_at=datetime(2026, 9, 27, 6, 1),
                                carrier_status='delivered', evidence='android_dlr',
                                diagnostics_json=json.dumps({'all_segments_delivered': False}))
-        self.assertEqual(_project_evidence([sent, part])[1]['state'], 'pending')
+        now = datetime(2026, 9, 27, 6, 5)
+        self.assertEqual(_project_evidence([sent, part], now=now)[1]['state'], 'pending')
         part.diagnostics_json = json.dumps({'all_segments_delivered': True})
-        self.assertEqual(_project_evidence([sent, part])[1]['state'], 'delivered')
+        self.assertEqual(_project_evidence([sent, part], now=now)[1]['state'], 'delivered')
+
+    # ── signed Android carrier result code (GMweb/Android contract) ─────────
+    #
+    # Android passes the raw PendingIntent callback result code through
+    # (SmsStatusReceiver.kt: `callbackResultCode = resultCode`, success ==
+    # Activity.RESULT_OK == -1) and GMweb relays it unchanged inside the signed
+    # diagnostics. EVE validated it with the UNSIGNED counters, answered HTTP 400
+    # invalid_event for every real receipt and GMweb dead-lettered the callback,
+    # so the carrier state stayed pending for ever.
+
+    def _delivered_payload(self, **overrides):
+        body = dict(self.payload, event_id='evt_delivery_1', type='sms.delivered',
+                    carrier_status='delivered', evidence='android_dlr',
+                    occurred_at=_now_iso())
+        body.update(overrides)
+        return body
+
+    def test_signed_android_carrier_result_code_is_accepted(self):
+        for code in (-1, 0, 1, -1000000, 1000000):
+            event_id = 'evt_code_%s' % ('neg1' if code == -1 else code)
+            body = self._delivered_payload(event_id=event_id, carrier_result_code=code)
+            self.assertEqual(self._post(body=body).status_code, 200, code)
+            row = db.session.get(SmsGatewayEvent, event_id)
+            self.assertIsNotNone(row, code)
+            self.assertEqual(json.loads(row.diagnostics_json)['carrier_result_code'], code)
+            self.assertEqual(row.carrier_status, 'delivered')
+
+    def test_carrier_result_code_outside_the_signed_range_is_rejected(self):
+        for code in (-1000001, 1000001):
+            body = self._delivered_payload(event_id=f'evt_code_{code}',
+                                           carrier_result_code=code)
+            self.assertEqual(self._post(body=body).status_code, 400, code)
+        self.assertEqual(SmsGatewayEvent.query.count(), 0)
+
+    def test_boolean_is_not_an_integer_carrier_result_code(self):
+        body = self._delivered_payload(event_id='evt_code_bool', carrier_result_code=True)
+        self.assertEqual(self._post(body=body).status_code, 400)
+        self.assertEqual(SmsGatewayEvent.query.count(), 0)
+
+    def test_unsigned_diagnostics_still_reject_negative_values(self):
+        body = self._delivered_payload(event_id='evt_code_negative_segment',
+                                       carrier_result_code=-1, segment_index=-1)
+        self.assertEqual(self._post(body=body).status_code, 400)
+        body = self._delivered_payload(event_id='evt_code_negative_count',
+                                       carrier_result_code=-1, segment_count=-1)
+        self.assertEqual(self._post(body=body).status_code, 400)
+        self.assertEqual(SmsGatewayEvent.query.count(), 0)
+
+    def test_replay_of_a_signed_code_receipt_is_idempotent(self):
+        body = self._delivered_payload(carrier_result_code=-1)
+        self.assertEqual(self._post(body=body).json,
+                         {'accepted': True, 'duplicate': False})
+        self.assertEqual(self._post(body=body).json,
+                         {'accepted': True, 'duplicate': True})
+        self.assertEqual(SmsGatewayEvent.query.count(), 1)
+
+    def test_signed_code_receipt_confirms_every_pipeline_stage(self):
+        self._login_superadmin()
+        log = SmsSendLog(email='signed-code@example.test', server_id=0, state='ended',
+                         status='sent', request_id='send_42', gateway_job_id='job_42',
+                         carrier_state='unavailable')
+        db.session.add(log)
+        db.session.commit()
+        try:
+            self.assertEqual(self._post().status_code, 200)  # send.sent
+            queued = dict(self.payload, event_id='evt_queued_42', type='send.queued',
+                          occurred_at='2026-09-27T05:59:00.000Z')
+            self.assertEqual(self._post(body=queued).status_code, 200)
+            delivered = self._delivered_payload(
+                carrier_result_code=-1, segment_index=0, segment_count=1,
+                all_segments_delivered=True, carrier_result='DELIVRD',
+                android_delivery_received_at='2026-09-27T06:00:10Z',
+                gmweb_delivery_received_at='2026-09-27T06:00:11Z')
+            self.assertEqual(self._post(body=delivered).status_code, 200)
+            timeline = self.client.get(f'/api/sms/messages/{log.id}/timeline').json
+            self.assertEqual(timeline['carrier']['state'], 'delivered')
+            self.assertEqual(timeline['carrier']['diagnostics']['carrier_result_code'], -1)
+            self.assertEqual([step['state'] for step in timeline['pipeline'][5:]],
+                             ['confirmed', 'confirmed', 'confirmed'])
+            # "Android accepted job" is no longer hardcoded not_reported.
+            self.assertEqual(timeline['pipeline'][2]['state'], 'confirmed')
+            self.assertEqual(timeline['pipeline'][2]['evidence'],
+                             'implied_by_android_submission')
+            # "GMweb job created" now carries the queue event's own timestamp.
+            self.assertEqual(timeline['pipeline'][1]['at'], '2026-09-27T05:59:00Z')
+        finally:
+            db.session.delete(log)
+            db.session.commit()
+
+    def test_explicit_gateway_acceptance_is_used_when_present(self):
+        accepted = _event('evt_accepted', 'gateway.accepted', 0)
+        submitted = _event('evt_sent', 'send.sent', 1)
+        log = SimpleNamespace(status='sent', carrier_state='unavailable',
+                              carrier_evidence=None, request_id='send_42',
+                              gateway_job_id='job_42', created_at=datetime(2026, 9, 27, 8, 59))
+        submission, carrier = _project_evidence([accepted, submitted], log,
+                                                now=datetime(2026, 9, 27, 9, 5))
+        steps = {step['name']: step for step in
+                 _delivery_pipeline(log, [accepted, submitted], submission, carrier)}
+        self.assertEqual(steps['Android accepted job']['state'], 'confirmed')
+        self.assertEqual(steps['Android accepted job']['evidence'], 'gateway_acceptance')
+        self.assertEqual(steps['Android accepted job']['at'], '2026-09-27T09:00:00Z')
+        self.assertEqual(steps['GMweb job created']['at'], '2026-09-27T09:00:00Z')
+
+    # ── derived unconfirmed state (display-only projection) ──────────────────
+
+    def _sent_event(self, at=datetime(2026, 9, 27, 6, 0)):
+        return SimpleNamespace(event_id='evt_sent', event_type='send.sent',
+                               occurred_at=at, received_at=at,
+                               carrier_status=None, evidence=None)
+
+    def _waiting_log(self):
+        return SimpleNamespace(status='sent', carrier_state='unavailable',
+                               carrier_evidence=None, request_id='send_42',
+                               gateway_job_id='job_42',
+                               created_at=datetime(2026, 9, 27, 5, 59))
+
+    def test_sent_without_receipt_turns_unconfirmed_after_the_wait_window(self):
+        sent = self._sent_event()
+        log = self._waiting_log()
+        with patch.dict(os.environ, {'SMS_DLR_PENDING_TIMEOUT_SECONDS': '900'}):
+            inside = _project_evidence([sent], log, now=datetime(2026, 9, 27, 6, 14))[1]
+            self.assertEqual(inside['state'], 'pending')
+            self.assertNotIn('timeout_seconds', inside)
+            submission, carrier = _project_evidence([sent], log, now=datetime(2026, 9, 27, 6, 15))
+        self.assertEqual(carrier['state'], 'unconfirmed')
+        self.assertFalse(carrier['confirmed'])
+        self.assertEqual(carrier['evidence'], 'no_carrier_receipt_within_window')
+        self.assertEqual(carrier['timeout_seconds'], 900)
+        steps = {step['name']: step for step in
+                 _delivery_pipeline(log, [sent], submission, carrier)}
+        self.assertEqual(steps['SmsManager submission']['state'], 'confirmed')
+        self.assertEqual(steps['SENT callback ingested']['state'], 'confirmed')
+        self.assertEqual(steps['Android accepted job']['state'], 'confirmed')
+        for name in ('Carrier DELIVERY callback', 'GMweb delivery report received',
+                     'EVE delivery receipt ingested'):
+            self.assertEqual(steps[name]['state'], 'unconfirmed', name)
+        self.assertEqual(steps['Carrier DELIVERY callback']['reason'],
+                         'carrier_receipt_timeout')
+
+    def test_wait_window_is_configurable_and_zero_disables_it(self):
+        sent = self._sent_event()
+        log = self._waiting_log()
+        with patch.dict(os.environ, {'SMS_DLR_PENDING_TIMEOUT_SECONDS': '60'}):
+            self.assertEqual(_project_evidence([sent], log,
+                                               now=datetime(2026, 9, 27, 6, 0, 59))[1]['state'],
+                             'pending')
+            self.assertEqual(_project_evidence([sent], log,
+                                               now=datetime(2026, 9, 27, 6, 1))[1]['state'],
+                             'unconfirmed')
+        with patch.dict(os.environ, {'SMS_DLR_PENDING_TIMEOUT_SECONDS': '0'}):
+            self.assertEqual(_project_evidence([sent], log,
+                                               now=datetime(2030, 1, 1))[1]['state'], 'pending')
+        with patch.dict(os.environ, {'SMS_DLR_PENDING_TIMEOUT_SECONDS': 'not-a-number'}):
+            self.assertEqual(_project_evidence([sent], log,
+                                               now=datetime(2026, 9, 27, 6, 15))[1]['state'],
+                             'unconfirmed')
+
+    def test_timeout_never_overrides_a_real_receipt(self):
+        sent = self._sent_event()
+        receipt = SimpleNamespace(event_id='evt_delivered', event_type='sms.delivered',
+                                  occurred_at=datetime(2026, 9, 27, 6, 2),
+                                  received_at=datetime(2026, 9, 27, 6, 2),
+                                  carrier_status='delivered',
+                                  evidence='android_dlr')
+        carrier = _project_evidence([sent, receipt], self._waiting_log(),
+                                    now=datetime(2030, 1, 1))[1]
+        self.assertEqual(carrier['state'], 'delivered')
+        self.assertTrue(carrier['confirmed'])
+
+    def test_list_and_timeline_agree_on_unconfirmed_after_the_window(self):
+        self._login_superadmin()
+        log = SmsSendLog(email='unconfirmed@example.test', server_id=0, state='ended',
+                         status='sent', request_id='send_42', gateway_job_id='job_42',
+                         carrier_state='unavailable')
+        db.session.add(log)
+        db.session.commit()
+        try:
+            old = (datetime.utcnow() - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+            self.assertEqual(self._post(body=dict(self.payload, occurred_at=old)).status_code, 200)
+            list_response = self.client.get('/api/sms/logs?q=unconfirmed@example.test')
+            timeline = self.client.get(f'/api/sms/messages/{log.id}/timeline')
+            self.assertEqual((list_response.status_code, timeline.status_code), (200, 200))
+            summary = next(row for row in list_response.json['logs'] if row['id'] == log.id)
+            self.assertEqual(summary['carrier_state'], 'unconfirmed')
+            self.assertEqual(summary['delivery']['carrier'], timeline.json['carrier'])
+            self.assertEqual(timeline.json['carrier']['state'], 'unconfirmed')
+            self.assertEqual([step['state'] for step in timeline.json['pipeline'][5:]],
+                             ['unconfirmed', 'unconfirmed', 'unconfirmed'])
+        finally:
+            db.session.delete(log)
+            db.session.commit()
 
     def test_log_date_filter_converts_offset_before_querying_utc(self):
         self._login_superadmin()
@@ -431,6 +657,14 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('Show all ${result.total || decisions.length} decisions', source)
         self.assertIn('No signed GMweb callback matches this message', source)
         self.assertNotIn('openModal(', source)
+
+    def test_sms_center_renders_the_unconfirmed_carrier_state(self):
+        source = (ROOT / 'static' / 'sms-center.js').read_text(encoding='utf-8')
+        stylesheet = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
+        self.assertIn('if (status === "unconfirmed") return "unconfirmed";', source)
+        self.assertIn('no_carrier_receipt_within_window', source)
+        self.assertIn('implied_by_android_submission', source)
+        self.assertIn('.sms-status-unconfirmed', stylesheet)
 
     def test_sms_settings_deep_link_is_hash_aware(self):
         source = (ROOT / 'templates' / 'settings.html').read_text(encoding='utf-8')

@@ -24,22 +24,75 @@ _CODE = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,63}$')
 _DEVICE = re.compile(r'^[A-Za-z0-9_.-]{1,64}$')
 _EVENT_TYPE = re.compile(r'^(?:send\.[a-z][a-z0-9_]{0,58}|gateway\.accepted|sms\.(?:delivered|delivery_failed))$')
 
+# Counters and indices are non-negative ...
+_UNSIGNED_DIAGNOSTICS = ('schema_version', 'segment_index', 'segment_count',
+                         'eve_dispatch_attempts')
+_MAX_DIAGNOSTIC = 1000000
+
+# ... but carrier_result_code is the raw Android callback result code, which is
+# SIGNED: a successful PendingIntent delivery callback reports Activity.RESULT_OK
+# (== -1). Validated with the counters above it was rejected as
+# invalid_carrier_result_code, EVE answered HTTP 400, GMweb moved the callback to
+# dead_letter and the carrier state stayed pending for ever even though the phone
+# held a real receipt.
+_MIN_CARRIER_RESULT_CODE = -1000000
+
+# Display-only projection window: after this many seconds a message that was
+# definitely submitted and still has no terminal carrier receipt stops reading as
+# "waiting for the carrier" and reads as "unconfirmed". 0 disables the derived
+# state (everything stays `pending`). Override with
+# SMS_DLR_PENDING_TIMEOUT_SECONDS.
+DEFAULT_DLR_PENDING_TIMEOUT_SECONDS = 900
+
 
 def _valid_text(value, maximum, pattern=None):
     return (isinstance(value, str) and 0 < len(value) <= maximum
             and (pattern is None or bool(pattern.fullmatch(value))))
 
 
+def _dlr_pending_timeout_seconds():
+    """Configured wait window for a terminal carrier receipt; 0 disables it."""
+    raw = os.environ.get('SMS_DLR_PENDING_TIMEOUT_SECONDS')
+    if raw is None or not str(raw).strip():
+        return DEFAULT_DLR_PENDING_TIMEOUT_SECONDS
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_DLR_PENDING_TIMEOUT_SECONDS
+    return max(0, value)
+
+
+def _parse_utc(value):
+    """ISO-8601 (with Z or an offset) -> naive UTC datetime, or None."""
+    if not value:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(timezone.utc).replace(tzinfo=None)
+    return stamp
+
+
 def _parse_delivery_diagnostics(data):
     """Keep only bounded delivery metadata; never retain body, recipient or secrets."""
     fields = {}
-    for name in ('schema_version', 'carrier_result_code', 'segment_index',
-                 'segment_count', 'eve_dispatch_attempts'):
+    for name in _UNSIGNED_DIAGNOSTICS:
         value = data.get(name)
         if value is not None:
-            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1000000:
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _MAX_DIAGNOSTIC:
                 raise ValueError(f'invalid_{name}')
             fields[name] = value
+    # Signed on purpose — see _MIN_CARRIER_RESULT_CODE above. The accepted range
+    # must match GMweb's (gatewayRoutes.js: minimum -1000000, maximum 1000000)
+    # and Android's raw BroadcastReceiver result code.
+    value = data.get('carrier_result_code')
+    if value is not None:
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or not _MIN_CARRIER_RESULT_CODE <= value <= _MAX_DIAGNOSTIC):
+            raise ValueError('invalid_carrier_result_code')
+        fields['carrier_result_code'] = value
     for name in ('carrier_result', 'last_error'):
         value = data.get(name)
         if value is not None:
@@ -142,8 +195,12 @@ def _event_dict(row):
     )
 
 
-def _project_evidence(rows, log=None):
-    """Derive transport submission and carrier truth from immutable evidence."""
+def _project_evidence(rows, log=None, now=None):
+    """Derive transport submission and carrier truth from immutable evidence.
+
+    `now` is injectable so the derived `unconfirmed` window is testable without
+    waiting (and without depending on the wall clock).
+    """
     submission = {'state': 'unknown', 'confirmed': False, 'evidence': 'not_available',
                   'occurred_at': None, 'received_at': None}
     submission_map = {
@@ -216,6 +273,19 @@ def _project_evidence(rows, log=None):
         carrier = {'state': 'delivered', 'confirmed': True,
                    'evidence': getattr(log, 'carrier_evidence', None) or 'carrier_dlr',
                    'occurred_at': getattr(log, 'carrier_occurred_at', None)}
+    # Derived, display-only: a message that WAS submitted and still has no
+    # terminal receipt after the wait window is neither delivered nor failed nor
+    # unavailable — the evidence simply never arrived. This never writes to the
+    # immutable evidence tables and never invents a receipt.
+    if carrier['state'] == 'pending' and submission['state'] == 'sent':
+        timeout = _dlr_pending_timeout_seconds()
+        submitted_at = _parse_utc(submission.get('occurred_at'))
+        if timeout > 0 and submitted_at is not None:
+            reference = now or datetime.now(timezone.utc).replace(tzinfo=None)
+            if reference - submitted_at >= timedelta(seconds=timeout):
+                carrier = dict(carrier, state='unconfirmed',
+                               evidence='no_carrier_receipt_within_window',
+                               timeout_seconds=timeout)
     return submission, carrier
 
 
@@ -250,6 +320,29 @@ def _delivery_pipeline(log, rows, submission, carrier):
                     if row.event_id == carrier.get('event_id')), None)
     diagnostics = carrier.get('diagnostics') or {}
     waiting = carrier['state'] == 'pending'
+    # The same missing-evidence fact, read one window apart: still inside the
+    # carrier wait window ("waiting") or past it ("unconfirmed").
+    awaiting = 'unconfirmed' if carrier['state'] == 'unconfirmed' else (
+        'waiting' if waiting else 'not_reported')
+    accepted = next((row for row in rows if row.event_type == 'gateway.accepted'), None)
+    queued = [row for row in rows if row.event_type == 'send.queued']
+    job_created = min(([accepted] if accepted is not None else []) + queued,
+                      key=lambda row: (row.occurred_at, row.event_id), default=None)
+    # This stage used to be hardcoded to not_reported, so a message could show
+    # "SmsManager submission: confirmed" directly above "Android accepted job:
+    # not reported" — Android cannot have handed the parts to SmsManager without
+    # accepting the task. Prefer an explicit acceptance event; otherwise say
+    # plainly that the stage is implied by the submission, and never invent a
+    # timestamp that is not the submission's own.
+    if accepted is not None:
+        android_state, android_at = 'confirmed', accepted.occurred_at.isoformat() + 'Z'
+        android_evidence = 'gateway_acceptance'
+    elif submission['state'] == 'sent':
+        android_state, android_at = 'confirmed', submission.get('occurred_at')
+        android_evidence = 'implied_by_android_submission'
+    else:
+        android_state = 'waiting' if log.request_id else 'not_reported'
+        android_at, android_evidence = None, None
 
     def stage(name, state, at=None, evidence=None, reason=None):
         return {'name': name, 'state': state, 'at': at, 'evidence': evidence,
@@ -259,8 +352,9 @@ def _delivery_pipeline(log, rows, submission, carrier):
         stage('EVE request created', 'confirmed',
               log.created_at.isoformat() + 'Z' if log.created_at else None, 'sms_send_log'),
         stage('GMweb job created', 'confirmed' if log.gateway_job_id else 'not_reported',
-              None, 'gateway_job_id' if log.gateway_job_id else None),
-        stage('Android accepted job', 'not_reported'),
+              job_created.occurred_at.isoformat() + 'Z' if job_created is not None else None,
+              'gateway_job_id' if log.gateway_job_id else None),
+        stage('Android accepted job', android_state, android_at, android_evidence),
         stage('SmsManager submission', 'confirmed' if submission['state'] == 'sent' else
               'failed' if submission['state'] == 'failed' else 'waiting' if log.request_id else 'not_reported',
               submission.get('occurred_at'), submission.get('evidence')),
@@ -268,22 +362,23 @@ def _delivery_pipeline(log, rows, submission, carrier):
               sent.received_at.isoformat() + 'Z' if sent else None,
               sent.event_id if sent else None),
         stage('Carrier DELIVERY callback', 'failed' if receipt and carrier['state'] == 'failed' else
-              'confirmed' if receipt else 'waiting' if waiting else 'not_reported',
+              'confirmed' if receipt else awaiting,
               diagnostics.get('android_delivery_received_at') or carrier.get('occurred_at') if receipt else None,
-              carrier.get('evidence') if receipt else None, carrier.get('reason_code')),
+              carrier.get('evidence') if receipt else None,
+              carrier.get('reason_code') or
+              ('carrier_receipt_timeout' if carrier['state'] == 'unconfirmed' else None)),
         stage('GMweb delivery report received',
-              'confirmed' if diagnostics.get('gmweb_delivery_received_at') else
-              'waiting' if waiting else 'not_reported',
+              'confirmed' if diagnostics.get('gmweb_delivery_received_at') else awaiting,
               diagnostics.get('gmweb_delivery_received_at'),
               carrier.get('event_id') if diagnostics.get('gmweb_delivery_received_at') else None),
-        stage('EVE delivery receipt ingested', 'confirmed' if receipt else 'waiting' if waiting else 'not_reported',
+        stage('EVE delivery receipt ingested', 'confirmed' if receipt else awaiting,
               carrier.get('received_at') if receipt else None,
               carrier.get('event_id') if receipt else None),
     ]
 
 
-def _delivery_view(log, rows):
-    submission, carrier = _project_evidence(rows, log)
+def _delivery_view(log, rows, now=None):
+    submission, carrier = _project_evidence(rows, log, now=now)
     return {'submission': submission, 'carrier': carrier,
             'pipeline': _delivery_pipeline(log, rows, submission, carrier)}
 

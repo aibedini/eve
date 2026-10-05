@@ -208,3 +208,92 @@ Please reply with **concrete answers** so Eve can implement the matching side:
 
 - **Minimum useful:** §4.0 (return an `id`) + §4.3 (polling `/status/{id}`) + §4.4 (error codes). Eve can then show real outcomes by polling.
 - **Best:** add §4.2 (signed webhook) so Eve updates instantly without polling, plus §4.5 (`Retry-After`) and §6.7 (idempotency key) for robustness.
+
+---
+
+## 8) Signed carrier result codes, `unconfirmed`, and dead-letter recovery
+
+### 8.1 `carrier_result_code` is SIGNED
+
+Android hands the raw `BroadcastReceiver` result code through as
+`carrierResultCode` (`Messages`: `SmsStatusReceiver.kt`, `callbackResultCode =
+resultCode`), and a **successful** PendingIntent delivery callback reports
+`Activity.RESULT_OK == -1`. GMweb accepts the signed range
+(`gatewayRoutes.js`: `minimum: -1000000, maximum: 1000000`, `sendStore.js`
+`int(-1_000_000, 1_000_000)`) and relays it unchanged inside the signed
+diagnostics body.
+
+Eve's validator used to check `carrier_result_code` together with the unsigned
+counters (`schema_version`, `segment_index`, `segment_count`,
+`eve_dispatch_attempts`), so:
+
+```text
+carrier_result_code = -1  ->  invalid_carrier_result_code  ->  HTTP 400 invalid_event
+                          ->  GMweb eve_sms_outbox.state = dead_letter
+                          ->  carrier state stays pending for ever
+```
+
+The signed fields are now validated separately:
+
+| field | accepted range |
+|---|---|
+| `schema_version`, `segment_index`, `segment_count`, `eve_dispatch_attempts` | `0 .. 1000000` (booleans rejected) |
+| `carrier_result_code` | `-1000000 .. 1000000` (booleans rejected) |
+
+`POST /internal/gmweb/sms/events` answers `400 invalid_event` for anything
+outside those ranges.
+
+### 8.2 Derived `unconfirmed` state (display only)
+
+A message that was definitely submitted (`send.sent` / `send.completed`) and
+still has **no terminal carrier receipt** stops reading as `pending` after a
+wait window and reads as `unconfirmed`:
+
+| env var | default | meaning |
+|---|---|---|
+| `SMS_DLR_PENDING_TIMEOUT_SECONDS` | `900` | seconds after the submission timestamp; `0` disables the derived state |
+
+`unconfirmed` is **not** `delivered`, **not** `failed` and **not**
+`unavailable`: it says "no conclusive carrier receipt arrived". It is a
+projection computed at read time — nothing is written to
+`carrier_delivery_reports` or `sms_gateway_events`, and no timestamp is
+invented. The three receipt pipeline stages (Carrier DELIVERY callback, GMweb
+delivery report received, EVE delivery receipt ingested) report
+`unconfirmed` with reason `carrier_receipt_timeout` instead of waiting for
+ever; a real receipt always wins over the window.
+
+### 8.3 Recovering callbacks that were dead-lettered by the old validator
+
+After this fix is deployed, GMweb still holds valid carrier evidence that the
+old validator rejected with HTTP 400. Requeue it with the existing GMweb admin
+endpoint — **never** by editing `data/sends.db` by hand:
+
+```http
+POST {GMWEB_BASE}/admin/eve-callbacks/requeue
+Authorization: Bearer {MASTER_OR_DASHBOARD_ADMIN_TOKEN}
+Content-Type: application/json
+
+{}                         # oldest dead letters, default limit 100
+{ "limit": 100 }           # explicit bound (1..100)
+{ "eventIds": ["dlr_..."] } # specific immutable event ids
+```
+
+Response: `{ "matched": n, "requeued": n, "alreadyPending": n,
+"alreadyDelivered": n, "stillIneligible": n }`. The endpoint is rate limited to
+6 requests per minute, so repeat the call until `matched` reaches 0. The signed
+body and the delivery identity are unchanged; the worker then replays the
+callback and the carrier state resolves without re-sending any SMS.
+
+Affected rows are exactly:
+
+```sql
+SELECT send_id, event_id, event_type, state, attempt_count, last_http_status, last_error
+  FROM eve_sms_outbox
+ WHERE state = 'dead_letter'
+   AND last_http_status = 400
+   AND event_type IN ('sms.delivered', 'sms.delivery_failed');
+```
+
+Verify afterwards that those rows reached `state='delivered'`,
+`last_http_status=200` and that `carrier_delivery_reports` rows for the same
+`send_id` are reflected in `sms_gateway_events` on the Eve side.

@@ -73,6 +73,9 @@
   }
   function statusTone(value) {
     const status = String(value || "").toLowerCase();
+    // Past the carrier wait window with no receipt: not delivered, not failed,
+    // not unavailable — the evidence never arrived. Muted, not alarming.
+    if (status === "unconfirmed") return "unconfirmed";
     if (["sent", "completed", "confirmed", "gateway_accepted", "accepted", "ready", "active", "delivered", "eligible_now"].includes(status)
       || /\.(sent|completed|accepted|delivered)$/.test(status)) return "success";
     if (["failed", "failed_terminal", "cancelled", "expired", "ended", "invalid_recipient"].includes(status)
@@ -147,6 +150,8 @@
   function evidenceLabel(value) {
     if (value === "not_available") return "Not recorded (no signed callback)";
     if (value === "awaiting_carrier_receipt") return "Waiting for carrier receipt";
+    if (value === "no_carrier_receipt_within_window") return "No carrier receipt within the wait window";
+    if (value === "implied_by_android_submission") return "Implied by the Android submission";
     return value;
   }
   function deliveryDetail(result) {
@@ -181,6 +186,7 @@
       ["EVE relay last attempt", diagnostics.eve_last_attempt_at && date(diagnostics.eve_last_attempt_at)],
       ["EVE relay acknowledged", diagnostics.eve_ack_at && date(diagnostics.eve_ack_at)],
       ["Relay error category", diagnostics.last_error],
+      ["Carrier wait window", result.carrier?.timeout_seconds ? `${result.carrier.timeout_seconds} s` : undefined],
       ["Event ID", result.carrier?.event_id]
     ].filter(([, value]) => value !== undefined && value !== null && value !== "");
     if (reported.length) {
