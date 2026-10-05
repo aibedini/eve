@@ -2,6 +2,13 @@
 
 All notable changes to Eve - Xui Manager are documented in this file.
 
+## [2.7.59] - 2026-10-05
+
+### Fixed
+- SMS Center now shows carrier receipt pending after a submitted message when no delivery receipt has arrived, while retaining confirmed carrier outcomes.
+- The current next-send reason remains visible when the delivery timeline opens.
+- SMS Center dates and filters follow the panel calendar and timezone, including Jalali date picking and local-day grouping.
+
 ## [2.7.48] - 2026-09-28
 
 ### Added

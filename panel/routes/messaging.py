@@ -1,7 +1,7 @@
 """SMS and WhatsApp gateway API routes (extracted from app.py)."""
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import requests
 import threading
 import time
@@ -438,8 +438,8 @@ def _paginate_sms_audience_preview(result, payload):
                 snapshot_meta[(email, inbound_server_id)] = client
 
     now_utc = datetime.now(timezone.utc)
-    tehran_tz = timezone(timedelta(hours=3, minutes=30))
-    local_now = now_utc.astimezone(tehran_tz)
+    from app import _get_app_tzinfo
+    local_now = now_utc.astimezone(_get_app_tzinfo())
     local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
     utc_end = (local_start + timedelta(days=1)).astimezone(timezone.utc).replace(tzinfo=None)
@@ -497,14 +497,20 @@ def _paginate_sms_audience_preview(result, payload):
             search in str(row.get(field) or '').lower() for field in fields)]
     if date_from:
         try:
-            lower = datetime.fromisoformat(date_from)
+            lower = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            if lower.tzinfo:
+                lower = lower.astimezone(timezone.utc).replace(tzinfo=None)
             rows = [row for row in rows if row.get('last_sms') and
                     datetime.fromisoformat(row['last_sms']['created_at'].rstrip('Z')) >= lower]
         except ValueError:
             pass
     if date_to:
         try:
-            upper = datetime.fromisoformat(date_to) + timedelta(days=1)
+            upper = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            if upper.tzinfo:
+                upper = upper.astimezone(timezone.utc).replace(tzinfo=None)
+            else:
+                upper += timedelta(days=1)
             rows = [row for row in rows if row.get('last_sms') and
                     datetime.fromisoformat(row['last_sms']['created_at'].rstrip('Z')) < upper]
         except ValueError:
@@ -1327,7 +1333,8 @@ def sms_logs():
                 parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
             except ValueError:
                 return jsonify({'success': False, 'error': f'Invalid {argument} timestamp.'}), 400
-            q = q.filter(operator(parsed.replace(tzinfo=None)))
+            q = q.filter(operator(parsed.astimezone(timezone.utc).replace(tzinfo=None)
+                                  if parsed.tzinfo else parsed))
     if server_filter.isdigit():
         q = q.filter(SmsSendLog.server_id == int(server_filter))
     if reason_filter:
@@ -1350,7 +1357,14 @@ def sms_logs():
                          func.lower(SmsSendLog.reason).like(term)))
     total = q.count()
     rows = q.order_by(SmsSendLog.created_at.desc()).offset(offset).limit(limit).all()
-    resp = jsonify({'success': True, 'logs': [r.to_dict() for r in rows],
+    logs = []
+    for row in rows:
+        log = row.to_dict()
+        if row.carrier_state in (None, 'unavailable') and not row.carrier_evidence and row.status == 'sent':
+            log['carrier_state'] = 'pending'
+            log['carrier_evidence'] = 'awaiting_carrier_receipt'
+        logs.append(log)
+    resp = jsonify({'success': True, 'logs': logs,
                     'total': total, 'offset': offset, 'limit': limit})
     # Never let a proxy/browser serve a stale log — it must always reflect now.
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -1361,12 +1375,12 @@ def sms_logs():
 @bp.route('/api/sms/daily-summary', methods=['GET'])
 @permission_required('secrets.manage')
 def sms_daily_summary():
-    """Complete operational summary for the current Tehran calendar day."""
+    """Complete operational summary for the current panel calendar day."""
     from datetime import timedelta, timezone
 
     now_utc = datetime.now(timezone.utc)
-    tehran_tz = timezone(timedelta(hours=3, minutes=30))
-    local_start = now_utc.astimezone(tehran_tz).replace(
+    from app import _get_app_timezone_name, _get_app_tzinfo
+    local_start = now_utc.astimezone(_get_app_tzinfo()).replace(
         hour=0, minute=0, second=0, microsecond=0)
     utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
     utc_end = (local_start + timedelta(days=1)).astimezone(timezone.utc).replace(tzinfo=None)
@@ -1404,7 +1418,7 @@ def sms_daily_summary():
     other = sum(int(count) for state, count in state_counts.items() if state not in known)
     response = jsonify({
         'success': True,
-        'timezone': 'Asia/Tehran',
+        'timezone': _get_app_timezone_name(),
         'window_start': local_start.isoformat(),
         'window_end': (local_start + timedelta(days=1) - timedelta(microseconds=1)).isoformat(),
         'attempts': attempts,

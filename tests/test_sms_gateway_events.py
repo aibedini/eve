@@ -26,7 +26,7 @@ os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
 from app import app  # noqa: E402
 from panel.extensions import db  # noqa: E402
-from panel.models import Admin, SmsGatewayEvent  # noqa: E402
+from panel.models import Admin, SmsGatewayEvent, SmsSendLog  # noqa: E402
 from panel.routes.sms_gateway_events import _project_evidence  # noqa: E402
 
 
@@ -183,6 +183,52 @@ class GatewayEventTests(unittest.TestCase):
     def test_sms_center_template_compiles(self):
         template = app.jinja_env.get_template('sms_center.html')
         self.assertIsNotNone(template)
+
+    def test_sent_log_without_receipt_is_carrier_pending(self):
+        self._login_superadmin()
+        log = SmsSendLog(email='pending@example.test', server_id=0,
+                         state='ended', status='sent', request_id='pending-test',
+                         carrier_state='unavailable')
+        db.session.add(log)
+        db.session.commit()
+        try:
+            response = self.client.get('/api/sms/logs?q=pending@example.test')
+            self.assertEqual(response.status_code, 200)
+            row = next(item for item in response.json['logs'] if item['id'] == log.id)
+            self.assertEqual(row['carrier_state'], 'pending')
+            self.assertEqual(row['carrier_evidence'], 'awaiting_carrier_receipt')
+            log.carrier_state = 'delivered'
+            db.session.commit()
+            response = self.client.get('/api/sms/logs?q=pending@example.test')
+            row = next(item for item in response.json['logs'] if item['id'] == log.id)
+            self.assertEqual(row['carrier_state'], 'delivered')
+            log.carrier_state = 'unavailable'
+            log.carrier_evidence = 'device_unsupported'
+            db.session.commit()
+            response = self.client.get('/api/sms/logs?q=pending@example.test')
+            row = next(item for item in response.json['logs'] if item['id'] == log.id)
+            self.assertEqual(row['carrier_state'], 'unavailable')
+        finally:
+            db.session.delete(log)
+            db.session.commit()
+
+    def test_log_date_filter_converts_offset_before_querying_utc(self):
+        self._login_superadmin()
+        log = SmsSendLog(email='midnight@example.test', server_id=0,
+                         state='ended', status='sent',
+                         created_at=datetime(2026, 10, 4, 21, 0))
+        db.session.add(log)
+        db.session.commit()
+        try:
+            response = self.client.get('/api/sms/logs?'
+                'from=2026-10-05T00%3A00%3A00%2B03%3A30&'
+                'to=2026-10-06T00%3A00%3A00%2B03%3A30&'
+                'q=midnight@example.test')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(log.id, [row['id'] for row in response.json['logs']])
+        finally:
+            db.session.delete(log)
+            db.session.commit()
 
     def test_current_audience_preview_remains_available_when_automation_is_disabled(self):
         self._login_superadmin()

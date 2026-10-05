@@ -24,7 +24,7 @@
     <button class="sms-audit-tab" type="button" data-sms-tab="gateway">Gateway</button>
   </nav>
   <section class="sms-center-pane" id="sms-center-overview">
-    <div class="sms-audit-stream-head"><div><h3>Today at a glance</h3><p>Complete Tehran-day totals, always from 00:00 through 23:59. This is not a limited sample.</p></div><span class="badge neutral" id="sms-center-day-window">Asia/Tehran</span></div>
+    <div class="sms-audit-stream-head"><div><h3>Today at a glance</h3><p>Complete totals for the panel's local day, 00:00 through 23:59. This is not a limited sample.</p></div><span class="badge neutral" id="sms-center-day-window">{{ app_timezone or 'Asia/Tehran' }}</span></div>
     <div class="sms-audit-kpis sms-overview-primary">
       <div class="stat-card"><span class="sms-audit-kpi-label">Attempts today</span><strong class="sms-audit-kpi-value" id="sms-center-attempts">—</strong><small class="field-note" id="sms-center-unique">— unique accounts</small></div>
       <div class="stat-card"><span class="sms-audit-kpi-label">Sent</span><strong class="sms-audit-kpi-value" id="sms-center-sent">—</strong><small class="field-note" id="sms-center-segments">— segments</small></div>
@@ -44,11 +44,11 @@
     <div id="sms-center-audience-source" class="field-note" aria-live="polite"></div>
     <div class="sms-center-filters">
       <div class="form-group"><label for="sms-center-audience-search">Account or server</label><input class="search-input" id="sms-center-audience-search" type="search" autocomplete="off"></div>
-      <div class="form-group"><label for="sms-center-audience-decision">Decision</label><select class="form-select" id="sms-center-audience-decision"><option value="">All decisions</option><option value="eligible_now">Eligible now</option><option value="deferred">Deferred</option><option value="suppressed">Suppressed</option><option value="invalid_recipient">Invalid recipient</option><option value="active_obligation">Active obligation</option></select></div>
+      <div class="form-group"><label for="sms-center-audience-decision">Next send</label><select class="form-select" id="sms-center-audience-decision"><option value="">All decisions</option><option value="eligible_now">Eligible now</option><option value="deferred">Deferred</option><option value="suppressed">Suppressed</option><option value="invalid_recipient">Invalid recipient</option><option value="active_obligation">Active obligation</option></select></div>
       <div class="form-group"><label for="sms-center-audience-activity">Today's outcome</label><select class="form-select" id="sms-center-audience-activity"><option value="">Any outcome</option><option value="sent">Sent today</option><option value="failed">Failed today</option><option value="queued">Queued today</option></select></div>
       <div class="form-group"><label for="sms-center-audience-state">Monitor state</label><select class="form-select" id="sms-center-audience-state"><option value="">All states</option><option value="near_expiry">Near expiry</option><option value="low_volume">Low volume</option><option value="expired">Expired</option><option value="ended">Ended</option></select></div>
-      <div class="form-group"><label for="sms-center-audience-from">Last SMS from</label><input class="search-input" id="sms-center-audience-from" type="date"></div>
-      <div class="form-group"><label for="sms-center-audience-to">Last SMS through</label><input class="search-input" id="sms-center-audience-to" type="date"></div>
+      <div class="form-group"><label for="sms-center-audience-from">Last SMS from</label><input class="search-input" id="sms-center-audience-from" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>
+      <div class="form-group"><label for="sms-center-audience-to">Last SMS through</label><input class="search-input" id="sms-center-audience-to" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>
       <button class="btn btn-secondary" type="button" id="sms-center-audience-refresh">Refresh Monitor &amp; re-evaluate</button>
     </div>
     <details class="sms-audience-visibility">
@@ -75,8 +75,8 @@
     <div class="sms-center-filters">
       <div class="form-group"><label for="sms-center-search">Account, phone, or gateway ID</label><input class="search-input" id="sms-center-search" type="search" autocomplete="off"></div>
       <div class="form-group"><label for="sms-center-status">EVE status</label><select class="form-select" id="sms-center-status"><option value="">All statuses</option><option value="queued">Queued</option><option value="sent">Sent</option><option value="failed">Failed</option><option value="skipped">Skipped</option></select></div>
-      <div class="form-group"><label for="sms-center-from">From date</label><input class="search-input" id="sms-center-from" type="date"></div>
-      <div class="form-group"><label for="sms-center-to">Through date</label><input class="search-input" id="sms-center-to" type="date"></div>
+      <div class="form-group"><label for="sms-center-from">From date</label><input class="search-input" id="sms-center-from" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>
+      <div class="form-group"><label for="sms-center-to">Through date</label><input class="search-input" id="sms-center-to" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>
       <button class="btn btn-primary" type="button" id="sms-center-filter">Apply filters</button>
     </div>
     <div class="sms-center-list" id="sms-center-delivery-list" aria-live="polite">Loading messages…</div>
@@ -102,4 +102,4 @@
   </section>
 </main>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='sms-center.js') }}" defer></script>{% endblock %}
+{% block scripts %}{% if app_calendar == 'jalali' %}<link rel="stylesheet" href="{{ url_for('static', filename='jalalidatepicker.min.css') }}"><script src="{{ url_for('static', filename='jalalidatepicker.min.js') }}"></script>{% endif %}<script src="{{ url_for('static', filename='sms-center.js') }}" defer></script>{% endblock %}

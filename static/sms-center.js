@@ -28,8 +28,32 @@
   }
   function date(value) {
     if (!value) return "—";
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+    return window.EveDate ? window.EveDate.format(value) : String(value);
+  }
+  function dayKey(value) {
+    const instant = window.EveDate?.parse(value);
+    if (!instant) return null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: window.EveDate.timezone, year: "numeric", month: "2-digit", day: "2-digit"
+    }).formatToParts(instant);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+  function dayHeading(value) {
+    const today = dayKey(new Date());
+    const [year, month, day] = today.split("-").map(Number);
+    const yesterday = new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+    const key = dayKey(value);
+    const persian = window.EveDate.locale.startsWith("fa");
+    if (key === today) return persian ? "امروز" : "Today";
+    if (key === yesterday) return persian ? "دیروز" : "Yesterday";
+    return window.EveDate?.formatDate(value) || date(value);
+  }
+  function filterBoundary(value, through = false) {
+    if (!value) return "";
+    const parsed = window.EveDate.parseInput(through ? `${value} 23:59:59` : value);
+    if (!parsed) throw new Error("Invalid date filter");
+    return new Date(parsed.getTime() + (through ? 1000 : 0)).toISOString();
   }
   async function json(url) {
     const response = await fetch(url, { credentials: "same-origin", cache: "no-store" });
@@ -152,16 +176,18 @@
     }
   }
   async function renderAudienceTimeline(panel, logId) {
-    panel.replaceChildren(node("p", "field-note", "Loading delivery timeline…"));
+    const timeline = node("div", "sms-center-timeline");
+    panel.append(timeline);
+    timeline.replaceChildren(node("p", "field-note", "Loading delivery timeline…"));
     try {
       const result = await json(`/api/sms/messages/${logId}/timeline`);
-      panel.replaceChildren(detailRow([
+      timeline.replaceChildren(detailRow([
         statusField("Gateway submission", result.submission?.state || "unknown"),
         field("Submission evidence", evidenceLabel(result.submission?.evidence)),
         statusField("Carrier outcome", result.carrier?.state || "unavailable"),
         field("Carrier evidence", evidenceLabel(result.carrier?.evidence))
       ]));
-    } catch (error) { showError(panel, error); }
+    } catch (error) { showError(timeline, error); }
   }
   function renderAudience() {
     const target = $("sms-center-audience-list");
@@ -181,7 +207,8 @@
       const lastSms = row.last_sms;
       const disclosure = expandableRow([
         field("Account", row.email || row.service_key), field("Server", row.server_name),
-        statusField("Monitor state", row.state), statusField("Decision", row.disposition),
+        statusField("Monitor state", row.state), statusField("Next send", row.disposition),
+        field("Why", audienceReason(row.reason_code)),
         statusField("Last SMS", lastSms?.status || "not sent"),
         field("Last SMS time", date(lastSms?.created_at))
       ], lastSms ? "Delivery timeline" : "Decision details");
@@ -232,8 +259,8 @@
           decision: $("sms-center-audience-decision").value,
           activity: $("sms-center-audience-activity").value,
           state: $("sms-center-audience-state").value,
-          date_from: $("sms-center-audience-from").value,
-          date_to: $("sms-center-audience-to").value,
+          date_from: filterBoundary($("sms-center-audience-from").value),
+          date_to: filterBoundary($("sms-center-audience-to").value, true),
           hide_disabled: $("sms-center-hide-disabled").checked,
           hide_reseller: $("sms-center-hide-reseller").checked,
           hide_no_recipient: $("sms-center-hide-no-recipient").checked,
@@ -396,7 +423,7 @@
       $("sms-center-segments").textContent = `${Number(data.segments || 0).toLocaleString()} segments`;
       $("sms-center-accepted").textContent = Number(data.gateway_accepted || 0).toLocaleString();
       $("sms-center-not-sent").textContent = `${Number(statuses.queued || 0).toLocaleString()} / ${Number(statuses.failed || 0).toLocaleString()} / ${Number(statuses.skipped || 0).toLocaleString()}`;
-      $("sms-center-day-window").textContent = `${new Date(data.window_start).toLocaleDateString()} · 00:00–23:59 Tehran`;
+      $("sms-center-day-window").textContent = `${window.EveDate?.formatDate(data.window_start) || date(data.window_start)} · ${data.timezone || window.EveDate?.timezone || "Asia/Tehran"}`;
       $("sms-center-purpose").replaceChildren(
         field("Created", data.transactional?.created || 0), field("Renewed", data.transactional?.renew || 0),
         field("Purchased", data.transactional?.purchase || 0), field("Royalty", data.royalty || 0),
@@ -474,19 +501,23 @@
     if ($("sms-center-status").value) params.set("status", $("sms-center-status").value);
     const from = $("sms-center-from").value;
     const through = $("sms-center-to").value;
-    if (from) params.set("from", new Date(`${from}T00:00:00`).toISOString());
-    if (through) {
-      const end = new Date(`${through}T00:00:00`);
-      end.setDate(end.getDate() + 1);
-      params.set("to", end.toISOString());
-    }
+    try {
+      if (from) params.set("from", filterBoundary(from));
+      if (through) params.set("to", filterBoundary(through, true));
+    } catch (error) { showError(target, error); return; }
     try {
       const data = await json(`/api/sms/logs?${params}`);
       total = data.total || 0;
       visibleLogs = data.logs || [];
       target.replaceChildren();
       if (!data.logs?.length) target.append(node("p", "field-note", "No matching messages."));
+      let previousDay = null;
       for (const log of data.logs || []) {
+        const currentDay = dayKey(log.created_at || log.updated_at);
+        if (currentDay !== previousDay) {
+          target.append(node("h3", "sms-center-day-heading", dayHeading(log.created_at || log.updated_at)));
+          previousDay = currentDay;
+        }
         const gatewayStatus = log.gateway_state || (log.request_id ? "accepted / pending" : "not submitted");
         const disclosure = expandableRow([
           field("Account", log.email), field("Phone", log.recipient),
@@ -639,6 +670,9 @@
     setTimeout(() => URL.revokeObjectURL(link.href), 0);
   });
   selectTab(location.hash.slice(1) || "overview", false);
+  if (window.EveDate?.calendar === "jalali" && typeof jalaliDatepicker !== "undefined") {
+    jalaliDatepicker.startWatch({ time: false });
+  }
   refresh();
   setInterval(() => {
     if (document.hidden) return;
