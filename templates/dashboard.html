@@ -751,7 +751,7 @@
                 </button>
                 <button class="btn btn-primary renew-success-action" onclick="copyRenewSuccessText()" id="renew-copy-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                    Copy Text
+                    Copy Info
                 </button>
                 <button class="btn btn-success renew-success-action renew-success-action-primary" onclick="sendRenewToUser()" id="renew-send-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
@@ -2189,7 +2189,7 @@
                 const deliver = async (channel, phone) => {
                     if (!phone) return;
                     let message = ctx.fallback || '';
-                    try {
+                    if (!ctx.exactMessage) try {
                         const chKey = `${ctx.group}_${channel === 'sms' ? 'sms' : 'whatsapp'}`;
                         const res = await fetch(`/api/account-message-templates/active?channel=${encodeURIComponent(chKey)}`, { cache: 'no-store' });
                         const data = await res.json();
@@ -5729,8 +5729,8 @@
         const originalText = btn.innerText;
         const renewProgressIsFa = RENEW_LANG === 'fa';
         const renewProgressSteps = renewProgressIsFa
-            ? ['در حال ارسال تمدید…', 'در حال اعمال تغییرات در 3x-ui…', 'در حال تأیید نهایی…']
-            : ['Submitting renewal…', 'Applying changes to 3x-ui…', 'Verifying renewed account…'];
+            ? ['در حال انجام…', 'در حال انجام…', 'در حال انجام…']
+            : ['Working…', 'Working…', 'Working…'];
         const renewProgressTimers = [];
         btn.disabled = true;
         btn.innerText = renewProgressSteps[0];
@@ -5777,14 +5777,10 @@
                     finalVolume = rawVol2 === '' ? null : (parseFloat(rawVol2) || 0);
                 }
 
-                const prevHtml = `
-                    <span style="color: #818cf8; font-weight: 600;">${email}</span>
-                    <span style="color: var(--text-secondary);">—</span>
-                    <span>${currentClientExpiryText || 'Unlimited'}</span>
-                    <span style="color: var(--text-secondary);">•</span>
-                    <span class="server-badge" style="background: rgba(99, 102, 241, 0.1); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.2); padding: 2px 8px; border-radius: 4px;">Remaining: ${currentClientRemainingVolume || 'Unlimited'}</span>
-                `;
-                document.getElementById('renew-prev-state').innerHTML = prevHtml;
+                _renderRenewPrevState(email);
+                const beforeExpiry = document.createElement('span');
+                beforeExpiry.textContent = ` · Before: ${currentClientExpiryText || 'Not reported'}`;
+                document.getElementById('renew-prev-state').appendChild(beforeExpiry);
 
                 // Track the operation's facts for "Re-check" (the modal is rendered
                 // further down, once the customer text is known): the durable operation
@@ -5799,18 +5795,8 @@
                 applyClientMutation(data, { serverId, inboundId, email });
 
                 const fallbackVolLabel = (finalVolume === null) ? '—' : `${finalVolume}GB`;
-                const renewIsFa = RENEW_LANG === 'fa';
-                const fallbackText = renewIsFa
-                    ? `🔰${email}\n⌛${finalDays} روز 📊${fallbackVolLabel}\nتمدید شد`
-                    : `🔰${email}\n⌛${finalDays} Days 📊${fallbackVolLabel}\nRenewed`;
-                let successText = (data && typeof data.copy_text === 'string' && data.copy_text.trim())
-                    ? data.copy_text
-                    : fallbackText;
-                if (data && data.was_reactivated) {
-                    successText += renewIsFa
-                        ? '\n✅ کاربر دوباره فعال شد'
-                        : '\n✅ The client was reactivated';
-                }
+                const successText = (data && typeof data.copy_text === 'string')
+                    ? data.copy_text : '';
                 document.getElementById('renew-success-text').innerText = successText;
                 const _renewClientData = _lookupClientVolume(
                     document.getElementById('renew-server-id')?.value,
@@ -6956,8 +6942,9 @@ Connection links
 
     function sendRenewToUser() {
         if (!_sendCtxRenew) { showToast(_L.noCtx, 'error'); return; }
-        // Keep fallback in sync with whatever is shown on screen.
-        _sendCtxRenew.fallback = document.getElementById('renew-success-text').innerText || _sendCtxRenew.fallback || '';
+        _sendCtxRenew.fallback = lastRenewContext?.copyText || '';
+        if (!_sendCtxRenew.fallback) { showToast('Client message unavailable', 'error'); return; }
+        _sendCtxRenew.exactMessage = true;
         sendTemplatedMessageToClient(_sendCtxRenew, _L.sendToUser);
     }
 
