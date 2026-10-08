@@ -1,4 +1,16 @@
-# Eve - Xui Manager v2.8.0
+# Eve - Xui Manager v2.8.3 (unreleased)
+
+EVE 2.8.3 improves renewal reliability and operator diagnostics. Package choices open
+from a scoped browser cache and revalidate in the background. If a renewal response is
+lost, the dashboard follows the original operation instead of asking the operator to
+renew again. Scheduler capacity pressure is reported as a deferral rather than a fake
+successful panel read, and shared diagnostics now retain bounded failure and revision
+evidence.
+
+No database migration is required. Real-panel validation is still required for each
+deployed 3x-ui capability family before rollout.
+
+## Previous release: v2.8.0
 
 SMS delivery now distinguishes a successful submission from a carrier delivery receipt. The SMS Center uses the same normalized carrier state in cards and detail, and its timeline shows each stage only when supporting evidence exists. The existing signed GMweb callback accepts optional bounded delivery diagnostics; a database migration adds nullable storage for those diagnostics. Existing payloads remain valid. Carrier DLR still requires validation with a real device, SIM, and recipient.
 

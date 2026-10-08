@@ -1,5 +1,7 @@
 """Package and price-tier API routes (extracted from app.py)."""
 import json
+import hashlib
+import time
 from datetime import datetime
 
 from flask import Blueprint, jsonify, make_response, request, session
@@ -15,6 +17,7 @@ bp = Blueprint('packages', __name__)
 @bp.route('/api/packages', methods=['GET'])
 @login_required
 def get_packages():
+    started = time.perf_counter()
     import json as _j
     user = db.session.get(Admin, session['admin_id'])
     purpose = (request.args.get('purpose') or '').strip().lower()
@@ -54,10 +57,24 @@ def get_packages():
         p_dict['created_by_username'] = creator_map.get(p.created_by)
         result.append(p_dict)
 
-    resp = make_response(jsonify(result))
-    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-    resp.headers['Pragma'] = 'no-cache'
-    resp.headers['Expires'] = '0'
+    # The representation is private to this authenticated pricing scope. Its digest is
+    # both an ETag and a revision: package edits and reseller-specific price changes
+    # naturally produce a new value without sharing one reseller's prices with another.
+    canonical = json.dumps(result, sort_keys=True, separators=(',', ':'), default=str)
+    revision = hashlib.sha256(
+        f"{user.id}:{user.role}:{purpose}:{canonical}".encode('utf-8')).hexdigest()[:20]
+    if request.if_none_match.contains(revision):
+        resp = make_response('', 304)
+    else:
+        for item in result:
+            item['revision'] = revision
+        resp = make_response(jsonify(result))
+    resp.set_etag(revision)
+    resp.headers['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=120'
+    resp.headers['Vary'] = 'Cookie'
+    resp.headers['X-Package-Revision'] = revision
+    resp.headers['Server-Timing'] = 'packages;dur=%.1f' % (
+        (time.perf_counter() - started) * 1000.0)
     return resp
 
 @bp.route('/admin/packages', methods=['POST'])

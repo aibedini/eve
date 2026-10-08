@@ -5010,6 +5010,7 @@
 
     function closeRenewSuccessModal() {
         document.getElementById('renew-success-modal').classList.add('hidden');
+        window._renewObserverGeneration = (window._renewObserverGeneration || 0) + 1;
     }
 
     function closeServerErrorModal() {
@@ -5685,6 +5686,40 @@
             }
         }
     }
+
+    function observeRenewalOperation() {
+        const generation = (window._renewObserverGeneration || 0) + 1;
+        window._renewObserverGeneration = generation;
+        const cadence = [500, 1000, 2000, 3000, 5000, 5000, 5000, 5000];
+        const startedAt = Date.now();
+        let attempt = 0;
+        const tick = async () => {
+            if (generation !== window._renewObserverGeneration || !lastRenewContext) return;
+            const modal = document.getElementById('renew-success-modal');
+            if (!modal || modal.classList.contains('hidden') || Date.now() - startedAt > 60000) return;
+            if (document.hidden) {
+                setTimeout(tick, 5000);
+                return;
+            }
+            const ctx = lastRenewContext;
+            try {
+                const response = await fetch(`/api/client/${ctx.serverId}/${ctx.inboundId}/${encodeURIComponent(ctx.email)}/renew/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ operation_id: ctx.operationId, awaiting_result: true })
+                });
+                const data = await response.json();
+                renderRenewApiStatus(data);
+                applyClientMutation(data, ctx);
+                const state = String(data.final_state || data.state || '').toUpperCase();
+                if (['VERIFIED', 'APPLIED_ACTIVE', 'NOT_APPLIED', 'MISMATCH', 'AUTH_ERROR', 'NEEDS_RECONCILIATION'].includes(state)) return;
+            } catch (_) {
+                // Transport remains unknown; the durable operation is polled again.
+            }
+            setTimeout(tick, cadence[Math.min(attempt++, cadence.length - 1)]);
+        };
+        setTimeout(tick, cadence[0]);
+    }
     // renew-result-modal:end
 
     async function submitRenewal() {
@@ -5835,53 +5870,20 @@
                 try {
                     const verify = data && data.verify ? data.verify : null;
                     const observed = verify && verify.observed ? verify.observed : {};
-                    const expected = verify && verify.expected ? verify.expected : {};
                     const expTs = (observed && observed.expiryTime !== null && observed.expiryTime !== undefined)
                         ? observed.expiryTime
-                        : (expected ? expected.expiryTime : null);
+                        : null;
                     const capBytes = (observed && observed.totalGB !== null && observed.totalGB !== undefined)
                         ? observed.totalGB
-                        : (expected ? expected.totalGB : null);
+                        : null;
 
                     const patch = {};
 
-                    const resolveFallbackRenewExpiry = () => {
-                        if (finalDays <= 0) return 0;
-                        if (startAfterFirstUse) return -1 * (finalDays * 86400000);
-                        if (previousExpiryTs < 0) return previousExpiryTs - (finalDays * 86400000);
-                        if (previousExpiryTs > 0) return previousExpiryTs + (finalDays * 86400000);
-                        return Date.now() + (finalDays * 86400000);
-                    };
+                    const resolvedExpiryTs = (expTs !== null && expTs !== undefined) ? Number(expTs) : null;
+                    const resolvedCapBytes = (capBytes !== null && capBytes !== undefined) ? Number(capBytes) : null;
 
-                    const resolveFallbackRenewTotal = () => {
-                        const requestedVolume = (finalVolume === null || finalVolume === undefined) ? null : Number(finalVolume);
-                        if (requestedVolume === null || !Number.isFinite(requestedVolume)) {
-                            return previousTotalBytes;
-                        }
-
-                        if (resetTraffic) {
-                            if (requestedVolume > 0) return requestedVolume * 1024 * 1024 * 1024;
-                            return 0;
-                        }
-
-                        if (requestedVolume === 0) return 0;
-                        if (previousTotalBytes === 0) return 0;
-                        return previousTotalBytes + (requestedVolume * 1024 * 1024 * 1024);
-                    };
-
-                    const resolvedExpiryTs = (expTs !== null && expTs !== undefined)
-                        ? Number(expTs)
-                        : resolveFallbackRenewExpiry();
-                    const resolvedCapBytes = (capBytes !== null && capBytes !== undefined)
-                        ? Number(capBytes)
-                        : resolveFallbackRenewTotal();
-
-                    if (Number.isFinite(resolvedExpiryTs)) patch.expiryTimestamp = resolvedExpiryTs;
-                    if (Number.isFinite(resolvedCapBytes)) patch.totalGB = resolvedCapBytes;
-                    if (resetTraffic) {
-                        patch.up = 0;
-                        patch.down = 0;
-                    }
+                    if (resolvedExpiryTs !== null && Number.isFinite(resolvedExpiryTs)) patch.expiryTimestamp = resolvedExpiryTs;
+                    if (resolvedCapBytes !== null && Number.isFinite(resolvedCapBytes)) patch.totalGB = resolvedCapBytes;
                     if (observed.service_state_label !== undefined) patch.service_state_label = observed.service_state_label;
                     if (observed.service_state_emoji !== undefined) patch.service_state_emoji = observed.service_state_emoji;
                     if (observed.service_state_tag !== undefined) patch.service_state_tag = observed.service_state_tag;
@@ -5906,6 +5908,7 @@
                 // state, keep the expected values the UI already knows, and let the user
                 // Re-check until it converges. No second charge happens server-side.
                 showRenewInProgress(serverId, inboundId, email, data);
+                observeRenewalOperation();
             } else if (data.code === 'renew_not_verified'
                        || data.code === 'renew_activation_pending'
                        || data.code === 'activation_pending'
@@ -5916,6 +5919,7 @@
                 // the returned operation id + expected values so Re-check sends them
                 // instead of nulls.
                 showRenewPending(serverId, inboundId, email, data);
+                observeRenewalOperation();
             } else {
                 // Business errors are downgraded to HTTP 200 by the server (so the
                 // CDN doesn't swallow the JSON); the real code is in X-Eve-Status.
@@ -5923,7 +5927,15 @@
                 showCreditAwareError(data.error || 'Error renewing', realStatus);
             }
         } catch (error) {
-            showToast('Error: ' + error.message, 'error');
+            // The POST may have reached EVE and the panel even though its response was
+            // lost. Keep the same operation id and recover with read-only verification.
+            showRenewInProgress(serverId, inboundId, email, {
+                operation_id: payload.operation_id,
+                note: 'Transport interrupted. Checking the existing renewal…',
+                awaiting_original_request: true
+            });
+            showToast('Checking renewal…');
+            observeRenewalOperation();
         } finally {
             renewProgressTimers.forEach(timerId => clearTimeout(timerId));
             btn.disabled = false;
@@ -6092,20 +6104,19 @@
         }
     }
 
-    async function loadRenewPackages() {
+    const RENEW_PACKAGE_TTL_MS = 90000;
+    const renewPackageCache = { items: null, etag: '', fetchedAt: 0, inflight: null };
+
+    function renderRenewPackages(pkgs, options = {}) {
         const container = document.getElementById('renew-packages-list');
         if (!container) return;
-        container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">Loading packages...</div>';
-        try {
-            const res = await fetch(`/api/packages?purpose=renew&_=${Date.now()}`, { cache: 'no-store' });
-            const pkgs = await res.json();
-            if (!Array.isArray(pkgs) || pkgs.length === 0) {
-                container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 15px; color: var(--text-secondary);">No packages defined.</div>';
-                selectedRenewPackageId = null;
-                return;
-            }
+        if (!Array.isArray(pkgs) || pkgs.length === 0) {
+            container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 15px; color: var(--text-secondary);">No packages defined.</div>';
+            selectedRenewPackageId = null;
+            return;
+        }
 
-            container.innerHTML = pkgs.map(p => `
+        container.innerHTML = pkgs.map(p => `
                 <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-package-name="${escapePackageAttr(p.name || '')}" onclick="selectRenewPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0}, ${Number(p.days) || 0}, ${Number(p.volume) || 0})"
                      style="border: 1px solid var(--border-color); padding: 8px; border-radius: 6px; cursor: pointer; transition: 0.2s; background: var(--bg-dark); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 60px;">
                     ${renderPackageTitle(p.name)}
@@ -6113,19 +6124,67 @@
                 </div>
             `).join('');
 
-            if (selectedRenewPackageId) {
-                const active = container.querySelector(`[data-package-id="${selectedRenewPackageId}"]`);
-                if (active) {
-                    active.style.borderColor = 'var(--primary)';
-                    active.style.backgroundColor = 'rgba(99, 102, 241, 0.1)';
-                }
-                refreshRenewPriceDisplay();
+        if (selectedRenewPackageId) {
+            const active = container.querySelector(`[data-package-id="${selectedRenewPackageId}"]`);
+            if (active) {
+                active.style.borderColor = 'var(--primary)';
+                active.style.backgroundColor = 'rgba(99, 102, 241, 0.1)';
             }
+            refreshRenewPriceDisplay();
+        }
+        container.classList.toggle('renew-packages-stale', Boolean(options.stale));
+        container.title = options.stale ? 'Showing cached packages while prices refresh' : '';
+    }
+
+    async function loadRenewPackages(options = {}) {
+        const container = document.getElementById('renew-packages-list');
+        if (!container) return;
+        const now = Date.now();
+        const hasCache = Array.isArray(renewPackageCache.items);
+        const fresh = hasCache && (now - renewPackageCache.fetchedAt) < RENEW_PACKAGE_TTL_MS;
+        if (hasCache) renderRenewPackages(renewPackageCache.items, { stale: !fresh });
+        if (fresh && !options.force) return renewPackageCache.items;
+        if (renewPackageCache.inflight) return renewPackageCache.inflight;
+        if (!hasCache) {
+            container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">Loading packages...</div>';
+        }
+        renewPackageCache.inflight = (async () => {
+            const headers = {};
+            if (renewPackageCache.etag) headers['If-None-Match'] = renewPackageCache.etag;
+            const res = await fetch('/api/packages?purpose=renew', { headers, cache: 'default' });
+            if (res.status === 304) {
+                renewPackageCache.fetchedAt = Date.now();
+                renderRenewPackages(renewPackageCache.items);
+                return renewPackageCache.items;
+            }
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const pkgs = await res.json();
+            if (!Array.isArray(pkgs)) throw new Error('Invalid package response');
+            renewPackageCache.items = pkgs;
+            renewPackageCache.etag = res.headers.get('ETag') || '';
+            renewPackageCache.fetchedAt = Date.now();
+            renderRenewPackages(pkgs);
+            return pkgs;
+        })();
+        try {
+            return await renewPackageCache.inflight;
         } catch (e) {
+            if (hasCache) {
+                renderRenewPackages(renewPackageCache.items, { stale: true });
+                showToast('Package refresh failed; cached prices are shown.', 'error');
+                return renewPackageCache.items;
+            }
             container.innerHTML = '<div style="grid-column: span 2; color: var(--danger); text-align: center;">Error loading packages</div>';
             selectedRenewPackageId = null;
+            return null;
+        } finally {
+            renewPackageCache.inflight = null;
         }
     }
+
+    // Warm the scoped cache once the dashboard has settled; opening Renew then paints
+    // immediately, while ETag revalidation remains authoritative in the background.
+    setTimeout(() => loadRenewPackages({ preload: true }), 0);
 
     function selectRenewPackage(el, id, price, days, volume, name) {
         const alreadySelected = selectedRenewPackageId === id;

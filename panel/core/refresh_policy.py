@@ -38,6 +38,7 @@ Per-server cadence (panel I/O):
 """
 import json
 import os
+import re
 import threading
 import time
 import zlib
@@ -1283,8 +1284,8 @@ def server_due(server_id, *, now=None) -> bool:
     return due
 
 
-def note_server_result(server_id, ok, *, now=None, duration_ms=None, changed=None,
-                       error=None) -> float:
+def note_server_result(server_id, ok=None, *, now=None, duration_ms=None, changed=None,
+                       error=None, outcome=None) -> float:
     """Record one poll's outcome and schedule the next one; returns the delay applied.
 
     Also the single writer of the per-server sync state the doctor page and the
@@ -1305,7 +1306,9 @@ def note_server_result(server_id, ok, *, now=None, duration_ms=None, changed=Non
     # panel load by ~4.5x for no operator-visible reason.
     was_settling = (float(state.get('active_until') or 0.0) > moment
                     or float(state.get('warm_until') or 0.0) > moment)
-    if ok:
+    outcome = str(outcome or ('FETCH_SUCCEEDED' if ok else 'FETCH_FAILED')).upper()
+    state['scheduler_outcome'] = outcome
+    if outcome == 'FETCH_SUCCEEDED':
         state['failures'] = 0
         state['consecutive_failures'] = 0
         state['last_fetch_success_at'] = moment
@@ -1323,12 +1326,14 @@ def note_server_result(server_id, ok, *, now=None, duration_ms=None, changed=Non
                     state.get('warm_until') or 0.0, moment + server_warm_ttl())
         elif state.get('last_changed_at') is None:
             state['last_changed_at'] = moment
-    else:
+    elif outcome == 'FETCH_FAILED':
         state['failures'] = int(state.get('failures') or 0) + 1
         state['consecutive_failures'] = state['failures']
         state['last_fetch_error_at'] = moment
         state['last_error'] = str(error)[:200] if error else 'fetch_failed'
         state['last_outcome'] = 'error'
+    # Other outcomes did not produce an authoritative panel observation. Preserve the
+    # last success/error evidence instead of manufacturing freshness.
     interval = server_interval(server_id, now=moment)
     # Idle panels are spread over the jitter band; a failing panel keeps its exact
     # backoff (its interval is a retry ladder, not a schedule to smooth out).
@@ -1702,6 +1707,7 @@ def server_sync_state(server_id, *, now=None) -> dict:
         'server_revision': int(state.get('server_revision') or 0),
         'snapshot_revision': int(state.get('snapshot_revision') or 0),
         'last_outcome': state.get('last_outcome'),
+        'scheduler_outcome': state.get('scheduler_outcome'),
         'last_error': state.get('last_error'),
         'sync_health': sync_health(sid, now=moment),
     }
@@ -1738,6 +1744,29 @@ def publish_server_sync(server_id, *, now=None) -> bool:
         return False
     state = _servers.get(sid) or {}
     moment = time.time() if now is None else float(now)
+    error_summary = str(state.get('last_error') or '')
+    # Reports cross process boundaries and reach operator UIs. Keep diagnostic words,
+    # but strip URL credentials/query strings and common secret assignments.
+    error_summary = re.sub(r'(?i)https?://\S+', '[panel]', error_summary)
+    error_summary = re.sub(
+        r'(?i)\b(token|password|passwd|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+',
+        r'\1=[redacted]', error_summary)
+    error_summary = error_summary[:200] or None
+    error_lower = (error_summary or '').lower()
+    if not error_summary:
+        error_category = error_code = None
+    elif 'timeout' in error_lower:
+        error_category = error_code = 'PANEL_TIMEOUT'
+    elif any(word in error_lower for word in ('unauthorized', 'forbidden', 'auth', 'login')):
+        error_category = error_code = 'PANEL_AUTH_FAILED'
+    elif 'rate' in error_lower and 'limit' in error_lower:
+        error_category = error_code = 'PANEL_RATE_LIMITED'
+    elif any(word in error_lower for word in ('connection', 'unreachable', 'dns')):
+        error_category = error_code = 'PANEL_UNREACHABLE'
+    else:
+        error_category = error_code = 'UNKNOWN'
+    failures = int(state.get('consecutive_failures') or 0)
+    next_due = state.get('next_due')
     row = {
         'mode': server_mode(sid, now=moment),
         'poll_interval_seconds': server_interval(sid, now=moment),
@@ -1746,13 +1775,28 @@ def publish_server_sync(server_id, *, now=None) -> bool:
         'inflight': bool(state.get('inflight')),
         'wake_pending': bool(state.get('wake_pending')),
         'last_success_at': state.get('last_fetch_success_at'),
+        'last_failure_at': state.get('last_fetch_error_at'),
         'last_fetch_duration_ms': state.get('last_fetch_duration_ms'),
-        'last_publish_at': state.get('last_snapshot_publish_at'),
-        'next_due': state.get('next_due'),
+        'last_publish_at': moment,
+        'last_snapshot_publish_at': state.get('last_snapshot_publish_at'),
+        'next_due': next_due,
+        'next_retry_at': next_due if failures else None,
+        'retry_in_seconds': (max(0.0, float(next_due) - moment)
+                             if failures and next_due else None),
         'queue_delay_ms': state.get('last_dispatch_delay_ms'),
+        'scheduler_queue_delay_ms': state.get('last_dispatch_delay_ms'),
         'last_start_gap_ms': state.get('last_start_gap_ms'),
-        'failures': int(state.get('consecutive_failures') or 0),
+        'failures': failures,
+        'consecutive_failures': failures,
         'backoff_seconds': float(state.get('backoff_seconds') or 0.0),
+        'currently_fetching': bool(state.get('currently_fetching')),
+        'error_code': error_code,
+        'error_category': error_category,
+        'last_error_summary': error_summary,
+        'last_outcome': state.get('last_outcome'),
+        'scheduler_outcome': state.get('scheduler_outcome'),
+        'snapshot_revision': int(state.get('snapshot_revision') or 0),
+        'server_revision': int(state.get('server_revision') or 0),
         'sync_health': sync_health(sid, now=moment),
         'updated_at': moment,
     }
@@ -1867,8 +1911,12 @@ def _public_sync_row(sid, row, *, now) -> dict:
         'watched': bool(row.get('watched')),
         'watch_reason': row.get('watch_reason'),
         'last_success_age_seconds': _age(row.get('last_success_at')),
+        'last_success_at': row.get('last_success_at'),
+        'last_failure_at': row.get('last_failure_at'),
         'last_fetch_duration_ms': row.get('last_fetch_duration_ms'),
-        'last_publish_age_seconds': _age(row.get('last_publish_at')),
+        'last_publish_at': row.get('last_publish_at'),
+        'last_publish_age_seconds': _age(
+            row.get('last_snapshot_publish_at') or row.get('last_publish_at')),
         'next_due_in_seconds': (None if stale_report
                                 else (round(max(0.0, float(next_due) - float(now)), 3)
                                       if next_due else None)),
@@ -1876,8 +1924,19 @@ def _public_sync_row(sid, row, *, now) -> dict:
         'consecutive_failures': int(row.get('failures') or 0),
         'backoff_seconds': float(row.get('backoff_seconds') or 0.0),
         'inflight': bool(row.get('inflight')),
+        'currently_fetching': bool(row.get('currently_fetching')),
         'wake_pending': bool(row.get('wake_pending')),
-        'scheduler_queue_delay_ms': row.get('queue_delay_ms'),
+        'scheduler_queue_delay_ms': row.get(
+            'scheduler_queue_delay_ms', row.get('queue_delay_ms')),
+        'error_code': row.get('error_code'),
+        'error_category': row.get('error_category'),
+        'last_error_summary': row.get('last_error_summary'),
+        'last_outcome': row.get('last_outcome'),
+        'scheduler_outcome': row.get('scheduler_outcome'),
+        'next_retry_at': (None if stale_report else row.get('next_retry_at')),
+        'retry_in_seconds': (None if stale_report else row.get('retry_in_seconds')),
+        'snapshot_revision': int(row.get('snapshot_revision') or 0),
+        'server_revision': int(row.get('server_revision') or 0),
         'last_start_gap_ms': row.get('last_start_gap_ms'),
         'sync_health': health,
         # How old the scheduling report itself is. A large value with an otherwise healthy

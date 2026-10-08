@@ -1,5 +1,14 @@
 # Changelog - Eve
 
+## [2.8.3] - 2026-10-08
+
+### Changed
+
+- Per-server scheduler reports now retain safe error, retry, timing and revision diagnostics; capacity deferrals and superseded reads no longer manufacture successful fetches.
+- Renew packages use private per-user ETag revalidation, an in-memory stale-while-revalidate cache and request coalescing.
+- Lost renewal responses recover the same durable operation through bounded read-only verification polling, and only authoritative observed fields update the client snapshot.
+
+
 All notable changes to Eve - Xui Manager are documented in this file.
 
 ## [2.8.0] - 2026-10-05

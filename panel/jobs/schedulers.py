@@ -623,7 +623,8 @@ def _scheduler_finish(sid, future, *, now=None):
         with _scheduler_lock:
             _scheduler_stats['capacity_rejections'] = (
                 _scheduler_stats.get('capacity_rejections', 0) + 1)
-        refresh_policy.note_server_result(sid, True, now=moment, duration_ms=duration_ms)
+        refresh_policy.note_server_result(
+            sid, outcome='CAPACITY_DEFERRED', now=moment, duration_ms=duration_ms)
         _scheduler_record_completion(sid, error=None)
         return
 
@@ -631,9 +632,8 @@ def _scheduler_finish(sid, future, *, now=None):
     if ticket is not None:
         try:
             if not fetch_sequence.accept(sid, ticket):
-                _backoff_record_success(sid)
                 refresh_policy.note_server_result(
-                    sid, True, now=moment, duration_ms=duration_ms)
+                    sid, outcome='SUPERSEDED', now=moment, duration_ms=duration_ms)
                 _scheduler_record_completion(sid, error=None, stale=True)
                 return
         except Exception:
