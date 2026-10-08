@@ -667,6 +667,20 @@ class PerServerSchedulerTests(unittest.TestCase):
             refresh_policy.server_due_in(7001, now=BASE + 0.3),
             refresh_policy.server_active_seconds() - 0.3, places=6)
 
+    def test_a_slow_hot_panel_does_not_replay_missed_poll_slots(self):
+        refresh_policy.note_server_activity(7005, now=BASE - 1, share=False)
+        refresh_policy.note_fetch_started(7005, now=BASE)
+        duration = refresh_policy.server_active_seconds() + 12.0
+        finished = BASE + duration
+
+        refresh_policy.note_server_result(
+            7005, True, now=finished, duration_ms=int(duration * 1000))
+
+        self.assertAlmostEqual(
+            refresh_policy.server_due_in(7005, now=finished),
+            refresh_policy.server_active_seconds(), places=6)
+        self.assertFalse(refresh_policy.server_due(7005, now=finished))
+
     def test_a_capacity_rejection_is_not_a_panel_failure(self):
         # The process-wide panel cap refusing a slot says the INSTALL is busy, not that the
         # panel is sick. Recording it as a failure would put a healthy panel into backoff

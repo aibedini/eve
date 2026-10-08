@@ -1339,21 +1339,18 @@ def note_server_result(server_id, ok=None, *, now=None, duration_ms=None, change
     # backoff (its interval is a retry ladder, not a schedule to smooth out).
     jitter = 0.0 if state.get('failures') else server_idle_jitter(
         server_id, interval, now=moment)
-    # Period-preserving, not completion-relative: the next poll is measured from the
-    # schedule this read was serving, so a HOT panel whose read takes 300 ms is polled
-    # every 2 s (start-to-start) rather than every 2.3 s, and a slow panel does not make
-    # the cadence drift. A read that took longer than its interval leaves the schedule in
-    # the past, which means "due now" -- the panel is behind and catches up instead of
-    # silently skipping a slot. The clamp keeps a stale schedule (a backoff window that
-    # was deferred while a manual refresh was running) from pushing the next poll out
-    # beyond one full interval.
+    # Preserve start-to-start cadence while the panel can keep up. Never replay missed
+    # slots: a slow read on a HOT cadence must not become due immediately forever. That
+    # catch-up loop monopolises the pool and makes healthy snapshots on other servers
+    # look stale. After an overrun, wait one normal interval from completion.
     served = state.pop('dispatched_for', None)
     try:
         base = float(served) if served and float(served) <= moment else moment
     except (TypeError, ValueError):
         base = moment
-    next_due = min(base + interval + jitter, moment + interval + jitter)
-    state['next_due'] = max(next_due, moment)
+    scheduled_due = base + interval + jitter
+    state['next_due'] = (scheduled_due if scheduled_due > moment
+                         else moment + interval + jitter)
     state['backoff_seconds'] = interval if state.get('failures') else 0.0
     if duration_ms is not None:
         try:

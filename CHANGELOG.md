@@ -1,5 +1,11 @@
 # Changelog - Eve
 
+## [2.8.4] - 2026-10-08
+
+### Fixed
+
+- Slow panel reads no longer replay missed HOT polling slots. After an overrun, the scheduler waits one normal cadence, preventing catch-up storms from starving other servers and falsely ageing successful sync reports.
+
 ## [2.8.3] - 2026-10-08
 
 ### Changed
