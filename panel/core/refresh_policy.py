@@ -1387,6 +1387,19 @@ def note_server_result(server_id, ok=None, *, now=None, duration_ms=None, change
         jitter_seconds=(round(jitter, 3) if jitter else None),
         error_type=(str(error)[:80] if error else None),
     )
+    # A slow successful read is capacity pressure, not a panel connection error.
+    # Record its cause separately, without a per-tick warning storm.
+    queue_ms = float(state.get('last_dispatch_delay_ms') or 0.0)
+    fetch_ms = float(state.get('last_fetch_duration_ms') or 0.0)
+    last_pressure_log = state.get('_last_pressure_log_at')
+    if (ok and queue_ms + fetch_ms > FRESH_MAX_AGE_SECONDS * 1000
+            and (last_pressure_log is None or moment - last_pressure_log >= 60)):
+        state['_last_pressure_log_at'] = moment
+        sync_event('sync.server.capacity_pressure', level='warning',
+                   server_id=_coerce_server_id(server_id),
+                   reason=('worker_queue' if queue_ms >= fetch_ms else 'slow_fetch'),
+                   queue_delay_ms=round(queue_ms), duration_ms=round(fetch_ms),
+                   failures=int(state.get('failures') or 0))
     return interval + jitter
 
 
@@ -1844,7 +1857,16 @@ def server_sync_report(server_ids=None, *, now=None) -> dict:
     """
     moment = time.time() if now is None else float(now)
     with _lock:
-        local_ids = set(_servers.keys())
+        # Watching a panel also creates local state in web workers. That state is
+        # not a scheduler report: it has never read the panel, so its default
+        # health is down and its default deadline is zero. Only an actual fetch
+        # makes this process authoritative for that server.
+        local_ids = {
+            sid for sid, state in _servers.items()
+            if state.get('last_fetch_started_at') is not None
+            or state.get('last_fetch_finished_at') is not None
+        }
+        observer_ids = set(_servers) - local_ids
     wanted = None
     if server_ids is not None:
         wanted = set()
@@ -1854,6 +1876,18 @@ def server_sync_report(server_ids=None, *, now=None) -> dict:
                 wanted.add(sid)
     published = shared_server_sync(now=moment)
     report = {}
+    for sid in observer_ids:
+        if wanted is not None and sid not in wanted:
+            continue
+        with _lock:
+            state = _servers.get(sid)
+            log_ignored = state is not None and not state.get('_observer_report_logged')
+            if log_ignored:
+                state['_observer_report_logged'] = True
+        if log_ignored:
+            sync_event('sync.report.observer_state_ignored', server_id=sid,
+                       reason='watch_state_is_not_fetch_state',
+                       published_report_available=bool(published.get(str(sid))))
     for sid in sorted(local_ids | {_coerce_server_id(k) for k in published if _coerce_server_id(k) is not None}):
         if wanted is not None and sid not in wanted:
             continue

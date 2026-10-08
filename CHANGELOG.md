@@ -1,5 +1,11 @@
 # Changelog - Eve
 
+## [2.8.5] - 2026-10-08
+
+### Fixed
+- Dashboard watch-only state in web workers no longer overrides the fetcher's shared sync report with a false `down` / zero-second poll deadline.
+- Sync logs distinguish ignored observer state from successful reads delayed by worker queues or slow fetches, with bounded diagnostic logging.
+
 ## [2.8.4] - 2026-10-08
 
 ### Fixed

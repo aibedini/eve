@@ -1295,6 +1295,66 @@ class ClientFenceTests(OfflinePolicyTests):
 
 class SyncDiagnosticsTests(OfflinePolicyTests):
     """The per-server sync state the doctor page and freshness badge read."""
+    def test_web_watch_does_not_replace_the_authoritative_report(self):
+        published = {'9': {
+            'mode': 'hot', 'sync_health': 'live', 'updated_at': BASE,
+            'last_success_at': BASE, 'next_due': BASE + 2,
+            'failures': 0, 'poll_interval_seconds': 2,
+        }}
+        refresh_policy.note_server_activity(9, now=BASE, share=False,
+                                            reason='dashboard')
+        with mock.patch.object(refresh_policy, 'shared_server_sync',
+                               return_value=published), \
+             mock.patch.object(refresh_policy, 'sync_event') as event:
+            row = refresh_policy.server_sync_report([9], now=BASE + 1)['9']
+            self.assertEqual(row['source'], 'published')
+            self.assertEqual(row['sync_health'], 'live')
+            self.assertEqual(row['last_success_age_seconds'], 1)
+            self.assertEqual(row['next_due_in_seconds'], 1)
+            refresh_policy.server_sync_report([9], now=BASE + 1)
+            event.assert_called_once_with(
+                'sync.report.observer_state_ignored', server_id=9,
+                reason='watch_state_is_not_fetch_state',
+                published_report_available=True)
+
+    def test_web_watch_preserves_real_fetch_errors(self):
+        refresh_policy.note_server_activity(9, now=BASE, share=False)
+        with mock.patch.object(refresh_policy, 'shared_server_sync', return_value={
+            '9': {'sync_health': 'backoff', 'failures': 3,
+                  'updated_at': BASE, 'last_error_summary': 'read_timeout'}}):
+            row = refresh_policy.server_sync_report([9], now=BASE)['9']
+        self.assertEqual(row['sync_health'], 'backoff')
+        self.assertEqual(row['consecutive_failures'], 3)
+        self.assertEqual(row['last_error_summary'], 'read_timeout')
+
+    def test_watch_without_a_report_does_not_invent_a_failed_poll(self):
+        refresh_policy.note_server_activity(9, now=BASE, share=False)
+        with mock.patch.object(refresh_policy, 'shared_server_sync', return_value={}):
+            self.assertEqual(refresh_policy.server_sync_report([9], now=BASE), {})
+
+    def test_actual_fetcher_keeps_its_local_authority(self):
+        refresh_policy.note_fetch_started(9, now=BASE)
+        refresh_policy.note_server_result(9, True, now=BASE + 1)
+        with mock.patch.object(refresh_policy, 'shared_server_sync', return_value={
+            '9': {'sync_health': 'down', 'updated_at': BASE, 'failures': 8}}):
+            row = refresh_policy.server_sync_report([9], now=BASE + 2)['9']
+        self.assertEqual(row['sync_health'], 'live')
+        self.assertEqual(row['consecutive_failures'], 0)
+
+    def test_successful_slow_reads_log_capacity_not_connection_failure(self):
+        with mock.patch.object(refresh_policy, 'sync_event') as event:
+            for offset in (0, 40):
+                refresh_policy.note_fetch_started(
+                    9, now=BASE + offset, queued_at=BASE + offset - 40)
+                refresh_policy.note_server_result(
+                    9, True, now=BASE + offset + 31, duration_ms=31000)
+        warnings = [call for call in event.call_args_list
+                    if call.args == ('sync.server.capacity_pressure',)]
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0].kwargs['reason'], 'worker_queue')
+        self.assertEqual(warnings[0].kwargs['queue_delay_ms'], 40000)
+        self.assertEqual(warnings[0].kwargs['failures'], 0)
+
 
     def test_health_ladder_from_down_to_stale(self):
         # Never answered: unreachable is not the same as old, but both are "not live".
