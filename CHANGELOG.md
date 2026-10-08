@@ -1,5 +1,10 @@
 # Changelog - Eve
 
+## [2.8.6] - 2026-10-08
+
+### Fixed
+- Superseded reads and capacity deferrals now log their actual scheduler outcome instead of a false fetch error; only observed panel failures use the error event.
+
 ## [2.8.5] - 2026-10-08
 
 ### Fixed

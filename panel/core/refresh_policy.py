@@ -1373,26 +1373,32 @@ def note_server_result(server_id, ok=None, *, now=None, duration_ms=None, change
         publish_server_sync(server_id, now=moment)
     except Exception:
         pass
+    event_suffix = {
+        'FETCH_SUCCEEDED': 'success', 'FETCH_FAILED': 'error',
+        'CAPACITY_DEFERRED': 'deferred', 'SUPERSEDED': 'superseded',
+    }.get(outcome, 'skipped')
     sync_event(
-        'sync.server.fetch.%s' % ('success' if ok else 'error'),
+        'sync.server.fetch.%s' % event_suffix,
         # An unchanged poll is the common case at scale; it keeps its specified event
         # name but at DEBUG, so the INFO log stays a record of things that moved.
-        level='info' if (not ok or changed) else 'debug',
+        level='info' if (outcome != 'FETCH_SUCCEEDED' or changed) else 'debug',
+        scheduler_outcome=outcome,
         server_id=_coerce_server_id(server_id),
         mode=server_mode(server_id, now=moment),
         reason=state.get('watch_reason'),
         duration_ms=state.get('last_fetch_duration_ms'),
-        changed=bool(changed) if ok else None,
+        changed=bool(changed) if outcome == 'FETCH_SUCCEEDED' else None,
         next_due_seconds=round(interval + jitter, 3),
         jitter_seconds=(round(jitter, 3) if jitter else None),
-        error_type=(str(error)[:80] if error else None),
+        error_type=(str(error)[:80] if error and outcome == 'FETCH_FAILED' else None),
     )
     # A slow successful read is capacity pressure, not a panel connection error.
     # Record its cause separately, without a per-tick warning storm.
     queue_ms = float(state.get('last_dispatch_delay_ms') or 0.0)
     fetch_ms = float(state.get('last_fetch_duration_ms') or 0.0)
     last_pressure_log = state.get('_last_pressure_log_at')
-    if (ok and queue_ms + fetch_ms > FRESH_MAX_AGE_SECONDS * 1000
+    if (outcome == 'FETCH_SUCCEEDED'
+            and queue_ms + fetch_ms > FRESH_MAX_AGE_SECONDS * 1000
             and (last_pressure_log is None or moment - last_pressure_log >= 60)):
         state['_last_pressure_log_at'] = moment
         sync_event('sync.server.capacity_pressure', level='warning',

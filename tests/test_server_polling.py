@@ -1355,6 +1355,23 @@ class SyncDiagnosticsTests(OfflinePolicyTests):
         self.assertEqual(warnings[0].kwargs['queue_delay_ms'], 40000)
         self.assertEqual(warnings[0].kwargs['failures'], 0)
 
+    def test_unobserved_scheduler_outcomes_do_not_log_fetch_errors(self):
+        for outcome, suffix in (('SUPERSEDED', 'superseded'),
+                                ('CAPACITY_DEFERRED', 'deferred')):
+            with self.subTest(outcome=outcome):
+                refresh_policy.reset_state()
+                refresh_policy.note_server_result(9, True, now=BASE)
+                with mock.patch.object(refresh_policy, 'sync_event') as event:
+                    refresh_policy.note_server_result(
+                        9, outcome=outcome, now=BASE + 1)
+                event.assert_called_once()
+                self.assertEqual(event.call_args.args,
+                                 ('sync.server.fetch.' + suffix,))
+                self.assertEqual(event.call_args.kwargs['scheduler_outcome'], outcome)
+                row = refresh_policy.server_sync_state(9, now=BASE + 1)
+                self.assertEqual(row['consecutive_failures'], 0)
+                self.assertEqual(row['last_success_age_seconds'], 1)
+
 
     def test_health_ladder_from_down_to_stale(self):
         # Never answered: unreachable is not the same as old, but both are "not live".
