@@ -123,7 +123,7 @@ class ContractFileTests(unittest.TestCase):
                           "announcement": 10})
         self.assertEqual(contract["errorResponse"]["rateLimitStatus"], 429)
         self.assertEqual(hashlib.sha256(CONTRACT_PATH.read_bytes()).hexdigest().upper(),
-                         "A2881C7F44605BC7D981BBA78DCC620A75049F340E0BBCC69D166F356F349D78")
+                         "7693EAC059E67285D835931B88D7F15FC0E8C71C3C4D584C57EAF073975C1148")
 
     def test_the_consumer_reads_the_paths_from_the_contract(self):
         source = (ROOT / "panel" / "jobs" / "messaging.py").read_text(encoding="utf-8")

@@ -429,7 +429,7 @@ class RenewLanguageTests(unittest.TestCase):
 
     def test_the_template_language_is_panel_lang_not_document_lang(self):
         for needle in ("const RENEW_LANG = {{", "const renewProgressIsFa = RENEW_LANG",
-                       "const renewIsFa = RENEW_LANG"):
+                       "body.dir = RENEW_LANG === 'fa'"):
             self.assertIn(needle, self.template.text, needle)
 
 

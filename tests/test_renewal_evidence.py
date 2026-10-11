@@ -126,7 +126,9 @@ class RenewalEvidenceUiTests(unittest.TestCase):
         region = template.split('// renew-result-modal:start', 1)[1].split('// renew-result-modal:end', 1)[0]
         region = re.sub(r'const RENEW_LANG = .*?;', "const RENEW_LANG = 'en';", region)
         code = ('const EveDate = {format: d => ' + json.dumps(calendar + ':')
-                + ' + d.toISOString()};\n' + region + '\nconsole.log(JSON.stringify(' + expression + '));')
+                + ' + d.toISOString()};\n' + region
+                + '\n(async () => console.log(JSON.stringify(await (' + expression
+                + '))))().catch(e => {console.error(e); process.exit(1);});')
         result = subprocess.run(['node'], input=code, capture_output=True,
                                 encoding='utf-8', check=True)
         return json.loads(result.stdout)
@@ -155,6 +157,22 @@ class RenewalEvidenceUiTests(unittest.TestCase):
         self.assertTrue(self.run_ui('renewOutcomeViewModel(' + json.dumps(active)
                                    + ', {context: {copyText: "success"}})')['copyEnabled'])
         self.assertFalse(self.run_ui('renewOutcomeViewModel({final_state: "APPLIED_ACTIVE"}, {context: {copyText: "old"}})')['copyEnabled'])
+
+    def test_late_recheck_response_cannot_replace_another_operations_modal(self):
+        self.assertTrue(self.run_ui('''(async () => {
+            global.document = {getElementById: () => null};
+            global.showToast = () => {};
+            let rendered = 0;
+            renderRenewApiStatus = () => {rendered++;};
+            applyClientMutation = () => {};
+            lastRenewContext = {operationId: 'old', email: 'old-client', serverId: '1'};
+            global.fetch = async () => ({json: async () => {
+                lastRenewContext = {operationId: 'new', email: 'new-client', serverId: '1'};
+                return {verify: {}, copy_text: 'old customer text'};
+            }});
+            await recheckRenewal();
+            return rendered === 0;
+        })()'''))
 
 
 if __name__ == '__main__':

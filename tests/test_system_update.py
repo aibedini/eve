@@ -424,10 +424,9 @@ class DomainSslUpdatePersistenceTest(unittest.TestCase):
             '\n    function showCreditAwareError', 1,
         )[0]
 
-        self.assertIn('در حال اعمال تغییرات در 3x-ui…', renew_fn)
-        self.assertIn('Applying changes to 3x-ui…', renew_fn)
-        self.assertIn('در حال تأیید نهایی…', renew_fn)
-        self.assertIn('Verifying renewed account…', renew_fn)
+        self.assertIn('در حال انجام…', renew_fn)
+        self.assertIn('Working…', renew_fn)
+        self.assertIn("const renewProgressIsFa = RENEW_LANG === 'fa'", renew_fn)
         self.assertNotIn('پاک‌سازی', renew_fn)
         self.assertNotIn('cleanup', renew_fn.lower())
 

@@ -1,5 +1,14 @@
 # Changelog - Eve
 
+## [2.9.1] - 2026-10-12
+
+### Security
+- Upgrade urllib3 to 2.8.0 and Werkzeug to 3.1.9 to resolve the four dependency advisories discovered by release CI.
+
+### Fixed
+- Resolve legacy cached renewal expectations before layered re-check classification, so an authoritative read can confirm or repair activation without repeating renewal.
+- Refresh CI assertions for the current migration head, contract fingerprint, capacity deferral semantics and localized progress copy.
+
 ## [2.9.0] - 2026-10-12
 
 ### Fixed

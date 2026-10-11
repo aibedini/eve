@@ -311,7 +311,7 @@ class MutationResultTests(unittest.TestCase):
     def test_the_summary_carries_no_payload(self):
         summary = xui.classify_mutation_result(
             True, {'success': True, 'obj': {'nodePending': True}}).as_dict()
-        self.assertEqual(set(summary), {'transport_ok', 'panel_success', 'node_pending',
+        self.assertEqual(set(summary), {'transport_ok', 'http_status', 'panel_success', 'node_pending',
                                         'skipped', 'partially_applied', 'need_restart',
                                         'error'})
 

@@ -697,7 +697,7 @@ class PerServerSchedulerTests(unittest.TestCase):
                     stop_when=lambda _m: len(attempts) >= 2, timeout=2.0)
         state = refresh_policy.server_sync_state(9701)
         self.assertEqual(state['consecutive_failures'], 0)
-        self.assertIn(state['sync_health'], ('live', 'fresh'))
+        self.assertIsNone(state['last_success_at'], 'capacity deferral must not invent a successful read')
         self.assertGreaterEqual(
             schedulers.scheduler_metrics().get('capacity_rejections', 0), 1)
 

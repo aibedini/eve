@@ -5755,6 +5755,8 @@
             });
             const data = await resp.json();
             if (data && data.verify) {
+                if (!lastRenewContext || ctx.operationId !== lastRenewContext.operationId
+                    || ctx.email !== lastRenewContext.email || ctx.serverId !== lastRenewContext.serverId) return;
                 const copyText = (typeof data.copy_text === 'string' && data.copy_text.trim())
                     ? data.copy_text : '';
                 // Same render path as the original outcome: title, body, tone, badges
@@ -5802,6 +5804,9 @@
                     body: JSON.stringify({ operation_id: ctx.operationId, awaiting_result: true })
                 });
                 const data = await response.json();
+                if (generation !== window._renewObserverGeneration || !lastRenewContext
+                    || ctx.operationId !== lastRenewContext.operationId
+                    || ctx.email !== lastRenewContext.email || ctx.serverId !== lastRenewContext.serverId) return;
                 renderRenewApiStatus(data);
                 applyClientMutation(data, ctx);
                 const state = String(data.final_state || data.state || '').toUpperCase();
@@ -5957,6 +5962,9 @@
                 // with the customer text this response - or its local fallback - produced.
                 renderRenewApiStatus(data, { copyText: successText });
                 document.getElementById('renew-success-modal').classList.remove('hidden');
+                if (data.final_state !== 'APPLIED_ACTIVE' || data.business_finalized !== true) {
+                    observeRenewalOperation();
+                }
 
                 // Update UI instantly using authoritative values returned by the API.
                 // This avoids stale values when server cache refresh is delayed or served by another worker.

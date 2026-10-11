@@ -3680,6 +3680,13 @@ def verify_renew_client(server_id, inbound_id, email):
         # stay offline while the panel showed the renewal as successful.
         _cached_result = _load_renew_result(renew_lock_key) or {}
         _cached_verify = (_cached_result or {}).get('verify') or {}
+        if operation is None and not requested_operation_id:
+            _cached_expected = _cached_verify.get('expected') or _cached_result.get('expected') or {}
+            if expected_expiry is None:
+                expected_expiry = _cached_expected.get('expiryTime')
+            if expected_total is None:
+                expected_total = _cached_expected.get('totalGB')
+            verify['expected'].update(expiryTime=expected_expiry, totalGB=expected_total)
         _node_pending = None  # Re-check must not replay a historical nodePending flag.
         _layers = _read_activation_layers(
             email=email,
@@ -3977,7 +3984,7 @@ def verify_renew_client(server_id, inbound_id, email):
         # The customer text is durable: it is returned whenever the business fact was
         # recorded, which is now independent of activation. `Send to Client` decides
         # on `final_state`, not on whether the text exists.
-        _copy_source = completed_result if completed_result else _durable
+        _copy_source = _durable if operation is not None else None
         if _copy_source:
             payload.update({
                 'copy_text': (_copy_source or {}).get('copy_text') or '',

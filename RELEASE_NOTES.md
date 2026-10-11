@@ -1,4 +1,4 @@
-# Eve - Xui Manager v2.9.0
+# Eve - Xui Manager v2.9.1
 
 Renewal failures now describe the evidence: expiry or quota mismatch, disabled global/inbound membership, consumed traffic, reset failure, unavailable reads and pending node sync. A matching existing 20 GB cap is not presented as proof that this renewal changed it. Unknown outcomes stay uncertain instead of being called “not applied.”
 
@@ -6,9 +6,9 @@ The result modal shows expected and observed values, exact expiry timestamp diff
 
 Re-check uses the original operation ID and re-reads panel state. It does not add days/volume, reset traffic, charge, create another event or send success SMS. If panel state later matches but financial records are unfinished, the operation still needs reconciliation.
 
-No schema migration is required. Focused tests were added; local suites were not run by request. Publish only after required GitHub CI succeeds. Real-panel verification remains necessary.
+No schema migration is required. urllib3 and Werkzeug are upgraded to their patched versions following the release security scan. Focused tests were added; local suites were not run by request. Publish only after required GitHub CI succeeds. Real-panel verification remains necessary.
 
-For reported trace `e784cb74` (account `h132-09185304704`), production logs and authoritative snapshots were not available in this checkout. Intended expiry, before-state, mutation acknowledgement, failing activation layer and reset acknowledgement are therefore unconfirmed. The observed 20 GB match and expiry mismatch support a configuration mismatch, not a proven “no changes” conclusion. Do not repeat renewal or send success messages until the original operation is reconciled.
+For reported trace `e784cb74`, production logs and authoritative snapshots were not available in this checkout. Intended expiry, before-state, mutation acknowledgement, failing activation layer and reset acknowledgement are therefore unconfirmed. The observed 20 GB match and expiry mismatch support a configuration mismatch, not a proven “no changes” conclusion. Do not repeat renewal or send success messages until the original operation is reconciled.
 
 ## Previous unreleased notes (2.8.3)
 
