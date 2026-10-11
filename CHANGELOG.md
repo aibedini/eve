@@ -1,5 +1,10 @@
 # Changelog - Eve
 
+## [2.9.4] - 2026-10-12
+
+### Fixed
+- Global-enable evidence explicitly records the renewal's expected active flag even when a legacy stored intent omitted it, and value matching uses each field's recorded expectation.
+
 ## [2.9.3] - 2026-10-12
 
 ### Release packaging

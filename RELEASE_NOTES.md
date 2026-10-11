@@ -1,6 +1,6 @@
-# Eve - Xui Manager v2.9.3
+# Eve - Xui Manager v2.9.4
 
-## [2.9.3] - 2026-10-12
+## [2.9.4] - 2026-10-12
 
 Renewal failures now describe the evidence: expiry or quota mismatch, disabled global/inbound membership, consumed traffic, reset failure, unavailable reads and pending node sync. A matching existing 20 GB cap is not presented as proof that this renewal changed it. Unknown outcomes stay uncertain instead of being called “not applied.”
 

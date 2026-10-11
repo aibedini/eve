@@ -192,7 +192,7 @@ def classify_layers(layers: ActivationLayers, *, expected: dict,
                                    if layers.global_total and used is not None else None)
     fields = {}
     field_expected = dict(expected)
-    field_expected.update(traffic_enable=True, nodePending=False,
+    field_expected.update(enable=expected.get('enable', True), traffic_enable=True, nodePending=False,
                           memberships={'expected_ids': list(layers.expected_inbound_ids),
                                        'enabled_ids': list(layers.expected_inbound_ids)},
                           remaining_quota='unlimited' if want_total == 0 else '>0')
@@ -200,7 +200,7 @@ def classify_layers(layers: ActivationLayers, *, expected: dict,
         field_expected.update(up=0, down=0)
     for name, value in observed.items():
         known = value is not None and (name != 'memberships' or bool(layers.expected_inbound_ids))
-        matched = known and name in expected and value == expected[name]
+        matched = known and name in field_expected and value == field_expected[name]
         changed = (known and before.get('status', 'ok') == 'ok'
                    and name in before and before[name] is not None and value != before[name])
         source_layer = ('traffic' if name in ('traffic_enable', 'up', 'down', 'remaining_quota')

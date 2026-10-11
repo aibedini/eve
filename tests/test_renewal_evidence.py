@@ -69,6 +69,12 @@ class RenewalEvidenceTests(unittest.TestCase):
         self.assertFalse(global_disabled.activation_converged)
         self.assertFalse(member_disabled.activation_converged)
 
+    def test_legacy_intent_still_records_expected_global_activation(self):
+        expected = {key: value for key, value in EXPECTED.items() if key != 'enable'}
+        field = measure(expected=expected).evidence['fields']['enable']
+        self.assertTrue(field['expected'])
+        self.assertTrue(field['value_matched'])
+
     def test_missing_membership_and_unknown_enable_do_not_confirm_activation(self):
         missing = ra.analyze_activation(expected=EXPECTED,
             global_client=EXPECTED, inbound_ids=[1600], memberships={})
