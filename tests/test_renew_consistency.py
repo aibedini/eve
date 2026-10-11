@@ -973,7 +973,7 @@ class RenewConsistencyTests(unittest.TestCase):
         self.assertEqual(str(status), '409', payload)
         self.assertFalse(payload.get('success'))
         self.assertIn(payload.get('final_state'),
-                      ('NOT_APPLIED', 'PARTIALLY_APPLIED'))
+                      ('UNKNOWN', 'NOT_APPLIED', 'PARTIALLY_APPLIED'))
         self.assertFalse(payload.get('config_applied'))
         self.assertFalse(payload.get('business_finalized'))
         self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 0)
@@ -985,6 +985,27 @@ class RenewConsistencyTests(unittest.TestCase):
             idempotency_key='renew-op-unapplied').one()
         self.assertIn(operation.state, ('needs_reconciliation', 'failed', 'panel_applied'))
         self.assertEqual(self.sms_fire.call_count, 0)
+
+    def test_recheck_recovery_does_not_repeat_business_or_panel_mutations(self):
+        self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        self.panel.direct = _raw_client(EMAIL, cap=5 * GB, expiry=0, up=0, down=0)
+        _, mismatch = self._renew_response(volume=20, reset_traffic=False,
+                                           operation_id='renew-evidence-recovery')
+        self.assertFalse(mismatch['business_finalized'])
+        self.panel.direct = None
+        writes, resets, sms = self.v3_update.call_count, app_module.v3_reset_client.call_count, self.sms_fire.call_count
+        for _ in range(2):
+            response = self.http.post('/api/client/%d/%d/%s/renew/verify' %
+                (self.server.id, INBOUND_ID, EMAIL), json={'operation_id': 'renew-evidence-recovery'})
+            result = response.get_json()
+            self.assertEqual(result['operation_id'], 'renew-evidence-recovery')
+            self.assertEqual(result['final_state'], 'APPLIED_ACTIVE')
+            self.assertFalse(result['sending_allowed'])
+        self.assertEqual((self.v3_update.call_count, app_module.v3_reset_client.call_count, self.sms_fire.call_count),
+                         (writes, resets, sms))
+        self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 0)
+        self.assertEqual(RenewalEvent.query.filter_by(operation_id='renew-evidence-recovery').count(), 0)
 
     def test_n_recheck_picks_the_operation_id_it_was_given(self):
         """Two renewals of the same account: the id decides, not (server, email)."""

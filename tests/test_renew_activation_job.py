@@ -30,7 +30,7 @@ import app as app_module  # noqa: E402
 from panel.extensions import db  # noqa: E402
 from panel.jobs import renew_activation as job  # noqa: E402
 from panel.models import ClientOperation, Transaction  # noqa: E402
-from panel.services import client_operations, renew_activation  # noqa: E402
+from panel.services import client_operations, renew_activation, renew_finalization  # noqa: E402
 
 GB = 1024 ** 3
 EXPECTED = {'expiryTime': 2_000_000_000_000, 'totalGB': 20 * GB, 'enable': True}
@@ -146,6 +146,17 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(result['action'], 'needs_reconciliation')
         db.session.refresh(operation)
         self.assertEqual(operation.state, 'needs_reconciliation')
+
+    def test_unverified_configuration_does_not_rebuild_business_or_repair(self):
+        operation = self._operation()
+        repair, record_transaction, record_event = mock.Mock(), mock.Mock(), mock.Mock()
+        job.reconcile_operation(operation, read_layers=lambda: _layers(config_applied=False),
+            repair=repair, finalize={'record_transaction': record_transaction,
+                                     'record_renewal_event': record_event})
+        repair.assert_not_called()
+        record_transaction.assert_not_called()
+        record_event.assert_not_called()
+        self.assertFalse(renew_finalization.business_is_finalized(operation))
 
     def test_an_operation_without_a_recorded_expectation_is_not_guessed(self):
         operation = self._operation(expected={})

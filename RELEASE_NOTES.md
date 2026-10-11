@@ -1,4 +1,16 @@
-# Eve - Xui Manager v2.8.3 (unreleased)
+# Eve - Xui Manager v2.9.0
+
+Renewal failures now describe the evidence: expiry or quota mismatch, disabled global/inbound membership, consumed traffic, reset failure, unavailable reads and pending node sync. A matching existing 20 GB cap is not presented as proof that this renewal changed it. Unknown outcomes stay uncertain instead of being called “not applied.”
+
+The result modal shows expected and observed values, exact expiry timestamp differences, activation flags and inbound IDs, with dates formatted using the panel calendar. Partial/uncertain outcomes are amber. Customer copy/send actions require a finalized, active operation and visibly disable otherwise.
+
+Re-check uses the original operation ID and re-reads panel state. It does not add days/volume, reset traffic, charge, create another event or send success SMS. If panel state later matches but financial records are unfinished, the operation still needs reconciliation.
+
+No schema migration is required. Focused tests were added; local suites were not run by request. Publish only after required GitHub CI succeeds. Real-panel verification remains necessary.
+
+For reported trace `e784cb74` (account `h132-09185304704`), production logs and authoritative snapshots were not available in this checkout. Intended expiry, before-state, mutation acknowledgement, failing activation layer and reset acknowledgement are therefore unconfirmed. The observed 20 GB match and expiry mismatch support a configuration mismatch, not a proven “no changes” conclusion. Do not repeat renewal or send success messages until the original operation is reconciled.
+
+## Previous unreleased notes (2.8.3)
 
 EVE 2.8.3 improves renewal reliability and operator diagnostics. Package choices open
 from a scoped browser cache and revalidate in the background. If a renewal response is

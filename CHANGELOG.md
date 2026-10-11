@@ -1,5 +1,17 @@
 # Changelog - Eve
 
+## [2.9.0] - 2026-10-12
+
+### Fixed
+- Renewal mismatches remain unknown unless authoritative field changes prove partial application or a rejected, unchanged write proves no application. An existing quota match is distinguished from a confirmed change.
+- Renewal results retain before, expected, observed, read and mutation evidence, typed reason codes, expiry differences, activation layers and traffic-reset acknowledgement on the same durable operation.
+- Re-check follows the original operation without repeating renewal, reset, billing, events or success SMS. Unfinished business records remain in reconciliation, and customer actions require a finalized active result.
+- Renewal diagnostics show exact expected/observed expiry and quota inline, use the configured calendar, display disabled/missing inbound IDs, and keep uncertain/partial outcomes amber and internal codes under Details.
+
+### Validation
+- Added focused evidence, recovery and UI tests. Local test suites were intentionally not run; GitHub CI is required before publishing this release.
+- Production trace `e784cb74` needs real-panel/log verification; the reported quota match alone does not prove renewal or its incident root cause.
+
 ## [2.8.6] - 2026-10-08
 
 ### Fixed

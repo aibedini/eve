@@ -31,7 +31,7 @@ FINAL_BUSINESS_STATES = (STATE_COMPLETED, STATE_ACTIVATION_PENDING)
 SAFE_EXPECTED_CONTEXT_KEYS = (
     'server_id', 'inbound_id', 'client_email', 'mode', 'days', 'volume_gb',
     'reset_traffic', 'start_after_first_use', 'is_free', 'price', 'description',
-    'package_name', 'source', 'renewal_trace_id',
+    'package_name', 'source', 'renewal_trace_id', 'before_evidence', 'mutation_evidence',
 )
 
 
@@ -216,6 +216,17 @@ def operation_response(operation) -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def record_client_operation_verification(operation, payload):
+    """Keep read-back evidence without replacing already finalized business facts."""
+    if operation is None:
+        return
+    stored = operation_response(operation)
+    stored.update(payload)
+    operation.response_json = _dumps(stored)
+    operation.updated_at = datetime.utcnow()
+    db.session.commit()
 
 
 def mark_client_operation_activation_pending(operation, *, expected=None, response=None):

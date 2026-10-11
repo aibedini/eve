@@ -741,7 +741,11 @@
             <div id="renew-api-status" class="hidden" style="margin-bottom: 10px; font-size: 0.8rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: flex; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-word;">
             </div>
             <div id="renew-state-body" class="renew-state-body"></div>
-            <div id="renew-diagnostic" class="renew-diagnostic hidden"></div>
+            <div id="renew-evidence" class="renew-evidence"></div>
+            <details id="renew-details" class="hidden">
+                <summary>{{ 'جزئیات' if panel_lang == 'fa' else 'Details' }}</summary>
+                <div id="renew-diagnostic" class="renew-diagnostic"></div>
+            </details>
             <div id="renew-prev-state" style="margin-bottom: 15px; font-size: 0.85rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-all;">
             </div>
             <div id="renew-success-text" class="hidden" style="white-space: pre-wrap; word-break: break-all; margin-bottom: 20px; font-size: 0.9rem; line-height: 1.5; background: var(--bg-dark); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); direction: ltr; text-align: left;"></div>
@@ -5185,10 +5189,10 @@
     const RENEW_STATE_TONE = {
         APPLIED_ACTIVE: 'green',
         CONFIG_APPLIED_ACTIVATION_PENDING: 'amber',
-        PARTIALLY_APPLIED: 'orange',
+        PARTIALLY_APPLIED: 'amber',
         NOT_APPLIED: 'red',
-        AUTH_DEGRADED: 'red',
-        UNKNOWN: 'neutral',
+        AUTH_DEGRADED: 'amber',
+        UNKNOWN: 'amber',
         IN_PROGRESS: 'amber',
     };
 
@@ -5291,6 +5295,10 @@
         add(src.code);
         add(src.message_key);
         add(verify.error);
+        (verify.reason_codes || []).forEach(add);
+        const evidence = verify.evidence || {};
+        if (evidence.read) add(JSON.stringify(evidence.read));
+        if (evidence.mutation) add(JSON.stringify(evidence.mutation));
         add(src.note);
         add(src.error);
         // Which panel endpoint answered is diagnostic too, and it used to be a badge
@@ -5325,7 +5333,6 @@
         if (context.finalState && RENEW_STATE_TEXT[String(context.finalState)]) {
             return String(context.finalState);
         }
-        if (src.success === true) return 'APPLIED_ACTIVE';
         return 'UNKNOWN';
     }
 
@@ -5384,7 +5391,7 @@
                     + (matches === true ? 'yes' : (matches === false ? 'no' : 'unknown')),
             ].join('\n');
             if (matches === true) addBadge(label, RENEW_MARK.matched, format(obs), 'green', detail);
-            else if (matches === false) addBadge(label, RENEW_MARK.mismatched, format(obs), 'red', detail);
+            else if (matches === false) addBadge(label, RENEW_MARK.mismatched, format(obs), state === 'NOT_APPLIED' ? 'red' : 'amber', detail);
             else addBadge(label, '', format(obs), 'neutral', detail);
         };
         addCheck('expiryTime', isFa ? 'انقضا' : 'Expiry', formatExpiry);
@@ -5429,6 +5436,60 @@
         return badges;
     }
 
+    function renewEvidenceRows(verify) {
+        const evidence = verify.evidence || {};
+        const expected = evidence.expected || verify.expected || {};
+        const observed = evidence.observed || verify.observed || {};
+        const fields = evidence.fields || {};
+        const fa = RENEW_LANG === 'fa';
+        const unknown = fa ? 'نامشخص' : 'unknown';
+        const value = function (v) { return v === null || typeof v === 'undefined' ? unknown : String(v); };
+        const expiry = function (v) {
+            if (v === null || typeof v === 'undefined') return unknown;
+            const ms = Number(v);
+            if (ms < 0) return String(ms) + ' ms · ' + String(-ms / 86400000) + (fa ? ' روز پس از اولین استفاده' : ' days after first use');
+            if (ms === 0) return fa ? 'بدون انقضا (0 ms)' : 'No expiry (0 ms)';
+            return String(ms) + ' UTC ms · ' + EveDate.format(new Date(ms));
+        };
+        const quota = function (v) {
+            return v === null || typeof v === 'undefined' ? unknown
+                : String(v) + ' B · ' + (Number(v) / (1024 ** 3)).toFixed(2) + ' GB';
+        };
+        const rows = [];
+        [['expiryTime', fa ? 'انقضا' : 'Expiry', expiry], ['totalGB', fa ? 'حجم' : 'Quota', quota]].forEach(function (item) {
+            const field = fields[item[0]] || {};
+            rows.push(item[1] + ' · ' + (fa ? 'انتظار: ' : 'Expected: ') + item[2](expected[item[0]])
+                + ' · ' + (fa ? 'مشاهده‌شده: ' : 'Observed: ') + item[2](observed[item[0]])
+                + ' · ' + (field.change_confirmed ? (fa ? 'تغییر تأیید شد' : 'Change confirmed')
+                    : field.value_matched ? (fa ? 'مقدار مطابق است؛ تغییر تأیید نشده' : 'Value matched; change unconfirmed')
+                    : (fa ? 'تغییر تأیید نشده' : 'Change unconfirmed')));
+        });
+        const delta = evidence.expiry || {};
+        if (delta.difference_ms !== null && typeof delta.difference_ms !== 'undefined') {
+            rows.push((fa ? 'اختلاف انقضا: ' : 'Expiry difference: ') + delta.difference_ms + ' ms · '
+                + delta.difference_seconds + ' s · ' + delta.difference_days + (fa ? ' روز' : ' days'));
+        }
+        const global = verify.global || {};
+        const memberships = verify.memberships || {};
+        const traffic = verify.traffic || {};
+        const ids = function (list) { return Array.isArray(list) ? (list.join(', ') || '—') : unknown; };
+        rows.push((fa ? 'فعال‌سازی کلی: ' : 'Global enable: ') + value(global.enable));
+        rows.push((fa ? 'عضویت فعال: ' : 'Membership enabled: ')
+            + (Array.isArray(memberships.expected_ids) && memberships.expected_ids.length
+                ? (memberships.missing_ids || []).length || (memberships.disabled_ids || []).length ? 'false'
+                    : (memberships.unknown_ids || []).length ? unknown : 'true' : unknown)
+            + ' · ' + (fa ? 'غیرفعال: ' : 'Disabled inbound IDs: ') + ids(memberships.disabled_ids)
+            + ' · ' + (fa ? 'مفقود: ' : 'Missing inbound IDs: ') + ids(memberships.missing_ids));
+        rows.push((fa ? 'ترافیک فعال: ' : 'Traffic enabled: ') + value(traffic.enable)
+            + ' · up: ' + value(traffic.up) + ' B · down: ' + value(traffic.down) + ' B');
+        rows.push((fa ? 'حجم باقی‌مانده: ' : 'Remaining quota: ') + quota(observed.remaining_quota)
+            + ' · ' + (fa ? 'همگام‌سازی نود در انتظار: ' : 'Node pending: ') + value(verify.node_pending));
+        const reset = (evidence.mutation || {}).traffic_reset || {};
+        rows.push((fa ? 'بازنشانی ترافیک درخواست شد: ' : 'Traffic reset requested: ') + value(reset.requested)
+            + ' · ' + (fa ? 'پذیرفته شد: ' : 'Acknowledged: ') + value(reset.accepted));
+        return rows;
+    }
+
     function renewOutcomeViewModel(data, opts) {
         const options = (opts && typeof opts === 'object') ? opts : {};
         const src = (data && typeof data === 'object') ? data : {};
@@ -5437,22 +5498,42 @@
         const state = options.forceState || renewStateFromPayload(src, ctx);
         const entry = RENEW_STATE_TEXT[state] || RENEW_STATE_TEXT.UNKNOWN;
         const text = entry[RENEW_LANG] || entry.en;
+        const reasons = verify.reason_codes || [];
+        let title = text.title;
+        if (reasons.includes('EXPIRY_MISMATCH')) {
+            title = RENEW_LANG === 'fa' ? 'انقضا مطابق نیست' : 'Expiry mismatch';
+            if (((verify.evidence || {}).fields || {}).totalGB && verify.evidence.fields.totalGB.value_matched) {
+                title += RENEW_LANG === 'fa' ? ' — حجم مطابق است' : ' — quota matched';
+            }
+        } else if (reasons.includes('QUOTA_MISMATCH')) {
+            title = RENEW_LANG === 'fa' ? 'حجم مطابق نیست' : 'Quota mismatch';
+        } else if (reasons.includes('GLOBAL_DISABLED')) {
+            title = RENEW_LANG === 'fa' ? 'حساب به‌صورت کلی غیرفعال است' : 'Account globally disabled';
+        } else if (reasons.includes('MEMBERSHIP_DISABLED')) {
+            title = (RENEW_LANG === 'fa' ? 'حساب در این ورودی‌ها غیرفعال است: ' : 'Account disabled in inbound: ')
+                + ((verify.memberships || {}).disabled_ids || []).join(', ');
+        } else if (reasons.includes('TRAFFIC_DEPLETED')) {
+            title = RENEW_LANG === 'fa' ? 'حجم حساب مصرف شده است' : 'Account quota depleted';
+        } else if (reasons.includes('PANEL_READ_FAILED')) {
+            title = RENEW_LANG === 'fa' ? 'بررسی پنل ممکن نشد' : 'Panel verification unavailable';
+        }
         const copyText = (typeof options.copyText === 'string') ? options.copyText : (ctx.copyText || '');
         const copyAvailable = Boolean(String(copyText || '').trim());
         // A customer confirmation may only be handed out for a finalized success - or,
         // while activation synchronizes, when the backend already produced the customer
         // text (`copy_text` is present only when `business_finalized`).
-        const copyEnabled = (state === 'APPLIED_ACTIVE')
-            || (state === 'CONFIG_APPLIED_ACTIVATION_PENDING' && copyAvailable);
+        const copyEnabled = state === 'APPLIED_ACTIVE' && copyAvailable
+            && src.business_finalized === true && src.sending_allowed === true;
         const totalMs = (src.timing && typeof src.timing.total_ms !== 'undefined')
             ? src.timing.total_ms : null;
         return {
             state: state,
             tone: RENEW_STATE_TONE[state] || 'neutral',
-            title: text.title,
+            title: title,
             body: text.body,
             pill: text.pill,
             diagnostic: _renewDiagnostic(src),
+            evidenceRows: renewEvidenceRows(verify),
             copyText: copyText,
             copyEnabled: copyEnabled,
             copyVisible: copyAvailable && copyEnabled,
@@ -5489,6 +5570,18 @@
             diag.textContent = view.diagnostic || '';
             diag.title = view.diagnostic || '';
             diag.classList.toggle('hidden', !view.diagnostic);
+        }
+        const details = document.getElementById('renew-details');
+        if (details) details.classList.toggle('hidden', !view.diagnostic);
+        const evidenceBox = document.getElementById('renew-evidence');
+        if (evidenceBox) {
+            evidenceBox.replaceChildren();
+            (view.evidenceRows || []).forEach(function (text) {
+                const row = document.createElement('div');
+                row.className = 'field-note';
+                row.textContent = text;
+                evidenceBox.appendChild(row);
+            });
         }
         if (statusBox) {
             statusBox.innerHTML = '';
@@ -5536,7 +5629,7 @@
         if (sendBtn) sendBtn.disabled = !view.copyEnabled;
         if (recheckBtn) recheckBtn.classList.toggle('renew-success-action-primary', Boolean(view.recheckPrimary));
         if (sendBtn) sendBtn.classList.toggle('renew-success-action-primary', !view.recheckPrimary);
-        if (view.copyEnabled && view.copyText && !_sendCtxRenew) {
+        if (view.copyEnabled && view.copyText) {
             const ctx = lastRenewContext || {};
             const client = _lookupClientVolume(ctx.serverId, ctx.inboundId, ctx.email);
             _sendCtxRenew = {
@@ -5712,7 +5805,7 @@
                 renderRenewApiStatus(data);
                 applyClientMutation(data, ctx);
                 const state = String(data.final_state || data.state || '').toUpperCase();
-                if (['VERIFIED', 'APPLIED_ACTIVE', 'NOT_APPLIED', 'MISMATCH', 'AUTH_ERROR', 'NEEDS_RECONCILIATION'].includes(state)) return;
+                if (['VERIFIED', 'APPLIED_ACTIVE'].includes(state) && data.business_finalized === true) return;
             } catch (_) {
                 // Transport remains unknown; the durable operation is polled again.
             }

@@ -390,6 +390,8 @@ def _v3_post(server, session_obj, path, json_body=None, *, timeout=(3, 20)):
     except Exception as e:
         return False, None, str(e)
     j, err = _safe_response_json(resp)
+    if isinstance(j, dict):
+        j['_eve_http_status'] = resp.status_code
     if err:
         return False, None, err
     if resp.status_code == 200 and isinstance(j, dict) and j.get('success'):
@@ -592,6 +594,7 @@ class PanelMutationResult:
     need_restart: bool = False
     error: str | None = None
     response: dict | None = None
+    http_status: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -602,6 +605,7 @@ class PanelMutationResult:
         """Credential-free summary for logs, the trace and the doctor."""
         return {
             'transport_ok': self.transport_ok,
+            'http_status': self.http_status,
             'panel_success': self.panel_success,
             'node_pending': self.node_pending,
             'skipped': [str(item)[:120] for item in (self.skipped or [])],
@@ -616,6 +620,7 @@ def classify_mutation_result(ok, response=None, error=None, *,
     """Turn one (ok, response, error) triple into a structured mutation result."""
     result = PanelMutationResult(transport_ok=bool(response is not None) or bool(ok),
                                  response=response if isinstance(response, dict) else None)
+    result.http_status = response.get('_eve_http_status') if isinstance(response, dict) else None
     if not ok:
         result.error = str(error or 'panel write failed')[:500]
         result.panel_success = False

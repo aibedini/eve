@@ -129,14 +129,14 @@ class LayerClassificationTests(unittest.TestCase):
             memberships={17: _client()}, traffic={'available': True, 'enable': True},
         )
         self.assertFalse(layers.config_applied)
-        self.assertEqual(layers.final_state, ra.STATE_NOT_APPLIED)
+        self.assertEqual(layers.final_state, ra.STATE_UNKNOWN)
 
     def test_a_partial_write_that_lost_the_config_is_reported_as_partial(self):
         layers = ra.analyze_activation(
             expected=EXPECTED, global_client=_client(expiry=1), inbound_ids=[17],
             memberships={17: _client()}, write_may_be_partial=True,
         )
-        self.assertEqual(layers.final_state, ra.STATE_PARTIALLY_APPLIED)
+        self.assertEqual(layers.final_state, ra.STATE_UNKNOWN)
 
     def test_auth_degraded_is_its_own_state(self):
         layers = ra.analyze_activation(expected=EXPECTED, global_client=_client(),
@@ -145,10 +145,10 @@ class LayerClassificationTests(unittest.TestCase):
         self.assertEqual(layers.final_state, ra.STATE_AUTH_DEGRADED)
         self.assertTrue(any('credential' in note for note in layers.notes))
 
-    def test_a_client_missing_from_the_panel_is_not_applied(self):
+    def test_a_client_missing_from_the_panel_is_unknown(self):
         layers = ra.analyze_activation(expected=EXPECTED, global_client=None,
                                        inbound_ids=[17], memberships={})
-        self.assertEqual(layers.final_state, ra.STATE_NOT_APPLIED)
+        self.assertEqual(layers.final_state, ra.STATE_UNKNOWN)
         self.assertFalse(layers.config_applied)
 
 
@@ -336,7 +336,7 @@ class RouteLayerReaderTests(unittest.TestCase):
             inbounds=[_inbound(17)], read_global=read_global,
             read_traffic=lambda: {'available': False})
         self.assertFalse(layers.global_found)
-        self.assertEqual(layers.final_state, ra.STATE_NOT_APPLIED)
+        self.assertEqual(layers.final_state, ra.STATE_UNKNOWN)
 
     def test_traffic_is_not_read_when_the_capability_is_absent(self):
         from panel.routes import clients as clients_route

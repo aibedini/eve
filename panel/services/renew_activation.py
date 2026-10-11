@@ -53,6 +53,7 @@ class ActivationLayers:
     enabled_inbound_ids: list = field(default_factory=list)
     disabled_inbound_ids: list = field(default_factory=list)
     missing_inbound_ids: list = field(default_factory=list)
+    unknown_inbound_ids: list = field(default_factory=list)
 
     traffic_available: bool = False
     traffic_enable: bool = None
@@ -67,6 +68,9 @@ class ActivationLayers:
     runtime_sync_state: str = RUNTIME_NOT_EXPOSED
     final_state: str = STATE_UNKNOWN
     notes: list = field(default_factory=list)
+    reason_codes: list = field(default_factory=list)
+    evidence: dict = field(default_factory=dict)
+    read_error: str | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -82,6 +86,7 @@ class ActivationLayers:
                 'enabled_ids': list(self.enabled_inbound_ids),
                 'disabled_ids': list(self.disabled_inbound_ids),
                 'missing_ids': list(self.missing_inbound_ids),
+                'unknown_ids': list(self.unknown_inbound_ids),
             },
             'traffic': {
                 'available': self.traffic_available,
@@ -97,6 +102,8 @@ class ActivationLayers:
             'runtime_sync_state': self.runtime_sync_state,
             'final_state': self.final_state,
             'notes': list(self.notes),
+            'reason_codes': list(self.reason_codes),
+            'evidence': dict(self.evidence),
         }
 
 
@@ -159,7 +166,8 @@ def membership_map(inbounds, email, *, inbound_ids=None) -> dict:
 
 def classify_layers(layers: ActivationLayers, *, expected: dict,
                     write_may_be_partial: bool = False,
-                    auth_degraded: bool = False) -> ActivationLayers:
+                    auth_degraded: bool = False, before=None,
+                    mutation=None, read=None) -> ActivationLayers:
     """Turn the measured layers into the three facts plus one final state.
 
     An unknown layer can only make the result *less* certain, never more: a
@@ -169,6 +177,77 @@ def classify_layers(layers: ActivationLayers, *, expected: dict,
     expected = dict(expected or {})
     want_expiry = _as_int(expected.get('expiryTime'))
     want_total = _as_int(expected.get('totalGB'))
+    before = dict(before or layers.evidence.get('before') or {})
+    mutation = dict(mutation or layers.evidence.get('mutation') or {})
+    read = dict(read or layers.evidence.get('read') or {})
+    observed = {'expiryTime': layers.global_expiry, 'totalGB': layers.global_total,
+                'enable': layers.global_enable,
+                'memberships': layers.as_dict()['memberships'],
+                'traffic_enable': layers.traffic_enable,
+                'up': layers.traffic_up, 'down': layers.traffic_down,
+                'nodePending': layers.node_pending}
+    used = (layers.traffic_up + layers.traffic_down
+            if layers.traffic_up is not None and layers.traffic_down is not None else None)
+    observed['remaining_quota'] = (max(0, layers.global_total - used)
+                                   if layers.global_total and used is not None else None)
+    fields = {}
+    field_expected = dict(expected)
+    field_expected.update(traffic_enable=True, nodePending=False,
+                          memberships={'expected_ids': list(layers.expected_inbound_ids),
+                                       'enabled_ids': list(layers.expected_inbound_ids)},
+                          remaining_quota='unlimited' if want_total == 0 else '>0')
+    if mutation.get('traffic_reset', {}).get('requested'):
+        field_expected.update(up=0, down=0)
+    for name, value in observed.items():
+        known = value is not None and (name != 'memberships' or bool(layers.expected_inbound_ids))
+        matched = known and name in expected and value == expected[name]
+        changed = (known and before.get('status', 'ok') == 'ok'
+                   and name in before and before[name] is not None and value != before[name])
+        source_layer = ('traffic' if name in ('traffic_enable', 'up', 'down', 'remaining_quota')
+                        else 'memberships' if name == 'memberships' else 'global')
+        layer_read = read.get('layers', {}).get(source_layer, read)
+        fields[name] = {'before': before.get(name), 'expected': field_expected.get(name),
+                        'observed': value, 'value_matched': bool(matched),
+                        'change_confirmed': bool(changed),
+                        'source_endpoint': layer_read.get('source_endpoint'),
+                        'read_timestamp_ms': read.get('timestamp_ms'),
+                        'read_status': layer_read.get('status', 'unknown')}
+    delta = (layers.global_expiry - want_expiry
+             if want_expiry is not None and layers.global_expiry is not None else None)
+    layers.evidence = {'before': before, 'expected': expected, 'observed': observed,
+                       'fields': fields, 'read': read, 'mutation': mutation,
+                       'expiry': {'expected_ms': want_expiry, 'observed_ms': layers.global_expiry,
+                                  'difference_ms': delta,
+                                  'difference_seconds': delta / 1000 if delta is not None else None,
+                                  'difference_days': delta / 86400000 if delta is not None else None}}
+    reasons = []
+    if auth_degraded:
+        reasons.append('AUTH_FAILED')
+    if not layers.global_found or read.get('status') == 'failed':
+        reasons.append('PANEL_READ_FAILED')
+    if read.get('status') == 'stale':
+        reasons.append('STALE_READ')
+    if layers.global_found:
+        for name, code in [('expiryTime', 'EXPIRY_MISMATCH'), ('totalGB', 'QUOTA_MISMATCH')]:
+            if expected.get(name) is not None and observed.get(name) is not None and not fields[name]['value_matched']:
+                reasons.append(code)
+    if layers.global_enable is False:
+        reasons.append('GLOBAL_DISABLED')
+    if layers.disabled_inbound_ids:
+        reasons.append('MEMBERSHIP_DISABLED')
+    if layers.missing_inbound_ids:
+        reasons.append('MEMBERSHIP_MISSING')
+    if used is not None and layers.global_total and used >= layers.global_total:
+        reasons.append('TRAFFIC_DEPLETED')
+    if mutation.get('traffic_reset', {}).get('accepted') is False:
+        reasons.append('TRAFFIC_RESET_FAILED')
+    if layers.node_pending is True:
+        reasons.append('NODE_SYNC_PENDING')
+    if mutation.get('accepted') is False:
+        reasons.append('MUTATION_REJECTED' if mutation.get('rejected') else 'MUTATION_OUTCOME_UNKNOWN')
+    elif mutation.get('accepted') is None:
+        reasons.append('MUTATION_OUTCOME_UNKNOWN')
+    layers.reason_codes = reasons
 
     if auth_degraded:
         layers.final_state = STATE_AUTH_DEGRADED
@@ -180,14 +259,17 @@ def classify_layers(layers: ActivationLayers, *, expected: dict,
                         or (layers.global_found and layers.global_expiry == want_expiry))
     config_total_ok = (want_total is None
                        or (layers.global_found and layers.global_total == want_total))
-    layers.config_applied = bool(layers.global_found and config_expiry_ok and config_total_ok)
+    layers.config_applied = bool(layers.global_found and config_expiry_ok and config_total_ok
+                                 and (want_expiry is not None or want_total is not None))
 
     membership_ok = bool(layers.expected_inbound_ids) and not layers.missing_inbound_ids
     memberships_enabled = (membership_ok
                            and not layers.disabled_inbound_ids
+                            and not layers.unknown_inbound_ids
                            and len(layers.found_inbound_ids) == len(layers.expected_inbound_ids))
-    global_enabled = layers.global_enable is not False
-    traffic_ok = (layers.traffic_enable is not False) if layers.traffic_available else True
+    global_enabled = layers.global_enable is True
+    traffic_ok = (layers.traffic_enable is True) if layers.traffic_available else True
+    traffic_ok = traffic_ok and 'TRAFFIC_DEPLETED' not in reasons and 'TRAFFIC_RESET_FAILED' not in reasons
     layers.activation_converged = bool(layers.global_found and global_enabled
                                        and memberships_enabled and traffic_ok)
     if layers.traffic_available and layers.traffic_enable is False:
@@ -209,13 +291,26 @@ def classify_layers(layers: ActivationLayers, *, expected: dict,
     else:
         layers.runtime_sync_state = RUNTIME_NOT_EXPOSED
 
-    if not layers.global_found:
-        layers.final_state = STATE_NOT_APPLIED
-        layers.notes.append('the client was not found on the panel after the write')
+    if not layers.global_found or read.get('status') in ('failed', 'stale'):
+        layers.final_state = STATE_UNKNOWN
+        layers.config_applied = False
+        layers.activation_converged = False
+        layers.notes.append('authoritative panel verification is unavailable')
+        return layers
+    config_names = [name for name in ('expiryTime', 'totalGB', 'enable') if expected.get(name) is not None]
+    unchanged = bool(config_names) and all(
+        before.get(name) is not None and observed.get(name) is not None
+        and before[name] == observed[name] for name in config_names)
+    if layers.config_applied and unchanged and mutation.get('accepted') is not True:
+        layers.final_state = STATE_UNKNOWN
+        layers.activation_converged = False
+        layers.notes.append('matching existing values does not confirm this mutation')
         return layers
     if not layers.config_applied:
-        layers.final_state = (STATE_PARTIALLY_APPLIED if write_may_be_partial
-                             else STATE_NOT_APPLIED)
+        changed = any(item['change_confirmed'] for item in fields.values())
+        layers.final_state = (STATE_PARTIALLY_APPLIED if changed else
+                              STATE_NOT_APPLIED if unchanged and read.get('status') == 'ok'
+                              and mutation.get('rejected') is True else STATE_UNKNOWN)
         return layers
     if layers.runtime_sync_state == RUNTIME_PENDING:
         # The configuration is committed but the panel's own node has not picked it
@@ -250,7 +345,7 @@ def analyze_activation(*, expected: dict, global_client: dict | None,
     global_client = global_client if isinstance(global_client, dict) else None
     if global_client:
         layers.global_found = True
-        layers.global_enable = bool(global_client.get('enable', True))
+        layers.global_enable = global_client.get('enable') if isinstance(global_client.get('enable'), bool) else None
         layers.global_expiry = _as_int(global_client.get('expiryTime'))
         layers.global_total = _as_int(global_client.get('totalGB'))
 
@@ -280,10 +375,12 @@ def analyze_activation(*, expected: dict, global_client: dict | None,
             layers.missing_inbound_ids.append(inbound_id)
             continue
         layers.found_inbound_ids.append(inbound_id)
-        if row.get('enable', True):
+        if row.get('enable') is True:
             layers.enabled_inbound_ids.append(inbound_id)
-        else:
+        elif row.get('enable') is False:
             layers.disabled_inbound_ids.append(inbound_id)
+        else:
+            layers.unknown_inbound_ids.append(inbound_id)
 
     if isinstance(traffic, dict) and traffic.get('available'):
         layers.traffic_available = True
@@ -346,6 +443,8 @@ def converge_activation(*, verify, repair, attempts: int = 3,
     """
     history = []
     layers = initial if initial is not None else verify()
+    if 'TRAFFIC_RESET_FAILED' in layers.reason_codes:
+        return layers, [{'attempt': 0, 'repair': 'skipped', 'reason': 'traffic reset failed'}]
     history.append({'attempt': 0, 'final_state': layers.final_state,
                     'activation_converged': layers.activation_converged})
     attempt = 0

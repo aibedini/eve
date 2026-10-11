@@ -101,6 +101,15 @@ def reconcile_operation(operation, *, read_layers=None, repair=None,
     # stored context allows - exactly once - BEFORE any completion branch, because a
     # converged activation must not close an operation whose transaction/event/text
     # were never written.
+    layers = read_layers()
+    if (not layers.config_applied or layers.final_state == renew_activation.STATE_UNKNOWN
+            or 'TRAFFIC_RESET_FAILED' in layers.reason_codes):
+        operation.state = STATE_NEEDS_RECONCILIATION
+        operation.error = 'renewal evidence requires reconciliation'
+        operation.updated_at = datetime.utcnow()
+        db.session.commit()
+        result.update(action='needs_reconciliation', final_state=layers.final_state)
+        return result
     if not renew_finalization.business_is_finalized(operation):
         payload, already = renew_finalization.minimal_rebuild(
             operation,
@@ -108,7 +117,6 @@ def reconcile_operation(operation, *, read_layers=None, repair=None,
             record_transaction=(finalize or {}).get('record_transaction'))
         result['business_rebuilt'] = not already
 
-    layers = read_layers()
     result['final_state'] = layers.final_state
 
     if layers.final_state == renew_activation.STATE_APPLIED_ACTIVE:
@@ -188,11 +196,19 @@ def _default_read_layers(operation):
             inbounds or [], email, inbound_ids=(details.get('inbound_ids') or None))
         traffic = (xui_adapter.v3_client_traffic(server, session_obj, email)
                    if caps.client_traffic else None)
-        return renew_activation.analyze_activation(
+        layers = renew_activation.analyze_activation(
             expected=client_operations.operation_expected(operation),
             global_client=(details.get('client') if details.get('ok') else None),
             inbound_ids=(details.get('inbound_ids') or []),
-            memberships=memberships, traffic=traffic)
+            memberships=memberships, traffic=traffic,
+            node_pending=(details.get('raw') or {}).get('nodePending'))
+        context = client_operations.operation_context(operation)
+        return renew_activation.classify_layers(
+            layers, expected=client_operations.operation_expected(operation),
+            before=context.get('before_evidence'), mutation=context.get('mutation_evidence'),
+            read={'status': 'ok' if details.get('ok') else 'failed',
+                  'source_endpoint': '/panel/api/clients/get/{email}',
+                  'timestamp_ms': int(time.time() * 1000)})
     return _read
 
 

@@ -357,7 +357,8 @@ class RenewModalCopyTests(unittest.TestCase):
 
     def test_the_title_and_body_come_from_the_state_table(self):
         self.assertIn("RENEW_STATE_TEXT[state]", self.region)
-        self.assertRegex(self.region, r"title:\s*text\.title")
+        self.assertRegex(self.region, r"title:\s*title")
+        self.assertIn("reasons.includes('EXPIRY_MISMATCH')", self.region)
         self.assertRegex(self.region, r"body:\s*text\.body")
         # And what the DOM receives is that view model, not the response prose.
         self.assertRegex(self.region, r"title\.textContent\s*=\s*view\.title")
@@ -446,10 +447,10 @@ class RenewToneTests(unittest.TestCase):
         self.assertEqual(self.tones["APPLIED_ACTIVE"], "green")
         self.assertEqual(self.tones["CONFIG_APPLIED_ACTIVATION_PENDING"], "amber",
                          "an applied config with activation pending must not be red")
-        self.assertEqual(self.tones["PARTIALLY_APPLIED"], "orange")
+        self.assertEqual(self.tones["PARTIALLY_APPLIED"], "amber")
         self.assertEqual(self.tones["NOT_APPLIED"], "red")
-        self.assertEqual(self.tones["AUTH_DEGRADED"], "red")
-        self.assertEqual(self.tones["UNKNOWN"], "neutral")
+        self.assertEqual(self.tones["AUTH_DEGRADED"], "amber")
+        self.assertEqual(self.tones["UNKNOWN"], "amber")
         self.assertEqual(self.tones["IN_PROGRESS"], "amber")
 
     def test_every_state_has_a_tone(self):

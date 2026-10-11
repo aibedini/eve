@@ -1,6 +1,20 @@
 .expiry-badge, .expiry-time {
     font-size: 0.7rem !important;
 }
+#renew-success-modal .renew-success-action:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+#renew-success-modal .renew-evidence {
+    margin-block: 12px;
+    overflow-wrap: anywhere;
+}
+#renew-success-modal .renew-evidence .field-note {
+    color: var(--text-secondary);
+    margin-block: 6px;
+}
+
 :root {
     --primary: #6366f1;
     --primary-dark: #4f46e5;
