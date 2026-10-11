@@ -786,6 +786,7 @@ class RenewEnableTests(unittest.TestCase):
                 app_module, 'fetch_inbounds',
                 return_value=(_panel_inbounds(observed, self.server.id), None, '3x-ui'),
             ),
+            mock.patch.object(app_module, '_v3_get_client', return_value=observed),
             mock.patch.object(clients_module, '_load_renew_result', return_value=completed),
         ):
             resp = self.client.post(

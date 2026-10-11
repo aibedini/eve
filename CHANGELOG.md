@@ -1,5 +1,10 @@
 # Changelog - Eve
 
+## [2.9.2] - 2026-10-12
+
+### Validation
+- The successful cache-repair fixture now supplies an authoritative global client read. A matching inbound row alone cannot confirm a first-class panel's global activation state when that read fails.
+
 ## [2.9.1] - 2026-10-12
 
 ### Security
