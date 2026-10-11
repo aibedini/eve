@@ -1,5 +1,11 @@
 # Changelog - Eve
 
+## [2.9.3] - 2026-10-12
+
+### Release packaging
+- Release notes use the version heading required by the release guard.
+- Offline CI uses Python 3.11 for dependency resolution, matching the bundled runtime and hash-pinned lockfile instead of evaluating dependency markers with Ubuntu's Python 3.10.
+
 ## [2.9.2] - 2026-10-12
 
 ### Validation
