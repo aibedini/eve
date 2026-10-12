@@ -10,7 +10,7 @@ from werkzeug.utils import secure_filename
 
 from panel.extensions import db
 from panel.models import (
-    Admin, AuditLog, ClientOperation, ClientOwnership, PriceTier, RenewalEvent, Server,
+    Admin, AuditLog, ClientOperation, ClientOwnership, PriceTier, PulseRun, RenewalEvent, Server,
     SystemConfig, Transaction, UsageCounterState, UsageDaily, UsageHourly,
     announcement_servers,
 )
@@ -748,6 +748,10 @@ def delete_server(server_id):
         )
         ClientOperation.query.filter_by(server_id=server_id).update(
             {ClientOperation.server_id: None},
+            synchronize_session=False,
+        )
+        PulseRun.query.filter_by(server_id=server_id).update(
+            {PulseRun.server_id: None},
             synchronize_session=False,
         )
 

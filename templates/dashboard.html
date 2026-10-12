@@ -744,9 +744,9 @@
             <div id="renew-api-status" class="hidden" style="margin-bottom: 10px; font-size: 0.8rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: flex; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-word;">
             </div>
             <div id="renew-state-body" class="renew-state-body"></div>
-            <div id="renew-evidence" class="renew-evidence"></div>
             <details id="renew-details" class="hidden">
                 <summary>{{ 'جزئیات' if panel_lang == 'fa' else 'Details' }}</summary>
+                <div id="renew-evidence" class="renew-evidence"></div>
                 <div id="renew-diagnostic" class="renew-diagnostic"></div>
             </details>
             <div id="renew-prev-state" style="margin-bottom: 15px; font-size: 0.85rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-all;">
@@ -5626,7 +5626,7 @@
             diag.classList.toggle('hidden', !view.diagnostic);
         }
         const details = document.getElementById('renew-details');
-        if (details) details.classList.toggle('hidden', !view.diagnostic);
+        if (details) details.classList.toggle('hidden', !view.diagnostic && !(view.evidenceRows || []).length);
         const evidenceBox = document.getElementById('renew-evidence');
         if (evidenceBox) {
             evidenceBox.replaceChildren();

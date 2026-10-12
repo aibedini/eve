@@ -92,6 +92,10 @@ MAPPING = (
         ['tests.test_regression_matrix', 'tests.test_renew_consistency',
          'tests.test_client_mutation_result', 'tests.test_refresh_reconcile'],
     )),
+    ('panel/routes/admin.py', (
+        ['tests.test_server_deletion'],
+        ['tests.test_regression_matrix'],
+    )),
     ('panel/routes/clients.py', (
         ['tests.test_renew_consistency'],
         ['tests.test_renew_enable', 'tests.test_regression_matrix',
