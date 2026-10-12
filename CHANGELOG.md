@@ -1,5 +1,13 @@
 # Changelog - Eve
 
+## [2.10.0] - 2026-10-12
+
+### Fixed
+- Dashboard live synchronization starts automatically, using bounded SSE when enabled and revision-aware cache polling otherwise. Visibility and network recovery reconcile immediately; pausing is explicit.
+- Separate pending and applied revisions prevent client events, cancelled requests and older responses from skipping authoritative changes. Missing delta history recovers from the cache.
+- Redis server blocks, snapshot revisions and delta history publish atomically across workers. Inbound removal and recreation are reconciled in revision order.
+- Update changed cards and mounted client rows in place while preserving expansion, search/filter state, valid selections, focus and scroll. Freshness labels age independently and diagnostics expose the browser synchronization state.
+
 ## [2.9.4] - 2026-10-12
 
 ### Fixed

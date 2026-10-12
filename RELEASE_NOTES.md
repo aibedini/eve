@@ -1,4 +1,16 @@
-# Eve - Xui Manager v2.9.4
+# Eve - Xui Manager v2.10.0
+
+## [2.10.0] - 2026-10-12
+
+The Dashboard now follows successful backend snapshot publication automatically. SSE sends revision invalidations when `EVE_SSE_ENABLED=1`; deployments with streaming disabled, interrupted or at capacity use cache-only polling, defaulting to 10 seconds in the foreground and at least 45 seconds in hidden tabs. The interval selector remains configurable. Browser visibility and network recovery trigger immediate reconciliation. Pausing clearly labels the dashboard and retains manual Refresh.
+
+Pending notifications never advance the applied snapshot cursor. Requests are coordinated; cancelled and older responses cannot overwrite newer state. Missing delta history recovers with a full cache snapshot. Redis commits revision history with server blocks so multiple web workers use one publication cursor. Existing per-server mutation fences remain in force.
+
+Changed cards and client rows reconcile in place; unchanged server DOM stays intact. Inbound names, membership, activation, renewal fields and client counters update without a page reload. Expansion, search/filter inputs, valid selection, modal focus and scroll are preserved. Panel freshness keeps aging independently of the browser's synchronization status. **Sync details** and `window.eveDashboardSync()` expose revision, SSE, polling and reconciliation diagnostics without client payloads.
+
+SSE remains opt-in and retains `EVE_SSE_MAX_STREAMS`, `EVE_SSE_MAX_SECONDS`, `EVE_SSE_TICK_SECONDS` and heartbeat limits. Enable it only with a deployment that can support bounded concurrent streams; cache polling works without configuration changes. No production panel request is triggered by an event or routine browser poll. Real deployment latency measurements are not available from this checkout; the default SSE tick is one second and the fallback cadence is ten seconds.
+
+Regression tests were written for CI and were not executed locally, as requested. Static Python/JavaScript syntax, the UI audit, diff checks and release metadata are checked locally. Release publication requires successful GitHub CI.
 
 ## [2.9.4] - 2026-10-12
 

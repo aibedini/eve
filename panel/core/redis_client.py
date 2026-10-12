@@ -387,7 +387,8 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
         for _attempt in range(3):
             pipe = client.pipeline()
             try:
-                watch_keys = [REDIS_SNAPSHOT_MANIFEST_KEY] + revision_keys
+                from panel.core import snapshot_delta
+                watch_keys = [REDIS_SNAPSHOT_MANIFEST_KEY, snapshot_delta.REDIS_REVISION_KEY] + revision_keys
                 pipe.watch(*watch_keys)
                 for sid in expected:
                     current = pipe.get(_redis_server_revision_key(sid))
@@ -456,11 +457,31 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                     if sid in active_server_ids or sid in merged_status_map
                 }
                 version = str(time.time_ns())
+                # Revision, history and server blocks commit together; readers adopt it.
+                revision = max(int(pipe.get(snapshot_delta.REDIS_REVISION_KEY) or 0),
+                               int(old_manifest.get('revision') or 0)) + 1
+                fingerprints = dict(old_manifest.get('inbound_fingerprints') or {})
+                changed_keys = []
+                removed_keys = []
+                for sid in changed:
+                    before = fingerprints.get(str(sid)) or {}
+                    after = {str(inbound.get('id')): snapshot_delta.fingerprint(inbound)
+                             for inbound in blocks.get(sid, [])}
+                    changed_keys.extend([sid, inbound.get('id')] for inbound in blocks.get(sid, [])
+                                        if before.get(str(inbound.get('id'))) != after[str(inbound.get('id'))])
+                    removed_keys.extend([sid, int(key) if key.lstrip('-').isdigit() else key]
+                                        for key in before if key not in after)
+                    fingerprints[str(sid)] = after
+                record = {'revision': revision, 'changed': changed_keys, 'removed': removed_keys,
+                          'last_update': GLOBAL_SERVER_DATA.get('last_update'), 'at': time.time()}
                 for sid in changed:
                     published_versions[sid] = version
 
                 manifest = {
                     'format': 2,
+                    'revision': revision,
+                    'published_at': record['at'],
+                    'inbound_fingerprints': fingerprints,
                     'version': version,
                     'server_versions': published_versions,
                     'stats': _aggregate_stats(merged_statuses),
@@ -484,7 +505,12 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                         pipe.expire(_redis_server_snapshot_key(sid), REDIS_SNAPSHOT_TTL)
                 pipe.set(REDIS_SNAPSHOT_MANIFEST_KEY, manifest_blob, ex=REDIS_SNAPSHOT_TTL)
                 pipe.set(REDIS_SNAPSHOT_VERSION_KEY, version, ex=REDIS_SNAPSHOT_TTL)
+                pipe.set(snapshot_delta.REDIS_REVISION_KEY, revision)
+                pipe.lpush(snapshot_delta.REDIS_HISTORY_KEY, json.dumps(record, separators=(',', ':')))
+                pipe.ltrim(snapshot_delta.REDIS_HISTORY_KEY, 0, snapshot_delta.MAX_HISTORY - 1)
+                pipe.expire(snapshot_delta.REDIS_HISTORY_KEY, snapshot_delta.REDIS_HISTORY_TTL)
                 pipe.execute()
+                load_snapshot_from_redis(force=True)
                 _PUBLISHED_SERVER_VERSIONS = published_versions
                 _SNAPSHOT_METRICS['publishes'] += 1
                 _SNAPSHOT_METRICS['blocks_encoded'] += len(encoded_blocks)
@@ -609,6 +635,11 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
                 GLOBAL_SERVER_DATA['stats'] = manifest.get('stats') or {}
                 GLOBAL_SERVER_DATA['servers_status'] = manifest.get('servers_status') or []
                 GLOBAL_SERVER_DATA['last_update'] = manifest.get('last_update')
+                complete = all(accepted_versions.get(sid) == value for sid, value in server_versions.items())
+                if targets is None and complete:
+                    GLOBAL_SERVER_DATA['_published_revision'] = manifest.get('revision')
+                    GLOBAL_SERVER_DATA['_published_last_update'] = manifest.get('last_update')
+                    GLOBAL_SERVER_DATA['_published_at'] = manifest.get('published_at')
                 GLOBAL_SERVER_DATA['normalized_server_ids'] = normalized_ids
                 from panel.core.snapshot_model import build_retained_index
                 GLOBAL_SERVER_DATA['normalized_indexes'] = {
@@ -635,7 +666,7 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
                 GLOBAL_SERVER_DATA['stats'] = payload.get('stats') or {}
                 GLOBAL_SERVER_DATA['servers_status'] = payload.get('servers_status') or []
                 GLOBAL_SERVER_DATA['last_update'] = payload.get('last_update')
-        if targets is None:
+        if targets is None and (not manifest_blob or complete):
             # Record what this process now holds (see memory_report.snapshot_copies): it is
             # what lets one call answer "how many full copies exist". Full loads only, and
             # version-throttled inside the recorder, so a forced reload of an unchanged

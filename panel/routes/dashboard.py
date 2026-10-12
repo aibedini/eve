@@ -57,6 +57,14 @@ def _stream_slot_available(limit) -> bool:
         return _stream_state['active'] < limit
 
 
+def _try_acquire_stream_slot(limit) -> bool:
+    with _stream_lock:
+        if _stream_state['active'] >= limit:
+            return False
+        _stream_state['active'] += 1
+        return True
+
+
 def _acquire_stream_slot() -> None:
     with _stream_lock:
         _stream_state['active'] += 1
@@ -103,7 +111,11 @@ def _sync_report_for(inbounds, now=None):
         return {}
     try:
         from panel.core import refresh_policy  # deferred: keeps the route import light
-        return refresh_policy.server_sync_report(ids, now=now)
+        rows = refresh_policy.server_sync_report(ids, now=now)
+        for row in rows.values():
+            row['live_max_age_seconds'] = refresh_policy.LIVE_MAX_AGE_SECONDS
+            row['fresh_max_age_seconds'] = refresh_policy.FRESH_MAX_AGE_SECONDS
+        return rows
     except Exception:
         return {}
 
@@ -138,7 +150,7 @@ def api_refresh_stream():
         return jsonify({'success': False, 'error': 'Live updates are disabled'}), 404
 
     limits = sse_limits()
-    if not _stream_slot_available(limits['max_streams']):
+    if not _try_acquire_stream_slot(limits['max_streams']):
         return jsonify({
             'success': False,
             'error': 'Too many live update streams; falling back to polling',
@@ -150,7 +162,6 @@ def api_refresh_stream():
     # renewed here). Bounded by the same watch cap.
     watched_servers = refresh_policy.note_watched_servers(
         request.args.get('servers') or request.args.get('server_ids'))
-    _acquire_stream_slot()
 
     def generate():
         client_revision = since
@@ -159,6 +170,10 @@ def api_refresh_stream():
         previous_revision = client_revision if client_revision is not None else 0
         deadline = time.monotonic() + limits['max_seconds']
         try:
+            try:
+                load_snapshot_from_redis()
+            except Exception:
+                pass
             yield 'retry: 3000' + '\n\n'
             yield sse_event('hello', {
                 'revision': snapshot_delta.current_revision(GLOBAL_SERVER_DATA),
@@ -171,7 +186,6 @@ def api_refresh_stream():
                 # stream at "now" so connecting does not trigger a redundant fetch.
                 client_revision = snapshot_delta.current_revision(GLOBAL_SERVER_DATA)
             last_heartbeat = time.monotonic()
-            ticks_since_hydrate = 0
             while time.monotonic() < deadline:
                 # A connected viewer counts as activity, but only once per minute
                 # so a forgotten tab cannot pin the fetcher to the fast cadence.
@@ -179,15 +193,12 @@ def api_refresh_stream():
                 # The per-server marks are shorter lived than the stream's own
                 # connection, so renew the declared panels on every tick.
                 refresh_policy.note_watched_servers(watched_servers)
-                ticks_since_hydrate += 1
-                if ticks_since_hydrate >= 5:
-                    # Multi-worker: pick up a snapshot another worker published, so
-                    # this stream does not miss external changes.
-                    ticks_since_hydrate = 0
-                    try:
-                        load_snapshot_from_redis()
-                    except Exception:
-                        pass
+                # The version-key check is cheap; hydrate another worker's successful
+                # publication within one tick, without another panel request.
+                try:
+                    load_snapshot_from_redis()
+                except Exception:
+                    pass
                 sync = snapshot_delta.build_sync(GLOBAL_SERVER_DATA, client_revision)
                 # Phase 9: hand over the individual clients that moved, with their
                 # verified state, so a second tab can patch one card instead of fetching
@@ -204,6 +215,11 @@ def api_refresh_stream():
                 else:
                     client_revision = sync['revision']
                     yield sse_event('changed', {
+                        'type': 'snapshot.changed',
+                        'server_ids': sorted({pair[0] for pair in
+                                              sync.get('changed', []) + sync.get('removed', [])}, key=str),
+                        'changed_inbound_keys': sync.get('changed', []),
+                        'removed_inbound_keys': sync.get('removed', []),
                         'mode': sync['mode'],
                         'revision': sync['revision'],
                         'last_update': sync.get('last_update'),
@@ -359,7 +375,7 @@ def api_refresh():
             # Freshness/mode per panel, in the backend's own vocabulary: a dashboard must
             # be able to say "Stale - 42s ago" without inventing thresholds in JS, and a
             # panel the fetcher has no row for stays absent rather than looking live.
-            "servers_sync": _sync_report_for(inbounds),
+            "servers_sync": _sync_report_for(GLOBAL_SERVER_DATA.get('inbounds') or []),
             "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
             "refresh_job": _summarize_job(job),
         }

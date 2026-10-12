@@ -204,7 +204,10 @@ def sync(snapshot, force=False):
     """Bring the revision history up to date; returns revision/changed/removed."""
     with _lock:
         last_update = snapshot.get('last_update') if isinstance(snapshot, dict) else None
-        if (not force) and (not _state['dirty']) and last_update == _state['last_update']:
+        # With a shared manifest only successful publication advances the cursor.
+        published_revision = snapshot.get('_published_revision') if isinstance(snapshot, dict) else None
+        if (not force) and (not _state['dirty']) and last_update == _state['last_update'] and (
+                published_revision is None or published_revision == _state['revision']):
             return {'revision': _state['revision'], 'changed': [], 'removed': []}
 
         inbounds = (snapshot.get('inbounds') or []) if isinstance(snapshot, dict) else []
@@ -277,7 +280,12 @@ def sync(snapshot, force=False):
         _state['dirty_keys'] = set()
 
         revision = _state['revision']
-        if changed or removed or meta_changed or revision == 0:
+        if published_revision is not None:
+            revision = int(published_revision)
+            _state['revision'] = revision
+            # History already committed with the manifest; do not publish it again
+            # from a reader whose previous local snapshot may be much older.
+        elif changed or removed or meta_changed or revision == 0:
             revision = _next_revision()
             _state['revision'] = revision
             _record_history(revision, [_pair(key) for key in changed],
@@ -325,7 +333,8 @@ def build_sync(snapshot, since, force=False):
     result = sync(snapshot, force=force)
     revision = result['revision']
     last_update = snapshot.get('last_update') if isinstance(snapshot, dict) else None
-    base = {'revision': revision, 'last_update': last_update}
+    base = {'revision': revision, 'last_update': last_update,
+            'published_at': snapshot.get('_published_at') if isinstance(snapshot, dict) else None}
 
     since_int = _to_int(since)
     if since_int is None:
@@ -346,15 +355,21 @@ def build_sync(snapshot, since, force=False):
     removed = set()
     for revision_item in expected:
         record = records[revision_item]
-        changed.update(_unpair(pair) for pair in record.get('changed') or [])
-        removed.update(_unpair(pair) for pair in record.get('removed') or [])
-    changed -= removed
+        for pair in record.get('changed') or []:
+            key = _unpair(pair)
+            changed.add(key)
+            removed.discard(key)
+        for pair in record.get('removed') or []:
+            key = _unpair(pair)
+            removed.add(key)
+            changed.discard(key)
     if len(changed) > MAX_DELTA_KEYS:
         return dict(base, mode='full', reason='too_many_changes')
 
     return dict(
         base,
         mode='delta',
+        since=since_int,
         changed=[_pair(key) for key in sorted(changed, key=str)],
         removed=[_pair(key) for key in sorted(removed, key=str)],
     )

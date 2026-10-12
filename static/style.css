@@ -5899,6 +5899,7 @@ button.sms-center-row:focus-visible { outline: 2px solid var(--primary); outline
     border: 1px solid rgba(100,116,139,0.2);
     white-space: nowrap;
 }
+.v3-ib-tag.disabled { opacity: 0.65; border-style: dashed; }
 .v3-ib-tag.vless { background: rgba(99,102,241,0.12); color: #818cf8; border-color: rgba(99,102,241,0.25); }
 .v3-ib-tag.vmess { background: rgba(59,130,246,0.12); color: #60a5fa; border-color: rgba(59,130,246,0.25); }
 .v3-ib-tag.trojan { background: rgba(245,158,11,0.12); color: #fbbf24; border-color: rgba(245,158,11,0.25); }

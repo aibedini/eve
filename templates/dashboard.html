@@ -6,16 +6,19 @@
 {% block header_actions %}
 <div class="header-controls">
     <label class="toggle-switch" title="Auto Refresh">
-        <input type="checkbox" id="auto-refresh-toggle" onchange="toggleAutoRefresh()">
+        <input type="checkbox" id="auto-refresh-toggle" checked onchange="toggleAutoRefresh()">
         <span class="slider"></span>
     </label>
     <select id="refresh-interval" class="interval-select" onchange="updateRefreshInterval()">
-        <option value="10">10s</option>
+        <option value="5">5s</option>
+        <option value="10" selected>10s</option>
         <option value="30">30s</option>
-        <option value="60" selected>60s</option>
+        <option value="60">60s</option>
         <option value="120">2 min</option>
         <option value="300">5 min</option>
     </select>
+    <small id="dashboard-live-status" class="field-note" role="status"></small>
+    <button class="btn btn-outline" onclick="showDashboardSyncDebug()">Sync details</button>
     <button class="btn btn-primary" onclick="refreshData()">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"></polyline>
@@ -1690,18 +1693,23 @@
     </div>
 </div>
 
+<div id="dashboard-sync-debug" class="modal-overlay hidden">
+    <div class="modal modal-lg">
+        <div class="modal-header"><h3>Dashboard sync diagnostics</h3><button class="modal-close" onclick="document.getElementById('dashboard-sync-debug').classList.add('hidden')">&times;</button></div>
+        <div class="modal-body"><pre id="dashboard-sync-debug-data"></pre></div>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='dashboard_live.js') }}" nonce="{{ csp_nonce }}"></script>
 <script nonce="{{ csp_nonce }}">
     function escHtml(s) {
         return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
-    let autoRefreshInterval = null;
     let currentLink = '';
     let inboundsData = [];
     let allInboundsData = [];
     let pendingServers = [];
     let serverStatuses = []; // /api/refresh -> servers (status list)
-    let snapshotRevision = null; // last applied /api/refresh revision (delta sync)
     // /api/refresh -> servers_sync: one scheduling/freshness row per server id
     // (string key). It is the ONLY freshness source: the shared inbound blocks carry
     // no per-request age, because stamping one into them would change the delta
@@ -1710,8 +1718,6 @@
     // behind the numbers on the card", and a server missing here is unknown - never
     // "live". Never derive one from the other.
     let serversSync = {};
-    let refreshController = null;
-    const serverRefreshControllers = new Map(); // serverId -> AbortController
     let activeRefreshJobId = null;
     let refreshJobPollTimer = null;
     // True while a full refresh job is in flight — used to keep the skeleton up
@@ -2410,12 +2416,11 @@
         getClientCreatedTemplate();   // warm cache so the first "new service" modal is instant
         // Load servers first to know if we have any
         loadServers().then(() => {
-            // Kick off a background refresh (non-blocking) and render cached data immediately.
-            // Warm the last-user cache from the snapshot AFTER it loads — no HTTP storm.
-            refreshData(true, { mode: 'full', poll: true }).finally(() => {
+            // Read the shared cache; panel fetching belongs to the backend scheduler.
+            refreshData(true, { mode: 'cache', poll: false }).finally(() => {
                 hideLoading();
                 prefetchAllLastUsers();
-                startLiveUpdates();
+                startAutoRefresh();
             });
         });
         const globalSearchInput = document.getElementById('global-search-input');
@@ -2463,6 +2468,7 @@
         
         if (toggle.checked) {
             startAutoRefresh();
+            dashboardLive.resumeVisible();
         } else {
             stopAutoRefresh();
         }
@@ -2475,83 +2481,53 @@
     }
 
     const SSE_ENABLED = {{ (sse_enabled|default(false))|tojson }};
-    let liveUpdates = null;
+    const dashboardLive = new DashboardLiveSync({
+        sseEnabled: SSE_ENABLED,
+        hidden: () => document.hidden,
+        interval: () => Math.max(5000, parseInt(document.getElementById('refresh-interval').value) * 1000 || 10000),
+        watched: () => watchedServerIds(),
+        reconcile: () => refreshData(true, { mode: 'cache', poll: false }),
+        status: () => updateDashboardLiveStatus(),
+    });
+    window.eveDashboardSync = () => dashboardLive.diagnostics();
 
-    // Live updates: the server pushes a "changed" nudge, the HTTP path does the
-    // delta/full decision and the merge. Only available when the operator turned
-    // EVE_SSE_ENABLED on; otherwise the auto-refresh interval is the only source.
-    function startLiveUpdates() {
-        if (!SSE_ENABLED || typeof window.EventSource === 'undefined' || liveUpdates) return;
-        try {
-            const streamParams = new URLSearchParams();
-            if (snapshotRevision !== null) streamParams.set('since', String(snapshotRevision));
-            // Phase 10: the stream renews the watch marks while it is open, so a tab
-            // driven by live updates (which polls rarely) still keeps the panels it
-            // renders on the per-server active cadence.
-            const streamWatched = watchedServerIds();
-            if (streamWatched.length) streamParams.set('servers', streamWatched.join(','));
-            const streamQuery = streamParams.toString();
-            const streamUrl = '/api/refresh/stream' + (streamQuery ? '?' + streamQuery : '');
-            liveUpdates = new EventSource(streamUrl);
-        } catch (error) {
-            liveUpdates = null;
-            return;
-        }
-        liveUpdates.addEventListener('changed', function () {
-            refreshData(true, { mode: 'cache', poll: false });
-        });
-        // Phase 9 fast path: the stream names the client that moved and carries its
-        // verified state, so this tab patches one card and does not wait for the nudge
-        // to fetch a delta. Without a state (an unverified write) it still asks the
-        // HTTP path, which keeps the delta/full decision in one place.
-        liveUpdates.addEventListener('client.changed', function (message) {
-            let event = null;
-            try {
-                event = JSON.parse(message.data || '{}');
-            } catch (error) {
-                event = null;
-            }
-            if (!event || !event.server_id) {
-                refreshData(true, { mode: 'cache', poll: false });
-                return;
-            }
-            if (typeof event.revision === 'number' && event.revision > 0) {
-                snapshotRevision = Math.max(snapshotRevision || 0, event.revision);
-            }
-            if (!event.client_state) {
-                refreshData(true, { mode: 'cache', poll: false });
-                return;
-            }
-            applyClientMutation({ mutation: event, client_state: event.client_state },
-                                { serverId: event.server_id, email: event.email });
-        });
-        liveUpdates.onerror = function () {
-            // EventSource reconnects on its own; the polling interval stays as a
-            // safety net when the operator enabled it.
-        };
+    function updateDashboardLiveStatus() {
+        const node = document.getElementById('dashboard-live-status');
+        if (!node) return;
+        const behind = dashboardLive.pendingTargetRevision > (dashboardLive.lastAppliedRevision || 0);
+        const old = dashboardLive.lastAppliedRevision === null || !dashboardLive.lastDashboardRefreshAt || Date.now() - dashboardLive.lastDashboardRefreshAt > 25000;
+        const state = !dashboardLive.enabled ? 'Live updates paused' :
+            dashboardLive.lastFetchError || old ? 'Dashboard: Showing last known data' :
+            behind ? 'Dashboard: Reconciling' : 'Dashboard: Synced';
+        node.textContent = state + (dashboardLive.lastAppliedRevision != null ? ` · Revision: ${dashboardLive.lastAppliedRevision}` : '');
+        node.className = !dashboardLive.enabled || old || behind || dashboardLive.lastFetchError
+            ? 'field-note field-note-warn' : 'field-note field-note-ok';
+        node.title = JSON.stringify(dashboardLive.diagnostics(), null, 2);
     }
 
-    function stopLiveUpdates() {
-        if (liveUpdates) {
-            liveUpdates.close();
-            liveUpdates = null;
-        }
+    function showDashboardSyncDebug() {
+        const modal = document.getElementById('dashboard-sync-debug');
+        document.getElementById('dashboard-sync-debug-data').textContent = JSON.stringify(dashboardLive.diagnostics(), null, 2);
+        modal.classList.remove('hidden');
     }
+
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) dashboardLive.resumeVisible();
+        else dashboardLive.schedulePoll();
+    });
+    window.addEventListener('online', () => dashboardLive.resumeVisible());
+    window.addEventListener('pagehide', () => dashboardLive.pause());
+    window.addEventListener('pageshow', event => {
+        if (event.persisted && document.getElementById('auto-refresh-toggle').checked) startAutoRefresh();
+    });
+    setInterval(() => { _refreshSyncIndicators(); updateDashboardLiveStatus(); }, 1000);
 
     function startAutoRefresh() {
-        stopAutoRefresh();
-        const interval = parseInt(document.getElementById('refresh-interval').value) * 1000;
-        // With live updates the interval is only a safety net, so keep it slow.
-        const effective = SSE_ENABLED ? Math.max(interval, 30000) : interval;
-        // Auto refresh should be lightweight: fetch cached payload only.
-        autoRefreshInterval = setInterval(() => refreshData(true, { mode: 'cache', poll: false }), effective);
+        dashboardLive.start();
     }
 
     function stopAutoRefresh() {
-        if (autoRefreshInterval) {
-            clearInterval(autoRefreshInterval);
-            autoRefreshInterval = null;
-        }
+        dashboardLive.pause();
     }
 
     function isSearchActive() {
@@ -2825,6 +2801,16 @@
     function clientStoreChanged(options = {}) {
         invalidateClientSearchIndex();
         recomputeLocalCounters();
+        const valid = new Set();
+        (allInboundsData || []).forEach(inbound => (inbound.clients || []).forEach(client => {
+            valid.add(makeBulkClientKey(inbound.server_id, inbound.id, client.email));
+        }));
+        for (const key of bulkSelectedClientKeys.keys()) if (!valid.has(key)) bulkSelectedClientKeys.delete(key);
+        const inboundKeys = new Set((allInboundsData || []).map(ib => `${ib.server_id}:${ib.id}`));
+        const serverKeys = new Set((allInboundsData || []).map(ib => `v3s:${ib.server_id}`));
+        for (const key of _cardRowData.keys()) {
+            if (!inboundKeys.has(key) && !serverKeys.has(key)) _cardRowData.delete(key);
+        }
         const shouldRender = (options && Object.prototype.hasOwnProperty.call(options, 'render'))
             ? Boolean(options.render)
             : true;
@@ -3035,11 +3021,10 @@
         const email = (mutation && mutation.email) || (state && state.email) || fallback.email;
         const inboundId = (state && state.inbound_id != null) ? state.inbound_id : fallback.inboundId;
 
-        // Keep the delta-sync cursor in step with the snapshot revision the mutation
-        // landed at, so the next poll asks for what changed after it instead of
-        // replaying. (`server_revision` is a per-server counter and is not a cursor.)
+        // A client patch is partial: reconcile before acknowledging the snapshot.
+        // server_revision fences one server's writes; it is never a dashboard cursor.
         if (mutation && typeof mutation.snapshot_revision === 'number' && mutation.snapshot_revision > 0) {
-            snapshotRevision = Math.max(snapshotRevision || 0, mutation.snapshot_revision);
+            dashboardLive.pendingTargetRevision = Math.max(dashboardLive.pendingTargetRevision, mutation.snapshot_revision);
         }
         if (!serverId || !email) return false;
 
@@ -3179,6 +3164,13 @@
     }
 
     async function refreshServerData(serverId, options = {}) {
+        if (!options.mode || options.mode === 'cache') {
+            return refreshData(true, { mode: 'cache', poll: false });
+        }
+        return dashboardLive.request(request => _refreshServerDataRequest(request, serverId, options), { coalesce: false });
+    }
+
+    async function _refreshServerDataRequest(request, serverId, options) {
         const sid = parseInt(serverId);
         if (!Number.isFinite(sid)) return;
 
@@ -3187,13 +3179,7 @@
         const mode = (options && options.mode) ? String(options.mode) : 'cache';
         const enqueue = (options && options.enqueue !== undefined) ? Boolean(options.enqueue) : (mode !== 'cache');
 
-        // Abort previous server refresh for the same server
-        const prev = serverRefreshControllers.get(String(sid));
-        if (prev) {
-            try { prev.abort(); } catch (e) {}
-        }
-        const controller = new AbortController();
-        serverRefreshControllers.set(String(sid), controller);
+        const controller = request.controller;
 
         try {
             const params = new URLSearchParams();
@@ -3203,6 +3189,7 @@
             const qs = params.toString() ? `?${params.toString()}` : '';
             const resp = await fetch(`/api/server/${sid}/refresh${qs}`, { signal: controller.signal, cache: 'no-store' });
             const data = await resp.json();
+            if (!dashboardLive.isCurrent(request)) return;
 
             if (data && data.success) {
                 // The per-server endpoint is NOT part of the servers_sync contract, so
@@ -3256,9 +3243,6 @@
             }
         } catch (e) {
             if (e && e.name === 'AbortError') return;
-        } finally {
-            const cur = serverRefreshControllers.get(String(sid));
-            if (cur === controller) serverRefreshControllers.delete(String(sid));
         }
     }
 
@@ -3405,6 +3389,11 @@
     }
 
     async function refreshData(isSilent = false, options = {}) {
+        return dashboardLive.request(request => _refreshDataRequest(request, isSilent, options),
+            { supersede: !isSilent || Boolean(options.force) || Boolean(options.recovery) });
+    }
+
+    async function _refreshDataRequest(request, isSilent, options) {
         const refreshBtn = document.querySelector('.header-controls .btn-primary');
 
         const force = Boolean(options && options.force);
@@ -3413,12 +3402,7 @@
         const mode = (options && options.mode) ? String(options.mode) : (isSilent ? 'cache' : 'full');
         const enqueue = (options && options.enqueue !== undefined) ? Boolean(options.enqueue) : (mode !== 'cache');
         
-        // Cancel previous request if it exists
-        if (refreshController) {
-            refreshController.abort();
-        }
-        refreshController = new AbortController();
-        const signal = refreshController.signal;
+        const signal = request.controller.signal;
 
         if (!isSilent) {
             if (refreshBtn) {
@@ -3436,6 +3420,7 @@
             const params = new URLSearchParams();
             if (force) params.set('force', '1');
             if (mode) params.set('mode', mode);
+            params.set('poll', String(poll));
             if (enqueue) params.set('enqueue', '1');
             if (serverId !== null && serverId !== '' && serverId !== undefined) params.set('server_id', String(serverId));
             // Phase 10: tell the server which panels this tab is rendering, so the
@@ -3448,10 +3433,12 @@
             // Silent polls ask for a delta; an explicit refresh always takes a
             // full snapshot so the operator's click cannot be answered with a
             // stale revision.
-            if (isSilent && snapshotRevision !== null) params.set('since', String(snapshotRevision));
+            if (isSilent && !options.recovery && dashboardLive.lastAppliedRevision !== null) params.set('since', String(dashboardLive.lastAppliedRevision));
             const qs = params.toString() ? `?${params.toString()}` : '';
             const response = await fetch(`/api/refresh${qs}`, { signal, cache: 'no-store' });
+            if (response.ok === false) throw new Error(`Cache HTTP ${response.status}`);
             const data = await response.json();
+            if (!dashboardLive.isCurrent(request, data.sync && data.sync.revision)) return;
             
             if (data.success) {
                 const jobId = data.refresh_job && data.refresh_job.id;
@@ -3464,15 +3451,17 @@
                 if (isAsyncJobPending && poll) _dashboardRefreshing = true;
 
                 const sync = data.sync || null;
-                if (sync && typeof sync.revision === 'number') {
-                    snapshotRevision = sync.revision;
-                }
                 // The servers_sync rows of THIS response are the authority (see
                 // _captureServersSync), so a render triggered below never shows the
                 // previous poll's idea of how fresh the data is.
                 _captureServersSync(data);
 
                 if (shouldApplySnapshotNow) {
+                    if (sync && sync.mode === 'delta' && sync.since !== dashboardLive.lastAppliedRevision) {
+                        // An absent/mismatched base cannot be safely merged. Recover from cache.
+                        dashboardLive.queued = false;
+                        return refreshData(true, { mode: 'cache', poll: false, recovery: true });
+                    }
                     if (sync && sync.mode === 'unchanged') {
                         // Nothing changed since the last poll: keep the current view.
                         // The freshness rows can still have moved, so repaint those
@@ -3484,6 +3473,8 @@
                     } else {
                         applySnapshotFull(data);
                     }
+                    // Advance only after the complete response has reached the store and DOM.
+                    dashboardLive.applied(sync, (data.inbounds || []).length + (data.removed || []).length);
                 }
 
                 if (jobId && poll) {
@@ -3498,15 +3489,18 @@
                     }
                 }
             } else {
+                dashboardLive.lastFetchError = 'Cache reconciliation failed';
                 if (!isSilent) showToast(data.error || 'Error updating data', 'error');
                 handleRefreshError();
             }
         } catch (error) {
             if (error.name === 'AbortError') return;
+            dashboardLive.lastFetchError = 'Cache request failed';
             console.error('Refresh error:', error);
             if (!isSilent) showToast('Error updating: ' + error.message, 'error');
             handleRefreshError();
         } finally {
+            if (!dashboardLive.isCurrent(request)) return;
             if (!isSilent) {
                 if (refreshBtn) {
                     refreshBtn.disabled = false;
@@ -3516,7 +3510,7 @@
                 }
             }
             hideLoading();
-            refreshController = null;
+            updateDashboardLiveStatus();
         }
     }
 
@@ -3746,7 +3740,7 @@
     // Build the rows of an expanded card incrementally (Layer 2). The first batch
     // renders immediately; further batches are appended as a bottom sentinel
     // scrolls near the viewport, so even a 10k-client card stays smooth.
-    function mountCardRows(sectionEl) {
+    function mountCardRows(sectionEl, previousCount = 0) {
         if (!sectionEl || sectionEl._rowsMounted) return;
         const btn = sectionEl.querySelector('.toggle-clients');
         const key = btn && btn.dataset ? btn.dataset.inboundKey : null;
@@ -3769,6 +3763,14 @@
         };
         sectionEl._teardownRows = teardown;
 
+        if (previousCount) {
+            const end = Math.min(Math.max(previousCount, ROW_BATCH), items.length);
+            const tpl = document.createElement('template');
+            tpl.innerHTML = items.slice(0, end).map(reg.buildRow).join('');
+            morphDashboardChildren(tbody, tpl.content);
+            idx = end;
+        }
+
         const appendBatch = () => {
             if (idx >= items.length) { teardown(); return; }
             const end = Math.min(idx + ROW_BATCH, items.length);
@@ -3783,7 +3785,8 @@
         };
 
         tbody.appendChild(sentinel);
-        appendBatch(); // first batch now
+        if (!previousCount) appendBatch(); // first batch now
+        else if (idx >= items.length) teardown();
         if (idx < items.length) {
             io = new IntersectionObserver((entries) => {
                 if (entries.some(e => e.isIntersecting)) appendBatch();
@@ -3822,7 +3825,7 @@
         fresh: {{ ('تازه' if panel_lang == 'fa' else 'Fresh')|tojson }},
         stale: {{ ('قدیمی' if panel_lang == 'fa' else 'Stale')|tojson }},
         issue: {{ ('مشکل همگام‌سازی' if panel_lang == 'fa' else 'Sync issue')|tojson }},
-        panelSync: {{ ('همگام‌سازی پنل' if panel_lang == 'fa' else 'Panel sync')|tojson }},
+        panelSync: {{ ('داده‌های پنل' if panel_lang == 'fa' else 'Panel data')|tojson }},
         telemetry: {{ ('تلمتری' if panel_lang == 'fa' else 'Telemetry')|tojson }},
         config: {{ ('تنظیمات' if panel_lang == 'fa' else 'Config')|tojson }},
         mode: {{ ('حالت پایش' if panel_lang == 'fa' else 'Poll mode')|tojson }},
@@ -3869,9 +3872,11 @@
     // snapshot whose reads stopped keep reading as "Live" forever. Only an
     // /api/refresh envelope may call this; the per-server endpoint is not part of
     // the contract and must not be able to erase what the contract supplied.
+    let serversSyncCapturedAt = 0;
     function _captureServersSync(payload) {
         const rows = payload && payload.servers_sync;
         serversSync = (rows && typeof rows === 'object' && !Array.isArray(rows)) ? rows : {};
+        serversSyncCapturedAt = Date.now();
     }
 
     // Label and tooltip are built together from ONE reading of the row, so a repaint
@@ -3881,8 +3886,18 @@
         const key = String(sid);
         const row = (serversSync && typeof serversSync === 'object') ? serversSync[key] : null;
         const detail = (row && typeof row === 'object') ? row : {};
-        const health = (typeof detail.sync_health === 'string' && detail.sync_health) ? detail.sync_health : '';
-        const age = _syncNumber(detail.last_success_age_seconds);
+        let health = (typeof detail.sync_health === 'string' && detail.sync_health) ? detail.sync_health : '';
+        const baseAge = _syncNumber(detail.last_success_age_seconds);
+        const elapsed = Math.max(0, (Date.now() - serversSyncCapturedAt) / 1000);
+        const age = baseAge === null ? null : baseAge + elapsed;
+        // Backend policy owns thresholds; age keeps ticking even when updates pause.
+        if (age !== null && ['live', 'fresh', 'stale'].includes(health)) {
+            const liveLimit = _syncNumber(detail.live_max_age_seconds);
+            const freshLimit = _syncNumber(detail.fresh_max_age_seconds);
+            if (liveLimit !== null && freshLimit !== null) {
+                health = age <= liveLimit ? 'live' : age <= freshLimit ? 'fresh' : 'stale';
+            } else if (elapsed > 10) health = 'stale';
+        }
         // Own-property lookup: a value such as "constructor" must resolve to unknown
         // and render nothing, not to something inherited from Object.prototype.
         const known = Object.prototype.hasOwnProperty.call(SYNC_HEALTH, health)
@@ -3896,7 +3911,7 @@
             : '';
         const word = SYNC_TEXT[known.word];
 
-        const tooltip = [word];
+        const tooltip = [word, `Dashboard revision: ${dashboardLive.lastAppliedRevision ?? 'unknown'}`];
         if (ageText) tooltip.push(`${SYNC_TEXT.panelSync}: ${ageText}`);
         const telemetry = _syncNumber(detail.telemetry_age_seconds);
         if (telemetry !== null) tooltip.push(`${SYNC_TEXT.telemetry}: ${_formatSyncSeconds(telemetry)}${ago}`);
@@ -3908,7 +3923,7 @@
         if (nextDue !== null) tooltip.push(`${SYNC_TEXT.nextPoll}: ${_formatSyncSeconds(nextDue)}`);
 
         return {
-            text: ageText ? `${word} · ${ageText}` : word,
+            text: `${SYNC_TEXT.panelSync}: ` + (ageText ? `${word} · ${ageText}` : word),
             title: tooltip.join('\n'),
             cls: known.tone ? `field-note ${known.tone}` : 'field-note',
         };
@@ -3951,7 +3966,8 @@
 
     function _buildV3ServerCard(sid, serverInbounds, forceExpand = false) {
         const server = (allServers || []).find(s => String(s.id) === String(sid));
-        const serverName = server ? server.name : `Server #${sid}`;
+        const status = (serverStatuses || []).find(s => String(s.server_id) === String(sid));
+        const serverName = serverInbounds[0]?.server_name || status?.name || (server ? server.name : `Server #${sid}`);
         const cardKey = `v3s:${sid}`;
         // Search results force-expand so the matched client is visible immediately.
         const isExpanded = forceExpand || expandedInboundKeys.has(cardKey);
@@ -3973,7 +3989,7 @@
         const activeCount = entries.filter(e => e.client.enable).length;
 
         const ibTagsHtml = serverInbounds.map(ib =>
-            `<span class="v3-ib-tag ${(ib.protocol || '').toLowerCase()}">${escapeHtml(ib.protocol)} · ${renderInboundName(ib.remark)}</span>`
+            `<span class="v3-ib-tag ${(ib.protocol || '').toLowerCase()} ${ib.enable === false ? 'disabled' : ''}" title="${ib.enable === false ? 'Disabled' : 'Active'}">${escapeHtml(ib.protocol)} · ${renderInboundName(ib.remark)}</span>`
         ).join('');
 
         const SVG_HIDE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>`;
@@ -4007,7 +4023,7 @@
         </div>` : '';
 
         const html = `
-        <div class="inbound-card v3-server-card">
+        <div class="inbound-card v3-server-card" data-dashboard-key="${cardKey}">
             <div class="inbound-header">
                 <div class="inbound-title" style="flex-wrap:wrap;gap:6px;align-items:center;">
                     <span class="v3-badge">v3</span>
@@ -4016,7 +4032,7 @@
                     <div class="v3-ib-tags">${ibTagsHtml}</div>
                 </div>
                 <div class="inbound-status">
-                    <span class="status-pill active">Active</span>
+                    <span class="status-pill ${serverInbounds.some(ib => ib.enable !== false) ? 'active' : 'inactive'}">${serverInbounds.some(ib => ib.enable !== false) ? 'Active' : 'Inactive'}</span>
                     ${totalCount > 0 ? `<button class="btn btn-secondary" style="padding:6px 10px;" title="Remaining-volume distribution" onclick="event.stopPropagation(); openVolumeStatsModal('${cardKey}')"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></button>` : ''}
                     ${totalCount > 0 ? `<button class="btn btn-secondary" style="padding:6px 10px;" onclick="event.stopPropagation(); toggleSelectAllClients('${cardKey}', true)">Select All</button>` : ''}
                 </div>
@@ -4037,12 +4053,10 @@
         if (countEl) countEl.textContent = `${inbounds.length} inbounds`;
 
         // Invalidate any in-flight chunked render (and any other innerHTML swap).
-        const myToken = ++_inboundsRenderToken;
-        // Rebuild the lazy-row registry for this render (drops stale cards).
-        _cardRowData.clear();
-        let html = '';
+        ++_inboundsRenderToken;
+        // Keep existing row mounts for unchanged cards; refresh their registry below.
 
-        if (inbounds.length === 0 && (!pendingServers || pendingServers.length === 0)) {
+        if (inbounds.length === 0 && (!allServers || allServers.length === 0) && (!pendingServers || pendingServers.length === 0)) {
             // A refresh is still fetching panels — keep the skeleton up instead of
             // briefly flashing "No servers added" before the data lands.
             if (_dashboardRefreshing) { showDashboardSkeleton(); return; }
@@ -4089,7 +4103,7 @@
                 enableOf: (c) => !!c.enable,
             });
             _renderItems.push({ clientCount: toggleCount, html: `
-            <div class="inbound-card ${!inbound.enable ? 'disabled' : ''}">
+            <div class="inbound-card ${!inbound.enable ? 'disabled' : ''}" data-dashboard-key="${inboundKey}">
                 <div class="inbound-header">
                     <div class="inbound-title">
                         <span class="protocol-badge ${inbound.protocol.toLowerCase()}">${inbound.protocol}</span>
@@ -4239,7 +4253,7 @@
                         };
 
                         return `
-                        <div class="inbound-card" style="border-style: dashed; opacity: 0.95;">
+                        <div class="inbound-card" data-dashboard-key="empty:${sid}" style="border-style: dashed; opacity: 0.95;">
                             <div class="inbound-header">
                                 <div class="inbound-title">
                                     <span class="protocol-badge" style="background: rgba(148,163,184,0.14); color: rgba(226,232,240,0.9);">${isErr ? 'ERROR' : 'EMPTY'}</span>
@@ -4280,38 +4294,72 @@
             `).join('');
         }
 
-        // ── Chunked injection ────────────────────────────────────────────────
-        // Cards now ship with an EMPTY <tbody> (rows are built lazily on expand),
-        // so injecting card shells is cheap — batch by card count, not row count.
-        container.innerHTML = '';
-        const CARDS_PER_FRAME = 60;  // card shells injected per frame
-        let _ci = 0;
-        const _renderChunk = () => {
-            if (myToken !== _inboundsRenderToken) return; // a newer render superseded us
-            if (_ci < _renderItems.length) {
-                let buf = '';
-                let cards = 0;
-                while (_ci < _renderItems.length && (buf === '' || cards < CARDS_PER_FRAME)) {
-                    buf += _renderItems[_ci].html;
-                    cards++;
-                    _ci++;
+        reconcileDashboardCards(_renderItems.map(item => item.html).join('') + extraHtml);
+    }
+
+    const dashboardCardSignatures = new Map();
+    function reconcileDashboardCards(html) {
+        const container = document.getElementById('inbounds-container');
+        const tpl = document.createElement('template');
+        tpl.innerHTML = html;
+        const oldCards = new Map(Array.from(container.children).map(card => [card.dataset.dashboardKey, card]));
+        const retained = new Set();
+        let cursor = container.firstElementChild;
+        const scroll = Array.from(document.querySelectorAll('.content-area, .clients-list')).map(node => [node, node.scrollTop, node.scrollLeft]);
+        const windowScroll = [window.scrollX, window.scrollY];
+        for (const next of Array.from(tpl.content.children)) {
+            const key = next.dataset.dashboardKey;
+            const current = key && oldCards.get(key);
+            const reg = key && _cardRowData.get(key);
+            // Freshness changes independently; it must not invalidate a server's rows.
+            const shell = next.cloneNode(true);
+            shell.querySelectorAll('[data-sync-server]').forEach(node => node.remove());
+            const signature = shell.innerHTML + JSON.stringify(reg ? reg.items : []);
+            if (current && dashboardCardSignatures.get(key) !== signature) {
+                const section = current.querySelector('.clients-section');
+                const list = section && section.querySelector('.clients-list');
+                const nextList = next.querySelector('.clients-list');
+                const mounted = Boolean(section && section._rowsMounted);
+                const count = mounted ? section.querySelectorAll('tbody .client-bulk-checkbox').length : 0;
+                if (list && nextList) {
+                    const hidden = list.classList.contains('hidden');
+                    nextList.classList.toggle('hidden', hidden);
+                    const nextToggle = next.querySelector('.toggle-clients');
+                    if (nextToggle) {
+                        const icon = current.querySelector('.toggle-clients svg');
+                        const count = nextToggle.dataset.clientCount || '0';
+                        nextToggle.innerHTML = (icon ? icon.outerHTML : '') + ` ${hidden ? 'Show' : 'Hide'} Clients (${count})`;
+                    }
                 }
-                const tpl = document.createElement('template');
-                tpl.innerHTML = buf;
-                container.appendChild(tpl.content);
-                requestAnimationFrame(_renderChunk);
-                return;
+                if (section && section._teardownRows) section._teardownRows();
+                morphDashboardNode(current, next, mounted);
+                const updated = current.querySelector('.clients-section');
+                if (updated) {
+                    updated._rowsMounted = false;
+                    if (mounted) mountCardRows(updated, count || ROW_BATCH);
+                }
             }
-            if (extraHtml) {
-                const tpl = document.createElement('template');
-                tpl.innerHTML = extraHtml;
-                container.appendChild(tpl.content);
-            }
-            mountExpandedCards();   // build rows only for cards left expanded
-            applyBulkSelectionToDOM();
-            updateBulkUI();
-        };
-        _renderChunk();
+            const card = current || next;
+            if (card !== cursor) container.insertBefore(card, cursor);
+            retained.add(card);
+            cursor = card.nextElementSibling;
+            if (key) dashboardCardSignatures.set(key, signature);
+        }
+        for (const card of Array.from(container.children)) {
+            if (retained.has(card)) continue;
+            card.querySelectorAll('.clients-section').forEach(section => {
+                if (section._teardownRows) section._teardownRows();
+            });
+            dashboardCardSignatures.delete(card.dataset.dashboardKey);
+            _cardRowData.delete(card.dataset.dashboardKey);
+            card.remove();
+        }
+        mountExpandedCards();
+        applyBulkSelectionToDOM();
+        updateBulkUI();
+        _refreshSyncIndicators();
+        scroll.forEach(([node, top, left]) => { if (node.isConnected) { node.scrollTop = top; node.scrollLeft = left; } });
+        if (window.scrollX !== windowScroll[0] || window.scrollY !== windowScroll[1]) window.scrollTo(...windowScroll);
     }
 
     function toggleClients(btn, ev) {
@@ -8145,7 +8193,6 @@ Connection links
 
     function updateInboundsFiltered(filteredResults) {
         _inboundsRenderToken++; // abort any in-flight chunked main-list render
-        _cardRowData.clear();   // rebuild the registry for the search view
         if (filteredResults.length === 0) {
             const container = document.getElementById('inbounds-container');
             container.innerHTML = `<div class="empty-state"><h3>No results</h3></div>`;
@@ -8212,7 +8259,7 @@ Connection links
                 _syncFirst ? _serverSyncHtml(sid) : ''));
         });
 
-        container.innerHTML = parts.join('');
+        reconcileDashboardCards(parts.join(''));
         mountExpandedCards();   // build rows for the force-expanded search cards
         applyBulkSelectionToDOM();
         updateBulkUI();
@@ -8225,7 +8272,7 @@ Connection links
         const count = inbound.clients.length;
         const SVG_HIDE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>`;
         return `
-        <div class="inbound-card ${!inbound.enable ? 'disabled' : ''}">
+        <div class="inbound-card ${!inbound.enable ? 'disabled' : ''}" data-dashboard-key="${inboundKey}">
             <div class="inbound-header">
                 <div class="inbound-title">
                     <span class="protocol-badge ${String(inbound.protocol || '').toLowerCase()}">${inbound.protocol}</span>

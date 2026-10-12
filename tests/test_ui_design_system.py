@@ -435,7 +435,8 @@ class MutationResponseWiringTests(unittest.TestCase):
             self.assertIn(field, self.helper, field)
 
     def test_it_keeps_the_delta_cursor_in_step(self):
-        self.assertIn("snapshotRevision", self.helper)
+        self.assertIn("pendingTargetRevision", self.helper)
+        self.assertNotIn("lastAppliedRevision =", self.helper)
 
     def test_an_unverified_payload_is_not_adopted(self):
         self.assertIn("if (!state) return false;", self.helper)
@@ -444,16 +445,17 @@ class MutationResponseWiringTests(unittest.TestCase):
         # The renew success path and the re-check path.
         self.assertGreaterEqual(self.dashboard.count("applyClientMutation(data,"), 2)
 
-    def test_the_sse_fast_path_patches_one_client(self):
-        """Phase 9: another tab applies the streamed client instead of a delta fetch."""
-        match = re.search(r"liveUpdates\.addEventListener\('client\.changed'.*?\n        \}\);",
-                          self.dashboard, re.S)
+    def test_the_sse_client_event_reconciles_without_skipping_revisions(self):
+        """A partial client event invalidates cache without acknowledging the full snapshot."""
+        live = _read(os.path.join(REPO_ROOT, "static", "dashboard_live.js"))
+        match = re.search(r"source\.addEventListener\('client\.changed'.*?\n            \}\);",
+                          live, re.S)
         self.assertIsNotNone(match, "the dashboard does not listen for client.changed")
         listener = match.group(0)
-        self.assertIn("client_state", listener)
-        self.assertIn("applyClientMutation(", listener)
-        # Without a verified state it falls back to the revision-driven HTTP path.
-        self.assertIn("refreshData(true, { mode: 'cache', poll: false });", listener)
+        self.assertIn("this.notify(payload)", listener)
+        self.assertNotIn("this.lastAppliedRevision =", listener)
+        # All event paths use the revision-driven cache request coordinator.
+        self.assertIn("this.options.reconcile()", live)
 
 
 class ClientStoreFunnelTests(unittest.TestCase):
