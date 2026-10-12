@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.10.6"
+APP_VERSION = "2.10.7"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -3013,7 +3013,8 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 client_data['traffic_scope'] = 'account' if _is_v3 else 'membership'
                 client_data['traffic_available'] = _stat is not None
                 if _is_v3:
-                    client_data['global_enable'] = (_stat or {}).get('enable', client.get('enable', True))
+                    client_data['global_enable'] = client.get('enable', True)
+                    client_data['traffic_enable'] = (_stat or {}).get('enable')
                 processed_clients.append(client_data)
 
             

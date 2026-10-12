@@ -53,6 +53,10 @@ is eligible. Unlimited quotas do not contribute finite bytes. Separately,
 `unused_allocated_raw` includes disabled or expired accounts, and
 `allocated_quota_raw` records their allocation. Reseller authorization filters
 memberships before aggregation; the shared snapshot is never modified.
+Settings enable and traffic-record enable are independent evidence. The account
+enable field follows client settings, not the traffic-record flag. Accounts with
+unverified finite capacity are counted in `unknown_clients`, rather than claimed
+inactive. Both traffic and remaining labels disclose incomplete evidence.
 
 ## Publication and recovery
 

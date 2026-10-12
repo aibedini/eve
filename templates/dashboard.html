@@ -3577,6 +3577,7 @@
         document.getElementById('stat-active').textContent = `${stats?.active_inbounds || 0} Active`;
         document.getElementById('stat-total-clients').textContent = stats?.total_clients || 0;
         document.getElementById('stat-total-clients').title = `${stats?.inbound_memberships || 0} inbound memberships; ${stats?.identity_conflicts || 0} identity conflicts; ${stats?.unknown_capability_servers || 0} servers awaiting capability detection`;
+        document.getElementById('stat-total-clients').title += `; ${stats?.unknown_clients || 0} accounts with unverified availability`;
         const onlineEl = document.getElementById('stat-online-clients');
         if (onlineEl) onlineEl.textContent = stats?.online_clients || 0;
         document.getElementById('stat-active-clients').textContent = stats?.active_clients || 0;
@@ -3596,6 +3597,7 @@
         document.getElementById('stat-download').textContent = `↓ ${stats?.total_download || '0 B'}`;
         const remEl = document.getElementById('stat-remaining');
         if (remEl) remEl.textContent = stats?.total_remaining || '0 B';
+        if (remEl && stats?.traffic_incomplete_clients) remEl.textContent += ' (incomplete)';
         if (remEl) remEl.title = 'Remaining quota counted once for globally enabled, non-expired accounts with an enabled inbound membership and verified traffic. Accounts awaiting first use are included; unlimited quotas are excluded.';
         const limEl = document.getElementById('stat-limited-clients');
         if (limEl) limEl.textContent = stats?.limited_clients || 0;

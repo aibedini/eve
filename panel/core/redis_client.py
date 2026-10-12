@@ -321,6 +321,7 @@ def _aggregate_stats(server_statuses):
         'unique_clients', 'inbound_memberships', 'allocated_quota_raw',
         'unused_allocated_raw', 'identity_conflicts', 'traffic_incomplete_clients',
         'unknown_capability_servers',
+        'unknown_clients',
     )
     total = {key: 0 for key in keys}
     for status in server_statuses or []:

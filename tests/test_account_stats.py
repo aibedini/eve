@@ -131,6 +131,8 @@ class AccountStatsTests(unittest.TestCase):
         stats = self.aggregate(rows(traffic_available=False))
         self.assertEqual(stats['traffic_incomplete_clients'], 1)
         self.assertEqual(stats['remaining_raw'], 0)
+        self.assertEqual(stats['unknown_clients'], 1)
+        self.assertEqual(stats['inactive_clients'], 0)
 
     def test_missing_copy_can_use_known_account_counter(self):
         data = rows()

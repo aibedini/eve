@@ -31,7 +31,7 @@ def aggregate_accounts(inbounds, *, modern_server_ids=(), now_ms=None):
     stats = dict.fromkeys((
         'total_inbounds', 'active_inbounds', 'total_clients', 'unique_clients',
         'inbound_memberships', 'active_clients', 'inactive_clients',
-        'online_clients', 'not_started_clients', 'unlimited_expiry_clients',
+        'online_clients', 'unknown_clients', 'not_started_clients', 'unlimited_expiry_clients',
         'unlimited_volume_clients', 'limited_clients', 'upload_raw',
         'download_raw', 'remaining_raw', 'unused_allocated_raw',
         'allocated_quota_raw', 'identity_conflicts', 'traffic_incomplete_clients',
@@ -108,7 +108,9 @@ def aggregate_accounts(inbounds, *, modern_server_ids=(), now_ms=None):
         usable = (enabled and account['usable_membership']
                   and (expiry <= 0 or expiry > now_ms)
                   and (quota == 0 or (complete and remaining > 0)))
-        stats['active_clients' if usable else 'inactive_clients'] += 1
+        uncertain = (enabled and account['usable_membership']
+                     and (expiry <= 0 or expiry > now_ms) and quota > 0 and not complete)
+        stats['unknown_clients' if uncertain else 'active_clients' if usable else 'inactive_clients'] += 1
         if usable:
             stats['remaining_raw'] += remaining
     stats['unique_clients'] = stats['total_clients']

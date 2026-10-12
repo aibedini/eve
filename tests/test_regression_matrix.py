@@ -672,6 +672,16 @@ class SubscriptionRegressionTests(unittest.TestCase):
 
 
 class CanonicalAccountStatsTests(MutationHarness):
+    def test_account_enable_and_traffic_enable_are_independent_evidence(self):
+        raw = self._raw(enable=True)
+        processed, _ = app_module.process_inbounds([
+            {'id': 1, 'enable': True, 'settings': json.dumps({'clients': [raw]}),
+             'clientStats': [{'email': raw['email'], 'up': 0, 'down': 0, 'enable': False}]},
+        ], self.server, self.admin)
+        client = processed[0]['clients'][0]
+        self.assertTrue(client['global_enable'])
+        self.assertFalse(client['traffic_enable'])
+
     def test_full_fetch_and_write_through_renewal_have_identical_totals(self):
         raw = self._raw(total=20 * GB, expiry=-31 * DAY_MS)
         raw_rows = [
