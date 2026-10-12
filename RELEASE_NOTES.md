@@ -1,4 +1,8 @@
-# Eve - Xui Manager v2.10.0
+# Eve - Xui Manager v2.10.1
+
+## [2.10.1] - 2026-10-12
+
+Includes the automatic Dashboard reconciliation changes below, with full cache recovery completion protected from obsolete request cleanup. Synchronization pause tests distinguish its owned timers from other dashboard features.
 
 ## [2.10.0] - 2026-10-12
 

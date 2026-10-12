@@ -3500,17 +3500,18 @@
             if (!isSilent) showToast('Error updating: ' + error.message, 'error');
             handleRefreshError();
         } finally {
-            if (!dashboardLive.isCurrent(request)) return;
-            if (!isSilent) {
-                if (refreshBtn) {
-                    refreshBtn.disabled = false;
-                    refreshBtn.innerHTML = refreshBtn.dataset.originalContent;
-                } else {
-                    hideLoading();
+            if (dashboardLive.isCurrent(request)) {
+                if (!isSilent) {
+                    if (refreshBtn) {
+                        refreshBtn.disabled = false;
+                        refreshBtn.innerHTML = refreshBtn.dataset.originalContent;
+                    } else {
+                        hideLoading();
+                    }
                 }
+                hideLoading();
+                updateDashboardLiveStatus();
             }
-            hideLoading();
-            updateDashboardLiveStatus();
         }
     }
 

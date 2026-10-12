@@ -1,5 +1,10 @@
 # Changelog - Eve
 
+## [2.10.1] - 2026-10-12
+
+### Fixed
+- Obsolete request cleanup no longer masks the completion of full cache recovery. Pause regression checks target synchronization timers separately from unrelated dashboard timers.
+
 ## [2.10.0] - 2026-10-12
 
 ### Fixed

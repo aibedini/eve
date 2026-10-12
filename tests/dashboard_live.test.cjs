@@ -104,7 +104,9 @@ test('stream bye falls back immediately and explicit pause stops both paths', ()
     const f = fixture(); f.live.start(); f.Source.instances[0].emit('bye');
     assert.equal(f.live.pollingFallback, true);
     f.live.pause(); const calls = f.reconciles(); f.live.resumeVisible();
-    assert.equal(f.reconciles(), calls); assert.equal(f.timers.size, 0);
+    assert.equal(f.reconciles(), calls);
+    assert.equal(f.timers.has(f.live.timer), false);
+    assert.equal(f.timers.has(f.live.reconnectTimer), false);
 });
 test('hidden tabs poll less often and visible/network recovery immediately reconcile', () => {
     const f = fixture(false); f.hidden(true); f.live.start();
