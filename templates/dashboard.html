@@ -78,17 +78,17 @@
                 </svg>
             </div>
             <div class="stat-info">
-                <span class="stat-label">Clients</span>
+                <span class="stat-label">Unique Clients</span>
                 <div class="stat-value-row">
                     <span class="stat-value" id="stat-total-clients">0</span>
-                    <span class="stat-online" title="Online clients">
+                    <span class="stat-online" title="Online accounts">
                         <span class="online-dot"></span>
                         <span id="stat-online-clients">0</span>
                     </span>
                 </div>
                 <div class="client-breakdown">
-                    <span class="client-count active-count"><span id="stat-active-clients">0</span></span>
-                    <span class="client-count inactive-count"><span id="stat-inactive-clients">0</span></span>
+                    <span class="client-count active-count" title="Active accounts"><span id="stat-active-clients">0</span></span>
+                    <span class="client-count inactive-count" title="Inactive accounts"><span id="stat-inactive-clients">0</span></span>
                     <span class="client-count expiry-start-after" title="Not started"><span id="stat-not-started-clients">0</span></span>
                     <span class="client-count unlimited-expiry" title="Unlimited expiry"><span id="stat-unlimited-expiry-clients">0</span></span>
                     <span class="client-count unlimited-volume" title="Unlimited volume"><span id="stat-unlimited-volume-clients">0</span></span>
@@ -102,7 +102,7 @@
                 </svg>
             </div>
             <div class="stat-info">
-                <span class="stat-label">Total Traffic</span>
+                <span class="stat-label">Total Account Traffic</span>
                 <span class="stat-value" id="stat-traffic">0 B</span>
                 <span class="stat-sub"><span id="stat-upload">↑ 0 B</span> / <span id="stat-download">↓ 0 B</span></span>
             </div>
@@ -115,7 +115,7 @@
                 </svg>
             </div>
             <div class="stat-info">
-                <span class="stat-label">Total Remaining</span>
+                <span class="stat-label">Total Usable Remaining</span>
                 <span class="stat-value" id="stat-remaining" style="color:#10b981;">0 B</span>
                 <span class="stat-sub" title="Active accounts with limited volume"><span id="stat-limited-clients">0</span> limited accounts</span>
             </div>
@@ -3451,6 +3451,10 @@
                 if (isAsyncJobPending && poll) _dashboardRefreshing = true;
 
                 const sync = data.sync || null;
+                if (sync && sync.complete === false) {
+                    dashboardLive.lastFetchError = 'Snapshot is incomplete; waiting for coherent cache data';
+                    return;
+                }
                 // The servers_sync rows of THIS response are the authority (see
                 // _captureServersSync), so a render triggered below never shows the
                 // previous poll's idea of how fresh the data is.
@@ -3474,6 +3478,14 @@
                         applySnapshotFull(data);
                     }
                     // Advance only after the complete response has reached the store and DOM.
+                    if (!dashboardInventoryMatches(allInboundsData, sync && sync.inventory)) {
+                        dashboardLive.lastFetchError = 'Snapshot inventory mismatch';
+                        dashboardLive.lastAppliedRevision = null;
+                        if (!options.recovery) {
+                            return refreshData(true, { mode: 'cache', poll: false, recovery: true });
+                        }
+                        return;
+                    }
                     dashboardLive.applied(sync, (data.inbounds || []).length + (data.removed || []).length);
                 }
 
@@ -3564,6 +3576,7 @@
         document.getElementById('stat-inbounds').textContent = stats?.total_inbounds || 0;
         document.getElementById('stat-active').textContent = `${stats?.active_inbounds || 0} Active`;
         document.getElementById('stat-total-clients').textContent = stats?.total_clients || 0;
+        document.getElementById('stat-total-clients').title = `${stats?.inbound_memberships || 0} inbound memberships; ${stats?.identity_conflicts || 0} identity conflicts; ${stats?.unknown_capability_servers || 0} servers awaiting capability detection`;
         const onlineEl = document.getElementById('stat-online-clients');
         if (onlineEl) onlineEl.textContent = stats?.online_clients || 0;
         document.getElementById('stat-active-clients').textContent = stats?.active_clients || 0;
@@ -3575,10 +3588,15 @@
         const unVolEl = document.getElementById('stat-unlimited-volume-clients');
         if (unVolEl) unVolEl.textContent = stats?.unlimited_volume_clients || 0;
         document.getElementById('stat-traffic').textContent = stats?.total_traffic || '0 B';
+        document.getElementById('stat-traffic').title = stats?.traffic_incomplete_clients
+            ? `Incomplete traffic evidence for ${stats.traffic_incomplete_clients} accounts; only verified counters are included.`
+            : 'Account traffic counted once per account.';
+        if (stats?.traffic_incomplete_clients) document.getElementById('stat-traffic').textContent += ' (incomplete)';
         document.getElementById('stat-upload').textContent = `↑ ${stats?.total_upload || '0 B'}`;
         document.getElementById('stat-download').textContent = `↓ ${stats?.total_download || '0 B'}`;
         const remEl = document.getElementById('stat-remaining');
         if (remEl) remEl.textContent = stats?.total_remaining || '0 B';
+        if (remEl) remEl.title = 'Remaining quota counted once for globally enabled, non-expired accounts with an enabled inbound membership and verified traffic. Accounts awaiting first use are included; unlimited quotas are excluded.';
         const limEl = document.getElementById('stat-limited-clients');
         if (limEl) limEl.textContent = stats?.limited_clients || 0;
     }
@@ -4200,6 +4218,7 @@
 
                 const serversList = Array.isArray(allServers) ? allServers : [];
                 const missingServers = serversList.filter(s => {
+                    if (s.hidden || s.enabled === false) return false;
                     const sid = parseInt(s?.id);
                     if (!Number.isFinite(sid)) return false;
                     if (visibleSelected && !visibleSelected.has(sid)) return false;
@@ -4245,6 +4264,8 @@
 
                         // Stash full error detail so the "Why?" modal can explain it.
                         (window.__serverErrorDetails = window.__serverErrorDetails || {})[sid] = {
+                            state: isErr ? 'error' : filtered ? 'filtered' : confirmedEmpty ? 'empty' : 'pending',
+                            client_api_generation: st.client_api_generation || 'unknown',
                             id: sid,
                             name: s?.name || ('Server #' + sid),
                             panel_type: String(s?.panel_type || st?.panel_type || ''),
@@ -5078,9 +5099,18 @@
     // Interpret a raw panel error into a human cause + fix hint.
     function _interpretServerError(detail) {
         const isFa = {{ ('fa' if panel_lang == 'fa' else 'en')|tojson }} === 'fa';
+        if (detail.state === 'pending') return isFa
+            ? { cause: 'داده‌های کش این سرور هنوز کامل نیست.', fix: 'داشبورد داده‌ها را دوباره از کش دریافت می‌کند. این وضعیت به‌تنهایی نشان‌دهندهٔ خرابی توکن یا رمز نیست.' }
+            : { cause: 'The cached server snapshot is not complete yet.', fix: 'The dashboard will reconcile its cache automatically. This state does not indicate an invalid API token or password.' };
+        if (detail.state === 'filtered') return isFa
+            ? { cause: 'فیلترهای فعلی داده‌ها را پنهان کرده‌اند.', fix: 'فیلترهای داشبورد را تغییر بده.' }
+            : { cause: 'The current filters hide this server\'s inbounds.', fix: 'Change the dashboard filters.' };
+        if (detail.state === 'empty') return isFa
+            ? { cause: 'پنل با موفقیت پاسخ داده و ورودی‌ای ندارد.', fix: 'ورودی‌های این سرور را در پنل بررسی کن.' }
+            : { cause: 'The panel successfully returned zero inbounds.', fix: 'Check the inbound configuration in the panel.' };
         const blob = `${detail.fetch_error} ${detail.panel_status_error} ${detail.reachable_error} ${detail.reason}`.toLowerCase();
         const pt = (detail.panel_type || '').toLowerCase();
-        const looksV3 = pt.includes('3') || pt.includes('sanaei') || pt.includes('v3');
+        const looksV3 = detail.client_api_generation === 'v3';
 
         const has = (...keys) => keys.some(k => blob.includes(k));
 

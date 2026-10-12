@@ -349,6 +349,17 @@ def _probe_v3_client_api(server, session_obj, *, force=False) -> bool:
     return supported
 
 
+def client_api_generation(server):
+    """Only authenticated, unexpired capability evidence defines identity."""
+    try:
+        cached = XUI_CAPABILITY_CACHE.get(int(server.id))
+        if cached and time.time() < float(cached.get('expiry') or 0):
+            return 'v3' if cached.get('v3_clients') else 'legacy'
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return 'unknown'
+
+
 def server_is_v3(server, session_obj=None, *, force_probe=False) -> bool:
     """Return whether the panel supports the first-class v3 client API.
 
@@ -362,10 +373,8 @@ def server_is_v3(server, session_obj=None, *, force_probe=False) -> bool:
     except (TypeError, ValueError):
         pass
     if session_obj is not None:
-        return _probe_v3_client_api(server, session_obj, force=force_probe)
-    # Before the first authenticated probe, a configured token is a useful UI
-    # hint. Network mutations always pass a session and therefore verify it.
-    return bool(get_server_api_token(server))
+        return probe_v3_client_api(server, session_obj, force=force_probe) == PROBE_SUPPORTED
+    return False
 
 
 # ── 3x-ui v3+ client API (/panel/api/clients/*) ──────────────────────────────

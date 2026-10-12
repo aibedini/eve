@@ -57,6 +57,10 @@ MAPPING = (
         ['tests.test_snapshot_delta'],
         ['tests.test_sse_updates', 'tests.test_client_events'],
     )),
+    ('panel/core/account_stats.py', (
+        ['tests.test_account_stats'],
+        ['tests.test_regression_matrix', 'tests.test_snapshot_model'],
+    )),
     ('panel/core/snapshot_model.py', (
         ['tests.test_snapshot_model', 'tests.test_snapshot_redis'],
         ['tests.test_snapshot_delta', 'tests.test_regression_matrix'],

@@ -671,5 +671,37 @@ class SubscriptionRegressionTests(unittest.TestCase):
                         results)
 
 
+class CanonicalAccountStatsTests(MutationHarness):
+    def test_full_fetch_and_write_through_renewal_have_identical_totals(self):
+        raw = self._raw(total=20 * GB, expiry=-31 * DAY_MS)
+        raw_rows = [
+            {'id': iid, 'enable': True, 'settings': json.dumps({'clients': [raw]}),
+             'clientStats': [{'email': raw['email'], 'up': GB, 'down': 2 * GB, 'enable': True}]}
+            for iid in range(1, 11)
+        ]
+        processed, stats = app_module.process_inbounds(raw_rows, self.server, self.admin)
+        GLOBAL_SERVER_DATA['inbounds'] = processed
+        GLOBAL_SERVER_DATA['normalized_server_ids'] = {self.server.id}
+        GLOBAL_SERVER_DATA['servers_status'] = [
+            {'server_id': self.server.id, 'success': True, 'stats': stats}]
+        result = refresh_jobs.patch_cached_client(
+            self.server.id, raw['email'], total_gb_bytes=50 * GB,
+            expiry_ts=-31 * DAY_MS, up=0, down=0, publish=False)
+        self.assertTrue(result)
+        written = GLOBAL_SERVER_DATA['servers_status'][0]['stats']
+        renewed = dict(raw, totalGB=50 * GB)
+        for inbound in raw_rows:
+            inbound['settings'] = json.dumps({'clients': [renewed]})
+            inbound['clientStats'][0].update(up=0, down=0)
+        _, fetched = app_module.process_inbounds(raw_rows, self.server, self.admin)
+        for field in ('total_clients', 'inbound_memberships', 'active_clients',
+                      'not_started_clients', 'upload_raw', 'download_raw',
+                      'remaining_raw', 'limited_clients'):
+            with self.subTest(field=field):
+                self.assertEqual(written[field], fetched[field])
+        self.assertEqual(written['total_clients'], 1)
+        self.assertEqual(written['remaining_raw'], 50 * GB)
+
+
 if __name__ == '__main__':
     unittest.main()

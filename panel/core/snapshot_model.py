@@ -31,11 +31,13 @@ def client_key(client):
     """Reliable account identity, scoped by the containing server block."""
     if not isinstance(client, dict):
         return None
+    email = str(client.get('email') or '').strip().casefold()
+    if email:
+        return 'email:' + email
     reliable = _uuid(client.get('id')) or _uuid(client.get('uuid'))
     if reliable:
         return 'uuid:' + reliable
-    email = str(client.get('email') or '').strip().casefold()
-    return ('email:' + email) if email else None
+    return None
 
 
 def _entity_data(client):
@@ -72,6 +74,10 @@ def normalize_server_block(inbounds, server_id):
                 anonymous += 1
                 key = 'anonymous:%d' % anonymous
             data = _entity_data(client)
+            # Conflicting duplicate rows inside one inbound need separate refs;
+            # ordinary cross-inbound copies remain one email account entity.
+            if key in normalized['client_refs'] and entities.get(key) != data:
+                key += ':conflict:' + _revision(data)
             if key not in entities:
                 entities[key] = data
                 revisions[key] = _revision(data)

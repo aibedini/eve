@@ -18,18 +18,20 @@ class SnapshotModelTests(unittest.TestCase):
     def test_one_uuid_becomes_one_entity_and_four_memberships(self):
         retained, block = snapshot_model.normalize_retained_block(self._mirrors(), 7)
         self.assertEqual(len(block['clients']), 1)
-        key = 'uuid:' + UUID_A
+        key = 'email:user@example.com'
         self.assertEqual(block['membership_index'][key], [10, 20, 30, 40])
         self.assertTrue(all(inbound['clients'][0] is retained[0]['clients'][0]
                             for inbound in retained))
 
-    def test_same_email_with_distinct_reliable_uuids_stays_distinct(self):
+    def test_same_v3_email_with_distinct_uuids_preserves_membership_evidence(self):
         rows = [{'id': 1, 'clients': [
             {'id': UUID_A, 'email': 'same@example.com'},
             {'id': 'ff5f8c59-9fd9-4609-93fa-5c5a0bbf02a4', 'email': 'same@example.com'},
         ]}]
         block = snapshot_model.normalize_server_block(rows, 7)
         self.assertEqual(len(block['clients']), 2)
+        expanded = snapshot_model.materialize_server_block(block)
+        self.assertEqual(len({row['id'] for row in expanded[0]['clients']}), 2)
 
     def test_legacy_rows_are_not_normalized_implicitly(self):
         original = self._mirrors()
@@ -52,7 +54,7 @@ class SnapshotModelTests(unittest.TestCase):
 
     def test_membership_deletion_keeps_entity_until_last_reference(self):
         block = snapshot_model.normalize_server_block(self._mirrors()[:2], 7)
-        key = 'uuid:' + UUID_A
+        key = 'email:user@example.com'
         self.assertTrue(snapshot_model.remove_membership(block, key, 10))
         self.assertIn(key, block['clients'])
         self.assertEqual(snapshot_model.affected_inbound_ids(block, key), [20])

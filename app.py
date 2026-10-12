@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.10.3"
+APP_VERSION = "2.10.4"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2823,7 +2823,6 @@ from panel.services.xui_compat import (  # noqa: F401
 
 def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, app_base_url=None, online_index=None):
     processed = []
-    stats = {"total_inbounds": 0, "active_inbounds": 0, "total_clients": 0, "online_clients": 0, "active_clients": 0, "inactive_clients": 0, "not_started_clients": 0, "unlimited_expiry_clients": 0, "unlimited_volume_clients": 0, "upload_raw": 0, "download_raw": 0, "remaining_raw": 0}
     dashboard_thresholds = _get_dashboard_status_thresholds()
     panel_lang = _get_panel_ui_lang()
     
@@ -2859,7 +2858,8 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
     # On v3 the same client (by email) is mirrored across several inbounds.
     # Count each person ONCE for all aggregate stats so totals aren't inflated.
     _is_v3 = server_is_v3(server)
-    _v3_seen_emails = set()
+    from panel.adapters.xui import client_api_generation
+    _client_generation = 'v3' if _is_v3 else client_api_generation(server)
     _compat = cached_compatibility(server.id)
     _detect_panel_lifecycle = bool(
         _compat is not None and _compat.profile.panel_lifecycle_automation)
@@ -2885,7 +2885,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
             # Build an email -> stats lookup ONCE per inbound (was O(clients*stats))
             stats_by_email = {}
             for _st in client_stats:
-                _e = _st.get('email')
+                _e = str(_st.get('email') or '').strip().casefold()
                 if _e is not None and _e not in stats_by_email:
                     stats_by_email[_e] = _st
 
@@ -2903,13 +2903,6 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 if user.role == 'reseller' and email.lower() not in owned_emails:
                     continue
 
-                # v3: only the first inbound where this email appears feeds the stats.
-                if _is_v3 and email_l:
-                    _count_stat = email_l not in _v3_seen_emails
-                    if _count_stat:
-                        _v3_seen_emails.add(email_l)
-                else:
-                    _count_stat = True
                 
                 sub_id = client.get('subId', '')
                 sub_url = ""
@@ -2924,7 +2917,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                         _server_id, final_id, _app_base,
                     )
 
-                _stat = stats_by_email.get(email)
+                _stat = stats_by_email.get(email_l)
                 client_up = _stat.get('up', 0) if _stat else 0
                 client_down = _stat.get('down', 0) if _stat else 0
 
@@ -2932,8 +2925,6 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 remaining_bytes = max(total_bytes - (client_up + client_down), 0) if total_bytes > 0 else None
                 total_formatted = format_bytes_gb_tb(total_bytes) if total_bytes > 0 else "Unlimited"
 
-                if _count_stat and total_bytes <= 0:
-                    stats["unlimited_volume_clients"] += 1
                 
                 volume_status = ""
                 if remaining_bytes is not None:
@@ -2961,11 +2952,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                     lang=panel_lang,
                 )
 
-                if expiry_info.get('type') == 'start_after_use':
-                    stats["not_started_clients"] += 1
 
-                if expiry_info.get('type') == 'unlimited':
-                    stats["unlimited_expiry_clients"] += 1
 
                 # Online status (best-effort; depends on panel API support)
                 inbound_id_norm = None
@@ -3023,19 +3010,12 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                     "link": sub_url,  # Use subscription URL - client apps will fetch correct configs from panel
                     "raw_client": client  # Store original object for faster updates
                 }
+                client_data['traffic_scope'] = 'account' if _is_v3 else 'membership'
+                client_data['traffic_available'] = _stat is not None
+                if _is_v3:
+                    client_data['global_enable'] = (_stat or {}).get('enable', client.get('enable', True))
                 processed_clients.append(client_data)
 
-                if _count_stat:
-                    stats["total_clients"] += 1
-                    if is_online:
-                        stats["online_clients"] += 1
-                    if client.get('enable', True): stats["active_clients"] += 1
-                    else: stats["inactive_clients"] += 1
-                    stats["upload_raw"] += client_up
-                    stats["download_raw"] += client_down
-                    # Accumulate remaining for active limited-volume clients only
-                    if client.get('enable', True) and remaining_bytes is not None and remaining_bytes >= 0:
-                        stats["remaining_raw"] += int(remaining_bytes)
             
             # استخراج network و security از settings
             streamSettings = settings.get('streamSettings', {})
@@ -3053,6 +3033,7 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
             )
             _active_count = sum(1 for _c in processed_clients if _c.get('enable', True))
             processed.append({
+                "client_api_generation": _client_generation,
                 "id": inbound.get('id'),
                 "remark": inbound.get('remark', ''),
                 "port": inbound.get('port', ''),
@@ -3073,8 +3054,6 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
                 "remaining_total": format_bytes(_inbound_remaining_raw) if _inbound_remaining_raw > 0 else None,
             })
             
-            # total_clients is now counted per-client above (v3-deduplicated).
-            if inbound.get('enable', False): stats["active_inbounds"] += 1
             
         except Exception as e:
             continue
@@ -3087,7 +3066,8 @@ def process_inbounds(inbounds, server, user, allowed_map='*', assignments=None, 
             active=_lifecycle_automation_seen,
         )
 
-    stats["total_inbounds"] = len(processed)
+    from panel.core.account_stats import aggregate_accounts
+    stats = aggregate_accounts(processed)
     stats["total_upload"] = format_bytes(stats["upload_raw"])
     stats["total_download"] = format_bytes(stats["download_raw"])
     stats["total_traffic"] = format_bytes(stats["upload_raw"] + stats["download_raw"])

@@ -185,3 +185,33 @@ class DashboardPublicationTests(unittest.TestCase):
         event = json.loads(self.redis.lists[delta.REDIS_HISTORY_KEY][0])
         self.assertEqual(sorted(event['changed']), [[4, 1], [5, 1]])
         self.assertNotIn('clients', event)
+
+    def test_publishing_one_server_keeps_another_unpublished_fetch(self):
+        self.assertTrue(cache.publish_snapshot_to_redis())
+        cache.GLOBAL_SERVER_DATA['inbounds'][1]['remark'] = 'new unpublished ECO5'
+        cache.GLOBAL_SERVER_DATA['last_update'] = 'new fetch'
+        self.assertTrue(cache.publish_snapshot_to_redis([4]))
+        self.assertEqual(cache.GLOBAL_SERVER_DATA['inbounds'][1]['remark'], 'new unpublished ECO5')
+        self.assertTrue(cache.publish_snapshot_to_redis([5]))
+        cache.GLOBAL_SERVER_DATA['inbounds'] = []
+        cache.load_snapshot_from_redis(force=True)
+        self.assertEqual(cache.GLOBAL_SERVER_DATA['inbounds'][1]['remark'], 'new unpublished ECO5')
+
+    def test_partial_block_cannot_replace_a_published_successful_server(self):
+        self.assertTrue(cache.publish_snapshot_to_redis())
+        original = self.redis.values[cache._redis_server_snapshot_key(4)]
+        cache.GLOBAL_SERVER_DATA['inbounds'] = [row for row in cache.GLOBAL_SERVER_DATA['inbounds'] if row['server_id'] != 4]
+        cache.GLOBAL_SERVER_DATA['servers_status'][0]['stats'] = {'total_inbounds': 1}
+        self.assertFalse(cache.publish_snapshot_to_redis([4]))
+        self.assertEqual(self.redis.values[cache._redis_server_snapshot_key(4)], original)
+
+    def test_reader_preserves_fetched_block_awaiting_publication(self):
+        self.assertTrue(cache.publish_snapshot_to_redis())
+        cache.GLOBAL_SERVER_DATA['inbounds'][1]['remark'] = 'not yet published'
+        cache.GLOBAL_SERVER_DATA['_pending_snapshot_servers'] = {5}
+        self.assertTrue(cache.load_snapshot_from_redis(force=True))
+        self.assertEqual(cache.GLOBAL_SERVER_DATA['inbounds'][1]['remark'], 'not yet published')
+        self.assertFalse(cache.GLOBAL_SERVER_DATA['_snapshot_complete'])
+        self.assertTrue(cache.publish_snapshot_to_redis([5]))
+        cache.load_snapshot_from_redis(force=True)
+        self.assertTrue(cache.GLOBAL_SERVER_DATA['_snapshot_complete'])

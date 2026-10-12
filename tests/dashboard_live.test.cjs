@@ -5,6 +5,16 @@ const vm = require('node:vm');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 
+test('snapshot inventory detects missing servers and truncated client lists', () => {
+    const { inventoryMatches } = require('../static/dashboard_live.js');
+    const inventory = [[1, 7, 2], [2, 8, 0]];
+    const complete = [{server_id:1,id:7,clients:[{},{}]}, {server_id:2,id:8,clients:[]}];
+    assert.equal(inventoryMatches(complete, inventory), true);
+    assert.equal(inventoryMatches(complete.slice(0,1), inventory), false);
+    assert.equal(inventoryMatches([{server_id:1,id:7,clients:[{}]},complete[1]], inventory), false);
+    assert.equal(inventoryMatches(complete, undefined), true);
+});
+
 function fixture(sseEnabled = true) {
     const timers = new Map();
     const events = {};

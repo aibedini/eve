@@ -213,7 +213,14 @@
         }
         for (const node of old) if (!retained.has(node) && node.parentNode === current) node.remove();
     }
+    function inventoryMatches(inbounds, inventory) {
+        if (!Array.isArray(inventory)) return true;
+        if (!Array.isArray(inbounds) || inbounds.length !== inventory.length) return false;
+        const actual = new Map(inbounds.map(row => [String(row.server_id) + '|' + String(row.id), (row.clients || []).length]));
+        return inventory.every(row => actual.get(String(row[0]) + '|' + String(row[1])) === row[2]);
+    }
+    root.dashboardInventoryMatches = inventoryMatches;
     root.morphDashboardChildren = morphChildren;
     root.morphDashboardNode = morphNode;
-    if (typeof module !== 'undefined') module.exports = { DashboardLiveSync, morphChildren, morphNode };
+    if (typeof module !== 'undefined') module.exports = { DashboardLiveSync, morphChildren, morphNode, inventoryMatches };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -337,6 +337,20 @@ def api_refresh():
         _ensure_snapshot_enriched()
 
         sync = snapshot_delta.build_sync(GLOBAL_SERVER_DATA, since)
+        inventory = [
+            [row.get('server_id'), row.get('id'), len(row.get('clients') or [])]
+            for row in GLOBAL_SERVER_DATA.get('inbounds') or []
+        ]
+        counts = {}
+        for sid, _, _ in inventory:
+            counts[str(sid)] = counts.get(str(sid), 0) + 1
+        sync['inventory'] = inventory
+        sync['complete'] = not GLOBAL_SERVER_DATA.get('_pending_snapshot_servers') and GLOBAL_SERVER_DATA.get('_snapshot_complete', True) and all(
+            (status.get('stats') or {}).get('total_inbounds', counts.get(str(status.get('server_id')), 0))
+            == counts.get(str(status.get('server_id')), 0)
+            for status in GLOBAL_SERVER_DATA.get('servers_status') or []
+            if status.get('success')
+        )
         if sync['mode'] == 'unchanged':
             # The client already holds this revision: answer with a small envelope
             # instead of the whole snapshot. The per-server freshness rows still travel,
@@ -461,19 +475,6 @@ def api_refresh():
     unique_server_ids = set()
     
     # متغیرهای آمار مخصوص ریسلر
-    reseller_stats = {
-        "total_inbounds": 0,
-        "active_inbounds": 0,
-        "total_clients": 0,     # فقط کلاینت‌های Assign شده
-        "online_clients": 0,
-        "active_clients": 0,    # فقط کلاینت‌های Assign شده فعال
-        "inactive_clients": 0,  # فقط کلاینت‌های Assign شده غیرفعال
-        "not_started_clients": 0,
-        "unlimited_expiry_clients": 0,
-        "unlimited_volume_clients": 0,
-        "upload_raw": 0,        # فقط مصرف کلاینت‌های Assign شده
-        "download_raw": 0
-    }
 
     for source_inbound in data['inbounds']:
         sid = source_inbound['server_id']
@@ -495,9 +496,6 @@ def api_refresh():
         inbound['total_down'] = "---"
         
         # شمارش اینباند
-        reseller_stats["total_inbounds"] += 1
-        if inbound.get('enable'):
-            reseller_stats["active_inbounds"] += 1
 
         # پردازش کلاینت‌ها برای آمار دقیق و فیلتر کردن لیست نمایش
         clients_in_inbound = inbound.get('clients', [])
@@ -524,30 +522,6 @@ def api_refresh():
                 # اضافه کردن به لیست فیلتر شده برای نمایش
                 filtered_clients_list.append(client)
                 
-                # محاسبه آمار
-                reseller_stats["total_clients"] += 1
-                if client.get('is_online'):
-                    reseller_stats["online_clients"] += 1
-                if client.get('enable'):
-                    reseller_stats["active_clients"] += 1
-                else:
-                    reseller_stats["inactive_clients"] += 1
-
-                if client.get('expiryType') == 'start_after_use':
-                    reseller_stats["not_started_clients"] += 1
-
-                if client.get('expiryType') == 'unlimited':
-                    reseller_stats["unlimited_expiry_clients"] += 1
-
-                # totalGB_formatted is already normalized in cached payload
-                if (client.get('totalGB_formatted') == 'Unlimited'):
-                    reseller_stats["unlimited_volume_clients"] += 1
-                
-                # جمع زدن ترافیک کلاینت‌های خودش
-                reseller_stats["upload_raw"] += client.get('up', 0)
-                reseller_stats["download_raw"] += client.get('down', 0)
-
-        # جایگزینی لیست کلاینت‌های اینباند با لیست فیلتر شده
         inbound['clients'] = filtered_clients_list
         # آپدیت تعداد کلاینت‌های نمایش داده شده در اینباند
         inbound['client_count'] = len(filtered_clients_list)
@@ -555,6 +529,10 @@ def api_refresh():
         filtered_inbounds.append(inbound)
 
     # فرمت کردن آمار نهایی
+    from panel.core.account_stats import aggregate_accounts
+    reseller_stats = aggregate_accounts(
+        filtered_inbounds, modern_server_ids=data.get('normalized_server_ids') or ())
+    reseller_stats["total_remaining"] = format_bytes(reseller_stats["remaining_raw"])
     reseller_stats["total_traffic"] = format_bytes(reseller_stats["upload_raw"] + reseller_stats["download_raw"])
     reseller_stats["total_upload"] = format_bytes(reseller_stats["upload_raw"])
     reseller_stats["total_download"] = format_bytes(reseller_stats["download_raw"])

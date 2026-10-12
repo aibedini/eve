@@ -1723,40 +1723,8 @@ def refresh_queue_worker():
 
 
 def _recompute_global_stats_from_server_statuses(server_statuses):
-    """Recompute aggregate stats from cached per-server stats."""
-    from app import format_bytes  # deferred: app-level helper, avoids circular import
-    total_stats = {
-        "total_inbounds": 0,
-        "active_inbounds": 0,
-        "total_clients": 0,
-        "online_clients": 0,
-        "active_clients": 0,
-        "inactive_clients": 0,
-        "not_started_clients": 0,
-        "unlimited_expiry_clients": 0,
-        "unlimited_volume_clients": 0,
-        "upload_raw": 0,
-        "download_raw": 0,
-        "remaining_raw": 0,
-        "limited_clients": 0,
-    }
-
-    for status in server_statuses or []:
-        if not isinstance(status, dict) or not status.get("success"):
-            continue
-        stats = status.get("stats")
-        if not isinstance(stats, dict):
-            continue
-        for k in list(total_stats.keys()):
-            v = stats.get(k, 0)
-            if isinstance(v, int):
-                total_stats[k] += v
-
-    total_stats["total_upload"] = format_bytes(total_stats["upload_raw"])
-    total_stats["total_download"] = format_bytes(total_stats["download_raw"])
-    total_stats["total_traffic"] = format_bytes(total_stats["upload_raw"] + total_stats["download_raw"])
-    total_stats["total_remaining"] = format_bytes(total_stats["remaining_raw"])
-    return total_stats
+    from panel.core.redis_client import _aggregate_stats
+    return _aggregate_stats(server_statuses)
 
 
 def fetch_and_update_server_data(server_id: int):
@@ -1844,8 +1812,8 @@ def _fetch_and_update_server_data_inner(server_id: int):
 
     if not isinstance(inbounds, list):
         inbounds = []
+    is_normalized = server_is_v3(server, session_obj)
     processed, stats = process_inbounds(inbounds, server, admin_user, '*', {}, online_index=online_index)
-    is_normalized = server_is_v3(server)
 
     # Mutation fence: a verified EVE write may still be propagating through the panel's
     # aggregate view. The guard rewrites those counters (and nothing else) before the
@@ -1858,6 +1826,12 @@ def _fetch_and_update_server_data_inner(server_id: int):
         app.logger.exception('Client fence guard failed for server %s', server.id)
 
     normalized_block = None
+    from panel.core.account_stats import aggregate_accounts
+    stats = aggregate_accounts(processed)
+    stats['total_upload'] = format_bytes(stats['upload_raw'])
+    stats['total_download'] = format_bytes(stats['download_raw'])
+    stats['total_traffic'] = format_bytes(stats['upload_raw'] + stats['download_raw'])
+    stats['total_remaining'] = format_bytes(stats['remaining_raw'])
     if is_normalized:
         processed, normalized_block = snapshot_model.normalize_retained_block(
             processed, server.id)
@@ -1904,6 +1878,9 @@ def _fetch_and_update_server_data_inner(server_id: int):
         # "Did this panel actually move?" is answered for THIS server only; a global
         # comparison would make fifty unchanged panels look like one change.
         changed = _block_signature(new_block) != _block_signature(previous_block)
+        previous_stats = next((row.get('stats') for row in GLOBAL_SERVER_DATA.get('servers_status') or []
+                               if str(row.get('server_id')) == str(server.id)), None)
+        changed = changed or previous_stats != stats
 
         # Find the first occurrence index of this server in the existing list (if any)
         first_idx = None
@@ -1934,6 +1911,8 @@ def _fetch_and_update_server_data_inner(server_id: int):
 
         # Only this server's block changed, so the delta sync only has to re-fingerprint it.
         snapshot_delta.mark_dirty(server_ids=[server.id])
+        if changed:
+            GLOBAL_SERVER_DATA.setdefault('_pending_snapshot_servers', set()).add(int(server.id))
 
         statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
         updated = False
@@ -1943,6 +1922,7 @@ def _fetch_and_update_server_data_inner(server_id: int):
                 st.update({
                     "server_id": server.id,
                     "success": True,
+                    "client_api_generation": 'v3' if is_normalized else (processed[0].get('client_api_generation', 'unknown') if processed else 'unknown'),
                     "stats": stats,
                     "panel_type": server.panel_type,
                     "xui_version": status_payload.get('xui_version'),
@@ -1960,6 +1940,7 @@ def _fetch_and_update_server_data_inner(server_id: int):
             statuses.append({
                 "server_id": server.id,
                 "success": True,
+                "client_api_generation": 'v3' if is_normalized else (processed[0].get('client_api_generation', 'unknown') if processed else 'unknown'),
                 "stats": stats,
                 "panel_type": server.panel_type,
                 "xui_version": status_payload.get('xui_version'),
@@ -2216,6 +2197,10 @@ def _recompute_cached_client(cd, thresholds=None, lang=None, *,
         pass
 
     cd['enable'] = bool(raw.get('enable', True))
+    if config_changed and cd.get('traffic_scope') == 'account':
+        cd['global_enable'] = cd['enable']
+    if telemetry_changed:
+        cd['traffic_available'] = True
     cd['comment'] = (raw.get('comment') or '').strip()
     cd['email'] = raw.get('email', cd.get('email'))
     cd['id'] = raw.get('id', cd.get('id'))
@@ -2274,87 +2259,31 @@ def _stamp_snapshot_rows(block, *, config=False, telemetry=False):
 
 
 def _recompute_cached_server_stats(server_id):
-    """Rebuild one server's cached counters after a write-through mutation."""
-    from app import format_bytes
+    from panel.core.account_stats import aggregate_accounts
     sid = int(server_id)
-    inbounds = []
-    stats = {
-        'total_inbounds': 0, 'active_inbounds': 0, 'total_clients': 0,
-        'online_clients': 0, 'active_clients': 0, 'inactive_clients': 0,
-        'not_started_clients': 0, 'unlimited_expiry_clients': 0,
-        'unlimited_volume_clients': 0, 'upload_raw': 0, 'download_raw': 0,
-        'remaining_raw': 0,
-    }
-    seen = set()
-    for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
-        try:
-            if int(inbound.get('server_id', -1)) != sid:
-                continue
-        except Exception:
-            continue
-        inbounds.append(inbound)
+    GLOBAL_SERVER_DATA.setdefault('_pending_snapshot_servers', set()).add(sid)
+    inbounds = [row for row in (GLOBAL_SERVER_DATA.get('inbounds') or [])
+                if str(row.get('server_id')) == str(sid)]
+    for inbound in inbounds:
         clients = inbound.get('clients') or []
         inbound['client_count'] = len(clients)
-        inbound['active_count'] = sum(1 for client in clients if client.get('enable', True))
-        inbound_remaining = sum(
-            int(client.get('remaining_bytes') or 0)
-            for client in clients
-            if client.get('enable', True)
-            and client.get('service_state', 'active') in {'active', 'expiring_soon', 'volume_low'}
-            and int(client.get('remaining_bytes', -1) or 0) >= 0
-        )
-        inbound['remaining_total_raw'] = inbound_remaining
-        inbound['remaining_total'] = format_bytes(inbound_remaining) if inbound_remaining > 0 else None
-        if inbound.get('enable'):
-            stats['active_inbounds'] += 1
-
-        for client in clients:
-            client_id = str(client.get('id') or '').strip().lower()
-            email = str(client.get('email') or '').strip().lower()
-            identity = ('uuid', client_id) if client_id else (
-                'inbound_email', str(inbound.get('id')), email,
-            )
-            if identity in seen:
-                continue
-            seen.add(identity)
-            stats['total_clients'] += 1
-            if client.get('is_online'):
-                stats['online_clients'] += 1
-            enabled = bool(client.get('enable', True))
-            stats['active_clients' if enabled else 'inactive_clients'] += 1
-            if client.get('expiryType') == 'start_after_use':
-                stats['not_started_clients'] += 1
-            if client.get('expiryType') == 'unlimited':
-                stats['unlimited_expiry_clients'] += 1
-            try:
-                total_bytes = int(client.get('totalGB') or 0)
-            except (TypeError, ValueError):
-                total_bytes = 0
-            if total_bytes <= 0:
-                stats['unlimited_volume_clients'] += 1
-            stats['upload_raw'] += int(client.get('up') or 0)
-            stats['download_raw'] += int(client.get('down') or 0)
-            remaining = int(client.get('remaining_bytes', -1) or 0)
-            if enabled and remaining >= 0:
-                stats['remaining_raw'] += remaining
-
-    stats['total_inbounds'] = len(inbounds)
-    stats['limited_clients'] = stats['total_clients'] - stats['unlimited_volume_clients']
+        inbound['active_count'] = sum(bool(c.get('enable', True)) for c in clients)
+        remaining = sum(int(c.get('remaining_bytes') or 0) for c in clients
+                        if c.get('enable', True)
+                        and c.get('service_state', 'active') in {'active', 'expiring_soon', 'volume_low'}
+                        and int(c.get('remaining_bytes', -1) or 0) >= 0)
+        inbound['remaining_total_raw'] = remaining
+        inbound['remaining_total'] = format_bytes(remaining) if remaining > 0 else None
+    stats = aggregate_accounts(inbounds, modern_server_ids=GLOBAL_SERVER_DATA.get('normalized_server_ids') or ())
     stats['total_upload'] = format_bytes(stats['upload_raw'])
     stats['total_download'] = format_bytes(stats['download_raw'])
     stats['total_traffic'] = format_bytes(stats['upload_raw'] + stats['download_raw'])
     stats['total_remaining'] = format_bytes(stats['remaining_raw'])
-
-    statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
-    for status in statuses:
-        try:
-            if int(status.get('server_id', -1)) == sid:
-                status['stats'] = stats
-                status['success'] = True
-                break
-        except Exception:
-            continue
-    GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(statuses)
+    for status in GLOBAL_SERVER_DATA.get('servers_status') or []:
+        if str(status.get('server_id')) == str(sid):
+            status['stats'] = stats
+    GLOBAL_SERVER_DATA['stats'] = _recompute_global_stats_from_server_statuses(
+        GLOBAL_SERVER_DATA.get('servers_status') or [])
     return stats
 
 

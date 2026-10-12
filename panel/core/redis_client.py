@@ -318,6 +318,9 @@ def _aggregate_stats(server_statuses):
         'active_clients', 'inactive_clients', 'not_started_clients',
         'unlimited_expiry_clients', 'unlimited_volume_clients', 'upload_raw',
         'download_raw', 'remaining_raw', 'limited_clients',
+        'unique_clients', 'inbound_memberships', 'allocated_quota_raw',
+        'unused_allocated_raw', 'identity_conflicts', 'traffic_incomplete_clients',
+        'unknown_capability_servers',
     )
     total = {key: 0 for key in keys}
     for status in server_statuses or []:
@@ -336,6 +339,11 @@ def _aggregate_stats(server_statuses):
 
 
 def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisions=None) -> bool:
+    with GLOBAL_REFRESH_LOCK:
+        return _publish_snapshot_to_redis_locked(changed_server_ids, expected_server_revisions)
+
+
+def _publish_snapshot_to_redis_locked(changed_server_ids=None, expected_server_revisions=None):
     """Publish a small manifest plus independently compressed server blocks.
 
     ``changed_server_ids`` limits expensive serialization to servers replaced by
@@ -368,6 +376,12 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                 continue
         if publish_all:
             changed = set(blocks)
+        for status in GLOBAL_SERVER_DATA.get('servers_status') or []:
+            sid = int(status.get('server_id', -1))
+            expected_count = (status.get('stats') or {}).get('total_inbounds')
+            if (sid in changed or publish_all) and expected_count is not None and len(blocks.get(sid, [])) != expected_count:
+                logger.warning('Refusing incomplete snapshot publication for server %s', sid)
+                return False
 
         for status in (GLOBAL_SERVER_DATA.get('servers_status') or []):
             try:
@@ -510,7 +524,11 @@ def publish_snapshot_to_redis(changed_server_ids=None, *, expected_server_revisi
                 pipe.ltrim(snapshot_delta.REDIS_HISTORY_KEY, 0, snapshot_delta.MAX_HISTORY - 1)
                 pipe.expire(snapshot_delta.REDIS_HISTORY_KEY, snapshot_delta.REDIS_HISTORY_TTL)
                 pipe.execute()
-                load_snapshot_from_redis(force=True)
+                GLOBAL_SERVER_DATA.setdefault('_pending_snapshot_servers', set()).difference_update(changed)
+                # A full hydration here erased other fetched blocks still waiting
+                # for their own publication in the same process.
+                GLOBAL_SERVER_DATA['_published_revision'] = revision
+                GLOBAL_SERVER_DATA['_published_at'] = record['at']
                 _PUBLISHED_SERVER_VERSIONS = published_versions
                 _SNAPSHOT_METRICS['publishes'] += 1
                 _SNAPSHOT_METRICS['blocks_encoded'] += len(encoded_blocks)
@@ -583,6 +601,11 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
             accepted_versions = dict(_LAST_LOADED_SERVER_VERSIONS)
             for sid, server_version in server_versions.items():
                 local = current_blocks.get(sid)
+                if sid in (GLOBAL_SERVER_DATA.get('_pending_snapshot_servers') or ()):
+                    if local is not None:
+                        new_blocks[sid] = local
+                    accepted_versions.pop(sid, None)
+                    continue
                 if targets is not None and sid not in targets and local:
                     # A per-server write cycle: leave every other block as it is.
                     new_blocks[sid] = local
@@ -621,6 +644,9 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
                     # Keep the last good local block if Redis is between writes.
                     new_blocks[sid] = local
 
+            for sid in GLOBAL_SERVER_DATA.get('_pending_snapshot_servers') or ():
+                if sid in current_blocks:
+                    new_blocks[sid] = current_blocks[sid]
             ordered_ids = []
             for status in (manifest.get('servers_status') or []):
                 try:
@@ -632,10 +658,19 @@ def _load_snapshot_from_redis_unlocked(force: bool = False, server_ids=None) -> 
                 GLOBAL_SERVER_DATA['inbounds'] = [
                     inbound for sid in ordered_ids for inbound in new_blocks.get(sid, [])
                 ]
-                GLOBAL_SERVER_DATA['stats'] = manifest.get('stats') or {}
-                GLOBAL_SERVER_DATA['servers_status'] = manifest.get('servers_status') or []
+                pending = GLOBAL_SERVER_DATA.get('_pending_snapshot_servers') or set()
+                local_statuses = {int(row['server_id']): row for row in GLOBAL_SERVER_DATA.get('servers_status') or []}
+                statuses = [local_statuses.get(int(row['server_id']), row)
+                            if int(row['server_id']) in pending else row
+                            for row in manifest.get('servers_status') or []]
+                status_ids = {int(row['server_id']) for row in statuses}
+                statuses.extend(local_statuses[sid] for sid in pending
+                                if sid in local_statuses and sid not in status_ids)
+                GLOBAL_SERVER_DATA['servers_status'] = statuses
+                GLOBAL_SERVER_DATA['stats'] = _aggregate_stats(statuses) if pending else manifest.get('stats') or {}
                 GLOBAL_SERVER_DATA['last_update'] = manifest.get('last_update')
-                complete = all(accepted_versions.get(sid) == value for sid, value in server_versions.items())
+                complete = not pending and all(accepted_versions.get(sid) == value for sid, value in server_versions.items())
+                GLOBAL_SERVER_DATA['_snapshot_complete'] = complete
                 if targets is None and complete:
                     GLOBAL_SERVER_DATA['_published_revision'] = manifest.get('revision')
                     GLOBAL_SERVER_DATA['_published_last_update'] = manifest.get('last_update')
