@@ -376,6 +376,8 @@ def _publish_snapshot_to_redis_locked(changed_server_ids=None, expected_server_r
                 continue
         if publish_all:
             changed = set(blocks)
+            changed.update(int(status['server_id']) for status in GLOBAL_SERVER_DATA.get('servers_status') or []
+                           if status.get('success') and (status.get('stats') or {}).get('total_inbounds') == 0)
         for status in GLOBAL_SERVER_DATA.get('servers_status') or []:
             sid = int(status.get('server_id', -1))
             expected_count = (status.get('stats') or {}).get('total_inbounds')

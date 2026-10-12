@@ -215,3 +215,11 @@ class DashboardPublicationTests(unittest.TestCase):
         self.assertTrue(cache.publish_snapshot_to_redis([5]))
         cache.load_snapshot_from_redis(force=True)
         self.assertTrue(cache.GLOBAL_SERVER_DATA['_snapshot_complete'])
+
+    def test_full_publication_can_replace_a_server_with_authoritative_zero(self):
+        self.assertTrue(cache.publish_snapshot_to_redis())
+        cache.GLOBAL_SERVER_DATA['inbounds'] = [row for row in cache.GLOBAL_SERVER_DATA['inbounds'] if row['server_id'] != 4]
+        cache.GLOBAL_SERVER_DATA['servers_status'][0].update(success=True, stats={'total_inbounds': 0})
+        self.assertTrue(cache.publish_snapshot_to_redis())
+        block = cache._decode_snapshot(self.redis.values[cache._redis_server_snapshot_key(4)])
+        self.assertEqual(block, [])

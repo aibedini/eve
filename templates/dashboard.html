@@ -5109,7 +5109,6 @@
             ? { cause: 'پنل با موفقیت پاسخ داده و ورودی‌ای ندارد.', fix: 'ورودی‌های این سرور را در پنل بررسی کن.' }
             : { cause: 'The panel successfully returned zero inbounds.', fix: 'Check the inbound configuration in the panel.' };
         const blob = `${detail.fetch_error} ${detail.panel_status_error} ${detail.reachable_error} ${detail.reason}`.toLowerCase();
-        const pt = (detail.panel_type || '').toLowerCase();
         const looksV3 = detail.client_api_generation === 'v3';
 
         const has = (...keys) => keys.some(k => blob.includes(k));

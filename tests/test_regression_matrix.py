@@ -680,8 +680,12 @@ class CanonicalAccountStatsTests(MutationHarness):
             for iid in range(1, 11)
         ]
         processed, stats = app_module.process_inbounds(raw_rows, self.server, self.admin)
+        from panel.core import snapshot_model
+        processed, _ = snapshot_model.normalize_retained_block(processed, self.server.id)
         GLOBAL_SERVER_DATA['inbounds'] = processed
         GLOBAL_SERVER_DATA['normalized_server_ids'] = {self.server.id}
+        GLOBAL_SERVER_DATA['normalized_indexes'] = {
+            self.server.id: snapshot_model.build_retained_index(processed)}
         GLOBAL_SERVER_DATA['servers_status'] = [
             {'server_id': self.server.id, 'success': True, 'stats': stats}]
         result = refresh_jobs.patch_cached_client(
