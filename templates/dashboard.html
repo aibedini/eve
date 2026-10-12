@@ -4187,6 +4187,7 @@
                 }
 
                 const statuses = Array.isArray(serverStatuses) ? serverStatuses : [];
+                const cachedServerIds = new Set((allInboundsData || []).map(ib => Number(ib.server_id)));
                 const statusMap = new Map();
                 statuses.forEach(st => {
                     const sid = parseInt(st?.server_id);
@@ -4219,7 +4220,7 @@
                         if (errorServerNames.length > 0) {
                             extra = ` • ${errorServerNames.length} server error (${errorServerNames.join(', ')})`;
                         } else {
-                            extra = ` • ${missingServers.length} server empty`;
+                            extra = ` • ${missingServers.length} servers without visible inbounds`;
                         }
                         countEl.textContent = `${inbounds.length} inbounds${extra}`;
                     }
@@ -4229,13 +4230,17 @@
                         const st = statusMap.get(sid) || {};
                         const ok = (st && (st.success === true || st.reachable === true)) && !st.error;
                         const isErr = !ok && Boolean(st && (st.error || st.success === false || st.reachable === false || st.reachable_error));
-                        const title = isErr ? 'Inbounds not loaded' : 'No inbounds found';
+                        const filtered = cachedServerIds.has(sid);
+                        const confirmedEmpty = !filtered && st.success === true && st.stats?.total_inbounds === 0;
+                        const title = isErr ? 'Inbounds not loaded' : filtered ? 'No matching inbounds' : confirmedEmpty ? 'No inbounds found' : 'Waiting for server data';
                         const reason = isErr
                             ? (st.error || st.reachable_error || 'Failed to fetch inbounds from panel')
-                            : 'This server returned zero inbounds.';
+                            : filtered ? 'The current filters hide this server\'s inbounds.'
+                            : confirmedEmpty ? 'This server returned zero inbounds.'
+                            : 'Server data is not available in the dashboard cache yet. The dashboard will retry automatically.';
                         const pill = isErr
                             ? `<span class="status-pill inactive" style="background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.28); color: #fecaca;">Error</span>`
-                            : `<span class="status-pill inactive">Empty</span>`;
+                            : `<span class="status-pill inactive">${filtered ? 'Filtered' : confirmedEmpty ? 'Empty' : 'Pending'}</span>`;
                         const panelType = (s?.panel_type || st?.panel_type || '') ? escapeHtml(String(s?.panel_type || st?.panel_type)) : '';
 
                         // Stash full error detail so the "Why?" modal can explain it.
@@ -4257,7 +4262,7 @@
                         <div class="inbound-card" data-dashboard-key="empty:${sid}" style="border-style: dashed; opacity: 0.95;">
                             <div class="inbound-header">
                                 <div class="inbound-title">
-                                    <span class="protocol-badge" style="background: rgba(148,163,184,0.14); color: rgba(226,232,240,0.9);">${isErr ? 'ERROR' : 'EMPTY'}</span>
+                                    <span class="protocol-badge" style="background: rgba(148,163,184,0.14); color: rgba(226,232,240,0.9);">${isErr ? 'ERROR' : filtered ? 'FILTERED' : confirmedEmpty ? 'EMPTY' : 'PENDING'}</span>
                                     <h3>${escapeHtml(s?.name || ('Server #' + sid))}</h3>
                                     ${panelType ? `<span class="port-badge">${panelType}</span>` : ''}
                                     <span class="server-badge">#${sid}</span>
