@@ -1750,7 +1750,7 @@ def _fetch_and_update_server_data_inner(server_id: int):
     block it committed. The mutation-fence guard runs here, inside the read, so no
     caller can forget it.
     """
-    from app import app, process_inbounds  # deferred: app-level helper, avoids circular import
+    from app import app, process_inbounds, format_bytes  # deferred: app-level helper, avoids circular import
     probe_cycle = memory_probe.begin_cycle()
     memory_probe.record(probe_cycle, 'idle_before_fetch', counts={'servers': 1})
     server = db.session.get(Server, int(server_id))
@@ -1911,7 +1911,7 @@ def _fetch_and_update_server_data_inner(server_id: int):
 
         # Only this server's block changed, so the delta sync only has to re-fingerprint it.
         snapshot_delta.mark_dirty(server_ids=[server.id])
-        if changed:
+        if changed and get_redis() is not None:
             GLOBAL_SERVER_DATA.setdefault('_pending_snapshot_servers', set()).add(int(server.id))
 
         statuses = GLOBAL_SERVER_DATA.get('servers_status') or []
@@ -2259,9 +2259,11 @@ def _stamp_snapshot_rows(block, *, config=False, telemetry=False):
 
 
 def _recompute_cached_server_stats(server_id):
+    from app import format_bytes
     from panel.core.account_stats import aggregate_accounts
     sid = int(server_id)
-    GLOBAL_SERVER_DATA.setdefault('_pending_snapshot_servers', set()).add(sid)
+    if get_redis() is not None:
+        GLOBAL_SERVER_DATA.setdefault('_pending_snapshot_servers', set()).add(sid)
     inbounds = [row for row in (GLOBAL_SERVER_DATA.get('inbounds') or [])
                 if str(row.get('server_id')) == str(sid)]
     for inbound in inbounds:

@@ -40,6 +40,8 @@ relative link does not resolve.
 
 ## Performance and measurement
 
+- [Dashboard account audit and statistics contract](performance/DASHBOARD_ACCOUNT_AUDIT.md)
+
 - [Adaptive refresh cadence](performance/ADAPTIVE_REFRESH.md) - performance/ADAPTIVE_REFRESH.md
 - [Bounded list responses (pagination contract)](performance/API_PAGINATION.md) - performance/API_PAGINATION.md
 - [Performance baseline](performance/BASELINE.md) - performance/BASELINE.md

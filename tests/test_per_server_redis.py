@@ -46,6 +46,7 @@ class PerServerLoadTests(unittest.TestCase):
         redis_client.reset_snapshot_metrics()
         redis_client._LAST_LOADED_SNAPSHOT_VERSION = None
         redis_client._LAST_LOADED_SERVER_VERSIONS = {}
+        redis_client.GLOBAL_SERVER_DATA['_pending_snapshot_servers'] = set()
         redis_client.GLOBAL_SERVER_DATA.update({
             "inbounds": [], "servers_status": [], "stats": {}, "last_update": None,
         })

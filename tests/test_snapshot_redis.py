@@ -37,6 +37,7 @@ class SnapshotRedisSchemaTests(unittest.TestCase):
         redis_client.GLOBAL_SERVER_DATA.update({
             'inbounds': [], 'stats': {}, 'servers_status': [], 'last_update': None,
             'normalized_server_ids': set(),
+            '_pending_snapshot_servers': set(),
         })
         redis_client._LAST_LOADED_SNAPSHOT_VERSION = None
         redis_client._LAST_LOADED_SERVER_VERSIONS = {}
