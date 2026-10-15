@@ -440,60 +440,73 @@
                     <div id="telegram-backup-server-results" style="margin-top: 8px; display:flex; flex-direction:column; gap:4px; font-size:0.82rem;"></div>
                 </div>
 
-                <div class="form-group">
-                    <label>{{ _('Enable Telegram Backup') }}</label>
-                    <div class="refresh-toggle" style="gap: 10px;">
-                        <label class="toggle-switch" style="margin: 0;">
-                            <input type="checkbox" id="telegram-backup-enabled">
-                            <span class="slider"></span>
-                        </label>
-                        <span class="toggle-label">{{ _('Enabled') }}</span>
+                <div class="tg-backup-grid">
+                    <div class="form-group">
+                        <label>{{ _('Enable Telegram Backup') }}</label>
+                        <div class="refresh-toggle" style="gap: 10px;">
+                            <label class="toggle-switch" style="margin: 0;">
+                                <input type="checkbox" id="telegram-backup-enabled">
+                                <span class="slider"></span>
+                            </label>
+                            <span class="toggle-label">{{ _('Enabled') }}</span>
+                        </div>
+                        <small class="text-secondary">{{ _('When enabled, backups are pulled from each X-UI panel.') }}</small>
                     </div>
-                    <small class="text-secondary">{{ _('When enabled, backups are pulled from each X-UI panel.') }}</small>
-                </div>
 
-                <div class="form-group">
-                    <label>{{ _('Send Panel Backup') }}</label>
-                    <div class="refresh-toggle" style="gap: 10px;">
-                        <label class="toggle-switch" style="margin: 0;">
-                            <input type="checkbox" id="telegram-backup-send-panel">
-                            <span class="slider"></span>
-                        </label>
-                        <span class="toggle-label">{{ _('Enabled') }}</span>
+                    <div class="form-group">
+                        <label>{{ _('Send Panel Backup') }}</label>
+                        <div class="refresh-toggle" style="gap: 10px;">
+                            <label class="toggle-switch" style="margin: 0;">
+                                <input type="checkbox" id="telegram-backup-send-panel">
+                                <span class="slider"></span>
+                            </label>
+                            <span class="toggle-label">{{ _('Enabled') }}</span>
+                        </div>
+                        <small class="text-secondary">{{ _('Send this panel database backup with the same Telegram backup schedule.') }}</small>
                     </div>
-                    <small class="text-secondary">{{ _('Send this panel database backup with the same Telegram backup schedule.') }}</small>
-                </div>
 
-                <div class="form-group">
-                    <label>{{ _('Schedule') }}</label>
-                    <select id="telegram-backup-schedule-mode" class="form-control" onchange="onTelegramScheduleModeChange()">
-                        <option value="daily">{{ _('Once a day at a fixed time') }}</option>
-                        <option value="interval">{{ _('Every N minutes (interval)') }}</option>
-                    </select>
-                    <small class="text-secondary">{{ _('Choose a fixed daily time (recommended) or a repeating interval.') }}</small>
-                </div>
+                    <div class="form-group">
+                        <label>{{ _('Schedule') }}</label>
+                        <select id="telegram-backup-schedule-mode" class="form-select" onchange="onTelegramScheduleModeChange()">
+                            <option value="daily">{{ _('Once a day at a fixed time') }}</option>
+                            <option value="interval">{{ _('Every N minutes (interval)') }}</option>
+                        </select>
+                        <small class="text-secondary">{{ _('Choose a fixed daily time (recommended) or a repeating interval.') }}</small>
+                    </div>
 
-                <div class="form-group" id="telegram-daily-time-group">
-                    <label>{{ _('Daily time (server timezone)') }}</label>
-                    <input type="time" id="telegram-backup-daily-time" class="form-control" value="00:00">
-                    <small class="text-secondary">{{ _('Backup is sent once per day at this time. Default 00:00 (midnight).') }}</small>
-                </div>
+                    <div class="form-group" id="telegram-daily-time-group">
+                        <label>{{ _('Daily time (server timezone)') }}</label>
+                        <input type="time" id="telegram-backup-daily-time" class="form-control" value="00:00">
+                        <small class="text-secondary">{{ _('Backup is sent once per day at this time. Default 00:00 (midnight).') }}</small>
+                    </div>
 
-                <div class="form-group" id="telegram-interval-group" style="display:none;">
-                    <label>{{ _('Interval (Minutes)') }}</label>
-                    <input type="number" id="telegram-backup-interval" class="form-control" min="1" max="1440" value="60">
-                    <small class="text-secondary">{{ _('How often to run the scheduled backup.') }}</small>
-                </div>
+                    <div class="form-group" id="telegram-interval-group" style="display:none;">
+                        <label>{{ _('Interval (Minutes)') }}</label>
+                        <input type="number" id="telegram-backup-interval" class="form-control" min="1" max="1440" value="60">
+                        <small class="text-secondary">{{ _('How often to run the scheduled backup.') }}</small>
+                    </div>
 
-                <div class="form-group">
-                    <label>{{ _('Bot Token') }}</label>
-                    <input type="text" id="telegram-backup-token" class="form-control" placeholder="123456:ABC-DEF" spellcheck="false" autocomplete="off">
-                    <small id="telegram-backup-token-hint" class="text-secondary" style="display:none;"></small>
-                </div>
+                    <div class="form-group">
+                        <label>{{ _('Bot Token') }}</label>
+                        <div class="tg-backup-token-wrap">
+                            <input type="password" id="telegram-backup-token" class="form-control" placeholder="123456:ABC-DEF" spellcheck="false" autocomplete="off">
+                            <button type="button" class="tg-backup-token-toggle" onclick="toggleTelegramBackupTokenVisibility(this)" aria-label="{{ _('Show or hide token') }}">
+                                <svg class="tg-eye-show" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                <svg class="tg-eye-hide" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                            </button>
+                        </div>
+                        <small id="telegram-backup-token-hint" class="text-secondary" style="display:none;"></small>
+                    </div>
 
-                <div class="form-group">
-                    <label>{{ _('Chat ID') }}</label>
-                    <input type="text" id="telegram-backup-chat-id" class="form-control" placeholder="-1001234567890" spellcheck="false" autocomplete="off">
+                    <div class="form-group">
+                        <label>{{ _('Chat ID') }}</label>
+                        <input type="text" id="telegram-backup-chat-id" class="form-control" placeholder="-1001234567890" spellcheck="false" autocomplete="off">
+                    </div>
+
+                    <div class="form-group">
+                        <label>{{ _('Last Run') }}</label>
+                        <div id="telegram-backup-last-run" class="text-secondary" style="padding:12px 0;">{{ _('Never') }}</div>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -562,45 +575,42 @@
                     </div>
 
                     <div id="telegram-backup-manual-proxy-fields">
-                    <div class="form-group">
-                        <label>{{ _('SOCKS Proxy Mode') }}</label>
-                        <select id="telegram-backup-proxy-mode" class="form-select" onchange="updateTelegramProxyModeUI()">
-                            <option value="url">URL</option>
-                            <option value="hostport">{{ _('Host & Port') }}</option>
-                        </select>
-                    </div>
+                    <div class="tg-backup-grid">
+                        <div class="form-group">
+                            <label>{{ _('SOCKS Proxy Mode') }}</label>
+                            <select id="telegram-backup-proxy-mode" class="form-select" onchange="updateTelegramProxyModeUI()">
+                                <option value="url">URL</option>
+                                <option value="hostport">{{ _('Host & Port') }}</option>
+                            </select>
+                        </div>
 
-                    <div class="form-group" id="tg-proxy-url-group">
-                        <label>{{ _('SOCKS Proxy URL') }}</label>
-                        <input type="text" id="telegram-backup-proxy" class="form-control" placeholder="socks5h://127.0.0.1:1080" spellcheck="false" autocomplete="off" oninput="updateTelegramProxyModeUI()">
-                    </div>
+                        <div class="form-group" id="tg-proxy-url-group">
+                            <label>{{ _('SOCKS Proxy URL') }}</label>
+                            <input type="text" id="telegram-backup-proxy" class="form-control" placeholder="socks5h://127.0.0.1:1080" spellcheck="false" autocomplete="off" oninput="updateTelegramProxyModeUI()">
+                        </div>
 
-                    <div class="form-group" id="tg-proxy-host-group">
-                        <label>{{ _('SOCKS Host') }}</label>
-                        <input type="text" id="telegram-backup-proxy-host" class="form-control" placeholder="127.0.0.1" spellcheck="false" autocomplete="off">
-                    </div>
+                        <div class="form-group" id="tg-proxy-host-group">
+                            <label>{{ _('SOCKS Host') }}</label>
+                            <input type="text" id="telegram-backup-proxy-host" class="form-control" placeholder="127.0.0.1" spellcheck="false" autocomplete="off">
+                        </div>
 
-                    <div class="form-group" id="tg-proxy-port-group">
-                        <label>{{ _('SOCKS Port') }}</label>
-                        <input type="number" id="telegram-backup-proxy-port" class="form-control" placeholder="1080" min="1" max="65535">
-                    </div>
+                        <div class="form-group" id="tg-proxy-port-group">
+                            <label>{{ _('SOCKS Port') }}</label>
+                            <input type="number" id="telegram-backup-proxy-port" class="form-control" placeholder="1080" min="1" max="65535">
+                        </div>
 
-                    <div class="form-group" id="tg-proxy-user-group">
-                        <label>{{ _('SOCKS Username') }}</label>
-                        <input type="text" id="telegram-backup-proxy-username" class="form-control" placeholder="{{ _('username (optional)') }}" spellcheck="false" autocomplete="off">
-                    </div>
+                        <div class="form-group" id="tg-proxy-user-group">
+                            <label>{{ _('SOCKS Username') }}</label>
+                            <input type="text" id="telegram-backup-proxy-username" class="form-control" placeholder="{{ _('username (optional)') }}" spellcheck="false" autocomplete="off">
+                        </div>
 
-                    <div class="form-group" id="tg-proxy-pass-group">
-                        <label>{{ _('SOCKS Password') }}</label>
-                        <input type="password" id="telegram-backup-proxy-password" class="form-control" placeholder="{{ _('password (optional)') }}" spellcheck="false" autocomplete="off">
-                        <small id="telegram-backup-proxy-password-hint" class="text-secondary" style="display:none;"></small>
+                        <div class="form-group" id="tg-proxy-pass-group">
+                            <label>{{ _('SOCKS Password') }}</label>
+                            <input type="password" id="telegram-backup-proxy-password" class="form-control" placeholder="{{ _('password (optional)') }}" spellcheck="false" autocomplete="off">
+                            <small id="telegram-backup-proxy-password-hint" class="text-secondary" style="display:none;"></small>
+                        </div>
                     </div>
                     </div>
-                </div>
-
-                <div class="form-group" style="margin-bottom: 0;">
-                    <label>{{ _('Last Run (Jalali)') }}</label>
-                    <div id="telegram-backup-last-run" class="text-secondary">{{ _('Never') }}</div>
                 </div>
 
                 <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
@@ -2583,6 +2593,41 @@
         gap: 10px;
     }
 
+    .tg-backup-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 18px;
+    }
+    .tg-backup-grid > * { min-width: 0; }
+
+    .tg-backup-token-wrap {
+        position: relative;
+        display: flex;
+        align-items: stretch;
+    }
+    .tg-backup-token-wrap .form-control {
+        padding-right: 40px;
+    }
+    .tg-backup-token-toggle {
+        position: absolute;
+        right: 1px;
+        top: 1px;
+        bottom: 1px;
+        width: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        cursor: pointer;
+        border-radius: 0 7px 7px 0;
+    }
+    .tg-backup-token-toggle:hover {
+        color: var(--text-primary);
+        background: rgba(255,255,255,0.04);
+    }
+
     .telegram-backup-picker-grid {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -2730,6 +2775,7 @@
         .telegram-announcement-actions .btn { width: 100%; justify-content: center; }
         .telegram-backup-header-actions { width: 100%; }
         .telegram-backup-header-actions .btn { flex: 1; justify-content: center; }
+        .tg-backup-grid { grid-template-columns: 1fr; }
         .telegram-backup-picker-grid { grid-template-columns: 1fr; }
         .telegram-backup-choice-box { height: 150px; }
         .telegram-notification-thresholds { grid-template-columns: 1fr; }
@@ -9178,6 +9224,17 @@
         const title = (text.match(/<title[^>]*>(.*?)<\/title>/i) || [])[1];
         const message = title ? title.trim() : (text || `HTTP ${res.status}`).slice(0, 160);
         throw new Error(message || `HTTP ${res.status}`);
+    }
+
+    function toggleTelegramBackupTokenVisibility(btn) {
+        const input = document.getElementById('telegram-backup-token');
+        if (!input) return;
+        const isPassword = input.type === 'password';
+        input.type = isPassword ? 'text' : 'password';
+        const show = btn.querySelector('.tg-eye-show');
+        const hide = btn.querySelector('.tg-eye-hide');
+        if (show) show.style.display = isPassword ? 'none' : '';
+        if (hide) hide.style.display = isPassword ? '' : 'none';
     }
 
     async function testTelegramBackupSettings(btnEl) {
