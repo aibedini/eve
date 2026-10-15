@@ -3,3 +3,4 @@ from panel.i18n import common  # noqa: F401
 from panel.i18n import monitor  # noqa: F401
 from panel.i18n import finance  # noqa: F401
 from panel.i18n import servers  # noqa: F401
+from panel.i18n import admins  # noqa: F401

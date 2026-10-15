@@ -34,6 +34,7 @@ PAGES = {
     'monitor': ('/monitor', ['templates/monitor.html']),
     'finance': ('/finance', ['templates/finance.html']),
     'servers': ('/servers', ['templates/servers.html']),
+    'admins': ('/admins', ['templates/admins.html']),
 }
 
 _spec = importlib.util.spec_from_file_location('i18n_scan', ROOT / 'scripts' / 'i18n_scan.py')

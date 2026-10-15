@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Admins - Eve Manager{% endblock %}
-{% block page_title %}User Management{% endblock %}
+{% block title %}{{ _('Admins - Eve Manager') }}{% endblock %}
+{% block page_title %}{{ _('User Management') }}{% endblock %}
 
 {% block header_actions %}
 <button class="btn btn-primary btn-full-mobile" onclick="openAddAdminModal()">
@@ -9,7 +9,7 @@
         <line x1="12" y1="5" x2="12" y2="19"></line>
         <line x1="5" y1="12" x2="19" y2="12"></line>
     </svg>
-    <span class="btn-label">Add User</span>
+    <span class="btn-label">{{ _('Add User') }}</span>
 </button>
 {% endblock %}
 
@@ -468,7 +468,7 @@
 <div class="modal-overlay hidden" id="admin-modal">
     <div class="modal">
         <div class="modal-header">
-            <h2 id="modal-title">Add User</h2>
+            <h2 id="modal-title">{{ _('Add User') }}</h2>
             <button class="modal-close" onclick="closeAdminModal()">&times;</button>
         </div>
         <div class="modal-body">
@@ -476,33 +476,33 @@
             
             <div style="display: flex; gap: 10px;">
                 <div class="form-group" style="flex: 1;">
-                    <label>Username</label>
-                    <input type="text" id="admin-username" placeholder="Username" oninput="this.value = this.value.toLowerCase().replace(/\s/g, '').replace(/[\u0600-\u06FF]/g, '')">
+                    <label>{{ _('Username') }}</label>
+                    <input type="text" id="admin-username" placeholder="{{ _('Username') }}" oninput="this.value = this.value.toLowerCase().replace(/\s/g, '').replace(/[\u0600-\u06FF]/g, '')">
                 </div>
                 
                 <div class="form-group" style="flex: 1;">
-                    <label>Password</label>
-                    <input type="password" id="admin-password" placeholder="Leave empty to keep current" oninput="validatePasswordUX(this.value)">
+                    <label>{{ _('Password') }}</label>
+                    <input type="password" id="admin-password" placeholder="{{ _('Leave empty to keep current') }}" oninput="validatePasswordUX(this.value)">
                     <div id="password-requirements" class="password-requirements hidden">
                         <div class="requirement" data-req="length">
                             <span class="status-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"></circle></svg></span>
-                            Min 8 chars
+                            {{ _('Min 8 chars') }}
                         </div>
                         <div class="requirement" data-req="upper">
                             <span class="status-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"></circle></svg></span>
-                            Uppercase
+                            {{ _('Uppercase') }}
                         </div>
                         <div class="requirement" data-req="lower">
                             <span class="status-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"></circle></svg></span>
-                            Lowercase
+                            {{ _('Lowercase') }}
                         </div>
                         <div class="requirement" data-req="number">
                             <span class="status-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"></circle></svg></span>
-                            Number
+                            {{ _('Number') }}
                         </div>
                         <div class="requirement" data-req="special">
                             <span class="status-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"></circle></svg></span>
-                            Special char
+                            {{ _('Special char') }}
                         </div>
                     </div>
                 </div>
@@ -510,24 +510,24 @@
 
             <div style="display: flex; gap: 10px;">
                 <div class="form-group" style="flex: 1;">
-                    <label>Role</label>
+                    <label>{{ _('Role') }}</label>
                     <select id="admin-role" class="form-select" onchange="toggleResellerFields()">
-                        <option value="reseller">Reseller</option>
-                        <option value="admin">Admin</option>
-                        <option value="superadmin">Super Admin</option>
+                        <option value="reseller">{{ _('Reseller') }}</option>
+                        <option value="admin">{{ _('Admin') }}</option>
+                        <option value="superadmin">{{ _('Super Admin') }}</option>
                     </select>
                 </div>
                 <div class="form-group" style="flex: 1;">
-                    <label>Telegram ID</label>
-                    <input type="text" id="admin-telegram-id" placeholder="Telegram ID">
+                    <label>{{ _('Telegram ID') }}</label>
+                    <input type="text" id="admin-telegram-id" placeholder="{{ _('Telegram ID') }}">
                 </div>
             </div>
 
             <div id="reseller-fields">
                 <div class="form-group">
-                    <label>Credit (Amount)</label>
+                    <label>{{ _('Credit (Amount)') }}</label>
                     <input type="text" id="admin-credit" placeholder="0" value="0" inputmode="numeric" oninput="formatSignedNumberInput(this)">
-                    <small style="color: var(--text-secondary);">Initial credit for new user (can be negative)</small>
+                    <small style="color: var(--text-secondary);">{{ _('Initial credit for new user (can be negative)') }}</small>
                 </div>
 
                 <label class="form-group form-toggle-item" style="cursor: pointer; margin-bottom: 4px;">
@@ -535,13 +535,13 @@
                         <input type="checkbox" id="admin-allow-negative" onchange="toggleNegativeLimitField()">
                         <span class="slider"></span>
                     </div>
-                    <span>{{ 'مجاز به اعتبار منفی' if panel_lang == 'fa' else 'Allow Negative Credit' }}</span>
+                    <span>{{ _('Allow Negative Credit') }}</span>
                 </label>
 
                 <div class="form-group" id="negative-limit-field" style="display:none;">
-                    <label>{{ 'حداکثر بدهی مجاز (تومان)' if panel_lang == 'fa' else 'Max Debt Allowed (Toman)' }}</label>
-                    <input type="text" id="admin-negative-limit" placeholder="e.g. 500,000" value="0" oninput="formatNumberInput(this)">
-                    <small style="color: var(--text-secondary);">{{ 'عملیات تا زمانی که موجودی بالاتر از این مقدار منفی باشد مجاز است' if panel_lang == 'fa' else 'Operations are allowed as long as the balance stays above this negative amount' }}</small>
+                    <label>{{ _('Max Debt Allowed (Toman)') }}</label>
+                    <input type="text" id="admin-negative-limit" placeholder="{{ _('e.g. 500,000') }}" value="0" oninput="formatNumberInput(this)">
+                    <small style="color: var(--text-secondary);">{{ _('Operations are allowed as long as the balance stays above this negative amount') }}</small>
                 </div>
 
                 <label class="form-group form-toggle-item" style="cursor: pointer; margin-bottom: 4px;">
@@ -549,53 +549,53 @@
                         <input type="checkbox" id="admin-allow-free">
                         <span class="slider"></span>
                     </div>
-                    <span>{{ 'مجاز به ساخت/تمدید رایگان' if panel_lang == 'fa' else 'Allow Free Creation' }}</span>
+                    <span>{{ _('Allow Free Creation') }}</span>
                 </label>
-                <small style="color: var(--text-secondary); display:block; margin: -2px 0 10px;">{{ 'در صورت فعال بودن، این کاربر گزینه Free را هنگام ساخت، تمدید و ریست مشاهده می‌کند' if panel_lang == 'fa' else 'When enabled, this user can see the Free option for creation, renewal, and reset' }}</small>
+                <small style="color: var(--text-secondary); display:block; margin: -2px 0 10px;">{{ _('When enabled, this user can see the Free option for creation, renewal, and reset') }}</small>
 
                 <label class="form-group form-toggle-item" style="cursor: pointer; margin-bottom: 4px;">
                     <div class="toggle-switch">
                         <input type="checkbox" id="admin-whatsapp-automation">
                         <span class="slider"></span>
                     </div>
-                    <span>{{ 'اتوماسیون واتساپ فعال' if panel_lang == 'fa' else 'WhatsApp Automation Enabled' }}</span>
+                    <span>{{ _('WhatsApp Automation Enabled') }}</span>
                 </label>
-                <small style="color: var(--text-secondary); display:block; margin: -2px 0 10px;">{{ 'در صورت غیرفعال بودن، پیام‌های خودکار واتساپ (هشدار اتمام و تمدید) از شماره‌ی سیستم به کلاینت‌های این کاربر ارسال نمی‌شود' if panel_lang == 'fa' else 'When disabled, automated WhatsApp messages (depletion alerts and renewals) are not sent from the system number to the clients of this user' }}</small>
+                <small style="color: var(--text-secondary); display:block; margin: -2px 0 10px;">{{ _('When disabled, automated WhatsApp messages (depletion alerts and renewals) are not sent from the system number to the clients of this user') }}</small>
 
                 <div class="form-group">
-                    <label>Support Links (Subscription Page)</label>
+                    <label>{{ _('Support Links (Subscription Page)') }}</label>
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <div class="form-group" style="flex: 1; min-width: 200px;">
-                            <label style="font-size: 0.85rem; color: var(--text-secondary);">Telegram Support (username)</label>
-                            <input type="text" id="admin-support-telegram" placeholder="e.g. my_support" oninput="this.value = this.value.trim()">
+                            <label style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('Telegram Support (username)') }}</label>
+                            <input type="text" id="admin-support-telegram" placeholder="{{ _('e.g. my_support') }}" oninput="this.value = this.value.trim()">
                         </div>
                         <div class="form-group" style="flex: 1; min-width: 200px;">
-                            <label style="font-size: 0.85rem; color: var(--text-secondary);">WhatsApp Support (phone)</label>
-                            <input type="text" id="admin-support-whatsapp" placeholder="e.g. 98912..." oninput="this.value = this.value.trim()">
+                            <label style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('WhatsApp Support (phone)') }}</label>
+                            <input type="text" id="admin-support-whatsapp" placeholder="{{ _('e.g. 98912...') }}" oninput="this.value = this.value.trim()">
                         </div>
                         <div class="form-group" style="flex: 1; min-width: 200px;">
-                            <label style="font-size: 0.85rem; color: var(--text-secondary);">SMS Support (phone)</label>
-                            <input type="text" id="admin-support-sms" placeholder="e.g. 0912... or +98912..." oninput="this.value = this.value.trim()">
+                            <label style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('SMS Support (phone)') }}</label>
+                            <input type="text" id="admin-support-sms" placeholder="{{ _('e.g. 0912... or +98912...') }}" oninput="this.value = this.value.trim()">
                         </div>
                     </div>
                 </div>
 
                 <div class="form-group">
-                    <label>Channel Links (Subscription Page)</label>
+                    <label>{{ _('Channel Links (Subscription Page)') }}</label>
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <div class="form-group" style="flex: 1; min-width: 200px;">
-                            <label style="font-size: 0.85rem; color: var(--text-secondary);">Telegram Channel (link or @)</label>
-                            <input type="text" id="admin-channel-telegram" placeholder="e.g. https://t.me/mychannel" oninput="this.value = this.value.trim()">
+                            <label style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('Telegram Channel (link or @)') }}</label>
+                            <input type="text" id="admin-channel-telegram" placeholder="{{ _('e.g. https://t.me/mychannel') }}" oninput="this.value = this.value.trim()">
                         </div>
                         <div class="form-group" style="flex: 1; min-width: 200px;">
-                            <label style="font-size: 0.85rem; color: var(--text-secondary);">WhatsApp Channel (link)</label>
-                            <input type="text" id="admin-channel-whatsapp" placeholder="e.g. https://chat.whatsapp.com/..." oninput="this.value = this.value.trim()">
+                            <label style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('WhatsApp Channel (link)') }}</label>
+                            <input type="text" id="admin-channel-whatsapp" placeholder="{{ _('e.g. https://chat.whatsapp.com/...') }}" oninput="this.value = this.value.trim()">
                         </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
-                    <label>Allowed Servers</label>
+                    <label>{{ _('Allowed Servers') }}</label>
                     <div class="server-selection-wrapper">
                         <!-- Main Header -->
                         <div class="select-all-container">
@@ -605,7 +605,7 @@
                                 <span class="checkmark"></span>
                             </label>
                             <div class="server-list-meta">
-                                <span class="meta-title">Allowed Servers</span>
+                                <span class="meta-title">{{ _('Allowed Servers') }}</span>
                                 <span class="count-pill" id="global-counter">0 / 0</span>
                             </div>
                         </div>
@@ -618,19 +618,19 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Discount Percentage (%)</label>
+                    <label>{{ _('Discount Percentage (%)') }}</label>
                     <input type="number" id="admin-discount" placeholder="0" min="0" max="100">
-                    <small style="color: var(--text-secondary);">Applies to standard prices</small>
+                    <small style="color: var(--text-secondary);">{{ _('Applies to standard prices') }}</small>
                 </div>
 
                 <div style="display: flex; gap: 10px;">
                     <div class="form-group" style="flex: 1;">
-                        <label>Custom Cost/Day</label>
-                        <input type="text" id="admin-cost-day" placeholder="Default" oninput="formatNumberInput(this)">
+                        <label>{{ _('Custom Cost/Day') }}</label>
+                        <input type="text" id="admin-cost-day" placeholder="{{ _('Default') }}" oninput="formatNumberInput(this)">
                     </div>
                     <div class="form-group" style="flex: 1;">
-                        <label>Custom Cost/GB</label>
-                        <input type="text" id="admin-cost-gb" placeholder="Default" oninput="formatNumberInput(this)">
+                        <label>{{ _('Custom Cost/GB') }}</label>
+                        <input type="text" id="admin-cost-gb" placeholder="{{ _('Default') }}" oninput="formatNumberInput(this)">
                     </div>
                 </div>
             </div>
@@ -640,12 +640,12 @@
                     <input type="checkbox" id="admin-enabled" checked>
                     <span class="slider"></span>
                 </div>
-                <span>Enabled</span>
+                <span>{{ _('Enabled') }}</span>
             </label>
             
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeAdminModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveAdmin()">Save</button>
+                <button class="btn btn-secondary" onclick="closeAdminModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" onclick="saveAdmin()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -654,26 +654,26 @@
 <div class="modal-overlay hidden" id="charge-modal">
     <div class="modal modal-sm">
         <div class="modal-header">
-            <h2>Charge Wallet</h2>
+            <h2>{{ _('Charge Wallet') }}</h2>
             <button class="modal-close" onclick="document.getElementById('charge-modal').classList.add('hidden')">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="charge-admin-id">
-            <p style="margin-bottom: 15px;">Charging wallet for: <strong id="charge-username" style="color: var(--primary);"></strong></p>
+            <p style="margin-bottom: 15px;">{{ _('Charging wallet for:') }} <strong id="charge-username" style="color: var(--primary);"></strong></p>
             
             <div class="form-group">
-                <label>Amount (Toman)</label>
-                <input type="text" id="charge-amount" class="form-input" placeholder="e.g. 500,000" oninput="formatSignedNumberInput(this)" inputmode="numeric">
-                <small style="color: var(--text-secondary);">Use negative value to deduct.</small>
+                <label>{{ _('Amount (Toman)') }}</label>
+                <input type="text" id="charge-amount" class="form-input" placeholder="{{ _('e.g. 500,000') }}" oninput="formatSignedNumberInput(this)" inputmode="numeric">
+                <small style="color: var(--text-secondary);">{{ _('Use negative value to deduct.') }}</small>
             </div>
             
             <div class="form-group">
-                <label>Description</label>
-                <input type="text" id="charge-desc" class="form-input" placeholder="e.g. Bank Transfer #123">
+                <label>{{ _('Description') }}</label>
+                <input type="text" id="charge-desc" class="form-input" placeholder="{{ _('e.g. Bank Transfer #123') }}">
             </div>
             
             <div class="form-actions">
-                <button class="btn btn-primary" onclick="submitCharge()">Submit Transaction</button>
+                <button class="btn btn-primary" onclick="submitCharge()">{{ _('Submit Transaction') }}</button>
             </div>
         </div>
     </div>
@@ -681,6 +681,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script nonce="{{ csp_nonce }}">window.EVE_I18N = {{ i18n_catalog('admins')|tojson }};</script>
 <script nonce="{{ csp_nonce }}">
     let admins = [];
     let allServers = [];
@@ -838,7 +839,7 @@
     function renderServerList() {
         const list = document.getElementById('server-list');
         if (!serversLoaded) {
-            list.innerHTML = '<div class="inbound-empty">Loading servers...</div>';
+            list.innerHTML = '<div class="inbound-empty">' + _t('Loading servers...') + '</div>';
             return;
         }
 
@@ -853,19 +854,19 @@
                             <input type="checkbox" class="inbound-checkbox" data-server="${s.id}" value="${inb.id}" onchange="updateCounts(${s.id})">
                             <span class="checkmark"></span>
                             <div class="inbound-details">
-                                <span class="inbound-name">${inb.remark || 'Inbound'}</span>
+                                <span class="inbound-name">${inb.remark || _t('Inbound')}</span>
                                 <span class="protocol-badge">${inb.protocol}</span>
                                 <span class="port-number">:${inb.port}</span>
                             </div>
                         </label>
-                        <button type="button" class="btn-assign-inbound" title="Assign all existing clients in this inbound to this reseller"
-                            onclick="bulkAssignInbound(${s.id}, ${inb.id}, '${(inb.remark||'Inbound').replace(/'/g,'&apos;')}')">
+                        <button type="button" class="btn-assign-inbound" title="${_t('Assign all existing clients in this inbound to this reseller')}"
+                            onclick="bulkAssignInbound(${s.id}, ${inb.id}, '${(inb.remark||_t('Inbound')).replace(/'/g,'&apos;')}')">
                             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>
-                            Assign Users
+                            ${_t('Assign Users')}
                         </button>
                     </div>
                 `;
-            }).join('') : '<div class="inbound-empty">No inbounds found</div>';
+            }).join('') : '<div class="inbound-empty">' + _t('No inbounds found') + '</div>';
 
             return `
                 <div class="server-accordion ${s.id === allServers[0].id ? 'open' : ''}" id="server-${s.id}" data-server-id="${s.id}">
@@ -896,7 +897,7 @@
                                 <span class="checkmark"></span>
                             </label>
                             <div class="inbound-header-text">
-                                <span>Select All Inbounds</span>
+                                <span>${_t('Select All Inbounds')}</span>
                                 <span class="count-pill inbound-counter" id="inbound-count-${s.id}">0 / 0</span>
                             </div>
                         </div>
@@ -1127,12 +1128,12 @@
             admins = await response.json();
             renderAdmins();
         } catch (error) {
-            showToast('Error loading admins', 'error');
+            showToast(_t('Error loading admins'), 'error');
         }
     }
     
     function formatJalaliDate(isoString) {
-        if (!isoString) return 'Never';
+        if (!isoString) return _t('Never');
         return window.EveDate ? EveDate.formatDate(isoString) : new Date(isoString).toLocaleDateString();
     }
     
@@ -1140,7 +1141,7 @@
         const container = document.getElementById('admins-container');
         
         if (admins.length === 0) {
-            container.innerHTML = '<p class="no-data">No users found</p>';
+            container.innerHTML = '<p class="no-data">' + _t('No users found') + '</p>';
             return;
         }
         
@@ -1156,10 +1157,10 @@
                     <div class="admin-info">
                         <h3>${admin.username}</h3>
                         <div class="admin-badges">
-                            <span class="badge ${admin.role}">${admin.role.toUpperCase()}</span>
-                            ${admin.enabled ? '<span class="badge active">Enabled</span>' : '<span class="badge inactive">Disabled</span>'}
+                            <span class="badge ${admin.role}">${_t(admin.role).toUpperCase()}</span>
+                            ${admin.enabled ? '<span class="badge active">' + _t('Enabled') + '</span>' : '<span class="badge inactive">' + _t('Disabled') + '</span>'}
                         </div>
-                        <div class="admin-credit-badge" title="Wallet balance">
+                        <div class="admin-credit-badge" title="${_t('Wallet balance')}">
                             <svg class="wallet-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <rect x="2" y="7" width="20" height="14" rx="4" ry="4"></rect>
                                 <path d="M16 7V5a3 3 0 0 0-3-3H5a3 3 0 0 0-3 3v2"></path>
@@ -1170,24 +1171,24 @@
                                 <small>T</small>
                             </div>
                         </div>
-                        ${admin.allow_negative_credit ? `<span style="font-size:0.72rem; color:#fbbf24; background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.3); border-radius:6px; padding:1px 6px; margin-top:3px; display:inline-block;" title="Max debt: ${(admin.negative_credit_limit||0).toLocaleString()} T">{{ 'اعتبار منفی تا' if panel_lang == 'fa' else 'Negative credit up to' }} ${(admin.negative_credit_limit||0).toLocaleString()} T</span>` : ''}
+                        ${admin.allow_negative_credit ? `<span style="font-size:0.72rem; color:#fbbf24; background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.3); border-radius:6px; padding:1px 6px; margin-top:3px; display:inline-block;" title="${_t('Max debt: {amount} T', {amount: (admin.negative_credit_limit||0).toLocaleString()})}">{{ _('Negative credit up to') }} ${(admin.negative_credit_limit||0).toLocaleString()} T</span>` : ''}
                         <p class="admin-meta" style="margin-top: 5px;">
-                            Last Login: ${formatJalaliDate(admin.last_login)}
+                            ${_t('Last Login:')} ${formatJalaliDate(admin.last_login)}
                         </p>
                     </div>
                 </div>
                 <div class="admin-actions">
-                    <button class="action-btn wallet-action" onclick="openChargeModal(${admin.id}, '${admin.username}')" title="Charge Wallet">
+                    <button class="action-btn wallet-action" onclick="openChargeModal(${admin.id}, '${admin.username}')" title="${_t('Charge Wallet')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
                     </button>
 
-                    <button class="action-btn" onclick="editAdmin(${admin.id})" title="Edit">
+                    <button class="action-btn" onclick="editAdmin(${admin.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
                         </svg>
                     </button>
-                    <button class="action-btn danger" onclick="deleteAdmin(${admin.id})" title="Delete">
+                    <button class="action-btn danger" onclick="deleteAdmin(${admin.id})" title="${_t('Delete')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="3 6 5 6 21 6"></polyline>
                             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -1211,9 +1212,9 @@
         const rawAmount = document.getElementById('charge-amount').value.replace(/,/g, '').trim();
         const desc = document.getElementById('charge-desc').value;
 
-        if (!rawAmount || rawAmount === '-') return showToast('Amount is required', 'error');
+        if (!rawAmount || rawAmount === '-') return showToast(_t('Amount is required'), 'error');
         const amount = parseInt(rawAmount);
-        if (isNaN(amount)) return showToast('Invalid amount', 'error');
+        if (isNaN(amount)) return showToast(_t('Invalid amount'), 'error');
 
         try {
             const res = await fetch('/admin/charge', {
@@ -1222,17 +1223,17 @@
                 body: JSON.stringify({ admin_id: id, amount: amount, description: desc })
             });
             if (res.ok) {
-                showToast('Transaction successful');
+                showToast(_t('Transaction successful'));
                 document.getElementById('charge-modal').classList.add('hidden');
                 loadAdmins();
             } else {
-                showToast('Error processing transaction', 'error');
+                showToast(_t('Error processing transaction'), 'error');
             }
-        } catch(e) { showToast('Network error', 'error'); }
+        } catch(e) { showToast(_t('Network error'), 'error'); }
     }
 
     function openAddAdminModal() {
-        document.getElementById('modal-title').textContent = 'Add User';
+        document.getElementById('modal-title').textContent = _t('Add User');
         document.getElementById('edit-admin-id').value = '';
         document.getElementById('admin-username').value = '';
         document.getElementById('admin-username').disabled = false;
@@ -1267,7 +1268,7 @@
         const admin = admins.find(a => a.id === id);
         if (!admin) return;
         
-        document.getElementById('modal-title').textContent = 'Edit User';
+        document.getElementById('modal-title').textContent = _t('Edit User');
         document.getElementById('edit-admin-id').value = admin.id;
         document.getElementById('admin-username').value = admin.username;
         document.getElementById('admin-username').disabled = false;
@@ -1310,7 +1311,7 @@
     async function bulkAssignInbound(serverId, inboundId, inboundName) {
         const resellerId = document.getElementById('edit-admin-id').value;
         if (!resellerId) {
-            showToast('Save the reseller first, then assign existing clients', 'warning');
+            showToast(_t('Save the reseller first, then assign existing clients'), 'warning');
             return;
         }
         const btn = event && event.currentTarget;
@@ -1324,14 +1325,14 @@
             const data = await res.json();
             if (data.success) {
                 const msg = data.assigned > 0
-                    ? `${data.assigned} clients assigned from "${inboundName}"` + (data.skipped > 0 ? ` (${data.skipped} already assigned)` : '')
-                    : `No new clients to assign from "${inboundName}"`;
+                    ? _t('{count} clients assigned from "{inbound}"', {count: data.assigned, inbound: inboundName}) + (data.skipped > 0 ? ' ' + _t('({count} already assigned)', {count: data.skipped}) : '')
+                    : _t('No new clients to assign from "{inbound}"', {inbound: inboundName});
                 showToast(msg, data.assigned > 0 ? 'success' : 'info');
             } else {
-                showToast(data.error || 'Failed to assign clients', 'error');
+                showToast(data.error || _t('Failed to assign clients'), 'error');
             }
         } catch(e) {
-            showToast('Network error', 'error');
+            showToast(_t('Network error'), 'error');
         } finally {
             if (btn) { btn.disabled = false; btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg> Assign Users'; }
         }
@@ -1416,7 +1417,7 @@
         // Validate password if it's a new user or if password is being changed
         if (!id || password) {
             if (!validatePasswordUX(password)) {
-                showToast('Password does not meet requirements', 'error');
+                showToast(_t('Password does not meet requirements'), 'error');
                 return;
             }
         }
@@ -1444,7 +1445,7 @@
         };
         
         if (!data.username) {
-            showToast('Username is required', 'error');
+            showToast(_t('Username is required'), 'error');
             return;
         }
         
@@ -1465,29 +1466,29 @@
             try { result = JSON.parse(raw); } catch (e) { result = null; }
 
             if (result && result.success) {
-                showToast(id ? 'User updated' : 'User added');
+                showToast(id ? _t('User updated') : _t('User added'));
                 closeAdminModal();
                 loadAdmins();
             } else {
                 const msg = (result && result.error)
                     ? result.error
-                    : `Error saving (HTTP ${response.status})`;
+                    : _t('Error saving (HTTP {status})', {status: response.status});
                 showToast(msg, 'error');
             }
         } catch (error) {
-            showToast('Error saving: ' + (error && error.message ? error.message : 'network error'), 'error');
+            showToast(_t('Error saving:') + ' ' + (error && error.message ? error.message : _t('network error')), 'error');
         }
     }
     
     async function deleteAdmin(id) {
-        if (!confirm('Are you sure you want to delete this user?')) return;
+        if (!confirm(_t('Are you sure you want to delete this user?'))) return;
         try {
             const response = await fetch(`/api/admins/${id}`, { method: 'DELETE' });
             if (response.ok) {
-                showToast('User deleted');
+                showToast(_t('User deleted'));
                 loadAdmins();
             }
-        } catch (error) { showToast('Error deleting', 'error'); }
+        } catch (error) { showToast(_t('Error deleting'), 'error'); }
     }
 </script>
 {% endblock %}
