@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.10.9"
+APP_VERSION = "2.10.10"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2179,6 +2179,9 @@ from panel.services.billing import (  # noqa: F401
     inject_wallet_credit,
 )
 app.context_processor(inject_wallet_credit)
+import panel.i18n  # noqa: E402,F401  (registers the Persian catalogs)
+from panel.core.i18n import inject_i18n  # noqa: E402
+app.context_processor(inject_i18n)
 
 def format_app_datetime(dt):
     if not dt:

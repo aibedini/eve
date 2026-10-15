@@ -38,6 +38,14 @@
             if (!value) return 0;
             return parseInt(value.toString().replace(/,/g, '').replace(/\D/g, '')) || 0;
         }
+
+        // Panel-language lookup for strings built in the browser: English text is the key
+        // and window.EVE_I18N (set per page, Persian panels only) holds the translations.
+        window._t = function (text, vars) {
+            const table = window.EVE_I18N || {};
+            let out = Object.prototype.hasOwnProperty.call(table, text) ? table[text] : text;
+            return vars ? out.replace(/\{(\w+)\}/g, function (m, k) { return vars[k] == null ? m : vars[k]; }) : out;
+        };
     </script>
     <script nonce="{{ csp_nonce }}">
         (function () {
@@ -442,9 +450,9 @@
                         <line x1="3" y1="18" x2="21" y2="18"></line>
                     </svg>
                 </button>
-                <h1 class="page-title">{% block page_title %}Financial Overview{% endblock %}</h1>
+                <h1 class="page-title">{% block page_title %}{{ _('Financial Overview') }}{% endblock %}</h1>
                 <div class="header-actions">
-                    <div class="wallet-pill" title="Wallet balance">
+                    <div class="wallet-pill" title="{{ _('Wallet balance') }}">
                         <svg class="wallet-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="2" y="7" width="20" height="14" rx="4" ry="4"></rect>
                             <path d="M16 7V5a3 3 0 0 0-3-3H5a3 3 0 0 0-3 3v2"></path>
@@ -480,7 +488,7 @@
     
     <div class="loading-overlay hidden" id="loading">
         <div class="spinner"></div>
-        <p>Loading...</p>
+        <p>{{ _('Loading...') }}</p>
     </div>
     
     <div class="toast hidden" id="toast"></div>

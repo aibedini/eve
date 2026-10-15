@@ -184,6 +184,29 @@ MAPPING = (
         ['tests.test_sms_candidate_decisions', 'tests.test_sms_candidate_evaluator',
          'tests.test_sms_center_copy'],
     )),
+    ('panel/core/i18n.py', (
+        # Panel-language lookup (English text is the key) and its per-page catalogs.
+        ['tests.test_i18n_pages'],
+        ['tests.test_sms_center_copy', 'tests.test_ui_design_system'],
+    )),
+    ('panel/i18n/', (
+        ['tests.test_i18n_pages'],
+        ['tests.test_sms_center_copy', 'tests.test_ui_design_system'],
+    )),
+    ('scripts/i18n_scan.py', (
+        ['tests.test_i18n_pages'],
+        ['tests.test_ui_design_system'],
+    )),
+    ('templates/monitor.html', (
+        ['tests.test_i18n_pages'],
+        ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
+    )),
+    ('templates/base.html', (
+        # The shell every page extends: sidebar, topbar and the _t() helper.
+        ['tests.test_i18n_pages', 'tests.test_sms_center_copy'],
+        ['tests.test_ui_design_system', 'tests.test_renew_ui_state',
+         'tests.test_static_deploy_contract'],
+    )),
     ('panel/core/sms_center_copy.py', (
         # Every visible SMS Center string, in both panel languages.
         ['tests.test_sms_center_copy'],

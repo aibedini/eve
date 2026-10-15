@@ -1,0 +1,38 @@
+"""Words and phrases shared by several pages."""
+from panel.core.i18n import register
+
+FA = {
+    'Save': 'ذخیره',
+    'Cancel': 'انصراف',
+    'Close': 'بستن',
+    'Delete': 'حذف',
+    'Edit': 'ویرایش',
+    'Search': 'جست‌وجو',
+    'Refresh': 'تازه‌سازی',
+    'Loading…': 'در حال بارگذاری…',
+    'Loading...': 'در حال بارگذاری...',
+    'Financial Overview': 'نمای مالی',
+    'Wallet balance': 'موجودی کیف پول',
+    'Yes': 'بله',
+    'No': 'خیر',
+    'Enable': 'فعال‌سازی',
+    'Disable': 'غیرفعال‌سازی',
+    'Enabled': 'فعال',
+    'Disabled': 'غیرفعال',
+    'Active': 'فعال',
+    'Inactive': 'غیرفعال',
+    'Error': 'خطا',
+    'All Servers': 'همهٔ سرورها',
+    'Server': 'سرور',
+    'Servers': 'سرورها',
+    'Status': 'وضعیت',
+    'Actions': 'عملیات',
+    'Name': 'نام',
+    'Email': 'ایمیل',
+    'Expiry': 'انقضا',
+    'Traffic': 'ترافیک',
+    'Volume': 'حجم',
+    'Settings saved': 'تنظیمات ذخیره شد',
+    'Server error, please try again': 'خطای سرور، دوباره تلاش کنید',
+}
+register('common', FA)

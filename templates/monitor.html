@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Monitor - Eve Manager{% endblock %}
-{% block page_title %}Renewal Monitor{% endblock %}
+{% block title %}{{ _('Monitor - Eve Manager') }}{% endblock %}
+{% block page_title %}{{ _('Renewal Monitor') }}{% endblock %}
 
 {% block header_actions %}
 <button class="btn btn-secondary" onclick="refreshAlerts()">
@@ -9,7 +9,7 @@
         <polyline points="23 4 23 10 17 10"></polyline>
         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
     </svg>
-    <span class="btn-label">Reload</span>
+    <span class="btn-label">{{ _('Reload') }}</span>
 </button>
 {% endblock %}
 
@@ -17,21 +17,21 @@
 <div class="monitor-page">
     <section class="monitor-hero">
         <div class="monitor-hero-content">
-            <div class="monitor-kicker">Client Renewal Desk</div>
-            <h2>Track expiring and low-volume clients</h2>
-            <p>Filter by risk, personalize the outreach text, and message users in seconds.</p>
+            <div class="monitor-kicker">{{ _('Client Renewal Desk') }}</div>
+            <h2>{{ _('Track expiring and low-volume clients') }}</h2>
+            <p>{{ _('Filter by risk, personalize the outreach text, and message users in seconds.') }}</p>
             <div class="monitor-hero-actions">
-                <button class="btn btn-primary" id="monitor-scan-btn" onclick="scanNetworks()">Scan Now</button>
-                <button class="btn btn-ghost" onclick="saveMonitorSettings()">Save Settings</button>
+                <button class="btn btn-primary" id="monitor-scan-btn" onclick="scanNetworks()">{{ _('Scan Now') }}</button>
+                <button class="btn btn-ghost" onclick="saveMonitorSettings()">{{ _('Save Settings') }}</button>
             </div>
         </div>
         <div class="monitor-hero-stats">
             <div class="monitor-stat">
-                <span class="label">Alerts</span>
+                <span class="label">{{ _('Alerts') }}</span>
                 <span class="value" id="monitor-alert-count">0</span>
             </div>
             <div class="monitor-stat">
-                <span class="label">Last Scan</span>
+                <span class="label">{{ _('Last Scan') }}</span>
                 <span class="value" id="monitor-last-scan">-</span>
             </div>
         </div>
@@ -42,37 +42,37 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h3>Filters</h3>
-                        <p class="text-secondary">Control how alerts are surfaced.</p>
+                        <h3>{{ _('Filters') }}</h3>
+                        <p class="text-secondary">{{ _('Control how alerts are surfaced.') }}</p>
                     </div>
                 </div>
                 <div class="monitor-form">
                     <div class="form-group">
-                        <label>Warning Days</label>
+                        <label>{{ _('Warning Days') }}</label>
                         <input type="number" id="monitor-warning-days" min="1" max="365" value="3">
                     </div>
                     <div class="form-group">
-                        <label>Warning GB</label>
+                        <label>{{ _('Warning GB') }}</label>
                         <input type="number" id="monitor-warning-gb" min="0.1" step="0.1" value="2">
                     </div>
                     <div class="form-group">
-                        <label>Hide Expired After (Days)</label>
+                        <label>{{ _('Hide Expired After (Days)') }}</label>
                         <input type="number" id="monitor-hide-days" min="0" max="365" value="7">
                     </div>
                     <label class="form-group form-toggle-item" style="cursor: pointer;">
                         <div class="toggle-switch"><input type="checkbox" id="monitor-show-unlimited-volume"><span class="slider"></span></div>
-                        <span>Time alerts for unlimited-volume accounts</span>
+                        <span>{{ _('Time alerts for unlimited-volume accounts') }}</span>
                     </label>
                     <label class="form-group form-toggle-item" style="cursor: pointer;">
                         <div class="toggle-switch"><input type="checkbox" id="monitor-show-unlimited-time"><span class="slider"></span></div>
-                        <span>Volume alerts for unlimited-time accounts</span>
+                        <span>{{ _('Volume alerts for unlimited-time accounts') }}</span>
                     </label>
                     <label class="form-group form-toggle-item" style="cursor: pointer;">
                         <div class="toggle-switch"><input type="checkbox" id="monitor-show-fully-unlimited"><span class="slider"></span></div>
-                        <span>Show fully unlimited accounts</span>
+                        <span>{{ _('Show fully unlimited accounts') }}</span>
                     </label>
                     <div class="form-group">
-                        <label>TimeZone</label>
+                        <label>{{ _('TimeZone') }}</label>
                         <select id="monitor-timezone" class="form-select"></select>
                     </div>
                     <label class="form-group form-toggle-item" style="cursor: pointer;">
@@ -80,7 +80,7 @@
                             <input type="checkbox" id="monitor-debug">
                             <span class="slider"></span>
                         </div>
-                        <span>Debug Mode</span>
+                        <span>{{ _('Debug Mode') }}</span>
                     </label>
                 </div>
             </div>
@@ -88,34 +88,34 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h3>Message Templates</h3>
-                        <p class="text-secondary">Variables: {user}, {rem}, {time}, {date}, {server}, {recommended_package}, {recommended_volume}, {recommended_days}, {recommended_price}, {recommended_daily_usage}, {recommended_31d_usage}, {if_recommendation}...{/if_recommendation}</p>
+                        <h3>{{ _('Message Templates') }}</h3>
+                        <p class="text-secondary">{{ _('Variables:') }} <bdi dir="ltr">{user}, {rem}, {time}, {date}, {server}, {recommended_package}, {recommended_volume}, {recommended_days}, {recommended_price}, {recommended_daily_usage}, {recommended_31d_usage}, {if_recommendation}...{/if_recommendation}</bdi></p>
                     </div>
                 </div>
                 <div class="monitor-accordion">
                     <details open>
-                        <summary>Ended</summary>
+                        <summary>{{ _('Ended') }}</summary>
                         <textarea id="tpl-ended" rows="4"></textarea>
                     </details>
                     <details>
-                        <summary>Expired</summary>
+                        <summary>{{ _('Expired') }}</summary>
                         <textarea id="tpl-expired" rows="4"></textarea>
                     </details>
                     <details>
-                        <summary>Low Data</summary>
+                        <summary>{{ _('Low Data') }}</summary>
                         <textarea id="tpl-low" rows="4"></textarea>
                     </details>
                     <details>
-                        <summary>Expiring Soon</summary>
+                        <summary>{{ _('Expiring Soon') }}</summary>
                         <textarea id="tpl-soon" rows="4"></textarea>
                     </details>
                     <details>
-                        <summary>Disabled (manual)</summary>
+                        <summary>{{ _('Disabled (manual)') }}</summary>
                         <textarea id="tpl-disabled" rows="4"></textarea>
                     </details>
                     <details open>
-                        <summary>No Usage (Royalty)</summary>
-                        <textarea id="tpl-zero-usage" rows="4" placeholder="Template for users who never connected. Vars: {user}, {rem}, {time}, {date}, {server}"></textarea>
+                        <summary>{{ _('No Usage (Royalty)') }}</summary>
+                        <textarea id="tpl-zero-usage" rows="4" placeholder="{{ _('Template for users who never connected. Variables: {user}, {rem}, {time}, {date}, {server}') }}"></textarea>
                     </details>
                 </div>
             </div>
@@ -124,17 +124,17 @@
         <section class="monitor-results">
             <div class="monitor-toolbar">
                 <div class="monitor-filter">
-                    <label>Server</label>
+                    <label>{{ _('Server') }}</label>
                     <select id="monitor-server-filter" class="form-select"></select>
                 </div>
                 <div class="monitor-filter">
-                    <label>Search</label>
+                    <label>{{ _('Search') }}</label>
                     <div class="search-wrapper">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon">
                             <circle cx="11" cy="11" r="8"></circle>
                             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                         </svg>
-                        <input type="text" id="monitor-search" placeholder="Email, username, comment, or mobile" class="search-input">
+                        <input type="text" id="monitor-search" placeholder="{{ _('Email, username, comment, or mobile') }}" class="search-input">
                         <button class="search-clear hidden" onclick="clearMonitorSearch()" id="monitor-search-clear">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
@@ -144,33 +144,33 @@
 
             <div class="monitor-filter-row">
                 <div class="monitor-status-filters">
-                    <button class="chip" data-status="ended" data-label="Ended" onclick="toggleStatusFilter(this)">Ended (0)</button>
-                    <button class="chip" data-status="expired" data-label="Expired" onclick="toggleStatusFilter(this)">Expired (0)</button>
-                    <button class="chip active" data-status="low" data-label="Low" onclick="toggleStatusFilter(this)">Low (0)</button>
-                    <button class="chip active" data-status="soon" data-label="Soon" onclick="toggleStatusFilter(this)">Soon (0)</button>
-                    <button class="chip" data-status="disabled" data-label="Disabled" onclick="toggleStatusFilter(this)">Disabled (0)</button>
-                    <button class="chip" data-status="all" data-label="All" onclick="toggleStatusFilter(this)">All (0)</button>
-                    <button class="chip active" data-optout="nosms" data-label="No SMS" onclick="toggleOptoutFilter(this)">No SMS (0)</button>
-                    <button class="chip active" data-optout="nopm" data-label="No PM" onclick="toggleOptoutFilter(this)">No PM (0)</button>
+                    <button class="chip" data-status="ended" data-label="{{ _('Ended') }}" onclick="toggleStatusFilter(this)">{{ _('Ended') }} (0)</button>
+                    <button class="chip" data-status="expired" data-label="{{ _('Expired') }}" onclick="toggleStatusFilter(this)">{{ _('Expired') }} (0)</button>
+                    <button class="chip active" data-status="low" data-label="{{ _('Low') }}" onclick="toggleStatusFilter(this)">{{ _('Low') }} (0)</button>
+                    <button class="chip active" data-status="soon" data-label="{{ _('Soon') }}" onclick="toggleStatusFilter(this)">{{ _('Soon') }} (0)</button>
+                    <button class="chip" data-status="disabled" data-label="{{ _('Disabled') }}" onclick="toggleStatusFilter(this)">{{ _('Disabled') }} (0)</button>
+                    <button class="chip" data-status="all" data-label="{{ _('All') }}" onclick="toggleStatusFilter(this)">{{ _('All') }} (0)</button>
+                    <button class="chip active" data-optout="nosms" data-label="{{ _('No SMS') }}" onclick="toggleOptoutFilter(this)">{{ _('No SMS') }} (0)</button>
+                    <button class="chip active" data-optout="nopm" data-label="{{ _('No PM') }}" onclick="toggleOptoutFilter(this)">{{ _('No PM') }} (0)</button>
                 </div>
                 {% if role != 'reseller' %}
-                <label class="filter-toggle" title="Include reseller-owned users">
+                <label class="filter-toggle" title="{{ _('Include reseller-owned users') }}">
                     <input type="checkbox" id="monitor-reseller-users-toggle">
                     <span class="toggle-track"></span>
-                    <span class="toggle-text">Reseller users</span>
+                    <span class="toggle-text">{{ _('Reseller users') }}</span>
                 </label>
                 {% endif %}
-                <div id="monitor-selected-summary" class="text-secondary" style="font-size: 0.9rem;">Selected users: 0</div>
+                <div id="monitor-selected-summary" class="text-secondary" style="font-size: 0.9rem;">{{ _('Selected users: {count}', count=0) }}</div>
             </div>
 
             <div class="monitor-list">
                 <div class="monitor-list-header">
-                    <span><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-inline-end:4px"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>User</span>
-                    <span><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-inline-end:4px"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>Mobile</span>
-                    <span><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-inline-end:4px"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>Server</span>
-                    <span>Status</span>
-                    <span>Details</span>
-                    <span>Actions</span>
+                    <span><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-inline-end:4px"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>{{ _('User') }}</span>
+                    <span><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-inline-end:4px"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>{{ _('Mobile') }}</span>
+                    <span><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-inline-end:4px"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>{{ _('Server') }}</span>
+                    <span>{{ _('Status') }}</span>
+                    <span>{{ _('Details') }}</span>
+                    <span>{{ _('Actions') }}</span>
                 </div>
                 <div id="monitor-list"></div>
             </div>
@@ -179,10 +179,10 @@
 
     <div id="monitor-progress-overlay" class="monitor-progress-overlay hidden">
         <div class="monitor-progress-box">
-            <button type="button" class="monitor-progress-close" onclick="hideMonitorProgress()" aria-label="Close">&times;</button>
-            <div class="monitor-progress-heading"><div class="monitor-spinner"></div><div id="monitor-progress-text" class="monitor-progress-text">Scanning servers...</div></div>
+            <button type="button" class="monitor-progress-close" onclick="hideMonitorProgress()" aria-label="{{ _('Close') }}">&times;</button>
+            <div class="monitor-progress-heading"><div class="monitor-spinner"></div><div id="monitor-progress-text" class="monitor-progress-text">{{ _('Scanning servers...') }}</div></div>
             <div class="monitor-progress-track"><span id="monitor-progress-bar"></span></div>
-            <div id="monitor-progress-summary" class="text-secondary">Preparing server list...</div>
+            <div id="monitor-progress-summary" class="text-secondary">{{ _('Preparing server list...') }}</div>
             <div id="monitor-progress-servers" class="monitor-progress-servers"></div>
         </div>
     </div>
@@ -254,6 +254,7 @@
     .monitor-progress-server .error { color:var(--danger); }
     .monitor-progress-server .pending { color:var(--text-secondary); }
 </style>
+<script nonce="{{ csp_nonce }}">window.EVE_I18N = {{ i18n_catalog('monitor')|tojson }};</script>
 <script nonce="{{ csp_nonce }}">
     const MONITOR_ROLE = '{{ role|e }}';
     let monitorSettings = null;
@@ -308,7 +309,7 @@
             const resp = await fetch('/api/monitor/settings');
             const data = await resp.json();
             if (!data.success) {
-                showToast('Failed to load settings', 'error');
+                showToast(_t('Failed to load settings'), 'error');
                 return;
             }
             monitorSettings = data.settings || {};
@@ -316,7 +317,7 @@
             monitorTimezone = (data.timezone || 'Asia/Tehran');
             applySettingsToForm();
         } catch (err) {
-            showToast('Failed to load settings', 'error');
+            showToast(_t('Failed to load settings'), 'error');
         }
     }
 
@@ -401,20 +402,20 @@
             } catch (_) {
                 const text = await resp.text().catch(() => '');
                 const snippet = text ? ': ' + text.replace(/<[^>]+>/g, ' ').trim().slice(0, 160) : '';
-                showToast(`Save failed (HTTP ${resp.status})${snippet}`, 'error');
+                showToast(_t('Save failed (HTTP {status})', {status: resp.status}) + snippet, 'error');
                 return;
             }
             if (!data.success) {
-                showToast(data.error || `Save failed (HTTP ${resp.status})`, 'error');
+                showToast(data.error || _t('Save failed (HTTP {status})', {status: resp.status}), 'error');
                 return;
             }
             monitorSettings = data.settings || payload;
             monitorSettings.timezone_options = data.timezone_options || [];
             monitorTimezone = data.timezone || payload.timezone || 'Asia/Tehran';
-            showToast('Settings saved', 'success');
+            showToast(_t('Settings saved'), 'success');
             renderAlerts();
         } catch (err) {
-            showToast(err.message || 'Failed to save settings', 'error');
+            showToast(err.message || _t('Failed to save settings'), 'error');
         }
     }
 
@@ -423,7 +424,7 @@
             const resp = await fetch('/api/monitor/alerts');
             const data = await resp.json();
             if (!data.success) {
-                showToast('Failed to fetch alerts', 'error');
+                showToast(_t('Failed to fetch alerts'), 'error');
                 return;
             }
             monitorSettings = data.settings || monitorSettings;
@@ -433,7 +434,7 @@
             updateServerFilterOptions();
             renderAlerts();
         } catch (err) {
-            showToast('Failed to fetch alerts', 'error');
+            showToast(_t('Failed to fetch alerts'), 'error');
         }
     }
 
@@ -449,14 +450,14 @@
         const servers = new Map();
         allAlerts.forEach((alert) => {
             if (alert.server_id != null) {
-                servers.set(String(alert.server_id), alert.server_name || `Server ${alert.server_id}`);
+                servers.set(String(alert.server_id), alert.server_name || _t('Server {id}', {id: alert.server_id}));
             }
         });
 
         select.textContent = '';
         const allOption = document.createElement('option');
         allOption.value = 'all';
-        allOption.textContent = 'All Servers';
+        allOption.textContent = _t('All Servers');
         select.appendChild(allOption);
 
         Array.from(servers.entries())
@@ -575,7 +576,7 @@
     function updateSelectedSummary(count) {
         const summary = document.getElementById('monitor-selected-summary');
         if (!summary) return;
-        summary.textContent = `Selected users: ${count}`;
+        summary.textContent = _t('Selected users: {count}', {count});
     }
 
     function renderAlerts() {
@@ -599,7 +600,7 @@
         if (!filtered.length) {
             const empty = document.createElement('div');
             empty.className = 'monitor-empty';
-            empty.textContent = 'No alerts match your filters.';
+            empty.textContent = _t('No alerts match your filters.');
             list.appendChild(empty);
             return;
         }
@@ -629,21 +630,21 @@
 
         const smsCount = parseInt(alert.sms_count || 0, 10);
         const waCount = parseInt(alert.wa_count || 0, 10);
-        const smsBtnLabel = smsCount > 0 ? `SMS <span class="msg-sent-badge">${smsCount}×</span>` : 'SMS';
+        const smsBtnLabel = smsCount > 0 ? `${_t('SMS')} <span class="msg-sent-badge">${smsCount}×</span>` : _t('SMS');
         const waBtnLabel = waCount > 0 ? `WhatsApp <span class="msg-sent-badge">${waCount}×</span>` : 'WhatsApp';
         const smsBtnClass = smsCount > 0 ? ' btn-msg-sent' : '';
         const waBtnClass = waCount > 0 ? ' btn-msg-sent' : '';
         const contactDisabled = Boolean(alert.contact_opted_out || alert.no_sms || alert.no_pm);
         const commentHtml = alert.comment ? `<span class="monitor-comment">${escapeHtml(alert.comment)}</span>` : '';
-        const optoutTags = `${alert.no_sms ? '<span class="monitor-tag tag-optout">No SMS</span>' : ''}${alert.no_pm ? '<span class="monitor-tag tag-optout">No PM</span>' : ''}`;
+        const optoutTags = `${alert.no_sms ? '<span class="monitor-tag tag-optout">' + _t('No SMS') + '</span>' : ''}${alert.no_pm ? '<span class="monitor-tag tag-optout">' + _t('No PM') + '</span>' : ''}`;
 
         const zeroUsageChip = alert.zero_usage
-            ? '<span class="monitor-tag tag-zero-usage" title="No traffic consumed — never connected">No Usage</span>'
+            ? '<span class="monitor-tag tag-zero-usage" title="' + _t('No traffic consumed — never connected') + '">' + _t('No Usage') + '</span>'
             : '';
         const royaltyBtn = alert.zero_usage
-            ? `<button class="btn btn-royalty" onclick="openRoyaltyModal(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}')" title="Add days for zero-usage client">
+            ? `<button class="btn btn-royalty" onclick="openRoyaltyModal(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}')" title="${_t('Add days for zero-usage client')}">
                 <span class="icon">${getRoyaltyIcon()}</span>
-                Add Days
+                ${_t('Add Days')}
                </button>`
             : '';
 
@@ -651,32 +652,32 @@
             <div class="monitor-cell monitor-user">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                 ${escapeHtml(alert.email || '-')}
-                ${alert.verified ? '<span class="verified-badge" style="color: var(--success); font-size: 0.75rem; margin-left: 6px; font-weight: 600; display: inline-flex; align-items: center; gap: 2px;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>Verified</span>' : ''}
+                ${alert.verified ? '<span class="verified-badge" style="color: var(--success); font-size: 0.75rem; margin-left: 6px; font-weight: 600; display: inline-flex; align-items: center; gap: 2px;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>' + _t('Verified') + '</span>' : ''}
                 ${commentHtml}
             </div>
             <div class="monitor-cell monitor-phone"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>${phoneHtml}</div>
             <div class="monitor-cell"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cell-icon"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>${escapeHtml(alert.server_name || '-')}</div>
-            <div class="monitor-cell" style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;"><span class="monitor-tag tag-${st}">${escapeHtml(alert.status_label || alert.status)}</span>${zeroUsageChip}${optoutTags}</div>
+            <div class="monitor-cell" style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;"><span class="monitor-tag tag-${st}">${escapeHtml(_t(alert.status_label || alert.status))}</span>${zeroUsageChip}${optoutTags}</div>
             <div class="monitor-cell monitor-detail-stack">
                 <span class="detail-remaining${remCls}">${escapeHtml(alert.remaining || '-')}</span>
                 <span class="detail-time${timeCls}">${escapeHtml(alert.time_left || '-')}</span>
                 <span class="detail-expiry${expCls}">${escapeHtml(alert.expiry_date || '-')}</span>
             </div>
             <div class="monitor-cell monitor-actions">
-                <button class="btn btn-sms${smsBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? 'Messaging disabled by No SMS / No PM tag' : ''}">
+                <button class="btn btn-sms${smsBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? _t('Messaging disabled by No SMS / No PM tag') : ''}">
                     <span class="icon">${getSmsIcon()}</span>
                     ${smsBtnLabel}
                 </button>
-                <button class="btn btn-whatsapp${waBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? 'Messaging disabled by No SMS / No PM tag' : ''}">
+                <button class="btn btn-whatsapp${waBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? _t('Messaging disabled by No SMS / No PM tag') : ''}">
                     <span class="icon">${getWhatsAppIcon()}</span>
                     ${waBtnLabel}
                 </button>
                 ${royaltyBtn}
-                <button class="btn ${alert.no_sms ? 'btn-optout-active' : ''}" type="button" onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nosms')">${alert.no_sms ? 'Allow SMS' : 'No SMS'}</button>
-                <button class="btn ${alert.no_pm ? 'btn-optout-active' : ''}" type="button" onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nopm')">${alert.no_pm ? 'Allow PM' : 'No PM'}</button>
-                <button class="btn ${alert.enabled ? 'btn-danger' : 'btn-success'}" onclick="toggleClientFromMonitor(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}', ${!alert.enabled})" title="${alert.enabled ? 'Disable' : 'Enable'}">
+                <button class="btn ${alert.no_sms ? 'btn-optout-active' : ''}" type="button" onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nosms')">${alert.no_sms ? _t('Allow SMS') : _t('No SMS')}</button>
+                <button class="btn ${alert.no_pm ? 'btn-optout-active' : ''}" type="button" onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nopm')">${alert.no_pm ? _t('Allow PM') : _t('No PM')}</button>
+                <button class="btn ${alert.enabled ? 'btn-danger' : 'btn-success'}" onclick="toggleClientFromMonitor(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}', ${!alert.enabled})" title="${alert.enabled ? _t('Disable') : _t('Enable')}">
                     <span class="icon">${alert.enabled ? getDisableIcon() : getEnableIcon()}</span>
-                    ${alert.enabled ? 'Disable' : 'Enable'}
+                    ${alert.enabled ? _t('Disable') : _t('Enable')}
                 </button>
             </div>
         `;
@@ -753,7 +754,7 @@
         const seen = new Set();
         sources.forEach((source) => {
             const rawValue = typeof source === 'object' && source !== null ? source.value : source;
-            const label = (typeof source === 'object' && source !== null ? source.label : '') || 'Mobile';
+            const label = (typeof source === 'object' && source !== null ? source.label : '') || _t('Mobile');
             const raw = toLatinDigits(rawValue || '');
             if (!raw.trim()) return;
             const candidates = raw.match(/(?:\+|00)?\d[\d\s().-]{8,}\d/g) || [];
@@ -770,9 +771,9 @@
 
     function getAlertPhones(alert) {
         return extractPhonesFromSources(
-            { label: 'Account name', value: alert.email },
-            { label: 'Comment', value: alert.comment },
-            { label: 'Saved phone', value: alert.phone || alert.mobile || alert.whatsapp }
+            { label: _t('Account name'), value: alert.email },
+            { label: _t('Comment'), value: alert.comment },
+            { label: _t('Saved phone'), value: alert.phone || alert.mobile || alert.whatsapp }
         );
     }
 
@@ -790,13 +791,13 @@
         try {
             alert = JSON.parse(decodeURIComponent(button?.dataset?.monitorAlert || '%7B%7D'));
         } catch (_) {
-            showToast('Unable to prepare message', 'error');
+            showToast(_t('Unable to prepare message'), 'error');
             return;
         }
 
         const phones = getAlertPhones(alert);
         if (!phones.length) {
-            showToast('No mobile number found for this user', 'error');
+            showToast(_t('No mobile number found for this user'), 'error');
             return;
         }
 
@@ -843,7 +844,7 @@
         openPhoneChoiceModal(
             phones,
             openTarget,
-            channel === 'sms' ? 'Send SMS to' : 'Send WhatsApp to'
+            channel === 'sms' ? _t('Send SMS to') : _t('Send WhatsApp to')
         );
     }
 
@@ -868,14 +869,14 @@
                 body: JSON.stringify({new_email: email, comment: nextComment}),
             });
             const data = await response.json();
-            if (!data.success) throw new Error(data.error || 'Comment update failed');
+            if (!data.success) throw new Error(data.error || _t('Comment update failed'));
             alert.comment = nextComment;
             alert[field] = adding;
             alert.contact_opted_out = Boolean(alert.no_sms || alert.no_pm);
-            showToast(adding ? `#${tag} added` : `#${tag} removed`, 'success');
+            showToast(adding ? _t('#{tag} added', {tag}) : _t('#{tag} removed', {tag}), 'success');
             renderAlerts();
         } catch (error) {
-            showToast(error.message || 'Failed to update messaging preference', 'error');
+            showToast(error.message || _t('Failed to update messaging preference'), 'error');
         }
     }
 
@@ -895,7 +896,7 @@
             overlay.innerHTML = `
                 <div class="modal" style="max-width: 420px;">
                     <div class="modal-header">
-                        <h2 id="monitor-phone-choice-title">Select mobile number</h2>
+                        <h2 id="monitor-phone-choice-title">${_t('Select mobile number')}</h2>
                         <button class="modal-close" type="button" data-phone-choice-close>&times;</button>
                     </div>
                     <div class="modal-body">
@@ -911,7 +912,7 @@
             });
         }
 
-        overlay.querySelector('#monitor-phone-choice-title').textContent = title || 'Select mobile number';
+        overlay.querySelector('#monitor-phone-choice-title').textContent = title || _t('Select mobile number');
         const container = overlay.querySelector('#monitor-phone-choice-list');
         container.textContent = '';
         list.forEach((phone) => {
@@ -919,7 +920,7 @@
             btn.type = 'button';
             btn.className = 'btn btn-secondary';
             btn.style.justifyContent = 'space-between';
-            btn.innerHTML = `<span>${escapeHtml(phone.label || 'Mobile')}</span><strong dir="ltr">${escapeHtml(phone.display)}</strong>`;
+            btn.innerHTML = `<span>${escapeHtml(phone.label || _t('Mobile'))}</span><strong dir="ltr">${escapeHtml(phone.display)}</strong>`;
             btn.addEventListener('click', () => {
                 overlay.classList.add('hidden');
                 onSelect(phone);
@@ -948,9 +949,9 @@
         const message = decodeURIComponent(encodedMessage || '');
         if (navigator.clipboard && message) {
             navigator.clipboard.writeText(message).then(() => {
-                showToast('Message copied', 'success');
+                showToast(_t('Message copied'), 'success');
             }).catch(() => {
-                showToast('Copy failed', 'error');
+                showToast(_t('Copy failed'), 'error');
             });
         }
     }
@@ -990,18 +991,18 @@
             overlay.innerHTML = `
                 <div class="modal" style="max-width: 400px;">
                     <div class="modal-header">
-                        <h2>Add Days — No Usage</h2>
+                        <h2>${_t('Add Days — No Usage')}</h2>
                         <button class="modal-close" type="button" data-royalty-close>&times;</button>
                     </div>
                     <div class="modal-body">
                         <p style="margin-bottom:12px; color: var(--text-secondary); font-size: 0.9rem;" id="royalty-modal-email-label"></p>
                         <div class="form-group">
-                            <label>Days to add</label>
+                            <label>${_t('Days to add')}</label>
                             <input type="number" id="royalty-days-input" min="1" max="365" value="30" style="width:100%">
                         </div>
                         <div style="display:flex; gap:8px; margin-top:16px;">
-                            <button class="btn btn-primary" style="flex:1" onclick="applyRoyaltyFromModal()">Apply</button>
-                            <button class="btn btn-secondary" type="button" data-royalty-close>Cancel</button>
+                            <button class="btn btn-primary" style="flex:1" onclick="applyRoyaltyFromModal()">${_t('Apply')}</button>
+                            <button class="btn btn-secondary" type="button" data-royalty-close>${_t('Cancel')}</button>
                         </div>
                     </div>
                 </div>
@@ -1017,7 +1018,7 @@
         overlay._serverId = serverId;
         overlay._inboundId = inboundId;
         overlay._email = email;
-        overlay.querySelector('#royalty-modal-email-label').textContent = `User: ${email}`;
+        overlay.querySelector('#royalty-modal-email-label').textContent = _t('User: {email}', {email});
         overlay.querySelector('#royalty-days-input').value = 30;
         overlay.classList.remove('hidden');
     }
@@ -1032,7 +1033,7 @@
         const days = parseInt(document.getElementById('royalty-days-input').value || '30', 10);
 
         if (!days || days <= 0) {
-            showToast('Days must be greater than zero', 'error');
+            showToast(_t('Days must be greater than zero'), 'error');
             return;
         }
 
@@ -1050,7 +1051,7 @@
             });
             const result = await resp.json();
             if (result.success || result.job_id) {
-                showToast(`${days} days added to ${email}`, 'success');
+                showToast(_t('{days} days added to {email}', {days, email}), 'success');
                 // Reset message send counter after renewal
                 fetch('/api/monitor/reset_msg_count', {
                     method: 'POST',
@@ -1067,10 +1068,10 @@
                     renderAlerts();
                 }
             } else {
-                showToast(result.error || 'Failed to add days', 'error');
+                showToast(result.error || _t('Failed to add days'), 'error');
             }
         } catch (err) {
-            showToast('Server error, please try again', 'error');
+            showToast(_t('Server error, please try again'), 'error');
         }
     }
 
@@ -1097,9 +1098,9 @@
 
             const data = await response.json();
             if (data.success) {
-                showToast(`Client ${action}d successfully`, 'success');
+                showToast(enable ? _t('Client enabled successfully') : _t('Client disabled successfully'), 'success');
             } else {
-                showToast(data.error || `Error ${action}ing client`, 'error');
+                showToast(data.error || (enable ? _t('Error enabling client') : _t('Error disabling client')), 'error');
                 if (alert) {
                     alert.enabled = !enable;
                     if (!enable) alert.status = prevStatus;
@@ -1107,7 +1108,7 @@
                 }
             }
         } catch (error) {
-            showToast(`Error ${action}ing client`, 'error');
+            showToast(enable ? _t('Error enabling client') : _t('Error disabling client'), 'error');
             if (alert) {
                 alert.enabled = !enable;
                 if (!enable) alert.status = prevStatus;
@@ -1130,18 +1131,18 @@
         const percent = total ? Math.min(100, Math.round(completed * 100 / total)) : 4;
         document.getElementById('monitor-progress-bar').style.width = `${percent}%`;
         document.getElementById('monitor-progress-summary').textContent = total
-            ? `${completed} of ${total} servers checked · ${success} successful${failed ? ` · ${failed} failed` : ''}`
-            : (job.state === 'queued' ? 'Waiting for the refresh worker...' : 'Loading server list...');
+            ? _t('{completed} of {total} servers checked · {success} successful', {completed, total, success}) + (failed ? ' · ' + _t('{failed} failed', {failed}) : '')
+            : (job.state === 'queued' ? _t('Waiting for the refresh worker...') : _t('Loading server list...'));
         document.getElementById('monitor-progress-servers').innerHTML = rows.map((row) => {
             const state = row.state || 'pending';
-            const labels = {success: 'Checked', error: 'Failed', skipped: 'Skipped', pending: 'Checking…'};
+            const labels = {success: _t('Checked'), error: _t('Failed'), skipped: _t('Skipped'), pending: _t('Checking…')};
             const detail = row.error ? ` title="${escapeHtml(row.error)}"` : '';
-            return `<div class="monitor-progress-server"><span>${escapeHtml(row.name || `Server ${row.id}`)}</span><span class="${state}"${detail}>${labels[state] || state}</span></div>`;
+            return `<div class="monitor-progress-server"><span>${escapeHtml(row.name || _t('Server {id}', {id: row.id}))}</span><span class="${state}"${detail}>${labels[state] || state}</span></div>`;
         }).join('');
         const current = progress.current_server;
         document.getElementById('monitor-progress-text').textContent = job.state === 'queued'
-            ? 'Scan queued'
-            : (current ? `Checking servers · latest: ${current}` : 'Checking servers...');
+            ? _t('Scan queued')
+            : (current ? _t('Checking servers · latest: {current}', {current}) : _t('Checking servers...'));
     }
 
     async function scanNetworks() {
@@ -1150,13 +1151,13 @@
         const scanBtn = document.getElementById('monitor-scan-btn');
 
         if (!overlay || !text) {
-            showToast('Progress UI is missing', 'error');
+            showToast(_t('Progress UI is missing'), 'error');
             return;
         }
 
         overlay.classList.remove('hidden');
-        text.textContent = 'Initiating global scan...';
-        document.getElementById('monitor-progress-summary').textContent = 'Preparing server list...';
+        text.textContent = _t('Initiating global scan...');
+        document.getElementById('monitor-progress-summary').textContent = _t('Preparing server list...');
         document.getElementById('monitor-progress-servers').textContent = '';
         document.getElementById('monitor-progress-bar').style.width = '2%';
         if (scanBtn) scanBtn.disabled = true;
@@ -1166,7 +1167,7 @@
             const startData = await startResp.json();
 
             if (!startData.success) {
-                throw new Error(startData.error || 'Failed to start scan');
+                throw new Error(startData.error || _t('Failed to start scan'));
             }
 
             const jobId = startData.job_id;
@@ -1185,12 +1186,12 @@
                     if (job.state === 'done') {
                         clearInterval(monitorScanPoll);
                         monitorScanPoll = null;
-                        text.textContent = 'Scan complete. Updating view...';
+                        text.textContent = _t('Scan complete. Updating view...');
                         document.getElementById('monitor-progress-bar').style.width = '100%';
                         await refreshAlerts();
                         setTimeout(() => {
                             if (scanBtn) scanBtn.disabled = false;
-                            showToast('Global scan completed successfully', 'success');
+                            showToast(_t('Global scan completed successfully'), 'success');
                         }, 350);
                         return;
                     }
@@ -1199,7 +1200,7 @@
                         clearInterval(monitorScanPoll);
                         monitorScanPoll = null;
                         if (scanBtn) scanBtn.disabled = false;
-                        showToast('Scan failed: ' + (job.error || 'Unknown error'), 'error');
+                        showToast(_t('Scan failed:') + ' ' + (job.error || _t('Unknown error')), 'error');
                         return;
                     }
                 } catch (e) {
@@ -1210,7 +1211,7 @@
             console.error(err);
             overlay.classList.add('hidden');
             if (scanBtn) scanBtn.disabled = false;
-            showToast(err.message || 'Error starting scan', 'error');
+            showToast(err.message || _t('Error starting scan'), 'error');
         }
     }
 </script>
