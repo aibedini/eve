@@ -1,4 +1,16 @@
-# Eve - Xui Manager v2.10.1
+# Eve - Xui Manager v2.11.0
+
+## [2.11.0] - 2026-10-15
+
+This release makes the panel language apply across the main pages and makes two daily screens clearer and faster.
+
+**Language.** With the panel language set to Persian, the sidebar, Monitor, Finance, Servers, Users, Dashboard, Settings, Sub Manager and SMS Center are fully Persian, including toasts, confirmations, modals, empty states and sentences built around values. With English they are fully English; the Settings Telegram bot copy editor, previously Persian-only, is now English too. Pages not yet converted (Royalty, Packages, Merger, Telegram Inbox, Receipts, Bank Cards, Transactions, Traffic, the public subscription page, login/MFA and others) remain English, as do messages produced by the backend. Message templates sent to customers are content and are unchanged.
+
+**SMS Center.** The Overview answers "how many can receive a reminder now and why not the rest": a headline count, a bar and five explained groups, then every reason with its meaning and the action to take, each linking to the matching accounts. The Audience tab has a decision legend and a reason filter, and the funnel numbers add up. Nothing on this page sends anything.
+
+**Dashboard.** The last snapshot is shown immediately from the browser's own storage (never presented as live; it is replaced as soon as the server answers) and then updated from its revision. The compact `wire=2` response sends each account once; a full read of a very large install is roughly 12x cheaper on the server and 8x smaller. No schema migration is required. Resellers always revalidate with a full read because ownership changes do not advance the snapshot revision.
+
+**Upgrade notes.** No configuration change is needed. Sessions that were already open pick up the new scripts on the next page load. Please check the converted pages in both languages on your own deployment: the Persian was written for the existing wording and has been exercised through automated render tests and browser spot checks, not against production data.
 
 ## [2.10.1] - 2026-10-12
 

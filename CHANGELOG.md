@@ -1,5 +1,27 @@
 # Changelog - Eve
 
+## [2.11.0] - 2026-10-15
+
+### Added
+- **Panel language everywhere it matters.** A shared translation mechanism (`panel/core/i18n.py`, per-page catalogs in `panel/i18n/`) makes the shell and the Monitor, Finance, Servers, Users, Dashboard, Settings, Sub Manager and SMS Center pages follow the panel language: English panel, all English; Persian panel, all Persian. English text is the lookup key, so English output is unchanged and a missing translation falls back to English. `tests/test_i18n_pages.py` fails on hardcoded text, untranslated or unused strings and inconsistent translations. `scripts/i18n_scan.py` finds and wraps untranslated markup and script text.
+- **SMS Center explains itself.** The Overview opens with how many accounts are ready to be messaged right now out of those that need a reminder, a proportional bar and five explained groups (ready, waiting, already in progress, no valid mobile, blocked). Every reason an account was not messaged is listed with what it means, what to do, and a button that opens exactly those accounts (new `reason` filter on `/api/sms/scan/preview`). Today's numbers, carrier confirmations and health cards are labelled and described.
+- **Instant dashboard.** The browser keeps the last snapshot (IndexedDB, scoped to admin, role and app version, wiped on the login page) and paints it before the network answers, then revalidates from its revision. The servers list and the snapshot load in parallel.
+
+### Changed
+- `/api/refresh?wire=2` sends each account once instead of once per inbound membership (about 12x less server time and 8x less transfer on a 90,000-membership snapshot); other callers keep the previous format.
+- The shared sidebar labels, role and logout title follow the panel language.
+- Telegram bot copy editor text on Settings is now English in an English panel (it was Persian-only).
+
+### Fixed
+- SMS Center overview cards now add up (invalid-recipient and already-pending accounts were dropped) and the overview panels no longer render clipped.
+- The owed-reminder count loads on every SMS Center tab.
+
+### Validation
+- `scripts/affected_tests.py` now maps the SMS Center, messaging routes, dashboard scripts, i18n files and converted templates to their tests.
+
+### Known limits
+- About 770 strings on 22 other pages (Royalty, Packages, Merger, Telegram Inbox, Receipts, Bank Cards and others) are still English only; messages produced by the backend (API errors, some status words) are not yet translated.
+
 ## [2.10.1] - 2026-10-12
 
 ### Fixed
