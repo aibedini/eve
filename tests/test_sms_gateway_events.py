@@ -563,6 +563,44 @@ class GatewayEventTests(unittest.TestCase):
         self.assertEqual(response.json['candidates'][0]['reason_code'], 'sms_disabled')
         preview.assert_called_once_with(triggered_by='preview', states=None, preview=True)
 
+    def test_audience_preview_filters_by_reason_but_counts_every_reason(self):
+        self._login_superadmin()
+
+        def result():
+            return {
+                'preview': True, 'matched': 3, 'eligible_now': 1, 'deferred': 1,
+                'suppressed': 0, 'invalid_recipient': 1, 'active_obligation': 0,
+                'run_state': 'ready',
+                'reasons': {'cooldown_active': 1, 'no_recipient': 1},
+                'candidates': [
+                    {'email': 'ready1', 'state': 'expired', 'disposition': 'eligible_now',
+                     'reason_code': None},
+                    {'email': 'cool1', 'state': 'expired', 'disposition': 'deferred',
+                     'reason_code': 'cooldown_active'},
+                    {'email': 'nomobile1', 'state': 'ended', 'disposition': 'invalid_recipient',
+                     'reason_code': 'no_recipient'},
+                ],
+            }
+
+        def post(body):
+            with patch('app._get_sms_runtime_settings', return_value={}), patch(
+                    'app._run_sms_depletion_scan', return_value=result()), patch(
+                    'panel.core.redis_client.load_snapshot_from_redis', return_value=False), patch.dict(
+                    'panel.core.redis_client.GLOBAL_SERVER_DATA',
+                    {'last_update': datetime.utcnow().isoformat()}):
+                return self.client.post('/api/sms/scan/preview', json=body)
+
+        filtered = post({'reason': 'cooldown_active'})
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual([row['email'] for row in filtered.json['candidates']], ['cool1'])
+        self.assertEqual(filtered.json['pagination']['total'], 1)
+        # The overview needs the whole picture even when the list is narrowed.
+        self.assertEqual(filtered.json['reasons'], {'cooldown_active': 1, 'no_recipient': 1})
+        self.assertEqual(filtered.json['matched'], 3)
+        unfiltered = post({})
+        self.assertEqual(unfiltered.json['pagination']['total'], 3)
+        self.assertEqual(post({'reason': 'no_such_reason'}).json['candidates'], [])
+
     def test_audience_preview_hydrates_shared_snapshot_and_distinguishes_missing_source(self):
         from panel.core.redis_client import GLOBAL_SERVER_DATA
         self._login_superadmin()
@@ -649,21 +687,25 @@ class GatewayEventTests(unittest.TestCase):
         self.assertIn('item.account || item.service_key', source)
         self.assertIn('sms-center-expansion hidden', source)
         self.assertIn('inlineDecisionLimit = 5', source)
-        self.assertIn('statusField("EVE", log.status)', source)
-        self.assertIn('statusField("Carrier", carrierStateForCard(log))', source)
+        self.assertIn('statusField(T("field.eve_status"), log.status)', source)
+        self.assertIn('statusField(T("field.carrier"), carrierStateForCard(log))', source)
         self.assertIn('mutated_local_events', source)
         self.assertIn('audience: loadAudience', source)
         self.assertIn('/api/sms/scan/preview', source)
-        self.assertIn('Show all ${result.total || decisions.length} decisions', source)
-        self.assertIn('No signed GMweb callback matches this message', source)
+        self.assertIn('T("runs.show_all"', source)
+        self.assertIn('T("delivery.no_callback")', source)
+        from panel.core.sms_center_copy import SMS_CENTER_COPY
+        self.assertIn('No signed callback from GMweb matches this message', SMS_CENTER_COPY['en']['delivery.no_callback'])
         self.assertNotIn('openModal(', source)
 
     def test_sms_center_renders_the_unconfirmed_carrier_state(self):
         source = (ROOT / 'static' / 'sms-center.js').read_text(encoding='utf-8')
         stylesheet = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
         self.assertIn('if (status === "unconfirmed") return "unconfirmed";', source)
-        self.assertIn('no_carrier_receipt_within_window', source)
-        self.assertIn('implied_by_android_submission', source)
+        from panel.core.sms_center_copy import SMS_CENTER_COPY
+        for language in ('en', 'fa'):
+            self.assertIn('evidence.no_carrier_receipt_within_window', SMS_CENTER_COPY[language])
+            self.assertIn('evidence.implied_by_android_submission', SMS_CENTER_COPY[language])
         self.assertIn('.sms-status-unconfirmed', stylesheet)
 
     def test_sms_settings_deep_link_is_hash_aware(self):

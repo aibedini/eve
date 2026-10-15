@@ -224,6 +224,11 @@
     </script>
 </head>
 <body class="{{ panel_dir or 'ltr' }}">
+{% set nav_copy = {
+    'en': {'dashboard': 'Dashboard', 'monitor': 'Monitor', 'pulse': 'Pulse', 'links': 'Links', 'royalty': 'Royalty', 'transactions': 'Transactions', 'receipts': 'Receipts', 'telegram_inbox': 'Telegram Inbox', 'finance': 'Finance', 'servers': 'Servers', 'custom_subscriptions': 'Custom Subscriptions', 'packages': 'Packages', 'bank_cards': 'Bank Cards', 'sub_manager': 'Sub Manager', 'merger': 'Merger', 'users': 'Users', 'traffic': 'Traffic', 'sms_center': 'SMS Center', 'settings': 'Settings', 'telegram_bot': 'Telegram Bot', 'logout': 'Logout', 'new_release': 'New Release', 'role_superadmin': 'superadmin', 'role_admin': 'admin', 'role_reseller': 'reseller'},
+    'fa': {'dashboard': 'داشبورد', 'monitor': 'مانیتور', 'pulse': 'پالس', 'links': 'لینک‌ها', 'royalty': 'حق‌امتیاز', 'transactions': 'تراکنش‌ها', 'receipts': 'رسیدها', 'telegram_inbox': 'صندوق تلگرام', 'finance': 'مالی', 'servers': 'سرورها', 'custom_subscriptions': 'اشتراک‌های سفارشی', 'packages': 'پکیج‌ها', 'bank_cards': 'کارت‌های بانکی', 'sub_manager': 'مدیریت اشتراک', 'merger': 'ادغام‌کننده', 'users': 'کاربران', 'traffic': 'ترافیک', 'sms_center': 'مرکز پیامک', 'settings': 'تنظیمات', 'telegram_bot': 'ربات تلگرام', 'logout': 'خروج', 'new_release': 'نسخهٔ جدید', 'role_superadmin': 'سوپرادمین', 'role_admin': 'ادمین', 'role_reseller': 'نماینده'},
+} %}
+{% set nav_t = nav_copy['fa' if panel_lang == 'fa' else 'en'] %}
     <div class="app-layout">
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
@@ -236,7 +241,7 @@
                         <span style="font-size: 0.65rem; color: var(--text-secondary); font-weight: 400; margin-top: 2px;">v{{ app_version }}</span>
                     </div>
                     <a id="update-badge" href="#" target="_blank" style="display: none; margin-left: 8px; background: rgba(249, 115, 22, 0.2); color: #fb923c; font-size: 0.6rem; padding: 2px 6px; border-radius: 4px; text-decoration: none; border: 1px solid rgba(251, 146, 60, 0.3);">
-                        🚀 New Release
+                        🚀 {{ nav_t['new_release'] }}
                     </a>
                 </div>
                 <button class="sidebar-toggle" onclick="toggleSidebar()">
@@ -256,7 +261,7 @@
                         <rect x="14" y="14" width="7" height="7"></rect>
                         <rect x="3" y="14" width="7" height="7"></rect>
                     </svg>
-                    <span>Dashboard</span>
+                    <span>{{ nav_t['dashboard'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.monitor_page') }}" class="nav-item {% if request.endpoint == 'pages.monitor_page' %}active{% endif %}">
@@ -268,14 +273,14 @@
                         <circle cx="13" cy="13" r="1"></circle>
                         <circle cx="17" cy="8" r="1"></circle>
                     </svg>
-                    <span>Monitor</span>
+                    <span>{{ nav_t['monitor'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.pulse_page') }}" class="nav-item {% if request.endpoint == 'pages.pulse_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
                     </svg>
-                    <span>Pulse</span>
+                    <span>{{ nav_t['pulse'] }}</span>
                 </a>
 
                 <a href="{{ url_for('bnqo.bnqo_links_page') }}" class="nav-item {% if request.endpoint in ('bnqo.bnqo_links_page', 'bnqo.bnqo_link_detail_page') %}active{% endif %}">
@@ -283,7 +288,7 @@
                         <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
                         <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
                     </svg>
-                    <span>Links</span>
+                    <span>{{ nav_t['links'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.royalty_page') }}" class="nav-item {% if request.endpoint == 'pages.royalty_page' %}active{% endif %}">
@@ -291,17 +296,17 @@
                         <path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7z"></path>
                         <line x1="5" y1="20" x2="19" y2="20"></line>
                     </svg>
-                    <span>Royalty</span>
+                    <span>{{ nav_t['royalty'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.transactions_page') }}" class="nav-item {% if request.endpoint == 'pages.transactions_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-                    <span>Transactions</span>
+                    <span>{{ nav_t['transactions'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.receipts_page') }}" class="nav-item {% if request.endpoint == 'pages.receipts_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V3a1 1 0 0 1 1-1h10l5 5v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="12" y2="17"></line></svg>
-                    <span>Receipts</span>
+                    <span>{{ nav_t['receipts'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.telegram_operations_page') }}" class="nav-item {% if request.endpoint == 'pages.telegram_operations_page' %}active{% endif %}">
@@ -309,12 +314,12 @@
                         <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
                         <path d="M8 9h8"></path><path d="M8 13h5"></path>
                     </svg>
-                    <span>Telegram Inbox</span>
+                    <span>{{ nav_t['telegram_inbox'] }}</span>
                 </a>
                 
                 <a href="{{ url_for('pages.finance_page') }}" class="nav-item {% if request.endpoint == 'pages.finance_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                    <span>Finance</span>
+                    <span>{{ nav_t['finance'] }}</span>
                 </a>
                 
                 {% if is_superadmin %}
@@ -325,27 +330,27 @@
                         <line x1="6" y1="6" x2="6" y2="6"></line>
                         <line x1="6" y1="18" x2="6" y2="18"></line>
                     </svg>
-                    <span>Servers</span>
+                    <span>{{ nav_t['servers'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.custom_subscriptions_page') }}" class="nav-item {% if request.endpoint == 'pages.custom_subscriptions_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"></path><path d="M8 9h8M8 13h8M8 17h5"></path></svg>
-                    <span>Custom Subscriptions</span>
+                    <span>{{ nav_t['custom_subscriptions'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.packages_page') }}" class="nav-item {% if request.endpoint == 'pages.packages_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                    <span>Packages</span>
+                    <span>{{ nav_t['packages'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.bank_cards_page') }}" class="nav-item {% if request.endpoint == 'pages.bank_cards_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="3"></rect><line x1="8" y1="15" x2="8" y2="15"></line><line x1="16" y1="15" x2="16" y2="15"></line><line x1="7" y1="8" x2="17" y2="8"></line></svg>
-                    <span>Bank Cards</span>
+                    <span>{{ nav_t['bank_cards'] }}</span>
                 </a>
                 
                 <a href="{{ url_for('pages.sub_manager_page') }}" class="nav-item {% if request.endpoint == 'pages.sub_manager_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                    <span>Sub Manager</span>
+                    <span>{{ nav_t['sub_manager'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.merger_page') }}" class="nav-item {% if request.endpoint == 'pages.merger_page' %}active{% endif %}">
@@ -357,7 +362,7 @@
                         <path d="M7 12h10"></path>
                         <path d="M12 7v10"></path>
                     </svg>
-                    <span>Merger</span>
+                    <span>{{ nav_t['merger'] }}</span>
                 </a>
                 
                 <a href="{{ url_for('pages.admins_page') }}" class="nav-item {% if request.endpoint == 'pages.admins_page' %}active{% endif %}">
@@ -367,38 +372,38 @@
                         <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
                         <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
                     </svg>
-                    <span>Users</span>
+                    <span>{{ nav_t['users'] }}</span>
                 </a>
 
                 <a href="{{ url_for('pages.traffic_check_page') }}" class="nav-item {% if request.endpoint == 'pages.traffic_check_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                    <span>Traffic</span>
+                    <span>{{ nav_t['traffic'] }}</span>
                 </a>
                 
                 <a href="{{ url_for('pages.sms_center_page') }}" class="nav-item {% if request.endpoint == 'pages.sms_center_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m2 7 10 7 10-7"></path></svg>
-                    <span>SMS Center</span>
+                    <span>{{ nav_t['sms_center'] }}</span>
                 </a>
                 <a href="{{ url_for('pages.settings_page') }}" class="nav-item {% if request.endpoint == 'pages.settings_page' %}active{% endif %}" style="margin-top: auto;">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                     </svg>
-                    <span>Settings</span>
+                    <span>{{ nav_t['settings'] }}</span>
                 </a>
                 {% endif %}
                 {% if not is_superadmin and role == 'reseller' %}
                 <a href="{{ url_for('pages.reseller_packages_page') }}" class="nav-item {% if request.endpoint == 'pages.reseller_packages_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                    <span>Packages</span>
+                    <span>{{ nav_t['packages'] }}</span>
                 </a>
                 <a href="{{ url_for('pages.reseller_telegram_bot_page') }}" class="nav-item {% if request.endpoint == 'pages.reseller_telegram_bot_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
-                    <span>Telegram Bot</span>
+                    <span>{{ nav_t['telegram_bot'] }}</span>
                 </a>
                 <a href="{{ url_for('pages.traffic_check_page') }}" class="nav-item {% if request.endpoint == 'pages.traffic_check_page' %}active{% endif %}" style="margin-top: auto;">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                    <span>Traffic</span>
+                    <span>{{ nav_t['traffic'] }}</span>
                 </a>
                 {% endif %}
             </nav>
@@ -413,10 +418,10 @@
                     </div>
                     <div class="user-details">
                         <span class="user-name">{{ admin_username }}</span>
-                        <span class="user-role" style="text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.5px;">{{ role }}</span>
+                        <span class="user-role" style="text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.5px;">{{ nav_t.get('role_' ~ role, role) }}</span>
                     </div>
                 </div>
-                <a href="{{ url_for('auth.logout') }}" class="logout-btn" title="Logout">
+                <a href="{{ url_for('auth.logout') }}" class="logout-btn" title="{{ nav_t['logout'] }}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
                         <polyline points="16 17 21 12 16 7"></polyline>

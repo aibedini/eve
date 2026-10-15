@@ -388,6 +388,7 @@ def _paginate_sms_audience_preview(result, payload):
     decision = str(payload.get('decision') or '').strip()
     activity = str(payload.get('activity') or '').strip()
     state = str(payload.get('state') or '').strip()
+    reason = str(payload.get('reason') or '').strip()
     date_from = str(payload.get('date_from') or '').strip()
     date_to = str(payload.get('date_to') or '').strip()
     hide_disabled = bool(payload.get('hide_disabled'))
@@ -491,6 +492,8 @@ def _paginate_sms_audience_preview(result, payload):
         rows = [row for row in rows if activity in (row.get('today_statuses') or [])]
     if state:
         rows = [row for row in rows if row.get('state') == state]
+    if reason:
+        rows = [row for row in rows if (row.get('reason_code') or '') == reason]
     if search:
         fields = ('email', 'server_name', 'service_key', 'state', 'reason_code')
         rows = [row for row in rows if any(

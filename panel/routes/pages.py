@@ -3,6 +3,7 @@ from flask import Blueprint, redirect, render_template, session, url_for
 
 from telegram_xray import find_xray_binary
 
+from panel.core.sms_center_copy import sms_center_copy
 from panel.extensions import db
 from panel.models import (
     Admin, BankCard, PulseAgent, PulseRun, PulseTemplate, Server, SystemConfig,
@@ -144,9 +145,11 @@ def admins_page():
 @permission_required('secrets.manage')
 def sms_center_page():
     """Operational SMS evidence; configuration remains in Settings."""
+    from app import _get_panel_ui_lang  # deferred: app-level helper, avoids circular import
     user = current_admin()
     return render_template(
         'sms_center.html',
+        sms_copy=sms_center_copy(_get_panel_ui_lang()),
         admin_username=(user.username if user else session.get('admin_username')),
         is_superadmin=bool(user and (user.role == 'superadmin' or user.is_superadmin)),
         role=(user.role if user else session.get('role', 'admin')),

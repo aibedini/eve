@@ -5801,6 +5801,47 @@ button.sms-center-row:focus-visible { outline: 2px solid var(--primary); outline
 .sms-overview-reasons { display: grid; gap: 8px; margin-top: 8px; }
 .sms-center-reconciliation { margin-top: 18px; }
 .sms-center-reconciliation .panel-card-header { align-items: flex-start; }
+.sms-card { min-width: 0; margin-top: 12px; padding: 16px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-card); }
+.sms-card-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.sms-card-head h3 { margin: 0; font-size: 1rem; }
+.sms-card-head .field-note { margin: 4px 0 0; }
+.sms-sub-title { margin: 18px 0 2px; font-size: .875rem; }
+.sms-banner { margin-top: 12px; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 10px; font-size: .8rem; }
+.sms-banner-warn { border-color: color-mix(in srgb, var(--warning) 50%, transparent); background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--warning); }
+.sms-hero-main { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 4px 0 16px; }
+.sms-hero-number { font-size: 2.6rem; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sms-hero-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sms-hero-label { font-size: 1rem; font-weight: 600; }
+.sms-funnel-success { --funnel: var(--success); }
+.sms-funnel-warning { --funnel: var(--warning); }
+.sms-funnel-info { --funnel: var(--primary); }
+.sms-funnel-danger { --funnel: var(--danger); }
+.sms-funnel-muted { --funnel: var(--secondary); }
+.sms-funnel-bar { display: flex; gap: 3px; height: 14px; overflow: hidden; border-radius: 9999px; background: color-mix(in srgb, var(--secondary) 14%, transparent); }
+.sms-funnel-seg { min-width: 6px; border-radius: 9999px; background: var(--funnel); }
+.sms-funnel-empty { flex: 1; background: transparent; }
+.sms-funnel-legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; }
+.sms-funnel-button { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 2px; align-items: start; width: 100%; height: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); text-align: start; font: inherit; cursor: pointer; transition: border-color .2s ease, background .2s ease; }
+.sms-funnel-button:hover:not(:disabled) { border-color: var(--funnel); background: var(--bg-card-hover); }
+.sms-funnel-button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.sms-funnel-button:disabled { cursor: default; opacity: .65; }
+.sms-funnel-dot { grid-row: 1 / span 3; width: 10px; height: 10px; margin-top: 7px; border-radius: 9999px; background: var(--funnel); }
+.sms-funnel-count { grid-column: 2; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.sms-funnel-name { grid-column: 2; font-size: .82rem; font-weight: 600; }
+.sms-funnel-button .field-note { grid-column: 2; margin: 0; }
+.sms-why-list { display: grid; gap: 8px; }
+.sms-why-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--bg-dark) 38%, var(--bg-card)); }
+.sms-why-head { display: flex; flex: 1 1 190px; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.sms-why-name { font-size: .9rem; overflow-wrap: anywhere; }
+.sms-why-body { flex: 3 1 260px; min-width: 0; font-size: .8rem; }
+.sms-why-row > .btn { flex: 0 0 auto; }
+.sms-why-body p { margin: 0 0 4px; }
+.sms-reason-note { margin: 10px 0 0; }
+.sms-legend { display: grid; gap: 10px; margin: 12px 0 0; }
+.sms-legend dt { font-size: .8rem; font-weight: 600; }
+.sms-legend dd { margin: 2px 0 0; color: var(--text-secondary); font-size: .78rem; }
+.sms-overview-grid .sms-card { margin-top: 0; }
+@media (max-width: 768px) { .sms-hero-number { font-size: 2.1rem; } }
 @media (max-width: 600px) { .sms-settings-actions { width: 100%; } .sms-settings-actions .btn { flex: 1 1 140px; } .sms-center-nav .sms-audit-tab { flex: 1 1 40%; } .sms-center-row, .sms-center-detail-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .sms-center-disclosure { grid-column: 1 / -1; justify-content: flex-start; padding-top: 4px; } .sms-overview-grid { grid-template-columns: 1fr; } }
 .sms-audit { margin-top: 20px; color: var(--text-primary); }
 .sms-audit .hidden { display: none; }

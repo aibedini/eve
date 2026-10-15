@@ -3,6 +3,17 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const tabs = ["overview", "audience", "runs", "delivery", "debt", "gateway"];
+  // The whole table for the panel language (panel/core/sms_center_copy.py). A key that
+  // is missing renders as the key itself, which tests/test_sms_center_copy.py forbids.
+  const COPY = (typeof window !== "undefined" && window.SMS_COPY) || {};
+  const T = (key, vars) => {
+    let text = Object.prototype.hasOwnProperty.call(COPY, key) ? COPY[key] : key;
+    if (vars) text = text.replace(/\{(\w+)\}/g, (match, name) => (vars[name] == null ? match : vars[name]));
+    return text;
+  };
+  const has = (key) => Object.prototype.hasOwnProperty.call(COPY, key);
+  const humanize = (code) => String(code).replaceAll("_", " ").replaceAll(".", " · ");
+  const num = (value) => Number(value || 0).toLocaleString();
   let offset = 0;
   let total = 0;
   let visibleLogs = [];
@@ -11,8 +22,22 @@
   let audiencePage = 1;
   let audiencePagination = null;
   let selectedTab = "overview";
+  let knownReasons = {};
   const pageSize = 30;
   const inlineDecisionLimit = 5;
+  // Dispositions in the order a reader should meet them, and the funnel group of each.
+  const funnelGroups = [
+    { key: "eligible_now", legend: "funnel.ready", tone: "success" },
+    { key: "deferred", legend: "funnel.waiting", tone: "warning" },
+    { key: "active_obligation", legend: "funnel.pending", tone: "info" },
+    { key: "invalid_recipient", legend: "funnel.nomobile", tone: "danger" },
+    { key: "suppressed", legend: "funnel.blocked", tone: "muted" }
+  ];
+  const decisionOfReason = (code) => {
+    if (code === "no_recipient") return "invalid_recipient";
+    if (code === "obligation_outstanding") return "active_obligation";
+    return null;
+  };
 
   function node(tag, className, value) {
     const item = document.createElement(tag);
@@ -21,7 +46,7 @@
     return item;
   }
   function showError(container, error) {
-    container.replaceChildren(node("p", "field-note field-note-warn", `Unavailable: ${error.message}`));
+    container.replaceChildren(node("p", "field-note field-note-warn", T("error.unavailable", { message: error.message })));
   }
   function fmt(value) {
     return value == null || value === "" ? "—" : String(value);
@@ -44,15 +69,14 @@
     const [year, month, day] = today.split("-").map(Number);
     const yesterday = new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
     const key = dayKey(value);
-    const persian = window.EveDate.locale.startsWith("fa");
-    if (key === today) return persian ? "امروز" : "Today";
-    if (key === yesterday) return persian ? "دیروز" : "Yesterday";
+    if (key === today) return T("day.today");
+    if (key === yesterday) return T("day.yesterday");
     return window.EveDate?.formatDate(value) || date(value);
   }
   function filterBoundary(value, through = false) {
     if (!value) return "";
     const parsed = window.EveDate.parseInput(through ? `${value} 23:59:59` : value);
-    if (!parsed) throw new Error("Invalid date filter");
+    if (!parsed) throw new Error(T("error.invalid_date"));
     return new Date(parsed.getTime() + (through ? 1000 : 0)).toISOString();
   }
   function carrierStateForCard(log) {
@@ -62,7 +86,7 @@
     const response = await fetch(url, { credentials: "same-origin", cache: "no-store" });
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(
-      [payload?.probe_state || payload?.error || `HTTP ${response.status}`,
+      [payload?.probe_state || payload?.error || T("error.http", { status: response.status }),
         payload?.diagnostic || payload?.message].filter(Boolean).join(" · "));
     return payload;
   }
@@ -76,21 +100,27 @@
     // Past the carrier wait window with no receipt: not delivered, not failed,
     // not unavailable — the evidence never arrived. Muted, not alarming.
     if (status === "unconfirmed") return "unconfirmed";
-    if (["sent", "completed", "confirmed", "gateway_accepted", "accepted", "ready", "active", "delivered", "eligible_now"].includes(status)
+    if (["sent", "completed", "confirmed", "gateway_accepted", "accepted", "ready", "active", "delivered", "eligible_now", "connected", "enabled"].includes(status)
       || /\.(sent|completed|accepted|delivered)$/.test(status)) return "success";
-    if (["failed", "failed_terminal", "cancelled", "expired", "ended", "invalid_recipient"].includes(status)
+    if (["failed", "failed_terminal", "cancelled", "expired", "ended", "invalid_recipient", "disabled"].includes(status)
       || /\.(failed|cancelled|expired)$/.test(status)) return "danger";
-    if (["retry", "failed_retryable", "deferred", "manual_review", "queued", "pending", "waiting", "suppressed", "skipped", "degraded", "unavailable"].includes(status)
+    if (["retry", "failed_retryable", "deferred", "manual_review", "queued", "pending", "waiting", "suppressed", "skipped", "degraded", "unavailable", "active_obligation"].includes(status)
       || /(pending|queued|retry|deferred|suppressed)/.test(status)) return "warning";
     return "neutral";
   }
+  // A status code the panel knows is shown in the panel language; a code it has never
+  // seen is shown readable rather than hidden.
+  function statusLabel(value) {
+    if (value == null || value === "") return "—";
+    const code = String(value).toLowerCase();
+    if (has(`status.${code}`)) return T(`status.${code}`);
+    if (has(`reason.${code}`)) return T(`reason.${code}`);
+    return humanize(value);
+  }
   function statusField(label, value) {
     const cell = node("div", "sms-center-fact");
-    const display = value == null || value === ""
-      ? "—"
-      : String(value).replaceAll("_", " ").replaceAll(".", " · ");
     cell.append(node("span", "sms-audit-kpi-label", label),
-      node("strong", `sms-status sms-status-${statusTone(value)}`, display));
+      node("strong", `sms-status sms-status-${statusTone(value)}`, statusLabel(value)));
     return cell;
   }
   function setKpi(id, value, tone = "neutral") {
@@ -108,7 +138,7 @@
     button.setAttribute("aria-expanded", "false");
     button.setAttribute("aria-controls", panelId);
     panel.id = panelId;
-    button.append(...fields, node("span", "sms-center-disclosure", label || "View details"));
+    button.append(...fields, node("span", "sms-center-disclosure", label || T("action.view_details")));
     entry.append(button, panel);
     return { entry, button, panel };
   }
@@ -116,82 +146,75 @@
     button.setAttribute("aria-expanded", open ? "true" : "false");
     panel.classList.toggle("hidden", !open);
     const disclosure = button.querySelector(".sms-center-disclosure");
-    if (disclosure) disclosure.textContent = open ? "Hide details" : "View details";
+    if (disclosure) disclosure.textContent = open ? T("action.hide_details") : T("action.view_details");
   }
   function detailRow(fields) {
     const row = node("div", "sms-center-detail-row");
     row.append(...fields);
     return row;
   }
-  const audienceReasonLabels = {
-    sms_disabled: "SMS automation is disabled or no state trigger is enabled",
-    gateway_not_ready: "Gateway is not ready",
-    quiet_hours: "Quiet hours are active",
-    trigger_disabled_by_operator: "This state trigger is disabled",
-    reseller_owned: "Owned by a reseller",
-    unlimited_skipped: "Unlimited-account policy excludes it",
-    expired_too_old: "Expired longer than the configured age limit",
-    ended_too_old: "Ended longer than the configured age limit",
-    opted_out_recheck: "Account opted out of SMS",
-    no_recipient: "No valid Iranian mobile was found",
-    manual_review_pending: "A previous uncertain send needs manual review",
-    obligation_outstanding: "The same notification is already outstanding",
-    cooldown_active: "A message was sent inside the cooldown window",
-    no_template: "No template is configured for this state",
-    empty_message: "The rendered message is empty",
-    daily_limit_reached: "Daily send limit reached",
-    hourly_limit_reached: "Hourly send limit reached",
-    evaluation_failed: "Eligibility evaluation failed"
-  };
+  // label / what it means / what to do, for a reason code the evaluator or a send log
+  // recorded. An unknown code still gets a readable label and the code itself.
+  function reasonInfo(code) {
+    if (!code) return { label: T("field.not_reported"), what: "", fix: "" };
+    if (has(`reason.${code}`)) {
+      return { label: T(`reason.${code}`), what: T(`reason.${code}.what`), fix: T(`reason.${code}.fix`) };
+    }
+    return { label: humanize(code), what: T("reason.unknown.what", { code }), fix: T("reason.unknown.fix") };
+  }
   function audienceReason(code) {
-    if (!code) return "Not reported";
-    return audienceReasonLabels[code] || String(code).replaceAll("_", " ");
+    return reasonInfo(code).label;
+  }
+  function reasonNote(code) {
+    const info = reasonInfo(code);
+    if (!info.what) return null;
+    const note = node("p", "field-note sms-reason-note");
+    note.append(node("span", "", info.what));
+    if (info.fix) note.append(" ", node("strong", "", `${T("why.action")}: `), node("span", "", info.fix));
+    return note;
   }
   function evidenceLabel(value) {
-    if (value === "not_available") return "Not recorded (no signed callback)";
-    if (value === "awaiting_carrier_receipt") return "Waiting for carrier receipt";
-    if (value === "no_carrier_receipt_within_window") return "No carrier receipt within the wait window";
-    if (value === "implied_by_android_submission") return "Implied by the Android submission";
-    return value;
+    const key = `evidence.${value}`;
+    return has(key) ? T(key) : value;
   }
   function deliveryDetail(result) {
     const container = node("div", "sms-center-timeline");
     container.append(detailRow([
-      statusField("Gateway submission", result.submission?.state || "unknown"),
-      field("Submission evidence", evidenceLabel(result.submission?.evidence)),
-      field("Submitted at", date(result.submission?.occurred_at))
+      statusField(T("delivery.gateway_submission"), result.submission?.state || "unknown"),
+      field(T("delivery.submission_evidence"), evidenceLabel(result.submission?.evidence)),
+      field(T("delivery.submitted_at"), date(result.submission?.occurred_at))
     ]), detailRow([
-      statusField("Carrier delivery", result.carrier?.state || "unknown"),
-      field("Carrier evidence", evidenceLabel(result.carrier?.evidence)),
-      field("Carrier at", date(result.carrier?.occurred_at))
+      statusField(T("delivery.carrier_delivery"), result.carrier?.state || "unknown"),
+      field(T("delivery.carrier_evidence"), evidenceLabel(result.carrier?.evidence)),
+      field(T("delivery.carrier_at"), date(result.carrier?.occurred_at))
     ]));
     const pipeline = node("div", "sms-center-pipeline");
-    pipeline.append(node("h4", "", "Delivery pipeline"));
+    pipeline.append(node("h4", "", T("delivery.pipeline")));
     for (const step of result.pipeline || []) pipeline.append(detailRow([
-      field("Stage", step.name), statusField("State", step.state),
-      field("At", date(step.at)), field("Evidence", step.evidence || "Not reported"),
-      field("Reason", step.reason || "—")
+      field(T("field.stage"), step.name), statusField(T("field.state_word"), step.state),
+      field(T("field.at"), date(step.at)), field(T("field.evidence"), step.evidence || T("field.not_reported")),
+      field(T("field.reason"), step.reason || "—")
     ]));
     container.append(pipeline);
     const diagnostics = result.carrier?.diagnostics || {};
     const reported = [
-      ["Carrier result", diagnostics.carrier_result],
-      ["Carrier code", diagnostics.carrier_result_code],
-      ["Segment", diagnostics.segment_index],
-      ["Segment count", diagnostics.segment_count],
-      ["All segments delivered", diagnostics.all_segments_delivered],
-      ["Android delivery received", diagnostics.android_delivery_received_at && date(diagnostics.android_delivery_received_at)],
-      ["GMweb delivery received", diagnostics.gmweb_delivery_received_at && date(diagnostics.gmweb_delivery_received_at)],
-      ["EVE relay attempts", diagnostics.eve_dispatch_attempts],
-      ["EVE relay last attempt", diagnostics.eve_last_attempt_at && date(diagnostics.eve_last_attempt_at)],
-      ["EVE relay acknowledged", diagnostics.eve_ack_at && date(diagnostics.eve_ack_at)],
-      ["Relay error category", diagnostics.last_error],
-      ["Carrier wait window", result.carrier?.timeout_seconds ? `${result.carrier.timeout_seconds} s` : undefined],
-      ["Event ID", result.carrier?.event_id]
+      ["diag.carrier_result", diagnostics.carrier_result],
+      ["diag.carrier_code", diagnostics.carrier_result_code],
+      ["diag.segment", diagnostics.segment_index],
+      ["diag.segment_count", diagnostics.segment_count],
+      ["diag.all_segments", diagnostics.all_segments_delivered],
+      ["diag.android_received", diagnostics.android_delivery_received_at && date(diagnostics.android_delivery_received_at)],
+      ["diag.gmweb_received", diagnostics.gmweb_delivery_received_at && date(diagnostics.gmweb_delivery_received_at)],
+      ["diag.relay_attempts", diagnostics.eve_dispatch_attempts],
+      ["diag.relay_last", diagnostics.eve_last_attempt_at && date(diagnostics.eve_last_attempt_at)],
+      ["diag.relay_ack", diagnostics.eve_ack_at && date(diagnostics.eve_ack_at)],
+      ["diag.relay_error", diagnostics.last_error],
+      ["diag.wait_window", result.carrier?.timeout_seconds ? `${result.carrier.timeout_seconds} s` : undefined],
+      ["diag.event_id", result.carrier?.event_id]
     ].filter(([, value]) => value !== undefined && value !== null && value !== "");
     if (reported.length) {
       const facts = node("div", "sms-center-pipeline");
-      facts.append(node("h4", "", "Carrier diagnostics"), detailRow(reported.map(([label, value]) => field(label, value))));
+      facts.append(node("h4", "", T("delivery.carrier_diagnostics")), detailRow(reported.map(([key, value]) => field(T(key), value))));
       container.append(facts);
     }
     return container;
@@ -206,6 +229,7 @@
       card.addEventListener("click", () => {
         const decision = $("sms-center-audience-decision");
         const activity = $("sms-center-audience-activity");
+        $("sms-center-audience-reason").value = "";
         if (filter.kind === "all") { decision.value = ""; activity.value = ""; }
         if (filter.kind === "decision") { decision.value = filter.value; activity.value = ""; }
         if (filter.kind === "activity") { activity.value = filter.value; decision.value = ""; }
@@ -228,7 +252,7 @@
   async function renderAudienceTimeline(panel, logId) {
     const timeline = node("div", "sms-center-timeline");
     panel.append(timeline);
-    timeline.replaceChildren(node("p", "field-note", "Loading delivery timeline…"));
+    timeline.replaceChildren(node("p", "field-note", T("delivery.loading_timeline")));
     try {
       const result = await json(`/api/sms/messages/${logId}/timeline`);
       timeline.replaceChildren(deliveryDetail(result));
@@ -242,28 +266,30 @@
       const scanned = Number(audienceDiagnostics?.scanned || 0);
       const detected = Object.values(audienceDiagnostics?.detected_states || {})
         .reduce((sum, count) => sum + Number(count || 0), 0);
-      const message = !scanned ? "The snapshot contains no clients to evaluate."
-        : !detected ? `Evaluated ${scanned.toLocaleString()} clients; none meet the SMS thresholds.`
-          : "No current accounts match these filters.";
+      const message = !scanned ? T("audience.no_clients")
+        : !detected ? T("audience.none_meet", { scanned: num(scanned) })
+          : T("audience.no_match");
       target.append(node("p", "field-note", message));
       return;
     }
     rows.forEach((row) => {
       const lastSms = row.last_sms;
       const disclosure = expandableRow([
-        field("Account", row.email || row.service_key), field("Server", row.server_name),
-        statusField("Monitor state", row.state), statusField("Next send", row.disposition),
-        field("Why", audienceReason(row.reason_code)),
-        statusField("Last SMS", lastSms?.status || "not sent"),
-        field("Last SMS time", date(lastSms?.created_at))
-      ], lastSms ? "Delivery timeline" : "Decision details");
+        field(T("field.account"), row.email || row.service_key), field(T("field.server"), row.server_name),
+        statusField(T("field.account_state"), row.state), statusField(T("field.decision"), row.disposition),
+        field(T("field.why"), audienceReason(row.reason_code)),
+        statusField(T("field.last_sms"), lastSms?.status || "not_sent"),
+        field(T("field.last_sms_time"), date(lastSms?.created_at))
+      ], lastSms ? T("action.delivery_timeline") : T("action.decision_details"));
       disclosure.panel.append(detailRow([
-        field("Reason", audienceReason(row.reason_code)), field("Recipient", row.recipient),
-        statusField("Account", row.account_enabled ? "enabled" : "disabled"),
-        field("Expiry", date(row.expiry_at)),
-        field("Today's outcomes", row.today_statuses?.length ? row.today_statuses.join(" · ") : "None"),
-        field("Today's events", row.today_events || 0)
+        field(T("field.reason"), audienceReason(row.reason_code)), field(T("field.recipient"), row.recipient),
+        statusField(T("field.account"), row.account_enabled ? "enabled" : "disabled"),
+        field(T("field.expiry"), date(row.expiry_at)),
+        field(T("field.today_results"), row.today_statuses?.length ? row.today_statuses.map(statusLabel).join(" · ") : T("field.none")),
+        field(T("field.today_events"), row.today_events || 0)
       ]));
+      const explanation = reasonNote(row.reason_code);
+      if (explanation) disclosure.panel.append(explanation);
       let loaded = false;
       disclosure.button.addEventListener("click", async () => {
         const opening = disclosure.button.getAttribute("aria-expanded") !== "true";
@@ -277,82 +303,112 @@
     });
     if (audiencePagination?.pages > 1) {
       const nav = node("div", "sms-audience-pagination");
-      const previous = node("button", "btn btn-outline", "Previous");
-      const next = node("button", "btn btn-outline", "Next");
+      const previous = node("button", "btn btn-outline", T("action.previous"));
+      const next = node("button", "btn btn-outline", T("action.next"));
       previous.type = next.type = "button";
       previous.disabled = audiencePagination.page <= 1;
       next.disabled = audiencePagination.page >= audiencePagination.pages;
       previous.addEventListener("click", () => { audiencePage -= 1; loadAudience(false); });
       next.addEventListener("click", () => { audiencePage += 1; loadAudience(false); });
-      nav.append(previous, node("span", "field-note",
-        `Page ${audiencePagination.page.toLocaleString()} of ${audiencePagination.pages.toLocaleString()} · ${audiencePagination.total.toLocaleString()} accounts`), next);
+      nav.append(previous, node("span", "field-note", T("audience.page", {
+        page: num(audiencePagination.page), pages: num(audiencePagination.pages), total: num(audiencePagination.total)
+      })), next);
       target.append(nav);
     }
+  }
+  // The reason filter lists the reasons the current evaluation actually produced, so
+  // every option leads to at least one account.
+  function fillReasonFilter(reasons) {
+    const select = $("sms-center-audience-reason");
+    const keep = select.value;
+    select.replaceChildren(node("option", "", T("filter.any_reason")));
+    select.firstChild.value = "";
+    for (const [code, count] of Object.entries(reasons || {}).sort((a, b) => b[1] - a[1])) {
+      const option = node("option", "", `${audienceReason(code)} (${num(count)})`);
+      option.value = code;
+      option.dataset.label = audienceReason(code);
+      select.append(option);
+    }
+    if (keep && Array.from(select.options).some((option) => option.value === keep)) select.value = keep;
+  }
+  function audienceErrorMessage(response, data) {
+    const source = data?.source;
+    if (source?.state === "stale") return T("audience.stale", { date: date(source.last_update) });
+    if (source?.state === "unavailable") return T("audience.unavailable");
+    return data?.error || T("error.http", { status: response.status });
+  }
+  async function postPreview(body) {
+    const response = await fetch("/api/sms/scan/preview", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(audienceErrorMessage(response, data));
+    return data;
   }
   async function loadAudience(resetPage = true) {
     const target = $("sms-center-audience-list");
     if (resetPage) audiencePage = 1;
     showAudienceSkeleton();
     try {
-      const response = await fetch("/api/sms/scan/preview", {
-        method: "POST", credentials: "same-origin", cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          page: audiencePage,
-          per_page: pageSize,
-          search: $("sms-center-audience-search").value.trim(),
-          decision: $("sms-center-audience-decision").value,
-          activity: $("sms-center-audience-activity").value,
-          state: $("sms-center-audience-state").value,
-          date_from: filterBoundary($("sms-center-audience-from").value),
-          date_to: filterBoundary($("sms-center-audience-to").value, true),
-          hide_disabled: $("sms-center-hide-disabled").checked,
-          hide_reseller: $("sms-center-hide-reseller").checked,
-          hide_no_recipient: $("sms-center-hide-no-recipient").checked,
-          hide_opted_out: $("sms-center-hide-opted-out").checked,
-          hide_unlimited: $("sms-center-hide-unlimited").checked,
-          hide_expired_days: $("sms-center-hide-expired-days").value
-        })
+      const data = await postPreview({
+        page: audiencePage,
+        per_page: pageSize,
+        search: $("sms-center-audience-search").value.trim(),
+        decision: $("sms-center-audience-decision").value,
+        reason: $("sms-center-audience-reason").value,
+        activity: $("sms-center-audience-activity").value,
+        state: $("sms-center-audience-state").value,
+        date_from: filterBoundary($("sms-center-audience-from").value),
+        date_to: filterBoundary($("sms-center-audience-to").value, true),
+        hide_disabled: $("sms-center-hide-disabled").checked,
+        hide_reseller: $("sms-center-hide-reseller").checked,
+        hide_no_recipient: $("sms-center-hide-no-recipient").checked,
+        hide_opted_out: $("sms-center-hide-opted-out").checked,
+        hide_unlimited: $("sms-center-hide-unlimited").checked,
+        hide_expired_days: $("sms-center-hide-expired-days").value
       });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        const source = data?.source;
-        throw new Error(source?.state === "stale"
-          ? `Live Monitor snapshot is stale (last updated ${date(source.last_update)}).`
-          : source?.state === "unavailable"
-            ? "Audience source unavailable. Live Monitor snapshot has not been loaded."
-            : data?.error || `HTTP ${response.status}`);
-      }
+      knownReasons = data.reasons || {};
+      fillReasonFilter(knownReasons);
       audienceRows = data.candidates || [];
       audienceDiagnostics = data;
       audiencePagination = data.pagination || null;
       const summary = $("sms-center-audience-summary");
+      // matched = ready + waiting + in progress + no mobile + blocked, so the cards add up.
       summary.replaceChildren(
-        summaryCard("Current matches", Number(data.matched || 0).toLocaleString(), "neutral", { kind: "all", value: "" }),
-        summaryCard("Eligible now", Number(data.eligible_now || 0).toLocaleString(), "success", { kind: "decision", value: "eligible_now" }),
-        summaryCard("Deferred", Number(data.deferred || 0).toLocaleString(), "warning", { kind: "decision", value: "deferred" }),
-        summaryCard("Suppressed", Number(data.suppressed || 0).toLocaleString(), "danger"),
-        summaryCard("Sent today", Number(data.today?.sent || 0).toLocaleString(), "success", { kind: "activity", value: "sent" }),
-        summaryCard("Failed today", Number(data.today?.failed || 0).toLocaleString(), "danger", { kind: "activity", value: "failed" }),
-        summaryCard("Queued today", Number(data.today?.queued || 0).toLocaleString(), "warning", { kind: "activity", value: "queued" })
+        summaryCard(T("audience.summary.matches"), num(data.matched), "neutral", { kind: "all", value: "" }),
+        summaryCard(T("audience.summary.eligible"), num(data.eligible_now), "success", { kind: "decision", value: "eligible_now" }),
+        summaryCard(T("audience.summary.deferred"), num(data.deferred), "warning", { kind: "decision", value: "deferred" }),
+        summaryCard(T("audience.summary.pending"), num(data.active_obligation), "warning", { kind: "decision", value: "active_obligation" }),
+        summaryCard(T("audience.summary.nomobile"), num(data.invalid_recipient), "danger", { kind: "decision", value: "invalid_recipient" }),
+        summaryCard(T("audience.summary.blocked"), num(data.suppressed), "danger", { kind: "decision", value: "suppressed" }),
+        summaryCard(T("audience.summary.sent_today"), num(data.today?.sent), "success", { kind: "activity", value: "sent" }),
+        summaryCard(T("audience.summary.failed_today"), num(data.today?.failed), "danger", { kind: "activity", value: "failed" }),
+        summaryCard(T("audience.summary.queued_today"), num(data.today?.queued), "warning", { kind: "activity", value: "queued" })
       );
       const activeFilters = [];
-      if ($("sms-center-audience-decision").value) activeFilters.push($("sms-center-audience-decision").selectedOptions[0].textContent);
-      if ($("sms-center-audience-activity").value) activeFilters.push($("sms-center-audience-activity").selectedOptions[0].textContent);
-      if ($("sms-center-audience-state").value) activeFilters.push($("sms-center-audience-state").selectedOptions[0].textContent);
-      if ($("sms-center-audience-from").value || $("sms-center-audience-to").value) activeFilters.push("Last SMS date range");
+      for (const id of ["sms-center-audience-decision", "sms-center-audience-reason",
+        "sms-center-audience-activity", "sms-center-audience-state"]) {
+        if ($(id).value) activeFilters.push($(id).selectedOptions[0].dataset.label || $(id).selectedOptions[0].textContent);
+      }
+      if ($("sms-center-audience-from").value || $("sms-center-audience-to").value) activeFilters.push(T("audience.date_range"));
       const filterState = $("sms-center-audience-filter-state");
       filterState.textContent = activeFilters.length
-        ? `${Number(data.pagination?.total || 0).toLocaleString()} accounts · ${activeFilters.join(" · ")}`
+        ? T("audience.filter_state", { total: num(data.pagination?.total), filters: activeFilters.join(" · ") })
         : "";
       filterState.classList.toggle("hidden", !activeFilters.length);
       const source = data.source || {};
       const states = data.detected_states || {};
       $("sms-center-audience-source").replaceChildren(
-        node("p", "field-note",
-          `Live Monitor: ${source.last_update ? date(source.last_update) : "unknown"} · ${Number(source.inbounds || 0).toLocaleString()} inbounds · ${Number(data.scanned || 0).toLocaleString()} clients scanned · SMS thresholds: ${source.thresholds?.expiry_days ?? "?"} days / ${source.thresholds?.volume_gb ?? "?"} GB`),
-        node("p", "field-note",
-          `Detected: near expiry ${states.near_expiry || 0} · low volume ${states.low_volume || 0} · expired ${states.expired || 0} · ended ${states.ended || 0}`));
+        node("p", "field-note", T("audience.source", {
+          date: source.last_update ? date(source.last_update) : T("audience.unknown"),
+          inbounds: num(source.inbounds), clients: num(data.scanned),
+          days: source.thresholds?.expiry_days ?? "?", gb: source.thresholds?.volume_gb ?? "?"
+        })),
+        node("p", "field-note", T("audience.detected", {
+          near_expiry: states.near_expiry || 0, low_volume: states.low_volume || 0,
+          expired: states.expired || 0, ended: states.ended || 0
+        })));
       renderAudience();
     } catch (error) {
       audienceRows = [];
@@ -369,23 +425,23 @@
     button.disabled = true;
     $("sms-center-audience-summary").replaceChildren();
     $("sms-center-audience-source").replaceChildren();
-    target.replaceChildren(node("p", "field-note", "Refreshing Live Monitor before re-evaluation…"));
+    target.replaceChildren(node("p", "field-note", T("audience.refreshing")));
     try {
       const response = await fetch("/api/monitor/refresh", {
         method: "POST", credentials: "same-origin", cache: "no-store"
       });
       const started = await response.json().catch(() => null);
-      if (!response.ok || !started?.job_id) throw new Error(started?.error || `HTTP ${response.status}`);
+      if (!response.ok || !started?.job_id) throw new Error(started?.error || T("error.http", { status: response.status }));
       for (let attempt = 0; attempt < 60; attempt++) {
         const status = await json(`/api/monitor/job/${encodeURIComponent(started.job_id)}`);
         if (status.job?.state === "done") {
           await loadAudience();
           return;
         }
-        if (status.job?.state === "error") throw new Error(status.job.error || "Monitor refresh failed");
+        if (status.job?.state === "error") throw new Error(status.job.error || T("audience.monitor_failed"));
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
-      throw new Error("Monitor refresh is still running. Re-evaluate after it finishes.");
+      throw new Error(T("audience.monitor_slow"));
     } catch (error) {
       showError(target, error);
     } finally {
@@ -397,25 +453,25 @@
     const reports = diagnostics?.carrierReports;
     const outbox = diagnostics?.callbackOutbox;
     if (android) container.append(
-      statusField("Android activity", android.authoritative ? "authoritative" : "informational"),
-      field("Last successful pull", date(android.lastSuccessfulPullAt)),
-      field("Last validate", `${date(android.lastValidateAt)} / ${fmt(android.lastValidateResult)}`)
+      statusField(T("gateway.android_activity"), android.authoritative ? "authoritative" : "informational"),
+      field(T("gateway.last_pull"), date(android.lastSuccessfulPullAt)),
+      field(T("gateway.last_validate"), `${date(android.lastValidateAt)} / ${fmt(android.lastValidateResult)}`)
     );
     if (reports) container.append(
-      field("Carrier reports", reports.total),
-      statusField("Carrier delivered", reports.delivered),
-      statusField("Carrier failed", reports.failed),
-      field("DLR duplicates / conflicts", `${fmt(reports.duplicates)} / ${fmt(reports.conflicts)}`),
-      field("Unknown requests", reports.unknownRequests),
-      field("Last carrier report", date(reports.lastReportAt))
+      field(T("gateway.carrier_reports"), reports.total),
+      statusField(T("gateway.carrier_delivered"), reports.delivered),
+      statusField(T("gateway.carrier_failed"), reports.failed),
+      field(T("gateway.dlr_dupes"), `${fmt(reports.duplicates)} / ${fmt(reports.conflicts)}`),
+      field(T("gateway.unknown_requests"), reports.unknownRequests),
+      field(T("gateway.last_report"), date(reports.lastReportAt))
     );
     if (outbox) container.append(
-      field("Callback pending / retry", `${fmt(outbox.pending)} / ${fmt(outbox.retry_wait)}`),
-      field("Callback delivering", outbox.delivering),
-      field("Callback delivered", outbox.delivered),
-      statusField("Callback dead letter", outbox.dead_letter),
-      field("Oldest callback age", outbox.oldest_pending_age_ms == null ? null : `${outbox.oldest_pending_age_ms} ms`),
-      field("Last callback success", date(outbox.last_success_at))
+      field(T("gateway.cb_pending"), `${fmt(outbox.pending)} / ${fmt(outbox.retry_wait)}`),
+      field(T("gateway.cb_delivering"), outbox.delivering),
+      field(T("gateway.cb_delivered"), outbox.delivered),
+      statusField(T("gateway.cb_dead"), outbox.dead_letter),
+      field(T("gateway.cb_oldest"), outbox.oldest_pending_age_ms == null ? null : `${outbox.oldest_pending_age_ms} ms`),
+      field(T("gateway.cb_success"), date(outbox.last_success_at))
     );
   }
 
@@ -427,108 +483,214 @@
       const device = health.device || {};
       const queue = health.queue || {};
       setKpi("sms-center-health", report.success
-        ? (health.gmweb?.ready ? "Ready" : `Degraded · ${health.gmweb?.reason || "no reason provided"}`)
-        : `${report.probe_state || "Unavailable"} · ${report.diagnostic || "No diagnostic"}`,
+        ? (health.gmweb?.ready ? T("health.ready") : T("health.degraded", { reason: health.gmweb?.reason ? statusLabel(health.gmweb.reason) : T("health.no_reason") }))
+        : T("health.unavailable_probe", {
+          state: report.probe_state ? statusLabel(report.probe_state) : T("health.unavailable"),
+          diagnostic: report.diagnostic ? statusLabel(report.diagnostic) : T("health.no_diagnostic")
+        }),
       report.success && health.gmweb?.ready ? "success" : "warning");
       setKpi("sms-center-device", report.success
-        ? `${device.state || "unreported"}${device.reason ? ` · ${device.reason}` : ""}` : "Transport health unavailable",
+        ? `${statusLabel(device.state || "unreported")}${device.reason ? ` · ${device.reason}` : ""}` : T("health.transport_unavailable"),
       report.success ? statusTone(device.state) : "neutral");
-      setKpi("sms-center-queue", report.success ? fmt(queue.pending) : "Transport health unavailable",
-        report.success ? "neutral" : "neutral");
+      setKpi("sms-center-queue", report.success ? fmt(queue.pending) : T("health.transport_unavailable"), "neutral");
       const facts = $("sms-center-gateway-facts");
       facts.replaceChildren(
-        field("Probe", report.probe_state), field("Active transport", transport.active),
-        field("Mode", transport.mode), field("State", transport.state),
-        field("Device last seen", date(device.last_seen_at)),
-        field("Pending / inflight", report.success ? `${fmt(queue.pending)} / ${fmt(queue.inflight)}` : "—"),
-        field("Last ACK", date(health.last_ack?.at)), field("ACK outcome", health.last_ack?.outcome)
+        field(T("gateway.probe"), report.probe_state), field(T("gateway.transport"), transport.active),
+        field(T("gateway.mode"), transport.mode), field(T("gateway.state"), transport.state),
+        field(T("gateway.device_seen"), date(device.last_seen_at)),
+        field(T("gateway.pending_inflight"), report.success ? `${fmt(queue.pending)} / ${fmt(queue.inflight)}` : "—"),
+        field(T("gateway.last_ack"), date(health.last_ack?.at)), field(T("gateway.ack_outcome"), health.last_ack?.outcome)
       );
       appendDiagnosticFacts(facts, health.diagnostics || {});
     } catch (error) {
       const missingScope = error.message.includes("scope_denied") || error.message.includes("transport:read");
-      setKpi("sms-center-health", `Unavailable · ${error.message}`, "danger");
-      setKpi("sms-center-device", missingScope ? "Requires transport:read" : "Health probe unavailable", "neutral");
-      setKpi("sms-center-queue", missingScope ? "Requires transport:read" : "Queue unavailable", "neutral");
+      setKpi("sms-center-health", T("error.unavailable", { message: error.message }), "danger");
+      setKpi("sms-center-device", missingScope ? T("health.requires_scope") : T("health.probe_unavailable"), "neutral");
+      setKpi("sms-center-queue", missingScope ? T("health.requires_scope") : T("health.queue_unavailable"), "neutral");
       showError($("sms-center-gateway-facts"), error);
     }
   }
-  async function loadOverview() {
+  // "Right now": the funnel from "needs a reminder" to "ready", with every reason for
+  // the accounts that are not ready. The numbers come from the same evaluator a run uses.
+  function renderNow(data) {
+    const matched = Number(data.matched || 0);
+    const ready = Number(data.eligible_now || 0);
+    const sent = Number(data.today?.sent || 0);
+    $("sms-now-ready").textContent = num(ready);
+    $("sms-now-of").textContent = !matched ? T("now.none")
+      : T(sent ? "now.of_sent" : "now.of", { total: num(matched), sent: num(sent) });
+    const pause = $("sms-center-pause");
+    const blocked = data.run_state && data.run_state !== "ready" ? `pause.${data.run_state}` : null;
+    pause.classList.toggle("hidden", !blocked || !has(blocked));
+    pause.textContent = blocked && has(blocked) ? T(blocked) : "";
+    const bar = $("sms-funnel-bar");
+    const legend = $("sms-funnel-legend");
+    bar.replaceChildren();
+    legend.replaceChildren();
+    for (const group of funnelGroups) {
+      const count = Number(data[group.key] || 0);
+      if (count > 0) {
+        const segment = node("span", `sms-funnel-seg sms-funnel-${group.tone}`);
+        segment.style.flexGrow = String(count);
+        segment.title = `${T(group.legend)}: ${num(count)}`;
+        bar.append(segment);
+      }
+      const item = node("li", "sms-funnel-item");
+      const button = node("button", `sms-funnel-button sms-funnel-${group.tone}`);
+      button.type = "button";
+      button.disabled = !count;
+      button.append(node("span", "sms-funnel-dot"), node("strong", "sms-funnel-count", num(count)),
+        node("span", "sms-funnel-name", T(group.legend)), node("small", "field-note", T(`${group.legend}.help`)));
+      button.addEventListener("click", () => openAudience({ decision: group.key }));
+      item.append(button);
+      legend.append(item);
+    }
+    if (!matched) bar.append(node("span", "sms-funnel-seg sms-funnel-empty"));
+  }
+  function renderWhy(data) {
+    const target = $("sms-center-why");
+    target.replaceChildren();
+    const reasons = Object.entries(data.reasons || {}).sort((a, b) => b[1] - a[1]);
+    if (!reasons.length) {
+      target.append(node("p", "field-note", T("why.empty")));
+      return;
+    }
+    for (const [code, count] of reasons) {
+      const info = reasonInfo(code);
+      const row = node("article", "sms-why-row");
+      const head = node("div", "sms-why-head");
+      head.append(node("strong", "sms-why-name", info.label), node("span", "badge neutral", T("why.count", { count: num(count) })));
+      const body = node("div", "sms-why-body");
+      body.append(node("p", "", info.what));
+      if (info.fix) {
+        const fix = node("p", "field-note");
+        fix.append(node("strong", "", `${T("why.action")}: `), info.fix);
+        body.append(fix);
+      }
+      const view = node("button", "btn btn-outline", T("why.view"));
+      view.type = "button";
+      view.addEventListener("click", () => openAudience({ reason: code, decision: decisionOfReason(code) }));
+      row.append(head, body, view);
+      target.append(row);
+    }
+  }
+  // Jump to the audience tab already narrowed to a decision and/or a reason.
+  function openAudience({ decision = "", reason = "" } = {}) {
+    fillReasonFilter(knownReasons);
+    $("sms-center-audience-decision").value = reason ? "" : decision;
+    $("sms-center-audience-reason").value = reason;
+    $("sms-center-audience-activity").value = "";
+    $("sms-center-audience-state").value = "";
+    selectTab("audience");
+  }
+  async function loadNow() {
     try {
-      const evidence = await json("/api/sms/overview");
-      $("sms-center-delivered").textContent = evidence.evidence_available
-        ? `${Number(evidence.carrier_delivered || 0).toLocaleString()} delivered / ${Number(evidence.carrier_failed || 0).toLocaleString()} failed / ${Number(evidence.carrier_pending || 0).toLocaleString()} pending`
-        : "No callback evidence";
-    } catch (error) { $("sms-center-delivered").textContent = `Unavailable · ${error.message}`; }
+      const data = await postPreview({ page: 1, per_page: 10 });
+      knownReasons = data.reasons || {};
+      renderNow(data);
+      renderWhy(data);
+    } catch (error) {
+      $("sms-now-ready").textContent = "—";
+      $("sms-now-of").textContent = T("now.unavailable", { message: error.message });
+      $("sms-funnel-bar").replaceChildren();
+      $("sms-funnel-legend").replaceChildren();
+      showError($("sms-center-why"), error);
+    }
+  }
+  function renderCarrierEvidence(evidence) {
+    const target = $("sms-center-delivered");
+    if (!evidence.evidence_available) {
+      target.replaceChildren(node("p", "field-note", T("carrier.none")));
+      return;
+    }
+    const card = (key, value, tone) => {
+      const item = node("div", "stat-card");
+      item.append(node("span", "sms-audit-kpi-label", T(`carrier.${key}`)),
+        node("strong", `sms-audit-kpi-value sms-kpi-${tone}`, num(value)),
+        node("small", "field-note", T(`carrier.${key}.help`)));
+      return item;
+    };
+    target.replaceChildren(card("delivered", evidence.carrier_delivered, "success"),
+      card("failed", evidence.carrier_failed, "danger"), card("pending", evidence.carrier_pending, "warning"));
+  }
+  async function loadOverview() {
+    const now = loadNow();
+    try {
+      renderCarrierEvidence(await json("/api/sms/overview"));
+    } catch (error) { showError($("sms-center-delivered"), error); }
     try {
       const data = await json("/api/sms/daily-summary");
       const statuses = data.statuses || {};
-      $("sms-center-attempts").textContent = Number(data.attempts || 0).toLocaleString();
-      $("sms-center-unique").textContent = `${Number(data.unique_accounts || 0).toLocaleString()} unique accounts`;
-      $("sms-center-sent").textContent = Number(statuses.sent || 0).toLocaleString();
-      $("sms-center-segments").textContent = `${Number(data.segments || 0).toLocaleString()} segments`;
-      $("sms-center-accepted").textContent = Number(data.gateway_accepted || 0).toLocaleString();
-      $("sms-center-not-sent").textContent = `${Number(statuses.queued || 0).toLocaleString()} / ${Number(statuses.failed || 0).toLocaleString()} / ${Number(statuses.skipped || 0).toLocaleString()}`;
-      $("sms-center-day-window").textContent = `${window.EveDate?.formatDate(data.window_start) || date(data.window_start)} · ${data.timezone || window.EveDate?.timezone || "Asia/Tehran"}`;
+      $("sms-center-attempts").textContent = num(data.attempts);
+      $("sms-center-unique").textContent = T("today.unique", { count: num(data.unique_accounts) });
+      $("sms-center-sent").textContent = num(statuses.sent);
+      $("sms-center-segments").textContent = T("today.segments", { count: num(data.segments) });
+      $("sms-center-accepted").textContent = num(data.gateway_accepted);
+      const notSent = Number(statuses.queued || 0) + Number(statuses.failed || 0) + Number(statuses.skipped || 0);
+      $("sms-center-not-sent").textContent = num(notSent);
+      $("sms-center-not-sent-detail").textContent = T("today.notsent.detail", {
+        queued: num(statuses.queued), failed: num(statuses.failed), skipped: num(statuses.skipped)
+      });
+      $("sms-center-day-window").textContent = T("today.window", {
+        date: window.EveDate?.formatDate(data.window_start) || date(data.window_start),
+        zone: data.timezone || window.EveDate?.timezone || "Asia/Tehran"
+      });
       $("sms-center-purpose").replaceChildren(
-        field("Created", data.transactional?.created || 0), field("Renewed", data.transactional?.renew || 0),
-        field("Purchased", data.transactional?.purchase || 0), field("Royalty", data.royalty || 0),
-        field("Announcements", data.announcement || 0), field("Other", data.other || 0));
+        field(T("purpose.created"), data.transactional?.created || 0), field(T("purpose.renew"), data.transactional?.renew || 0),
+        field(T("purpose.purchase"), data.transactional?.purchase || 0), field(T("purpose.royalty"), data.royalty || 0),
+        field(T("purpose.announcement"), data.announcement || 0), field(T("purpose.other"), data.other || 0));
       $("sms-center-reminders").replaceChildren(
-        field("Near expiry", data.reminders?.near_expiry || 0), field("Low volume", data.reminders?.low_volume || 0),
-        field("Expired", data.reminders?.expired || 0), field("Ended", data.reminders?.ended || 0));
-      const reasons = $("sms-center-reasons");
-      reasons.replaceChildren();
-      for (const item of data.top_non_send_reasons || []) reasons.append(detailRow([
-        field("Reason", audienceReason(item.reason)), field("Count", item.count)
-      ]));
-      if (!data.top_non_send_reasons?.length) reasons.append(node("p", "field-note", "No non-send reasons recorded today."));
+        field(T("state.near_expiry"), data.reminders?.near_expiry || 0), field(T("state.low_volume"), data.reminders?.low_volume || 0),
+        field(T("state.expired"), data.reminders?.expired || 0), field(T("state.ended"), data.reminders?.ended || 0));
     } catch (error) {
       for (const id of ["sms-center-attempts", "sms-center-sent", "sms-center-accepted", "sms-center-not-sent"])
-        $(id).textContent = `Unavailable · ${error.message}`;
+        $(id).textContent = T("today.unavailable", { message: error.message });
     }
+    await now;
   }
   async function loadRuns() {
     const target = $("sms-center-run-list");
     try {
       const data = await json("/api/sms/scan/runs?limit=50");
       target.replaceChildren();
-      if (!data.runs?.length) { target.append(node("p", "field-note", "No runs recorded.")); return; }
+      if (!data.runs?.length) { target.append(node("p", "field-note", T("runs.none"))); return; }
       for (const run of data.runs) {
         const disclosure = expandableRow([
-          field("Run", run.run_id), field("Started", date(run.started_at)),
-          field("Targets", run.matched_count), field("Submitted", run.submitted_count),
-          field("Skipped / deferred", (run.suppressed_count || 0) + (run.deferred_count || 0))
-        ], "View recipient decisions");
+          field(T("field.run"), run.run_id), field(T("field.started"), date(run.started_at)),
+          field(T("field.targets"), run.matched_count), field(T("field.submitted"), run.submitted_count),
+          field(T("field.skipped_deferred"), (run.suppressed_count || 0) + (run.deferred_count || 0))
+        ], T("action.view_decisions"));
         let loaded = false;
         disclosure.button.addEventListener("click", async () => {
           const opening = disclosure.panel.classList.contains("hidden");
           toggleExpansion(disclosure.button, disclosure.panel, opening);
           if (!opening || loaded) return;
-          disclosure.panel.replaceChildren(node("p", "field-note", "Loading recipient decisions…"));
+          disclosure.panel.replaceChildren(node("p", "field-note", T("runs.loading_decisions")));
           try {
             const result = await json(`/api/sms/scan/runs/${encodeURIComponent(run.run_id)}/decisions?limit=100`);
             const decisions = result.decisions || [];
             const list = node("div", "sms-center-detail-list");
-            if (!decisions.length) list.append(node("p", "field-note", "No recipient decisions were recorded for this run."));
+            if (!decisions.length) list.append(node("p", "field-note", T("runs.no_decisions")));
             decisions.forEach((decision, index) => {
               const item = detailRow([
-                field("Account", decision.client_email || decision.service_key || "Account"),
-                statusField("Decision", decision.disposition || "unrecorded"),
-                field("Reason", decision.reason_code || "No reason code"),
-                field("Recipient", decision.recipient_masked),
-                field("Decided", date(decision.decision_at))
+                field(T("field.account"), decision.client_email || decision.service_key || T("runs.account_fallback")),
+                statusField(T("field.decision"), decision.disposition || "unrecorded"),
+                field(T("field.reason"), decision.reason_code ? audienceReason(decision.reason_code) : T("field.no_reason_code")),
+                field(T("field.recipient"), decision.recipient_masked),
+                field(T("field.decided"), date(decision.decision_at))
               ]);
               if (index >= inlineDecisionLimit) item.classList.add("sms-center-overflow", "hidden");
               list.append(item);
             });
             disclosure.panel.replaceChildren(list);
             if (decisions.length > inlineDecisionLimit) {
-              const toggle = node("button", "btn btn-outline sms-center-more", `Show all ${result.total || decisions.length} decisions`);
+              const showAll = T("runs.show_all", { count: result.total || decisions.length });
+              const toggle = node("button", "btn btn-outline sms-center-more", showAll);
               toggle.type = "button";
               toggle.addEventListener("click", () => {
                 const hidden = list.querySelector(".sms-center-overflow.hidden");
                 list.querySelectorAll(".sms-center-overflow").forEach((item) => item.classList.toggle("hidden", !hidden));
-                toggle.textContent = hidden ? "Show fewer decisions" : `Show all ${result.total || decisions.length} decisions`;
+                toggle.textContent = hidden ? T("runs.show_fewer") : showAll;
               });
               disclosure.panel.append(toggle);
             }
@@ -555,7 +717,7 @@
       total = data.total || 0;
       visibleLogs = data.logs || [];
       target.replaceChildren();
-      if (!data.logs?.length) target.append(node("p", "field-note", "No matching messages."));
+      if (!data.logs?.length) target.append(node("p", "field-note", T("delivery.none")));
       let previousDay = null;
       for (const log of data.logs || []) {
         const currentDay = dayKey(log.created_at || log.updated_at);
@@ -563,36 +725,35 @@
           target.append(node("h3", "sms-center-day-heading", dayHeading(log.created_at || log.updated_at)));
           previousDay = currentDay;
         }
-        const gatewayStatus = log.gateway_state || (log.request_id ? "accepted / pending" : "not submitted");
+        const gatewayStatus = log.gateway_state || (log.request_id ? "accepted_pending" : "not_submitted");
         const disclosure = expandableRow([
-          field("Account", log.email), field("Phone", log.recipient),
-          field("Trigger", log.state), statusField("EVE", log.status),
-          statusField("Submission", gatewayStatus), statusField("Carrier", carrierStateForCard(log)),
-          field("Last event", date(log.updated_at)),
-          field("Reason", log.reason)
-        ], "View delivery timeline");
+          field(T("field.account"), log.email), field(T("field.phone"), log.recipient),
+          statusField(T("field.trigger"), log.state), statusField(T("field.eve_status"), log.status),
+          statusField(T("field.submission"), gatewayStatus), statusField(T("field.carrier"), carrierStateForCard(log)),
+          field(T("field.last_event"), date(log.updated_at)),
+          field(T("field.reason"), log.reason ? audienceReason(log.reason) : log.reason)
+        ], T("action.view_timeline"));
         let loaded = false;
         disclosure.button.addEventListener("click", async () => {
           const opening = disclosure.panel.classList.contains("hidden");
           toggleExpansion(disclosure.button, disclosure.panel, opening);
           if (!opening || loaded) return;
-          disclosure.panel.replaceChildren(node("p", "field-note", "Loading delivery timeline…"));
+          disclosure.panel.replaceChildren(node("p", "field-note", T("delivery.loading_timeline")));
           try {
             const result = await json(`/api/sms/messages/${log.id}/timeline`);
             const timeline = node("div", "sms-center-timeline");
             const events = result.gateway_events || [];
             timeline.append(deliveryDetail(result));
-            if (!events.length) timeline.append(node("p", "field-note field-note-warn",
-              "No signed GMweb callback matches this message. Check the send result, callback URL/secret, and GMweb callback outbox."));
+            if (!events.length) timeline.append(node("p", "field-note field-note-warn", T("delivery.no_callback")));
             for (const event of events) timeline.append(detailRow([
-              statusField("Event", event.type), field("Occurred", date(event.occurred_at)),
-              field("Attempt", event.attempt), field("Device", event.device_id || "Not reported"),
-              field("Reason", event.reason_code)
+              statusField(T("field.event"), event.type), field(T("field.occurred"), date(event.occurred_at)),
+              field(T("field.attempt"), event.attempt), field(T("field.device"), event.device_id || T("field.not_reported")),
+              field(T("field.reason"), event.reason_code)
             ]));
             const identity = detailRow([
-              field("EVE message", log.id), field("Request", log.request_id),
-              field("Gateway request", log.gateway_request_id), field("Gateway job", log.gateway_job_id),
-              field("Notification", log.eve_notification_id), field("Correlation", log.correlation_id)
+              field(T("delivery.id.eve"), log.id), field(T("delivery.id.request"), log.request_id),
+              field(T("delivery.id.gateway_request"), log.gateway_request_id), field(T("delivery.id.gateway_job"), log.gateway_job_id),
+              field(T("delivery.id.notification"), log.eve_notification_id), field(T("delivery.id.correlation"), log.correlation_id)
             ]);
             identity.classList.add("sms-center-identity");
             disclosure.panel.replaceChildren(identity, timeline);
@@ -601,10 +762,22 @@
         });
         target.append(disclosure.entry);
       }
-      $("sms-center-page-label").textContent = `${total ? offset + 1 : 0}–${Math.min(total, offset + pageSize)} of ${total}`;
+      $("sms-center-page-label").textContent = T("delivery.page", {
+        from: total ? offset + 1 : 0, to: Math.min(total, offset + pageSize), total
+      });
       $("sms-center-prev").disabled = offset === 0;
       $("sms-center-next").disabled = offset + pageSize >= total;
     } catch (error) { showError(target, error); }
+  }
+  // The health strip shows the owed-reminder count on every tab, not only after the
+  // "Owed reminders" tab has been opened.
+  async function loadDebtCount() {
+    try {
+      const data = await json("/api/sms/notification-debt?limit=1");
+      $("sms-center-debt-count").textContent = fmt(data.active);
+    } catch (error) {
+      $("sms-center-debt-count").textContent = T("debt.unavailable");
+    }
   }
   async function loadDebt() {
     const target = $("sms-center-debt-list");
@@ -612,17 +785,17 @@
       const data = await json("/api/sms/notification-debt?limit=100");
       $("sms-center-debt-count").textContent = fmt(data.active);
       target.replaceChildren();
-      if (!data.obligations?.length) target.append(node("p", "field-note", "No outstanding obligations in this page."));
+      if (!data.obligations?.length) target.append(node("p", "field-note", T("debt.none")));
       for (const item of data.obligations || []) {
         const row = node("div", "sms-center-row");
-        row.append(field("Account", item.account || item.service_key),
-          field("Notification", item.notification_kind), statusField("State", item.status),
-          field("Attempts", item.attempt_count), field("Reason", item.last_error || item.reason_code),
-          field("Next retry", date(item.next_attempt_at)));
+        row.append(field(T("field.account"), item.account || item.service_key),
+          field(T("field.notification"), statusLabel(item.notification_kind)), statusField(T("field.state_word"), item.status),
+          field(T("field.attempts"), item.attempt_count), field(T("field.reason"), item.last_error || (item.reason_code ? audienceReason(item.reason_code) : null)),
+          field(T("field.next_retry"), date(item.next_attempt_at)));
         target.append(row);
       }
     } catch (error) {
-      $("sms-center-debt-count").textContent = "Unavailable";
+      $("sms-center-debt-count").textContent = T("debt.unavailable");
       showError(target, error);
     }
   }
@@ -633,29 +806,29 @@
     const status = $("sms-center-reconcile-status").value;
     if (requestId) params.set("requestId", requestId);
     if (status) params.set("status", status);
-    target.replaceChildren(node("p", "field-note", "Checking GMweb delivery evidence..."));
+    target.replaceChildren(node("p", "field-note", T("recon.checking")));
     try {
       const result = await json(`/api/sms/delivery-events?${params}`);
       if (!result.available) {
-        target.replaceChildren(node("p", "field-note field-note-warn", "Contract v5 delivery search is unavailable on the configured GMweb deployment."));
+        target.replaceChildren(node("p", "field-note field-note-warn", T("recon.unavailable")));
         return;
       }
       const comparison = result.comparison || {};
       const list = node("div", "sms-center-detail-list");
       list.append(detailRow([
-        field("Remote events", result.events?.length || 0),
-        field("Matched callbacks", comparison.matched || 0),
-        statusField("Missing locally", comparison.remote_only_event_ids?.length || 0),
-        field("Local only", comparison.local_only_event_ids?.length || 0),
-        field("Authority", comparison.authoritative_source),
-        field("Local mutations", comparison.mutated_local_events)
+        field(T("recon.remote_events"), result.events?.length || 0),
+        field(T("recon.matched"), comparison.matched || 0),
+        statusField(T("recon.missing_local"), comparison.remote_only_event_ids?.length || 0),
+        field(T("recon.local_only"), comparison.local_only_event_ids?.length || 0),
+        field(T("recon.authority"), comparison.authoritative_source),
+        field(T("recon.mutations"), comparison.mutated_local_events)
       ]));
       for (const event of result.events || []) list.append(detailRow([
-        statusField("Carrier", event.status), field("Event", event.eventId),
-        field("Request", event.requestId), field("Gateway request", event.gatewayRequestId),
-        field("Occurred", date(event.occurredAt)), statusField("Callback", event.callbackState)
+        statusField(T("field.carrier"), event.status), field(T("recon.event"), event.eventId),
+        field(T("delivery.id.request"), event.requestId), field(T("delivery.id.gateway_request"), event.gatewayRequestId),
+        field(T("field.occurred"), date(event.occurredAt)), statusField(T("recon.callback"), event.callbackState)
       ]));
-      if (!result.events?.length) list.append(node("p", "field-note", "No matching carrier delivery events."));
+      if (!result.events?.length) list.append(node("p", "field-note", T("recon.none")));
       target.replaceChildren(list);
     } catch (error) { showError(target, error); }
   }
@@ -671,7 +844,7 @@
     if (load) tabLoaders[name]?.();
   }
   async function refresh() {
-    const tasks = [loadHealth()];
+    const tasks = [loadHealth(), loadDebtCount()];
     if (tabLoaders[selectedTab]) tasks.push(tabLoaders[selectedTab]());
     await Promise.allSettled(tasks);
   }
@@ -682,6 +855,7 @@
   document.querySelectorAll("[data-sms-tab]").forEach((button) =>
     button.addEventListener("click", () => selectTab(button.dataset.smsTab)));
   $("sms-center-refresh").addEventListener("click", refresh);
+  $("sms-center-open-audience").addEventListener("click", () => openAudience({ decision: "eligible_now" }));
   $("sms-center-audience-refresh").addEventListener("click", refreshAudienceSource);
   let audienceSearchTimer = null;
   $("sms-center-audience-search").addEventListener("input", () => {
@@ -689,7 +863,7 @@
     audienceSearchTimer = setTimeout(() => loadAudience(), 350);
   });
   $("sms-center-audience-decision").addEventListener("change", () => loadAudience());
-  for (const id of ["sms-center-audience-activity", "sms-center-audience-state",
+  for (const id of ["sms-center-audience-reason", "sms-center-audience-activity", "sms-center-audience-state",
     "sms-center-audience-from", "sms-center-audience-to", "sms-center-hide-disabled",
     "sms-center-hide-reseller", "sms-center-hide-no-recipient", "sms-center-hide-opted-out",
     "sms-center-hide-unlimited", "sms-center-hide-expired-days"]) {
@@ -706,7 +880,7 @@
     const columns = ["id", "email", "recipient", "state", "status", "request_id", "gateway_state", "reason", "updated_at"];
     const escape = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
     const csv = [columns.join(","), ...visibleLogs.map((row) => columns.map((key) => escape(row[key])).join(","))].join("\r\n");
-    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob(["﻿", csv], { type: "text/csv;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = "eve-sms-delivery-page.csv";

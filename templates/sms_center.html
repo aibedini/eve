@@ -1,105 +1,134 @@
 {% extends "base.html" %}
-{% block title %}SMS Center · Eve{% endblock %}
-{% block page_title %}SMS Center{% endblock %}
+{% block title %}{{ sms_copy['page.title'] }} · Eve{% endblock %}
+{% block page_title %}{{ sms_copy['page.title'] }}{% endblock %}
 {% block content %}
+{% set t = sms_copy %}
+{% macro date_input(id, label) %}<div class="form-group"><label for="{{ id }}">{{ label }}</label><input class="search-input" id="{{ id }}" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>{% endmacro %}
 <main class="sms-center sms-audit">
   <header class="sms-audit-header">
-    <div><span class="sms-audit-eyebrow">OPERATIONS / SMS</span><h2>SMS Center</h2>
-    <p>Eligibility, gateway acceptance, physical send, and carrier delivery are separate facts. Awaiting a carrier receipt means pending.</p></div>
-    <div class="sms-audit-actions"><button class="btn btn-secondary" id="sms-center-refresh" type="button">Refresh</button>
-      <a class="btn btn-outline" href="{{ url_for('pages.settings_page') }}#tab-sms">Automation settings</a></div>
+    <div><span class="sms-audit-eyebrow">{{ t['page.eyebrow'] }}</span><h2>{{ t['page.title'] }}</h2>
+    <p>{{ t['page.intro'] }}</p></div>
+    <div class="sms-audit-actions"><button class="btn btn-secondary" id="sms-center-refresh" type="button">{{ t['action.refresh'] }}</button>
+      <a class="btn btn-outline" href="{{ url_for('pages.settings_page') }}#tab-sms">{{ t['action.settings'] }}</a></div>
   </header>
   <div class="sms-health-strip" aria-live="polite">
-    <div class="stat-card"><span class="sms-audit-kpi-label">GMweb</span><strong class="sms-audit-kpi-value" id="sms-center-health">Checking…</strong></div>
-    <div class="stat-card"><span class="sms-audit-kpi-label">Device</span><strong class="sms-audit-kpi-value" id="sms-center-device">—</strong></div>
-    <div class="stat-card"><span class="sms-audit-kpi-label">Queue</span><strong class="sms-audit-kpi-value" id="sms-center-queue">—</strong></div>
-    <div class="stat-card"><span class="sms-audit-kpi-label">Notification debt</span><strong class="sms-audit-kpi-value" id="sms-center-debt-count">—</strong></div>
+    <div class="stat-card"><span class="sms-audit-kpi-label">{{ t['health.gateway'] }}</span><strong class="sms-audit-kpi-value" id="sms-center-health">{{ t['state.checking'] }}</strong><small class="field-note">{{ t['health.gateway.help'] }}</small></div>
+    <div class="stat-card"><span class="sms-audit-kpi-label">{{ t['health.device'] }}</span><strong class="sms-audit-kpi-value" id="sms-center-device">—</strong><small class="field-note">{{ t['health.device.help'] }}</small></div>
+    <div class="stat-card"><span class="sms-audit-kpi-label">{{ t['health.queue'] }}</span><strong class="sms-audit-kpi-value" id="sms-center-queue">—</strong><small class="field-note">{{ t['health.queue.help'] }}</small></div>
+    <div class="stat-card"><span class="sms-audit-kpi-label">{{ t['health.debt'] }}</span><strong class="sms-audit-kpi-value" id="sms-center-debt-count">—</strong><small class="field-note">{{ t['health.debt.help'] }}</small></div>
   </div>
-  <nav class="sms-center-nav" aria-label="SMS Center sections">
-    <button class="sms-audit-tab active" type="button" data-sms-tab="overview">Overview</button>
-    <button class="sms-audit-tab" type="button" data-sms-tab="audience">Current audience</button>
-    <button class="sms-audit-tab" type="button" data-sms-tab="runs">Runs</button>
-    <button class="sms-audit-tab" type="button" data-sms-tab="delivery">Delivery log</button>
-    <button class="sms-audit-tab" type="button" data-sms-tab="debt">Notification debt</button>
-    <button class="sms-audit-tab" type="button" data-sms-tab="gateway">Gateway</button>
+  <nav class="sms-center-nav" aria-label="{{ t['nav.label'] }}">
+    <button class="sms-audit-tab active" type="button" data-sms-tab="overview">{{ t['tab.overview'] }}</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="audience">{{ t['tab.audience'] }}</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="runs">{{ t['tab.runs'] }}</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="delivery">{{ t['tab.delivery'] }}</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="debt">{{ t['tab.debt'] }}</button>
+    <button class="sms-audit-tab" type="button" data-sms-tab="gateway">{{ t['tab.gateway'] }}</button>
   </nav>
   <section class="sms-center-pane" id="sms-center-overview">
-    <div class="sms-audit-stream-head"><div><h3>Today at a glance</h3><p>Complete totals for the panel's local day, 00:00 through 23:59. This is not a limited sample.</p></div><span class="badge neutral" id="sms-center-day-window">{{ app_timezone or 'Asia/Tehran' }}</span></div>
-    <div class="sms-audit-kpis sms-overview-primary">
-      <div class="stat-card"><span class="sms-audit-kpi-label">Attempts today</span><strong class="sms-audit-kpi-value" id="sms-center-attempts">—</strong><small class="field-note" id="sms-center-unique">— unique accounts</small></div>
-      <div class="stat-card"><span class="sms-audit-kpi-label">Sent</span><strong class="sms-audit-kpi-value" id="sms-center-sent">—</strong><small class="field-note" id="sms-center-segments">— segments</small></div>
-      <div class="stat-card"><span class="sms-audit-kpi-label">Gateway accepted</span><strong class="sms-audit-kpi-value" id="sms-center-accepted">—</strong><small class="field-note">Accepted is not carrier delivery</small></div>
-      <div class="stat-card"><span class="sms-audit-kpi-label">Queued / failed / skipped</span><strong class="sms-audit-kpi-value" id="sms-center-not-sent">—</strong><small class="field-note">Current EVE outcomes</small></div>
+    <div class="sms-banner sms-banner-warn hidden" id="sms-center-pause" role="status"></div>
+    <div class="sms-card sms-hero">
+      <div class="sms-card-head">
+        <div><h3>{{ t['now.title'] }}</h3><p class="field-note">{{ t['now.subtitle'] }}</p></div>
+        <button class="btn btn-outline" type="button" id="sms-center-open-audience">{{ t['now.open'] }}</button>
+      </div>
+      <div class="sms-hero-main">
+        <strong class="sms-hero-number sms-kpi-success" id="sms-now-ready">—</strong>
+        <div class="sms-hero-text"><span class="sms-hero-label">{{ t['now.ready'] }}</span><small class="field-note" id="sms-now-of">{{ t['state.checking'] }}</small></div>
+      </div>
+      <div class="sms-funnel-bar" id="sms-funnel-bar" role="img" aria-label="{{ t['now.bar.label'] }}"></div>
+      <ul class="sms-funnel-legend" id="sms-funnel-legend"></ul>
+    </div>
+    <div class="sms-card">
+      <div class="sms-card-head"><div><h3>{{ t['why.title'] }}</h3><p class="field-note">{{ t['why.subtitle'] }}</p></div></div>
+      <div class="sms-why-list" id="sms-center-why"><p class="field-note">{{ t['state.checking'] }}</p></div>
+    </div>
+    <div class="sms-card">
+      <div class="sms-card-head"><div><h3>{{ t['today.title'] }}</h3><p class="field-note">{{ t['today.subtitle'] }}</p></div><span class="badge neutral" id="sms-center-day-window">{{ app_timezone or 'Asia/Tehran' }}</span></div>
+      <div class="sms-audit-kpis sms-overview-primary">
+        <div class="stat-card"><span class="sms-audit-kpi-label">{{ t['today.attempts'] }}</span><strong class="sms-audit-kpi-value" id="sms-center-attempts">—</strong><small class="field-note" id="sms-center-unique">{{ t['today.attempts.help'] }}</small></div>
+        <div class="stat-card"><span class="sms-audit-kpi-label">{{ t['today.sent'] }}</span><strong class="sms-audit-kpi-value sms-kpi-success" id="sms-center-sent">—</strong><small class="field-note" id="sms-center-segments">{{ t['today.sent.help'] }}</small></div>
+        <div class="stat-card"><span class="sms-audit-kpi-label">{{ t['today.accepted'] }}</span><strong class="sms-audit-kpi-value" id="sms-center-accepted">—</strong><small class="field-note">{{ t['today.accepted.help'] }}</small></div>
+        <div class="stat-card"><span class="sms-audit-kpi-label">{{ t['today.notsent'] }}</span><strong class="sms-audit-kpi-value" id="sms-center-not-sent">—</strong><small class="field-note" id="sms-center-not-sent-detail">{{ t['today.notsent.help'] }}</small></div>
+      </div>
+      <h4 class="sms-sub-title">{{ t['carrier.title'] }}</h4>
+      <p class="field-note">{{ t['carrier.help'] }}</p>
+      <div class="sms-audit-kpis sms-carrier-kpis" id="sms-center-delivered"><p class="field-note">{{ t['state.checking'] }}</p></div>
     </div>
     <div class="sms-overview-grid">
-      <div class="panel-card sms-overview-panel"><div class="panel-card-header"><h3>Message purpose</h3></div><dl class="sms-center-facts" id="sms-center-purpose"></dl></div>
-      <div class="panel-card sms-overview-panel"><div class="panel-card-header"><h3>Reminder states</h3></div><dl class="sms-center-facts" id="sms-center-reminders"></dl></div>
-      <div class="panel-card sms-overview-panel"><div class="panel-card-header"><h3>Why messages did not send</h3></div><div class="sms-overview-reasons" id="sms-center-reasons"></div></div>
-      <div class="panel-card sms-overview-panel"><div class="panel-card-header"><h3>Carrier evidence today</h3></div><strong class="sms-audit-kpi-value" id="sms-center-delivered">Checking…</strong><p class="field-note">Only signed callback evidence is counted. Acceptance never implies handset delivery.</p></div>
+      <div class="sms-card"><div class="sms-card-head"><div><h3>{{ t['purpose.title'] }}</h3><p class="field-note">{{ t['purpose.help'] }}</p></div></div><dl class="sms-center-facts" id="sms-center-purpose"></dl></div>
+      <div class="sms-card"><div class="sms-card-head"><div><h3>{{ t['reminders.title'] }}</h3><p class="field-note">{{ t['reminders.help'] }}</p></div></div><dl class="sms-center-facts" id="sms-center-reminders"></dl></div>
     </div>
   </section>
   <section class="sms-center-pane hidden" id="sms-center-audience">
-    <div class="sms-audit-stream-head"><div><h3>Current SMS audience</h3><p>Live Monitor matches evaluated against the same rules as an actual run. This preview never sends or changes state.</p></div></div>
+    <div class="sms-audit-stream-head"><div><h3>{{ t['audience.title'] }}</h3><p>{{ t['audience.subtitle'] }}</p></div></div>
     <div class="sms-audit-kpis sms-center-audience-summary" id="sms-center-audience-summary" aria-live="polite"></div>
     <div id="sms-center-audience-source" class="field-note" aria-live="polite"></div>
+    <details class="sms-audience-visibility">
+      <summary>{{ t['audience.legend.title'] }}</summary>
+      <dl class="sms-legend">
+        {% for key in ('eligible_now', 'deferred', 'active_obligation', 'invalid_recipient', 'suppressed') %}<div><dt>{{ t['decision.' ~ key] }}</dt><dd>{{ t['decision.' ~ key ~ '.help'] }}</dd></div>{% endfor %}
+      </dl>
+    </details>
     <div class="sms-center-filters">
-      <div class="form-group"><label for="sms-center-audience-search">Account or server</label><input class="search-input" id="sms-center-audience-search" type="search" autocomplete="off"></div>
-      <div class="form-group"><label for="sms-center-audience-decision">Next send</label><select class="form-select" id="sms-center-audience-decision"><option value="">All decisions</option><option value="eligible_now">Eligible now</option><option value="deferred">Deferred</option><option value="suppressed">Suppressed</option><option value="invalid_recipient">Invalid recipient</option><option value="active_obligation">Active obligation</option></select></div>
-      <div class="form-group"><label for="sms-center-audience-activity">Today's outcome</label><select class="form-select" id="sms-center-audience-activity"><option value="">Any outcome</option><option value="sent">Sent today</option><option value="failed">Failed today</option><option value="queued">Queued today</option></select></div>
-      <div class="form-group"><label for="sms-center-audience-state">Monitor state</label><select class="form-select" id="sms-center-audience-state"><option value="">All states</option><option value="near_expiry">Near expiry</option><option value="low_volume">Low volume</option><option value="expired">Expired</option><option value="ended">Ended</option></select></div>
-      <div class="form-group"><label for="sms-center-audience-from">Last SMS from</label><input class="search-input" id="sms-center-audience-from" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>
-      <div class="form-group"><label for="sms-center-audience-to">Last SMS through</label><input class="search-input" id="sms-center-audience-to" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>
-      <button class="btn btn-secondary" type="button" id="sms-center-audience-refresh">Refresh Monitor &amp; re-evaluate</button>
+      <div class="form-group"><label for="sms-center-audience-search">{{ t['filter.account_server'] }}</label><input class="search-input" id="sms-center-audience-search" type="search" autocomplete="off"></div>
+      <div class="form-group"><label for="sms-center-audience-decision">{{ t['filter.next_send'] }}</label><select class="form-select" id="sms-center-audience-decision"><option value="">{{ t['filter.all_decisions'] }}</option>{% for key in ('eligible_now', 'deferred', 'active_obligation', 'invalid_recipient', 'suppressed') %}<option value="{{ key }}">{{ t['decision.' ~ key] }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label for="sms-center-audience-reason">{{ t['filter.reason'] }}</label><select class="form-select" id="sms-center-audience-reason"><option value="">{{ t['filter.any_reason'] }}</option></select></div>
+      <div class="form-group"><label for="sms-center-audience-activity">{{ t['filter.today_outcome'] }}</label><select class="form-select" id="sms-center-audience-activity"><option value="">{{ t['filter.any_outcome'] }}</option><option value="sent">{{ t['filter.sent_today'] }}</option><option value="failed">{{ t['filter.failed_today'] }}</option><option value="queued">{{ t['filter.queued_today'] }}</option></select></div>
+      <div class="form-group"><label for="sms-center-audience-state">{{ t['filter.monitor_state'] }}</label><select class="form-select" id="sms-center-audience-state"><option value="">{{ t['filter.all_states'] }}</option>{% for key in ('near_expiry', 'low_volume', 'expired', 'ended') %}<option value="{{ key }}">{{ t['state.' ~ key] }}</option>{% endfor %}</select></div>
+      {{ date_input('sms-center-audience-from', t['filter.last_from']) }}
+      {{ date_input('sms-center-audience-to', t['filter.last_to']) }}
+      <button class="btn btn-secondary" type="button" id="sms-center-audience-refresh">{{ t['filter.refresh_monitor'] }}</button>
     </div>
     <details class="sms-audience-visibility">
-      <summary>Visibility filters</summary>
+      <summary>{{ t['visibility.title'] }}</summary>
       <div class="sms-audience-visibility-grid">
-        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-disabled"><span class="checkmark"></span><span>Hide disabled accounts</span></label>
-        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-reseller"><span class="checkmark"></span><span>Hide reseller-owned</span></label>
-        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-no-recipient"><span class="checkmark"></span><span>Hide accounts without a valid mobile</span></label>
-        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-opted-out"><span class="checkmark"></span><span>Hide SMS opt-outs</span></label>
-        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-unlimited"><span class="checkmark"></span><span>Hide unlimited accounts</span></label>
-        <div class="form-group"><label for="sms-center-hide-expired-days">Hide expired more than N days</label><input id="sms-center-hide-expired-days" type="number" min="0" max="3650" value="0"><small class="field-note">0 keeps every expired account visible.</small></div>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-disabled"><span class="checkmark"></span><span>{{ t['visibility.disabled'] }}</span></label>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-reseller"><span class="checkmark"></span><span>{{ t['visibility.reseller'] }}</span></label>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-no-recipient"><span class="checkmark"></span><span>{{ t['visibility.no_mobile'] }}</span></label>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-opted-out"><span class="checkmark"></span><span>{{ t['visibility.opted_out'] }}</span></label>
+        <label class="checkbox-label"><input type="checkbox" id="sms-center-hide-unlimited"><span class="checkmark"></span><span>{{ t['visibility.unlimited'] }}</span></label>
+        <div class="form-group"><label for="sms-center-hide-expired-days">{{ t['visibility.expired_days'] }}</label><input id="sms-center-hide-expired-days" type="number" min="0" max="3650" value="0"><small class="field-note">{{ t['visibility.expired_days.help'] }}</small></div>
       </div>
     </details>
     <div class="sms-audience-filter-state hidden" id="sms-center-audience-filter-state" aria-live="polite"></div>
-    <p class="field-note">“Eligible now” means the account passed every read-only rule. The real send rechecks mutable limits immediately before submission.</p>
-    <div class="sms-center-list" id="sms-center-audience-list" aria-live="polite">Evaluating current audience…</div>
+    <p class="field-note">{{ t['audience.eligible_note'] }}</p>
+    <div class="sms-center-list" id="sms-center-audience-list" aria-live="polite">{{ t['audience.evaluating'] }}</div>
   </section>
   <section class="sms-center-pane hidden" id="sms-center-runs">
-    <div class="sms-audit-stream-head"><div><h3>Recorded runs</h3><p>Decisions for matched candidates, including skips, remain inspectable.</p></div></div>
-    <div class="sms-center-list" id="sms-center-run-list" aria-live="polite">Loading runs…</div>
+    <div class="sms-audit-stream-head"><div><h3>{{ t['runs.title'] }}</h3><p>{{ t['runs.subtitle'] }}</p></div></div>
+    <div class="sms-center-list" id="sms-center-run-list" aria-live="polite">{{ t['runs.loading'] }}</div>
   </section>
   <section class="sms-center-pane hidden" id="sms-center-delivery">
-    <div class="sms-audit-stream-head"><div><h3>Delivery log</h3><p>Click a row for its recorded timeline.</p></div></div>
+    <div class="sms-audit-stream-head"><div><h3>{{ t['delivery.title'] }}</h3><p>{{ t['delivery.subtitle'] }}</p></div></div>
     <div class="sms-center-filters">
-      <div class="form-group"><label for="sms-center-search">Account, phone, or gateway ID</label><input class="search-input" id="sms-center-search" type="search" autocomplete="off"></div>
-      <div class="form-group"><label for="sms-center-status">EVE status</label><select class="form-select" id="sms-center-status"><option value="">All statuses</option><option value="queued">Queued</option><option value="sent">Sent</option><option value="failed">Failed</option><option value="skipped">Skipped</option></select></div>
-      <div class="form-group"><label for="sms-center-from">From date</label><input class="search-input" id="sms-center-from" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>
-      <div class="form-group"><label for="sms-center-to">Through date</label><input class="search-input" id="sms-center-to" type="{{ 'text' if app_calendar == 'jalali' else 'date' }}" {% if app_calendar == 'jalali' %}data-jdp placeholder="YYYY/MM/DD"{% endif %}></div>
-      <button class="btn btn-primary" type="button" id="sms-center-filter">Apply filters</button>
+      <div class="form-group"><label for="sms-center-search">{{ t['delivery.search'] }}</label><input class="search-input" id="sms-center-search" type="search" autocomplete="off"></div>
+      <div class="form-group"><label for="sms-center-status">{{ t['delivery.status'] }}</label><select class="form-select" id="sms-center-status"><option value="">{{ t['delivery.all_statuses'] }}</option>{% for key in ('queued', 'sent', 'failed', 'skipped') %}<option value="{{ key }}">{{ t['status.' ~ key] }}</option>{% endfor %}</select></div>
+      {{ date_input('sms-center-from', t['delivery.from']) }}
+      {{ date_input('sms-center-to', t['delivery.to']) }}
+      <button class="btn btn-primary" type="button" id="sms-center-filter">{{ t['delivery.apply'] }}</button>
     </div>
-    <div class="sms-center-list" id="sms-center-delivery-list" aria-live="polite">Loading messages…</div>
-    <div class="sms-audit-pager"><span id="sms-center-page-label"></span><div class="sms-audit-pager-actions"><button class="btn btn-secondary" type="button" id="sms-center-export">Export this page CSV</button><button class="btn btn-secondary" type="button" id="sms-center-prev">Previous</button><button class="btn btn-secondary" type="button" id="sms-center-next">Next</button></div></div>
+    <div class="sms-center-list" id="sms-center-delivery-list" aria-live="polite">{{ t['delivery.loading'] }}</div>
+    <div class="sms-audit-pager"><span id="sms-center-page-label"></span><div class="sms-audit-pager-actions"><button class="btn btn-secondary" type="button" id="sms-center-export">{{ t['delivery.export'] }}</button><button class="btn btn-secondary" type="button" id="sms-center-prev">{{ t['action.previous'] }}</button><button class="btn btn-secondary" type="button" id="sms-center-next">{{ t['action.next'] }}</button></div></div>
   </section>
   <section class="sms-center-pane hidden" id="sms-center-debt">
-    <div class="sms-audit-stream-head"><div><h3>Notification debt</h3><p>Outstanding obligations and their next action.</p></div></div>
-    <div class="sms-center-list" id="sms-center-debt-list" aria-live="polite">Loading obligations…</div>
+    <div class="sms-audit-stream-head"><div><h3>{{ t['debt.title'] }}</h3><p>{{ t['debt.subtitle'] }}</p></div></div>
+    <div class="sms-center-list" id="sms-center-debt-list" aria-live="polite">{{ t['debt.loading'] }}</div>
   </section>
   <section class="sms-center-pane hidden" id="sms-center-gateway">
-    <div class="sms-audit-stream-head"><div><h3>Gateway diagnostics</h3><p>Active transport only; historical delivery must be read from message evidence.</p></div></div>
+    <div class="sms-audit-stream-head"><div><h3>{{ t['gateway.title'] }}</h3><p>{{ t['gateway.subtitle'] }}</p></div></div>
     <dl class="sms-center-facts" id="sms-center-gateway-facts"></dl>
-    <div class="panel-card sms-center-reconciliation">
-      <div class="panel-card-header"><div><h3>Carrier reconciliation</h3><p class="field-note">Read-only Contract v5 lookup for missed-callback diagnosis. Signed callbacks remain EVE's authority.</p></div></div>
+    <div class="sms-card sms-center-reconciliation">
+      <div class="sms-card-head"><div><h3>{{ t['recon.title'] }}</h3><p class="field-note">{{ t['recon.subtitle'] }}</p></div></div>
       <div class="sms-center-filters">
-        <div class="form-group"><label for="sms-center-reconcile-request">Request ID</label><input class="search-input" id="sms-center-reconcile-request" type="search" maxlength="120" autocomplete="off" placeholder="Optional"></div>
-        <div class="form-group"><label for="sms-center-reconcile-status">Carrier status</label><select class="form-select" id="sms-center-reconcile-status"><option value="">All statuses</option><option value="delivered">Delivered</option><option value="failed">Failed</option></select></div>
-        <div class="form-group"><label for="sms-center-reconcile-limit">Result limit</label><select class="form-select" id="sms-center-reconcile-limit"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></div>
-        <button class="btn btn-secondary" type="button" id="sms-center-reconcile">Check GMweb evidence</button>
+        <div class="form-group"><label for="sms-center-reconcile-request">{{ t['recon.request'] }}</label><input class="search-input" id="sms-center-reconcile-request" type="search" maxlength="120" autocomplete="off" placeholder="{{ t['recon.optional'] }}"></div>
+        <div class="form-group"><label for="sms-center-reconcile-status">{{ t['recon.status'] }}</label><select class="form-select" id="sms-center-reconcile-status"><option value="">{{ t['delivery.all_statuses'] }}</option><option value="delivered">{{ t['status.delivered'] }}</option><option value="failed">{{ t['status.failed'] }}</option></select></div>
+        <div class="form-group"><label for="sms-center-reconcile-limit">{{ t['recon.limit'] }}</label><select class="form-select" id="sms-center-reconcile-limit"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></div>
+        <button class="btn btn-secondary" type="button" id="sms-center-reconcile">{{ t['recon.run'] }}</button>
       </div>
-      <div class="sms-center-list" id="sms-center-reconciliation-results" aria-live="polite"><p class="field-note">Run this check only when investigating missing callback evidence.</p></div>
+      <div class="sms-center-list" id="sms-center-reconciliation-results" aria-live="polite"><p class="field-note">{{ t['recon.hint'] }}</p></div>
     </div>
   </section>
 </main>
 {% endblock %}
-{% block scripts %}{% if app_calendar == 'jalali' %}<link rel="stylesheet" href="{{ url_for('static', filename='jalalidatepicker.min.css') }}"><script src="{{ url_for('static', filename='jalalidatepicker.min.js') }}"></script>{% endif %}<script src="{{ url_for('static', filename='sms-center.js') }}" defer></script>{% endblock %}
+{% block scripts %}{% if app_calendar == 'jalali' %}<link rel="stylesheet" href="{{ url_for('static', filename='jalalidatepicker.min.css') }}"><script src="{{ url_for('static', filename='jalalidatepicker.min.js') }}"></script>{% endif %}<script nonce="{{ csp_nonce }}">window.SMS_COPY = {{ sms_copy|tojson }};</script><script src="{{ url_for('static', filename='sms-center.js') }}" defer></script>{% endblock %}

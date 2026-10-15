@@ -178,6 +178,39 @@ MAPPING = (
         ['tests.test_telemetry_state_transitions'],
         ['tests.test_telemetry_pipeline_integration', 'tests.test_sms_terminal_transitions'],
     )),
+    ('panel/routes/messaging.py', (
+        # The SMS audience preview API behind the SMS Center overview and audience tab.
+        ['tests.test_sms_gateway_events'],
+        ['tests.test_sms_candidate_decisions', 'tests.test_sms_candidate_evaluator',
+         'tests.test_sms_center_copy'],
+    )),
+    ('panel/core/sms_center_copy.py', (
+        # Every visible SMS Center string, in both panel languages.
+        ['tests.test_sms_center_copy'],
+        ['tests.test_sms_gateway_events', 'tests.test_ui_design_system'],
+    )),
+    ('templates/sms_center.html', (
+        ['tests.test_sms_center_copy'],
+        ['tests.test_sms_gateway_events', 'tests.test_ui_design_system'],
+    )),
+    ('static/sms-center.js', (
+        ['tests.test_sms_center_copy'],
+        ['tests.test_sms_gateway_events', 'tests.test_ui_design_system'],
+    )),
+    ('static/dashboard_live.js', (
+        # Node regressions for the dashboard sync coordinator and boot cache.
+        ['tests.test_dashboard_live'],
+        ['tests.test_ui_design_system', 'tests.test_static_caching'],
+    )),
+    ('static/dashboard_boot_cache.js', (
+        ['tests.test_dashboard_live'],
+        ['tests.test_ui_design_system', 'tests.test_static_caching'],
+    )),
+    ('templates/dashboard.html', (
+        ['tests.test_dashboard_live', 'tests.test_renew_ui_state'],
+        ['tests.test_ui_design_system', 'tests.test_subscription_scope',
+         'tests.test_static_deploy_contract'],
+    )),
     ('templates/', (
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
         ['tests.test_subscription_scope', 'tests.test_static_deploy_contract',
