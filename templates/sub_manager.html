@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Sub Manager{% endblock %}
-{% block page_title %}Subscription Page Manager{% endblock %}
+{% block title %}{{ _('Sub Manager') }}{% endblock %}
+{% block page_title %}{{ _('Subscription Page Manager') }}{% endblock %}
 
 {% block header_actions %}
 {% endblock %}
@@ -10,11 +10,11 @@
     <div class="settings-sidebar">
         <button class="settings-tab active" onclick="switchTab('apps')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
-            Applications
+            {{ _('Applications') }}
         </button>
         <button class="settings-tab" onclick="switchTab('statistics')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16V5"/></svg>
-            Statistics
+            {{ _('Statistics') }}
         </button>
         <button class="settings-tab" onclick="switchTab('faq')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
@@ -22,20 +22,20 @@
         </button>
         <button class="settings-tab" onclick="switchTab('contact')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-            Contact Info
+            {{ _('Contact Info') }}
         </button>
 
         <button class="settings-tab" onclick="switchTab('announcements')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v11a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V4z"/><path d="M8 22h8"/><path d="M12 15v-3"/><path d="M12 6h.01"/></svg>
-            Announcement
+            {{ _('Announcement') }}
         </button>
         <button class="settings-tab" onclick="switchTab('online_chat')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            Online Chat
+            {{ _('Online Chat') }}
         </button>
         <button class="settings-tab" onclick="switchTab('backup_config')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Backup Config
+            {{ _('Backup Config') }}
         </button>
     </div>
 
@@ -44,12 +44,12 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h2>Applications</h2>
-                        <p class="text-secondary">Manage client applications shown on the subscription page.</p>
+                        <h2>{{ _('Applications') }}</h2>
+                        <p class="text-secondary">{{ _('Manage client applications shown on the subscription page.') }}</p>
                     </div>
                     <button class="btn btn-success" onclick="openAddModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        Add New App
+                        {{ _('Add New App') }}
                     </button>
                 </div>
                 <div id="apps-container" class="servers-grid"></div>
@@ -60,14 +60,14 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h2>Subscription Statistics</h2>
-                        <p class="text-secondary">Add a live account summary as the last config inside subscription apps.</p>
+                        <h2>{{ _('Subscription Statistics') }}</h2>
+                        <p class="text-secondary">{{ _('Add a live account summary as the last config inside subscription apps.') }}</p>
                     </div>
                 </div>
 
                 <div class="statistics-safety-note">
-                    <strong>This entry is connectable.</strong>
-                    It clones the first valid config of each user and changes only its display name. It is never added to the manual configuration list on the web page.
+                    <strong>{{ _('This entry is connectable.') }}</strong>
+                    {{ _('It clones the first valid config of each user and changes only its display name. It is never added to the manual configuration list on the web page.') }}
                 </div>
 
                 <label class="form-group form-toggle-item" style="cursor:pointer;">
@@ -75,37 +75,37 @@
                         <input type="checkbox" id="statistics-enabled" {% if statistics_enabled %}checked{% endif %} onchange="updateStatisticsPreview()">
                         <span class="slider"></span>
                     </div>
-                    <span>Show statistics config in subscription apps</span>
+                    <span>{{ _('Show statistics config in subscription apps') }}</span>
                 </label>
 
                 <div class="form-group">
-                    <label>Persian name template</label>
+                    <label>{{ _('Persian name template') }}</label>
                     <textarea id="statistics-template-fa" class="form-input" rows="3" maxlength="500" dir="rtl" onfocus="setStatisticsTemplateTarget('statistics-template-fa')" oninput="updateStatisticsPreview()">{{ statistics_template_fa }}</textarea>
                 </div>
 
                 <div class="form-group">
-                    <label>English name template</label>
+                    <label>{{ _('English name template') }}</label>
                     <textarea id="statistics-template-en" class="form-input" rows="3" maxlength="500" dir="ltr" onfocus="setStatisticsTemplateTarget('statistics-template-en')" oninput="updateStatisticsPreview()">{{ statistics_template_en }}</textarea>
-                    <small style="color:var(--text-secondary);">The active subscription-page language selects which template is used.</small>
+                    <small style="color:var(--text-secondary);">{{ _('The active subscription-page language selects which template is used.') }}</small>
                 </div>
 
                 <div class="form-group">
-                    <label>Available variables</label>
+                    <label>{{ _('Available variables') }}</label>
                     <div class="statistics-tokens">
                         {% for token in ['emoji', 'status', 'renewal', 'days', 'volume', 'remaining_volume', 'total_volume', 'used_volume', 'expiry', 'expiry_type', 'email'] %}
                         <button type="button" class="statistics-token" onclick="insertStatisticsToken('{{ token }}')">&#123;{{ token }}&#125;</button>
                         {% endfor %}
                     </div>
-                    <small style="color:var(--text-secondary);">Examples: <code>{expiry}</code> can become “31 days after first connection”; <code>{renewal}</code> shows whether renewal is required.</small>
+                    <small style="color:var(--text-secondary);">{{ _('Examples:') }} <code>{expiry}</code> {{ _('can become “31 days after first connection”;') }} <code>{renewal}</code> {{ _('shows whether renewal is required.') }}</small>
                 </div>
 
                 <div class="form-group">
-                    <label>Live preview</label>
+                    <label>{{ _('Live preview') }}</label>
                     <div id="statistics-preview" class="statistics-preview" dir="auto"></div>
                 </div>
 
                 <div class="form-actions" style="display:flex;justify-content:flex-end;">
-                    <button type="button" class="btn btn-primary" onclick="saveSubscriptionStatistics()">Save Statistics</button>
+                    <button type="button" class="btn btn-primary" onclick="saveSubscriptionStatistics()">{{ _('Save Statistics') }}</button>
                 </div>
             </div>
         </div>
@@ -114,12 +114,12 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h2>FAQ Management</h2>
-                        <p class="text-secondary">Manage frequently asked questions.</p>
+                        <h2>{{ _('FAQ Management') }}</h2>
+                        <p class="text-secondary">{{ _('Manage frequently asked questions.') }}</p>
                     </div>
                     <button class="btn btn-success" onclick="openAddFAQModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        Add New FAQ
+                        {{ _('Add New FAQ') }}
                     </button>
                 </div>
                 <div id="faqs-container" class="servers-grid"></div>
@@ -130,86 +130,86 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h2>Support Contact Information</h2>
-                        <p class="text-secondary">Set the support contact details for the subscription page.</p>
+                        <h2>{{ _('Support Contact Information') }}</h2>
+                        <p class="text-secondary">{{ _('Set the support contact details for the subscription page.') }}</p>
                     </div>
                 </div>
                 <div style="padding: 0;">
                     <div class="form-group">
-                        <label>Telegram Support ID (without @)</label>
+                        <label>{{ _('Telegram Support ID (without @)') }}</label>
                         <div style="position: relative;">
                             <span style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-secondary);">@</span>
-                            <input type="text" id="support-telegram" class="form-input" style="padding-left: 30px;" value="{{ support_telegram }}" placeholder="username">
+                            <input type="text" id="support-telegram" class="form-input" style="padding-left: 30px;" value="{{ support_telegram }}" placeholder="{{ _('username') }}">
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>WhatsApp Support Number</label>
-                        <input type="text" id="support-whatsapp" class="form-input" value="{{ support_whatsapp }}" placeholder="e.g., 989123456789">
-                        <small style="color: var(--text-secondary);">Enter number with country code (e.g., 98...)</small>
+                        <label>{{ _('WhatsApp Support Number') }}</label>
+                        <input type="text" id="support-whatsapp" class="form-input" value="{{ support_whatsapp }}" placeholder="{{ _('e.g., 989123456789') }}">
+                        <small style="color: var(--text-secondary);">{{ _('Enter number with country code (e.g., 98...)') }}</small>
                     </div>
                     <div class="form-group">
-                        <label>SMS Support Number</label>
-                        <input type="text" id="support-sms" class="form-input" value="{{ support_sms }}" placeholder="e.g., 09123456789 or +989123456789">
-                        <small style="color: var(--text-secondary);">Shown as an SMS button on the subscription page. Leave empty to hide it.</small>
+                        <label>{{ _('SMS Support Number') }}</label>
+                        <input type="text" id="support-sms" class="form-input" value="{{ support_sms }}" placeholder="{{ _('e.g., 09123456789 or +989123456789') }}">
+                        <small style="color: var(--text-secondary);">{{ _('Shown as an SMS button on the subscription page. Leave empty to hide it.') }}</small>
                     </div>
 
                     <div class="form-group">
-                        <label>Telegram Channel Link</label>
+                        <label>{{ _('Telegram Channel Link') }}</label>
                         <input type="text" id="channel-telegram" class="form-input" value="{{ channel_telegram }}" placeholder="https://t.me/yourchannel">
-                        <small style="color: var(--text-secondary);">You can also enter just the channel id (without @).</small>
+                        <small style="color: var(--text-secondary);">{{ _('You can also enter just the channel id (without @).') }}</small>
                     </div>
                     <div class="form-group">
-                        <label>WhatsApp Channel Link</label>
+                        <label>{{ _('WhatsApp Channel Link') }}</label>
                         <input type="text" id="channel-whatsapp" class="form-input" value="{{ channel_whatsapp }}" placeholder="https://whatsapp.com/channel/...">
-                        <small style="color: var(--text-secondary);">Paste the full WhatsApp Channel link.</small>
+                        <small style="color: var(--text-secondary);">{{ _('Paste the full WhatsApp Channel link.') }}</small>
                     </div>
 
                     <hr style="border: none; border-top: 1px solid var(--border-color); margin: 20px 0;">
 
                     <div class="form-group">
-                        <h3 style="margin: 0 0 6px 0;">WhatsApp Automation</h3>
-                        <small style="color: var(--text-secondary);">If deployment region is Iran, this feature is blocked and cannot be enabled.</small>
+                        <h3 style="margin: 0 0 6px 0;">{{ _('WhatsApp Automation') }}</h3>
+                        <small style="color: var(--text-secondary);">{{ _('If deployment region is Iran, this feature is blocked and cannot be enabled.') }}</small>
                     </div>
 
                     <div id="whatsapp-region-warning" class="form-group" style="display: none; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px;">
-                        <strong>Unavailable on Iran deployment:</strong>
-                        <div style="margin-top: 4px;">Your panel server is in Iran, so WhatsApp automation cannot be used.</div>
+                        <strong>{{ _('Unavailable on Iran deployment:') }}</strong>
+                        <div style="margin-top: 4px;">{{ _('Your panel server is in Iran, so WhatsApp automation cannot be used.') }}</div>
                     </div>
 
                     <div class="form-group">
-                        <label>Deployment Region</label>
+                        <label>{{ _('Deployment Region') }}</label>
                         <select id="whatsapp-deployment-region" class="form-input" onchange="applyWhatsappRegionState()">
-                            <option value="outside" {% if whatsapp_deployment_region != 'iran' %}selected{% endif %}>Outside Iran</option>
-                            <option value="iran" {% if whatsapp_deployment_region == 'iran' %}selected{% endif %}>Iran</option>
+                            <option value="outside" {% if whatsapp_deployment_region != 'iran' %}selected{% endif %}>{{ _('Outside Iran') }}</option>
+                            <option value="iran" {% if whatsapp_deployment_region == 'iran' %}selected{% endif %}>{{ _('Iran') }}</option>
                         </select>
                     </div>
 
                     <div class="form-group">
-                        <label>Provider</label>
+                        <label>{{ _('Provider') }}</label>
                         <select id="whatsapp-provider" class="form-input">
                             <option value="baileys" {% if whatsapp_provider == 'baileys' %}selected{% endif %}>Baileys</option>
-                            <option value="cloud" {% if whatsapp_provider == 'cloud' %}selected{% endif %}>WhatsApp Cloud API</option>
+                            <option value="cloud" {% if whatsapp_provider == 'cloud' %}selected{% endif %}>{{ _('WhatsApp Cloud API') }}</option>
                         </select>
                     </div>
 
                     <div class="form-group">
-                        <label>Gateway URL</label>
+                        <label>{{ _('Gateway URL') }}</label>
                         <input type="text" id="whatsapp-gateway-url" class="form-input" value="{{ whatsapp_gateway_url }}" placeholder="https://wa-gateway.example.com">
-                        <small style="color: var(--text-secondary);">Gateway must expose /health and /send endpoints.</small>
+                        <small style="color: var(--text-secondary);">{{ _('Gateway must expose /health and /send endpoints.') }}</small>
                     </div>
 
                     <div class="form-group">
-                        <label>Gateway API Key (optional)</label>
-                        <input type="text" id="whatsapp-gateway-api-key" class="form-input" value="{{ whatsapp_gateway_api_key }}" placeholder="Bearer token for gateway">
+                        <label>{{ _('Gateway API Key (optional)') }}</label>
+                        <input type="text" id="whatsapp-gateway-api-key" class="form-input" value="{{ whatsapp_gateway_api_key }}" placeholder="{{ _('Bearer token for gateway') }}">
                     </div>
 
                     <div class="form-group">
-                        <label>Gateway Timeout (seconds)</label>
+                        <label>{{ _('Gateway Timeout (seconds)') }}</label>
                         <input type="number" id="whatsapp-gateway-timeout" class="form-input" min="3" max="60" value="{{ whatsapp_gateway_timeout_seconds }}">
                     </div>
 
                     <div class="form-group" style="margin-top: -8px; display: flex; justify-content: flex-end;">
-                        <button id="whatsapp-test-connection" class="btn btn-secondary" type="button" onclick="testWhatsappConnection()">Test WhatsApp Connection</button>
+                        <button id="whatsapp-test-connection" class="btn btn-secondary" type="button" onclick="testWhatsappConnection()">{{ _('Test WhatsApp Connection') }}</button>
                     </div>
 
                     <label class="form-group form-toggle-item" style="cursor: pointer;">
@@ -217,47 +217,47 @@
                             <input type="checkbox" id="whatsapp-enabled" {% if whatsapp_enabled %}checked{% endif %}>
                             <span class="slider"></span>
                         </div>
-                        <span>Enable WhatsApp Automation</span>
+                        <span>{{ _('Enable WhatsApp Automation') }}</span>
                     </label>
 
                     <div class="form-group" style="margin-top: -10px;">
-                        <label style="margin-bottom: 8px;">Triggers</label>
+                        <label style="margin-bottom: 8px;">{{ _('Triggers') }}</label>
                         <label class="checkbox-label" style="margin-bottom: 8px !important;" onclick="event.stopPropagation()">
                             <input type="checkbox" id="whatsapp-trigger-renew" {% if whatsapp_trigger_renew_success %}checked{% endif %}>
                             <span class="checkmark"></span>
-                            <span>After successful renewal</span>
+                            <span>{{ _('After successful renewal') }}</span>
                         </label>
                         <label class="checkbox-label" style="margin-bottom: 8px !important;" onclick="event.stopPropagation()">
                             <input type="checkbox" id="whatsapp-trigger-welcome" {% if whatsapp_trigger_welcome %}checked{% endif %}>
                             <span class="checkmark"></span>
-                            <span>Welcome message (new activation)</span>
+                            <span>{{ _('Welcome message (new activation)') }}</span>
                         </label>
                         <label class="checkbox-label" style="margin-bottom: 0 !important;" onclick="event.stopPropagation()">
                             <input type="checkbox" id="whatsapp-trigger-pre-expiry" {% if whatsapp_trigger_pre_expiry %}checked{% endif %}>
                             <span class="checkmark"></span>
-                            <span>Pre-expiry reminder</span>
+                            <span>{{ _('Pre-expiry reminder') }}</span>
                         </label>
                     </div>
 
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
                         <div class="form-group" style="margin-bottom: 0;">
-                            <label>Min Interval (seconds)</label>
+                            <label>{{ _('Min Interval (seconds)') }}</label>
                             <input type="number" id="whatsapp-min-interval" class="form-input" min="45" max="3600" value="{{ whatsapp_min_interval_seconds }}">
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
-                            <label>Daily Limit</label>
+                            <label>{{ _('Daily Limit') }}</label>
                             <input type="number" id="whatsapp-daily-limit" class="form-input" min="1" max="50000" value="{{ whatsapp_daily_limit }}">
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
-                            <label>Pre-expiry (hours)</label>
+                            <label>{{ _('Pre-expiry (hours)') }}</label>
                             <input type="number" id="whatsapp-pre-expiry-hours" class="form-input" min="1" max="720" value="{{ whatsapp_pre_expiry_hours }}">
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
-                            <label>Retry Count</label>
+                            <label>{{ _('Retry Count') }}</label>
                             <input type="number" id="whatsapp-retry-count" class="form-input" min="0" max="10" value="{{ whatsapp_retry_count }}">
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
-                            <label>Backoff (seconds)</label>
+                            <label>{{ _('Backoff (seconds)') }}</label>
                             <input type="number" id="whatsapp-backoff-seconds" class="form-input" min="5" max="3600" value="{{ whatsapp_backoff_seconds }}">
                         </div>
                     </div>
@@ -267,23 +267,23 @@
                             <input type="checkbox" id="whatsapp-circuit-breaker" {% if whatsapp_circuit_breaker %}checked{% endif %}>
                             <span class="slider"></span>
                         </div>
-                        <span>Circuit Breaker (stop sends on repeated failures)</span>
+                        <span>{{ _('Circuit Breaker (stop sends on repeated failures)') }}</span>
                     </label>
 
                     <div class="form-group">
-                        <label>Renew Template</label>
-                        <textarea id="whatsapp-template-renew" class="form-input" rows="2" placeholder="{{ 'سلام {user}، تمدید شما با موفقیت انجام شد.' if panel_lang == 'fa' else 'Hello {user}, your renewal was completed successfully.' }}">{{ whatsapp_template_renew }}</textarea>
+                        <label>{{ _('Renew Template') }}</label>
+                        <textarea id="whatsapp-template-renew" class="form-input" rows="2" placeholder="{{ _('Hello {user}, your renewal was completed successfully.') }}">{{ whatsapp_template_renew }}</textarea>
                     </div>
                     <div class="form-group">
-                        <label>Welcome Template</label>
-                        <textarea id="whatsapp-template-welcome" class="form-input" rows="2" placeholder="{{ 'سلام {user}، اشتراک شما فعال شد.' if panel_lang == 'fa' else 'Hello {user}, your subscription is active.' }}">{{ whatsapp_template_welcome }}</textarea>
+                        <label>{{ _('Welcome Template') }}</label>
+                        <textarea id="whatsapp-template-welcome" class="form-input" rows="2" placeholder="{{ _('Hello {user}, your subscription is active.') }}">{{ whatsapp_template_welcome }}</textarea>
                     </div>
                     <div class="form-group">
-                        <label>Pre-expiry Template</label>
-                        <textarea id="whatsapp-template-pre-expiry" class="form-input" rows="2" placeholder="{{ 'سلام {user}، اشتراک شما تا {time_left} دیگر منقضی می‌شود.' if panel_lang == 'fa' else 'Hello {user}, your subscription expires in {time_left}.' }}">{{ whatsapp_template_pre_expiry }}</textarea>
+                        <label>{{ _('Pre-expiry Template') }}</label>
+                        <textarea id="whatsapp-template-pre-expiry" class="form-input" rows="2" placeholder="{{ _('Hello {user}, your subscription expires in {time_left}.') }}">{{ whatsapp_template_pre_expiry }}</textarea>
                     </div>
                     <div class="form-actions" style="display: flex; justify-content: flex-end;">
-                        <button class="btn btn-primary" onclick="saveContactInfo()">Save Contact & WhatsApp Settings</button>
+                        <button class="btn btn-primary" onclick="saveContactInfo()">{{ _('Save Contact & WhatsApp Settings') }}</button>
                     </div>
                 </div>
             </div>
@@ -293,12 +293,12 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h2>Announcements</h2>
-                        <p class="text-secondary">Create server-scoped announcements shown on the subscription page.</p>
+                        <h2>{{ _('Announcements') }}</h2>
+                        <p class="text-secondary">{{ _('Create server-scoped announcements shown on the subscription page.') }}</p>
                     </div>
                     <button class="btn btn-success" onclick="openAddAnnouncementModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        Add Announcement
+                        {{ _('Add Announcement') }}
                     </button>
                 </div>
                 <div id="announcements-container" class="servers-grid"></div>
@@ -309,12 +309,12 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h2>Online Chat Scripts</h2>
-                        <p class="text-secondary">Add/edit chat widget snippets. Activate one script to load on subscription page.</p>
+                        <h2>{{ _('Online Chat Scripts') }}</h2>
+                        <p class="text-secondary">{{ _('Add/edit chat widget snippets. Activate one script to load on subscription page.') }}</p>
                     </div>
                     <button class="btn btn-success" onclick="openAddOnlineChatModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        Add Chat Script
+                        {{ _('Add Chat Script') }}
                     </button>
                 </div>
                 <div id="online-chat-container" class="servers-grid"></div>
@@ -325,12 +325,12 @@
             <div class="panel-card">
                 <div class="panel-card-header">
                     <div class="header-content">
-                        <h2>Backup Config</h2>
-                        <p class="text-secondary">{{ 'کانفیگ‌های پشتیبان که زیر پروفایل کاربر در صفحه اشتراک نمایش داده می‌شوند و قابل کپی هستند.' if panel_lang == 'fa' else 'Backup configurations shown below the client profile on the subscription page and available for copying.' }}</p>
+                        <h2>{{ _('Backup Config') }}</h2>
+                        <p class="text-secondary">{{ _('Backup configurations shown below the client profile on the subscription page and available for copying.') }}</p>
                     </div>
                     <button class="btn btn-success" onclick="openBackupConfigModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        Add Config
+                        {{ _('Add Config') }}
                     </button>
                 </div>
                 <div id="backup-config-container" class="servers-grid"></div>
@@ -343,34 +343,34 @@
 <div class="modal-overlay hidden" id="backup-config-modal">
     <div class="modal modal-md">
         <div class="modal-header">
-            <h2 id="bc-modal-title">Add Backup Config</h2>
+            <h2 id="bc-modal-title">{{ _('Add Backup Config') }}</h2>
             <button class="modal-close" onclick="closeBackupConfigModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="bc-id">
 
             <div class="form-group">
-                <label>Server <small style="color:var(--text-secondary); font-weight:normal;">(optional — leave empty to show on all servers)</small></label>
+                <label>{{ _('Server') }} <small style="color:var(--text-secondary); font-weight:normal;">{{ _('(optional — leave empty to show on all servers)') }}</small></label>
                 <select id="bc-server-id" class="form-select">
-                    <option value="">— All servers —</option>
+                    <option value="">{{ _('— All servers —') }}</option>
                 </select>
             </div>
 
             <div class="form-group">
-                <label>Title <span style="color:var(--danger);">*</span></label>
-                <input type="text" id="bc-title" class="form-input" placeholder="e.g. Iran Backup">
+                <label>{{ _('Title') }} <span style="color:var(--danger);">*</span></label>
+                <input type="text" id="bc-title" class="form-input" placeholder="{{ _('e.g. Iran Backup') }}">
             </div>
 
             <div class="form-group">
-                <label>Config URL <span style="color:var(--danger);">*</span></label>
-                <textarea id="bc-config-url" class="form-input" rows="3" placeholder="vmess://... or vless://... or trojan://..." style="font-family: monospace; font-size: 0.8rem; resize: vertical;"></textarea>
+                <label>{{ _('Config URL') }} <span style="color:var(--danger);">*</span></label>
+                <textarea id="bc-config-url" class="form-input" rows="3" placeholder="{{ _('vmess://... or vless://... or trojan://...') }}" style="font-family: monospace; font-size: 0.8rem; resize: vertical;"></textarea>
             </div>
 
             <div class="form-group">
-                <label>Description <small style="color:var(--text-secondary); font-weight:normal;">(shown as info text to users)</small></label>
-                <textarea id="bc-description" class="form-input" rows="5" placeholder="Describe when and how to use this backup config..." style="resize:vertical;"></textarea>
+                <label>{{ _('Description') }} <small style="color:var(--text-secondary); font-weight:normal;">{{ _('(shown as info text to users)') }}</small></label>
+                <textarea id="bc-description" class="form-input" rows="5" placeholder="{{ _('Describe when and how to use this backup config...') }}" style="resize:vertical;"></textarea>
                 <small style="color:var(--text-secondary); display:block; margin-top:6px;">
-                    <a href="#" onclick="event.preventDefault(); document.getElementById('bc-description').value = window._bcDefaultDesc || ''" style="color:var(--primary);">Reset to default text</a>
+                    <a href="#" onclick="event.preventDefault(); document.getElementById('bc-description').value = window._bcDefaultDesc || ''" style="color:var(--primary);">{{ _('Reset to default text') }}</a>
                 </small>
             </div>
 
@@ -380,10 +380,10 @@
                         <input type="checkbox" id="bc-is-enabled" checked>
                         <span class="slider"></span>
                     </div>
-                    <span>Enabled</span>
+                    <span>{{ _('Enabled') }}</span>
                 </label>
                 <div class="form-group" style="margin:0;">
-                    <label>Sort Order</label>
+                    <label>{{ _('Sort Order') }}</label>
                     <input type="number" id="bc-sort-order" class="form-input" value="0" min="0" style="height:42px;">
                 </div>
             </div>
@@ -391,8 +391,8 @@
         <div class="modal-footer">
             <span></span>
             <div style="display:flex; gap:10px;">
-                <button class="btn btn-secondary" onclick="closeBackupConfigModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveBackupConfig()">Save</button>
+                <button class="btn btn-secondary" onclick="closeBackupConfigModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" onclick="saveBackupConfig()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -1101,7 +1101,7 @@
 <div class="modal-overlay hidden" id="edit-app-modal">
     <div class="modal modal-lg">
         <div class="modal-header">
-            <h2 id="modal-title">Edit App</h2>
+            <h2 id="modal-title">{{ _('Edit App') }}</h2>
             <button class="modal-close" onclick="closeEditModal()">&times;</button>
         </div>
         <div class="modal-body">
@@ -1109,7 +1109,7 @@
             
             <div style="display: flex; gap: 15px; align-items: flex-end; margin-bottom: 20px;">
                 <div class="form-group" style="flex: 0 0 150px;">
-                    <label style="color: var(--primary); font-weight: bold; margin-bottom: 5px; display: block;">OS Type</label>
+                    <label style="color: var(--primary); font-weight: bold; margin-bottom: 5px; display: block;">{{ _('OS Type') }}</label>
                     <select id="edit-os-type" class="form-input">
                         <option value="android">Android</option>
                         <option value="ios">iOS</option>
@@ -1118,8 +1118,8 @@
                 </div>
 
                 <div class="form-group" style="flex: 1;">
-                    <label style="color: var(--primary); font-weight: bold; margin-bottom: 5px; display: block;">App Name</label>
-                    <input type="text" id="edit-app-name" class="form-input" placeholder="Display Name">
+                    <label style="color: var(--primary); font-weight: bold; margin-bottom: 5px; display: block;">{{ _('App Name') }}</label>
+                    <input type="text" id="edit-app-name" class="form-input" placeholder="{{ _('Display Name') }}">
                 </div>
 
                 <label class="form-group form-toggle-item" style="margin-bottom: 0; padding-bottom: 12px; cursor: pointer;">
@@ -1127,30 +1127,30 @@
                         <input type="checkbox" id="edit-enabled">
                         <span class="slider"></span>
                     </div>
-                    <span>Show in Sub Page</span>
+                    <span>{{ _('Show in Sub Page') }}</span>
                 </label>
             </div>
 
             <div style="display: flex; gap: 20px; margin-bottom: 20px;">
                 <div style="flex: 1;">
-                    <h4 style="color: #4ade80; margin-bottom: 10px;">Persian Content</h4>
+                    <h4 style="color: #4ade80; margin-bottom: 10px;">{{ _('Persian Content') }}</h4>
                     <div class="form-group">
-                        <label>Title (FA)</label>
+                        <label>{{ _('Title (FA)') }}</label>
                         <input type="text" id="edit-title-fa" class="form-input" dir="rtl">
                     </div>
                     <div class="form-group">
-                        <label>Description (FA)</label>
+                        <label>{{ _('Description (FA)') }}</label>
                         <textarea id="edit-desc-fa" class="form-input" rows="4" dir="rtl" style="width:100%; background:var(--bg-dark); color:white; border:1px solid var(--border-color); border-radius:8px; padding:10px;"></textarea>
                     </div>
                 </div>
                 <div style="flex: 1;">
-                    <h4 style="color: #60a5fa; margin-bottom: 10px;">English Content</h4>
+                    <h4 style="color: #60a5fa; margin-bottom: 10px;">{{ _('English Content') }}</h4>
                     <div class="form-group">
-                        <label>Title (EN)</label>
+                        <label>{{ _('Title (EN)') }}</label>
                         <input type="text" id="edit-title-en" class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Description (EN)</label>
+                        <label>{{ _('Description (EN)') }}</label>
                         <textarea id="edit-desc-en" class="form-input" rows="4" style="width:100%; background:var(--bg-dark); color:white; border:1px solid var(--border-color); border-radius:8px; padding:10px;"></textarea>
                     </div>
                 </div>
@@ -1158,19 +1158,19 @@
 
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
                 <div>
-                    <h4 style="color:#fbbf24;margin:0 0 3px;">Action Buttons</h4>
-                    <small style="color:var(--text-secondary);">Add any number of titled links. Their order here is their order on the subscription page.</small>
+                    <h4 style="color:#fbbf24;margin:0 0 3px;">{{ _('Action Buttons') }}</h4>
+                    <small style="color:var(--text-secondary);">{{ _('Add any number of titled links. Their order here is their order on the subscription page.') }}</small>
                 </div>
-                <button type="button" class="btn btn-secondary" onclick="addAppActionButton()">+ Add Button</button>
+                <button type="button" class="btn btn-secondary" onclick="addAppActionButton()">{{ _('+ Add Button') }}</button>
             </div>
             <div id="edit-action-buttons" class="app-action-editor"></div>
             <div class="form-group">
-                <label>App Icon URL</label>
+                <label>{{ _('App Icon URL') }}</label>
                 <div class="link-input-row">
-                    <input type="text" id="edit-icon-url" class="form-input" placeholder="https://... or upload via Browse">
+                    <input type="text" id="edit-icon-url" class="form-input" placeholder="{{ _('https://... or upload via Browse') }}">
                     <button type="button" class="btn-browse" onclick="openFilePicker('edit-icon-url', ['image'])">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        Browse
+                        {{ _('Browse') }}
                     </button>
                 </div>
             </div>
@@ -1179,12 +1179,12 @@
                     <input type="checkbox" id="edit-recommended">
                     <span class="slider"></span>
                 </div>
-                <span>{{ 'علامت‌گذاری به‌عنوان پیشنهادی (نشان «پیشنهادی»)' if panel_lang == 'fa' else 'Mark as Recommended (shows the “Recommended” badge)' }}</span>
+                <span>{{ _('Mark as Recommended (shows the “Recommended” badge)') }}</span>
             </label>
 
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveApp()">Save Changes</button>
+                <button class="btn btn-secondary" onclick="closeEditModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" onclick="saveApp()">{{ _('Save Changes') }}</button>
             </div>
         </div>
     </div>
@@ -1212,7 +1212,7 @@
         <div class="modal-header" style="flex-shrink:0;">
             <h2 style="display:flex;align-items:center;gap:10px;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                File Manager
+                {{ _('File Manager') }}
             </h2>
             <button class="modal-close" onclick="closeFileManager()">&times;</button>
         </div>
@@ -1225,16 +1225,16 @@
              ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleFileDrop(event)">
             <input type="file" id="fm-file-input" style="display:none" multiple onchange="handleFileSelect(this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary);margin-bottom:8px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            <p style="margin:0;font-size:.9rem;color:var(--text-secondary);">Drag & drop or <strong style="color:var(--primary);">click to upload</strong></p>
-            <p style="margin:4px 0 0;font-size:.75rem;color:var(--text-secondary);opacity:.7;">APK · EXE · DMG · DEB · RPM · ZIP · MP4 · WebM · PNG — max 500 MB</p>
+            <p style="margin:0;font-size:.9rem;color:var(--text-secondary);">{{ _('Drag & drop or') }} <strong style="color:var(--primary);">{{ _('click to upload') }}</strong></p>
+            <p style="margin:4px 0 0;font-size:.75rem;color:var(--text-secondary);opacity:.7;">{{ _('APK · EXE · DMG · DEB · RPM · ZIP · MP4 · WebM · PNG — max 500 MB') }}</p>
         </div>
 
         <!-- Setup error banner (shown when upload directory is missing / not writable) -->
         <div id="fm-setup-banner" style="display:none;flex-shrink:0;margin:10px 20px 0;padding:12px 14px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:10px;font-size:.85rem;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                <strong style="color: var(--danger);">Upload directory error</strong>
-                <button onclick="runFmSetup()" style="margin-left:auto;padding:4px 10px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:6px;color: var(--danger);cursor:pointer;font-size:.78rem;font-family:inherit;">Fix Setup</button>
+                <strong style="color: var(--danger);">{{ _('Upload directory error') }}</strong>
+                <button onclick="runFmSetup()" style="margin-left:auto;padding:4px 10px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:6px;color: var(--danger);cursor:pointer;font-size:.78rem;font-family:inherit;">{{ _('Fix Setup') }}</button>
             </div>
             <div id="fm-setup-error-text" style="color:#fca5a5;white-space:pre-wrap;word-break:break-all;line-height:1.5;"></div>
         </div>
@@ -1252,18 +1252,18 @@
 
         <!-- Filter tabs -->
         <div id="fm-filters" style="flex-shrink:0;display:flex;gap:8px;padding:14px 20px 0;flex-wrap:wrap;">
-            <button class="fm-filter active" data-cat="all" onclick="setFmFilter('all',this)">All</button>
+            <button class="fm-filter active" data-cat="all" onclick="setFmFilter('all',this)">{{ _('All') }}</button>
             <button class="fm-filter" data-cat="android" onclick="setFmFilter('android',this)">Android</button>
             <button class="fm-filter" data-cat="windows" onclick="setFmFilter('windows',this)">Windows</button>
             <button class="fm-filter" data-cat="macos" onclick="setFmFilter('macos',this)">macOS</button>
             <button class="fm-filter" data-cat="linux" onclick="setFmFilter('linux',this)">Linux</button>
-            <button class="fm-filter" data-cat="video" onclick="setFmFilter('video',this)">Video</button>
-            <button class="fm-filter" data-cat="archive" onclick="setFmFilter('archive',this)">Archive</button>
-            <button class="fm-filter" data-cat="image" onclick="setFmFilter('image',this)">Image</button>
+            <button class="fm-filter" data-cat="video" onclick="setFmFilter('video',this)">{{ _('Video') }}</button>
+            <button class="fm-filter" data-cat="archive" onclick="setFmFilter('archive',this)">{{ _('Archive') }}</button>
+            <button class="fm-filter" data-cat="image" onclick="setFmFilter('image',this)">{{ _('Image') }}</button>
             <div class="fm-search-wrap">
                 <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-                <input type="search" id="fm-search" class="fm-search" placeholder="Search files..." autocomplete="off" oninput="setFmSearch(this.value)">
-                <button type="button" class="fm-search-clear" title="Clear search" onclick="clearFmSearch()">&times;</button>
+                <input type="search" id="fm-search" class="fm-search" placeholder="{{ _('Search files...') }}" autocomplete="off" oninput="setFmSearch(this.value)">
+                <button type="button" class="fm-search-clear" title="{{ _('Clear search') }}" onclick="clearFmSearch()">&times;</button>
             </div>
         </div>
 
@@ -1271,7 +1271,7 @@
         <div id="fm-grid" style="flex:1;overflow-y:auto;padding:14px 20px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;min-height:200px;">
             <div id="fm-empty" style="grid-column:1/-1;text-align:center;color:var(--text-secondary);padding:40px 0;display:none;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4;margin-bottom:10px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                <p id="fm-empty-text" style="margin:0;">No files yet. Upload one above.</p>
+                <p id="fm-empty-text" style="margin:0;">{{ _('No files yet. Upload one above.') }}</p>
             </div>
         </div>
     </div>
@@ -1346,16 +1346,16 @@
 <div class="modal-overlay hidden" id="edit-faq-modal">
     <div class="modal modal-lg" style="max-width: 800px;">
         <div class="modal-header">
-            <h2 id="faq-modal-title">Edit FAQ</h2>
+            <h2 id="faq-modal-title">{{ _('Edit FAQ') }}</h2>
             <button class="modal-close" onclick="closeFAQModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-faq-id">
             
             <div class="form-group">
-                <label>Platform</label>
+                <label>{{ _('Platform') }}</label>
                 <select id="edit-faq-platform" class="form-select" style="width: 100%; padding: 10px; background: var(--bg-dark); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px;">
-                    <option value="general">General (all platforms)</option>
+                    <option value="general">{{ _('General (all platforms)') }}</option>
                     <option value="android">Android</option>
                     <option value="ios">iOS</option>
                     <option value="windows">Windows</option>
@@ -1363,52 +1363,52 @@
             </div>
             
             <div class="form-group">
-                <label>Title</label>
-                <input type="text" id="edit-faq-title" class="form-input" placeholder="FAQ Title">
+                <label>{{ _('Title') }}</label>
+                <input type="text" id="edit-faq-title" class="form-input" placeholder="{{ _('FAQ Title') }}">
             </div>
 
             <div class="form-group">
-                <label>Content</label>
+                <label>{{ _('Content') }}</label>
                 <div id="editor-container" style="height: 200px; background: var(--bg-dark); color: white;"></div>
             </div>
 
             <div class="form-group">
-                <label>Image</label>
-                <input type="text" id="edit-faq-image" class="form-input" placeholder="Image URL" style="margin-bottom: 10px;">
+                <label>{{ _('Image') }}</label>
+                <input type="text" id="edit-faq-image" class="form-input" placeholder="{{ _('Image URL') }}" style="margin-bottom: 10px;">
                 
                 <div class="file-upload-wrapper" id="faq-upload-container">
                     <div class="file-upload-btn" id="faq-upload-btn">
-                        <span class="btn-text">Choose File</span>
+                        <span class="btn-text">{{ _('Choose File') }}</span>
                         <span class="btn-loading hidden">
                             <svg class="animate-spin" width="16" height="16" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            Uploading...
+                            {{ _('Uploading...') }}
                         </span>
                     </div>
-                    <div class="file-upload-text" id="faq-file-name">No file chosen</div>
+                    <div class="file-upload-text" id="faq-file-name">{{ _('No file chosen') }}</div>
                     <input type="file" id="faq-image-upload" class="file-upload-input" accept="image/*" onchange="uploadFAQImage(this)">
                 </div>
-                <p style="margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary);">SVG, PNG, JPG or GIF (MAX. 800x400px).</p>
+                <p style="margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary);">{{ _('SVG, PNG, JPG or GIF (MAX. 800x400px).') }}</p>
             </div>
 
             <div class="form-group">
-                <label>Video</label>
-                <input type="text" id="edit-faq-video" class="form-input" placeholder="Video URL (optional)" style="margin-bottom: 10px;">
+                <label>{{ _('Video') }}</label>
+                <input type="text" id="edit-faq-video" class="form-input" placeholder="{{ _('Video URL (optional)') }}" style="margin-bottom: 10px;">
 
                 <div class="file-upload-wrapper" id="faq-video-upload-container">
                     <div class="file-upload-btn" id="faq-video-upload-btn">
-                        <span class="btn-text">Browse Video</span>
+                        <span class="btn-text">{{ _('Browse Video') }}</span>
                         <span class="btn-loading hidden">
                             <svg class="animate-spin" width="16" height="16" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            Uploading...
+                            {{ _('Uploading...') }}
                         </span>
                     </div>
-                    <div class="file-upload-text" id="faq-video-file-name">No file chosen</div>
+                    <div class="file-upload-text" id="faq-video-file-name">{{ _('No file chosen') }}</div>
                     <input type="file" id="faq-video-upload" class="file-upload-input" accept="video/mp4,video/webm,video/x-matroska,video/quicktime,.mp4,.webm,.mkv,.mov" onchange="uploadFAQVideo(this)">
                 </div>
                 <div id="faq-video-progress" style="display:none; margin-top:8px;">
@@ -1417,7 +1417,7 @@
                     </div>
                     <div id="faq-video-progress-text" style="margin-top:4px;font-size:0.72rem;color:var(--text-secondary);"></div>
                 </div>
-                <p style="margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary);">Paste a URL, or browse to upload MP4 / WEBM / MKV / MOV (max 500 MB).</p>
+                <p style="margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary);">{{ _('Paste a URL, or browse to upload MP4 / WEBM / MKV / MOV (max 500 MB).') }}</p>
             </div>
 
             <label class="form-group form-toggle-item" style="margin-bottom: 20px; cursor: pointer;">
@@ -1425,12 +1425,12 @@
                     <input type="checkbox" id="edit-faq-enabled">
                     <span class="slider"></span>
                 </div>
-                <span>Visible</span>
+                <span>{{ _('Visible') }}</span>
             </label>
 
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeFAQModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveFAQ()">Save Changes</button>
+                <button class="btn btn-secondary" onclick="closeFAQModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" onclick="saveFAQ()">{{ _('Save Changes') }}</button>
             </div>
         </div>
     </div>
@@ -1439,25 +1439,25 @@
 <div class="modal-overlay hidden" id="announcement-modal">
     <div class="modal" style="max-width: 720px;">
         <div class="modal-header">
-            <h2 id="announcement-modal-title">Add Announcement</h2>
+            <h2 id="announcement-modal-title">{{ _('Add Announcement') }}</h2>
             <button class="modal-close" onclick="closeAnnouncementModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="announcement-id">
 
             <div class="form-group">
-                <label>Announcement type</label>
+                <label>{{ _('Announcement type') }}</label>
                 <select id="announcement-channel" class="form-input" onchange="annOnChannelChange()">
-                    <option value="subscription">Subscription page</option>
-                    <option value="sms">SMS campaign</option>
-                    <option value="whatsapp">WhatsApp campaign</option>
-                    <option value="telegram">Telegram campaign</option>
+                    <option value="subscription">{{ _('Subscription page') }}</option>
+                    <option value="sms">{{ _('SMS campaign') }}</option>
+                    <option value="whatsapp">{{ _('WhatsApp campaign') }}</option>
+                    <option value="telegram">{{ _('Telegram campaign') }}</option>
                 </select>
-                <small style="color:var(--text-secondary);">Outbound campaigns are saved as drafts. Sending starts only after your confirmation.</small>
+                <small style="color:var(--text-secondary);">{{ _('Outbound campaigns are saved as drafts. Sending starts only after your confirmation.') }}</small>
             </div>
 
             <div class="form-group" id="announcement-rich-message-wrap">
-                <label>Message</label>
+                <label>{{ _('Message') }}</label>
                 <div id="ann-quill-container" style="border-radius:8px;overflow:hidden;border:1px solid var(--border-color);">
                     <div id="ann-quill-editor" style="min-height:120px;direction:rtl;"></div>
                 </div>
@@ -1465,8 +1465,8 @@
             </div>
 
             <div class="form-group" id="announcement-outbound-message-wrap" style="display:none;">
-                <label>Personalized message</label>
-                <textarea id="announcement-outbound-message" class="form-input" rows="8" dir="rtl" maxlength="8000" oninput="annUpdateMessageCounter()" placeholder="Write the message and insert customer variables below..."></textarea>
+                <label>{{ _('Personalized message') }}</label>
+                <textarea id="announcement-outbound-message" class="form-input" rows="8" dir="rtl" maxlength="8000" oninput="annUpdateMessageCounter()" placeholder="{{ _('Write the message and insert customer variables below...') }}"></textarea>
                 <div id="announcement-variable-chips" style="display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;"></div>
                 <div id="announcement-message-counter" style="font-size:.8rem;color:var(--text-secondary);margin-top:8px;"></div>
             </div>
@@ -1474,27 +1474,27 @@
             <div id="announcement-subscription-options">
             <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:10px;">
                 <div>
-                    <h4 style="color:#fbbf24;margin:0 0 3px;">Action Buttons</h4>
-                    <small style="color:var(--text-secondary);">Add titled links and arrange them exactly as they should appear below the announcement.</small>
+                    <h4 style="color:#fbbf24;margin:0 0 3px;">{{ _('Action Buttons') }}</h4>
+                    <small style="color:var(--text-secondary);">{{ _('Add titled links and arrange them exactly as they should appear below the announcement.') }}</small>
                 </div>
-                <button type="button" class="btn btn-secondary" onclick="addAnnouncementActionButton()">+ Add Button</button>
+                <button type="button" class="btn btn-secondary" onclick="addAnnouncementActionButton()">{{ _('+ Add Button') }}</button>
             </div>
             <div id="announcement-action-buttons" class="app-action-editor"></div>
             <div class="form-group" style="max-width:260px;">
-                <label>Button grid</label>
+                <label>{{ _('Button grid') }}</label>
                 <select id="announcement-button-columns" class="form-input">
-                    <option value="1">Single column (full width)</option>
-                    <option value="2">Two columns</option>
+                    <option value="1">{{ _('Single column (full width)') }}</option>
+                    <option value="2">{{ _('Two columns') }}</option>
                 </select>
             </div>
 
             <div style="display:flex; gap: 12px;">
                 <div class="form-group" style="flex:1;">
-                    <label>Start</label>
+                    <label>{{ _('Start') }}</label>
                     <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="announcement-start" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="form-input" placeholder="{{ '1405/04/23 14:30' if app_calendar == 'jalali' else '2026-07-14 14:30' }}">
                 </div>
                 <div class="form-group" style="flex:1;">
-                    <label>End</label>
+                    <label>{{ _('End') }}</label>
                     <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="announcement-end" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="form-input" placeholder="{{ '1405/04/23 18:30' if app_calendar == 'jalali' else '2026-07-14 18:30' }}">
                 </div>
             </div>
@@ -1503,57 +1503,57 @@
             <div id="announcement-delivery-options" style="display:none;">
                 <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;">
                     <div class="form-group">
-                        <label>Delivery schedule</label>
+                        <label>{{ _('Delivery schedule') }}</label>
                         <select id="announcement-delivery-mode" class="form-input" onchange="annOnDeliveryModeChange()">
-                            <option value="all">Send to everyone</option>
-                            <option value="daily">Send to a daily batch</option>
+                            <option value="all">{{ _('Send to everyone') }}</option>
+                            <option value="daily">{{ _('Send to a daily batch') }}</option>
                         </select>
                     </div>
                     <div class="form-group" id="announcement-daily-limit-wrap" style="display:none;">
-                        <label>Recipients per day</label>
+                        <label>{{ _('Recipients per day') }}</label>
                         <input id="announcement-daily-limit" type="number" class="form-input" min="1" max="100000" value="100">
                     </div>
                 </div>
                 <div id="announcement-sms-audience-options" class="ann-audience-panel">
                     <div class="ann-filter-section">
                         <div class="ann-filter-heading">
-                            <strong>Account owner</strong>
-                            <small>Select every owner group that should receive this SMS.</small>
+                            <strong>{{ _('Account owner') }}</strong>
+                            <small>{{ _('Select every owner group that should receive this SMS.') }}</small>
                         </div>
                         <div class="ann-filter-grid" id="announcement-owner-filters">
-                            <label class="ann-filter-chip"><input type="checkbox" value="system" checked><span>System / admin / superadmin</span></label>
-                            <label class="ann-filter-chip"><input type="checkbox" value="unowned" checked><span>No owner</span></label>
-                            <label class="ann-filter-chip"><input type="checkbox" value="reseller"><span>Reseller-owned users</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="system" checked><span>{{ _('System / admin / superadmin') }}</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="unowned" checked><span>{{ _('No owner') }}</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="reseller"><span>{{ _('Reseller-owned users') }}</span></label>
                         </div>
                     </div>
                     <div class="ann-filter-section">
                         <div class="ann-filter-heading">
-                            <strong>Subscription state</strong>
-                            <small>Multi-select the account states included in this campaign.</small>
+                            <strong>{{ _('Subscription state') }}</strong>
+                            <small>{{ _('Multi-select the account states included in this campaign.') }}</small>
                         </div>
                         <div class="ann-filter-grid" id="announcement-status-filters">
-                            <label class="ann-filter-chip"><input type="checkbox" value="other" checked><span>Active / other</span></label>
-                            <label class="ann-filter-chip"><input type="checkbox" value="expired" checked><span>Time expired</span></label>
-                            <label class="ann-filter-chip"><input type="checkbox" value="volume_ended" checked><span>Volume ended</span></label>
-                            <label class="ann-filter-chip"><input type="checkbox" value="expiring_soon" checked><span>Time expiring soon</span></label>
-                            <label class="ann-filter-chip"><input type="checkbox" value="volume_low" checked><span>Volume running low</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="other" checked><span>{{ _('Active / other') }}</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="expired" checked><span>{{ _('Time expired') }}</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="volume_ended" checked><span>{{ _('Volume ended') }}</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="expiring_soon" checked><span>{{ _('Time expiring soon') }}</span></label>
+                            <label class="ann-filter-chip"><input type="checkbox" value="volume_low" checked><span>{{ _('Volume running low') }}</span></label>
                         </div>
                     </div>
                 </div>
                 <section class="ann-recipient-preview-shell" aria-labelledby="ann-recipient-preview-title">
                     <div class="ann-recipient-preview-actions">
                         <div>
-                            <strong id="ann-recipient-preview-title">Recipient estimate</strong>
-                            <small>Preview exactly who will receive this campaign before sending.</small>
+                            <strong id="ann-recipient-preview-title">{{ _('Recipient estimate') }}</strong>
+                            <small>{{ _('Preview exactly who will receive this campaign before sending.') }}</small>
                         </div>
                         <button id="announcement-count-recipients" type="button" class="btn btn-secondary" onclick="previewAnnouncementRecipients()">
-                            Count recipients
+                            {{ _('Count recipients') }}
                         </button>
                     </div>
                     <div id="announcement-recipient-preview" class="ann-recipient-preview is-empty" role="status" aria-live="polite">
                         <div class="ann-preview-empty">
                             <span class="ann-preview-empty-icon" aria-hidden="true">👥</span>
-                            <div><strong>No estimate yet</strong><small>Select targets and count recipients to see a full breakdown.</small></div>
+                            <div><strong>{{ _('No estimate yet') }}</strong><small>{{ _('Select targets and count recipients to see a full breakdown.') }}</small></div>
                         </div>
                     </div>
                 </section>
@@ -1561,7 +1561,7 @@
             </div>
 
             <div class="form-group">
-                <label>Targets (Servers + Inbounds)</label>
+                <label>{{ _('Targets (Servers + Inbounds)') }}</label>
                 <input type="hidden" id="announcement-targets" value="*">
 
                 <div class="server-selection-wrapper" style="margin-top: 8px;">
@@ -1571,7 +1571,7 @@
                             <span class="checkmark"></span>
                         </label>
                         <div class="server-list-meta">
-                            <span class="meta-title">Select Servers</span>
+                            <span class="meta-title">{{ _('Select Servers') }}</span>
                             <span class="count-pill" id="announcement-global-counter">0 / 0</span>
                         </div>
                     </div>
@@ -1579,7 +1579,7 @@
                     <div id="announcement-server-list"></div>
                 </div>
 
-                <small style="color: var(--text-secondary);">Target rules match reseller access selector: per-server inbounds or "Select All".</small>
+                <small style="color: var(--text-secondary);">{{ _('Target rules match reseller access selector: per-server inbounds or "Select All".') }}</small>
             </div>
 
             <div id="announcement-subscription-toggles">
@@ -1589,8 +1589,8 @@
                     <span class="slider"></span>
                 </div>
                 <span style="font-size:0.88rem;">
-                    🔒 Hide from resellers' customers
-                    <small style="display:block; color:var(--text-secondary); font-weight:normal; margin-top:2px;">When on, this announcement won't show on subscription pages of reseller-owned accounts</small>
+                    {{ _('🔒 Hide from resellers\' customers') }}
+                    <small style="display:block; color:var(--text-secondary); font-weight:normal; margin-top:2px;">{{ _('When on, this announcement won\'t show on subscription pages of reseller-owned accounts') }}</small>
                 </span>
             </label>
 
@@ -1600,21 +1600,21 @@
                     <span class="slider"></span>
                 </div>
                 <span style="font-size:0.88rem;">
-                    📢 Show as popup modal
-                    <small style="display:block; color:var(--text-secondary); font-weight:normal; margin-top:2px;">When on, this announcement opens as a modal when the user opens their subscription page (instead of the inline notice)</small>
+                    {{ _('📢 Show as popup modal') }}
+                    <small style="display:block; color:var(--text-secondary); font-weight:normal; margin-top:2px;">{{ _('When on, this announcement opens as a modal when the user opens their subscription page (instead of the inline notice)') }}</small>
                 </span>
             </label>
 
             <div class="form-group" id="announcement-button-text-wrap" style="display:none; margin-top:12px;">
-                <label>Popup button text</label>
-                <input type="text" id="announcement-button-text" class="form-input" placeholder="{{ 'مثلاً متوجه شدم' if panel_lang == 'fa' else 'e.g. Got it' }}" maxlength="120">
-                <small style="color: var(--text-secondary);">Label of the button that closes the popup. Leave empty for a default.</small>
+                <label>{{ _('Popup button text') }}</label>
+                <input type="text" id="announcement-button-text" class="form-input" placeholder="{{ _('e.g. Got it') }}" maxlength="120">
+                <small style="color: var(--text-secondary);">{{ _('Label of the button that closes the popup. Leave empty for a default.') }}</small>
             </div>
             </div>
 
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeAnnouncementModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveAnnouncement()">Save</button>
+                <button class="btn btn-secondary" onclick="closeAnnouncementModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" onclick="saveAnnouncement()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -1623,22 +1623,22 @@
 <div class="modal-overlay hidden" id="announcement-failures-modal">
     <div class="modal" style="max-width: 920px;">
         <div class="modal-header">
-            <h2 id="announcement-failures-title">Failed SMS deliveries</h2>
+            <h2 id="announcement-failures-title">{{ _('Failed SMS deliveries') }}</h2>
             <button class="modal-close" onclick="closeAnnouncementFailuresModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="ann-failure-toolbar">
                 <label class="ann-failure-select-all">
                     <input type="checkbox" id="announcement-failures-select-all" onchange="toggleAllAnnouncementFailures(this.checked)">
-                    <span>Select all shown</span>
+                    <span>{{ _('Select all shown') }}</span>
                 </label>
                 <span id="announcement-failures-summary" class="ann-failure-summary"></span>
             </div>
             <div id="announcement-failures-list" class="ann-failure-list"></div>
             <div class="form-actions ann-failure-actions">
-                <button class="btn btn-secondary" onclick="closeAnnouncementFailuresModal()">Close</button>
-                <button class="btn btn-secondary" id="announcement-resend-selected" onclick="resendSelectedAnnouncementFailures()" disabled>Resend selected</button>
-                <button class="btn btn-primary" id="announcement-resend-all" onclick="resendAllAnnouncementFailures()">Resend all failed</button>
+                <button class="btn btn-secondary" onclick="closeAnnouncementFailuresModal()">{{ _('Close') }}</button>
+                <button class="btn btn-secondary" id="announcement-resend-selected" onclick="resendSelectedAnnouncementFailures()" disabled>{{ _('Resend selected') }}</button>
+                <button class="btn btn-primary" id="announcement-resend-all" onclick="resendAllAnnouncementFailures()">{{ _('Resend all failed') }}</button>
             </div>
         </div>
     </div>
@@ -1647,26 +1647,26 @@
 <div class="modal-overlay hidden" id="online-chat-modal">
     <div class="modal" style="max-width: 760px;">
         <div class="modal-header">
-            <h2 id="online-chat-modal-title">Add Online Chat Script</h2>
+            <h2 id="online-chat-modal-title">{{ _('Add Online Chat Script') }}</h2>
             <button class="modal-close" onclick="closeOnlineChatModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="online-chat-id">
 
             <div class="form-group">
-                <label>Name</label>
-                <input type="text" id="online-chat-name" class="form-input" placeholder="e.g., Raychat - Main Widget">
+                <label>{{ _('Name') }}</label>
+                <input type="text" id="online-chat-name" class="form-input" placeholder="{{ _('e.g., Raychat - Main Widget') }}">
             </div>
 
             <div class="form-group">
-                <label>Embed Code</label>
-                <textarea id="online-chat-code" class="form-input" rows="10" placeholder="Paste full chat widget snippet here (script/iframe/etc)"></textarea>
-                <small style="color: var(--text-secondary);">Active script is injected before &lt;/head&gt; in subscription page.</small>
+                <label>{{ _('Embed Code') }}</label>
+                <textarea id="online-chat-code" class="form-input" rows="10" placeholder="{{ _('Paste full chat widget snippet here (script/iframe/etc)') }}"></textarea>
+                <small style="color: var(--text-secondary);">{{ _('Active script is injected before </head> in subscription page.') }}</small>
             </div>
 
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeOnlineChatModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveOnlineChatScript()">Save</button>
+                <button class="btn btn-secondary" onclick="closeOnlineChatModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" onclick="saveOnlineChatScript()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -1681,6 +1681,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='jalalidatepicker.min.css') }}">
 <script src="{{ url_for('static', filename='jalalidatepicker.min.js') }}"></script>
 
+<script nonce="{{ csp_nonce }}">window.EVE_I18N = {{ i18n_catalog('sub_manager')|tojson }};</script>
 <script nonce="{{ csp_nonce }}">
     let apps = [];
     document.addEventListener('DOMContentLoaded', loadApps);
@@ -1693,7 +1694,7 @@
             apps = Array.isArray(_appsData) ? _appsData : (_appsData.apps || []);
             renderApps();
         } catch (e) {
-            showToast('Error loading apps', 'error');
+            showToast(_t('Error loading apps'), 'error');
         }
     }
 
@@ -1702,7 +1703,7 @@
     function renderApps() {
         const container = document.getElementById('apps-container');
         if (apps.length === 0) {
-            container.innerHTML = '<div class="empty-state"><p>No apps defined</p></div>';
+            container.innerHTML = '<div class="empty-state"><p>' + _t('No apps defined') + '</p></div>';
             return;
         }
         container.innerHTML = apps.map(app => `
@@ -1716,7 +1717,7 @@
                  ondragend="appDragEnd(event)">
                 <div class="server-header">
                     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
-                        <span title="Drag to reorder" style="color:var(--text-secondary);cursor:grab;flex-shrink:0;padding:2px 4px;">
+                        <span title="${_t('Drag to reorder')}" style="color:var(--text-secondary);cursor:grab;flex-shrink:0;padding:2px 4px;">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="5" x2="9" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/></svg>
                         </span>
                         <div class="server-icon" style="overflow:hidden; border-radius: 10px; background: linear-gradient(135deg, var(--primary), #8b5cf6); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
@@ -1726,8 +1727,8 @@
                             }
                         </div>
                         <div class="server-title">
-                            <h3>${app.name}${app.is_recommended ? ' <span style="font-size:10px;padding:2px 6px;background:rgba(251,146,60,0.2);color:#fb923c;border-radius:999px;font-weight:600;">Recommended</span>' : ''}</h3>
-                            <p class="server-url" style="direction: rtl; text-align: right; margin-top: 2px;">${app.title_fa || {{ ('بدون عنوان' if panel_lang == 'fa' else 'Untitled')|tojson }}}</p>
+                            <h3>${app.name}${app.is_recommended ? ' <span style="font-size:10px;padding:2px 6px;background:rgba(251,146,60,0.2);color:#fb923c;border-radius:999px;font-weight:600;">' + _t('Recommended') + '</span>' : ''}</h3>
+                            <p class="server-url" style="direction: rtl; text-align: right; margin-top: 2px;">${app.title_fa || {{ _('Untitled')|tojson }}}</p>
                         </div>
                     </div>
                 </div>
@@ -1736,10 +1737,10 @@
                     <span class="badge" style="background:rgba(99,102,241,0.10);color:var(--primary);border:1px solid rgba(99,102,241,0.2);">#${app.display_order || 0}</span>
                 </div>
                 <div class="server-actions">
-                    <button class="action-btn" onclick="openEditModal(${app.id})" title="Edit">
+                    <button class="action-btn" onclick="openEditModal(${app.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
-                    <button class="action-btn danger" onclick="deleteApp(${app.id})" title="Delete">
+                    <button class="action-btn danger" onclick="deleteApp(${app.id})" title="${_t('Delete')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                     </button>
                 </div>
@@ -1787,8 +1788,8 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                showToast('Order saved');
-            } catch (e) { showToast('Order save failed', 'error'); }
+                showToast(_t('Order saved'));
+            } catch (e) { showToast(_t('Order save failed'), 'error'); }
         }, 600);
     }
 
@@ -1797,14 +1798,14 @@
     }
 
     const APP_ACTION_PALETTES = [
-        ['primary', 'Theme / Indigo'],
-        ['blue', 'Blue'],
-        ['green', 'Green'],
-        ['cyan', 'Cyan'],
-        ['amber', 'Amber'],
-        ['red', 'Red'],
-        ['purple', 'Purple'],
-        ['slate', 'Slate']
+        ['primary', _t('Theme / Indigo')],
+        ['blue', _t('Blue')],
+        ['green', _t('Green')],
+        ['cyan', _t('Cyan')],
+        ['amber', _t('Amber')],
+        ['red', _t('Red')],
+        ['purple', _t('Purple')],
+        ['slate', _t('Slate')]
     ];
     let _appActionSequence = 0;
 
@@ -1814,17 +1815,17 @@
         const inputId = `edit-action-url-${++_appActionSequence}`;
         row.className = 'app-action-row';
         row.innerHTML = `
-            <input type="text" class="form-input app-action-title" maxlength="100" placeholder="Button title (e.g. v2rayNG ARM64)">
+            <input type="text" class="form-input app-action-title" maxlength="100" placeholder="${_t('Button title (e.g. v2rayNG ARM64)')}">
             <div class="link-input-row">
-                <input type="text" id="${inputId}" class="form-input app-action-url" placeholder="https://... or select an uploaded file">
-                <button type="button" class="btn-browse" title="Browse uploaded files">Browse</button>
+                <input type="text" id="${inputId}" class="form-input app-action-url" placeholder="${_t('https://... or select an uploaded file')}">
+                <button type="button" class="btn-browse" title="${_t('Browse uploaded files')}">${_t('Browse')}</button>
             </div>
-            <input type="text" class="form-input app-action-icon" maxlength="64" list="phosphor-icon-suggestions" placeholder="Icon e.g. download-simple">
-            <select class="form-input app-action-palette" aria-label="Button color"></select>
+            <input type="text" class="form-input app-action-icon" maxlength="64" list="phosphor-icon-suggestions" placeholder="${_t('Icon e.g. download-simple')}">
+            <select class="form-input app-action-palette" aria-label="${_t('Button color')}"></select>
             <div class="app-action-controls">
-                <button type="button" class="app-action-control app-action-up" title="Move up">↑</button>
-                <button type="button" class="app-action-control app-action-down" title="Move down">↓</button>
-                <button type="button" class="app-action-control danger app-action-remove" title="Remove">×</button>
+                <button type="button" class="app-action-control app-action-up" title="${_t('Move up')}">↑</button>
+                <button type="button" class="app-action-control app-action-down" title="${_t('Move down')}">↓</button>
+                <button type="button" class="app-action-control danger app-action-remove" title="${_t('Remove')}">×</button>
             </div>`;
 
         const palette = APP_ACTION_PALETTES.some(item => item[0] === button.palette)
@@ -1865,7 +1866,7 @@
             const url = row.querySelector('.app-action-url').value.trim();
             const icon = row.querySelector('.app-action-icon').value.trim();
             if (!title && !url && !icon) return;
-            if (!title || !url) throw new Error(`Button ${index + 1} needs both a title and a URL`);
+            if (!title || !url) throw new Error(_t('Button {v1} needs both a title and a URL', {v1: index + 1}));
             const button = {
                 title,
                 url,
@@ -1879,7 +1880,7 @@
 
     function openAddModal() {
         document.getElementById('edit-app-id').value = '';
-        document.getElementById('modal-title').textContent = 'Add New App';
+        document.getElementById('modal-title').textContent = _t('Add New App');
         
         document.getElementById('edit-os-type').value = 'android';
         document.getElementById('edit-app-name').value = '';
@@ -1898,7 +1899,7 @@
     function openEditModal(id) {
         const app = apps.find(a => a.id === id);
         document.getElementById('edit-app-id').value = app.id;
-        document.getElementById('modal-title').textContent = 'Edit App';
+        document.getElementById('modal-title').textContent = _t('Edit App');
         
         document.getElementById('edit-os-type').value = app.os_type || 'android';
         document.getElementById('edit-app-name').value = app.name;
@@ -1937,7 +1938,7 @@
         };
 
         if (!data.name.trim()) {
-            showToast('App Name is required', 'error');
+            showToast(_t('App Name is required'), 'error');
             return;
         }
 
@@ -1961,30 +1962,30 @@
             const result = await response.json();
             
             if (result.success) {
-                showToast(id ? 'App updated successfully' : 'App added successfully');
+                showToast(id ? _t('App updated successfully') : _t('App added successfully'));
                 closeEditModal();
                 loadApps();
             } else {
-                showToast('Error: ' + result.error, 'error');
+                showToast(_t('Error:') + result.error, 'error');
             }
         } catch (e) {
-            showToast('Error: ' + (e.message || 'Connection failed'), 'error');
+            showToast(_t('Error:') + (e.message || _t('Connection failed')), 'error');
         }
     }
 
     async function deleteApp(id) {
-        if (!confirm('Are you sure you want to delete this app?')) return;
+        if (!confirm(_t('Are you sure you want to delete this app?'))) return;
         
         try {
             const response = await fetch(`/api/sub-apps/${id}`, { method: 'DELETE' });
             if (response.ok) {
-                showToast('App deleted');
+                showToast(_t('App deleted'));
                 loadApps();
             } else {
-                showToast('Error deleting app', 'error');
+                showToast(_t('Error deleting app'), 'error');
             }
         } catch (e) {
-            showToast('Error deleting app', 'error');
+            showToast(_t('Error deleting app'), 'error');
         }
     }
 
@@ -2014,7 +2015,7 @@
         const field = document.getElementById(statisticsTemplateTarget);
         if (!preview || !enabled || !field) return;
         if (!enabled.checked) {
-            preview.textContent = 'Statistics config is disabled.';
+            preview.textContent = _t('Statistics config is disabled.');
             preview.style.opacity = '.65';
             return;
         }
@@ -2052,9 +2053,9 @@
             if (!response.ok || !result.success) {
                 throw new Error(result.error || `HTTP ${response.status}`);
             }
-            showToast('Statistics settings saved successfully');
+            showToast(_t('Statistics settings saved successfully'));
         } catch (error) {
-            showToast(error.message || 'Could not save statistics settings', 'error');
+            showToast(error.message || _t('Could not save statistics settings'), 'error');
         }
     }
 
@@ -2098,16 +2099,16 @@
     let announcements = [];
     let announcementRefreshTimer = null;
     const ANNOUNCEMENT_VARIABLES = [
-        ['email', 'Email / account'], ['account_name', 'Account name'], ['remaining_time', 'Remaining time'],
-        ['remaining_volume', 'Remaining volume'], ['dashboard_link', 'Dashboard link'],
-        ['sub_link', 'Subscription link'], ['server_name', 'Server name']
+        ['email', _t('Email / account')], ['account_name', _t('Account name')], ['remaining_time', _t('Remaining time')],
+        ['remaining_volume', _t('Remaining volume')], ['dashboard_link', _t('Dashboard link')],
+        ['sub_link', _t('Subscription link')], ['server_name', _t('Server name')]
     ];
     const ANNOUNCEMENT_OWNER_LABELS = {
-        system: 'System/admin/superadmin', unowned: 'No owner', reseller: 'Reseller-owned'
+        system: _t('System/admin/superadmin'), unowned: _t('No owner'), reseller: _t('Reseller-owned')
     };
     const ANNOUNCEMENT_STATUS_LABELS = {
-        other: 'Active/other', expired: 'Time expired', volume_ended: 'Volume ended',
-        expiring_soon: 'Time expiring soon', volume_low: 'Volume running low'
+        other: _t('Active/other'), expired: _t('Time expired'), volume_ended: _t('Volume ended'),
+        expiring_soon: _t('Time expiring soon'), volume_low: _t('Volume running low')
     };
 
     function annCheckedValues(containerId) {
@@ -2131,19 +2132,19 @@
         const remaining = Number.isFinite(Number(a.remaining_count))
             ? Number(a.remaining_count) : Math.max(0, total - sent - failed - skipped);
         const percent = total ? Math.min(100, ((sent + failed + skipped) / total) * 100) : 0;
-        const eta = a.eta && remaining > 0 ? `${a.eta.label} remaining` : (remaining ? 'ETA unavailable' : 'Finished');
+        const eta = a.eta && remaining > 0 ? _t('{v1} remaining', {v1: a.eta.label}) : (remaining ? _t('ETA unavailable') : _t('Finished'));
         const isSms = (a.channel || '') === 'sms';
         return `<div class="campaign-progress-panel">
-            <div style="display:flex;justify-content:space-between;gap:.75rem;"><strong>${percent.toFixed(1)}% processed</strong><span>${escapeHtml(eta)}</span></div>
+            <div style="display:flex;justify-content:space-between;gap:.75rem;"><strong>${_t('{percent}% processed', {percent: percent.toFixed(1)})}</strong><span>${escapeHtml(eta)}</span></div>
             <div class="campaign-progress-track"><div class="campaign-progress-fill" style="width:${percent.toFixed(1)}%"></div></div>
             <div class="campaign-progress-stats">
-                <span>Total <strong>${total}</strong></span><span>Sent <strong>${sent}</strong></span>
-                <span>Errors <strong>${failed}</strong></span><span>Remaining <strong>${remaining}</strong></span>
+                <span>${_t('Total')} <strong>${total}</strong></span><span>${_t('Sent')} <strong>${sent}</strong></span>
+                <span>${_t('Errors')} <strong>${failed}</strong></span><span>${_t('Remaining')} <strong>${remaining}</strong></span>
             </div>
-            ${skipped ? `<div style="margin-top:.45rem;font-size:.76rem;">Skipped: ${skipped}</div>` : ''}
-            ${blocked ? `<div style="margin-top:.35rem;font-size:.76rem;color: var(--warning);">Blocked (rate/cap): <strong>${blocked}</strong></div>` : ''}
+            ${skipped ? `<div style="margin-top:.45rem;font-size:.76rem;">${_t('Skipped: {count}', {count: skipped})}</div>` : ''}
+            ${blocked ? `<div style="margin-top:.35rem;font-size:.76rem;color: var(--warning);">${_t('Blocked (rate/cap):')} <strong>${blocked}</strong></div>` : ''}
             <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;">
-                ${failed && isSms ? `<button type="button" class="btn btn-secondary ann-view-failures" onclick="openAnnouncementFailuresModal(${a.id})">View ${failed} failed ${failed === 1 ? 'delivery' : 'deliveries'}</button>` : ''}
+                ${failed && isSms ? `<button type="button" class="btn btn-secondary ann-view-failures" onclick="openAnnouncementFailuresModal(${a.id})">${failed === 1 ? _t('View 1 failed delivery') : _t('View {count} failed deliveries', {count: failed})}</button>` : ''}
                 ${blocked && isSms ? `<button type="button" class="btn btn-warning ann-send-now" onclick="sendNowAnnouncementBlocked(${a.id})" style="background: var(--warning);color:#1e1e2e;border:none;">Send Now ${blocked} blocked</button>` : ''}
             </div>
         </div>`;
@@ -2169,7 +2170,7 @@
         const button = document.getElementById('announcement-resend-selected');
         if (button) {
             button.disabled = selected === 0;
-            button.textContent = selected ? `Resend selected (${selected})` : 'Resend selected';
+            button.textContent = selected ? _t('Resend selected ({selected})', {selected}) : _t('Resend selected');
         }
     }
 
@@ -2184,18 +2185,18 @@
         const list = document.getElementById('announcement-failures-list');
         const summary = document.getElementById('announcement-failures-summary');
         modal?.classList.remove('hidden');
-        if (list) list.innerHTML = '<div class="ann-failure-empty">Loading failed deliveries...</div>';
+        if (list) list.innerHTML = '<div class="ann-failure-empty">' + _t('Loading failed deliveries...') + '</div>';
         if (summary) summary.textContent = '';
         try {
             const response = await fetch(`/api/announcements/${id}/failures?per_page=200`, {cache:'no-store'});
             const data = await response.json();
-            if (!data.success) throw new Error(data.error || 'Failed deliveries could not be loaded');
+            if (!data.success) throw new Error(data.error || _t('Failed deliveries could not be loaded'));
             announcementFailureTotal = Number(data.total || 0);
             announcementFailureResendableTotal = Number(data.resendable_total || 0);
-            if (summary) summary.textContent = `${announcementFailureTotal} delivery ${announcementFailureTotal === 1 ? 'issue' : 'issues'}`;
+            if (summary) summary.textContent = (announcementFailureTotal === 1 ? _t('1 delivery issue') : _t('{count} delivery issues', {count: announcementFailureTotal}));
             const rows = Array.isArray(data.failures) ? data.failures : [];
             if (list) list.innerHTML = rows.length ? rows.map(item => {
-                const source = item.source === 'gmweb' ? 'Gmweb' : 'Panel';
+                const source = item.source === 'gmweb' ? 'Gmweb' : _t('Panel');
                 const failedAt = item.failed_at ? EveDate.format(item.failed_at) : '';
                 const priority = item.gateway_priority
                     ? `${item.gateway_priority}${item.gateway_priority_level ? ` L${item.gateway_priority_level}` : ''}` : '';
@@ -2216,10 +2217,10 @@
                         ${gatewayMeta ? `<small>${gatewayMeta}</small>` : ''}
                     </div>
                     ${manualReview
-                        ? '<button type="button" class="btn btn-secondary ann-failure-single" disabled>Unverified</button>'
-                        : `<button type="button" class="btn btn-secondary ann-failure-single" onclick="resendAnnouncementFailures([${item.id}])">Resend</button>`}
+                        ? '<button type="button" class="btn btn-secondary ann-failure-single" disabled>' + _t('Unverified') + '</button>'
+                        : `<button type="button" class="btn btn-secondary ann-failure-single" onclick="resendAnnouncementFailures([${item.id}])">${_t('Resend')}</button>`}
                 </div>`;
-            }).join('') : '<div class="ann-failure-empty">No failed deliveries remain.</div>';
+            }).join('') : '<div class="ann-failure-empty">' + _t('No failed deliveries remain.') + '</div>';
             document.getElementById('announcement-resend-all').disabled = announcementFailureResendableTotal === 0;
             updateAnnouncementFailureSelection();
         } catch (error) {
@@ -2231,16 +2232,16 @@
     async function resendAnnouncementFailures(deliveryIds = null) {
         const campaignId = announcementFailureCampaignId;
         if (!campaignId) return;
-        const countLabel = deliveryIds ? `${deliveryIds.length} selected` : `all ${announcementFailureResendableTotal}`;
-        if (!confirm(`Resend ${countLabel} failed SMS deliveries?`)) return;
+        const countLabel = deliveryIds ? _t('{v1} selected', {v1: deliveryIds.length}) : _t('all {count}', {count: announcementFailureResendableTotal});
+        if (!confirm(_t('Resend {countLabel} failed SMS deliveries?', {countLabel}))) return;
         try {
             const response = await fetch(`/api/announcements/${campaignId}/failures/resend`, {
                 method:'POST', headers:{'Content-Type':'application/json'},
                 body:JSON.stringify(deliveryIds ? {delivery_ids: deliveryIds} : {})
             });
             const data = await response.json();
-            if (!data.success) throw new Error(data.error || 'Resend request failed');
-            showToast(`${data.resent_count} failed ${data.resent_count === 1 ? 'delivery' : 'deliveries'} queued for resend`);
+            if (!data.success) throw new Error(data.error || _t('Resend request failed'));
+            showToast((data.resent_count === 1 ? _t('1 failed delivery queued for resend') : _t('{count} failed deliveries queued for resend', {count: data.resent_count})));
             await loadAnnouncements();
             await openAnnouncementFailuresModal(campaignId);
         } catch (error) {
@@ -2264,18 +2265,18 @@
         try {
             const resp = await fetch(`/api/announcements/${campaignId}/blocked`, {cache:'no-store'});
             const data = await resp.json();
-            if (!data.success) throw new Error(data.error || 'Could not load blocked deliveries');
+            if (!data.success) throw new Error(data.error || _t('Could not load blocked deliveries'));
             const blocked = Array.isArray(data.blocked) ? data.blocked : [];
-            if (!blocked.length) { showToast('No blocked deliveries found'); return; }
+            if (!blocked.length) { showToast(_t('No blocked deliveries found')); return; }
             const ids = blocked.map(b => b.id);
-            if (!confirm(`Force-send ${ids.length} blocked ${ids.length === 1 ? 'delivery' : 'deliveries'} now? This bypasses the daily cap.`)) return;
+            if (!confirm((ids.length === 1 ? _t('Force-send 1 blocked delivery now? This bypasses the daily cap.') : _t('Force-send {count} blocked deliveries now? This bypasses the daily cap.', {count: ids.length})))) return;
             const sendResp = await fetch(`/api/announcements/${campaignId}/deliveries/send-now`, {
                 method:'POST', headers:{'Content-Type':'application/json'},
                 body: JSON.stringify({delivery_ids: ids})
             });
             const sendData = await sendResp.json();
-            if (!sendData.success) throw new Error(sendData.error || 'Send Now failed');
-            showToast(`Send Now: ${sendData.sent_count} sent, ${sendData.failed_count} failed`);
+            if (!sendData.success) throw new Error(sendData.error || _t('Send Now failed'));
+            showToast(_t('Send Now: {v1} sent, {v2} failed', {v1: sendData.sent_count, v2: sendData.failed_count}));
             await loadAnnouncements();
         } catch (error) {
             showToast(error.message, 'error');
@@ -2325,7 +2326,7 @@
                 }, 5000);
             }
         } catch (e) {
-            showToast('Error loading announcements', 'error');
+            showToast(_t('Error loading announcements'), 'error');
         }
     }
 
@@ -2334,7 +2335,7 @@
         if (!container) return;
 
         if (!announcements || announcements.length === 0) {
-            container.innerHTML = '<div class="empty-state"><p>No announcements defined</p></div>';
+            container.innerHTML = '<div class="empty-state"><p>' + _t('No announcements defined') + '</p></div>';
             return;
         }
 
@@ -2342,21 +2343,21 @@
             const channel = a.channel || 'subscription';
             const isSubscription = channel === 'subscription';
             const isActive = isSubscription ? isAnnouncementActive(a) : ['queued', 'sending'].includes(a.status);
-            const serversLabel = a.all_servers ? 'All servers' : ((a.server_names && a.server_names.length) ? a.server_names.join(', ') : 'No servers selected');
+            const serversLabel = a.all_servers ? _t('All servers') : ((a.server_names && a.server_names.length) ? a.server_names.join(', ') : _t('No servers selected'));
             const createdBy = a.created_by || 'unknown';
             const createdAt = a.created_at ? EveDate.format(a.created_at) : (a.created_at_jalali || '');
             const windowLabel = isSubscription && (a.start_at && a.end_at)
                 ? `${EveDate.format(a.start_at)} → ${EveDate.format(a.end_at)}`
                 : '';
-            const typeLabel = {subscription:'Subscription', sms:'SMS', whatsapp:'WhatsApp', telegram:'Telegram'}[channel] || channel;
-            const statusLabel = isSubscription ? (isActive ? 'Active' : 'Inactive') : (a.status || 'draft');
+            const typeLabel = {subscription: _t('Subscription'), sms: _t('SMS'), whatsapp: 'WhatsApp', telegram: 'Telegram'}[channel] || channel;
+            const statusLabel = isSubscription ? (isActive ? _t('Active') : _t('Inactive')) : (a.status || 'draft');
             const progress = isSubscription ? '' : announcementProgressMarkup(a);
             const ownerLabel = (a.audience_owner_types || []).map(value => ANNOUNCEMENT_OWNER_LABELS[value] || value).join(', ');
             const stateLabel = (a.audience_statuses || []).map(value => ANNOUNCEMENT_STATUS_LABELS[value] || value).join(', ');
             const campaignActions = isSubscription ? '' : (
-                a.status === 'draft' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'send')" title="Start sending">▶</button>`
-                : ['queued','sending'].includes(a.status) ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'pause')" title="Pause">Ⅱ</button>`
-                : a.status === 'paused' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'resume')" title="Resume">▶</button>` : ''
+                a.status === 'draft' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'send')" title="${_t('Start sending')}">▶</button>`
+                : ['queued','sending'].includes(a.status) ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'pause')" title="${_t('Pause')}">Ⅱ</button>`
+                : a.status === 'paused' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'resume')" title="${_t('Resume')}">▶</button>` : ''
             );
 
             return `
@@ -2366,7 +2367,7 @@
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v11a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V4z"/><path d="M8 22h8"/><path d="M12 15v-3"/><path d="M12 6h.01"/></svg>
                         </div>
                         <div class="server-title">
-                            <h3>${escapeHtml(typeLabel)} announcement</h3>
+                            <h3>${_t('{type} announcement', {type: escapeHtml(typeLabel)})}</h3>
                             <p class="server-url" style="direction: rtl; text-align: right; margin-top: 2px;">${escapeHtml(a.message).slice(0, 120)}${(a.message || '').length > 120 ? '…' : ''}</p>
                         </div>
                     </div>
@@ -2374,24 +2375,24 @@
                     <div class="server-badges" style="flex-wrap: wrap;">
                         <span class="badge ${isActive ? 'active' : 'inactive'}">${escapeHtml(statusLabel)}</span>
                         <span class="badge" style="background: rgba(99, 102, 241, 0.12); color: var(--primary); border: 1px solid rgba(99, 102, 241, 0.2);">${escapeHtml(serversLabel)}</span>
-                        ${isSubscription && a.hide_from_resellers ? '<span class="badge" style="background:rgba(251,191,36,0.12); color:#fbbf24; border:1px solid rgba(251,191,36,0.3);">🔒 Hidden from resellers</span>' : ''}
-                        ${!isSubscription && a.delivery_mode === 'daily' ? `<span class="badge">${Number(a.daily_limit || 0)} recipients/day</span>` : ''}
-                        ${channel === 'sms' && ownerLabel ? `<span class="badge">Owners: ${escapeHtml(ownerLabel)}</span>` : ''}
-                        ${channel === 'sms' && stateLabel ? `<span class="badge">States: ${escapeHtml(stateLabel)}</span>` : ''}
+                        ${isSubscription && a.hide_from_resellers ? '<span class="badge" style="background:rgba(251,191,36,0.12); color:#fbbf24; border:1px solid rgba(251,191,36,0.3);">' + _t('🔒 Hidden from resellers') + '</span>' : ''}
+                        ${!isSubscription && a.delivery_mode === 'daily' ? `<span class="badge">${_t('{count} recipients/day', {count: Number(a.daily_limit || 0)})}</span>` : ''}
+                        ${channel === 'sms' && ownerLabel ? `<span class="badge">${_t('Owners: {value}', {value: escapeHtml(ownerLabel)})}</span>` : ''}
+                        ${channel === 'sms' && stateLabel ? `<span class="badge">${_t('States: {value}', {value: escapeHtml(stateLabel)})}</span>` : ''}
                     </div>
 
                     <div style="margin-top: 10px; color: var(--text-secondary); font-size: 0.8rem;">
                         <div>${escapeHtml(windowLabel)}</div>
                         ${progress ? `<div style="margin-top:8px;">${progress}</div>` : ''}
-                        <div style="margin-top: 4px;">Created: ${escapeHtml(createdAt)} • By: ${escapeHtml(createdBy)}</div>
+                        <div style="margin-top: 4px;">${_t('Created: {date} • By: {user}', {date: escapeHtml(createdAt), user: escapeHtml(createdBy)})}</div>
                     </div>
 
                     <div class="server-actions">
                         ${campaignActions}
-                        ${(a.status === 'cancelled' || (!isSubscription && channel !== 'sms' && a.status !== 'draft')) ? '' : `<button class="action-btn" onclick="openEditAnnouncementModal(${a.id})" title="Edit">
+                        ${(a.status === 'cancelled' || (!isSubscription && channel !== 'sms' && a.status !== 'draft')) ? '' : `<button class="action-btn" onclick="openEditAnnouncementModal(${a.id})" title="${_t('Edit')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                         </button>`}
-                        <button class="action-btn danger" onclick="deleteAnnouncement(${a.id})" title="Delete">
+                        <button class="action-btn danger" onclick="deleteAnnouncement(${a.id})" title="${_t('Delete')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
                     </div>
@@ -2445,7 +2446,7 @@
         const list = document.getElementById('announcement-server-list');
         if (!list) return;
         if (!annServersLoaded) {
-            list.innerHTML = '<div class="inbound-empty">Loading servers...</div>';
+            list.innerHTML = '<div class="inbound-empty">' + _t('Loading servers...') + '</div>';
             return;
         }
 
@@ -2465,7 +2466,7 @@
                         </div>
                     </label>
                 `;
-            }).join('') : '<div class="inbound-empty">No inbounds found</div>';
+            }).join('') : '<div class="inbound-empty">' + _t('No inbounds found') + '</div>';
 
             return `
                 <div class="server-accordion ${idx === 0 ? 'open' : ''}" data-server-id="${s.id}">
@@ -2494,7 +2495,7 @@
                                 <span class="checkmark"></span>
                             </label>
                             <div class="inbound-header-text">
-                                <span>Select All Inbounds</span>
+                                <span>${_t('Select All Inbounds')}</span>
                                 <span class="count-pill inbound-counter" id="ann-inbound-count-${s.id}">0 / 0</span>
                             </div>
                         </div>
@@ -2845,7 +2846,7 @@
         preview.innerHTML = `
             <div class="ann-preview-empty">
                 <span class="ann-preview-empty-icon" aria-hidden="true">👥</span>
-                <div><strong>No estimate yet</strong><small>Select targets and count recipients to see a full breakdown.</small></div>
+                <div><strong>${_t('No estimate yet')}</strong><small>${_t('Select targets and count recipients to see a full breakdown.')}</small></div>
             </div>`;
         annSetRecipientEstimateButton(false);
     }
@@ -2872,7 +2873,7 @@
         preview.innerHTML = `
             <div class="ann-preview-empty">
                 <span class="ann-preview-empty-icon" aria-hidden="true">⚠️</span>
-                <div><strong>Could not count recipients</strong><small>${escapeHtml(message || 'Preview failed')}</small></div>
+                <div><strong>${_t('Could not count recipients')}</strong><small>${escapeHtml(message || 'Preview failed')}</small></div>
             </div>`;
     }
 
@@ -2893,12 +2894,12 @@
         const smsCard = data.sms ? `
             <article class="ann-preview-delivery-card">
                 <span class="ann-preview-delivery-icon" aria-hidden="true">💬</span>
-                <div><small>SMS segments</small><strong>${annFormatCount(data.sms.estimated_total_segments)}</strong><span>${annFormatCount(data.sms.min_segments_per_recipient)}–${annFormatCount(data.sms.max_segments_per_recipient)} per recipient</span></div>
+                <div><small>${_t('SMS segments')}</small><strong>${annFormatCount(data.sms.estimated_total_segments)}</strong><span>${annFormatCount(data.sms.min_segments_per_recipient)}–${annFormatCount(data.sms.max_segments_per_recipient)} per recipient</span></div>
             </article>` : '';
         const etaCard = data.eta ? `
             <article class="ann-preview-delivery-card">
                 <span class="ann-preview-delivery-icon" aria-hidden="true">⏱️</span>
-                <div><small>Estimated duration</small><strong>${escapeHtml(data.eta.label || '—')}</strong><span>${escapeHtml(data.eta.bottleneck || 'Current sending settings')}</span></div>
+                <div><small>${_t('Estimated duration')}</small><strong>${escapeHtml(data.eta.label || '—')}</strong><span>${escapeHtml(data.eta.bottleneck || 'Current sending settings')}</span></div>
             </article>` : '';
         const deliveryCards = smsCard || etaCard ? `
             <div class="ann-preview-delivery ${(smsCard && etaCard) ? '' : 'is-single'}">${smsCard}${etaCard}</div>` : '';
@@ -2913,24 +2914,24 @@
             <header class="ann-preview-hero">
                 <div class="ann-preview-hero-icon" aria-hidden="true">✅</div>
                 <div class="ann-preview-hero-copy">
-                    <small>Audience ready</small>
-                    <strong><span>${annFormatCount(unique)}</span> unique recipients</strong>
-                    <p>Selected from ${annFormatCount(clients)} matched clients</p>
+                    <small>${_t('Audience ready')}</small>
+                    <strong><span>${annFormatCount(unique)}</span> ${_t('unique recipients')}</strong>
+                    <p>${_t('Selected from {count} matched clients', {count: annFormatCount(clients)})}</p>
                 </div>
-                <div class="ann-preview-rate"><strong>${selectedPercent.toFixed(1)}%</strong><span>will receive</span></div>
+                <div class="ann-preview-rate"><strong>${selectedPercent.toFixed(1)}%</strong><span>${_t('will receive')}</span></div>
             </header>
             <progress class="ann-preview-ratio" max="100" value="${selectedPercent.toFixed(2)}" aria-label="${selectedPercent.toFixed(1)} percent of matched clients will receive this campaign"></progress>
             ${deliveryCards}
             <section class="ann-preview-breakdown">
                 <div class="ann-preview-breakdown-heading">
-                    <div><span aria-hidden="true">🚫</span><strong>Excluded or cleaned up</strong></div>
+                    <div><span aria-hidden="true">🚫</span><strong>${_t('Excluded or cleaned up')}</strong></div>
                     <span>${annFormatCount(excluded)} total</span>
                 </div>
                 <table class="ann-preview-table">
                     <tbody>${rows}</tbody>
                 </table>
             </section>
-            <footer class="ann-preview-note"><span aria-hidden="true">ℹ️</span>Calculated from the current targets, owner groups, subscription states, and sending limits.</footer>`;
+            <footer class="ann-preview-note"><span aria-hidden="true">ℹ️</span>${_t('Calculated from the current targets, owner groups, subscription states, and sending limits.')}</footer>`;
         annSetRecipientEstimateButton(true);
     }
 
@@ -2965,12 +2966,12 @@
     }
 
     async function mutateAnnouncementCampaign(id, action) {
-        if (action === 'send' && !confirm('Start sending this campaign to its unique recipients?')) return;
+        if (action === 'send' && !confirm(_t('Start sending this campaign to its unique recipients?'))) return;
         try {
             const response = await fetch(`/api/announcements/${id}/${action}`, {method:'POST'});
             const data = await response.json();
             if (!data.success) throw new Error(data.error || 'Campaign action failed');
-            showToast(`Campaign ${action} accepted`);
+            showToast(_t('Campaign {action} accepted', {action: _t(action)}));
             loadAnnouncements();
         } catch (error) {
             showToast(error.message, 'error');
@@ -2988,17 +2989,17 @@
         const inputId = `announcement-action-url-${++_appActionSequence}`;
         row.className = 'app-action-row';
         row.innerHTML = `
-            <input type="text" class="form-input app-action-title" maxlength="100" placeholder="Button title">
+            <input type="text" class="form-input app-action-title" maxlength="100" placeholder="${_t('Button title')}">
             <div class="link-input-row">
-                <input type="text" id="${inputId}" class="form-input app-action-url" placeholder="https://... or select an uploaded file">
-                <button type="button" class="btn-browse" title="Browse uploaded files">Browse</button>
+                <input type="text" id="${inputId}" class="form-input app-action-url" placeholder="${_t('https://... or select an uploaded file')}">
+                <button type="button" class="btn-browse" title="${_t('Browse uploaded files')}">${_t('Browse')}</button>
             </div>
-            <input type="text" class="form-input app-action-icon" maxlength="64" list="phosphor-icon-suggestions" placeholder="Icon e.g. download-simple">
-            <select class="form-input app-action-palette" aria-label="Button color"></select>
+            <input type="text" class="form-input app-action-icon" maxlength="64" list="phosphor-icon-suggestions" placeholder="${_t('Icon e.g. download-simple')}">
+            <select class="form-input app-action-palette" aria-label="${_t('Button color')}"></select>
             <div class="app-action-controls">
-                <button type="button" class="app-action-control app-action-up" title="Move up">↑</button>
-                <button type="button" class="app-action-control app-action-down" title="Move down">↓</button>
-                <button type="button" class="app-action-control danger app-action-remove" title="Remove">×</button>
+                <button type="button" class="app-action-control app-action-up" title="${_t('Move up')}">↑</button>
+                <button type="button" class="app-action-control app-action-down" title="${_t('Move down')}">↓</button>
+                <button type="button" class="app-action-control danger app-action-remove" title="${_t('Remove')}">×</button>
             </div>`;
 
         const palette = APP_ACTION_PALETTES.some(item => item[0] === button.palette)
@@ -3037,7 +3038,7 @@
             const url = row.querySelector('.app-action-url').value.trim();
             const icon = row.querySelector('.app-action-icon').value.trim();
             if (!title && !url && !icon) return;
-            if (!title || !url) throw new Error(`Button ${index + 1} needs both a title and a URL`);
+            if (!title || !url) throw new Error(_t('Button {v1} needs both a title and a URL', {v1: index + 1}));
             const button = {
                 title,
                 url,
@@ -3051,7 +3052,7 @@
 
     async function openAddAnnouncementModal() {
         document.getElementById('announcement-id').value = '';
-        document.getElementById('announcement-modal-title').textContent = 'Add Announcement';
+        document.getElementById('announcement-modal-title').textContent = _t('Add Announcement');
         document.getElementById('announcement-channel').value = 'subscription';
         document.getElementById('announcement-channel').disabled = false;
         annSetContent('');
@@ -3091,7 +3092,7 @@
         if (!a) return;
 
         document.getElementById('announcement-id').value = String(a.id);
-        document.getElementById('announcement-modal-title').textContent = 'Edit Announcement';
+        document.getElementById('announcement-modal-title').textContent = _t('Edit Announcement');
         const channel = a.channel || 'subscription';
         document.getElementById('announcement-channel').value = channel;
         document.getElementById('announcement-channel').disabled = true;
@@ -3104,7 +3105,7 @@
         const progress = document.getElementById('announcement-edit-progress');
         if (progress) {
             progress.hidden = channel === 'subscription' || a.status === 'draft';
-            progress.innerHTML = progress.hidden ? '' : `<div style="margin-bottom:.65rem;">Changes apply only to recipients that have not been sent yet. Sent recipients are never added again.</div>${announcementProgressMarkup(a)}`;
+            progress.innerHTML = progress.hidden ? '' : `<div style="margin-bottom:.65rem;">${_t('Changes apply only to recipients that have not been sent yet. Sent recipients are never added again.')}</div>${announcementProgressMarkup(a)}`;
         }
 
         document.getElementById('announcement-start').value = EveDate.formatInput(a.start_at);
@@ -3170,9 +3171,9 @@
         // Label the custom toolbar buttons
         const tb = annQuill.getModule('toolbar').container;
         const btnPicker = tb.querySelector('.ql-ann-btn');
-        if (btnPicker) { btnPicker.title = 'Insert button'; btnPicker.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="3"/><text x="12" y="16" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="sans-serif">BTN</text></svg>'; }
+        if (btnPicker) { btnPicker.title = _t('Insert button'); btnPicker.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="3"/><text x="12" y="16" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="sans-serif">BTN</text></svg>'; }
         const mediaPicker = tb.querySelector('.ql-ann-media');
-        if (mediaPicker) { mediaPicker.title = 'Upload image / video'; mediaPicker.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'; }
+        if (mediaPicker) { mediaPicker.title = _t('Upload image / video'); mediaPicker.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'; }
 
         // RTL by default for Persian content
         annQuill.format('direction', 'rtl');
@@ -3204,18 +3205,18 @@
         dlg.style.cssText = 'position:fixed;inset:0;z-index:19999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6)';
         dlg.innerHTML = `
         <div style="background:#1e293b;border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:24px;width:360px;max-width:94vw;">
-            <h3 style="margin:0 0 16px;font-size:1rem;color:#f1f5f9;">Insert Inline Button</h3>
+            <h3 style="margin:0 0 16px;font-size:1rem;color:#f1f5f9;">${_t('Insert Inline Button')}</h3>
             <div class="form-group" style="margin-bottom:12px;">
-                <label style="font-size:0.82rem;color:#94a3b8;">Button label</label>
-                <input id="ann-btn-label" class="form-input" placeholder="{{ 'مثلاً دریافت کانفیگ' if panel_lang == 'fa' else 'e.g. Get Configuration' }}" style="margin-top:4px;">
+                <label style="font-size:0.82rem;color:#94a3b8;">${_t('Button label')}</label>
+                <input id="ann-btn-label" class="form-input" placeholder="{{ _('e.g. Get Configuration') }}" style="margin-top:4px;">
             </div>
             <div class="form-group" style="margin-bottom:16px;">
-                <label style="font-size:0.82rem;color:#94a3b8;">URL (optional)</label>
+                <label style="font-size:0.82rem;color:#94a3b8;">${_t('URL (optional)')}</label>
                 <input id="ann-btn-url" class="form-input" placeholder="https://..." style="margin-top:4px;">
             </div>
             <div style="display:flex;gap:8px;">
-                <button class="btn btn-primary" style="flex:1;" onclick="annConfirmButton()">Insert</button>
-                <button class="btn btn-secondary" onclick="document.getElementById('ann-btn-dialog').remove()">Cancel</button>
+                <button class="btn btn-primary" style="flex:1;" onclick="annConfirmButton()">${_t('Insert')}</button>
+                <button class="btn btn-secondary" onclick="document.getElementById('ann-btn-dialog').remove()">${_t('Cancel')}</button>
             </div>
         </div>`;
         document.body.appendChild(dlg);
@@ -3249,7 +3250,7 @@
 
         // Show toast with progress
         const toastId = '_annUpload';
-        showToast(`Uploading ${isVideo ? 'video' : 'image'}…`, 'info', 60000);
+        showToast(_t('Uploading {v1}…', {v1: isVideo ? 'video' : 'image'}), 'info', 60000);
 
         const fd = new FormData();
         fd.append('file', file);
@@ -3269,9 +3270,9 @@
             } else {
                 annQuill.insertEmbed(idx, 'image', url);
             }
-            showToast(`${isVideo ? 'Video' : 'Image'} inserted ✓`);
+            showToast(_t('{v1} inserted ✓', {v1: isVideo ? 'Video' : 'Image'}));
         } catch (err) {
-            showToast(`Upload error: ${err.message}`, 'error', 8000);
+            showToast(_t('Upload error: {v1}', {v1: err.message}), 'error', 8000);
         }
     }
 
@@ -3313,26 +3314,26 @@
         }
 
         if (!message) {
-            showToast('Message is required', 'error');
+            showToast(_t('Message is required'), 'error');
             return;
         }
         if (isSubscription && (!startAtJalali || !endAtJalali)) {
-            showToast('Start/End are required', 'error');
+            showToast(_t('Start/End are required'), 'error');
             return;
         }
 
         const deliveryMode = document.getElementById('announcement-delivery-mode')?.value || 'all';
         const dailyLimit = Number(document.getElementById('announcement-daily-limit')?.value || 0);
         if (!isSubscription && deliveryMode === 'daily' && (!Number.isInteger(dailyLimit) || dailyLimit < 1)) {
-            showToast('Enter a valid daily recipient limit', 'error');
+            showToast(_t('Enter a valid daily recipient limit'), 'error');
             return;
         }
         if (channel === 'sms' && !annCheckedValues('announcement-owner-filters').length) {
-            showToast('Select at least one account owner group', 'error');
+            showToast(_t('Select at least one account owner group'), 'error');
             return;
         }
         if (channel === 'sms' && !annCheckedValues('announcement-status-filters').length) {
-            showToast('Select at least one subscription state', 'error');
+            showToast(_t('Select at least one subscription state'), 'error');
             return;
         }
 
@@ -3367,26 +3368,26 @@
                 closeAnnouncementModal();
                 loadAnnouncements();
             } else {
-                showToast('Error: ' + (result.error || 'Unknown'), 'error');
+                showToast(_t('Error:') + (result.error || 'Unknown'), 'error');
             }
         } catch (e) {
-            showToast('Error: ' + (e.message || 'Connection failed'), 'error');
+            showToast(_t('Error:') + (e.message || _t('Connection failed')), 'error');
         }
     }
 
     async function deleteAnnouncement(id) {
-        if (!confirm('Are you sure you want to delete this announcement?')) return;
+        if (!confirm(_t('Are you sure you want to delete this announcement?'))) return;
         try {
             const resp = await fetch(`/api/announcements/${id}`, { method: 'DELETE' });
             const result = await resp.json();
             if (result.success) {
-                showToast('Announcement deleted');
+                showToast(_t('Announcement deleted'));
                 loadAnnouncements();
             } else {
-                showToast('Error: ' + (result.error || 'Unknown'), 'error');
+                showToast(_t('Error:') + (result.error || 'Unknown'), 'error');
             }
         } catch (e) {
-            showToast('Error deleting announcement', 'error');
+            showToast(_t('Error deleting announcement'), 'error');
         }
     }
 
@@ -3399,7 +3400,7 @@
             onlineChatScripts = await response.json();
             renderOnlineChatScripts();
         } catch (e) {
-            showToast('Error loading online chat scripts', 'error');
+            showToast(_t('Error loading online chat scripts'), 'error');
         }
     }
 
@@ -3408,7 +3409,7 @@
         if (!container) return;
 
         if (!onlineChatScripts || onlineChatScripts.length === 0) {
-            container.innerHTML = '<div class="empty-state"><p>No online chat scripts defined</p></div>';
+            container.innerHTML = '<div class="empty-state"><p>' + _t('No online chat scripts defined') + '</p></div>';
             return;
         }
 
@@ -3434,13 +3435,13 @@
 
                 <div class="server-actions" style="gap: 8px; flex-wrap: wrap;">
                     ${item.is_active
-                        ? '<button class="btn btn-success" style="padding: 6px 10px;" disabled>Active</button>'
-                        : `<button class="btn btn-primary" style="padding: 6px 10px;" onclick="activateOnlineChatScript(${item.id})">Activate</button>`
+                        ? '<button class="btn btn-success" style="padding: 6px 10px;" disabled>' + _t('Active') + '</button>'
+                        : `<button class="btn btn-primary" style="padding: 6px 10px;" onclick="activateOnlineChatScript(${item.id})">${_t('Activate')}</button>`
                     }
-                    <button class="action-btn" onclick="openEditOnlineChatModal(${item.id})" title="Edit">
+                    <button class="action-btn" onclick="openEditOnlineChatModal(${item.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>
-                    <button class="action-btn danger" onclick="deleteOnlineChatScript(${item.id})" title="Delete">
+                    <button class="action-btn danger" onclick="deleteOnlineChatScript(${item.id})" title="${_t('Delete')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                 </div>
@@ -3454,7 +3455,7 @@
 
     function openAddOnlineChatModal() {
         document.getElementById('online-chat-id').value = '';
-        document.getElementById('online-chat-modal-title').textContent = 'Add Online Chat Script';
+        document.getElementById('online-chat-modal-title').textContent = _t('Add Online Chat Script');
         document.getElementById('online-chat-name').value = '';
         document.getElementById('online-chat-code').value = '';
         document.getElementById('online-chat-modal').classList.remove('hidden');
@@ -3464,7 +3465,7 @@
         const item = (onlineChatScripts || []).find(x => x.id === id);
         if (!item) return;
         document.getElementById('online-chat-id').value = String(item.id);
-        document.getElementById('online-chat-modal-title').textContent = 'Edit Online Chat Script';
+        document.getElementById('online-chat-modal-title').textContent = _t('Edit Online Chat Script');
         document.getElementById('online-chat-name').value = item.name || '';
         document.getElementById('online-chat-code').value = item.script_code || '';
         document.getElementById('online-chat-modal').classList.remove('hidden');
@@ -3476,11 +3477,11 @@
         const script_code = (document.getElementById('online-chat-code').value || '').trim();
 
         if (!name) {
-            showToast('Name is required', 'error');
+            showToast(_t('Name is required'), 'error');
             return;
         }
         if (!script_code) {
-            showToast('Script code is required', 'error');
+            showToast(_t('Script code is required'), 'error');
             return;
         }
 
@@ -3498,10 +3499,10 @@
                 closeOnlineChatModal();
                 loadOnlineChatScripts();
             } else {
-                showToast('Error: ' + (result.error || 'Unknown'), 'error');
+                showToast(_t('Error:') + (result.error || 'Unknown'), 'error');
             }
         } catch (e) {
-            showToast('Error: ' + (e.message || 'Connection failed'), 'error');
+            showToast(_t('Error:') + (e.message || _t('Connection failed')), 'error');
         }
     }
 
@@ -3510,29 +3511,29 @@
             const resp = await fetch(`/api/online-chat-scripts/${id}/activate`, { method: 'POST' });
             const result = await resp.json();
             if (result.success) {
-                showToast('Online chat script activated');
+                showToast(_t('Online chat script activated'));
                 loadOnlineChatScripts();
             } else {
-                showToast('Error: ' + (result.error || 'Unknown'), 'error');
+                showToast(_t('Error:') + (result.error || 'Unknown'), 'error');
             }
         } catch (e) {
-            showToast('Error activating script', 'error');
+            showToast(_t('Error activating script'), 'error');
         }
     }
 
     async function deleteOnlineChatScript(id) {
-        if (!confirm('Are you sure you want to delete this online chat script?')) return;
+        if (!confirm(_t('Are you sure you want to delete this online chat script?'))) return;
         try {
             const resp = await fetch(`/api/online-chat-scripts/${id}`, { method: 'DELETE' });
             const result = await resp.json();
             if (result.success) {
-                showToast('Online chat script deleted');
+                showToast(_t('Online chat script deleted'));
                 loadOnlineChatScripts();
             } else {
-                showToast('Error: ' + (result.error || 'Unknown'), 'error');
+                showToast(_t('Error:') + (result.error || 'Unknown'), 'error');
             }
         } catch (e) {
-            showToast('Error deleting script', 'error');
+            showToast(_t('Error deleting script'), 'error');
         }
     }
 
@@ -3611,7 +3612,7 @@
             faqs = Array.isArray(data) ? data : (data.faqs || []);
             renderFAQs();
         } catch (e) {
-            showToast('Error loading FAQs: ' + (e.message || e), 'error');
+            showToast(_t('Error loading FAQs:') + (e.message || e), 'error');
         }
     }
 
@@ -3619,7 +3620,7 @@
         const container = document.getElementById('faqs-container');
 
         if (!faqs || faqs.length === 0) {
-            container.innerHTML = '<div class="empty-state"><p>No FAQs defined</p></div>';
+            container.innerHTML = '<div class="empty-state"><p>' + _t('No FAQs defined') + '</p></div>';
             return;
         }
 
@@ -3642,11 +3643,11 @@
                 </div>
 
                 <div class="server-actions">
-                    <button class="action-btn" onclick="openEditFAQModal(${faq.id})" title="Edit">
+                    <button class="action-btn" onclick="openEditFAQModal(${faq.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>
 
-                    <button class="action-btn danger" onclick="deleteFAQ(${faq.id})" title="Delete">
+                    <button class="action-btn danger" onclick="deleteFAQ(${faq.id})" title="${_t('Delete')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                 </div>
@@ -3662,7 +3663,7 @@
         const inp = document.getElementById('faq-video-upload');
         if (inp) inp.value = '';
         const name = document.getElementById('faq-video-file-name');
-        if (name) name.textContent = 'No file chosen';
+        if (name) name.textContent = _t('No file chosen');
         const prog = document.getElementById('faq-video-progress');
         if (prog) prog.style.display = 'none';
         const bar = document.getElementById('faq-video-progress-bar');
@@ -3673,7 +3674,7 @@
 
     function openAddFAQModal() {
         document.getElementById('edit-faq-id').value = '';
-        document.getElementById('faq-modal-title').textContent = 'Add New FAQ';
+        document.getElementById('faq-modal-title').textContent = _t('Add New FAQ');
         
         document.getElementById('edit-faq-platform').value = 'android';
         document.getElementById('edit-faq-title').value = '';
@@ -3684,7 +3685,7 @@
         
         // Reset file upload
         document.getElementById('faq-image-upload').value = '';
-        document.getElementById('faq-file-name').textContent = 'No file chosen';
+        document.getElementById('faq-file-name').textContent = _t('No file chosen');
         _resetFAQVideoUI();
 
         document.getElementById('edit-faq-modal').classList.remove('hidden');
@@ -3693,7 +3694,7 @@
     function openEditFAQModal(id) {
         const faq = faqs.find(f => f.id === id);
         document.getElementById('edit-faq-id').value = faq.id;
-        document.getElementById('faq-modal-title').textContent = 'Edit FAQ';
+        document.getElementById('faq-modal-title').textContent = _t('Edit FAQ');
         
         document.getElementById('edit-faq-platform').value = faq.platform || 'android';
         document.getElementById('edit-faq-title').value = faq.title;
@@ -3704,7 +3705,7 @@
         
         // Reset file upload
         document.getElementById('faq-image-upload').value = '';
-        document.getElementById('faq-file-name').textContent = 'No file chosen';
+        document.getElementById('faq-file-name').textContent = _t('No file chosen');
         _resetFAQVideoUI();
 
         document.getElementById('edit-faq-modal').classList.remove('hidden');
@@ -3722,7 +3723,7 @@
         };
 
         if (!data.title.trim()) {
-            showToast('Title is required', 'error');
+            showToast(_t('Title is required'), 'error');
             return;
         }
 
@@ -3749,26 +3750,26 @@
                 closeFAQModal();
                 loadFAQs();
             } else {
-                showToast('Error: ' + result.error, 'error');
+                showToast(_t('Error:') + result.error, 'error');
             }
         } catch (e) {
-            showToast('Error: ' + (e.message || 'Connection failed'), 'error');
+            showToast(_t('Error:') + (e.message || _t('Connection failed')), 'error');
         }
     }
 
     async function deleteFAQ(id) {
-        if (!confirm('Are you sure you want to delete this FAQ?')) return;
+        if (!confirm(_t('Are you sure you want to delete this FAQ?'))) return;
         
         try {
             const response = await fetch(`/api/faqs/${id}`, { method: 'DELETE' });
             if (response.ok) {
-                showToast('FAQ deleted');
+                showToast(_t('FAQ deleted'));
                 loadFAQs();
             } else {
-                showToast('Error deleting FAQ', 'error');
+                showToast(_t('Error deleting FAQ'), 'error');
             }
         } catch (e) {
-            showToast('Error: ' + (e.message || 'Connection failed'), 'error');
+            showToast(_t('Error:') + (e.message || _t('Connection failed')), 'error');
         }
     }
 
@@ -3795,12 +3796,12 @@
                 
                 if (result.url) {
                     document.getElementById('edit-faq-image').value = result.url;
-                    showToast('Image uploaded successfully');
+                    showToast(_t('Image uploaded successfully'));
                 } else {
-                    showToast('Upload failed: ' + result.error, 'error');
+                    showToast(_t('Upload failed:') + result.error, 'error');
                 }
             } catch (e) {
-                showToast('Upload error', 'error');
+                showToast(_t('Upload error'), 'error');
             } finally {
                 wrapper.classList.remove('uploading');
                 btn.classList.remove('loading');
@@ -3822,7 +3823,7 @@
         btn.classList.add('loading');
         prog.style.display = 'block';
         bar.style.width = '0%';
-        txt.textContent = 'Starting…';
+        txt.textContent = _t('Starting…');
 
         const formData = new FormData();
         formData.append('file', file);
@@ -3839,13 +3840,13 @@
             const spd = sp > 0 ? (e.loaded / sp / 1024 / 1024).toFixed(1) + ' MB/s' : '';
             txt.textContent = `${pct}% · ${mb(e.loaded)} / ${mb(e.total)}${spd ? ' · ' + spd : ''}`;
         };
-        xhr.upload.onload = () => { txt.textContent = 'Processing on server…'; };
+        xhr.upload.onload = () => { txt.textContent = _t('Processing on server…'); };
 
         const cleanup = () => {
             wrapper.classList.remove('uploading');
             btn.classList.remove('loading');
             input.value = '';
-            document.getElementById('faq-video-file-name').textContent = 'No file chosen';
+            document.getElementById('faq-video-file-name').textContent = _t('No file chosen');
         };
 
         xhr.onload = () => {
@@ -3857,8 +3858,8 @@
                 document.getElementById('edit-faq-video').value = url;
                 bar.style.width = '100%';
                 bar.style.background = '#22c55e';
-                txt.textContent = 'Uploaded ✓';
-                showToast('Video uploaded successfully');
+                txt.textContent = _t('Uploaded ✓');
+                showToast(_t('Video uploaded successfully'));
             } else {
                 bar.style.background = '#ef4444';
                 const msg = (res && res.error) || ('Upload failed (HTTP ' + xhr.status + ')');
@@ -3869,8 +3870,8 @@
         xhr.onerror = () => {
             cleanup();
             bar.style.background = '#ef4444';
-            txt.textContent = 'Network error — upload interrupted';
-            showToast('Network error during video upload', 'error', 8000);
+            txt.textContent = _t('Network error — upload interrupted');
+            showToast(_t('Network error during video upload'), 'error', 8000);
         };
 
         // Larger limit + video extensions are handled by /api/app-files/upload.
@@ -3925,20 +3926,20 @@
                 if (result.warning) {
                     showToast(result.warning, 'warning');
                 } else {
-                    showToast('Contact and WhatsApp settings saved successfully');
+                    showToast(_t('Contact and WhatsApp settings saved successfully'));
                 }
             } else {
-                showToast('Error saving contact info', 'error');
+                showToast(_t('Error saving contact info'), 'error');
             }
         } catch (e) {
-            showToast('Error: ' + (e.message || 'Connection failed'), 'error');
+            showToast(_t('Error:') + (e.message || _t('Connection failed')), 'error');
         }
     }
 
     async function testWhatsappConnection() {
         const deploymentRegion = document.getElementById('whatsapp-deployment-region').value;
         if (deploymentRegion === 'iran') {
-            showToast('Server region is Iran. WhatsApp automation is unavailable.', 'warning');
+            showToast(_t('Server region is Iran. WhatsApp automation is unavailable.'), 'warning');
             return;
         }
 
@@ -3951,12 +3952,12 @@
             const result = await response.json();
 
             if (result.success) {
-                showToast('WhatsApp gateway is reachable.');
+                showToast(_t('WhatsApp gateway is reachable.'));
             } else {
                 showToast(result.error || result.message || 'WhatsApp gateway test failed', 'error');
             }
         } catch (e) {
-            showToast('Error: ' + (e.message || 'Connection failed'), 'error');
+            showToast(_t('Error:') + (e.message || _t('Connection failed')), 'error');
         }
     }
 
@@ -4078,13 +4079,13 @@
                 const badgeHtml = `<div class="fm-ext-badge" style="background:${color}20;color:${color};border:1px solid ${color}40;">${label}</div>`;
                 let topHtml = badgeHtml;
                 if (isImage) {
-                    topHtml = `<div class="fm-thumb-wrap" title="Click to preview">
+                    topHtml = `<div class="fm-thumb-wrap" title="${_t('Click to preview')}">
                         <img src="${safeUrl}" class="fm-thumb" alt="${f.name}" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex')">
                         <div class="fm-ext-badge" style="display:none;background:${color}20;color:${color};border:1px solid ${color}40;">${label}</div>
                         <div class="fm-thumb-overlay">🔍</div>
                     </div>`;
                 } else if (isVideo) {
-                    topHtml = `<div class="fm-video-wrap" title="Click to play"><div class="fm-play-btn">▶</div></div>`;
+                    topHtml = `<div class="fm-video-wrap" title="${_t('Click to play')}"><div class="fm-play-btn">▶</div></div>`;
                 }
 
                 card.innerHTML = `
@@ -4094,9 +4095,9 @@
                     <div class="fm-actions">
                         <button class="fm-btn fm-btn-select" title="${selectable ? 'Use this file' : 'Not compatible'}" ${selectable ? '' : 'disabled style="opacity:0.35;cursor:not-allowed;"'}>
                             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                            Select
+                            ${_t('Select')}
                         </button>
-                        <button class="fm-btn fm-btn-delete" title="Delete file">
+                        <button class="fm-btn fm-btn-delete" title="${_t('Delete file')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                         </button>
                     </div>`;
@@ -4159,7 +4160,7 @@
         });
 
         async function deleteFile(filename, cardEl) {
-            if (!confirm(`Delete "${filename}"?`)) return;
+            if (!confirm(_t('Delete "{filename}"?', {filename}))) return;
             try {
                 const resp = await fetch(`/api/app-files/${encodeURIComponent(filename)}`, { method: 'DELETE' });
                 const data = await resp.json();
@@ -4169,12 +4170,12 @@
                     if (!document.querySelectorAll('#fm-grid .fm-card').length) {
                         document.getElementById('fm-empty').style.display = 'block';
                     }
-                    showToast('File deleted.');
+                    showToast(_t('File deleted.'));
                 } else {
                     showToast(data.error || 'Delete failed', 'error');
                 }
             } catch (e) {
-                showToast(`Delete failed: ${e.message || e}`, 'error');
+                showToast(_t('Delete failed: {v1}', {v1: e.message || e}), 'error');
             }
         }
 
@@ -4201,14 +4202,14 @@
                 }
             } catch (e) {
                 banner.style.display = 'block';
-                errText.textContent = `Network error: ${e.message || e}`;
+                errText.textContent = _t('Network error: {v1}', {v1: e.message || e});
             }
         }
 
         async function runFmSetup() {
             const banner = document.getElementById('fm-setup-banner');
             const errText = document.getElementById('fm-setup-error-text');
-            errText.textContent = 'Running setup…';
+            errText.textContent = _t('Running setup…');
             try {
                 const resp = await fetch('/api/app-files/setup', { method: 'POST' });
                 const data = await resp.json();
@@ -4217,13 +4218,13 @@
                 ).join('\n');
                 if (data.success) {
                     banner.style.display = 'none';
-                    showToast('Setup complete — upload directory is ready', 'success');
+                    showToast(_t('Setup complete — upload directory is ready'), 'success');
                     loadFmFiles();
                 } else {
                     errText.textContent = (data.error ? data.error + '\n\n' : '') + lines;
                 }
             } catch (e) {
-                errText.textContent = `Setup request failed: ${e.message || e}`;
+                errText.textContent = _t('Setup request failed: {v1}', {v1: e.message || e});
             }
         }
 
@@ -4262,9 +4263,9 @@
                         if (xhr.status >= 200 && xhr.status < 300) {
                             try {
                                 const res = JSON.parse(xhr.responseText);
-                                if (!res.success) showToast(res.error || `Upload failed: ${file.name}`, 'error');
+                                if (!res.success) showToast(res.error || _t('Upload failed: {v1}', {v1: file.name}), 'error');
                             } catch (_) {
-                                showToast(`Unexpected server response for: ${file.name}`, 'error');
+                                showToast(_t('Unexpected server response for: {v1}', {v1: file.name}), 'error');
                             }
                         } else {
                             // Try to extract meaningful error from response body (JSON or plain text)
@@ -4281,7 +4282,7 @@
                             if (xhr.status === 413) {
                                 showToast(`File too large: "${file.name}". Add client_max_body_size 512m to Nginx config.`, 'error', 8000);
                             } else if (xhr.status === 403 || xhr.status === 401) {
-                                showToast('Permission denied. Are you logged in as superadmin?', 'error');
+                                showToast(_t('Permission denied. Are you logged in as superadmin?'), 'error');
                             } else if (xhr.status === 402 || isCdnBlock) {
                                 const body = xhr.responseText ? xhr.responseText.replace(/<[^>]+>/g,'').replace(/\s+/g,' ').trim().slice(0,160) : '';
                                 showToast(
@@ -4290,12 +4291,12 @@
                                 );
                             } else {
                                 const msg = detail || `HTTP ${xhr.status}`;
-                                showToast(`Upload failed (${xhr.status}): ${msg}`, 'error', 8000);
+                                showToast(_t('Upload failed ({v1}): {msg}', {v1: xhr.status, msg}), 'error', 8000);
                             }
                         }
                         resolve();
                     };
-                    xhr.onerror = () => { showToast(`Network error while uploading: ${file.name}`, 'error'); resolve(); };
+                    xhr.onerror = () => { showToast(_t('Network error while uploading: {v1}', {v1: file.name}), 'error'); resolve(); };
                     xhr.send(fd);
                 });
             }
@@ -4384,7 +4385,7 @@
             window._bcDefaultDesc = data.default_description || '';
             renderBackupConfigs();
         } catch (e) {
-            showToast('Failed to load backup configs', 'error');
+            showToast(_t('Failed to load backup configs'), 'error');
         }
     }
 
@@ -4392,7 +4393,7 @@
         const container = document.getElementById('backup-config-container');
         if (!container) return;
         if (!_backupConfigs.length) {
-            container.innerHTML = '<div class="empty-state"><p>No backup configs yet. Click "Add Config" to create one.</p></div>';
+            container.innerHTML = '<div class="empty-state"><p>' + _t('No backup configs yet. Click "Add Config" to create one.') + '</p></div>';
             return;
         }
         container.innerHTML = _backupConfigs.map(bc => `
@@ -4406,12 +4407,12 @@
                             </span>
                         </div>
                         <div style="font-size:0.78rem; color:var(--text-secondary);">
-                            ${bc.server_name ? `<span style="margin-right:8px;">🖥️ ${escapeHtml(bc.server_name)}</span>` : '<span style="margin-right:8px; opacity:0.6;">All servers</span>'}
+                            ${bc.server_name ? `<span style="margin-right:8px;">🖥️ ${escapeHtml(bc.server_name)}</span>` : '<span style="margin-right:8px; opacity:0.6;">' + _t('All servers') + '</span>'}
                         </div>
                     </div>
                     <div style="display:flex; gap:6px; flex-shrink:0;">
-                        <button class="btn btn-secondary" style="padding:5px 10px; font-size:0.8rem;" onclick="openBackupConfigModal(${bc.id})">Edit</button>
-                        <button class="btn btn-danger" style="padding:5px 10px; font-size:0.8rem;" onclick="deleteBackupConfig(${bc.id})">Delete</button>
+                        <button class="btn btn-secondary" style="padding:5px 10px; font-size:0.8rem;" onclick="openBackupConfigModal(${bc.id})">${_t('Edit')}</button>
+                        <button class="btn btn-danger" style="padding:5px 10px; font-size:0.8rem;" onclick="deleteBackupConfig(${bc.id})">${_t('Delete')}</button>
                     </div>
                 </div>
                 <div style="font-family:monospace; font-size:0.75rem; color:var(--text-secondary); background:var(--bg-dark); border:1px solid var(--border-color); border-radius:8px; padding:8px 12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:default;" title="${escapeHtml(bc.config_url)}">
@@ -4425,7 +4426,7 @@
     function populateBcServerSelect() {
         const sel = document.getElementById('bc-server-id');
         if (!sel) return;
-        sel.innerHTML = '<option value="">— All servers —</option>'
+        sel.innerHTML = '<option value="">' + _t('— All servers —') + '</option>'
             + _bcServers.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
     }
 
@@ -4435,7 +4436,7 @@
         if (id) {
             const bc = _backupConfigs.find(x => x.id === id);
             if (!bc) return;
-            document.getElementById('bc-modal-title').textContent = 'Edit Backup Config';
+            document.getElementById('bc-modal-title').textContent = _t('Edit Backup Config');
             document.getElementById('bc-id').value = bc.id;
             document.getElementById('bc-server-id').value = bc.server_id || '';
             document.getElementById('bc-title').value = bc.title;
@@ -4444,7 +4445,7 @@
             document.getElementById('bc-is-enabled').checked = bc.is_enabled;
             document.getElementById('bc-sort-order').value = bc.sort_order || 0;
         } else {
-            document.getElementById('bc-modal-title').textContent = 'Add Backup Config';
+            document.getElementById('bc-modal-title').textContent = _t('Add Backup Config');
             document.getElementById('bc-id').value = '';
             document.getElementById('bc-server-id').value = '';
             document.getElementById('bc-title').value = '';
@@ -4464,8 +4465,8 @@
         const id = document.getElementById('bc-id').value;
         const title = (document.getElementById('bc-title').value || '').trim();
         const config_url = (document.getElementById('bc-config-url').value || '').trim();
-        if (!title) { showToast('Title is required', 'error'); document.getElementById('bc-title').focus(); return; }
-        if (!config_url) { showToast('Config URL is required', 'error'); document.getElementById('bc-config-url').focus(); return; }
+        if (!title) { showToast(_t('Title is required'), 'error'); document.getElementById('bc-title').focus(); return; }
+        if (!config_url) { showToast(_t('Config URL is required'), 'error'); document.getElementById('bc-config-url').focus(); return; }
 
         const payload = {
             title,
@@ -4489,24 +4490,24 @@
                 showToast(data.error || 'Save failed', 'error');
             }
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast(_t('Network error'), 'error');
         }
     }
 
     async function deleteBackupConfig(id) {
         const bc = _backupConfigs.find(x => x.id === id);
-        if (!confirm(`Delete "${bc ? bc.title : id}"?`)) return;
+        if (!confirm(_t('Delete "{v1}"?', {v1: bc ? bc.title : id}))) return;
         try {
             const res = await fetch(`/api/backup-configs/${id}`, { method: 'DELETE' });
             const data = await res.json();
             if (data.success) {
-                showToast('Deleted', 'success');
+                showToast(_t('Deleted'), 'success');
                 loadBackupConfigs();
             } else {
                 showToast(data.error || 'Delete failed', 'error');
             }
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast(_t('Network error'), 'error');
         }
     }
 
