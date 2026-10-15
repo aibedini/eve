@@ -70,6 +70,17 @@ class Admin(db.Model):
         return check_password_hash(self.password_hash, password)
     
     def to_dict(self):
+        mfa = None
+        try:
+            from panel.models.ops import AdminMFASetting
+            row = AdminMFASetting.query.filter_by(admin_id=self.id).first()
+            if row:
+                mfa = {
+                    'enabled': bool(row.enabled),
+                    'configured': bool(row.totp_secret and row.confirmed_at),
+                }
+        except Exception:
+            pass
         return {
             'id': self.id,
             'username': self.username,
@@ -92,7 +103,8 @@ class Admin(db.Model):
             'channel_telegram': self.channel_telegram,
             'channel_whatsapp': self.channel_whatsapp,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'last_login': self.last_login.isoformat() if self.last_login else None
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'mfa': mfa,
         }
 
 class Server(db.Model):

@@ -1114,5 +1114,12 @@ FA = {
     '🔑 Key:': '🔑 کلید:',
     '🚫 Volume ended': '🚫 حجم تمام\u200cشده',
     '🚫 Volume ended (Monitor “Ended”)': '🚫 حجم تمام\u200cشده (مانیتور «تمام\u200cشده»)',
+    'Two-Step Verification (2FA)': 'تأیید دومرحله‌ای (2FA)',
+    'Control the global 2FA requirement and how long a verified device is remembered.': 'تنظیم نیاز سراسری 2FA و مدت‌زمان ذخیرهٔ دستگاه تأییدشده.',
+    'Enable Two-Step Verification': 'فعال‌سازی تأیید دومرحله‌ای',
+    'When disabled, no user is asked for a 2FA code at login, even if they have it configured.': 'وقتی غیرفعال باشد، هیچ کاربری هنگام ورود کد 2FA درخواست نمی‌شود، حتی اگر آن را تنظیم کرده باشد.',
+    'Trust Device Duration (Hours)': 'مدت اعتماد به دستگاه (ساعت)',
+    'After a successful 2FA verification, the device is remembered for this many hours. Default: 72 (3 days).': 'پس از تأیید موفق 2FA، دستگاه به مدت این تعداد ساعت ذخیره می‌شود. پیش‌فرض: ۷۲ (۳ روز).',
+    'Session settings saved': 'تنظیمات نشست ذخیره شد',
 }
 register('settings', FA)

@@ -22,8 +22,9 @@ from panel.routes.common import (
 )
 from panel.security import client_ip, hash_bearer_token
 from panel.services.mfa import (
-    generate_backup_codes, generate_totp_secret, normalize_backup_code,
-    provisioning_uri, verify_totp,
+    MFA_TRUST_COOKIE, create_trust_token, generate_backup_codes,
+    generate_totp_secret, normalize_backup_code, provisioning_uri,
+    trust_max_age_seconds, verify_totp, verify_trust_token,
 )
 from panel.services.sessions import (
     SESSION_TOKEN_KEY, create_session, list_sessions, mark_step_up,
@@ -239,6 +240,12 @@ def login():
                     return (jsonify({"success": True, "mfa_enrollment_required": True, "redirect": dest})
                             if request.is_json else redirect(dest))
                 if _mfa_configured(admin.id):
+                    trust_tok = request.cookies.get(MFA_TRUST_COOKIE)
+                    if verify_trust_token(trust_tok, admin.id):
+                        _establish_session(admin, mfa_verified=True)
+                        _audit('auth.login.success', admin, meta={'mfa': 'trusted_device'})
+                        db.session.commit()
+                        return jsonify({"success": True}) if request.is_json else redirect(url_for('pages.dashboard'))
                     _pending_start(admin, enrolled=True)
                     _audit('auth.login.mfa_required', admin)
                     db.session.commit()
@@ -302,9 +309,17 @@ def mfa_verify():
     _establish_session(admin, mfa_verified=True)
     _audit('auth.mfa.success', admin)
     db.session.commit()
+    trust_tok = create_trust_token(admin.id)
     if request.is_json:
-        return jsonify({"success": True, "redirect": url_for('pages.dashboard')})
-    return redirect(url_for('pages.dashboard'))
+        resp = jsonify({"success": True, "redirect": url_for('pages.dashboard')})
+    else:
+        resp = redirect(url_for('pages.dashboard'))
+    resp.set_cookie(
+        MFA_TRUST_COOKIE, trust_tok,
+        max_age=trust_max_age_seconds(),
+        httponly=True, samesite='Lax', secure=request.is_secure,
+    )
+    return resp
 
 
 @bp.route('/mfa/setup')
@@ -355,9 +370,19 @@ def mfa_confirm():
     _establish_session(admin, mfa_verified=True, commit=False)
     _audit('auth.mfa.enrolled', admin, meta={'backup_codes': len(codes)})
     db.session.commit()
+    trust_tok = create_trust_token(admin.id)
     if request.is_json:
-        return jsonify({"success": True, "backup_codes": codes})
-    return render_template('mfa_backup_codes.html', codes=codes)
+        resp = jsonify({"success": True, "backup_codes": codes})
+    else:
+        resp = render_template('mfa_backup_codes.html', codes=codes)
+        from flask import make_response
+        resp = make_response(resp)
+    resp.set_cookie(
+        MFA_TRUST_COOKIE, trust_tok,
+        max_age=trust_max_age_seconds(),
+        httponly=True, samesite='Lax', secure=request.is_secure,
+    )
+    return resp
 
 
 @bp.route('/api/mfa/step-up', methods=['POST'])
@@ -377,6 +402,76 @@ def mfa_step_up():
     _audit('auth.mfa.step_up', admin)
     db.session.commit()
     return jsonify({"success": True})
+
+
+@bp.route('/api/mfa/deactivate', methods=['POST'])
+@limiter.limit("10 per minute")
+@login_required
+def mfa_deactivate():
+    """Deactivate 2FA for the current user. Requires a valid TOTP code.
+    The secret is preserved so re-activation does not require a new QR scan."""
+    admin = current_admin()
+    payload = (request.get_json(silent=True) or {}) if request.is_json else request.form
+    code = (payload.get('code') or '').strip()
+    if not _mfa_confirmed(admin.id):
+        return jsonify({"success": False, "error": "MFA is not enabled"}), 400
+    if not _consume_mfa_code(admin, code):
+        _audit('auth.mfa.deactivate_failed', admin)
+        db.session.commit()
+        return jsonify({"success": False, "error": "Invalid code"}), 401
+    setting = AdminMFASetting.query.filter_by(admin_id=admin.id).first()
+    setting.enabled = False
+    _audit('auth.mfa.deactivated', admin)
+    db.session.commit()
+    resp = jsonify({"success": True})
+    resp.delete_cookie(MFA_TRUST_COOKIE, samesite='Lax')
+    return resp
+
+
+@bp.route('/api/mfa/reactivate', methods=['POST'])
+@limiter.limit("10 per minute")
+@login_required
+def mfa_reactivate():
+    """Re-activate 2FA using the stored secret. Requires a valid TOTP code."""
+    admin = current_admin()
+    payload = (request.get_json(silent=True) or {}) if request.is_json else request.form
+    code = (payload.get('code') or '').strip()
+    setting = AdminMFASetting.query.filter_by(admin_id=admin.id).first()
+    if not setting or not setting.totp_secret or not setting.confirmed_at:
+        return jsonify({"success": False, "error": "No 2FA secret configured. Set up 2FA first."}), 400
+    if setting.enabled:
+        return jsonify({"success": False, "error": "2FA is already active"}), 400
+    ok, counter = verify_totp(setting.totp_secret, code, last_counter=setting.last_counter)
+    if not ok:
+        _audit('auth.mfa.reactivate_failed', admin)
+        db.session.commit()
+        return jsonify({"success": False, "error": "Invalid code"}), 401
+    setting.enabled = True
+    setting.last_counter = counter
+    _audit('auth.mfa.reactivated', admin)
+    db.session.commit()
+    resp = jsonify({"success": True})
+    resp.set_cookie(
+        MFA_TRUST_COOKIE, create_trust_token(admin.id),
+        max_age=trust_max_age_seconds(),
+        httponly=True, samesite='Lax', secure=request.is_secure,
+    )
+    return resp
+
+
+@bp.route('/api/mfa/status', methods=['GET'])
+@login_required
+def mfa_status():
+    """Return 2FA status for the current user."""
+    admin = current_admin()
+    setting = AdminMFASetting.query.filter_by(admin_id=admin.id).first()
+    has_secret = bool(setting and setting.totp_secret and setting.confirmed_at)
+    return jsonify({
+        "success": True,
+        "enabled": bool(setting and setting.enabled),
+        "configured": has_secret,
+        "confirmed_at": setting.confirmed_at.isoformat() + 'Z' if setting and setting.confirmed_at else None,
+    })
 
 
 @bp.route('/api/sessions', methods=['GET'])
@@ -579,7 +674,13 @@ def webauthn_login_complete():
     _establish_session(admin, mfa_verified=True, commit=False)
     _audit('auth.webauthn.success', admin)
     db.session.commit()
-    return jsonify({'success': True, 'redirect': url_for('pages.dashboard')})
+    resp = jsonify({'success': True, 'redirect': url_for('pages.dashboard')})
+    resp.set_cookie(
+        MFA_TRUST_COOKIE, create_trust_token(admin.id),
+        max_age=trust_max_age_seconds(),
+        httponly=True, samesite='Lax', secure=request.is_secure,
+    )
+    return resp
 
 
 @bp.route('/api/webauthn/credentials', methods=['GET'])

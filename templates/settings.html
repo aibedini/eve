@@ -1999,6 +1999,30 @@
                     <small class="text-secondary">{{ _('Default is 168 hours (7 days). Set to a higher value to keep users logged in longer.') }}</small>
                 </div>
             </div>
+
+            <div class="panel-card" style="margin-top:16px;">
+                <div class="panel-card-header">
+                    <div class="header-content">
+                        <h2>{{ _('Two-Step Verification (2FA)') }}</h2>
+                        <p class="text-secondary">{{ _('Control the global 2FA requirement and how long a verified device is remembered.') }}</p>
+                    </div>
+                </div>
+
+                <label class="form-group form-toggle-item" style="cursor:pointer;margin-bottom:8px;">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="mfa-global-enabled" checked>
+                        <span class="slider"></span>
+                    </div>
+                    <span>{{ _('Enable Two-Step Verification') }}</span>
+                </label>
+                <small class="text-secondary" style="display:block;margin:-2px 0 14px;">{{ _('When disabled, no user is asked for a 2FA code at login, even if they have it configured.') }}</small>
+
+                <div class="form-group">
+                    <label>{{ _('Trust Device Duration (Hours)') }}</label>
+                    <input type="number" id="mfa-trust-hours" class="form-control" min="1" max="720" value="72">
+                    <small class="text-secondary">{{ _('After a successful 2FA verification, the device is remembered for this many hours. Default: 72 (3 days).') }}</small>
+                </div>
+            </div>
         </div>
 
         <!-- System Logs / Health Check tab -->
@@ -10006,6 +10030,10 @@
             const data = await res.json();
             if (data.success) {
                 document.getElementById('session-timeout').value = data.timeout_hours;
+                const mfaToggle = document.getElementById('mfa-global-enabled');
+                if (mfaToggle) mfaToggle.checked = !!data.mfa_global_enabled;
+                const trustInput = document.getElementById('mfa-trust-hours');
+                if (trustInput) trustInput.value = data.mfa_trust_hours || 72;
             }
         } catch (e) {
             console.error('Error loading session settings:', e);
@@ -10014,11 +10042,17 @@
 
     async function saveSessionSettings() {
         const hours = document.getElementById('session-timeout').value;
+        const mfaEnabled = document.getElementById('mfa-global-enabled')?.checked ?? true;
+        const trustHours = document.getElementById('mfa-trust-hours')?.value || 72;
         try {
             const res = await fetch('/api/settings/session', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ timeout_hours: hours })
+                body: JSON.stringify({
+                    timeout_hours: hours,
+                    mfa_global_enabled: mfaEnabled,
+                    mfa_trust_hours: parseInt(trustHours, 10),
+                })
             });
             const data = await res.json();
             if (data.success) {

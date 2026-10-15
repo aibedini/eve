@@ -1,3 +1,37 @@
+﻿# Eve - Xui Manager v2.13.0
+
+## [2.13.0] - 2026-10-15
+
+This release redesigns the Royalty (Idle Accounts) page from a card grid into a grouped data table.
+
+**Grouped table.** Accounts that share a phone number are grouped into expandable/collapsible rows with an indeterminate checkbox for bulk selection. Ungrouped accounts (no phone detected) appear as individual rows. Stats pills at the top show phone count, shared count and no-phone count.
+
+**All actions preserved.** Search, window/server/reseller filters, Select All, per-row checkboxes, bulk actions (volume policy, volume multiplier, add days, add volume, enable/disable/delete, assign owner) and per-account Send SMS/WhatsApp all work as before.
+
+**Responsive.** The table adapts at three breakpoints: owner column hides at 1100px, send button label hides at 860px, and below 640px the table switches to a CSS grid card layout with 44px touch targets and no horizontal scroll.
+
+**Persian.** 152 new translation entries cover every string on the page. The Royalty page now follows the panel language like the other translated pages.
+
+**Upgrade notes.** No schema migration is required. The page layout changes are CSS and template only.
+
+# Eve - Xui Manager v2.12.0
+
+## [2.12.0] - 2026-10-15
+
+This release adds full Two-Factor Authentication (2FA) lifecycle management: trusted-device session persistence, safe deactivation without losing the secret, per-user admin management and a global enable/disable toggle.
+
+**Trusted device.** After a successful TOTP or WebAuthn login, an HMAC-signed cookie (`eve_mfa_trust`) remembers the device for a configurable duration (default 72 hours, max 720). On the next login from the same browser the MFA challenge is skipped automatically. The duration is set in Settings → Session. Clearing the cookie or logging out from another device removes the trust.
+
+**Safe deactivation.** A user who wants to turn off 2FA must enter a live TOTP code first — this prevents lockout of the account. Disabling sets a flag (`enabled=False`) but keeps the secret and enrollment timestamp intact, so reactivating later is a one-click toggle with no QR re-scan required.
+
+**Admin management.** The user-edit modal in the Admins page shows a 2FA status badge (Active / Inactive / Not configured) for every admin and reseller. A superadmin can force-disable 2FA for any user without knowing their TOTP code, which is useful when a user loses their authenticator app. Step-up authentication is required for this action.
+
+**Global toggle.** A new Settings → Session option lets a superadmin disable the 2FA requirement for all users at once, without touching individual records. Useful for maintenance windows or initial rollout testing.
+
+**Security notes.** Trust tokens are HMAC-SHA256 signed with the deployment's `SECRET_KEY` and bound to a specific admin ID, so a token cannot be replayed for a different account. The deactivation endpoint is rate-limited and all deactivation attempts (successful or not) are written to the audit log.
+
+**Upgrade notes.** No schema migration is required — `AdminMFASetting` and `SystemSetting` already exist. The new cookie is set only after a successful MFA verification; existing sessions are not affected. The `mfa_global_enabled` setting defaults to `True` (requirement on) if the row is absent.
+
 # Eve - Xui Manager v2.11.0
 
 ## [2.11.0] - 2026-10-15
