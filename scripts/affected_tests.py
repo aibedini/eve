@@ -209,6 +209,14 @@ MAPPING = (
         ['tests.test_i18n_pages'],
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
     )),
+    ('templates/settings.html', (
+        ['tests.test_i18n_pages'],
+        ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
+    )),
+    ('templates/sub_manager.html', (
+        ['tests.test_i18n_pages'],
+        ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
+    )),
     ('templates/monitor.html', (
         ['tests.test_i18n_pages'],
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
@@ -242,7 +250,7 @@ MAPPING = (
         ['tests.test_ui_design_system', 'tests.test_static_caching'],
     )),
     ('templates/dashboard.html', (
-        ['tests.test_dashboard_live', 'tests.test_renew_ui_state'],
+        ['tests.test_dashboard_live', 'tests.test_i18n_pages', 'tests.test_renew_ui_state'],
         ['tests.test_ui_design_system', 'tests.test_subscription_scope',
          'tests.test_static_deploy_contract'],
     )),

@@ -39,6 +39,8 @@ function fixture(sseEnabled = true) {
         addEventListener: (name, callback) => { events[name] = callback; },
         localStorage: { getItem: () => null, setItem: () => {} },
         location: { origin: 'https://eve.test' },
+        // base.html's panel-language helper: English text is returned unchanged.
+        _t: (text, vars) => (vars ? text.replace(/\{(\w+)\}/g, (m, k) => (vars[k] == null ? m : vars[k])) : text),
     };
     sandbox.window = sandbox;
     vm.createContext(sandbox);
