@@ -1,5 +1,13 @@
 ﻿# Changelog - Eve
 
+## [2.14.0] - 2026-10-15
+
+### Performance
+- **WOFF2 fonts.** All 10 font files (Inter 300-700, Vazirmatn 300-700) converted from TTF to WOFF2. Total font payload drops from 2,102 KB to 760 KB (64% smaller). TTF kept as fallback.
+- **Inline flag SVGs.** All 271 country flag SVGs bundled into a single cached flag-data.js file (~1.9 MB), eliminating ~50+ individual HTTP requests per dashboard load. Graceful fallback to individual SVG loading if the bundle is missing.
+- **Strip raw_client from API response.** The /api/refresh endpoint no longer sends the redundant raw_client field to the browser, saving ~1.4 MB per response at scale. The field remains in memory for server-side use.
+- **Extract dashboard JS.** The inline script block (8,673 lines) is moved to a cacheable static/dashboard.js. The template drops from 10,381 to 1,722 lines. Returning visitors load the JS from browser cache. A small inline config block (window.EVE_DASHBOARD) passes server-rendered values.
+
 ## [2.13.0] - 2026-10-15
 
 ### Changed
