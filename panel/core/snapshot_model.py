@@ -215,6 +215,7 @@ def materialize_retained_inbounds(inbounds, normalized_server_ids, keys=None):
             if not isinstance(client, dict):
                 continue
             row = copy.deepcopy(client)
+            row.pop('raw_client', None)
             row['inbound_id'] = inbound.get('id')
             view['clients'].append(row)
         result.append(view)
@@ -258,7 +259,8 @@ def compact_wire_inbounds(inbounds, normalized_server_ids=(), keys=None):
             slot = slots.get(id(client))
             if slot is None:
                 slot = slots[id(client)] = len(table)
-                table.append(client)
+                wire_client = {k: v for k, v in client.items() if k != 'raw_client'} if isinstance(client, dict) else client
+                table.append(wire_client)
             refs.append(slot)
         view['client_refs'] = refs
         if stamp:

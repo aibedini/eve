@@ -554,6 +554,14 @@ def api_refresh():
         if s['server_id'] in unique_server_ids
     ]
 
+    # Strip raw_client from client dicts: needed in-memory but not on the wire.
+    for _inb in filtered_inbounds:
+        _inb['clients'] = [
+            {k: v for k, v in c.items() if k != 'raw_client'}
+            if isinstance(c, dict) else c
+            for c in _inb.get('clients') or []
+        ]
+
     resp = {
         "success": True,
         "sync": {
