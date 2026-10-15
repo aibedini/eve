@@ -932,9 +932,13 @@ def ssl_apply():
 def get_session_settings():
     from app import app  # deferred: app-level helper, avoids circular import
     setting = db.session.get(SystemSetting, 'session_timeout_hours')
+    mfa_global = db.session.get(SystemSetting, 'mfa_global_enabled')
+    mfa_trust = db.session.get(SystemSetting, 'mfa_trust_hours')
     return jsonify({
         'success': True,
-        'timeout_hours': int(setting.value) if setting else 168 # Default 7 days = 168 hours
+        'timeout_hours': int(setting.value) if setting else 168,
+        'mfa_global_enabled': str(mfa_global.value).strip().lower() not in ('0', 'false', 'off', 'no', '') if mfa_global else True,
+        'mfa_trust_hours': int(mfa_trust.value) if mfa_trust and mfa_trust.value else 72,
     })
 
 
@@ -948,19 +952,26 @@ def save_session_settings():
         hours = int(data.get('timeout_hours', 168))
         if hours < 1:
             return jsonify({'success': False, 'message': 'Timeout must be at least 1 hour'}), 400
-            
+
         setting = db.session.get(SystemSetting, 'session_timeout_hours')
         if not setting:
             setting = SystemSetting(key='session_timeout_hours', value=str(hours))
             db.session.add(setting)
         else:
             setting.value = str(hours)
-            
+
+        if 'mfa_global_enabled' in data:
+            _set_system_setting_value('mfa_global_enabled', '1' if data['mfa_global_enabled'] else '0')
+
+        if 'mfa_trust_hours' in data:
+            trust_h = max(1, min(int(data['mfa_trust_hours']), 720))
+            _set_system_setting_value('mfa_trust_hours', str(trust_h))
+
         db.session.commit()
-        
+
         # Update config immediately
         app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=hours)
-        
+
         return jsonify({'success': True, 'message': 'Session settings saved'})
     except ValueError:
         return jsonify({'success': False, 'message': 'Invalid value'}), 400

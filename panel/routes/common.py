@@ -55,9 +55,20 @@ def admin_is_superadmin(admin) -> bool:
     return bool(admin and (admin.role == 'superadmin' or admin.is_superadmin))
 
 
+def mfa_global_enabled() -> bool:
+    """True unless the site-wide 2FA toggle is explicitly off."""
+    from panel.models import SystemSetting
+    row = db.session.get(SystemSetting, 'mfa_global_enabled')
+    if row is None:
+        return True
+    return str(row.value).strip().lower() not in ('0', 'false', 'off', 'no', '')
+
+
 def mfa_required_for(admin) -> bool:
     """True when the account must complete MFA before a session is granted."""
     if not admin or not bool(admin.enabled):
+        return False
+    if not mfa_global_enabled():
         return False
     raw = (__import__('os').environ.get('EVE_MFA_REQUIRED_ROLES') or 'superadmin').strip().lower()
     if raw in ('', 'none', 'off', 'false', '0'):

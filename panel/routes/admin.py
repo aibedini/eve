@@ -10,9 +10,9 @@ from werkzeug.utils import secure_filename
 
 from panel.extensions import db
 from panel.models import (
-    Admin, AuditLog, ClientOperation, ClientOwnership, PriceTier, PulseRun, RenewalEvent, Server,
-    SystemConfig, Transaction, UsageCounterState, UsageDaily, UsageHourly,
-    announcement_servers,
+    Admin, AdminMFASetting, AuditLog, ClientOperation, ClientOwnership,
+    PriceTier, PulseRun, RenewalEvent, Server, SystemConfig, Transaction,
+    UsageCounterState, UsageDaily, UsageHourly, announcement_servers,
 )
 from panel.routes.common import (
     current_admin, current_permissions, login_required, paginate_query,
@@ -406,6 +406,44 @@ def set_admin_permissions(admin_id):
         'permissions': sorted(permissions_for(target)),
         'overrides': overrides_for(target.id),
     })
+
+
+@bp.route('/api/admins/<int:admin_id>/mfa', methods=['GET'])
+@permission_required('admins.manage')
+def get_admin_mfa_status(admin_id):
+    target = db.session.get(Admin, admin_id)
+    if target is None:
+        return jsonify({'success': False, 'error': 'Admin not found'}), 404
+    setting = AdminMFASetting.query.filter_by(admin_id=admin_id).first()
+    return jsonify({
+        'success': True,
+        'mfa_enabled': bool(setting and setting.enabled),
+        'mfa_configured': bool(setting and setting.totp_secret and setting.confirmed_at),
+        'confirmed_at': setting.confirmed_at.isoformat() + 'Z' if setting and setting.confirmed_at else None,
+    })
+
+
+@bp.route('/api/admins/<int:admin_id>/mfa/force-disable', methods=['POST'])
+@permission_required('admins.manage')
+@step_up_required('admins.manage')
+def force_disable_admin_mfa(admin_id):
+    """Superadmin force-disables 2FA for another user (keeps the secret)."""
+    from app import _log_audit
+    target = db.session.get(Admin, admin_id)
+    if target is None:
+        return jsonify({'success': False, 'error': 'Admin not found'}), 404
+    editor = current_admin()
+    editor_is_super = bool(editor and (editor.role == 'superadmin' or editor.is_superadmin))
+    if not editor_is_super:
+        return jsonify({'success': False, 'error': 'Only superadmins can force-disable MFA'}), 403
+    setting = AdminMFASetting.query.filter_by(admin_id=admin_id).first()
+    if not setting or not setting.enabled:
+        return jsonify({'success': False, 'error': '2FA is not active for this user'}), 400
+    setting.enabled = False
+    _log_audit('admins.mfa_force_disabled', target, actor=editor,
+               meta={'target_id': admin_id})
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 @bp.route('/api/servers', methods=['GET'])

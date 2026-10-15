@@ -90,3 +90,70 @@ def generate_backup_codes(count: int = 10) -> list[str]:
 
 def normalize_backup_code(code) -> str:
     return str(code or '').strip().replace('-', '').replace(' ', '').upper()
+
+
+# ── Trusted-device tokens ────────────────────────────────────────────────────
+# A signed HMAC token stored in a long-lived cookie so the user is not
+# prompted for 2FA on every login.  The token binds to (admin_id, secret) and
+# expires after a configurable number of hours.
+
+MFA_TRUST_HOURS_DEFAULT = 72
+MFA_TRUST_COOKIE = 'eve_mfa_trust'
+
+_TRUST_SEP = '.'
+
+
+def _trust_key() -> bytes:
+    import os
+    raw = os.environ.get('SECRET_KEY') or os.environ.get('EVE_SECRET_KEY') or 'eve-fallback-key'
+    return hashlib.sha256(('mfa-trust:' + raw).encode()).digest()
+
+
+def create_trust_token(admin_id: int) -> str:
+    """Return a signed token that proves MFA was verified for *admin_id*."""
+    issued = int(time.time())
+    payload = f'{admin_id}:{issued}'
+    sig = hmac.new(_trust_key(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    raw = f'{payload}:{sig}'
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def verify_trust_token(token: str | None, admin_id: int, *, max_age_hours: int | None = None) -> bool:
+    """True when *token* is a valid, unexpired trust cookie for *admin_id*."""
+    if not token:
+        return False
+    if max_age_hours is None:
+        max_age_hours = _trust_hours_setting()
+    try:
+        raw = base64.urlsafe_b64decode(token.encode()).decode()
+        parts = raw.split(':')
+        if len(parts) != 3:
+            return False
+        tok_id, tok_ts, tok_sig = parts
+        if int(tok_id) != int(admin_id):
+            return False
+        payload = f'{tok_id}:{tok_ts}'
+        expected = hmac.new(_trust_key(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+        if not hmac.compare_digest(tok_sig, expected):
+            return False
+        age = time.time() - int(tok_ts)
+        return 0 <= age <= max_age_hours * 3600
+    except Exception:
+        return False
+
+
+def _trust_hours_setting() -> int:
+    try:
+        from panel.models import SystemSetting
+        from panel.extensions import db
+        row = db.session.get(SystemSetting, 'mfa_trust_hours')
+        if row and row.value:
+            v = int(row.value)
+            return max(1, min(v, 720))
+    except Exception:
+        pass
+    return MFA_TRUST_HOURS_DEFAULT
+
+
+def trust_max_age_seconds() -> int:
+    return _trust_hours_setting() * 3600
