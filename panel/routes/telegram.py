@@ -1848,7 +1848,7 @@ def test_telegram_backup_settings():
     from app import _telegram_get_me  # deferred: app-level helper, avoids circular import
     settings = _get_telegram_backup_settings()
     data = request.get_json(silent=True) or {}
-    token = ((data.get('bot_token') if 'bot_token' in data else settings.get('bot_token')) or '').strip()
+    token = (data.get('bot_token') or '').strip() or (settings.get('bot_token') or '').strip()
     if not token:
         return jsonify({'success': False, 'error': 'Bot token is required'}), 400
 
@@ -1858,7 +1858,7 @@ def test_telegram_backup_settings():
     proxy_host = ((data.get('proxy_host') if 'proxy_host' in data else settings.get('proxy_host')) or '')
     proxy_port = _parse_int(data.get('proxy_port') if 'proxy_port' in data else settings.get('proxy_port'), 0, min_value=0, max_value=65535)
     proxy_username = ((data.get('proxy_username') if 'proxy_username' in data else settings.get('proxy_username')) or '')
-    proxy_password = ((data.get('proxy_password') if 'proxy_password' in data else settings.get('proxy_password')) or '')
+    proxy_password = (data.get('proxy_password') or '').strip() or (settings.get('proxy_password') or '')
     route_source = str(
         data.get('route_source') if 'route_source' in data else settings.get('route_source') or ''
     ).strip().lower()

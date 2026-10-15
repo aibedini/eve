@@ -488,6 +488,7 @@
                 <div class="form-group">
                     <label>{{ _('Bot Token') }}</label>
                     <input type="text" id="telegram-backup-token" class="form-control" placeholder="123456:ABC-DEF" spellcheck="false" autocomplete="off">
+                    <small id="telegram-backup-token-hint" class="text-secondary" style="display:none;"></small>
                 </div>
 
                 <div class="form-group">
@@ -592,6 +593,7 @@
                     <div class="form-group" id="tg-proxy-pass-group">
                         <label>{{ _('SOCKS Password') }}</label>
                         <input type="password" id="telegram-backup-proxy-password" class="form-control" placeholder="{{ _('password (optional)') }}" spellcheck="false" autocomplete="off">
+                        <small id="telegram-backup-proxy-password-hint" class="text-secondary" style="display:none;"></small>
                     </div>
                     </div>
                 </div>
@@ -8929,7 +8931,22 @@
             if (schedMode) schedMode.value = data.schedule_mode || 'interval';
             if (dailyTime) dailyTime.value = data.daily_time || '00:00';
             onTelegramScheduleModeChange();
-            if (token) token.value = data.bot_token || '';
+            const tokenHint = document.getElementById('telegram-backup-token-hint');
+            if (token) {
+                token.value = '';
+                if (data.has_bot_token) {
+                    token.placeholder = '••••••••••';
+                    token.dataset.hasSaved = 'true';
+                    if (tokenHint) {
+                        tokenHint.style.display = '';
+                        tokenHint.textContent = _t('Token is saved. Leave empty to keep current, or enter a new one.');
+                    }
+                } else {
+                    token.placeholder = '123456:ABC-DEF';
+                    delete token.dataset.hasSaved;
+                    if (tokenHint) tokenHint.style.display = 'none';
+                }
+            }
             if (chatId) chatId.value = data.chat_id || '';
             if (useProxy) useProxy.checked = !!data.use_proxy;
             if (routeSource) routeSource.value = data.route_source === 'panel_account' ? 'panel_account' : 'manual_proxy';
@@ -8939,8 +8956,23 @@
             // proxy_port is an integer from the server; 0 means "not set" so show empty
             if (proxyPort) proxyPort.value = (data.proxy_port > 0) ? data.proxy_port : '';
             if (proxyUser) proxyUser.value = data.proxy_username || '';
-            if (proxyPass) proxyPass.value = data.proxy_password || '';
-            if (lastRun) lastRun.textContent = data.last_run_jalali || 'Never';
+            const passHint = document.getElementById('telegram-backup-proxy-password-hint');
+            if (proxyPass) {
+                proxyPass.value = '';
+                if (data.has_proxy_password) {
+                    proxyPass.placeholder = '••••••••';
+                    proxyPass.dataset.hasSaved = 'true';
+                    if (passHint) {
+                        passHint.style.display = '';
+                        passHint.textContent = _t('Password is saved. Leave empty to keep current, or enter a new one.');
+                    }
+                } else {
+                    proxyPass.placeholder = _t('password (optional)');
+                    delete proxyPass.dataset.hasSaved;
+                    if (passHint) passHint.style.display = 'none';
+                }
+            }
+            if (lastRun) lastRun.textContent = data.last_run_jalali || _t('Never');
 
             if (data.route_source === 'panel_account') {
                 const managed = data.managed_account || {};
@@ -9006,13 +9038,13 @@
             if (passGroup) passGroup.style.display = '';
             if (userInput) {
                 userInput.disabled = urlHasCreds;
-                userInput.placeholder = urlHasCreds ? 'Credentials already in URL' : 'username (optional)';
-                userInput.title = urlHasCreds ? 'Username is already included in the proxy URL' : '';
+                userInput.placeholder = urlHasCreds ? _t('Credentials in URL') : _t('username (optional)');
+                userInput.title = urlHasCreds ? _t('Username is already included in the proxy URL') : '';
             }
             if (passInput) {
                 passInput.disabled = urlHasCreds;
-                passInput.placeholder = urlHasCreds ? 'Credentials already in URL' : 'password (optional)';
-                passInput.title = urlHasCreds ? 'Password is already included in the proxy URL' : '';
+                passInput.placeholder = urlHasCreds ? _t('Credentials in URL') : _t('password (optional)');
+                passInput.title = urlHasCreds ? _t('Password is already included in the proxy URL') : '';
             }
         }
     }
@@ -9103,7 +9135,7 @@
                     if (lr) lr.textContent = data.last_run_jalali || 'Never';
                 }
             } else {
-                showToast(data.error || 'Error saving settings', 'error');
+                showToast(data.error || _t('Error saving settings'), 'error');
             }
         } catch (e) {
             showToast(_t('Network error'), 'error');
@@ -9151,7 +9183,7 @@
     async function testTelegramBackupSettings(btnEl) {
         const btn = btnEl || (typeof event !== 'undefined' ? event.currentTarget : null);
         const originalText = btn.innerHTML;
-        btn.innerHTML = 'Testing...';
+        btn.innerHTML = _t('Testing...');
         btn.disabled = true;
 
         try {
@@ -9168,7 +9200,7 @@
             if (data.success) {
                 showToast(_t('Telegram connection successful'));
             } else {
-                showToast(data.error || 'Telegram test failed', 'error');
+                showToast(data.error || _t('Telegram test failed'), 'error');
             }
         } catch (e) {
             showToast(_t('Telegram test failed:') + (e.message || e), 'error', 8000);
@@ -9181,7 +9213,7 @@
     async function triggerTelegramBackupNow(btnEl) {
         const btn = btnEl || (typeof event !== 'undefined' ? event.currentTarget : null);
         const originalText = btn.innerHTML;
-        btn.innerHTML = 'Running...';
+        btn.innerHTML = _t('Running...');
         btn.disabled = true;
 
         // A previous run may still have a polling timer alive after a network
@@ -9220,31 +9252,31 @@
                 const err  = !ok && r.error ? `<span style="color: var(--text-secondary);font-size:.78rem;"> — ${r.error}</span>` : '';
                 return `<div style="display:flex;align-items:baseline;gap:5px;">
                     <span>${icon}</span>
-                    <span style="color:${clr};font-weight:600;">${r.server_name || 'Server'}</span>${err}
+                    <span style="color:${clr};font-weight:600;">${r.server_name || _t('Server')}</span>${err}
                 </div>`;
             }).join('');
         }
 
         function stageToHuman(stage) {
             const s = (stage || '').toString();
-            if (!s || s === 'starting') return 'Starting: preparing the backup job...';
-            if (s === 'queued')           return 'Queued: waiting for the backup worker...';
-            if (s === 'loading_settings') return 'Step 1/5: loading Telegram backup settings...';
-            if (s === 'building_proxy')   return 'Step 2/5: preparing the Telegram route...';
-            if (s === 'checking_proxy')   return 'Step 3/5: checking proxy reachability...';
-            if (s === 'fetching_servers') return 'Step 4/5: loading enabled X-UI servers...';
-            if (s.startsWith('xui_login:'))           return `Step 4/5: logging into X-UI — ${s.split(':').slice(1).join(':')}...`;
-            if (s.startsWith('xui_download_backup:')) return `Step 4/5: downloading the database backup — ${s.split(':').slice(1).join(':')}...`;
-            if (s.startsWith('telegram_upload:'))     return `Step 5/5: uploading the backup to Telegram — ${s.split(':').slice(1).join(':')}...`;
+            if (!s || s === 'starting') return _t('Starting: preparing the backup job...');
+            if (s === 'queued')           return _t('Queued: waiting for the backup worker...');
+            if (s === 'loading_settings') return _t('Step 1/5: loading Telegram backup settings...');
+            if (s === 'building_proxy')   return _t('Step 2/5: preparing the Telegram route...');
+            if (s === 'checking_proxy')   return _t('Step 3/5: checking proxy reachability...');
+            if (s === 'fetching_servers') return _t('Step 4/5: loading enabled X-UI servers...');
+            if (s.startsWith('xui_login:'))           return _t('Step 4/5: logging into X-UI — {v1}...', {v1: s.split(':').slice(1).join(':')});
+            if (s.startsWith('xui_download_backup:')) return _t('Step 4/5: downloading the database backup — {v1}...', {v1: s.split(':').slice(1).join(':')});
+            if (s.startsWith('telegram_upload:'))     return _t('Step 5/5: uploading the backup to Telegram — {v1}...', {v1: s.split(':').slice(1).join(':')});
             if (s.startsWith('server_done:'))         return _t('Finished: {v1}', {v1: s.split(':').slice(1).join(':')});
             if (s.startsWith('xui_failed:'))          return _t('X-UI failed: {v1} — see the detailed error below.', {v1: s.split(':').slice(1).join(':')});
             if (s.startsWith('telegram_failed:'))     return _t('Telegram upload failed: {v1} — see the detailed error below.', {v1: s.split(':').slice(1).join(':')});
-            if (s === 'panel_backup_create') return 'Step 4/5: creating the Eve panel backup...';
-            if (s === 'panel_backup_upload') return 'Step 5/5: uploading the Eve panel backup to Telegram...';
-            if (s === 'panel_backup_done')   return 'Finished: Eve panel backup sent to Telegram.';
-            if (s === 'panel_backup_failed') return 'Eve panel backup failed — see the detailed error below.';
-            if (s === 'done')  return 'Completed: all backup tasks have finished.';
-            if (s === 'error') return 'Failed: the backup worker stopped with an error.';
+            if (s === 'panel_backup_create') return _t('Step 4/5: creating the Eve panel backup...');
+            if (s === 'panel_backup_upload') return _t('Step 5/5: uploading the Eve panel backup to Telegram...');
+            if (s === 'panel_backup_done')   return _t('Finished: Eve panel backup sent to Telegram.');
+            if (s === 'panel_backup_failed') return _t('Eve panel backup failed — see the detailed error below.');
+            if (s === 'done')  return _t('Completed: all backup tasks have finished.');
+            if (s === 'error') return _t('Failed: the backup worker stopped with an error.');
             return s;
         }
 
@@ -9254,14 +9286,14 @@
         let pollErrors = 0;
 
         try {
-            setProgress(true, 0, 0, 'Starting backup...');
+            setProgress(true, 0, 0, _t('Starting backup...'));
             const startRes = await fetch('/api/telegram-backup/now', {
                 method: 'POST',
                 headers: {'Accept': 'application/json'}
             });
             const startData = await readTelegramBackupJson(startRes);
             if (!startData.success || !startData.job_id) {
-                showToast(startData.error || 'Backup failed to start', 'error', 6000);
+                showToast(startData.error || _t('Backup failed to start'), 'error', 6000);
                 setProgress(false);
                 return;
             }
@@ -9279,10 +9311,10 @@
                     pollErrors = 0;
 
                     if (!data.success) {
-                        throw new Error(data.error || 'Could not read backup job status');
+                        throw new Error(data.error || _t('Could not read backup job status'));
                     }
                     if (!data.job) {
-                        setProgress(true, 0, 0, 'Waiting for job...');
+                        setProgress(true, 0, 0, _t('Waiting for job...'));
                         return;
                     }
 
@@ -9311,22 +9343,22 @@
 
                         if (job.state === 'done') {
                             if (bar) bar.style.width = '100%';
-                            if (text) text.textContent = `Done — ${done}/${all} files sent`;
+                            if (text) text.textContent = _t('Done — {done}/{all} files sent', {done, all});
                             const hasFailures = Array.isArray(job.results) && job.results.some(r => !r.success);
                             if (hasFailures && job.error) {
-                                showToast(`Backup partially done (${done}/${all})\nFailed: ${job.error}`, 'warning', 8000);
+                                showToast(_t('Backup partially done ({done}/{all})', {done, all}) + '\n' + _t('Failed:') + ' ' + job.error, 'warning', 8000);
                             } else {
-                                showToast(`Backup sent (${done}/${all})`);
+                                showToast(_t('Backup sent ({done}/{all})', {done, all}));
                             }
                             loadTelegramBackupSettings();
                         } else {
                             if (bar) { bar.style.background = '#ef4444'; bar.style.width = '100%'; }
-                            if (text) text.textContent = `Failed — ${done}/${all} files sent`;
-                            let message = job.error || 'Backup failed';
+                            if (text) text.textContent = _t('Failed — {done}/{all} files sent', {done, all});
+                            let message = job.error || _t('Backup failed');
                             if (Array.isArray(job.results) && job.results.length) {
                                 const details = job.results
                                     .filter(r => !r.success && r.error)
-                                    .map(r => `${r.server_name || 'Server'}: ${r.error}`)
+                                    .map(r => `${r.server_name || _t('Server')}: ${r.error}`)
                                     .slice(0, 6).join('\n');
                                 if (details) message += '\n' + details;
                             }
@@ -9336,13 +9368,13 @@
                 } catch (e) {
                     if (pollGeneration !== pollState.generation) return;
                     pollErrors++;
-                    if (pollErrors >= 5) {
+                    if (pollErrors >= 8) {
                         clearInterval(pollTimer);
                         pollTimer = null;
                         setProgress(false);
                         showToast(_t('Lost connection to backup job: {v1}', {v1: e.message || e}), 'error', 8000);
                     } else {
-                        setProgress(true, 0, 0, `Checking status (attempt ${pollErrors}/5): ${e.message || e}`);
+                        setProgress(true, 0, 0, _t('Reconnecting to backup job... ({v1}/{v2})', {v1: pollErrors, v2: 8}));
                     }
                 }
             }
