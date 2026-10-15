@@ -23,6 +23,8 @@ KEEP = {
     'Eve', 'EVE', 'GMweb', 'SMS', 'X-UI', '3X-UI', 'Telegram', 'WhatsApp', 'WebAuthn', 'MFA',
     'TOTP', 'JSON', 'CSV', 'API', 'URL', 'UUID', 'IP', 'GB', 'MB', 'TB', 'Xray', 'xray', 'HWID',
     'curl', 'sms:', 'wa.me',
+    'SQLite', 'HTTP', 'Android', 'iOS', 'Windows', 'Linux', 'macOS', 'ID', 'Baileys', 'OpenWA', 'nginx',
+    'Cloudflare', 'LetsEncrypt', 'SOCKS', 'SOCKS5', 'X-API-Key', 'XRAY_BIN', 'Asia/Tehran', 'pg_dump',
     '3X-UI (Sanaei)', 'X-UI (Alireza)', 'Pulse', 'BNQO', 'Redis', 'PostgreSQL', 'OK', 'N/A', 'Clash', 'QR', 'VLESS', 'VMess',
 }
 USED = re.compile(r'''(?<![\w.])_t?\(\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)")''')
@@ -40,6 +42,14 @@ def is_translatable(text):
         return False  # already Persian
     # A list of {variables} is code, not a sentence.
     if not (LETTERS.search(re.sub(r'\{[^}]*\}', '', text)) or text.startswith('e.g.')) or text in KEEP:
+        return False
+    # A single token that looks like code (URL, file, id, class, constant) is data too.
+    bare_token = re.sub(r'\{[^}]*\}', '', text).rstrip(':')  # a trailing colon is a label, not code
+    plain_word = re.fullmatch(r'[A-Z][a-z]+(?:\.\.\.|…)|[a-z]+[.,;!?]|[A-Z][a-z]+/[A-Z][a-z]+', text)
+    if ' ' not in text and not plain_word and (re.search(r'[._/:@\d]|\.\.\.', bare_token) or bare_token.endswith('-') or bare_token.startswith('-')
+                            or re.fullmatch(r'[A-Z][A-Z0-9_]+', bare_token)):
+        return False
+    if ' ' not in text and ('://' in text or re.search(r'\bexample\.com\b', text)):
         return False
     # A URL path is data too.
     if text.startswith('/') and ' ' not in text:
@@ -320,6 +330,8 @@ def interpolated_sentence(js, opening, quasis, exprs):
     # CSS class lists, file names, hashtags: not sentences.
     if (re.match(r'\s*[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\s|$)', joined) or re.search(r'\.(?:db|txt|csv|json)\b|[#_]', joined)):
         return None
+    if re.search(r'[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\(|\w_\w', joined):
+        return None  # a function call or identifier, not a sentence
     names, args = [], []
     for index, (a, b) in enumerate(exprs):
         code = js[a:b].strip()
@@ -337,6 +349,8 @@ def interpolated_sentence(js, opening, quasis, exprs):
         key += text
         if index < len(names):
             key += '{%s}' % names[index]
+    if re.fullmatch(r'\s*[a-z][a-z0-9-]*\s*\{[^}]*\}\s*', key):
+        return None  # `badge ${state}`: a CSS class list
     if re.search(r'[A-Za-z]\{', key):
         return None  # a value glued to a word, e.g. English plural suffixes
     bare = re.sub(r'\{[^}]*\}', '', key)

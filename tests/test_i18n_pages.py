@@ -36,6 +36,7 @@ PAGES = {
     'servers': ('/servers', ['templates/servers.html']),
     'admins': ('/admins', ['templates/admins.html']),
     'dashboard': ('/', ['templates/dashboard.html']),
+    'settings': ('/settings', ['templates/settings.html']),
 }
 
 _spec = importlib.util.spec_from_file_location('i18n_scan', ROOT / 'scripts' / 'i18n_scan.py')
@@ -157,7 +158,9 @@ class I18nPageRenderTests(unittest.TestCase):
                     if key in catalog:
                         import html
                         self.assertIn(html.escape(catalog[key]), persian, key)
-            visible = re.sub(r'<script.*?</script>|<style.*?</style>|<!--.*?-->', '', english, flags=re.S)
+            visible = re.sub(r'<script.*?</script>|<style.*?</style>|<!--.*?-->|<textarea.*?</textarea>', '', english, flags=re.S)
+            # (a <textarea> holds message-template content sent to customers, not interface text)
+            visible = visible.replace('فارسی', '')  # the language's own name in a language selector
             self.assertNotRegex(visible.split('<main', 1)[-1] if '<main' in visible else visible, PERSIAN, page)
 
 
