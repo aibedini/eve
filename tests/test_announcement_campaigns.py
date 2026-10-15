@@ -108,7 +108,7 @@ class AnnouncementCampaignTests(unittest.TestCase):
         self.assertIn('id="announcement-status-filters"', html)
         self.assertIn('id="announcement-failures-modal"', html)
         self.assertIn('resendSelectedAnnouncementFailures', html)
-        self.assertIn("['remaining_volume', 'Remaining volume']", html)
+        self.assertIn("['remaining_volume', _t('Remaining volume')]", html)
 
     def test_sms_eta_uses_daily_segment_cap_and_send_pace(self):
         estimate = _estimate_sms_campaign_duration(
