@@ -1,5 +1,19 @@
-# Changelog - Eve
+﻿# Changelog - Eve
 
+## [2.12.0] - 2026-10-15
+
+### Added
+- **Two-Factor Authentication (2FA) — full lifecycle.** TOTP-based MFA with session persistence, deactivation, admin management and a global toggle.
+  - **Session persistence (trusted device).** After a successful TOTP or WebAuthn verification, an HMAC-SHA256-signed cookie (`eve_mfa_trust`) is set, binding `admin_id` and `issued_timestamp`. On the next login the cookie is checked before the MFA challenge is shown; if valid, the session is established with `mfa_verified=True` and the challenge is skipped. Duration is configurable in Settings (default 72 h, range 1–720 h, stored in `SystemSetting.mfa_trust_hours`).
+  - **Safe deactivation.** `/api/mfa/deactivate` requires a valid live TOTP code, sets `enabled=False` on the `AdminMFASetting` row, and clears the trust cookie. The TOTP secret and `confirmed_at` are intentionally preserved so the user can reactivate without re-scanning the QR code.
+  - **Per-user admin management.** The admin user-edit modal shows a 2FA status badge (Active / Inactive / Not configured). Superadmins can force-disable 2FA via `/api/admins/<id>/mfa/force-disable` (step-up auth required); the secret is kept. MFA status is included in `Admin.to_dict()`.
+  - **Global toggle.** A `SystemSetting` key `mfa_global_enabled` (default `True`) lets a superadmin disable the MFA requirement site-wide from the Settings -> Session tab without touching per-user records.
+- All new UI strings wrapped with `_()` / `_t()` and Persian translations added to `panel/i18n/settings.py` and `panel/i18n/admins.py`.
+
+### Security
+- Trust tokens use HMAC-SHA256 over `admin_id:issued_timestamp`, keyed from `SECRET_KEY`. A token for one admin cannot be replayed for another.
+- Deactivation endpoint rate-limited to 10 per minute; failed attempts are audited.
+- Trust cookie: `HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS.
 ## [2.11.0] - 2026-10-15
 
 ### Added

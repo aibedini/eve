@@ -635,6 +635,14 @@
                 </div>
             </div>
 
+            <div id="mfa-section" class="hidden" style="border:1px solid var(--border-color);border-radius:10px;padding:14px;margin-bottom:12px;">
+                <strong>{{ _('Two-Step Verification (2FA)') }}</strong>
+                <div id="mfa-status-row" style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+                    <span id="mfa-status-badge" class="status-badge"></span>
+                    <button id="mfa-force-disable-btn" class="btn btn-sm btn-danger hidden" onclick="forceDisableMfa()">{{ _('Force Disable 2FA') }}</button>
+                </div>
+            </div>
+
             <label class="form-group form-toggle-item" style="cursor: pointer;">
                 <div class="toggle-switch">
                     <input type="checkbox" id="admin-enabled" checked>
@@ -642,7 +650,7 @@
                 </div>
                 <span>{{ _('Enabled') }}</span>
             </label>
-            
+
             <div class="form-actions">
                 <button class="btn btn-secondary" onclick="closeAdminModal()">{{ _('Cancel') }}</button>
                 <button class="btn btn-primary" onclick="saveAdmin()">{{ _('Save') }}</button>
@@ -1251,6 +1259,8 @@
         document.getElementById('admin-negative-limit').value = '0';
         document.getElementById('admin-allow-free').checked = false;
         document.getElementById('admin-whatsapp-automation').checked = false;
+        const mfaSec = document.getElementById('mfa-section');
+        if (mfaSec) mfaSec.classList.add('hidden');
         toggleNegativeLimitField();
         document.getElementById('admin-allowed-servers').value = '*';
         document.getElementById('admin-discount').value = '0';
@@ -1299,11 +1309,61 @@
         document.getElementById('admin-cost-gb').value = admin.custom_cost_per_gb ? admin.custom_cost_per_gb.toLocaleString() : '';
 
         document.getElementById('admin-enabled').checked = admin.enabled;
-        
+
+        // 2FA section (visible only when editing and viewer is superadmin)
+        const mfaSec = document.getElementById('mfa-section');
+        const isSuperViewer = {{ 'true' if session.get('is_superadmin') else 'false' }};
+        if (mfaSec && isSuperViewer && admin.id) {
+            mfaSec.classList.remove('hidden');
+            const badge = document.getElementById('mfa-status-badge');
+            const forceBtn = document.getElementById('mfa-force-disable-btn');
+            if (admin.mfa && admin.mfa.configured) {
+                if (admin.mfa.enabled) {
+                    badge.textContent = _t('Active');
+                    badge.className = 'status-badge status-success';
+                    forceBtn.classList.remove('hidden');
+                } else {
+                    badge.textContent = _t('Inactive');
+                    badge.className = 'status-badge status-warning';
+                    forceBtn.classList.add('hidden');
+                }
+            } else {
+                badge.textContent = _t('Not configured');
+                badge.className = 'status-badge status-secondary';
+                forceBtn.classList.add('hidden');
+            }
+        } else if (mfaSec) {
+            mfaSec.classList.add('hidden');
+        }
+
         toggleResellerFields();
         document.getElementById('admin-modal').classList.remove('hidden');
     }
-    
+
+    async function forceDisableMfa() {
+        const adminId = document.getElementById('edit-admin-id').value;
+        if (!adminId) return;
+        if (!confirm(_t('Are you sure you want to force-disable 2FA for this user?'))) return;
+        try {
+            const res = await fetch(`/api/admins/${adminId}/mfa/force-disable`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(_t('2FA disabled for this user'));
+                document.getElementById('mfa-status-badge').textContent = _t('Inactive');
+                document.getElementById('mfa-status-badge').className = 'status-badge status-warning';
+                document.getElementById('mfa-force-disable-btn').classList.add('hidden');
+                loadAdmins();
+            } else {
+                showToast(data.error || _t('Error'), 'error');
+            }
+        } catch (e) {
+            showToast(_t('Network error'), 'error');
+        }
+    }
+
     function closeAdminModal() {
         document.getElementById('admin-modal').classList.add('hidden');
     }
