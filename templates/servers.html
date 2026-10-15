@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Servers - Eve Manager{% endblock %}
-{% block page_title %}Server Management{% endblock %}
+{% block title %}{{ _('Servers - Eve Manager') }}{% endblock %}
+{% block page_title %}{{ _('Server Management') }}{% endblock %}
 
 {% block header_actions %}
 {% if is_superadmin %}
@@ -10,7 +10,7 @@
         <line x1="12" y1="5" x2="12" y2="19"></line>
         <line x1="5" y1="12" x2="19" y2="12"></line>
     </svg>
-    <span class="btn-label">Add Server</span>
+    <span class="btn-label">{{ _('Add Server') }}</span>
 </button>
 {% endif %}
 {% endblock %}
@@ -24,69 +24,69 @@
 <div class="modal-overlay hidden" id="server-modal">
     <div class="modal">
         <div class="modal-header">
-            <h2 id="modal-title">Add Server</h2>
+            <h2 id="modal-title">{{ _('Add Server') }}</h2>
             <button class="modal-close" onclick="closeServerModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-server-id">
             <div class="form-group">
-                <label>Server Name</label>
-                <input type="text" id="server-name" placeholder="e.g., Server 1">
+                <label>{{ _('Server Name') }}</label>
+                <input type="text" id="server-name" placeholder="{{ _('e.g., Server 1') }}">
             </div>
             <div class="form-group">
-                <label>Host URL</label>
-                <input type="text" id="server-host" placeholder="e.g., https://example.com:8443">
+                <label>{{ _('Host URL') }}</label>
+                <input type="text" id="server-host" placeholder="{{ _('e.g., https://example.com:8443') }}">
             </div>
             <div class="form-group">
-                <label>Username</label>
-                <input type="text" id="server-username" placeholder="Username">
+                <label>{{ _('Username') }}</label>
+                <input type="text" id="server-username" placeholder="{{ _('Username') }}">
             </div>
             <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="server-password" placeholder="Password">
-                <small id="server-password-hint" class="field-note field-note-ok hidden">✓ A password is already saved. Type a new one to replace it, or leave empty to keep it.</small>
+                <label>{{ _('Password') }}</label>
+                <input type="password" id="server-password" placeholder="{{ _('Password') }}">
+                <small id="server-password-hint" class="field-note field-note-ok hidden">{{ _('✓ A password is already saved. Type a new one to replace it, or leave empty to keep it.') }}</small>
             </div>
             
             <div style="display: flex; gap: 10px;">
                 <div class="form-group" style="flex: 2;">
-                    <label>Sub Path</label>
+                    <label>{{ _('Sub Path') }}</label>
                     <input type="text" id="server-sub-path" placeholder="/sub/" value="/sub/">
                 </div>
                 <div class="form-group" style="flex: 2;">
-                    <label>Json Path</label>
+                    <label>{{ _('Json Path') }}</label>
                     <input type="text" id="server-json-path" placeholder="/json/" value="/json/">
                 </div>
                 <div class="form-group" style="flex: 1;">
-                    <label>Sub Port</label>
-                    <input type="number" id="server-sub-port" placeholder="Port">
+                    <label>{{ _('Sub Port') }}</label>
+                    <input type="number" id="server-sub-port" placeholder="{{ _('Port') }}">
                 </div>
             </div>
 
             <div class="form-group">
-                <label>Panel Type</label>
+                <label>{{ _('Panel Type') }}</label>
                 <select id="server-panel-type" class="form-select">
-                    <option value="auto">Auto Detect</option>
+                    <option value="auto">{{ _('Auto Detect') }}</option>
                     <option value="sanaei">3X-UI (Sanaei)</option>
                     <option value="alireza">X-UI (Alireza)</option>
                 </select>
             </div>
 
             <div class="form-group">
-                <label>API Token <small class="label-note">(3x-ui v3+ — Settings → Security → API Token)</small></label>
-                <input type="password" id="server-api-token" placeholder="Paste token for v3 panels; leave empty for older panels">
-                <small id="server-api-token-hint" class="field-note field-note-ok hidden">✓ A token is already saved. Type a new one to replace it, or leave empty to keep it.</small>
-                <small id="server-api-token-clear-hint" class="field-note field-note-warn hidden">The saved token will be removed when you save.</small>
-                <button type="button" class="btn btn-secondary btn-icon hidden" id="server-api-token-clear" style="margin-top:8px;" onclick="clearServerApiToken()">Remove saved API token</button>
+                <label>{{ _('API Token') }} <small class="label-note">{{ _('(3x-ui v3+ — Settings → Security → API Token)') }}</small></label>
+                <input type="password" id="server-api-token" placeholder="{{ _('Paste token for v3 panels; leave empty for older panels') }}">
+                <small id="server-api-token-hint" class="field-note field-note-ok hidden">{{ _('✓ A token is already saved. Type a new one to replace it, or leave empty to keep it.') }}</small>
+                <small id="server-api-token-clear-hint" class="field-note field-note-warn hidden">{{ _('The saved token will be removed when you save.') }}</small>
+                <button type="button" class="btn btn-secondary btn-icon hidden" id="server-api-token-clear" style="margin-top:8px;" onclick="clearServerApiToken()">{{ _('Remove saved API token') }}</button>
             </div>
 
             <div class="form-group">
                 <label class="checkbox-label" for="server-allow-insecure">
                     <input type="checkbox" id="server-allow-insecure">
                     <span class="checkmark"></span>
-                    <span>Allow insecure connection</span>
+                    <span>{{ _('Allow insecure connection') }}</span>
                 </label>
-                <small class="field-note">Allows plaintext HTTP or HTTPS without certificate verification for this server only.</small>
-                <small id="server-allow-insecure-warning" class="field-note field-note-warn field-note-strong hidden">Warning: Panel credentials will be sent over plaintext HTTP.</small>
+                <small class="field-note">{{ _('Allows plaintext HTTP or HTTPS without certificate verification for this server only.') }}</small>
+                <small id="server-allow-insecure-warning" class="field-note field-note-warn field-note-strong hidden">{{ _('Warning: Panel credentials will be sent over plaintext HTTP.') }}</small>
             </div>
 
             <label class="form-group form-toggle-item" style="cursor: pointer;">
@@ -94,11 +94,11 @@
                     <input type="checkbox" id="server-enabled" checked>
                     <span class="slider"></span>
                 </div>
-                <span>Enabled</span>
+                <span>{{ _('Enabled') }}</span>
             </label>
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeServerModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveServer()">Save</button>
+                <button class="btn btn-secondary" onclick="closeServerModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" onclick="saveServer()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -108,20 +108,19 @@
     <div class="modal modal-lg">
         <div class="modal-header">
             <div>
-                <h2>Subscription Inbound Priority</h2>
+                <h2>{{ _('Subscription Inbound Priority') }}</h2>
                 <p id="subscription-order-server-name" class="subscription-order-subtitle"></p>
             </div>
             <button class="modal-close" onclick="closeSubscriptionOrderModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p class="subscription-order-help">
-                Drag the inbounds or use the arrow buttons. A customer only sees
-                inbounds assigned to them, in the priority defined here.
+                {{ _('Drag the inbounds or use the arrow buttons. A customer only sees inbounds assigned to them, in the priority defined here.') }}
             </p>
             <div id="subscription-order-list" class="subscription-order-list"></div>
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeSubscriptionOrderModal()">Cancel</button>
-                <button class="btn btn-primary" id="save-subscription-order" onclick="saveSubscriptionOrder()">Save Priority</button>
+                <button class="btn btn-secondary" onclick="closeSubscriptionOrderModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" id="save-subscription-order" onclick="saveSubscriptionOrder()">{{ _('Save Priority') }}</button>
             </div>
         </div>
     </div>
@@ -129,6 +128,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script nonce="{{ csp_nonce }}">window.EVE_I18N = {{ i18n_catalog('servers')|tojson }};</script>
 <script nonce="{{ csp_nonce }}">
     const IS_SUPERADMIN = {{ 'true' if is_superadmin else 'false' }};
     const USER_ROLE = "{{ role }}";
@@ -144,7 +144,7 @@
             servers = await response.json();
             renderServers();
         } catch (error) {
-            showToast('Error loading servers', 'error');
+            showToast(_t('Error loading servers'), 'error');
         }
     }
     
@@ -155,7 +155,7 @@
             container.textContent = '';
             const empty = document.createElement('p');
             empty.className = 'no-data';
-            empty.textContent = 'No servers found. Add one to get started.';
+            empty.textContent = _t('No servers found. Add one to get started.');
             container.appendChild(empty);
             return;
         }
@@ -228,22 +228,22 @@
             // ID badge
             const idBadge = createBadge(`#${server.id}`, 'badge panel-type');
             idBadge.style.fontFamily = 'monospace';
-            idBadge.title = `Server ID used in dash-sub URLs (e.g. /s/${server.id}/...)`;
+            idBadge.title = _t('Server ID used in dash-sub URLs (e.g. /s/{id}/...)', {id: server.id});
             badges.appendChild(idBadge);
-            badges.appendChild(createBadge(server.enabled ? 'Enabled' : 'Disabled', `badge ${server.enabled ? 'active' : 'inactive'}`));
-            if (isHidden) badges.appendChild(createBadge('Hidden', 'badge inactive'));
-            badges.appendChild(createBadge(server.panel_type || 'Unknown', 'badge panel-type'));
+            badges.appendChild(createBadge(server.enabled ? _t('Enabled') : _t('Disabled'), `badge ${server.enabled ? 'active' : 'inactive'}`));
+            if (isHidden) badges.appendChild(createBadge(_t('Hidden'), 'badge inactive'));
+            badges.appendChild(createBadge(server.panel_type || _t('Unknown'), 'badge panel-type'));
             if (server.has_api_token) {
-                const v3b = createBadge('🔑 v3 (Token)', 'badge active');
-                v3b.title = 'Authenticated with a 3x-ui v3+ API token (Bearer)';
+                const v3b = createBadge('🔑 ' + _t('v3 (Token)'), 'badge active');
+                v3b.title = _t('Authenticated with a 3x-ui v3+ API token (Bearer)');
                 badges.appendChild(v3b);
             }
             if (server.allow_insecure) {
                 const plaintextHost = /^http:\/\//i.test(server.host || '');
-                const insecureBadge = createBadge(plaintextHost ? '⚠ HTTP' : '⚠ TLS Unverified', 'badge warning');
+                const insecureBadge = createBadge(plaintextHost ? '⚠ HTTP' : '⚠ ' + _t('TLS Unverified'), 'badge warning');
                 insecureBadge.title = plaintextHost
-                    ? 'Plaintext HTTP is allowed for this server (Allow insecure connection).'
-                    : 'TLS certificate verification is disabled for this server (Allow insecure connection).';
+                    ? _t('Plaintext HTTP is allowed for this server (Allow insecure connection).')
+                    : _t('TLS certificate verification is disabled for this server (Allow insecure connection).');
                 badges.appendChild(insecureBadge);
             }
 
@@ -258,7 +258,7 @@
             const statusErr = server?.panel_status_error || '';
 
             if (onlineCount !== null) {
-                statusMeta.appendChild(createBadge(`👥 Online: ${onlineCount}`, 'badge info'));
+                statusMeta.appendChild(createBadge('👥 ' + _t('Online: {count}', {count: onlineCount}), 'badge info'));
             }
             if (xrayVersion) {
                 statusMeta.appendChild(createBadge(`Xray: ${xrayVersion}`, 'badge info'));
@@ -274,7 +274,7 @@
                 statusMeta.appendChild(createBadge(`Core: ${xrayCore}`, 'badge info'));
             }
             if (statusErr) {
-                const errBadge = createBadge(`⚠ Status`, 'badge inactive');
+                const errBadge = createBadge('⚠ ' + _t('Status'), 'badge inactive');
                 errBadge.title = statusErr;
                 errBadge.style.cursor = 'help';
                 statusMeta.appendChild(errBadge);
@@ -287,7 +287,7 @@
             const eyeBtn = document.createElement('button');
             eyeBtn.type = 'button';
             eyeBtn.className = 'action-btn';
-            eyeBtn.title = isHidden ? 'Show server (resume fetching)' : 'Hide server (pause fetching, kept in backups)';
+            eyeBtn.title = isHidden ? _t('Show server (resume fetching)') : _t('Hide server (pause fetching, kept in backups)');
             eyeBtn.innerHTML = isHidden ? EYE_OFF_SVG : EYE_OPEN_SVG;
             if (isHidden) eyeBtn.style.color = '#94a3b8';
             eyeBtn.addEventListener('click', () => toggleServerHidden(server.id));
@@ -296,7 +296,7 @@
             const testBtn = document.createElement('button');
             testBtn.type = 'button';
             testBtn.className = 'action-btn';
-            testBtn.title = 'Test Connection';
+            testBtn.title = _t('Test Connection');
             testBtn.innerHTML = TEST_ICON_SVG;
             testBtn.addEventListener('click', (ev) => testConnection(server.id, ev));
             actions.appendChild(testBtn);
@@ -305,7 +305,7 @@
                 const sortBtn = document.createElement('button');
                 sortBtn.type = 'button';
                 sortBtn.className = 'action-btn';
-                sortBtn.title = 'Subscription inbound priority';
+                sortBtn.title = _t('Subscription inbound priority');
                 sortBtn.innerHTML = SORT_ICON_SVG;
                 sortBtn.addEventListener('click', () => openSubscriptionOrderModal(server));
                 actions.appendChild(sortBtn);
@@ -313,7 +313,7 @@
                 const backupBtn = document.createElement('button');
                 backupBtn.type = 'button';
                 backupBtn.className = 'action-btn';
-                backupBtn.title = 'Backup Database';
+                backupBtn.title = _t('Backup Database');
                 backupBtn.innerHTML = BACKUP_ICON_SVG;
                 backupBtn.addEventListener('click', () => downloadServerBackup(server.id, backupBtn));
                 actions.appendChild(backupBtn);
@@ -323,7 +323,7 @@
                 const editBtn = document.createElement('button');
                 editBtn.type = 'button';
                 editBtn.className = 'action-btn';
-                editBtn.title = 'Edit';
+                editBtn.title = _t('Edit');
                 editBtn.innerHTML = EDIT_ICON_SVG;
                 editBtn.addEventListener('click', () => editServer(server.id));
                 actions.appendChild(editBtn);
@@ -331,7 +331,7 @@
                 const deleteBtn = document.createElement('button');
                 deleteBtn.type = 'button';
                 deleteBtn.className = 'action-btn danger';
-                deleteBtn.title = 'Delete';
+                deleteBtn.title = _t('Delete');
                 deleteBtn.innerHTML = DELETE_ICON_SVG;
                 deleteBtn.addEventListener('click', () => deleteServer(server.id));
                 actions.appendChild(deleteBtn);
@@ -360,7 +360,7 @@
         list.textContent = '';
         const loading = document.createElement('p');
         loading.className = 'no-data';
-        loading.textContent = 'Loading inbounds...';
+        loading.textContent = _t('Loading inbounds...');
         list.appendChild(loading);
         document.getElementById('subscription-order-modal').classList.remove('hidden');
 
@@ -371,7 +371,7 @@
             );
             const result = await response.json().catch(() => ({}));
             if (!response.ok || !result.success) {
-                throw new Error(result.error || 'Unable to load inbound priority');
+                throw new Error(result.error || _t('Unable to load inbound priority'));
             }
             subscriptionOrderItems = Array.isArray(result.inbounds) ? result.inbounds : [];
             renderSubscriptionOrder();
@@ -379,7 +379,7 @@
             list.textContent = '';
             const message = document.createElement('p');
             message.className = 'no-data';
-            message.textContent = error.message || 'Unable to load inbounds';
+            message.textContent = error.message || _t('Unable to load inbounds');
             list.appendChild(message);
             showToast(message.textContent, 'error');
         }
@@ -405,7 +405,7 @@
         if (!subscriptionOrderItems.length) {
             const empty = document.createElement('p');
             empty.className = 'no-data';
-            empty.textContent = 'No inbounds found on this server.';
+            empty.textContent = _t('No inbounds found on this server.');
             list.appendChild(empty);
             return;
         }
@@ -423,14 +423,14 @@
             const handle = document.createElement('span');
             handle.className = 'subscription-order-handle';
             handle.textContent = '⋮⋮';
-            handle.title = 'Drag to reorder';
+            handle.title = _t('Drag to reorder');
 
             const info = document.createElement('div');
             info.className = 'subscription-order-info';
             const title = document.createElement('strong');
-            title.textContent = inbound.remark || `Inbound #${inbound.id}`;
+            title.textContent = inbound.remark || _t('Inbound #{id}', {id: inbound.id});
             const meta = document.createElement('span');
-            meta.textContent = `${inbound.protocol || 'unknown'} · port ${inbound.port || '-'} · ID ${inbound.id}`;
+            meta.textContent = _t('{protocol} · port {port} · ID {id}', {protocol: inbound.protocol || _t('unknown'), port: inbound.port || '-', id: inbound.id});
             info.appendChild(title);
             info.appendChild(meta);
 
@@ -439,14 +439,14 @@
             const up = document.createElement('button');
             up.type = 'button';
             up.className = 'action-btn';
-            up.title = 'Move up';
+            up.title = _t('Move up');
             up.textContent = '↑';
             up.disabled = index === 0;
             up.addEventListener('click', () => moveSubscriptionInbound(index, -1));
             const down = document.createElement('button');
             down.type = 'button';
             down.className = 'action-btn';
-            down.title = 'Move down';
+            down.title = _t('Move down');
             down.textContent = '↓';
             down.disabled = index === subscriptionOrderItems.length - 1;
             down.addEventListener('click', () => moveSubscriptionInbound(index, 1));
@@ -496,12 +496,12 @@
             );
             const result = await response.json().catch(() => ({}));
             if (!response.ok || !result.success) {
-                throw new Error(result.error || 'Unable to save inbound priority');
+                throw new Error(result.error || _t('Unable to save inbound priority'));
             }
-            showToast('Subscription priority saved', 'success');
+            showToast(_t('Subscription priority saved'), 'success');
             closeSubscriptionOrderModal();
         } catch (error) {
-            showToast(error.message || 'Unable to save inbound priority', 'error');
+            showToast(error.message || _t('Unable to save inbound priority'), 'error');
         } finally {
             button.disabled = false;
         }
@@ -520,7 +520,7 @@
     }
 
     function clearServerApiToken() {
-        if (!confirm('Remove the saved API token for this server?')) return;
+        if (!confirm(_t('Remove the saved API token for this server?'))) return;
         clearApiTokenRequested = true;
         document.getElementById('server-api-token').value = '';
         document.getElementById('server-api-token-hint').classList.add('hidden');
@@ -555,7 +555,7 @@
 
         document.getElementById('server-enabled').checked = true;
         updateInsecureUi();
-        document.getElementById('modal-title').textContent = 'Add Server';
+        document.getElementById('modal-title').textContent = _t('Add Server');
         document.getElementById('server-modal').classList.remove('hidden');
     }
     
@@ -589,7 +589,7 @@
         updateInsecureUi();
 
         document.getElementById('server-enabled').checked = server.enabled;
-        document.getElementById('modal-title').textContent = 'Edit Server';
+        document.getElementById('modal-title').textContent = _t('Edit Server');
         document.getElementById('server-modal').classList.remove('hidden');
     }
     
@@ -606,12 +606,12 @@
         const sub_port = document.getElementById('server-sub-port').value.trim();
         
         if (!name || !host || !username || (!id && !password)) {
-            showToast('Please fill in all fields', 'error');
+            showToast(_t('Please fill in all fields'), 'error');
             return;
         }
         const allowInsecure = document.getElementById('server-allow-insecure').checked;
         if (hostUsesPlaintext() && !allowInsecure) {
-            showToast('This server uses plaintext HTTP. Enable "Allow insecure connection" to continue.', 'error');
+            showToast(_t('This server uses plaintext HTTP. Enable "Allow insecure connection" to continue.'), 'error');
             return;
         }
         
@@ -648,14 +648,14 @@
             const result = await response.json();
             
             if (!response.ok || !result.success) {
-                throw new Error(result.error || 'Failed to save server');
+                throw new Error(result.error || _t('Failed to save server'));
             }
             
-            showToast(id ? 'Server updated' : 'Server added', 'success');
+            showToast(id ? _t('Server updated') : _t('Server added'), 'success');
             closeServerModal();
             loadServers();
         } catch (error) {
-            showToast(error.message || 'Error saving server', 'error');
+            showToast(error.message || _t('Error saving server'), 'error');
         }
     }
     
@@ -664,30 +664,30 @@
             const res = await fetch(`/api/servers/${id}/hidden`, { method: 'POST' });
             const data = await res.json();
             if (data.success) {
-                showToast(data.hidden ? 'Server hidden — no longer fetched' : 'Server visible — will be fetched on next refresh', 'success', 4000);
+                showToast(data.hidden ? _t('Server hidden — no longer fetched') : _t('Server visible — will be fetched on next refresh'), 'success', 4000);
                 loadServers();
             } else {
-                showToast(data.error || 'Failed to toggle', 'error');
+                showToast(data.error || _t('Failed to toggle'), 'error');
             }
         } catch (e) {
-            showToast('Network error', 'error');
+            showToast(_t('Network error'), 'error');
         }
     }
 
     async function deleteServer(id) {
-        if (!confirm('Are you sure you want to delete this server?')) return;
+        if (!confirm(_t('Are you sure you want to delete this server?'))) return;
         
         try {
             const response = await fetch(`/api/servers/${id}`, { method: 'DELETE' });
             const result = await response.json().catch(() => ({}));
             if (!response.ok || !result.success) {
-                throw new Error(result.error || result.details || 'Failed to delete server');
+                throw new Error(result.error || result.details || _t('Failed to delete server'));
             }
             
-            showToast('Server deleted', 'success');
+            showToast(_t('Server deleted'), 'success');
             loadServers();
         } catch (error) {
-            showToast(error.message || 'Error deleting server', 'error');
+            showToast(error.message || _t('Error deleting server'), 'error');
         }
     }
     
@@ -699,7 +699,7 @@
             const res = await fetch(`/api/servers/${serverId}/xui-backup`, { cache: 'no-store' });
             if (!res.ok) {
                 const data = await res.json().catch(() => ({}));
-                alert(data.error || `Backup failed (${res.status})`);
+                alert(data.error || _t('Backup failed ({status})', {status: res.status}));
                 return;
             }
             const cd = res.headers.get('Content-Disposition') || '';
@@ -715,7 +715,7 @@
             a.remove();
             URL.revokeObjectURL(url);
         } catch (e) {
-            alert('Network error: ' + e.message);
+            alert(_t('Network error:') + ' ' + e.message);
         } finally {
             btn.disabled = false;
             btn.innerHTML = orig;
@@ -732,13 +732,13 @@
             const result = await response.json();
             
             if (result.success) {
-                showToast(`✓ Connection successful (${result.panel_type})`, 'success');
+                showToast('✓ ' + _t('Connection successful ({type})', {type: result.panel_type}), 'success');
                 loadServers();
             } else {
-                showToast(`✗ Connection failed: ${result.error}`, 'error');
+                showToast('✗ ' + _t('Connection failed: {error}', {error: result.error}), 'error');
             }
         } catch (error) {
-            showToast('Error testing connection', 'error');
+            showToast(_t('Error testing connection'), 'error');
         } finally {
             btn.disabled = false;
             btn.classList.remove('loading');

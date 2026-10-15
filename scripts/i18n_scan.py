@@ -22,7 +22,7 @@ LETTERS = re.compile(r'[A-Za-z]{2,}')
 KEEP = {
     'Eve', 'EVE', 'GMweb', 'SMS', 'X-UI', '3X-UI', 'Telegram', 'WhatsApp', 'WebAuthn', 'MFA',
     'TOTP', 'JSON', 'CSV', 'API', 'URL', 'UUID', 'IP', 'GB', 'MB', 'TB', 'Xray', 'xray', 'HWID',
-    'Pulse', 'BNQO', 'Redis', 'PostgreSQL', 'OK', 'N/A', 'Clash', 'QR', 'VLESS', 'VMess',
+    '3X-UI (Sanaei)', 'X-UI (Alireza)', 'Pulse', 'BNQO', 'Redis', 'PostgreSQL', 'OK', 'N/A', 'Clash', 'QR', 'VLESS', 'VMess',
 }
 USED = re.compile(r'''(?<![\w.])_t?\(\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)")''')
 
@@ -34,6 +34,9 @@ def normalize(text):
 def is_translatable(text):
     # A list of {variables} is code, not a sentence.
     if not (LETTERS.search(re.sub(r'\{[^}]*\}', '', text)) or text.startswith('e.g.')) or text in KEEP:
+        return False
+    # A URL path is data too.
+    if text.startswith('/') and ' ' not in text:
         return False
     # An example value (card number, e-mail address) is data, not a sentence.
     if ' ' not in text and re.search(r'[\d@]', text):
