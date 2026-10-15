@@ -157,6 +157,8 @@ def _establish_session(admin, *, mfa_verified: bool, commit: bool = True) -> str
         user_agent=request.headers.get('User-Agent'),
         mfa_verified=mfa_verified,
     )
+    if mfa_verified:
+        mark_step_up(_row)
     session.clear()
     session.permanent = False  # the registry row, not the cookie age, is authoritative
     session[SESSION_TOKEN_KEY] = token
