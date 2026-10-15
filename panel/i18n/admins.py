@@ -89,6 +89,13 @@ FA = {
     'reseller': 'نماینده',
     'superadmin': 'سوپرادمین',
     '{count} clients assigned from "{inbound}"': '{count} کلاینت از «{inbound}» اختصاص داده شد',
+    'Two-Step Verification (2FA)': 'تأیید دومرحله‌ای (2FA)',
+    'Active': 'فعال',
+    'Inactive': 'غیرفعال',
+    'Not configured': 'پیکربندی نشده',
+    'Force Disable 2FA': 'غیرفعال‌سازی اجباری 2FA',
+    'Are you sure you want to force-disable 2FA for this user?': 'آیا از غیرفعال‌سازی اجباری 2FA برای این کاربر مطمئن هستید؟',
+    '2FA disabled for this user': '2FA برای این کاربر غیرفعال شد',
 }
 # Looked up with _t() on data the server sends, so no literal appears in the template.
 DYNAMIC = ('admin', 'reseller', 'superadmin')
