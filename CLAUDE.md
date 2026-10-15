@@ -1,3 +1,10 @@
+## Branching & release workflow
+
+Always work directly on `main`. Do not create feature branches or worktrees.
+After each task, create a release: bump `x`, reset `y` to `0`, update
+CHANGELOG.md and RELEASE_NOTES.md, create a git tag `v2.x.0`, and publish
+a GitHub release.
+
 ## Validation budget
 
 Do **not** run the whole suite after an ordinary edit. Map changed files to affected tests
@@ -22,8 +29,7 @@ Version scheme: `2.x.y` (single source of truth: `APP_VERSION` in `app.py`).
 
 - **`y` (patch)**: bump by 1 on **every commit** that changes code/behavior. So each commit raises `APP_VERSION` (e.g. `2.3.2` → `2.3.3`).
 - **`x` (minor)**: bump by 1 **only when the user explicitly asks for a release**. On release, look at the current version, increase `x` by one, and reset `y` to `0` (e.g. `2.3.7` → `2.4.0`).
-- **Do NOT cut a release until the user explicitly says so.** Never create a git tag, push a tag, or create/edit a GitHub release on your own. Committing (with the `y` bump) is fine and expected; releasing is not.
-- When the user does ask to release: bump `x`, reset `y`, update CHANGELOG.md and RELEASE_NOTES.md, then create the tag and GitHub release.
+- After each task, release automatically: bump `x`, reset `y`, update CHANGELOG.md and RELEASE_NOTES.md, create the git tag and GitHub release.
 
 ## Upgrade maintenance
 

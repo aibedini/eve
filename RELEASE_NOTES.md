@@ -1,4 +1,20 @@
-﻿# Eve - Xui Manager v2.12.0
+﻿# Eve - Xui Manager v2.13.0
+
+## [2.13.0] - 2026-10-15
+
+This release redesigns the Royalty (Idle Accounts) page from a card grid into a grouped data table.
+
+**Grouped table.** Accounts that share a phone number are grouped into expandable/collapsible rows with an indeterminate checkbox for bulk selection. Ungrouped accounts (no phone detected) appear as individual rows. Stats pills at the top show phone count, shared count and no-phone count.
+
+**All actions preserved.** Search, window/server/reseller filters, Select All, per-row checkboxes, bulk actions (volume policy, volume multiplier, add days, add volume, enable/disable/delete, assign owner) and per-account Send SMS/WhatsApp all work as before.
+
+**Responsive.** The table adapts at three breakpoints: owner column hides at 1100px, send button label hides at 860px, and below 640px the table switches to a CSS grid card layout with 44px touch targets and no horizontal scroll.
+
+**Persian.** 152 new translation entries cover every string on the page. The Royalty page now follows the panel language like the other translated pages.
+
+**Upgrade notes.** No schema migration is required. The page layout changes are CSS and template only.
+
+# Eve - Xui Manager v2.12.0
 
 ## [2.12.0] - 2026-10-15
 

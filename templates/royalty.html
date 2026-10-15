@@ -1,332 +1,245 @@
 {% extends "base.html" %}
 
-{% block title %}Royalty - Eve Manager{% endblock %}
-{% block page_title %}Royalty{% endblock %}
+{% block title %}{{ _('Royalty - Eve Manager') }}{% endblock %}
+{% block page_title %}{{ _('Royalty') }}{% endblock %}
 
 {% block header_actions %}
 <button type="button" class="btn btn-primary btn-full-mobile" onclick="loadRoyalty()">
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-    <span class="btn-label">Refresh</span>
+    <span class="btn-label">{{ _('Refresh') }}</span>
 </button>
 {% endblock %}
 
 {% block content %}
 <div class="royalty-page">
-    <div class="panel-card" style="margin-bottom:16px;">
+    <section class="panel-card royalty-filter-card">
         <div class="panel-card-header">
             <div class="header-content">
-                <h2>Idle Accounts</h2>
-                <p class="text-secondary">Active accounts that used <strong>no traffic</strong> in the selected window — ideal for a re-engagement nudge.</p>
+                <h2>{{ _('Idle Accounts') }}</h2>
+                <p class="text-secondary">{{ _('Active accounts that used no traffic in the selected window. Ideal for a re-engagement nudge.') }}</p>
             </div>
-            <span class="badge" id="royalty-count">0 found</span>
+            <span class="badge" id="royalty-count">0</span>
         </div>
 
-        <!-- Filters row: Search | Window | Server | Reseller | Select All -->
         <div class="royalty-filters">
-            <div class="royalty-field">
-                <label>Search</label>
-                <input type="text" id="royalty-search" class="form-input" placeholder="email / phone / server…" oninput="renderRoyalty()">
+            <div class="royalty-field royalty-field-search">
+                <label for="royalty-search">{{ _('Search') }}</label>
+                <input type="search" id="royalty-search" class="form-input" placeholder="{{ _('Email, phone or server') }}" autocomplete="off" oninput="renderRoyalty()">
             </div>
             <div class="royalty-field">
-                <label>Window</label>
+                <label for="royalty-days">{{ _('Window') }}</label>
                 <select id="royalty-days" class="form-select" onchange="loadRoyalty()">
-                    <option value="1">Today vs yesterday (1 day)</option>
-                    <option value="2">Last 2 days</option>
-                    <option value="3">Last 3 days</option>
-                    <option value="7">Last 7 days</option>
-                    <option value="14">Last 14 days</option>
-                    <option value="30">Last 30 days</option>
+                    <option value="1">{{ _('Today vs yesterday (1 day)') }}</option>
+                    <option value="2">{{ _('Last 2 days') }}</option>
+                    <option value="3">{{ _('Last 3 days') }}</option>
+                    <option value="7">{{ _('Last 7 days') }}</option>
+                    <option value="14">{{ _('Last 14 days') }}</option>
+                    <option value="30">{{ _('Last 30 days') }}</option>
                 </select>
             </div>
             <div class="royalty-field">
-                <label>Server</label>
+                <label for="royalty-server">{{ _('Server') }}</label>
                 <select id="royalty-server" class="form-select" onchange="loadRoyalty()">
-                    <option value="all">All servers</option>
+                    <option value="all">{{ _('All Servers') }}</option>
                 </select>
             </div>
-            <div class="royalty-field" id="royalty-reseller-field" style="display:none;">
-                <label>Reseller</label>
+            <div class="royalty-field hidden" id="royalty-reseller-field">
+                <label for="royalty-reseller">{{ _('Reseller') }}</label>
                 <select id="royalty-reseller" class="form-select" onchange="loadRoyalty()">
-                    <option value="all">All resellers</option>
-                    <option value="0">System (unassigned)</option>
+                    <option value="all">{{ _('All resellers') }}</option>
+                    <option value="0">{{ _('System (unassigned)') }}</option>
                 </select>
             </div>
-            <div class="royalty-field royalty-select-all-field">
-                <label>&nbsp;</label>
-                <button class="btn btn-secondary" style="padding:8px 12px;" onclick="selectAllVisibleRoyalty()">Select All</button>
-            </div>
         </div>
-    </div>
+    </section>
 
-    <!-- Bulk actions container -->
-    <div id="bulk-actions-container" style="display:none; margin-bottom:10px; padding:12px 14px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card);">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-            <strong style="font-size:0.9rem;">Bulk Actions</strong>
-            <span id="bulk-selected-count" style="font-size:0.82em; color:var(--text-secondary);">0 selected</span>
+    <!-- Bulk actions: shown while at least one account is selected -->
+    <section id="bulk-actions-container" class="royalty-bulk hidden">
+        <div class="royalty-bulk-head">
+            <strong>{{ _('Bulk Actions') }}</strong>
+            <span id="bulk-selected-count" class="royalty-muted">0</span>
         </div>
 
-        <!-- Main controls row — all inline, auto-width, consistent height 36px -->
-        <div class="bulk-bar">
-            <select id="bulk-action-select" class="bulk-ctrl" onchange="onBulkActionChanged()">
-                <option value="">Select Action</option>
-                <option value="set_start_after_use">Set to Start After First Use</option>
-                <option value="enable">Enable</option>
-                <option value="disable">Disable</option>
-                <option value="delete">Delete</option>
-                <option value="add_days">Add Days</option>
-                <option value="add_volume">Add Volume (GB)</option>
-                <option value="volume_policy">Volume Filter</option>
-                <option value="volume_multiplier">Volume Multiplier ✕</option>
+        <div class="royalty-bulk-bar">
+            <select id="bulk-action-select" class="royalty-bulk-ctrl" aria-label="{{ _('Select Action') }}" onchange="onBulkActionChanged()">
+                <option value="">{{ _('Select Action') }}</option>
+                <option value="set_start_after_use">{{ _('Set to Start After First Use') }}</option>
+                <option value="enable">{{ _('Enable') }}</option>
+                <option value="disable">{{ _('Disable') }}</option>
+                <option value="delete">{{ _('Delete') }}</option>
+                <option value="add_days">{{ _('Add Days') }}</option>
+                <option value="add_volume">{{ _('Add Volume (GB)') }}</option>
+                <option value="volume_policy">{{ _('Volume Filter') }}</option>
+                <option value="volume_multiplier">{{ _('Volume Multiplier') }}</option>
                 {% if is_superadmin %}
-                <option value="assign_owner">Assign Owner</option>
-                <option value="unassign_owner">Unassign Owner</option>
+                <option value="assign_owner">{{ _('Assign Owner') }}</option>
+                <option value="unassign_owner">{{ _('Unassign Owner') }}</option>
                 {% endif %}
             </select>
 
-            <input id="bulk-days-delta"   type="number" class="bulk-ctrl" min="1" step="1" placeholder="Days"  style="display:none; width:90px;">
-            <input id="bulk-volume-delta" type="number" class="bulk-ctrl" min="1" step="1" placeholder="GB"    style="display:none; width:80px;">
+            <input id="bulk-days-delta" type="number" class="royalty-bulk-ctrl royalty-bulk-num hidden" min="1" step="1" placeholder="{{ _('Days') }}">
+            <input id="bulk-volume-delta" type="number" class="royalty-bulk-ctrl royalty-bulk-num hidden" min="1" step="1" placeholder="GB">
 
-            <select id="bulk-cond-enable" class="bulk-ctrl" title="Target by enabled/disabled">
-                <option value="any" selected>Any Status</option>
-                <option value="enabled">Enabled only</option>
-                <option value="disabled">Disabled only</option>
+            <select id="bulk-cond-enable" class="royalty-bulk-ctrl" title="{{ _('Target by enabled/disabled') }}">
+                <option value="any" selected>{{ _('Any Status') }}</option>
+                <option value="enabled">{{ _('Enabled only') }}</option>
+                <option value="disabled">{{ _('Disabled only') }}</option>
             </select>
-            <select id="bulk-cond-expiry" class="bulk-ctrl" title="Target by expiry type">
-                <option value="any" selected>Any Expiry</option>
-                <option value="unlimited">Unlimited</option>
-                <option value="start_after_use">Not started</option>
-                <option value="expired">Expired</option>
-                <option value="today">Today</option>
-                <option value="soon">Soon</option>
-                <option value="normal">Normal</option>
+            <select id="bulk-cond-expiry" class="royalty-bulk-ctrl" title="{{ _('Target by expiry type') }}">
+                <option value="any" selected>{{ _('Any Expiry') }}</option>
+                <option value="unlimited">{{ _('Unlimited') }}</option>
+                <option value="start_after_use">{{ _('Not started') }}</option>
+                <option value="expired">{{ _('Expired') }}</option>
+                <option value="today">{{ _('Today') }}</option>
+                <option value="soon">{{ _('Soon') }}</option>
+                <option value="normal">{{ _('Normal') }}</option>
             </select>
 
             {% if is_superadmin %}
-            <select id="bulk-reseller-select" class="bulk-ctrl" style="display:none;">
-                <option value="">Select Reseller</option>
+            <select id="bulk-reseller-select" class="royalty-bulk-ctrl hidden" aria-label="{{ _('Select Reseller') }}">
+                <option value="">{{ _('Select Reseller') }}</option>
             </select>
             {% endif %}
 
-            <button class="btn btn-primary  bulk-ctrl-btn" onclick="executeRoyaltyBulkAction()">Apply</button>
-            <button class="btn btn-secondary bulk-ctrl-btn" onclick="clearRoyaltyBulkSelection()">Clear</button>
+            <div class="royalty-bulk-buttons">
+                <button type="button" class="btn btn-primary royalty-bulk-btn" onclick="executeRoyaltyBulkAction()">{{ _('Apply') }}</button>
+                <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="clearRoyaltyBulkSelection()">{{ _('Clear') }}</button>
+            </div>
         </div>
 
         <!-- Volume Filter policy -->
-        <div id="bulk-volume-policy-container" style="display:none; margin-top:10px; border-top:1px solid var(--border-color); padding-top:10px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; flex-wrap:wrap;">
-                <strong style="font-size:0.9rem;">Remaining Volume Rules</strong>
-                <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <button type="button" class="btn btn-secondary" style="padding:6px 10px;" onclick="addBulkVolumeRule()">Add Rule</button>
-                    <button type="button" class="btn btn-primary" style="padding:6px 10px;" onclick="saveVolumeRulePreset()">Save Setting</button>
+        <div id="bulk-volume-policy-container" class="royalty-bulk-panel hidden">
+            <div class="royalty-bulk-panel-head">
+                <strong>{{ _('Remaining Volume Rules') }}</strong>
+                <div class="royalty-inline-actions">
+                    <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="addBulkVolumeRule()">{{ _('Add Rule') }}</button>
+                    <button type="button" class="btn btn-primary royalty-bulk-btn" onclick="saveVolumeRulePreset()">{{ _('Save Setting') }}</button>
                 </div>
             </div>
-            <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
-                <select id="bulk-volume-preset-select" class="form-select" style="flex:1; min-width:160px;" onchange="applyVolumeRulePreset()">
-                    <option value="">— Load saved setting —</option>
+            <div class="royalty-inline-actions royalty-preset-row">
+                <select id="bulk-volume-preset-select" class="form-select" aria-label="{{ _('Load saved setting') }}" onchange="applyVolumeRulePreset()">
+                    <option value="">{{ _('Load saved setting') }}</option>
                 </select>
-                <button type="button" class="btn btn-secondary" style="padding:6px 10px;" onclick="deleteVolumeRulePreset()" title="Delete selected preset">Delete</button>
+                <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="deleteVolumeRulePreset()" title="{{ _('Delete selected preset') }}">{{ _('Delete') }}</button>
             </div>
-            <div style="display:grid; grid-template-columns:minmax(86px,1fr) minmax(86px,1fr) minmax(120px,1.2fr) minmax(170px,1.6fr) auto; gap:8px; margin-bottom:6px; color:var(--text-secondary); font-size:0.78rem;">
-                <span>From GB</span><span>To GB</span><span>Make Left GB</span><span>Mode</span><span></span>
+            <div class="royalty-rule-grid royalty-rule-head">
+                <span>{{ _('From GB') }}</span><span>{{ _('To GB') }}</span><span>{{ _('Make Left GB') }}</span><span>{{ _('Mode') }}</span><span></span>
             </div>
-            <div id="bulk-volume-rules" style="display:flex; flex-direction:column; gap:8px;"></div>
+            <div id="bulk-volume-rules" class="royalty-rule-list"></div>
         </div>
 
         <!-- Volume Multiplier -->
-        <div id="bulk-multiplier-container" style="display:none; margin-top:10px; border-top:1px solid var(--border-color); padding-top:12px;">
-            <strong style="font-size:0.9rem; display:block; margin-bottom:10px;">Volume Multiplier</strong>
-            <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-                <div>
-                    <label style="font-size:0.78rem; color:var(--text-secondary); display:block; margin-bottom:4px;">Factor (e.g. 1.5 = +50%)</label>
-                    <input id="bulk-multiplier-factor" type="number" class="form-input" min="0.01" step="0.01" placeholder="1.0" style="max-width:120px;" oninput="refreshMultiplierPreview()">
+        <div id="bulk-multiplier-container" class="royalty-bulk-panel hidden">
+            <strong class="royalty-bulk-panel-title">{{ _('Volume Multiplier') }}</strong>
+            <div class="royalty-mult-fields">
+                <div class="royalty-field">
+                    <label for="bulk-multiplier-factor">{{ _('Factor (e.g. 1.5 = +50%)') }}</label>
+                    <input id="bulk-multiplier-factor" type="number" class="form-input" min="0.01" step="0.01" placeholder="1.0" oninput="refreshMultiplierPreview()">
                 </div>
-                <div>
-                    <label style="font-size:0.78rem; color:var(--text-secondary); display:block; margin-bottom:4px;">Mode</label>
-                    <select id="bulk-multiplier-mode" class="form-select" style="max-width:220px;" onchange="refreshMultiplierPreview()">
-                        <option value="set_remaining">Adjust cap (keep used traffic)</option>
-                        <option value="reset_and_set">Reset traffic + set new cap</option>
+                <div class="royalty-field">
+                    <label for="bulk-multiplier-mode">{{ _('Mode') }}</label>
+                    <select id="bulk-multiplier-mode" class="form-select" onchange="refreshMultiplierPreview()">
+                        <option value="set_remaining">{{ _('Adjust cap (keep used traffic)') }}</option>
+                        <option value="reset_and_set">{{ _('Reset traffic + set new cap') }}</option>
                     </select>
                 </div>
-                <div>
-                    <label style="font-size:0.78rem; color:var(--text-secondary); display:block; margin-bottom:4px;">Skip if remaining between (GB)</label>
-                    <div style="display:flex; align-items:center; gap:6px;">
-                        <input id="bulk-mult-skip-min" type="number" class="form-input" min="0" step="0.1" placeholder="From" style="max-width:80px;" oninput="refreshMultiplierPreview()">
-                        <span style="color:var(--text-secondary);">–</span>
-                        <input id="bulk-mult-skip-max" type="number" class="form-input" min="0" step="0.1" placeholder="To" style="max-width:80px;" oninput="refreshMultiplierPreview()">
+                <div class="royalty-field">
+                    <label for="bulk-mult-skip-min">{{ _('Skip if remaining between (GB)') }}</label>
+                    <div class="royalty-range">
+                        <input id="bulk-mult-skip-min" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('From') }}" oninput="refreshMultiplierPreview()">
+                        <span class="royalty-muted">-</span>
+                        <input id="bulk-mult-skip-max" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('To') }}" aria-label="{{ _('To') }}" oninput="refreshMultiplierPreview()">
                     </div>
                 </div>
-                <button type="button" class="btn btn-secondary" style="padding:8px 14px; align-self:flex-end;" onclick="refreshMultiplierPreview()">Preview</button>
+                <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="refreshMultiplierPreview()">{{ _('Preview') }}</button>
             </div>
-            <div id="bulk-multiplier-preview" style="margin-top:12px; display:none;"></div>
+            <div id="bulk-multiplier-preview" class="hidden"></div>
         </div>
 
         <!-- Progress bar -->
-        <div id="bulk-progress" style="display:none; margin-top:10px;">
-            <div style="height:8px; background:var(--bg-dark); border:1px solid var(--border-color); border-radius:999px; overflow:hidden;">
-                <div id="bulk-progress-bar" style="height:8px; width:0%; background:var(--primary); transition:width .18s linear;"></div>
-            </div>
-            <div id="bulk-progress-text" style="margin-top:6px; font-size:0.85rem; color:var(--text-secondary);">0/0</div>
+        <div id="bulk-progress" class="royalty-progress hidden">
+            <div class="royalty-progress-track"><div id="bulk-progress-bar" class="royalty-progress-bar"></div></div>
+            <div id="bulk-progress-text" class="royalty-muted">0/0</div>
         </div>
-    </div>
+    </section>
 
-    <!-- Results -->
-    <div id="royalty-results"></div>
+    <!-- Results: accounts grouped by mobile number -->
+    <section class="panel-card royalty-results-card">
+        <div class="royalty-list-toolbar">
+            <div class="royalty-list-toolbar-start">
+                <label class="checkbox-label royalty-select-all">
+                    <input type="checkbox" id="royalty-select-all" onchange="toggleSelectAllRoyalty(this.checked)">
+                    <span class="checkmark"></span>
+                    <span>{{ _('Select all') }}</span>
+                </label>
+                <div class="royalty-stats" id="royalty-stats"></div>
+            </div>
+            <div class="royalty-list-toolbar-end">
+                <button type="button" class="btn btn-secondary royalty-bulk-btn" id="royalty-expand-all" onclick="toggleAllRoyaltyGroups()">{{ _('Expand all') }}</button>
+            </div>
+        </div>
+        <div id="royalty-results" aria-live="polite"></div>
+    </section>
 </div>
 
 <!-- Confirm modal (identical to dashboard) -->
 <div class="modal-overlay hidden" id="bulk-confirm-modal">
     <div class="modal modal-md">
         <div class="modal-header">
-            <h2 id="bulk-confirm-title">Confirm Bulk Action</h2>
-            <button class="modal-close" onclick="closeBulkConfirmModal()">&times;</button>
+            <h2 id="bulk-confirm-title">{{ _('Confirm Bulk Action') }}</h2>
+            <button type="button" class="modal-close" aria-label="{{ _('Close') }}" onclick="closeBulkConfirmModal()">&times;</button>
         </div>
         <div class="modal-body">
-            <p class="text-secondary" style="margin:0 0 10px 0; font-size:0.9rem;">
-                You're about to apply <strong id="bulk-confirm-action" style="color:var(--text-primary);"></strong>
-                to <strong id="bulk-confirm-count" style="color:var(--text-primary);"></strong> client(s).
-            </p>
-            <div class="form-group" style="margin-bottom:14px;">
-                <label>Affected servers &amp; inbounds</label>
-                <div id="bulk-confirm-targets" style="max-height:34vh; overflow:auto; border:1px solid var(--border-color); border-radius:8px; padding:10px; background:var(--bg-dark); font-size:0.85rem; line-height:1.7;"></div>
+            <p class="field-note royalty-confirm-text" id="bulk-confirm-text"></p>
+            <div class="form-group">
+                <label>{{ _('Affected servers and inbounds') }}</label>
+                <div id="bulk-confirm-targets" class="royalty-confirm-targets"></div>
             </div>
-            <div id="bulk-confirm-backup" style="border:1px solid rgba(245,158,11,0.3); background:rgba(245,158,11,0.07); border-radius:8px; padding:12px; margin-bottom:14px;">
-                <div style="display:flex; align-items:flex-start; gap:8px;">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; margin-top:2px;"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                    <div style="flex:1;">
-                        <strong style="color:#fbbf24; font-size:0.88rem;">Back up first?</strong>
-                        <p class="text-secondary" style="margin:4px 0 8px 0; font-size:0.82rem;">
-                            Download the X-UI database of the affected server(s) before applying, so you can restore if anything goes wrong.
-                        </p>
-                        <div id="bulk-confirm-backup-list" style="display:flex; flex-direction:column; gap:6px;"></div>
-                    </div>
+            <div id="bulk-confirm-backup" class="royalty-confirm-backup">
+                <svg class="eve-icon-outline" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                <div class="royalty-confirm-backup-body">
+                    <strong>{{ _('Back up first?') }}</strong>
+                    <p class="field-note">{{ _('Download the X-UI database of the affected server(s) before applying, so you can restore if anything goes wrong.') }}</p>
+                    <div id="bulk-confirm-backup-list" class="royalty-confirm-backup-list"></div>
                 </div>
             </div>
-            <div class="form-actions" style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;">
-                <button class="btn btn-secondary" onclick="closeBulkConfirmModal()">Cancel</button>
-                <button class="btn btn-primary" id="bulk-confirm-proceed" onclick="confirmBulkProceed()">No backup, proceed</button>
+            <div class="form-actions royalty-confirm-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeBulkConfirmModal()">{{ _('Cancel') }}</button>
+                <button type="button" class="btn btn-primary" id="bulk-confirm-proceed" onclick="confirmBulkProceed()">{{ _('No backup, proceed') }}</button>
             </div>
         </div>
     </div>
 </div>
-
-<style nonce="{{ csp_nonce }}">
-    /* Bulk bar: consistent 36px height, gap on both axes, select arrow padded */
-    .bulk-bar {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;          /* column gap */
-        row-gap: 8px;      /* row gap when wrapping on mobile */
-    }
-    .bulk-ctrl {
-        height: 36px;
-        padding: 0 10px;
-        font-size: 0.85rem;
-        line-height: 36px;
-        border: 1px solid var(--border-color);
-        border-radius: 6px;
-        background: var(--bg-dark);
-        color: var(--text-primary);
-        width: auto;
-        min-width: 0;
-        flex-shrink: 0;
-        cursor: pointer;
-        box-sizing: border-box;
-        vertical-align: middle;
-    }
-    /* Remove native arrow, inject custom SVG arrow with proper spacing */
-    select.bulk-ctrl {
-        padding-right: 32px;
-        -webkit-appearance: none;
-        -moz-appearance: none;
-        appearance: none;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-        background-repeat: no-repeat;
-        background-position: right 10px center;
-        background-size: 12px 12px;
-    }
-    .bulk-ctrl:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
-    input.bulk-ctrl { cursor: text; padding: 0 10px; }
-    .bulk-ctrl-btn {
-        height: 36px;
-        padding: 0 18px;
-        font-size: 0.85rem;
-        line-height: 36px;
-        flex-shrink: 0;
-        white-space: nowrap;
-        display: inline-flex;
-        align-items: center;
-    }
-
-    .royalty-filters {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
-        gap: 12px;
-        margin-top: 14px;
-        align-items: end;
-    }
-    .royalty-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-    .royalty-field label { font-size: 0.78rem; color: var(--text-secondary); font-weight: 600; }
-    .royalty-select-all-field { min-width: 110px; max-width: 140px; }
-
-    .royalty-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
-        gap: 14px;
-    }
-    .royalty-card {
-        border: 1px solid var(--border-color);
-        background: var(--bg-card);
-        border-radius: 14px;
-        padding: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        box-shadow: var(--shadow);
-        transition: border-color .18s ease, transform .18s ease;
-        position: relative;
-        cursor: pointer;
-    }
-    .royalty-card:hover { border-color: rgba(99,102,241,0.4); transform: translateY(-2px); }
-    .royalty-card.r-selected { border-color: var(--primary); background: rgba(99,102,241,0.07); transform: none; }
-    .royalty-card-check {
-        position: absolute; top: 13px; left: 13px;
-        width: 16px; height: 16px; cursor: pointer;
-        accent-color: var(--primary);
-    }
-    .royalty-card { padding-left: 38px; }
-    .royalty-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-    .royalty-email { font-weight: 600; color: var(--text-primary); font-size: 0.95rem; word-break: break-all; min-width: 0; }
-    .royalty-idle-badge {
-        flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px;
-        padding: 3px 9px; border-radius: 999px;
-        background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3);
-        font-size: 0.72rem; font-weight: 700; white-space: nowrap;
-    }
-    .royalty-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.8rem; color: var(--text-secondary); }
-    .royalty-meta .val { color: var(--text-primary); font-weight: 500; }
-    .royalty-card-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 6px; }
-    .royalty-card-actions .btn { flex: 1; justify-content: center; }
-    .royalty-empty, .royalty-loading { text-align: center; padding: 48px 16px; color: var(--text-secondary); }
-    .royalty-empty svg { color: var(--primary); opacity: .8; margin-bottom: 10px; }
-    .royalty-online-dot { width:8px; height:8px; border-radius:50%; background:#4ade80; display:inline-block; flex-shrink:0; }
-</style>
 {% endblock %}
 
 {% block scripts %}
+<script nonce="{{ csp_nonce }}">window.EVE_I18N = {{ i18n_catalog('royalty')|tojson }};</script>
 <script src="{{ url_for('static', filename='account-message.js') }}"></script>
 <script nonce="{{ csp_nonce }}">
     const IS_SUPERADMIN = {{ 'true' if is_superadmin else 'false' }};
     const USER_ROLE = "{{ role }}";
     let royaltyData = [];
     let royaltyServers = [];
+    let royaltyVisible = [];          // accounts matching the current search
+    const royaltyByKey = new Map();   // selection key -> account
+    const royaltyExpanded = new Set();  // group keys the user opened
     const bulkSelectedClientKeys = new Set();
+
+    const ICONS = {
+        send: '<svg class="eve-icon-outline" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>',
+        chevron: '<svg class="eve-icon-outline" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>',
+        phone: '<svg class="eve-icon-outline" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>',
+        nophone: '<svg class="eve-icon-outline" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>',
+        clock: '<svg class="eve-icon-outline" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+        check: '<svg class="eve-icon-outline" xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 12l2 2 4-4"></path><circle cx="12" cy="12" r="10"></circle></svg>',
+        download: '<svg class="eve-icon-outline" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
+    };
 
     document.addEventListener('DOMContentLoaded', () => {
         if (window.AccountMessage) AccountMessage.warm();
         loadServersForFilter();
         if (IS_SUPERADMIN || USER_ROLE === 'admin') {
-            document.getElementById('royalty-reseller-field').style.display = '';
+            document.getElementById('royalty-reseller-field').classList.remove('hidden');
             loadResellersForFilter();
         }
         if (IS_SUPERADMIN) loadResellersForBulk();
@@ -338,6 +251,17 @@
             .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
     function escapeHtml(v) { return escapeHtmlR(v); }
+    function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = text;
+        return node;
+    }
+    function setVisible(id, visible) {
+        const node = typeof id === 'string' ? document.getElementById(id) : id;
+        if (node) node.classList.toggle('hidden', !visible);
+    }
+    const mkKey = (c) => `${c.server_id}:${c.inbound_id}:${(c.email||'').toLowerCase()}`;
 
     // ── Server / reseller filter loaders ────────────────────────────────────
     async function loadServersForFilter() {
@@ -372,7 +296,7 @@
         try {
             const admins = await (await fetch('/api/admins')).json();
             const resellers = (admins || []).filter(a => a.role === 'reseller');
-            select.innerHTML = '<option value="">Select Reseller</option><option value="0">System</option>'
+            select.innerHTML = `<option value="">${escapeHtml(_t('Select Reseller'))}</option><option value="0">${escapeHtml(_t('System'))}</option>`
                 + resellers.map(r => `<option value="${r.id}">${escapeHtml(r.username)}</option>`).join('');
         } catch (_) {}
     }
@@ -382,14 +306,28 @@
     // index. A load token ignores a stale response when filters change, and an
     // AbortController stops the request (and the spinner) instead of hanging.
     let _royaltyLoadToken = 0;
+    function showRoyaltyMessage(text, withSpinner) {
+        const results = document.getElementById('royalty-results');
+        const box = el('div', withSpinner ? 'royalty-loading' : 'royalty-empty');
+        if (withSpinner) box.appendChild(el('div', 'spinner royalty-spinner'));
+        box.appendChild(el('p', '', text));
+        results.textContent = '';
+        results.appendChild(box);
+    }
+    function resetRoyaltyCounters() {
+        document.getElementById('royalty-count').textContent = _t('{count} found', {count: 0});
+        document.getElementById('royalty-stats').textContent = '';
+        royaltyVisible = [];
+        syncSelectAll();
+    }
+
     async function loadRoyalty() {
         const days = document.getElementById('royalty-days').value;
         const server = document.getElementById('royalty-server').value;
         const resellerEl = document.getElementById('royalty-reseller');
         const reseller = resellerEl ? resellerEl.value : 'all';
-        const results = document.getElementById('royalty-results');
         const myToken = ++_royaltyLoadToken;
-        results.innerHTML = `<div class="royalty-loading"><div class="spinner" style="margin:0 auto 12px;"></div>Scanning usage history…</div>`;
+        showRoyaltyMessage(_t('Scanning usage history…'), true);
 
         const params = new URLSearchParams({ days });
         if (server && server !== 'all') params.set('server_id', server);
@@ -405,140 +343,371 @@
             const data = await res.json();
             if (stale()) return;
             if (!data.success) {
-                results.innerHTML = `<div class="royalty-empty">${escapeHtmlR(data.error || 'Failed to load')}</div>`;
-                document.getElementById('royalty-count').textContent = '0 found';
+                showRoyaltyMessage(data.error ? _t(data.error) : _t('Failed to load'));
+                resetRoyaltyCounters();
                 return;
             }
             royaltyData = data.clients || [];
+            royaltyByKey.clear();
+            royaltyData.forEach(c => royaltyByKey.set(mkKey(c), c));
             bulkSelectedClientKeys.clear();
             updateBulkUI();
             renderRoyalty();
         } catch (e) {
             clearTimeout(timer);
             if (stale()) return;
-            const msg = (e && e.name === 'AbortError')
-                ? 'Scan timed out. Try a single server or a shorter window.'
-                : `Network error: ${escapeHtmlR(e.message || '')}`;
-            results.innerHTML = `<div class="royalty-empty">${msg}</div>`;
-            document.getElementById('royalty-count').textContent = '0 found';
+            showRoyaltyMessage((e && e.name === 'AbortError')
+                ? _t('Scan timed out. Try a single server or a shorter window.')
+                : _t('Network error: {error}', {error: (e && e.message) || ''}));
+            resetRoyaltyCounters();
         }
     }
 
-    // ── Render cards ────────────────────────────────────────────────────────
+    // ── Grouping by mobile number ───────────────────────────────────────────
+    // The number comes from the account name or comment, exactly as the
+    // SMS / WhatsApp sender finds it, so a group is "one person to message".
+    function phoneOf(c) {
+        if (c._phone !== undefined) return c._phone;
+        let nums = [];
+        if (window.AccountMessage && AccountMessage.extractNumbers) {
+            nums = AccountMessage.extractNumbers({label: 'name', value: c.email}, {label: 'comment', value: c.comment});
+        }
+        c._phone = nums.length ? nums[0].number : '';
+        return c._phone;
+    }
+    function formatPhone(n) {
+        if (/^98\d{10}$/.test(n)) return `+98 ${n.slice(2, 5)} ${n.slice(5, 8)} ${n.slice(8)}`;
+        return `+${n}`;
+    }
+    function buildGroups(list) {
+        const byPhone = new Map();
+        const noPhone = [];
+        list.forEach(c => {
+            const p = phoneOf(c);
+            if (!p) { noPhone.push(c); return; }
+            if (!byPhone.has(p)) byPhone.set(p, []);
+            byPhone.get(p).push(c);
+        });
+        const groups = Array.from(byPhone.entries()).map(([phone, items]) => ({ key: `p:${phone}`, phone, items }));
+        groups.sort((a, b) => (b.items.length - a.items.length) || a.phone.localeCompare(b.phone));
+        if (noPhone.length) groups.push({ key: 'none', phone: '', items: noPhone });
+        return groups;
+    }
+    const ownerLabel = (c) => (USER_ROLE === 'reseller') ? _t('You') : (c.owner_username || _t('System'));
+    // One shared value is shown as is, several as a count ("3 servers").
+    function summarize(values, many) {
+        const unique = Array.from(new Set(values.filter(Boolean)));
+        return unique.length === 1 ? unique[0] : many(unique.length);
+    }
+    const manyServers = (count) => _t('{count} servers', {count});
+    const manyOwners = (count) => _t('{count} owners', {count});
+
+    // ── Render table ────────────────────────────────────────────────────────
     function renderRoyalty() {
         const results = document.getElementById('royalty-results');
         const q = (document.getElementById('royalty-search').value || '').trim().toLowerCase();
         const list = !q ? royaltyData : royaltyData.filter(c =>
-            `${c.email} ${c.comment} ${c.server_name} ${c.owner_username || ''}`.toLowerCase().includes(q));
+            `${c.email} ${c.comment} ${c.server_name} ${c.owner_username || ''} ${phoneOf(c)}`.toLowerCase().includes(q));
+        royaltyVisible = list;
 
-        document.getElementById('royalty-count').textContent = `${list.length} found`;
+        document.getElementById('royalty-count').textContent = _t('{count} found', {count: list.length});
 
         if (!royaltyData.length) {
-            results.innerHTML = `<div class="royalty-empty">
-                <svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"></path><circle cx="12" cy="12" r="10"></circle></svg>
-                <h3 style="color:var(--text-primary);margin:0 0 4px;">No idle accounts</h3>
-                <p>Every active account moved some traffic in this window. 🎉</p>
-            </div>`;
+            const box = el('div', 'royalty-empty');
+            const icon = el('div', 'royalty-empty-icon');
+            icon.innerHTML = ICONS.check;
+            box.append(icon, el('h3', '', _t('No idle accounts')),
+                el('p', '', _t('Every active account moved some traffic in this window.')));
+            results.textContent = '';
+            results.appendChild(box);
+            resetRoyaltyCounters();
             return;
         }
         if (!list.length) {
-            results.innerHTML = `<div class="royalty-empty">No matches for "${escapeHtmlR(q)}".</div>`;
+            showRoyaltyMessage(_t('No matches for "{query}".', {query: q}));
+            document.getElementById('royalty-stats').textContent = '';
+            syncSelectAll();
             return;
         }
 
-        const ownerLabel = (c) => (USER_ROLE === 'reseller') ? 'You' : (c.owner_username || 'System');
-        const mkKey = (c) => `${c.server_id}:${c.inbound_id}:${(c.email||'').toLowerCase()}`;
+        const groups = buildGroups(list);
+        renderStats(groups);
 
-        const grid = document.createElement('div');
-        grid.className = 'royalty-grid';
-
-        list.forEach((c, idx) => {
-            const key = mkKey(c);
-            const isSelected = bulkSelectedClientKeys.has(key);
-            const card = document.createElement('div');
-            card.className = `royalty-card${isSelected ? ' r-selected' : ''}`;
-            card.dataset.key = key;
-            card.innerHTML = `
-                <input type="checkbox" class="royalty-card-check"
-                    data-server-id="${c.server_id}" data-inbound-id="${c.inbound_id}" data-email="${escapeHtmlR(c.email)}"
-                    ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); onRoyaltyCheckboxChanged(this)">
-                <div class="royalty-card-top">
-                    <div class="royalty-email">
-                        ${c.is_online ? '<span class="royalty-online-dot" title="Online"></span> ' : ''}${escapeHtmlR(c.email || '-')}
-                    </div>
-                    <span class="royalty-idle-badge">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                        no usage
-                    </span>
-                </div>
-                <div class="royalty-meta">
-                    <span>Server: <span class="val">${escapeHtmlR(c.server_name || '-')}</span></span>
-                    <span>Owner: <span class="val">${escapeHtmlR(ownerLabel(c))}</span></span>
-                    <span>Expiry: <span class="val">${escapeHtmlR(c.expiryTime || '-')}</span></span>
-                    <span>Remaining: <span class="val">${escapeHtmlR(c.remaining_formatted || '-')}</span></span>
-                </div>
-                <div class="royalty-card-actions">
-                    <button class="btn btn-success" data-idx="${idx}" onclick="event.stopPropagation(); sendRoyaltyMessage(this)">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
-                        Send SMS / WhatsApp
-                    </button>
-                </div>`;
-            card.addEventListener('click', (e) => {
-                if (e.target.closest('button') || e.target.classList.contains('royalty-card-check')) return;
-                const cb = card.querySelector('.royalty-card-check');
-                cb.checked = !cb.checked;
-                onRoyaltyCheckboxChanged(cb);
-            });
-            grid.appendChild(card);
+        const table = el('table', 'clients-table royalty-table');
+        const thead = el('thead');
+        const headRow = el('tr');
+        [
+            ['royalty-col-select', ''],
+            ['royalty-col-account', _t('Account')],
+            ['royalty-col-server', _t('Server')],
+            ['royalty-col-owner', _t('Owner')],
+            ['royalty-col-expiry', _t('Expiry')],
+            ['royalty-col-remaining', _t('Remaining')],
+            ['royalty-col-actions', _t('Actions')],
+        ].forEach(([cls, label]) => {
+            const th = el('th', cls, label);
+            th.scope = 'col';
+            headRow.appendChild(th);
         });
+        if (!headRow.firstChild.textContent) {
+            headRow.firstChild.appendChild(el('span', 'royalty-sr-only', _t('Select')));
+        }
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        const tbody = el('tbody');
+        groups.forEach(g => {
+            if (g.items.length === 1) {
+                tbody.appendChild(buildAccountRow(g.items[0], null));
+                return;
+            }
+            const expanded = royaltyExpanded.has(g.key);
+            tbody.appendChild(buildGroupRow(g, expanded));
+            g.items.forEach(c => tbody.appendChild(buildAccountRow(c, g.key, !expanded)));
+        });
+        table.appendChild(tbody);
 
         results.textContent = '';
-        results.appendChild(grid);
-        results._list = list;
+        results.appendChild(table);
+        syncSelectionUI();
+        syncExpandAllButton(groups);
+    }
+
+    function renderStats(groups) {
+        const stats = document.getElementById('royalty-stats');
+        stats.textContent = '';
+        const phoneGroups = groups.filter(g => g.phone);
+        const shared = phoneGroups.filter(g => g.items.length > 1).length;
+        const none = groups.find(g => !g.phone);
+        const add = (text) => stats.appendChild(el('span', 'royalty-stat', text));
+        add(_t('{count} phone numbers', {count: phoneGroups.length}));
+        if (shared) add(_t('{count} shared by several accounts', {count: shared}));
+        if (none) add(_t('{count} without a phone', {count: none.items.length}));
+    }
+
+    function buildCheckbox(className, ariaLabel, onChange) {
+        const label = el('label', 'checkbox-label');
+        const input = el('input', className);
+        input.type = 'checkbox';
+        input.setAttribute('aria-label', ariaLabel);
+        input.addEventListener('click', (e) => e.stopPropagation());
+        input.addEventListener('change', () => onChange(input));
+        label.addEventListener('click', (e) => e.stopPropagation());
+        label.append(input, el('span', 'checkmark'));
+        return label;
+    }
+
+    function metaCell(cls, label, value, title) {
+        const td = el('td', `royalty-cell-meta ${cls}`);
+        td.dataset.label = label;
+        const span = el('span', 'royalty-ellipsis', value || '-');
+        if (title) span.title = title;
+        td.appendChild(span);
+        return td;
+    }
+
+    function buildGroupRow(g, expanded) {
+        const tr = el('tr', `royalty-row royalty-group-row${expanded ? ' is-expanded' : ''}`);
+        tr.dataset.group = g.key;
+        const label = g.phone ? formatPhone(g.phone) : _t('No phone number');
+
+        const selectTd = el('td', 'royalty-cell-select');
+        selectTd.appendChild(buildCheckbox('royalty-group-check', _t('Select {count} accounts of {phone}', {count: g.items.length, phone: label}),
+            (cb) => toggleGroupSelection(g.key, cb.checked)));
+        tr.appendChild(selectTd);
+
+        const acc = el('td', 'royalty-cell-account');
+        const head = el('div', 'royalty-group-head');
+        const icon = el('span', 'royalty-group-icon');
+        icon.innerHTML = g.phone ? ICONS.phone : ICONS.nophone;
+        const text = el('div', 'royalty-account');
+        const name = el('div', 'royalty-account-name');
+        const phoneEl = el('span', g.phone ? 'royalty-phone' : 'royalty-name-text', label);
+        name.appendChild(phoneEl);
+        const sub = el('div', 'royalty-account-sub');
+        sub.appendChild(el('span', 'royalty-count-pill', _t('{count} accounts', {count: g.items.length})));
+        sub.appendChild(el('span', 'royalty-sub-owner', summarize(g.items.map(ownerLabel), manyOwners)));
+        text.append(name, sub);
+        head.append(icon, text);
+        acc.appendChild(head);
+        tr.appendChild(acc);
+
+        const servers = summarize(g.items.map(c => c.server_name), manyServers);
+        tr.appendChild(metaCell('royalty-col-server', _t('Server'), servers, servers));
+        const owners = summarize(g.items.map(ownerLabel), manyOwners);
+        tr.appendChild(metaCell('royalty-col-owner', _t('Owner'), owners, owners));
+        const expiryTd = el('td', 'royalty-cell-meta royalty-col-expiry royalty-cell-blank');
+        const remainTd = el('td', 'royalty-cell-meta royalty-col-remaining royalty-cell-blank');
+        tr.append(expiryTd, remainTd);
+
+        const actions = el('td', 'royalty-cell-actions');
+        const toggle = el('button', 'action-btn royalty-toggle-btn');
+        toggle.type = 'button';
+        toggle.innerHTML = ICONS.chevron;
+        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        toggle.setAttribute('aria-label', _t('Show accounts of {phone}', {phone: label}));
+        toggle.title = _t('Show accounts');
+        toggle.addEventListener('click', (e) => { e.stopPropagation(); toggleRoyaltyGroup(g.key); });
+        actions.appendChild(toggle);
+        tr.appendChild(actions);
+
+        tr.addEventListener('click', () => toggleRoyaltyGroup(g.key));
+        return tr;
+    }
+
+    function buildAccountRow(c, groupKey, collapsed) {
+        const key = mkKey(c);
+        const tr = el('tr', `royalty-row royalty-account-row${groupKey ? ' royalty-child-row' : ''}${collapsed ? ' hidden' : ''}`);
+        tr.dataset.key = key;
+        if (groupKey) tr.dataset.parent = groupKey;
+
+        const selectTd = el('td', 'royalty-cell-select');
+        const cbLabel = buildCheckbox('royalty-account-check', _t('Select {email}', {email: c.email || '-'}),
+            (cb) => setAccountSelected(key, cb.checked));
+        cbLabel.querySelector('input').dataset.key = key;
+        selectTd.appendChild(cbLabel);
+        tr.appendChild(selectTd);
+
+        const acc = el('td', 'royalty-cell-account');
+        const wrap = el('div', 'royalty-account');
+        const name = el('div', 'royalty-account-name');
+        if (c.is_online) {
+            const dot = el('span', 'royalty-online-dot');
+            dot.title = _t('Online');
+            name.appendChild(dot);
+        }
+        const nameText = el('span', 'royalty-name-text', c.email || '-');
+        nameText.title = c.email || '';
+        name.appendChild(nameText);
+        const sub = el('div', 'royalty-account-sub');
+        const badge = el('span', 'royalty-idle-badge');
+        badge.innerHTML = ICONS.clock;
+        badge.appendChild(document.createTextNode(_t('No usage')));
+        sub.appendChild(badge);
+        const phone = phoneOf(c);
+        if (!groupKey && phone) sub.appendChild(el('span', 'royalty-phone', formatPhone(phone)));
+        sub.appendChild(el('span', 'royalty-sub-owner', ownerLabel(c)));
+        wrap.append(name, sub);
+        acc.appendChild(wrap);
+        tr.appendChild(acc);
+
+        tr.appendChild(metaCell('royalty-col-server', _t('Server'), c.server_name, c.server_name));
+        tr.appendChild(metaCell('royalty-col-owner', _t('Owner'), ownerLabel(c)));
+        tr.appendChild(metaCell('royalty-col-expiry', _t('Expiry'), c.expiryTime));
+        tr.appendChild(metaCell('royalty-col-remaining', _t('Remaining'), c.remaining_formatted));
+
+        const actions = el('td', 'royalty-cell-actions');
+        const send = el('button', 'btn btn-outline royalty-send-btn');
+        send.type = 'button';
+        send.innerHTML = ICONS.send;
+        send.appendChild(el('span', 'royalty-send-label', _t('Send')));
+        send.title = _t('Send SMS / WhatsApp');
+        send.setAttribute('aria-label', _t('Send SMS / WhatsApp to {email}', {email: c.email || '-'}));
+        send.addEventListener('click', (e) => { e.stopPropagation(); sendRoyaltyMessage(key); });
+        actions.appendChild(send);
+        tr.appendChild(actions);
+
+        tr.addEventListener('click', () => setAccountSelected(key, !bulkSelectedClientKeys.has(key)));
+        return tr;
+    }
+
+    // ── Expand / collapse ────────────────────────────────────────────────────
+    function setGroupExpanded(groupKey, expanded) {
+        if (expanded) royaltyExpanded.add(groupKey); else royaltyExpanded.delete(groupKey);
+        const results = document.getElementById('royalty-results');
+        const row = results.querySelector(`tr.royalty-group-row[data-group="${CSS.escape(groupKey)}"]`);
+        if (!row) return;
+        row.classList.toggle('is-expanded', expanded);
+        const btn = row.querySelector('.royalty-toggle-btn');
+        if (btn) btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        results.querySelectorAll(`tr[data-parent="${CSS.escape(groupKey)}"]`)
+            .forEach(tr => tr.classList.toggle('hidden', !expanded));
+    }
+    function toggleRoyaltyGroup(groupKey) {
+        setGroupExpanded(groupKey, !royaltyExpanded.has(groupKey));
+        syncExpandAllButton();
+    }
+    function visibleGroupKeys() {
+        return Array.from(document.querySelectorAll('#royalty-results tr.royalty-group-row')).map(r => r.dataset.group);
+    }
+    function toggleAllRoyaltyGroups() {
+        const keys = visibleGroupKeys();
+        const expand = keys.some(k => !royaltyExpanded.has(k));
+        keys.forEach(k => setGroupExpanded(k, expand));
+        syncExpandAllButton();
+    }
+    function syncExpandAllButton() {
+        const btn = document.getElementById('royalty-expand-all');
+        const keys = visibleGroupKeys();
+        setVisible(btn, keys.length > 0);
+        btn.textContent = keys.length && keys.every(k => royaltyExpanded.has(k)) ? _t('Collapse all') : _t('Expand all');
     }
 
     // ── Selection helpers ────────────────────────────────────────────────────
-    function onRoyaltyCheckboxChanged(cb) {
-        const key = `${cb.dataset.serverId}:${cb.dataset.inboundId}:${(cb.dataset.email||'').toLowerCase()}`;
-        if (cb.checked) bulkSelectedClientKeys.add(key);
-        else             bulkSelectedClientKeys.delete(key);
-        const card = cb.closest('.royalty-card');
-        if (card) card.classList.toggle('r-selected', cb.checked);
+    function setAccountSelected(key, selected) {
+        if (selected) bulkSelectedClientKeys.add(key); else bulkSelectedClientKeys.delete(key);
+        syncSelectionUI();
         updateBulkUI();
     }
-
-    function selectAllVisibleRoyalty() {
-        const results = document.getElementById('royalty-results');
-        const list = results._list || [];
-        list.forEach(c => {
-            const key = `${c.server_id}:${c.inbound_id}:${(c.email||'').toLowerCase()}`;
-            bulkSelectedClientKeys.add(key);
+    function toggleGroupSelection(groupKey, selected) {
+        document.querySelectorAll(`#royalty-results tr[data-parent="${CSS.escape(groupKey)}"]`).forEach(tr => {
+            if (selected) bulkSelectedClientKeys.add(tr.dataset.key); else bulkSelectedClientKeys.delete(tr.dataset.key);
         });
-        results.querySelectorAll('.royalty-card-check').forEach(cb => {
-            cb.checked = true;
-            const card = cb.closest('.royalty-card');
-            if (card) card.classList.add('r-selected');
-        });
+        syncSelectionUI();
         updateBulkUI();
+    }
+    function toggleSelectAllRoyalty(selected) {
+        if (selected) royaltyVisible.forEach(c => bulkSelectedClientKeys.add(mkKey(c)));
+        else royaltyVisible.forEach(c => bulkSelectedClientKeys.delete(mkKey(c)));
+        syncSelectionUI();
+        updateBulkUI();
+    }
+    // kept for callers of the previous page version
+    function selectAllVisibleRoyalty() { toggleSelectAllRoyalty(true); }
+
+    function syncSelectionUI() {
+        const results = document.getElementById('royalty-results');
+        results.querySelectorAll('tr.royalty-account-row').forEach(tr => {
+            const on = bulkSelectedClientKeys.has(tr.dataset.key);
+            tr.classList.toggle('is-selected', on);
+            const cb = tr.querySelector('.royalty-account-check');
+            if (cb) cb.checked = on;
+        });
+        results.querySelectorAll('tr.royalty-group-row').forEach(tr => {
+            const children = results.querySelectorAll(`tr[data-parent="${CSS.escape(tr.dataset.group)}"]`);
+            const picked = Array.from(children).filter(c => bulkSelectedClientKeys.has(c.dataset.key)).length;
+            const cb = tr.querySelector('.royalty-group-check');
+            if (cb) {
+                cb.checked = picked > 0 && picked === children.length;
+                cb.indeterminate = picked > 0 && picked < children.length;
+            }
+            tr.classList.toggle('is-selected', picked > 0 && picked === children.length);
+        });
+        syncSelectAll();
+    }
+    function syncSelectAll() {
+        const all = document.getElementById('royalty-select-all');
+        if (!all) return;
+        const picked = royaltyVisible.filter(c => bulkSelectedClientKeys.has(mkKey(c))).length;
+        all.checked = royaltyVisible.length > 0 && picked === royaltyVisible.length;
+        all.indeterminate = picked > 0 && picked < royaltyVisible.length;
+        all.disabled = royaltyVisible.length === 0;
     }
 
     function clearRoyaltyBulkSelection() {
         bulkSelectedClientKeys.clear();
-        document.querySelectorAll('.royalty-card-check').forEach(cb => { cb.checked = false; });
-        document.querySelectorAll('.royalty-card').forEach(c => c.classList.remove('r-selected'));
+        syncSelectionUI();
         updateBulkUI();
     }
 
     function updateBulkUI() {
-        const container = document.getElementById('bulk-actions-container');
         const countEl = document.getElementById('bulk-selected-count');
-        if (!container || !countEl) return;
-        countEl.textContent = `${bulkSelectedClientKeys.size} selected`;
-        container.style.display = bulkSelectedClientKeys.size > 0 ? 'block' : 'none';
+        if (!countEl) return;
+        countEl.textContent = _t('{count} selected', {count: bulkSelectedClientKeys.size});
+        setVisible('bulk-actions-container', bulkSelectedClientKeys.size > 0);
     }
 
     function getSelectedClientsForBulk() {
-        const mkKey = (c) => `${c.server_id}:${c.inbound_id}:${(c.email||'').toLowerCase()}`;
         return royaltyData.filter(c => bulkSelectedClientKeys.has(mkKey(c))).map(c => ({
             server_id: c.server_id,
             inbound_id: c.inbound_id,
@@ -550,39 +719,25 @@
     // ── Bulk action changed ──────────────────────────────────────────────────
     function onBulkActionChanged() {
         const action = document.getElementById('bulk-action-select')?.value;
+        setVisible('bulk-reseller-select', IS_SUPERADMIN && action === 'assign_owner');
+        setVisible('bulk-days-delta', action === 'add_days');
+        setVisible('bulk-volume-delta', action === 'add_volume');
 
-        // Reseller select (superadmin only, flat in bar now)
-        const resellerSel = document.getElementById('bulk-reseller-select');
-        if (resellerSel)
-            resellerSel.style.display = (IS_SUPERADMIN && action === 'assign_owner') ? '' : 'none';
+        const showPolicy = action === 'volume_policy';
+        setVisible('bulk-volume-policy-container', showPolicy);
+        if (showPolicy) { ensureDefaultBulkVolumeRules(); loadVolumeRulePresets(); }
 
-        // Days / volume inputs (flat in bar, no wrapper div)
-        const daysInput = document.getElementById('bulk-days-delta');
-        const volInput  = document.getElementById('bulk-volume-delta');
-        if (daysInput) daysInput.style.display = (action === 'add_days')   ? '' : 'none';
-        if (volInput)  volInput.style.display  = (action === 'add_volume') ? '' : 'none';
-
-        const policyContainer = document.getElementById('bulk-volume-policy-container');
-        if (policyContainer) {
-            const showPolicy = action === 'volume_policy';
-            policyContainer.style.display = showPolicy ? 'block' : 'none';
-            if (showPolicy) { ensureDefaultBulkVolumeRules(); loadVolumeRulePresets(); }
-        }
-
-        const multContainer = document.getElementById('bulk-multiplier-container');
-        if (multContainer) {
-            multContainer.style.display = (action === 'volume_multiplier') ? 'block' : 'none';
-            if (action === 'volume_multiplier') refreshMultiplierPreview();
-        }
+        setVisible('bulk-multiplier-container', action === 'volume_multiplier');
+        if (action === 'volume_multiplier') refreshMultiplierPreview();
     }
 
     // ── Execute bulk action ──────────────────────────────────────────────────
     async function executeRoyaltyBulkAction() {
         let action = document.getElementById('bulk-action-select')?.value;
-        if (!action) { showToast('Please select an action', 'error'); return; }
+        if (!action) { showToast(_t('Please select an action'), 'error'); return; }
 
         const clients = getSelectedClientsForBulk();
-        if (!clients.length) { showToast('Please select at least one client', 'error'); return; }
+        if (!clients.length) { showToast(_t('Please select at least one client'), 'error'); return; }
 
         const data = {};
         const conditions = {
@@ -592,21 +747,21 @@
 
         if (action === 'add_days') {
             const v = parseInt(document.getElementById('bulk-days-delta')?.value);
-            if (!Number.isFinite(v) || v <= 0) { showToast('Please enter days (> 0)', 'error'); return; }
+            if (!Number.isFinite(v) || v <= 0) { showToast(_t('Please enter days (> 0)'), 'error'); return; }
             data.days_delta = v;
         }
         if (action === 'add_volume') {
             const v = parseInt(document.getElementById('bulk-volume-delta')?.value);
-            if (!Number.isFinite(v) || v <= 0) { showToast('Please enter volume GB (> 0)', 'error'); return; }
+            if (!Number.isFinite(v) || v <= 0) { showToast(_t('Please enter volume GB (> 0)'), 'error'); return; }
             data.volume_gb_delta = v;
         }
         if (action === 'volume_policy') {
             try { data.volume_rules = collectBulkVolumeRules(); }
-            catch (e) { showToast(e.message || 'Invalid volume rules', 'error'); return; }
+            catch (e) { showToast(e.message || _t('Invalid volume rules'), 'error'); return; }
         }
         if (action === 'volume_multiplier') {
             const factor = parseFloat(document.getElementById('bulk-multiplier-factor')?.value);
-            if (!isFinite(factor) || factor <= 0) { showToast('Please enter a valid factor (> 0)', 'error'); return; }
+            if (!isFinite(factor) || factor <= 0) { showToast(_t('Please enter a valid factor (> 0)'), 'error'); return; }
             data.factor = factor;
             data.mode = document.getElementById('bulk-multiplier-mode')?.value || 'set_remaining';
             const skipMin = parseFloat(document.getElementById('bulk-mult-skip-min')?.value);
@@ -616,7 +771,7 @@
         }
         if (action === 'assign_owner') {
             const resellerId = document.getElementById('bulk-reseller-select')?.value;
-            if (!resellerId && resellerId !== '0') { showToast('Please select a reseller', 'error'); return; }
+            if (!resellerId && resellerId !== '0') { showToast(_t('Please select a reseller'), 'error'); return; }
             const rid = parseInt(resellerId);
             if (rid === 0) { action = 'unassign_owner'; }
             else { data.reseller_id = rid; }
@@ -650,43 +805,44 @@
 
         const serverName = (sid) => {
             const s = royaltyServers.find(x => String(x.id) === String(sid));
-            return s ? s.name : `Server ${sid}`;
+            return s ? s.name : _t('Server {id}', {id: sid});
         };
 
         const targetsEl = document.getElementById('bulk-confirm-targets');
-        targetsEl.innerHTML = Array.from(byServer.entries()).map(([sid, iids]) => {
-            const ibBadges = Array.from(iids).map(iid =>
-                `<span class="meta-tag" style="margin:2px 4px 2px 0; display:inline-block;">Inbound #${escapeHtml(iid)}</span>`
-            ).join('');
-            return `<div style="margin-bottom:8px;">
-                <strong style="color:var(--primary);">${escapeHtml(serverName(sid))}</strong>
-                <span style="color:var(--text-secondary);">(#${escapeHtml(sid)})</span>
-                <div style="margin-top:3px;">${ibBadges}</div>
-            </div>`;
-        }).join('');
+        targetsEl.textContent = '';
+        byServer.forEach((iids, sid) => {
+            const block = el('div', 'royalty-confirm-server');
+            block.append(el('strong', '', serverName(sid)), el('span', 'royalty-muted', ` (#${sid})`));
+            const tags = el('div', 'royalty-confirm-inbounds');
+            iids.forEach(iid => tags.appendChild(el('span', 'meta-tag', _t('Inbound #{id}', {id: iid}))));
+            block.appendChild(tags);
+            targetsEl.appendChild(block);
+        });
 
         _bulkPendingBackupServers = new Set(byServer.keys());
         _updateBulkProceedBtn();
 
         const backupList = document.getElementById('bulk-confirm-backup-list');
-        const isReseller = !IS_SUPERADMIN;
-        if (isReseller) {
-            document.getElementById('bulk-confirm-backup').style.display = 'none';
+        if (!IS_SUPERADMIN) {
+            setVisible('bulk-confirm-backup', false);
             _bulkPendingBackupServers.clear();
             _updateBulkProceedBtn();
         } else {
-            document.getElementById('bulk-confirm-backup').style.display = 'block';
-            backupList.innerHTML = Array.from(byServer.keys()).map(sid =>
-                `<button type="button" class="btn btn-secondary" style="justify-content:flex-start; gap:8px;"
-                         onclick="downloadServerBackup('${sid}', this)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                    Backup DB: ${escapeHtml(serverName(sid))}
-                </button>`
-            ).join('');
+            setVisible('bulk-confirm-backup', true);
+            backupList.textContent = '';
+            byServer.forEach((_iids, sid) => {
+                const btn = el('button', 'btn btn-secondary royalty-backup-btn');
+                btn.type = 'button';
+                btn.innerHTML = ICONS.download;
+                btn.appendChild(document.createTextNode(_t('Backup DB: {server}', {server: serverName(sid)})));
+                btn.addEventListener('click', () => downloadServerBackup(sid, btn));
+                backupList.appendChild(btn);
+            });
         }
 
-        document.getElementById('bulk-confirm-action').textContent = BULK_ACTION_LABELS[action] || action;
-        document.getElementById('bulk-confirm-count').textContent = String(clients.length);
+        document.getElementById('bulk-confirm-text').textContent = _t("You're about to apply {action} to {count} client(s).", {
+            action: _t(BULK_ACTION_LABELS[action] || action), count: clients.length,
+        });
         document.getElementById('bulk-confirm-modal').classList.remove('hidden');
     }
 
@@ -694,9 +850,9 @@
         const btn = document.getElementById('bulk-confirm-proceed');
         if (!btn) return;
         if (_bulkPendingBackupServers.size === 0) {
-            btn.textContent = 'Proceed'; btn.classList.remove('btn-warning'); btn.classList.add('btn-primary');
+            btn.textContent = _t('Proceed'); btn.classList.remove('btn-warning'); btn.classList.add('btn-primary');
         } else {
-            btn.textContent = 'No backup, proceed'; btn.classList.remove('btn-primary'); btn.classList.add('btn-warning');
+            btn.textContent = _t('No backup, proceed'); btn.classList.remove('btn-primary'); btn.classList.add('btn-warning');
         }
     }
 
@@ -707,7 +863,7 @@
 
     async function downloadServerBackup(serverId, btn) {
         const original = btn.innerHTML;
-        btn.disabled = true; btn.innerHTML = 'Downloading…';
+        btn.disabled = true; btn.textContent = _t('Downloading…');
         try {
             const resp = await fetch(`/api/servers/${serverId}/xui-backup`);
             if (!resp.ok) {
@@ -723,12 +879,13 @@
             const a = document.createElement('a');
             a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
             URL.revokeObjectURL(url);
-            btn.innerHTML = '✓ Saved'; btn.style.color = '#4ade80';
-            showToast('Backup downloaded', 'success');
+            btn.textContent = _t('Saved');
+            btn.classList.add('is-done');
+            showToast(_t('Backup downloaded'), 'success');
             _bulkPendingBackupServers.delete(String(serverId)); _updateBulkProceedBtn();
         } catch (e) {
             btn.innerHTML = original; btn.disabled = false;
-            showToast('Backup failed: ' + (e.message || 'error'), 'error', 7000);
+            showToast(_t('Backup failed: {error}', {error: e.message || 'error'}), 'error', 7000);
         }
     }
 
@@ -743,13 +900,16 @@
         const buildErr = (e, phase = 'request') => {
             const raw = String(e?.message || e || '').trim();
             const lower = raw.toLowerCase();
-            if (!navigator.onLine) return 'Network is offline.';
+            if (!navigator.onLine) return _t('Network is offline.');
             if (lower.includes('failed to fetch') || lower.includes('networkerror') ||
                 lower.includes('connection reset') || lower.includes('load failed'))
-                return phase === 'poll' ? 'Bulk started but status connection reset. Refresh to verify.' : 'Bulk request could not reach server.';
-            if (raw) return `Bulk action failed: ${raw}`;
-            return 'Bulk action failed due to an unknown error.';
+                return phase === 'poll' ? _t('Bulk started but status connection reset. Refresh to verify.') : _t('Bulk request could not reach server.');
+            if (raw) return _t('Bulk action failed: {error}', {error: raw});
+            return _t('Bulk action failed due to an unknown error.');
         };
+        const doneToast = (p) => showToast(_t('Bulk action done. Success: {success}, Failed: {failed}, Skipped: {skipped}', {
+            success: p.success || 0, failed: p.failed || 0, skipped: p.skipped || 0,
+        }));
 
         try {
             setBulkProgress(true, 0, clients.length);
@@ -760,30 +920,29 @@
             });
             let result = null;
             try { result = await response.json(); }
-            catch (e) { result = { success: false, error: `Invalid server response (HTTP ${response.status})` }; }
+            catch (e) { result = { success: false, error: _t('Invalid server response (HTTP {status})', {status: response.status}) }; }
 
             if (!response.ok || !result.success) {
                 setBulkProgress(false);
-                showToast(result?.error ? `Bulk action failed: ${result.error}` : `Bulk action failed (HTTP ${response.status})`, 'error');
+                showToast(result?.error ? _t('Bulk action failed: {error}', {error: result.error}) : _t('Bulk action failed (HTTP {status})', {status: response.status}), 'error');
                 return;
             }
 
             if (result.done && result.job) {
-                const p = result.job.progress || {};
                 setBulkProgress(false);
-                showToast(`Bulk action done. Success: ${p.success||0}, Failed: ${p.failed||0}, Skipped: ${p.skipped||0}`);
+                doneToast(result.job.progress || {});
                 _onBulkDone(action, clients, data);
                 return;
             }
 
             const jobId = result.job_id;
-            if (!jobId) { setBulkProgress(false); showToast('Bulk action failed (missing job id)', 'error'); return; }
+            if (!jobId) { setBulkProgress(false); showToast(_t('Bulk action failed (missing job id)'), 'error'); return; }
 
             const pollStart = Date.now(); const pollMaxMs = 10 * 60 * 1000;
             let transientErrors = 0; const MAX_TRANSIENT = 8;
             const poll = async () => {
                 try {
-                    if (Date.now() - pollStart > pollMaxMs) { setBulkProgress(false); showToast('Bulk action is taking too long. Please refresh.', 'error'); return; }
+                    if (Date.now() - pollStart > pollMaxMs) { setBulkProgress(false); showToast(_t('Bulk action is taking too long. Please refresh.'), 'error'); return; }
                     const stResp = await fetch(`/api/client/bulk/job/${jobId}`);
                     let st = null;
                     try { st = await stResp.json(); } catch (e) { st = { success: false }; }
@@ -791,7 +950,7 @@
                         transientErrors++;
                         if (transientErrors <= MAX_TRANSIENT) { setTimeout(poll, 1200); return; }
                         setBulkProgress(false);
-                        showToast(st?.error ? `Bulk progress error: ${st.error}` : `Bulk progress error (HTTP ${stResp.status})`, 'error');
+                        showToast(st?.error ? _t('Bulk progress error: {error}', {error: st.error}) : _t('Bulk progress error (HTTP {status})', {status: stResp.status}), 'error');
                         return;
                     }
                     transientErrors = 0;
@@ -800,12 +959,12 @@
                     setBulkProgress(true, p.processed || 0, p.total || clients.length);
                     if (job.state === 'done') {
                         setBulkProgress(false);
-                        showToast(`Bulk action done. Success: ${p.success||0}, Failed: ${p.failed||0}, Skipped: ${p.skipped||0}`);
+                        doneToast(p);
                         if (action === 'volume_policy') _downloadVolumePolicyReport(job);
                         _onBulkDone(action, clients, data);
                         return;
                     }
-                    if (job.state === 'error') { setBulkProgress(false); showToast(job.error || 'Bulk action failed', 'error'); return; }
+                    if (job.state === 'error') { setBulkProgress(false); showToast(job.error || _t('Bulk action failed'), 'error'); return; }
                     setTimeout(poll, 800);
                 } catch (e) { setBulkProgress(false); showToast(buildErr(e, 'poll'), 'error'); }
             };
@@ -820,11 +979,10 @@
     }
 
     function setBulkProgress(visible, processed = 0, total = 0) {
-        const wrap = document.getElementById('bulk-progress');
         const bar = document.getElementById('bulk-progress-bar');
         const text = document.getElementById('bulk-progress-text');
-        if (!wrap || !bar || !text) return;
-        wrap.style.display = visible ? 'block' : 'none';
+        if (!bar || !text) return;
+        setVisible('bulk-progress', visible);
         const safeTotal = Math.max(0, parseInt(total || 0));
         const safeProc = Math.max(0, Math.min(parseInt(processed || 0), safeTotal || 0));
         const pct = safeTotal > 0 ? Math.round((safeProc / safeTotal) * 100) : 0;
@@ -838,18 +996,16 @@
         const maxVal = Number.isFinite(Number(rule.max)) ? Number(rule.max) : 10;
         const targetVal = Number.isFinite(Number(rule.target)) ? Number(rule.target) : 5;
         const mode = rule.mode === 'reset_and_set' ? 'reset_and_set' : 'set_remaining';
-        const row = document.createElement('div');
-        row.className = 'bulk-volume-rule';
-        row.style.cssText = 'display:grid; grid-template-columns:minmax(86px,1fr) minmax(86px,1fr) minmax(120px,1.2fr) minmax(170px,1.6fr) auto; gap:8px; align-items:center;';
+        const row = el('div', 'bulk-volume-rule royalty-rule-grid');
         row.innerHTML = `
-            <input type="number" class="form-input bulk-rule-min" min="0" step="0.1" value="${minVal}" placeholder="From GB">
-            <input type="number" class="form-input bulk-rule-max" min="0" step="0.1" value="${maxVal}" placeholder="To GB">
-            <input type="number" class="form-input bulk-rule-target" min="0" step="0.1" value="${targetVal}" placeholder="Left GB">
-            <select class="form-select bulk-rule-mode">
-                <option value="set_remaining" ${mode === 'set_remaining' ? 'selected' : ''}>Set remaining to target</option>
-                <option value="reset_and_set" ${mode === 'reset_and_set' ? 'selected' : ''}>Reset traffic and set cap</option>
+            <input type="number" class="form-input bulk-rule-min" min="0" step="0.1" value="${minVal}" placeholder="${escapeHtml(_t('From GB'))}" aria-label="${escapeHtml(_t('From GB'))}">
+            <input type="number" class="form-input bulk-rule-max" min="0" step="0.1" value="${maxVal}" placeholder="${escapeHtml(_t('To GB'))}" aria-label="${escapeHtml(_t('To GB'))}">
+            <input type="number" class="form-input bulk-rule-target" min="0" step="0.1" value="${targetVal}" placeholder="${escapeHtml(_t('Make Left GB'))}" aria-label="${escapeHtml(_t('Make Left GB'))}">
+            <select class="form-select bulk-rule-mode" aria-label="${escapeHtml(_t('Mode'))}">
+                <option value="set_remaining" ${mode === 'set_remaining' ? 'selected' : ''}>${escapeHtml(_t('Set remaining to target'))}</option>
+                <option value="reset_and_set" ${mode === 'reset_and_set' ? 'selected' : ''}>${escapeHtml(_t('Reset traffic and set cap'))}</option>
             </select>
-            <button type="button" class="btn btn-secondary" style="padding:8px 10px;" onclick="removeBulkVolumeRule(this)">Remove</button>`;
+            <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="removeBulkVolumeRule(this)">${escapeHtml(_t('Remove'))}</button>`;
         return row;
     }
     function addBulkVolumeRule(rule = {}) {
@@ -877,11 +1033,11 @@
             const target = Number(row.querySelector('.bulk-rule-target')?.value);
             const mode = row.querySelector('.bulk-rule-mode')?.value || 'set_remaining';
             if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(target))
-                throw new Error('Please fill all volume rule numbers');
-            if (min < 0 || max < 0 || target < 0) throw new Error('Volume rule values cannot be negative');
+                throw new Error(_t('Please fill all volume rule numbers'));
+            if (min < 0 || max < 0 || target < 0) throw new Error(_t('Volume rule values cannot be negative'));
             rules.push({ min_remaining_gb: min, max_remaining_gb: max, target_gb: target, mode });
         }
-        if (!rules.length) throw new Error('Please add at least one volume rule');
+        if (!rules.length) throw new Error(_t('Please add at least one volume rule'));
         return rules;
     }
 
@@ -894,7 +1050,7 @@
             const sel = document.getElementById('bulk-volume-preset-select');
             if (!sel) return;
             const current = sel.value;
-            sel.innerHTML = '<option value="">— Load saved setting —</option>'
+            sel.innerHTML = `<option value="">${escapeHtml(_t('Load saved setting'))}</option>`
                 + volumeRulePresetsCache.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
             if (current) sel.value = current;
         } catch (_) {}
@@ -910,32 +1066,32 @@
         if (list) list.innerHTML = '';
         (preset.rules || []).forEach(r => addBulkVolumeRule({ min: r.min_remaining_gb, max: r.max_remaining_gb, target: r.target_gb, mode: r.mode }));
         if (list && !list.children.length) ensureDefaultBulkVolumeRules();
-        showToast(`Loaded "${preset.name}"`, 'success', 2500);
+        showToast(_t('Loaded "{name}"', {name: preset.name}), 'success', 2500);
     }
     function saveVolumeRulePreset() {
-        let rules; try { rules = collectBulkVolumeRules(); } catch (e) { showToast(e.message || 'Fix the rules first', 'error'); return; }
+        let rules; try { rules = collectBulkVolumeRules(); } catch (e) { showToast(e.message || _t('Fix the rules first'), 'error'); return; }
         openSavePresetModal(async (name) => {
             try {
                 const data = await (await fetch('/api/volume-rule-presets', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name, rules })
                 })).json();
-                if (data.success) { showToast(`Saved "${name}"`, 'success'); await loadVolumeRulePresets(); const sel = document.getElementById('bulk-volume-preset-select'); if (sel && data.preset) sel.value = data.preset.id; }
-                else showToast(data.error || 'Save failed', 'error');
-            } catch (_) { showToast('Network error', 'error'); }
+                if (data.success) { showToast(_t('Saved "{name}"', {name}), 'success'); await loadVolumeRulePresets(); const sel = document.getElementById('bulk-volume-preset-select'); if (sel && data.preset) sel.value = data.preset.id; }
+                else showToast(data.error || _t('Save failed'), 'error');
+            } catch (_) { showToast(_t('Network error'), 'error'); }
         });
     }
     function deleteVolumeRulePreset() {
         const sel = document.getElementById('bulk-volume-preset-select');
         const id = Number(sel?.value || 0);
-        if (!id) { showToast('Select a saved setting first', 'error'); return; }
+        if (!id) { showToast(_t('Select a saved setting first'), 'error'); return; }
         const preset = volumeRulePresetsCache.find(p => p.id === id);
         openDeletePresetModal(preset ? preset.name : String(id), async () => {
             try {
                 const data = await (await fetch(`/api/volume-rule-presets/${id}`, { method: 'DELETE' })).json();
-                if (data.success) { showToast('Deleted', 'success'); await loadVolumeRulePresets(); }
-                else showToast(data.error || 'Delete failed', 'error');
-            } catch (_) { showToast('Network error', 'error'); }
+                if (data.success) { showToast(_t('Deleted'), 'success'); await loadVolumeRulePresets(); }
+                else showToast(data.error || _t('Delete failed'), 'error');
+            } catch (_) { showToast(_t('Network error'), 'error'); }
         });
     }
 
@@ -943,7 +1099,7 @@
         let overlay = document.getElementById('save-preset-modal');
         if (!overlay) {
             overlay = document.createElement('div'); overlay.id = 'save-preset-modal'; overlay.className = 'modal-overlay hidden';
-            overlay.innerHTML = `<div class="modal" style="max-width:380px;"><div class="modal-header"><h2>Save Volume Setting</h2><button class="modal-close" type="button" data-spm-close>&times;</button></div><div class="modal-body"><div class="form-group" style="margin:0;"><label>Name</label><input type="text" id="save-preset-name-input" class="form-input" placeholder="e.g. Standard rules" autocomplete="off" maxlength="80"></div></div><div class="modal-footer"><span></span><div style="display:flex;gap:10px;"><button class="btn btn-secondary" type="button" data-spm-close>Cancel</button><button class="btn btn-primary" type="button" id="save-preset-confirm-btn">Save</button></div></div></div>`;
+            overlay.innerHTML = `<div class="modal modal-sm"><div class="modal-header"><h2>${escapeHtml(_t('Save Volume Setting'))}</h2><button class="modal-close" type="button" data-spm-close aria-label="${escapeHtml(_t('Close'))}">&times;</button></div><div class="modal-body"><div class="form-group"><label for="save-preset-name-input">${escapeHtml(_t('Name'))}</label><input type="text" id="save-preset-name-input" class="form-input" placeholder="${escapeHtml(_t('e.g. Standard rules'))}" autocomplete="off" maxlength="80"></div><div class="form-actions royalty-confirm-actions"><button class="btn btn-secondary" type="button" data-spm-close>${escapeHtml(_t('Cancel'))}</button><button class="btn btn-primary" type="button" id="save-preset-confirm-btn">${escapeHtml(_t('Save'))}</button></div></div></div>`;
             document.body.appendChild(overlay);
             const doSave = () => { const name = (document.getElementById('save-preset-name-input')?.value||'').trim(); if (!name) return; overlay.classList.add('hidden'); if (typeof overlay._onSave==='function') overlay._onSave(name); };
             overlay.addEventListener('click', (e) => { if (e.target===overlay||e.target.closest('[data-spm-close]')) { overlay.classList.add('hidden'); return; } if (e.target.closest('#save-preset-confirm-btn')) doSave(); });
@@ -958,20 +1114,20 @@
         let overlay = document.getElementById('delete-preset-modal');
         if (!overlay) {
             overlay = document.createElement('div'); overlay.id = 'delete-preset-modal'; overlay.className = 'modal-overlay hidden';
-            overlay.innerHTML = `<div class="modal" style="max-width:360px;"><div class="modal-header"><h2>Delete Setting</h2><button class="modal-close" type="button" data-dpm-close>&times;</button></div><div class="modal-body"><p id="delete-preset-msg" style="margin:0;color:var(--text-secondary);font-size:0.9rem;"></p></div><div class="modal-footer"><span></span><div style="display:flex;gap:10px;"><button class="btn btn-secondary" type="button" data-dpm-close>Cancel</button><button class="btn btn-danger" type="button" id="delete-preset-confirm-btn">Delete</button></div></div></div>`;
+            overlay.innerHTML = `<div class="modal modal-sm"><div class="modal-header"><h2>${escapeHtml(_t('Delete Setting'))}</h2><button class="modal-close" type="button" data-dpm-close aria-label="${escapeHtml(_t('Close'))}">&times;</button></div><div class="modal-body"><p id="delete-preset-msg" class="field-note"></p><div class="form-actions royalty-confirm-actions"><button class="btn btn-secondary" type="button" data-dpm-close>${escapeHtml(_t('Cancel'))}</button><button class="btn btn-danger" type="button" id="delete-preset-confirm-btn">${escapeHtml(_t('Delete'))}</button></div></div></div>`;
             document.body.appendChild(overlay);
             overlay.addEventListener('click', (e) => { if (e.target===overlay||e.target.closest('[data-dpm-close]')) { overlay.classList.add('hidden'); return; } if (e.target.closest('#delete-preset-confirm-btn')) { overlay.classList.add('hidden'); if (typeof overlay._onConfirm==='function') overlay._onConfirm(); } });
             overlay.addEventListener('keydown', (e) => { if (e.key==='Escape') overlay.classList.add('hidden'); });
         }
         overlay._onConfirm = onConfirm;
         const msg = document.getElementById('delete-preset-msg');
-        if (msg) msg.textContent = `Delete "${presetName}"? This cannot be undone.`;
+        if (msg) msg.textContent = _t('Delete "{name}"? This cannot be undone.', {name: presetName});
         overlay.classList.remove('hidden');
     }
 
     // ── Volume multiplier preview ────────────────────────────────────────────
     function _fmtGB(bytes) {
-        if (!bytes && bytes !== 0) return '—';
+        if (!bytes && bytes !== 0) return '-';
         const gb = bytes / (1024**3);
         return gb >= 1000 ? `${(gb/1024).toFixed(2)} TB` : `${gb.toFixed(2)} GB`;
     }
@@ -979,41 +1135,46 @@
         const previewEl = document.getElementById('bulk-multiplier-preview');
         if (!previewEl) return;
         const factor = parseFloat(document.getElementById('bulk-multiplier-factor')?.value);
-        const mode = document.getElementById('bulk-multiplier-mode')?.value || 'set_remaining';
-        if (!isFinite(factor) || factor <= 0) { previewEl.style.display = 'none'; return; }
+        if (!isFinite(factor) || factor <= 0) { setVisible(previewEl, false); return; }
         const selected = getSelectedClientsForBulk();
-        if (!selected.length) { previewEl.style.display = 'none'; return; }
+        if (!selected.length) { setVisible(previewEl, false); return; }
         const skipMin = parseFloat(document.getElementById('bulk-mult-skip-min')?.value);
         const skipMax = parseFloat(document.getElementById('bulk-mult-skip-max')?.value);
         const hasSkipMin = isFinite(skipMin) && skipMin >= 0;
         const hasSkipMax = isFinite(skipMax) && skipMax >= 0;
         const GiB = 1024**3;
-        let totalCur = 0, totalNew = 0, counted = 0, unlimited = 0, skippedRange = 0;
-        const rows = selected.map(s => {
+        let totalCur = 0, totalNew = 0, counted = 0, skippedRange = 0;
+        selected.forEach(s => {
             const c = royaltyData.find(x => String(x.server_id)===String(s.server_id) && String(x.inbound_id)===String(s.inbound_id) && (x.email||'').toLowerCase()===(s.email||'').toLowerCase());
             const totalGB = c ? parseInt(c.totalGB || 0) : 0;
-            if (!totalGB) { unlimited++; return null; }
+            if (!totalGB) return;
             const used = Math.max(0, parseInt((c.up||0)) + parseInt((c.down||0)));
             const remaining = Math.max(0, totalGB - used);
             const remainingGb = remaining / GiB;
             const inSkip = (hasSkipMin||hasSkipMax) && (!hasSkipMin||remainingGb>=skipMin) && (!hasSkipMax||remainingGb<=skipMax);
-            if (inSkip) { skippedRange++; return { email: s.email, remaining, newRemaining: remaining, skipped: true }; }
-            const newRemaining = Math.round(remaining * factor);
-            totalCur += remaining; totalNew += newRemaining; counted++;
-            return { email: s.email, remaining, newRemaining, skipped: false };
-        }).filter(Boolean);
-        const pct = factor >= 1 ? `+${((factor-1)*100).toFixed(0)}%` : `−${((1-factor)*100).toFixed(0)}%`;
+            if (inSkip) { skippedRange++; return; }
+            totalCur += remaining; totalNew += Math.round(remaining * factor); counted++;
+        });
         const diff = totalNew - totalCur;
-        const diffStr = diff >= 0 ? `+${_fmtGB(diff)}` : `−${_fmtGB(Math.abs(diff))}`;
-        const skipLabel = (hasSkipMin||hasSkipMax) ? ` · <span style="color:#fbbf24;">${skippedRange} skipped</span>` : '';
-        previewEl.style.display = 'block';
-        previewEl.innerHTML = `<div style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px;font-size:0.83rem;">
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;">
-                <div style="background:var(--bg-dark);border-radius:8px;padding:10px;text-align:center;"><div style="color:var(--text-secondary);font-size:0.73rem;margin-bottom:4px;">Will change</div><div style="font-weight:700;font-size:1rem;">${counted}<span style="font-size:0.72rem;color:var(--text-secondary);">${skipLabel}</span></div></div>
-                <div style="background:var(--bg-dark);border-radius:8px;padding:10px;text-align:center;"><div style="color:var(--text-secondary);font-size:0.73rem;margin-bottom:4px;">Current Remaining</div><div style="font-weight:700;font-size:1rem;">${_fmtGB(totalCur)}</div></div>
-                <div style="background:var(--bg-dark);border-radius:8px;padding:10px;text-align:center;"><div style="color:var(--text-secondary);font-size:0.73rem;margin-bottom:4px;">New Remaining</div><div style="font-weight:700;font-size:1rem;color:${diff<0?'#f87171':'#4ade80'}">${_fmtGB(totalNew)} <span style="font-size:0.72rem;">(${diffStr})</span></div></div>
-            </div>
-        </div>`;
+        const diffStr = diff >= 0 ? `+${_fmtGB(diff)}` : `-${_fmtGB(Math.abs(diff))}`;
+
+        const box = el('div', 'royalty-mult-preview');
+        const tile = (label, value, note, tone) => {
+            const t = el('div', 'royalty-mult-tile');
+            t.appendChild(el('div', 'royalty-mult-label', label));
+            const v = el('div', `royalty-mult-value${tone ? ' ' + tone : ''}`, value);
+            if (note) v.appendChild(el('span', 'royalty-mult-note', ` ${note}`));
+            t.appendChild(v);
+            return t;
+        };
+        box.append(
+            tile(_t('Will change'), String(counted), (hasSkipMin || hasSkipMax) ? _t('{count} skipped', {count: skippedRange}) : ''),
+            tile(_t('Current Remaining'), _fmtGB(totalCur)),
+            tile(_t('New Remaining'), _fmtGB(totalNew), `(${diffStr})`, diff < 0 ? 'is-down' : 'is-up'),
+        );
+        previewEl.textContent = '';
+        previewEl.appendChild(box);
+        setVisible(previewEl, true);
     }
 
     // ── Volume policy report download ────────────────────────────────────────
@@ -1031,12 +1192,10 @@
     }
 
     // ── Send message ─────────────────────────────────────────────────────────
-    function sendRoyaltyMessage(btn) {
-        const results = document.getElementById('royalty-results');
-        const idx = parseInt(btn.dataset.idx, 10);
-        const c = (results._list || [])[idx];
+    function sendRoyaltyMessage(key) {
+        const c = royaltyByKey.get(key);
         if (!c) return;
-        if (!window.AccountMessage) { showToast('Message module not loaded', 'error'); return; }
+        if (!window.AccountMessage) { showToast(_t('Message module not loaded'), 'error'); return; }
         AccountMessage.open({
             email: c.email, comment: c.comment, phone: '',
             expiryTime: c.expiryTime, remaining_formatted: c.remaining_formatted,

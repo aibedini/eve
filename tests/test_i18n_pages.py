@@ -38,6 +38,7 @@ PAGES = {
     'dashboard': ('/', ['templates/dashboard.html']),
     'settings': ('/settings', ['templates/settings.html']),
     'sub_manager': ('/sub-manager', ['templates/sub_manager.html']),
+    'royalty': ('/royalty', ['templates/royalty.html']),
 }
 
 _spec = importlib.util.spec_from_file_location('i18n_scan', ROOT / 'scripts' / 'i18n_scan.py')
