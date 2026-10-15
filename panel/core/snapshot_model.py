@@ -221,6 +221,71 @@ def materialize_retained_inbounds(inbounds, normalized_server_ids, keys=None):
     return result
 
 
+WIRE_VERSION = 2
+
+
+def compact_wire_inbounds(inbounds, normalized_server_ids=(), keys=None):
+    """Wire v2 view: every account object once, inbounds carry indexes into a table.
+
+    The retained graph shares one entity object between the memberships of a v3
+    account, but the v1 wire format repeats (and deep-copies) it once per inbound.
+    Here each distinct object is emitted once in ``table`` and an inbound lists
+    ``client_refs`` into it. Expanding a ref to a shallow copy of its table row, plus
+    ``inbound_id = inbound.id`` when the inbound carries ``client_stamp``, yields
+    exactly what :func:`materialize_retained_inbounds` returns. The table holds the
+    retained objects themselves: the response is serialized at once and nothing here
+    mutates them.
+    """
+    normalized = {int(value) for value in (normalized_server_ids or set())}
+    wanted = None if keys is None else {tuple(value) for value in keys}
+    table = []
+    slots = {}
+    result = []
+    for inbound in inbounds or []:
+        if not isinstance(inbound, dict):
+            continue
+        if wanted is not None and (inbound.get('server_id'), inbound.get('id')) not in wanted:
+            continue
+        try:
+            stamp = int(inbound.get('server_id')) in normalized
+        except (TypeError, ValueError):
+            stamp = False
+        view = {name: value for name, value in inbound.items() if name != 'clients'}
+        refs = []
+        for client in inbound.get('clients') or []:
+            if stamp and not isinstance(client, dict):
+                continue
+            slot = slots.get(id(client))
+            if slot is None:
+                slot = slots[id(client)] = len(table)
+                table.append(client)
+            refs.append(slot)
+        view['client_refs'] = refs
+        if stamp:
+            view['client_stamp'] = True
+        result.append(view)
+    return result, table
+
+
+def expand_wire_inbounds(inbounds, table):
+    """Inverse of :func:`compact_wire_inbounds` (the browser does the same in JS)."""
+    result = []
+    for source in inbounds or []:
+        inbound = {name: value for name, value in source.items()
+                   if name not in ('client_refs', 'client_stamp')}
+        rows = []
+        for slot in source.get('client_refs') or []:
+            value = table[slot]
+            if isinstance(value, dict):
+                value = dict(value)
+                if source.get('client_stamp'):
+                    value['inbound_id'] = inbound.get('id')
+            rows.append(value)
+        inbound['clients'] = rows
+        result.append(inbound)
+    return result
+
+
 def affected_inbound_ids(block, identity):
     validate_server_block(block)
     return list((block.get('membership_index') or {}).get(identity) or [])

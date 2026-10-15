@@ -15,6 +15,13 @@
             } catch (e) {
                 // Ignore storage errors
             }
+            try {
+                // Logout and session expiry land here: the dashboard boot cache
+                // (static/dashboard_boot_cache.js) must not outlive the session.
+                if (window.indexedDB) window.indexedDB.deleteDatabase('eve-dashboard');
+            } catch (e) {
+                // Ignore storage errors
+            }
         })();
     </script>
     <style nonce="{{ csp_nonce }}">

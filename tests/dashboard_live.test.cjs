@@ -43,6 +43,7 @@ function fixture(sseEnabled = true) {
     sandbox.window = sandbox;
     vm.createContext(sandbox);
     vm.runInContext(fs.readFileSync(path.join(root, 'static/dashboard_live.js'), 'utf8'), sandbox);
+    vm.runInContext(fs.readFileSync(path.join(root, 'static/dashboard_boot_cache.js'), 'utf8'), sandbox);
     const live = new sandbox.DashboardLiveSync({ sseEnabled, hidden: () => hidden,
         interval: () => 10000, watched: () => [4, 5], status: () => {},
         reconcile: () => { reconciles++; } });
@@ -55,7 +56,7 @@ function fixture(sseEnabled = true) {
         hideLoading = () => {};
         handleRefreshError = () => {};
         globalThis.dashboard = { applySnapshotFull, applySnapshotDelta, applyClientMutation,
-            refreshData, _captureServersSync, _serverSyncInfo, live: dashboardLive,
+            refreshData, paintFromBootCache, cacheSaver: dashboardCacheSaver, _captureServersSync, _serverSyncInfo, live: dashboardLive,
             data: () => allInboundsData, filtered: () => inboundsData,
             selection: bulkSelectedClientKeys, expanded: expandedInboundKeys,
             setSseTime: value => { serversSyncCapturedAt = value; } };
@@ -269,4 +270,59 @@ test('conditional element replacement keeps the insertion cursor valid', () => {
     const next = new Element('DIV').append(new Element('BUTTON')).append(new Element('SPAN'));
     f.sandbox.morphDashboardChildren(current, next);
     assert.deepEqual(current.childNodes.map(node => node.tagName), ['BUTTON', 'SPAN']);
+});
+
+test('compact wire rows expand to independent copies stamped with their inbound id', () => {
+    const { expand } = require('../static/dashboard_boot_cache.js');
+    const shared = { email: 'a@x', enable: true, up: 1 };
+    const payload = { wire: 2, client_table: [shared, { email: 'b@x', inbound_id: 9 }, 'odd'],
+        inbounds: [{ server_id: 1, id: 7, client_refs: [0], client_stamp: true },
+            { server_id: 1, id: 8, client_refs: [0], client_stamp: true },
+            { server_id: 2, id: 9, client_refs: [1, 2] }] };
+    expand(payload);
+    assert.equal(payload.client_table, undefined);
+    assert.deepEqual(payload.inbounds[0].clients, [{ email: 'a@x', enable: true, up: 1, inbound_id: 7 }]);
+    assert.equal(payload.inbounds[1].clients[0].inbound_id, 8);
+    assert.notEqual(payload.inbounds[0].clients[0], payload.inbounds[1].clients[0]);
+    assert.deepEqual(payload.inbounds[2].clients, [{ email: 'b@x', inbound_id: 9 }, 'odd']);
+    assert.equal('client_refs' in payload.inbounds[0], false);
+    const v1 = { inbounds: [inbound(1, 2, 'x', [{ email: 'q@x' }])] };
+    assert.equal(expand(v1), v1);
+});
+test('boot cache compaction is lossless and stores one row per identical account', () => {
+    const { expand, compact } = require('../static/dashboard_boot_cache.js');
+    const row = (inbound_id, extra = {}) => ({ email: 'a@x', up: 1, owner: { id: 3 }, inbound_id, ...extra });
+    const inbounds = [inbound(1, 7, 'a', [row(7), { email: 'b@x', inbound_id: 7 }]),
+        inbound(1, 8, 'b', [row(8)]), inbound(1, 9, 'c', [row(9, { up: 5 })]),
+        inbound(2, 3, 'legacy', [{ email: 'l@x', inbound_id: 4 }]), inbound(2, 4, 'empty', [])];
+    const packed = compact(JSON.parse(JSON.stringify(inbounds)));
+    assert.equal(packed.client_table.length, 4);
+    assert.deepEqual(packed.inbounds.map(ib => ib.client_refs), [[0, 1], [0], [2], [3], []]);
+    assert.deepEqual(expand(packed).inbounds, inbounds);
+});
+test('a cache-provided revision is provisional until the server answers', () => {
+    const f = fixture();
+    const request = { controller: new AbortController() };
+    f.live.active = request; f.live.lastAppliedRevision = 50; f.live.provisional = true;
+    assert.equal(f.live.isCurrent(request, 3), true);
+    f.live.applied({ revision: 3 }, 1);
+    assert.equal(f.live.provisional, false);
+    assert.equal(f.live.isCurrent(request, 2), false);
+});
+test('boot cache paints the stored snapshot without claiming freshness', async () => {
+    const f = fixture();
+    const { compact } = require('../static/dashboard_boot_cache.js');
+    const stored = compact([inbound(4, 1, 'cached', [{ email: 'c@x', inbound_id: 1 }])]);
+    f.sandbox.EveDashboardCache.load = async () => ({ revision: 41, servers: [], server_statuses: [],
+        stats: {}, ...stored });
+    assert.equal(await f.dashboard.paintFromBootCache(), true);
+    assert.deepEqual(f.dashboard.data().map(ib => ib.clients[0].email), ['c@x']);
+    assert.equal(f.dashboard.data()[0].clients[0].inbound_id, 1);
+    // Template placeholders render as false here, i.e. a reseller view: the cached
+    // revision is not adopted, so the first network read is a full revalidation.
+    assert.equal(f.live.lastAppliedRevision, null);
+    assert.equal(f.live.provisional, false);
+    assert.equal(f.live.lastDashboardRefreshAt, null);
+    f.sandbox.EveDashboardCache.load = async () => null;
+    assert.equal(await f.dashboard.paintFromBootCache(), false);
 });

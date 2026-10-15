@@ -328,6 +328,9 @@ def api_refresh():
 
     user = db.session.get(Admin, session['admin_id'])
     since = _request_since()
+    # Opt-in compact encoding (see snapshot_model.compact_wire_inbounds); callers that
+    # do not ask for it keep receiving one expanded row per membership.
+    wire_compact = (request.args.get('wire') or '').strip() == '2'
 
     # === حالت سوپرادمین (یا ادمین معمولی غیر ریسلر) ===
     if user.role != 'reseller':
@@ -367,15 +370,20 @@ def api_refresh():
             }), 200
 
         from panel.core import snapshot_model
-        if sync['mode'] == 'delta':
-            inbounds = snapshot_model.materialize_retained_inbounds(
+        keys = sync['changed'] if sync['mode'] == 'delta' else None
+        client_table = None
+        if wire_compact:
+            # One copy per account instead of one deep copy per inbound membership:
+            # the dominant cost (and payload) of a full read at scale.
+            inbounds, client_table = snapshot_model.compact_wire_inbounds(
                 GLOBAL_SERVER_DATA.get('inbounds') or [],
                 GLOBAL_SERVER_DATA.get('normalized_server_ids') or set(),
-                keys=sync['changed'])
+                keys=keys)
         else:
             inbounds = snapshot_model.materialize_retained_inbounds(
                 GLOBAL_SERVER_DATA.get('inbounds') or [],
-                GLOBAL_SERVER_DATA.get('normalized_server_ids') or set())
+                GLOBAL_SERVER_DATA.get('normalized_server_ids') or set(),
+                keys=keys)
 
         resp = {
             "success": True,
@@ -393,6 +401,9 @@ def api_refresh():
             "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
             "refresh_job": _summarize_job(job),
         }
+        if client_table is not None:
+            resp['wire'] = snapshot_model.WIRE_VERSION
+            resp['client_table'] = client_table
         if debug_timing and t0 is not None:
             resp['timing_ms'] = {
                 'total': round((time.perf_counter() - t0) * 1000.0, 2),
@@ -562,6 +573,13 @@ def api_refresh():
         "is_updating": bool(GLOBAL_SERVER_DATA.get('is_updating')),
         "refresh_job": _summarize_job(job),
     }
+    if wire_compact:
+        from panel.core import snapshot_model
+        # The reseller rows are the retained objects as-is (no inbound_id stamp), so
+        # the compact view stamps nothing and only removes the repeated accounts.
+        resp['inbounds'], resp['client_table'] = snapshot_model.compact_wire_inbounds(
+            filtered_inbounds)
+        resp['wire'] = snapshot_model.WIRE_VERSION
     if debug_timing and t0 is not None and t_projection_start is not None:
         resp['timing_ms'] = {
             'projection': round((time.perf_counter() - t_projection_start) * 1000.0, 2),

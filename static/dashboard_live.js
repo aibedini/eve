@@ -5,6 +5,9 @@
         constructor(options) {
             this.options = options;
             this.lastAppliedRevision = null;
+            // True while lastAppliedRevision came from the browser's boot cache: it is a
+            // starting point for a delta, never proof the server is past it.
+            this.provisional = false;
             this.pendingTargetRevision = 0;
             this.lastSseEventAt = null;
             this.lastDashboardRefreshAt = null;
@@ -25,7 +28,7 @@
             this.queued = false;
         }
         diagnostics() {
-            const keys = ['lastAppliedRevision', 'pendingTargetRevision', 'lastSseEventAt',
+            const keys = ['lastAppliedRevision', 'provisional', 'pendingTargetRevision', 'lastSseEventAt',
                 'lastDashboardRefreshAt', 'lastDeltaAppliedAt', 'lastSnapshotPublishedAt', 'sseStatus', 'pollingFallback',
                 'reconnectAttempts', 'lastFetchError', 'lastEventServerIds', 'lastUpdatedInboundCount'];
             return Object.fromEntries(keys.map(key => [key, this[key]]));
@@ -64,10 +67,12 @@
         }
         isCurrent(request, revision) {
             return this.active === request && !request.controller.signal.aborted &&
-                (revision == null || this.lastAppliedRevision == null || revision >= this.lastAppliedRevision);
+                (revision == null || this.lastAppliedRevision == null || this.provisional ||
+                    revision >= this.lastAppliedRevision);
         }
         applied(sync, count) {
             if (sync && Number.isFinite(sync.revision)) this.lastAppliedRevision = sync.revision;
+            this.provisional = false;
             this.lastDashboardRefreshAt = Date.now();
             this.lastFetchError = null;
             this.lastUpdatedInboundCount = count;

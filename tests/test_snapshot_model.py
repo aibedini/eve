@@ -74,6 +74,35 @@ class SnapshotModelTests(unittest.TestCase):
         self.assertEqual(view[0]['clients'][0]['inbound_id'], 20)
         self.assertNotIn('inbound_id', retained[1]['clients'][0])
 
+    def _mixed_retained(self):
+        rows = self._mirrors()
+        rows[1]['clients'][0]['total'] = 200  # membership override: its own object
+        retained, _ = snapshot_model.normalize_retained_block(rows, 7)
+        legacy = [{'id': 5, 'server_id': 8, 'remark': 'legacy',
+                   'clients': [{'email': 'old@example.com', 'inbound_id': 5}, 'not-a-row']}]
+        return retained + legacy
+
+    def test_compact_wire_sends_each_account_once_and_expands_to_the_v1_rows(self):
+        inbounds = self._mixed_retained()
+        compact, table = snapshot_model.compact_wire_inbounds(inbounds, {7})
+        # One shared entity, one override row, one legacy row and its non-dict entry.
+        self.assertEqual(len(table), 4)
+        self.assertEqual([row['client_refs'] for row in compact[:4]], [[0], [1], [0], [0]])
+        self.assertTrue(all(row.get('client_stamp') for row in compact[:4]))
+        self.assertNotIn('client_stamp', compact[4])
+        self.assertTrue(all('clients' not in row for row in compact))
+        self.assertEqual(snapshot_model.expand_wire_inbounds(compact, table),
+                         snapshot_model.materialize_retained_inbounds(inbounds, {7}))
+        self.assertTrue(all('inbound_id' not in row for row in table[:2]))
+
+    def test_compact_wire_respects_requested_keys(self):
+        inbounds = self._mixed_retained()
+        compact, table = snapshot_model.compact_wire_inbounds(inbounds, {7}, keys=[[7, 20], [8, 5]])
+        self.assertEqual([row['id'] for row in compact], [20, 5])
+        self.assertEqual(
+            snapshot_model.expand_wire_inbounds(compact, table),
+            snapshot_model.materialize_retained_inbounds(inbounds, {7}, keys=[[7, 20], [8, 5]]))
+
 
 if __name__ == '__main__':
     unittest.main()

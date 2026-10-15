@@ -24,7 +24,7 @@ bp = Blueprint('pages', __name__)
 @bp.route('/')
 @login_required
 def dashboard():
-    from app import get_accessible_servers  # deferred: app-level helper, avoids circular import
+    from app import APP_VERSION, get_accessible_servers  # deferred: app-level helper, avoids circular import
     user = db.session.get(Admin, session['admin_id'])
     servers = get_accessible_servers(user)
     
@@ -54,6 +54,9 @@ def dashboard():
                          base_cost_gb=user_cost_gb,
                          base_cost_day_unlimited=user_cost_day_unlimited,
                          bank_cards=bank_cards,
+                         # Partition key of the browser's dashboard boot cache: another
+                         # admin, a role change or an upgrade never reuses a snapshot.
+                         dashboard_cache_scope='%s:%s:%s' % (user.id, user.role, APP_VERSION),
                          sse_enabled=sse_enabled())
 
 @bp.route('/servers')

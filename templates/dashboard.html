@@ -1700,6 +1700,7 @@
     </div>
 </div>
 <script src="{{ url_for('static', filename='dashboard_live.js') }}" nonce="{{ csp_nonce }}"></script>
+<script src="{{ url_for('static', filename='dashboard_boot_cache.js') }}" nonce="{{ csp_nonce }}"></script>
 <script nonce="{{ csp_nonce }}">
     function escHtml(s) {
         return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -2414,8 +2415,11 @@
         getAccountInfoTemplate('whatsapp');
         getAccountInfoTemplate('sms');
         getClientCreatedTemplate();   // warm cache so the first "new service" modal is instant
-        // Load servers first to know if we have any
-        loadServers().then(() => {
+        // The servers list and the snapshot load in parallel (no request waterfall);
+        // the snapshot read waits for the list only before it renders.
+        serversReadyPromise = loadServers();
+        // Paint the last known snapshot at once, then revalidate from its revision.
+        paintFromBootCache().then(() => {
             // Read the shared cache; panel fetching belongs to the backend scheduler.
             refreshData(true, { mode: 'cache', poll: false }).finally(() => {
                 hideLoading();
@@ -2490,6 +2494,43 @@
         status: () => updateDashboardLiveStatus(),
     });
     window.eveDashboardSync = () => dashboardLive.diagnostics();
+
+    // Boot cache (static/dashboard_boot_cache.js): the last snapshot this browser saw,
+    // painted before the network answers. Scoped to this admin, role and app version.
+    const DASHBOARD_CACHE_SCOPE = {{ (dashboard_cache_scope|default(''))|tojson }};
+    // A superadmin view is the shared snapshot, so its revision says everything and the
+    // first read can be a delta. A reseller view also depends on ownership rows that do
+    // not move the revision, so it always revalidates with a full read.
+    const DASHBOARD_VIEW_IS_SNAPSHOT = {{ (role != 'reseller')|tojson }};
+    let serversReadyPromise = Promise.resolve();
+    let lastDashboardStats = {};
+    const dashboardCacheSaver = EveDashboardCache.createSaver(DASHBOARD_CACHE_SCOPE, () => ({
+        revision: dashboardLive.lastAppliedRevision, inbounds: allInboundsData,
+        servers: allServers, serverStatuses, stats: lastDashboardStats,
+    }));
+
+    async function paintFromBootCache() {
+        const record = await EveDashboardCache.load(DASHBOARD_CACHE_SCOPE);
+        if (!record || (Array.isArray(allInboundsData) && allInboundsData.length)) return false;
+        try {
+            if (!Array.isArray(allServers) || !allServers.length) allServers = record.servers || [];
+            const cached = EveDashboardCache.expand({ inbounds: record.inbounds, client_table: record.client_table });
+            // No servers_sync is stored, so no card can claim to be live from the cache;
+            // the status line reads "Showing last known data" until the network answers.
+            applySnapshotFull({ inbounds: cached.inbounds, servers: record.server_statuses, stats: record.stats });
+            if (DASHBOARD_VIEW_IS_SNAPSHOT) {
+                dashboardLive.lastAppliedRevision = record.revision;
+                dashboardLive.provisional = true;
+            }
+            dashboardCacheSaver.markSaved(record.revision);
+            hideLoading();
+            return true;
+        } catch (error) {
+            dashboardLive.lastAppliedRevision = null;
+            dashboardLive.provisional = false;
+            return false;
+        }
+    }
 
     function updateDashboardLiveStatus() {
         const node = document.getElementById('dashboard-live-status');
@@ -3422,6 +3463,8 @@
             if (mode) params.set('mode', mode);
             params.set('poll', String(poll));
             if (enqueue) params.set('enqueue', '1');
+            // Compact encoding: each account once instead of once per inbound.
+            params.set('wire', '2');
             if (serverId !== null && serverId !== '' && serverId !== undefined) params.set('server_id', String(serverId));
             // Phase 10: tell the server which panels this tab is rendering, so the
             // fetcher polls exactly those at the per-server active cadence (external
@@ -3437,9 +3480,12 @@
             const qs = params.toString() ? `?${params.toString()}` : '';
             const response = await fetch(`/api/refresh${qs}`, { signal, cache: 'no-store' });
             if (response.ok === false) throw new Error(`Cache HTTP ${response.status}`);
-            const data = await response.json();
+            const data = EveDashboardCache.expand(await response.json());
+            // The servers list decides v3 vs legacy cards; it is fetched in parallel
+            // with this read, so only the first render ever waits for it here.
+            await serversReadyPromise;
             if (!dashboardLive.isCurrent(request, data.sync && data.sync.revision)) return;
-            
+
             if (data.success) {
                 const jobId = data.refresh_job && data.refresh_job.id;
                 const jobState = data.refresh_job && data.refresh_job.state;
@@ -3487,6 +3533,7 @@
                         return;
                     }
                     dashboardLive.applied(sync, (data.inbounds || []).length + (data.removed || []).length);
+                    if (sync && sync.mode !== 'unchanged') dashboardCacheSaver.schedule();
                 }
 
                 if (jobId && poll) {
@@ -3572,6 +3619,7 @@
     }
 
     function updateStats(stats, serverCount) {
+        lastDashboardStats = stats || {};
         document.getElementById('stat-servers').textContent = serverCount || 0;
         document.getElementById('stat-inbounds').textContent = stats?.total_inbounds || 0;
         document.getElementById('stat-active').textContent = `${stats?.active_inbounds || 0} Active`;

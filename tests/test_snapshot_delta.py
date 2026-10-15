@@ -376,6 +376,38 @@ class RefreshRouteDeltaTests(unittest.TestCase):
         self.assertEqual(again["sync"]["mode"], "full")
         self.assertEqual(len(again["inbounds"]), 2)
 
+        compact = self.client.get("/api/refresh?wire=2").get_json()
+        self.assertEqual(compact["wire"], 2)
+        self.assertEqual(
+            snapshot_model.expand_wire_inbounds(compact["inbounds"], compact["client_table"]),
+            self.client.get("/api/refresh").get_json()["inbounds"])
+
+    def test_compact_wire_full_and_delta_expand_to_the_v1_rows(self):
+        self._seed_snapshot()
+        self._login(self.superadmin)
+        v1 = self.client.get("/api/refresh").get_json()
+        v2 = self.client.get("/api/refresh?wire=2").get_json()
+        self.assertEqual(v2["wire"], 2)
+        self.assertNotIn("clients", v2["inbounds"][0])
+        self.assertEqual(
+            snapshot_model.expand_wire_inbounds(v2["inbounds"], v2["client_table"]),
+            v1["inbounds"])
+        revision = v2["sync"]["revision"]
+
+        GLOBAL_SERVER_DATA["inbounds"][0]["clients"][0]["up"] = 777
+        GLOBAL_SERVER_DATA["last_update"] = "t2"
+        delta_v2 = self.client.get("/api/refresh?wire=2&since=%d" % revision).get_json()
+        delta_v1 = self.client.get("/api/refresh?since=%d" % revision).get_json()
+        self.assertEqual(delta_v2["sync"]["mode"], "delta")
+        self.assertEqual(
+            snapshot_model.expand_wire_inbounds(delta_v2["inbounds"], delta_v2["client_table"]),
+            delta_v1["inbounds"])
+
+        unchanged = self.client.get(
+            "/api/refresh?wire=2&since=%d" % delta_v2["sync"]["revision"]).get_json()
+        self.assertEqual(unchanged["sync"]["mode"], "unchanged")
+        self.assertNotIn("client_table", unchanged)
+
 
 if __name__ == "__main__":
     unittest.main()
