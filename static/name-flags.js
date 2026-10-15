@@ -69,21 +69,27 @@
         return element.hasAttribute && element.hasAttribute('data-no-flags');
     }
 
-    /** Build the flag badge; the image is always the source of truth. */
+    var inlineSvg = global.__FLAG_SVG || null;
+
+    /** Build the flag badge; prefer inlined SVG, fall back to img request. */
     function badge(code) {
         var span = document.createElement('span');
         span.className = 'country-flag';
-        var img = document.createElement('img');
-        img.src = flagUrl(code);
-        img.alt = code.toUpperCase();
-        img.decoding = 'async';
-        img.loading = 'lazy';
-        img.addEventListener('error', function () {
-            // A missing asset must not degrade into the letters: hide the badge and
-            // leave the name text as the only thing on screen.
-            span.classList.add('country-flag-missing');
-        }, { once: true });
-        span.appendChild(img);
+        if (inlineSvg && inlineSvg[code]) {
+            span.innerHTML = inlineSvg[code];
+            var svg = span.firstChild;
+            if (svg) svg.setAttribute('role', 'img');
+        } else {
+            var img = document.createElement('img');
+            img.src = flagUrl(code);
+            img.alt = code.toUpperCase();
+            img.decoding = 'async';
+            img.loading = 'lazy';
+            img.addEventListener('error', function () {
+                span.classList.add('country-flag-missing');
+            }, { once: true });
+            span.appendChild(img);
+        }
         return span;
     }
 
@@ -153,6 +159,9 @@
         return esc(value).replace(PAIR, function (flag) {
             var code = codeFromEmoji(flag);
             if (!code) return flag;
+            if (inlineSvg && inlineSvg[code]) {
+                return '<span class="country-flag">' + inlineSvg[code] + '</span>';
+            }
             return '<span class="country-flag"><img src="' + flagUrl(code) + '" alt="' +
                 code.toUpperCase() + '" loading="lazy" decoding="async"></span>';
         });
