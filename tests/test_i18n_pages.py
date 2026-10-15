@@ -32,6 +32,7 @@ PLACEHOLDER = re.compile(r'\{(\w+)\}')
 # page catalog module -> (route, template files whose strings it owns)
 PAGES = {
     'monitor': ('/monitor', ['templates/monitor.html']),
+    'finance': ('/finance', ['templates/finance.html']),
 }
 
 _spec = importlib.util.spec_from_file_location('i18n_scan', ROOT / 'scripts' / 'i18n_scan.py')
@@ -65,6 +66,14 @@ class I18nPageCatalogTests(unittest.TestCase):
                 self.assertRegex(persian, PERSIAN, '%s: %r' % (module, english))
                 self.assertEqual(set(PLACEHOLDER.findall(english)),
                                  set(PLACEHOLDER.findall(persian)), '%s: %r' % (module, english))
+
+    def test_a_word_is_translated_the_same_way_on_every_page(self):
+        import panel.i18n  # noqa: F401
+        seen = {}
+        for module, table in i18n.modules().items():
+            for english, persian in table.items():
+                self.assertEqual(seen.setdefault(english, persian), persian,
+                                 '%r differs between catalogs (%s)' % (english, module))
 
     def test_pages_keep_no_hardcoded_markup_text_or_backtick_calls(self):
         for page, (_route, files) in PAGES.items():
@@ -145,7 +154,7 @@ class I18nPageRenderTests(unittest.TestCase):
                     if key in catalog:
                         import html
                         self.assertIn(html.escape(catalog[key]), persian, key)
-            visible = re.sub(r'<script.*?</script>|<style.*?</style>', '', english, flags=re.S)
+            visible = re.sub(r'<script.*?</script>|<style.*?</style>|<!--.*?-->', '', english, flags=re.S)
             self.assertNotRegex(visible.split('<main', 1)[-1] if '<main' in visible else visible, PERSIAN, page)
 
 

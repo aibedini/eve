@@ -197,6 +197,18 @@ MAPPING = (
         ['tests.test_i18n_pages'],
         ['tests.test_ui_design_system'],
     )),
+    ('templates/finance.html', (
+        ['tests.test_i18n_pages'],
+        ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
+    )),
+    ('templates/servers.html', (
+        ['tests.test_i18n_pages'],
+        ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
+    )),
+    ('templates/admins.html', (
+        ['tests.test_i18n_pages'],
+        ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
+    )),
     ('templates/monitor.html', (
         ['tests.test_i18n_pages'],
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],

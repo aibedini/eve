@@ -33,7 +33,10 @@ def normalize(text):
 
 def is_translatable(text):
     # A list of {variables} is code, not a sentence.
-    if not LETTERS.search(re.sub(r'\{[^}]*\}', '', text)) or text in KEEP:
+    if not (LETTERS.search(re.sub(r'\{[^}]*\}', '', text)) or text.startswith('e.g.')) or text in KEEP:
+        return False
+    # An example value (card number, e-mail address) is data, not a sentence.
+    if ' ' not in text and re.search(r'[\d@]', text):
         return False
     return not all(word in KEEP for word in re.findall(r'[\w\-]+', text))
 

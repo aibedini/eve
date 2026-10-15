@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Finance Overview - Eve X-UI Manager{% endblock %}
-{% block page_title %}Financial Overview{% endblock %}
+{% block title %}{{ _('Finance Overview - Eve X-UI Manager') }}{% endblock %}
+{% block page_title %}{{ _('Financial Overview') }}{% endblock %}
 
 {% block content %}
 <div class="page-header"></div>
@@ -590,10 +590,10 @@
             </svg>
         </div>
         <div class="stat-info">
-            <span class="stat-label">Today</span>
+            <span class="stat-label">{{ _('Today') }}</span>
             <span class="stat-value" id="stat-today">0 T</span>
             <span class="stat-sub">
-                <span class="delta-label">vs same day last month:</span>
+                <span class="delta-label">{{ _('vs same day last month:') }}</span>
                 <span class="delta-value" id="stat-today-delta">—</span>
             </span>
         </div>
@@ -606,10 +606,10 @@
             </svg>
         </div>
         <div class="stat-info">
-            <span class="stat-label" id="stat-month-label">This Month</span>
+            <span class="stat-label" id="stat-month-label">{{ _('This Month') }}</span>
             <span class="stat-value" id="stat-month">0 T</span>
             <span class="stat-sub">
-                <span class="delta-label">vs same period last month:</span>
+                <span class="delta-label">{{ _('vs same period last month:') }}</span>
                 <span class="delta-value" id="stat-month-delta">—</span>
             </span>
         </div>
@@ -624,10 +624,10 @@
             </svg>
         </div>
         <div class="stat-info">
-            <span class="stat-label" id="stat-month-expense-label">Month Cost</span>
+            <span class="stat-label" id="stat-month-expense-label">{{ _('Month Cost') }}</span>
             <span class="stat-value" id="stat-month-expense">0 T</span>
             <span class="stat-sub">
-                <span class="delta-label">vs same period last month:</span>
+                <span class="delta-label">{{ _('vs same period last month:') }}</span>
                 <span class="delta-value" id="stat-month-expense-delta">—</span>
             </span>
         </div>
@@ -641,10 +641,10 @@
             </svg>
         </div>
         <div class="stat-info">
-            <span class="stat-label" id="stat-total-label">Total Profit</span>
+            <span class="stat-label" id="stat-total-label">{{ _('Total Profit') }}</span>
             <span class="stat-value profit" id="stat-total">0 T</span>
             <span class="stat-sub">
-                <span class="delta-label">Profit vs same period last month:</span>
+                <span class="delta-label">{{ _('Profit vs same period last month:') }}</span>
                 <span class="delta-value" id="stat-net-delta">—</span>
             </span>
         </div>
@@ -657,38 +657,38 @@
         <summary class="overview-summary">
             <div class="overview-summary-title">
                 <div class="overview-summary-row">
-                    <h3>Summary</h3>
-                    <span class="overview-summary-hint">Daily income, costs, and profit for the selected Jalali month.</span>
+                    <h3>{{ _('Summary') }}</h3>
+                    <span class="overview-summary-hint">{{ _('Daily income, costs, and profit for the selected Jalali month.') }}</span>
                 </div>
             </div>
         </summary>
 
         <div class="overview-body">
-            <div class="overview-picker" id="overview-picker" aria-label="Jalali month picker">
-                <label for="overview-month-select">Month</label>
-                <select id="overview-month-select" class="form-select interval-select" aria-label="Select month">
-                    <option value="" selected>Open Summary to load…</option>
+            <div class="overview-picker" id="overview-picker" aria-label="{{ _('Jalali month picker') }}">
+                <label for="overview-month-select">{{ _('Month') }}</label>
+                <select id="overview-month-select" class="form-select interval-select" aria-label="{{ _('Select month') }}">
+                    <option value="" selected>{{ _('Open Summary to load…') }}</option>
                 </select>
             </div>
 
             <!-- Monthly Summary Totals -->
             <div class="overview-monthly-summary" id="overview-monthly-summary" style="display: none;">
                 <div class="monthly-summary-item">
-                    <span class="summary-label">Total Income</span>
+                    <span class="summary-label">{{ _('Total Income') }}</span>
                     <span class="summary-value success" id="monthly-total-income">0 T</span>
                 </div>
                 <div class="monthly-summary-item">
-                    <span class="summary-label">Total Costs</span>
+                    <span class="summary-label">{{ _('Total Costs') }}</span>
                     <span class="summary-value danger" id="monthly-total-costs">0 T</span>
                 </div>
                 <div class="monthly-summary-item">
-                    <span class="summary-label">Total Profit</span>
+                    <span class="summary-label">{{ _('Total Profit') }}</span>
                     <span class="summary-value profit" id="monthly-total-profit">0 T</span>
                 </div>
             </div>
 
             <div class="overview-feed" id="overview-feed">
-                <div class="overview-empty" id="overview-empty">Open Summary to load overview…</div>
+                <div class="overview-empty" id="overview-empty">{{ _('Open Summary to load overview…') }}</div>
             </div>
         </div>
     </details>
@@ -877,17 +877,17 @@
 <div class="server-card" id="stmt-card" style="margin-bottom:20px;">
     <div class="server-header" style="cursor:pointer;" id="stmt-toggle">
         <div class="server-title">
-            <h3>📊 Reseller Statement</h3>
-            <p class="muted-note">From a date onward: how many accounts a reseller created / renewed, at what cost, by package — and how much they should have deposited.</p>
+            <h3>{{ _('📊 Reseller Statement') }}</h3>
+            <p class="muted-note">{{ _('From a date onward: how many accounts a reseller created / renewed, at what cost, by package — and how much they should have deposited.') }}</p>
         </div>
-        <button type="button" class="btn-reset" id="stmt-collapse-btn" aria-expanded="true" aria-controls="stmt-body" style="white-space:nowrap;">Hide</button>
+        <button type="button" class="btn-reset" id="stmt-collapse-btn" aria-expanded="true" aria-controls="stmt-body" style="white-space:nowrap;">{{ _('Hide') }}</button>
     </div>
 
     <div id="stmt-body">
         <div class="filters-grid" style="margin-top:6px;">
             {% if is_superadmin %}
             <div class="filter-field">
-                <label>Reseller</label>
+                <label>{{ _('Reseller') }}</label>
                 <select id="stmt-user" class="form-select filter-select">
                     {% for admin in admin_options %}
                     <option value="{{ admin.id }}">{{ admin.username }} ({{ admin.role }})</option>
@@ -896,26 +896,26 @@
             </div>
             {% endif %}
             <div class="filter-field">
-                <label>From (Jalali)</label>
+                <label>{{ _('From (Jalali)') }}</label>
                 <input type="text" id="stmt-start" dir="ltr" placeholder="1405/01/01">
             </div>
             <div class="filter-field">
-                <label>To (Jalali, optional)</label>
-                <input type="text" id="stmt-end" dir="ltr" placeholder="today if empty">
+                <label>{{ _('To (Jalali, optional)') }}</label>
+                <input type="text" id="stmt-end" dir="ltr" placeholder="{{ _('today if empty') }}">
             </div>
             <div class="filter-field" style="max-width:190px;">
-                <label>Settlement % (optional)</label>
-                <input type="number" id="stmt-percent" dir="ltr" min="0" max="100" step="0.5" placeholder="e.g. 60">
+                <label>{{ _('Settlement % (optional)') }}</label>
+                <input type="number" id="stmt-percent" dir="ltr" min="0" max="100" step="0.5" placeholder="{{ _('e.g. 60') }}">
             </div>
         </div>
         <div class="filter-actions" style="margin-top:10px;gap:8px;">
             <div class="range-chips" style="display:flex;gap:6px;flex-wrap:wrap;">
-                <button type="button" data-stmt-range="30d">Last 30 Days</button>
-                <button type="button" data-stmt-range="90d">Last 90 Days</button>
-                <button type="button" data-stmt-range="year">This Year</button>
+                <button type="button" data-stmt-range="30d">{{ _('Last 30 Days') }}</button>
+                <button type="button" data-stmt-range="90d">{{ _('Last 90 Days') }}</button>
+                <button type="button" data-stmt-range="year">{{ _('This Year') }}</button>
             </div>
-            <button type="button" class="btn-apply" id="stmt-run">Generate</button>
-            <button type="button" class="btn-reset" id="stmt-export" disabled>Export Excel</button>
+            <button type="button" class="btn-apply" id="stmt-run">{{ _('Generate') }}</button>
+            <button type="button" class="btn-reset" id="stmt-export" disabled>{{ _('Export Excel') }}</button>
         </div>
 
         <!-- Summary cards -->
@@ -924,104 +924,104 @@
             <div id="stmt-pricing" class="muted-note" style="margin-bottom:10px;"></div>
             <div id="stmt-usage-warning" style="display:none;margin-bottom:10px;padding:8px 12px;border:1px solid rgba(251,191,36,.45);border-radius:8px;color:#fbbf24;font-size:13px;"></div>
             <div class="stmt-cards">
-                <div class="stmt-card"><span class="stmt-k">✨ Created</span><span class="stmt-v" id="stmt-created">0</span></div>
-                <div class="stmt-card"><span class="stmt-k">🔄 Renewed</span><span class="stmt-v" id="stmt-renewed">0</span></div>
-                <div class="stmt-card"><span class="stmt-k">♻️ Reset</span><span class="stmt-v" id="stmt-reset">0</span></div>
-                <div class="stmt-card"><span class="stmt-k">📦 Charged GB</span><span class="stmt-v" id="stmt-charged-gb">0</span></div>
-                <div class="stmt-card"><span class="stmt-k">📉 Used GB</span><span class="stmt-v" id="stmt-used-gb">0</span></div>
-                <div class="stmt-card"><span class="stmt-k">⏳ Remaining GB</span><span class="stmt-v" id="stmt-remaining-gb">0</span></div>
-                <div class="stmt-card"><span class="stmt-k">🏷️ Price / GB</span><span class="stmt-v" id="stmt-price-gb">0 T</span></div>
-                <div class="stmt-card"><span class="stmt-k">💸 Usage cost</span><span class="stmt-v" id="stmt-usage-cost">0 T</span></div>
-                <div class="stmt-card stmt-spend"><span class="stmt-k">Should pay (spent)</span><span class="stmt-v" id="stmt-spent">0 T</span></div>
-                <div class="stmt-card stmt-paid"><span class="stmt-k">Revenue (deposited)</span><span class="stmt-v" id="stmt-deposited">0 T</span></div>
-                <div class="stmt-card" id="stmt-balance-card"><span class="stmt-k">Balance</span><span class="stmt-v" id="stmt-balance">0 T</span></div>
-                <div class="stmt-card" id="stmt-percent-card" style="display:none;"><span class="stmt-k" id="stmt-percent-k">Debt</span><span class="stmt-v" id="stmt-percent-debt">0 T</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('✨ Created') }}</span><span class="stmt-v" id="stmt-created">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('🔄 Renewed') }}</span><span class="stmt-v" id="stmt-renewed">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('♻️ Reset') }}</span><span class="stmt-v" id="stmt-reset">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('📦 Charged GB') }}</span><span class="stmt-v" id="stmt-charged-gb">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('📉 Used GB') }}</span><span class="stmt-v" id="stmt-used-gb">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('⏳ Remaining GB') }}</span><span class="stmt-v" id="stmt-remaining-gb">0</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('🏷️ Price / GB') }}</span><span class="stmt-v" id="stmt-price-gb">0 T</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('💸 Usage cost') }}</span><span class="stmt-v" id="stmt-usage-cost">0 T</span></div>
+                <div class="stmt-card stmt-spend"><span class="stmt-k">{{ _('Should pay (spent)') }}</span><span class="stmt-v" id="stmt-spent">0 T</span></div>
+                <div class="stmt-card stmt-paid"><span class="stmt-k">{{ _('Revenue (deposited)') }}</span><span class="stmt-v" id="stmt-deposited">0 T</span></div>
+                <div class="stmt-card" id="stmt-balance-card"><span class="stmt-k">{{ _('Balance') }}</span><span class="stmt-v" id="stmt-balance">0 T</span></div>
+                <div class="stmt-card" id="stmt-percent-card" style="display:none;"><span class="stmt-k" id="stmt-percent-k">{{ _('Debt') }}</span><span class="stmt-v" id="stmt-percent-debt">0 T</span></div>
             </div>
 
             <div class="stmt-tables">
                 <div class="stmt-tablewrap">
-                    <h4 class="stmt-h">By package</h4>
+                    <h4 class="stmt-h">{{ _('By package') }}</h4>
                     <table class="finance-table stmt-table"><thead>
-                        <tr><th>Package</th><th>Count</th><th>GB</th><th>Days</th><th>Spent</th></tr>
+                        <tr><th>{{ _('Package') }}</th><th>{{ _('Count') }}</th><th>GB</th><th>{{ _('Days') }}</th><th>{{ _('Spent') }}</th></tr>
                     </thead><tbody id="stmt-by-package"></tbody></table>
                 </div>
                 <div class="stmt-tablewrap">
-                    <h4 class="stmt-h">By server <small style="font-weight:400;color:var(--text-secondary);">(click a server to load its accounts)</small></h4>
+                    <h4 class="stmt-h">{{ _('By server') }} <small style="font-weight:400;color:var(--text-secondary);">{{ _('(click a server to load its accounts)') }}</small></h4>
                     <table class="finance-table stmt-table"><thead>
-                        <tr><th>Server</th><th>Count</th><th>Spent</th></tr>
+                        <tr><th>{{ _('Server') }}</th><th>{{ _('Count') }}</th><th>{{ _('Spent') }}</th></tr>
                     </thead><tbody id="stmt-by-server"></tbody></table>
                 </div>
             </div>
         </div>
-        <div id="stmt-empty" class="muted-note" style="display:none;margin-top:14px;text-align:center;padding:18px;">No transactions in this period.</div>
+        <div id="stmt-empty" class="muted-note" style="display:none;margin-top:14px;text-align:center;padding:18px;">{{ _('No transactions in this period.') }}</div>
     </div>
 </div>
 
 <div class="filters-card">
     <div class="filters-header">
         <div>
-            <h3>Smart Filters</h3>
-            <p class="muted-note">Enter Jalali dates such as 1403/01/01 for precise reporting.</p>
+            <h3>{{ _('Smart Filters') }}</h3>
+            <p class="muted-note">{{ _('Enter Jalali dates such as 1403/01/01 for precise reporting.') }}</p>
         </div>
         <div class="range-chips">
-            <button type="button" data-range="today">Today</button>
-            <button type="button" data-range="7d">Last 7 Days</button>
-            <button type="button" data-range="30d">Last 30 Days</button>
-            <button type="button" data-range="clear">Clear Dates</button>
+            <button type="button" data-range="today">{{ _('Today') }}</button>
+            <button type="button" data-range="7d">{{ _('Last 7 Days') }}</button>
+            <button type="button" data-range="30d">{{ _('Last 30 Days') }}</button>
+            <button type="button" data-range="clear">{{ _('Clear Dates') }}</button>
         </div>
     </div>
     <form id="payment-filters">
         <div class="filters-grid">
             <div class="filter-field" style="grid-column: span 2;">
-                <label>Search</label>
-                <input type="text" id="payment-search" placeholder="Email, description, or sender">
+                <label>{{ _('Search') }}</label>
+                <input type="text" id="payment-search" placeholder="{{ _('Email, description, or sender') }}">
             </div>
             <div class="filter-field">
-                <label>Direction</label>
+                <label>{{ _('Direction') }}</label>
                 <select id="direction-filter" class="form-select filter-select">
-                    <option value="">All</option>
-                    <option value="income">Income (+)</option>
-                    <option value="expense">Expense (-)</option>
+                    <option value="">{{ _('All') }}</option>
+                    <option value="income">{{ _('Income (+)') }}</option>
+                    <option value="expense">{{ _('Expense (-)') }}</option>
                 </select>
             </div>
             <div class="filter-field">
-                <label>Type</label>
+                <label>{{ _('Type') }}</label>
                 <select id="type-filter" class="form-select filter-select">
-                    <option value="">All types</option>
-                    <option value="payment">PAYMENT</option>
-                    <option value="receipt">RECEIPT</option>
-                    <option value="deposit">DEPOSIT</option>
-                    <option value="manual_debit">MANUAL_DEBIT</option>
-                    <option value="renew">RENEW</option>
-                    <option value="reset_traffic">RESET_TRAFFIC</option>
-                    <option value="purchase">PURCHASE</option>
-                    <option value="add_client">ADD_CLIENT</option>
-                    <option value="server_renewal">SERVER_RENEWAL</option>
-                    <option value="server_traffic">SERVER_TRAFFIC</option>
-                    <option value="server_cost">SERVER_COST</option>
+                    <option value="">{{ _('All types') }}</option>
+                    <option value="payment">{{ _('PAYMENT') }}</option>
+                    <option value="receipt">{{ _('RECEIPT') }}</option>
+                    <option value="deposit">{{ _('DEPOSIT') }}</option>
+                    <option value="manual_debit">{{ _('MANUAL_DEBIT') }}</option>
+                    <option value="renew">{{ _('RENEW') }}</option>
+                    <option value="reset_traffic">{{ _('RESET_TRAFFIC') }}</option>
+                    <option value="purchase">{{ _('PURCHASE') }}</option>
+                    <option value="add_client">{{ _('ADD_CLIENT') }}</option>
+                    <option value="server_renewal">{{ _('SERVER_RENEWAL') }}</option>
+                    <option value="server_traffic">{{ _('SERVER_TRAFFIC') }}</option>
+                    <option value="server_cost">{{ _('SERVER_COST') }}</option>
                 </select>
             </div>
             <div class="filter-field">
-                <label>Start Date (Jalali)</label>
+                <label>{{ _('Start Date (Jalali)') }}</label>
                 <input type="text" id="start-date" dir="ltr" placeholder="1403/01/01">
             </div>
             <div class="filter-field">
-                <label>End Date (Jalali)</label>
+                <label>{{ _('End Date (Jalali)') }}</label>
                 <input type="text" id="end-date" dir="ltr" placeholder="1403/01/30">
             </div>
             <div class="filter-field">
-                <label>Card</label>
+                <label>{{ _('Card') }}</label>
                 <select id="card-filter" class="form-select filter-select">
-                    <option value="">All cards</option>
+                    <option value="">{{ _('All cards') }}</option>
                     {% for card in cards %}
                     <option value="{{ card.id }}">{{ card.label }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="filter-field">
-                <label>Server</label>
+                <label>{{ _('Server') }}</label>
                 <select id="server-filter" class="form-select filter-select">
-                    <option value="">All servers</option>
+                    <option value="">{{ _('All servers') }}</option>
                     {% for server in servers %}
                     <option value="{{ server.id }}">{{ server.name }}</option>
                     {% endfor %}
@@ -1029,9 +1029,9 @@
             </div>
             {% if is_superadmin %}
             <div class="filter-field">
-                <label>User</label>
+                <label>{{ _('User') }}</label>
                 <select id="user-filter" class="form-select filter-select">
-                    <option value="">All users</option>
+                    <option value="">{{ _('All users') }}</option>
                     {% for admin in admin_options %}
                     <option value="{{ admin.id }}">{{ admin.username }} ({{ admin.role }})</option>
                     {% endfor %}
@@ -1040,8 +1040,8 @@
             {% endif %}
         </div>
         <div class="filter-actions">
-            <button type="button" class="btn-reset" id="reset-filters">Reset</button>
-            <button type="submit" class="btn-apply">Apply Filters</button>
+            <button type="button" class="btn-reset" id="reset-filters">{{ _('Reset') }}</button>
+            <button type="submit" class="btn-apply">{{ _('Apply Filters') }}</button>
         </div>
     </form>
 </div>
@@ -1050,13 +1050,13 @@
 <div class="server-card">
     <div class="server-header">
         <div class="server-title">
-            <h3>Payment History</h3>
-            <p class="muted-note" id="payments-count">Loading...</p>
+            <h3>{{ _('Payment History') }}</h3>
+            <p class="muted-note" id="payments-count">{{ _('Loading...') }}</p>
         </div>
         <div class="server-actions">
-            <button id="add-payment-btn" class="btn btn-primary" title="Add Payment">
+            <button id="add-payment-btn" class="btn btn-primary" title="{{ _('Add Payment') }}">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                Add Payment
+                {{ _('Add Payment') }}
             </button>
         </div>
     </div>
@@ -1065,27 +1065,27 @@
         <table class="clients-table finance-table" style="width: 100%; border-collapse: collapse;">
             <thead>
                 <tr>
-                    <th style="padding: 15px; text-align: left;">Date</th>
+                    <th style="padding: 15px; text-align: left;">{{ _('Date') }}</th>
                     {% if is_superadmin %}
-                    <th style="padding: 15px; text-align: left;">User</th>
+                    <th style="padding: 15px; text-align: left;">{{ _('User') }}</th>
                     {% endif %}
-                    <th style="padding: 15px; text-align: left;">Type</th>
-                    <th style="padding: 15px; text-align: left;">Sender</th>
-                    <th style="padding: 15px; text-align: left;">Card</th>
-                    <th style="padding: 15px; text-align: left;">Amount</th>
-                    <th style="padding: 15px; text-align: left;">Client</th>
-                    <th style="padding: 15px; text-align: left;">Status</th>
-                    <th style="padding: 15px; text-align: center;">Actions</th>
+                    <th style="padding: 15px; text-align: left;">{{ _('Type') }}</th>
+                    <th style="padding: 15px; text-align: left;">{{ _('Sender') }}</th>
+                    <th style="padding: 15px; text-align: left;">{{ _('Card') }}</th>
+                    <th style="padding: 15px; text-align: left;">{{ _('Amount') }}</th>
+                    <th style="padding: 15px; text-align: left;">{{ _('Client') }}</th>
+                    <th style="padding: 15px; text-align: left;">{{ _('Status') }}</th>
+                    <th style="padding: 15px; text-align: center;">{{ _('Actions') }}</th>
                 </tr>
             </thead>
             <tbody id="payments-list">
-                <tr><td colspan="8" style="text-align: center; padding: 20px;">Loading...</td></tr>
+                <tr><td colspan="8" style="text-align: center; padding: 20px;">{{ _('Loading...') }}</td></tr>
             </tbody>
         </table>
     </div>
     
     <div class="pagination-controls" style="display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 20px; border-top: 1px solid var(--border-color); flex-wrap: wrap;">
-        <span id="page-info" style="color: var(--text-secondary); font-size: 0.875rem;">Showing 0 to 0 of 0 results</span>
+        <span id="page-info" style="color: var(--text-secondary); font-size: 0.875rem;">{{ _('Showing {start} to {end} of {totalItems} results', start=0, end=0, totalItems=0) }}</span>
         <div id="pagination-buttons" style="display: flex; align-items: center; gap: 4px;"></div>
     </div>
 
@@ -1096,7 +1096,7 @@
 <div id="payment-modal" class="modal-overlay hidden">
     <div class="modal modal-sm">
         <div class="modal-header">
-            <h3 id="modal-title">Edit Payment</h3>
+            <h3 id="modal-title">{{ _('Edit Payment') }}</h3>
             <button class="modal-close" onclick="closeModal()">&times;</button>
         </div>
         <form id="payment-form">
@@ -1104,72 +1104,72 @@
             <div id="payment-error" class="muted-note" style="color: var(--danger); display:none; margin-bottom:8px;"> </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label>Entry Type</label>
+                    <label>{{ _('Entry Type') }}</label>
                     <select id="payment-kind" class="form-select">
-                        <option value="income" selected>Income (payment)</option>
-                        <option value="expense">Expense (server cost)</option>
+                        <option value="income" selected>{{ _('Income (payment)') }}</option>
+                        <option value="expense">{{ _('Expense (server cost)') }}</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Amount (Toman) *</label>
-                    <input type="text" id="payment-amount" class="form-input" required inputmode="numeric" placeholder="e.g. 150,000">
+                    <label>{{ _('Amount (Toman) *') }}</label>
+                    <input type="text" id="payment-amount" class="form-input" required inputmode="numeric" placeholder="{{ _('e.g. 150,000') }}">
                 </div>
                 <div class="form-group">
-                    <label>Payment Date (Jalali)</label>
+                    <label>{{ _('Payment Date (Jalali)') }}</label>
                     <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                         <input type="text" id="payment-date" class="form-input" style="flex: 2 1 160px; min-width: 0;" placeholder="1403/09/18">
                         <input type="text" id="payment-time" class="form-input" style="flex: 1 1 120px; min-width: 0;" placeholder="00:00">
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Destination Card (Your Card)</label>
+                    <label>{{ _('Destination Card (Your Card)') }}</label>
                     <select id="payment-card" class="form-select">
-                        <option value="">-- Select Card --</option>
+                        <option value="">{{ _('-- Select Card --') }}</option>
                         {% for card in cards %}
                         <option value="{{ card.id }}">{{ card.label }} ({{ card.bank_name }})</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div class="form-group expense-only" style="display:none;">
-                    <label>Server (for expense)</label>
+                    <label>{{ _('Server (for expense)') }}</label>
                     <select id="payment-server" class="form-select">
-                        <option value="">-- Select Server --</option>
+                        <option value="">{{ _('-- Select Server --') }}</option>
                         {% for server in servers %}
                         <option value="{{ server.id }}">{{ server.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div class="form-group expense-only" style="display:none;">
-                    <label>Cost Type</label>
+                    <label>{{ _('Cost Type') }}</label>
                     <select id="payment-cost-type" class="form-select">
-                        <option value="server_renewal">Server renewal</option>
-                        <option value="server_traffic">Server traffic</option>
-                        <option value="server_cost">Other server cost</option>
+                        <option value="server_renewal">{{ _('Server renewal') }}</option>
+                        <option value="server_traffic">{{ _('Server traffic') }}</option>
+                        <option value="server_cost">{{ _('Other server cost') }}</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Sender Name</label>
-                    <input type="text" id="payment-sender-name" class="form-input" placeholder="Customer name">
+                    <label>{{ _('Sender Name') }}</label>
+                    <input type="text" id="payment-sender-name" class="form-input" placeholder="{{ _('Customer name') }}">
                 </div>
                 <div class="form-group">
-                    <label>Sender Card Number</label>
+                    <label>{{ _('Sender Card Number') }}</label>
                     <input type="text" id="payment-sender-card" class="form-input" placeholder="6037xxxxxxxxxxxx">
                 </div>
                 <div class="form-group">
-                    <label>Client Email</label>
+                    <label>{{ _('Client Email') }}</label>
                     <input type="text" id="payment-client" class="form-input" placeholder="client@example.com">
                 </div>
                 <div class="form-group">
-                    <label>Description</label>
-                    <textarea id="payment-description" class="form-input" rows="2" placeholder="Notes..."></textarea>
+                    <label>{{ _('Description') }}</label>
+                    <textarea id="payment-description" class="form-input" rows="2" placeholder="{{ _('Notes...') }}"></textarea>
                     <div id="tx-audit-note" class="muted-note" style="display:none; margin-top: 6px;">
-                        For transaction edits, changes are automatically written into the description (who/when/what changed).
+                        {{ _('For transaction edits, changes are automatically written into the description (who/when/what changed).') }}
                     </div>
                 </div>
             </div>
             <div class="form-actions">
-                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                <button type="submit" class="btn btn-primary" id="save-payment-btn">Save Payment</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">{{ _('Cancel') }}</button>
+                <button type="submit" class="btn btn-primary" id="save-payment-btn">{{ _('Save Payment') }}</button>
             </div>
         </form>
     </div>
@@ -1185,48 +1185,48 @@
                     <line x1="12" y1="8" x2="12" y2="12"></line>
                     <line x1="12" y1="16" x2="12.01" y2="16"></line>
                 </svg>
-                Delete Payment
+                {{ _('Delete Payment') }}
             </h3>
             <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-                <p style="color: #991b1b; margin: 0; font-weight: 600;">⚠️ Warning: This action cannot be undone!</p>
-                <p style="color: #991b1b; margin: 8px 0 0 0; font-size: 0.9rem;">This will remove the record from the Finance overview.</p>
-                <p style="color: #991b1b; margin: 6px 0 0 0; font-size: 0.9rem;">A log entry will remain in Transactions showing who deleted it.</p>
+                <p style="color: #991b1b; margin: 0; font-weight: 600;">{{ _('⚠️ Warning: This action cannot be undone!') }}</p>
+                <p style="color: #991b1b; margin: 8px 0 0 0; font-size: 0.9rem;">{{ _('This will remove the record from the Finance overview.') }}</p>
+                <p style="color: #991b1b; margin: 6px 0 0 0; font-size: 0.9rem;">{{ _('A log entry will remain in Transactions showing who deleted it.') }}</p>
             </div>
-            <p style="color: var(--text-primary); margin-bottom: 12px;">You are about to delete this payment transaction:</p>
+            <p style="color: var(--text-primary); margin-bottom: 12px;">{{ _('You are about to delete this payment transaction:') }}</p>
             <div style="background: var(--bg-secondary); border-radius: 8px; padding: 12px; margin-bottom: 20px;">
                 <div style="display: grid; gap: 8px; font-size: 0.875rem;">
                     <div style="display: flex; justify-content: space-between;">
-                        <span style="color: var(--text-secondary);">Amount:</span>
+                        <span style="color: var(--text-secondary);">{{ _('Amount:') }}</span>
                         <span style="color: var(--text-primary); font-weight: 600;" id="delete-amount">-</span>
                     </div>
                     <div style="display: flex; justify-content: space-between;">
-                        <span style="color: var(--text-secondary);">Date:</span>
+                        <span style="color: var(--text-secondary);">{{ _('Date:') }}</span>
                         <span style="color: var(--text-primary);" id="delete-date">-</span>
                     </div>
                     <div style="display: flex; justify-content: space-between;">
-                        <span style="color: var(--text-secondary);">Sender:</span>
+                        <span style="color: var(--text-secondary);">{{ _('Sender:') }}</span>
                         <span style="color: var(--text-primary);" id="delete-sender">-</span>
                     </div>
                 </div>
             </div>
-            <p style="color: var(--text-secondary); font-size: 0.875rem; margin: 0;">Deleting this payment will:</p>
+            <p style="color: var(--text-secondary); font-size: 0.875rem; margin: 0;">{{ _('Deleting this payment will:') }}</p>
             <ul style="color: var(--text-secondary); font-size: 0.875rem; margin: 8px 0 0 20px; padding: 0;">
-                <li>Permanently remove it from the database</li>
-                <li>Update your income statistics</li>
-                <li>This cannot be reversed</li>
+                <li>{{ _('Permanently remove it from the database') }}</li>
+                <li>{{ _('Update your income statistics') }}</li>
+                <li>{{ _('This cannot be reversed') }}</li>
             </ul>
         </div>
         <div class="form-actions">
-            <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">Cancel</button>
+            <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">{{ _('Cancel') }}</button>
             <button type="button" class="btn" style="background: var(--danger); color: white;" id="confirm-delete-btn" onclick="confirmDelete()">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
                     <polyline points="3 6 5 6 21 6"></polyline>
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                 </svg>
-                Delete Payment
+                {{ _('Delete Payment') }}
             </button>
         </div>
     </div>
@@ -1234,6 +1234,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script nonce="{{ csp_nonce }}">window.EVE_I18N = {{ i18n_catalog('finance')|tojson }};</script>
 <script nonce="{{ csp_nonce }}">
     const isSuperadmin = {{ 'true' if is_superadmin else 'false' }};
     const columnSpan = isSuperadmin ? 9 : 8;
@@ -1516,19 +1517,19 @@
                     <div class="overview-content">
                         <div class="overview-grid">
                             <div class="overview-cell" data-kind="date">
-                                <span class="overview-label">Date</span>
+                                <span class="overview-label">${_t('Date')}</span>
                                 <span class="overview-value" title="${escapeAttr(fullDateStr)}">${escapeAttr(dayLabel)}</span>
                             </div>
                             <div class="overview-cell" data-kind="income">
-                                <span class="overview-label">Income</span>
+                                <span class="overview-label">${_t('Income')}</span>
                                 <span class="overview-value success">${inc.toLocaleString()} T</span>
                             </div>
                             <div class="overview-cell" data-kind="costs">
-                                <span class="overview-label">Costs</span>
+                                <span class="overview-label">${_t('Costs')}</span>
                                 <span class="overview-value danger">-${Math.abs(exp).toLocaleString()} T</span>
                             </div>
                             <div class="overview-cell" data-kind="profit">
-                                <span class="overview-label">Profit</span>
+                                <span class="overview-label">${_t('Profit')}</span>
                                 <span class="overview-value profit">${prof.toLocaleString()} T</span>
                             </div>
                         </div>
@@ -1539,7 +1540,7 @@
         });
 
         if (!rows.length) {
-            overviewFeed.innerHTML = `<div class="overview-empty">No overview data.</div>`;
+            overviewFeed.innerHTML = `<div class="overview-empty">${_t('No overview data.')}</div>`;
             return;
         }
 
@@ -1548,7 +1549,7 @@
 
     const loadOverviewMonth = async (year, month) => {
         if (!overviewFeed) return;
-        overviewFeed.innerHTML = `<div class="overview-empty">Loading overview…</div>`;
+        overviewFeed.innerHTML = `<div class="overview-empty">${_t('Loading overview…')}</div>`;
 
         const summaryBlock = document.getElementById('overview-monthly-summary');
         if (summaryBlock) summaryBlock.style.display = 'none';
@@ -1557,7 +1558,7 @@
         const response = await financeFetch(`/api/finance/overview?${query}`);
         const data = await response.json();
         if (!response.ok || !data.success) {
-            overviewFeed.innerHTML = `<div class="overview-empty">Failed to load overview.</div>`;
+            overviewFeed.innerHTML = `<div class="overview-empty">${_t('Failed to load overview.')}</div>`;
             return;
         }
         renderOverview({ year, month, labels: data.labels, series: data.series });
@@ -1566,13 +1567,13 @@
     const loadOverviewMonths = async () => {
         if (!overviewMonthSelect) return;
         const previousValue = overviewMonthSelect.value;
-        overviewMonthSelect.innerHTML = '<option value="" selected>Loading…</option>';
+        overviewMonthSelect.innerHTML = '<option value="" selected>' + _t('Loading…') + '</option>';
 
         const query = buildOverviewQuery({ range: '12m' });
         const response = await financeFetch(`/api/finance/overview?${query}`);
         const data = await response.json();
         if (!response.ok || !data.success) {
-            overviewMonthSelect.innerHTML = '<option value="" selected>Failed to load months</option>';
+            overviewMonthSelect.innerHTML = '<option value="" selected>' + _t('Failed to load months') + '</option>';
             return;
         }
 
@@ -1593,8 +1594,8 @@
         if (ym) await loadOverviewMonth(ym.year, ym.month);
     };
 
-    const setLoadingState = (message = 'Loading...') => {
-        if (countLabel) countLabel.textContent = 'Loading...';
+    const setLoadingState = (message = _t('Loading...')) => {
+        if (countLabel) countLabel.textContent = _t('Loading...');
         if (tbody) {
             tbody.innerHTML = `<tr><td colspan="${columnSpan}" style="text-align:center; padding:20px; color:var(--text-secondary);">${message}</td></tr>`;
         }
@@ -1616,7 +1617,7 @@
     const updatePaginationUI = () => {
         const start = totalItems === 0 ? 0 : ((currentPage - 1) * perPage) + 1;
         const end = Math.min(currentPage * perPage, totalItems);
-        if (pageInfo) pageInfo.textContent = `Showing ${start} to ${end} of ${totalItems} results`;
+        if (pageInfo) pageInfo.textContent = _t('Showing {start} to {end} of {totalItems} results', {start, end, totalItems});
 
         const pages = getPageNumbers(currentPage, totalPages);
         let html = '';
@@ -1655,7 +1656,7 @@
     const renderPayments = (payments) => {
         if (!tbody) return;
         if (!payments || !payments.length) {
-            tbody.innerHTML = `<tr><td colspan="${columnSpan}" style="text-align: center; padding: 20px; color: var(--text-secondary);">No payments found.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${columnSpan}" style="text-align: center; padding: 20px; color: var(--text-secondary);">${_t('No payments found.')}</td></tr>`;
             return;
         }
 
@@ -1693,22 +1694,22 @@
 
             const isEdited = String(p.description || '').toLowerCase().includes('edited by');
             const statusBadge = isEdited
-                ? '<span class="badge" style="font-size: 0.7rem; background: var(--primary);">EDITED</span>'
-                : (p.verified ? '<span class="badge active" style="font-size: 0.7rem;">VERIFIED</span>' : '<span class="badge" style="font-size: 0.7rem; background: #374151;">PENDING</span>');
+                ? '<span class="badge" style="font-size: 0.7rem; background: var(--primary);">' + _t('EDITED') + '</span>'
+                : (p.verified ? '<span class="badge active" style="font-size: 0.7rem;">' + _t('VERIFIED') + '</span>' : '<span class="badge" style="font-size: 0.7rem; background: #374151;">' + _t('PENDING') + '</span>');
 
             const editBtnHtml = canEdit
-                ? `<button class="action-btn" title="Edit" data-action="edit" data-entry-id="${escapeAttr(entryId)}">
+                ? `<button class="action-btn" title="${_t('Edit')}" data-action="edit" data-entry-id="${escapeAttr(entryId)}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>`
-                : `<button class="action-btn" title="Edit" disabled style="opacity:0.5;cursor:not-allowed;">
+                : `<button class="action-btn" title="${_t('Edit')}" disabled style="opacity:0.5;cursor:not-allowed;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>`;
 
             const deleteBtnHtml = canDelete
-                ? `<button class="action-btn danger" title="Delete" data-action="delete" data-entry-id="${escapeAttr(entryId)}">
+                ? `<button class="action-btn danger" title="${_t('Delete')}" data-action="delete" data-entry-id="${escapeAttr(entryId)}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>`
-                : `<button class="action-btn danger" title="Delete" disabled style="opacity:0.5;cursor:not-allowed;">
+                : `<button class="action-btn danger" title="${_t('Delete')}" disabled style="opacity:0.5;cursor:not-allowed;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>`;
 
@@ -1822,7 +1823,7 @@
             const query = buildQueryString();
             const response = await financeFetch(`/api/payments?${query}`);
             const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'Failed to load');
+            if (!response.ok) throw new Error(data.error || _t('Failed to load'));
 
             totalPages = data.pages || 1;
             currentPage = data.current_page || 1;
@@ -1831,11 +1832,11 @@
 
             renderPayments(data.payments || []);
             updatePaginationUI();
-            if (countLabel) countLabel.textContent = `${totalItems} payments found.`;
+            if (countLabel) countLabel.textContent = _t('{totalItems} payments found.', {totalItems});
         } catch (error) {
             console.error(error);
             if (tbody) tbody.innerHTML = `<tr><td colspan="${columnSpan}" style="text-align: center; color: var(--danger); padding: 20px;">${error.message}</td></tr>`;
-            if (countLabel) countLabel.textContent = 'Unable to load payments';
+            if (countLabel) countLabel.textContent = _t('Unable to load payments');
         }
     };
 
@@ -1909,7 +1910,7 @@
     if (overviewDetails) {
         overviewDetails.addEventListener('toggle', () => {
             if (overviewDetails.open) {
-                if (overviewEmpty) overviewEmpty.textContent = 'Loading overview…';
+                if (overviewEmpty) overviewEmpty.textContent = _t('Loading overview…');
                 ensureOverviewLoaded({ forceMonthsReload: false });
             }
         });
@@ -1934,7 +1935,7 @@
         document.getElementById('payment-form').reset();
         document.getElementById('payment-id').value = '';
         resetSenderCardField();
-        document.getElementById('modal-title').textContent = 'Add Payment';
+        document.getElementById('modal-title').textContent = _t('Add Payment');
         const err = document.getElementById('payment-error');
         if (err) { err.style.display = 'none'; err.textContent = ''; }
         if (txAuditNote) txAuditNote.style.display = 'none';
@@ -1946,7 +1947,7 @@
     window.closeModal = closeModal;
 
     addPaymentBtn.addEventListener('click', () => {
-        document.getElementById('modal-title').textContent = 'Add Payment';
+        document.getElementById('modal-title').textContent = _t('Add Payment');
         const today = new Date();
         const todayJalali = formatJalali(today);
         const dateInput = document.getElementById('payment-date');
@@ -1976,7 +1977,7 @@
         const amountDigits = toCleanNumberString(amountValRaw);
         if (!amountDigits || Number(amountDigits) <= 0) {
             if (errorBox) {
-                errorBox.textContent = 'Amount is required and must be greater than 0';
+                errorBox.textContent = _t('Amount is required and must be greater than 0');
                 errorBox.style.display = 'block';
             }
             return;
@@ -1984,7 +1985,7 @@
 
         saveBtn.disabled = true;
         const originalText = saveBtn.textContent;
-        saveBtn.textContent = 'Saving...';
+        saveBtn.textContent = _t('Saving...');
 
         const paymentId = document.getElementById('payment-id').value;
         const paymentDate = document.getElementById('payment-date').value;
@@ -2018,7 +2019,7 @@
             data.cost_type = document.getElementById('payment-cost-type').value || 'server_cost';
             if (!data.server_id) {
                 if (errorBox) {
-                    errorBox.textContent = 'Please select a server for this expense.';
+                    errorBox.textContent = _t('Please select a server for this expense.');
                     errorBox.style.display = 'block';
                 }
                 saveBtn.disabled = false;
@@ -2043,13 +2044,13 @@
             });
 
             const result = await response.json();
-            if (!response.ok) throw new Error((result && result.error) ? result.error : 'Failed to save');
+            if (!response.ok) throw new Error((result && result.error) ? result.error : _t('Failed to save'));
 
             window.closeModal();
             try {
-                if (result && result.converted) showToast('Converted to expense successfully');
-                else if (method === 'POST') showToast('Payment saved successfully');
-                else showToast('Payment updated successfully');
+                if (result && result.converted) showToast(_t('Converted to expense successfully'));
+                else if (method === 'POST') showToast(_t('Payment saved successfully'));
+                else showToast(_t('Payment updated successfully'));
             } catch (e) {}
 
             updateFiltersFromInputs();
@@ -2059,7 +2060,7 @@
             if (isOverviewOpen()) ensureOverviewLoaded({ forceMonthsReload: true });
         } catch (error) {
             if (errorBox) {
-                errorBox.textContent = error.message || 'An error occurred';
+                errorBox.textContent = error.message || _t('An error occurred');
                 errorBox.style.display = 'block';
             }
         } finally {
@@ -2079,13 +2080,13 @@
             }
 
             if (!entry) {
-                alert('Payment not found');
+                alert(_t('Payment not found'));
                 return;
             }
 
             const isTx = String(entry.id).startsWith('tx-');
             if (isTx && !isSuperadmin) {
-                alert('Access denied');
+                alert(_t('Access denied'));
                 return;
             }
 
@@ -2132,10 +2133,10 @@
                 updateKindUI();
             }
 
-            document.getElementById('modal-title').textContent = 'Edit Payment';
+            document.getElementById('modal-title').textContent = _t('Edit Payment');
             openModal();
         } catch (error) {
-            alert('Error loading payment');
+            alert(_t('Error loading payment'));
         }
     };
 
@@ -2152,13 +2153,13 @@
             }
 
             if (!entry) {
-                alert('Payment not found');
+                alert(_t('Payment not found'));
                 return;
             }
 
             const isTx = String(entry.id).startsWith('tx-');
             if (isTx && !isSuperadmin) {
-                alert('Access denied');
+                alert(_t('Access denied'));
                 return;
             }
 
@@ -2173,7 +2174,7 @@
             // Show delete modal
             document.getElementById('delete-modal').classList.remove('hidden');
         } catch (error) {
-            alert('Error loading payment details');
+            alert(_t('Error loading payment details'));
         }
     };
 
@@ -2188,7 +2189,7 @@
         const confirmBtn = document.getElementById('confirm-delete-btn');
         const originalText = confirmBtn.innerHTML;
         confirmBtn.disabled = true;
-        confirmBtn.innerHTML = '<span style="opacity: 0.7;">Deleting...</span>';
+        confirmBtn.innerHTML = '<span style="opacity: 0.7;">' + _t('Deleting...') + '</span>';
 
         try {
             const deletedEntryId = String(paymentToDelete);
@@ -2199,19 +2200,19 @@
             const response = await financeFetch(url, { method: 'DELETE' });
             const result = await response.json();
 
-            if (!response.ok) throw new Error(result.error || 'Failed to delete');
+            if (!response.ok) throw new Error(result.error || _t('Failed to delete'));
 
             lastLoadedEntries = (lastLoadedEntries || []).filter(p => String(p.id) !== deletedEntryId);
             renderPayments(lastLoadedEntries);
             totalItems = Math.max(0, totalItems - 1);
             updatePaginationUI();
-            if (countLabel) countLabel.textContent = `${totalItems} payments found.`;
+            if (countLabel) countLabel.textContent = _t('{totalItems} payments found.', {totalItems});
 
             closeDeleteModal();
             
             // Show success message
             try {
-                showToast('Payment deleted successfully');
+                showToast(_t('Payment deleted successfully'));
             } catch (e) { /* ignore */ }
 
             updateFiltersFromInputs();
@@ -2220,7 +2221,7 @@
             await loadStats();
             if (isOverviewOpen()) ensureOverviewLoaded({ forceMonthsReload: true });
         } catch (error) {
-            alert('Error: ' + error.message);
+            alert(_t('Error:') + ' ' + error.message);
         } finally {
             confirmBtn.disabled = false;
             confirmBtn.innerHTML = originalText;
@@ -2243,11 +2244,11 @@
 
     if (!isSuperadmin) {
         const monthLabel = document.getElementById('stat-month-label');
-        if (monthLabel) monthLabel.textContent = 'Charge';
+        if (monthLabel) monthLabel.textContent = _t('Charge');
         const expenseLabel = document.getElementById('stat-month-expense-label');
-        if (expenseLabel) expenseLabel.textContent = 'Month Cost';
+        if (expenseLabel) expenseLabel.textContent = _t('Month Cost');
         const totalLabel = document.getElementById('stat-total-label');
-        if (totalLabel) totalLabel.textContent = 'Total';
+        if (totalLabel) totalLabel.textContent = _t('Total');
     }
 
     // ───────────── Reseller Statement ─────────────
@@ -2265,7 +2266,7 @@
         function toggleStmt() {
             const hidden = stmtBody.style.display === 'none';
             stmtBody.style.display = hidden ? '' : 'none';
-            collapseBtn.textContent = hidden ? 'Hide' : 'Show';
+            collapseBtn.textContent = hidden ? _t('Hide') : _t('Show');
             collapseBtn.setAttribute('aria-expanded', hidden ? 'true' : 'false');
         }
         collapseBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleStmt(); });
@@ -2310,11 +2311,11 @@
         function pkgDetailRows(pkg) {
             const items = (pkg && pkg.items) || [];
             if (!items.length) {
-                return '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:10px;">No line items.</td></tr>';
+                return '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:10px;">' + _t('No line items.') + '</td></tr>';
             }
             return items.map((it) => {
                 const amtCell = it.gift
-                    ? '<span style="color:#a78bfa;font-weight:600;">🎁 Gift</span>'
+                    ? '<span style="color:#a78bfa;font-weight:600;">🎁 ' + _t('Gift') + '</span>'
                     : money(Math.abs(Number(it.amount || 0)));
                 const badge = it.type === 'renew' ? '🔄' : '✨';
                 return `<tr>
@@ -2343,7 +2344,7 @@
         const srvAccounts = {};
         function acctRows(list) {
             if (!list || !list.length) {
-                return '<tr><td colspan="7" style="text-align:center;color:var(--text-secondary);padding:10px;">No accounts on this server.</td></tr>';
+                return '<tr><td colspan="7" style="text-align:center;color:var(--text-secondary);padding:10px;">' + _t('No accounts on this server.') + '</td></tr>';
             }
             const badge = { active: '🟢', disabled: '🔴', deleted: '⚫' };
             return list.map((a) => `<tr>
@@ -2369,14 +2370,14 @@
             const cell = detail.querySelector('.stmt-srv-cell');
             const sid = row.getAttribute('data-sid');
             if (!sid) {
-                cell.innerHTML = '<div style="padding:10px;color:var(--text-secondary);">Unknown server.</div>';
+                cell.innerHTML = '<div style="padding:10px;color:var(--text-secondary);">' + _t('Unknown server.') + '</div>';
                 return;
             }
             if (srvAccounts[sid]) {
                 cell.innerHTML = srvAccounts[sid];
                 return;
             }
-            cell.innerHTML = '<div style="padding:10px;color:var(--text-secondary);">Loading accounts…</div>';
+            cell.innerHTML = '<div style="padding:10px;color:var(--text-secondary);">' + _t('Loading accounts…') + '</div>';
             try {
                 const params = stmtParams();
                 params.set('server_id', sid);
@@ -2385,12 +2386,12 @@
                 const acc = await res.json();
                 if (!acc || !acc.success) throw new Error((acc && acc.error) || 'failed');
                 const html = `<table class="stmt-subtable"><thead><tr>
-                        <th>User</th><th>Charged GB</th><th>Used GB</th><th>Remaining</th><th>Spent</th><th>Last change</th><th>Date</th>
+                        <th>${_t('User')}</th><th>${_t('Charged GB')}</th><th>${_t('Used GB')}</th><th>${_t('Remaining')}</th><th>${_t('Spent')}</th><th>${_t('Last change')}</th><th>${_t('Date')}</th>
                     </tr></thead><tbody>${acctRows(acc.accounts)}</tbody></table>`;
                 srvAccounts[sid] = html;
                 cell.innerHTML = html;
             } catch (err) {
-                cell.innerHTML = '<div style="padding:10px;color:#f87171;">Could not load accounts.</div>';
+                cell.innerHTML = '<div style="padding:10px;color:#f87171;">' + _t('Could not load accounts.') + '</div>';
             }
         });
 
@@ -2399,30 +2400,30 @@
             const s = data.summary;
             $('stmt-summary').style.display = '';
             $('stmt-empty').style.display = (s.row_count > 0) ? 'none' : '';
-            const period = (s.start_jalali || '…') + ' → ' + (s.end_jalali || 'today')
+            const period = (s.start_jalali || '…') + ' → ' + (s.end_jalali || _t('today'))
                 + '  ·  ' + (s.reseller.username || '') + ' (' + (s.reseller.role || '') + ')'
-                + '  ·  current credit ' + money(s.reseller.credit);
+                + '  ·  ' + _t('current credit') + ' ' + money(s.reseller.credit);
             $('stmt-period').textContent = period;
             const t = s.traffic || {};
             const pz = s.pricing || {};
-            let pzText = 'Pricing: standard rates';
+            let pzText = _t('Pricing: standard rates');
             if (pz.mode === 'fixed') {
                 const bits = [];
                 if (pz.custom_cost_per_gb != null) bits.push(money(pz.custom_cost_per_gb) + ' / GB');
                 if (pz.custom_cost_per_day != null) bits.push(money(pz.custom_cost_per_day) + ' / day');
-                pzText = 'Pricing: fixed rate (' + bits.join(' + ') + ')';
+                pzText = _t('Pricing: fixed rate ({rates})', {rates: bits.join(' + ')});
             } else if (pz.mode === 'percentage') {
-                pzText = 'Pricing: percentage (' + (pz.discount_percent || 0) + '% discount)';
+                pzText = _t('Pricing: percentage ({percent}% discount)', {percent: pz.discount_percent || 0});
             }
-            pzText += '  ·  price basis: ' + (t.price_basis || 'unknown')
-                + '  ·  accounts tracked: ' + (t.accounts_tracked || 0);
+            pzText += '  ·  ' + _t('price basis:') + ' ' + (t.price_basis || _t('unknown'))
+                + '  ·  ' + _t('accounts tracked:') + ' ' + (t.accounts_tracked || 0);
             $('stmt-pricing').textContent = pzText;
             const uWarn = $('stmt-usage-warning');
             if (t.usage_available === false) {
                 uWarn.style.display = '';
-                uWarn.textContent = '⚠️ No usage snapshots exist for this period'
-                    + (t.coverage_from_jalali ? ' — earliest snapshot: ' + t.coverage_from_jalali : '')
-                    + '. Used / Remaining GB and Usage cost are understated (shown as 0).';
+                uWarn.textContent = '⚠️ ' + _t('No usage snapshots exist for this period')
+                    + (t.coverage_from_jalali ? ' — ' + _t('earliest snapshot:') + ' ' + t.coverage_from_jalali : '')
+                    + '. ' + _t('Used / Remaining GB and Usage cost are understated (shown as 0).');
             } else {
                 uWarn.style.display = 'none';
             }
@@ -2435,7 +2436,7 @@
             const psCard = $('stmt-percent-card');
             if (ps) {
                 psCard.style.display = '';
-                $('stmt-percent-k').textContent = 'Debt @ ' + ps.percent + '%';
+                $('stmt-percent-k').textContent = _t('Debt @ {percent}%', {percent: ps.percent});
                 $('stmt-percent-debt').textContent = money(ps.debt);
             } else {
                 psCard.style.display = 'none';
@@ -2450,14 +2451,14 @@
             balCard.classList.remove('stmt-debt', 'stmt-ok');
             balCard.classList.add(s.balance < 0 ? 'stmt-debt' : 'stmt-ok');
             const balK = balCard.querySelector('.stmt-k');
-            if (balK) balK.textContent = s.balance < 0 ? 'Balance (owes)' : 'Balance (credit)';
+            if (balK) balK.textContent = s.balance < 0 ? _t('Balance (owes)') : _t('Balance (credit)');
 
             const pkgBody = $('stmt-by-package');
-            const pkgLabel = (name) => (name === '—' ? '— (unspecified)' : name);
+            const pkgLabel = (name) => (name === '—' ? _t('— (unspecified)') : name);
             pkgBody.innerHTML = (data.by_package || []).length
                 ? data.by_package.map((p) => {
                     const gifts = p.gifts ? ` <span style="color:#a78bfa;">(${p.gifts}🎁)</span>` : '';
-                    return `<tr class="stmt-pkg-row" data-pkg="${escapeAttr(p.package)}" title="Click to see each user">
+                    return `<tr class="stmt-pkg-row" data-pkg="${escapeAttr(p.package)}" title="${_t('Click to see each user')}">
                         <td><span class="stmt-caret">▸</span> ${escapeAttr(pkgLabel(p.package))}${gifts}</td>
                         <td>${p.count}</td>
                         <td>${p.volume_gb}</td>
@@ -2465,7 +2466,7 @@
                         <td>${money(p.spent)}</td></tr>
                     <tr class="stmt-pkg-detail" style="display:none;"><td colspan="5" style="padding:0;background:rgba(148,163,184,0.05);">
                         <table class="stmt-subtable"><thead><tr>
-                            <th>User</th><th>GB</th><th>Days</th><th>Amount</th><th>Date</th>
+                            <th>${_t('User')}</th><th>${_t('GB')}</th><th>${_t('Days')}</th><th>${_t('Amount')}</th><th>${_t('Date')}</th>
                         </tr></thead><tbody>${pkgDetailRows(p)}</tbody></table>
                     </td></tr>`;
                 }).join('')
@@ -2473,7 +2474,7 @@
 
             const srvBody = $('stmt-by-server');
             srvBody.innerHTML = (data.by_server || []).length
-                ? data.by_server.map((p) => `<tr class="stmt-srv-row" data-sid="${p.server_id ?? ''}" title="Click to load accounts" style="cursor:pointer;">
+                ? data.by_server.map((p) => `<tr class="stmt-srv-row" data-sid="${p.server_id ?? ''}" title="${_t('Click to load accounts')}" style="cursor:pointer;">
                     <td><span class="stmt-caret">▸</span> ${escapeAttr(p.server)}</td>
                     <td>${p.count}</td>
                     <td>${money(p.spent)}</td></tr>
@@ -2487,19 +2488,19 @@
         async function runStmt() {
             const params = stmtParams();
             params.set('_', Date.now());  // cache-bust: never reuse a stale GET response
-            runBtn.disabled = true; runBtn.textContent = 'Loading…';
+            runBtn.disabled = true; runBtn.textContent = _t('Loading…');
             try {
                 const res = await financeFetch('/api/finance/reseller-statement?' + params.toString());
                 const data = await res.json();
                 if (!data || !data.success) {
-                    showToast((data && data.error) || 'Could not load statement', 'error');
+                    showToast((data && data.error) || _t('Could not load statement'), 'error');
                     return;
                 }
                 render(data);
             } catch (e) {
-                showToast('Network error loading statement', 'error');
+                showToast(_t('Network error loading statement'), 'error');
             } finally {
-                runBtn.disabled = false; runBtn.textContent = 'Generate';
+                runBtn.disabled = false; runBtn.textContent = _t('Generate');
             }
         }
 
