@@ -1,5 +1,11 @@
 ﻿# Changelog - Eve
 
+## [2.13.0] - 2026-10-15
+
+### Changed
+- **Royalty page redesigned as a grouped data table.** The card grid is replaced by a professional data table. Accounts are grouped by phone number with expandable/collapsible rows; ungrouped accounts (no phone) appear individually. Per-row action buttons (Send SMS/WhatsApp), checkboxes with Select All, search, and all bulk actions are preserved. Responsive at desktop, tablet and mobile widths (card layout below 640px with 44px touch targets).
+- Full Persian i18n for the Royalty page: 152 new translation entries in `panel/i18n/royalty.py`, all Jinja strings wrapped with `_()`, all JS strings with `_t()`.
+
 ## [2.12.0] - 2026-10-15
 
 ### Added
