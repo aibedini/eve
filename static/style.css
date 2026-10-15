@@ -3002,7 +3002,8 @@ html[data-theme="light"] .package-price {
     margin-inline-end: 3px;
 }
 
-.country-flag img {
+.country-flag img,
+.country-flag svg {
     display: block;
     width: 1.22em;
     height: 0.92em;
