@@ -1,3 +1,21 @@
+# Eve - Xui Manager v2.15.0
+
+## [2.15.0] - 2026-10-16
+
+This release optimizes the Renew Client experience and adds a comprehensive 3x-ui endpoint reference.
+
+**Live renewal progress.** The "Working..." button now shows what's happening: Connecting to panel → Applying renewal → Verifying result. The amber "Renewal is still running" state auto-checks for up to 5 minutes with a visible counter (attempt number and elapsed seconds), so you no longer need to press Re-check manually.
+
+**Smart modal defaults.** The renew modal pre-checks toggles based on client state: "Reset Traffic" for suspended clients, "Start after first use" for expired clients, both for clients that are both.
+
+**Extended auto-reactivation.** Client-side polling runs for 5 minutes (was 60 seconds) with progressive backoff, giving the background worker time to converge when the panel is slow to activate a client.
+
+**3x-ui Endpoint Registry.** A new reference document (`docs/XUI_ENDPOINT_REGISTRY.md`) catalogues every 3x-ui API endpoint across all version families (v2.x through v3.8+), authentication methods, the client record shape, and how EVE's version-aware routing maps each version to a renewal strategy.
+
+**Test fix.** Three test classes (`MutationResponseWiringTests`, `ClientStoreFunnelTests`, `CountryFlagTests`) now correctly search both `dashboard.html` and `dashboard.js` after the v2.14.0 JS extraction.
+
+**Upgrade notes.** No schema migration required. All changes are backward-compatible.
+
 # Eve - Xui Manager v2.14.0
 
 ## [2.14.0] - 2026-10-15

@@ -1,5 +1,19 @@
 ﻿# Changelog - Eve
 
+## [2.15.0] - 2026-10-16
+
+### Improved
+- **Renew client live progress.** The static "Working..." button state is replaced with step-by-step feedback (Connecting → Applying → Verifying). The orange "still running" state now auto-checks for up to 5 minutes with a live counter, removing the need to manually press Re-check.
+- **Smart renew defaults.** The renew modal auto-checks "Reset Traffic" for suspended clients and "Start after first use" for expired clients.
+- **Extended auto-reactivation polling.** Client-side polling extended from 60s to 5 minutes with progressive backoff, giving the background activation worker more time to converge.
+- **Pulsing amber indicator.** The renewal pending state pulses to signal that auto-checking is active.
+
+### Added
+- **3x-ui Endpoint Registry** (`docs/XUI_ENDPOINT_REGISTRY.md`). Comprehensive reference of all 3x-ui panel API endpoints across versions (v2.x through v3.8+), authentication methods, client record shape, and EVE's version-aware routing strategy.
+
+### Fixed
+- **Test suite after JS extraction.** `MutationResponseWiringTests`, `ClientStoreFunnelTests` and `CountryFlagTests` now search both `dashboard.html` and `dashboard.js` after the v2.14.0 inline JS extraction.
+
 ## [2.14.0] - 2026-10-15
 
 ### Performance

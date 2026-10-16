@@ -1496,6 +1496,13 @@
     #renew-success-modal.renew-tone-green .renew-state-body { color: var(--success); }
     #renew-success-modal.renew-tone-amber #renew-modal-title,
     #renew-success-modal.renew-tone-amber .renew-state-body { color: var(--warning); }
+    #renew-success-modal.renew-tone-amber .renew-pill-amber {
+        animation: renew-pulse 2s ease-in-out infinite;
+    }
+    @keyframes renew-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
     #renew-success-modal.renew-tone-orange #renew-modal-title,
     #renew-success-modal.renew-tone-orange .renew-state-body { color: var(--renew-tone-orange); }
     #renew-success-modal.renew-tone-red #renew-modal-title,

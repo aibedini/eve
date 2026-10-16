@@ -3317,8 +3317,11 @@
                 }
             }
         }
-        document.getElementById('renew-start-after-first-use').checked = false;
-        document.getElementById('renew-reset-traffic').checked = false;
+        // Smart defaults: auto-check toggles based on client state
+        var _vs = String(volumeStatus || '').toLowerCase();
+        var _et = String(expiryType || '').toLowerCase();
+        document.getElementById('renew-reset-traffic').checked = (_vs === 'suspended');
+        document.getElementById('renew-start-after-first-use').checked = (_et === 'expired');
         const renewFreeToggle = document.getElementById('renew-free-toggle');
         if (renewFreeToggle) renewFreeToggle.checked = false;
         document.getElementById('renew-custom-days').value = 30;
@@ -3564,8 +3567,8 @@
             en: { title: 'Renewal completed successfully', body: 'The account has been renewed and is active.', pill: 'Verified' },
         },
         CONFIG_APPLIED_ACTIVATION_PENDING: {
-            fa: { title: 'تمدید ثبت شد — فعال‌سازی در حال تکمیل است', body: 'تمدید را دوباره انجام ندهید. EVE در حال تکمیل فعال‌سازی حساب است.', pill: 'در حال تکمیل' },
-            en: { title: 'Renewal applied — activation is still synchronizing', body: 'Do not renew again. EVE is still completing account activation.', pill: 'Activation syncing' },
+            fa: { title: 'تمدید ثبت شد — فعال‌سازی در حال تکمیل است', body: 'تمدید نکنید. EVE به‌صورت خودکار فعال‌سازی را تکمیل می‌کند.', pill: 'در حال تکمیل' },
+            en: { title: 'Renewal applied — activation is still synchronizing', body: 'Do not renew again. EVE is automatically completing activation.', pill: 'Activation syncing' },
         },
         PARTIALLY_APPLIED: {
             fa: { title: 'تمدید ناقص اعمال شده', body: 'دوباره تمدید نکنید؛ وضعیت نیاز به تطبیق دارد.', pill: 'ناقص' },
@@ -3584,8 +3587,8 @@
             en: { title: 'Renewal status is not yet confirmed', body: 'The panel answer could not be classified. Re-check the current state before acting.', pill: 'Unconfirmed' },
         },
         IN_PROGRESS: {
-            fa: { title: 'تمدید در حال انجام است', body: 'یک درخواست تمدید برای این حساب در حال اجراست. دوباره تمدید نکنید؛ چند لحظه بعد «بررسی مجدد» را بزنید.', pill: 'در حال اجرا' },
-            en: { title: 'Renewal is still running', body: 'A renewal request for this account is still running. Do not renew again; press Re-check in a moment.', pill: 'In progress' },
+            fa: { title: 'تمدید در حال انجام است', body: 'یک درخواست تمدید برای این حساب در حال اجراست. دوباره تمدید نکنید؛ بررسی خودکار در حال انجام است.', pill: 'در حال اجرا' },
+            en: { title: 'Renewal is still running', body: 'A renewal request for this account is still running. Do not renew again; auto-checking is active.', pill: 'In progress' },
         },
     };
 
@@ -3994,6 +3997,21 @@
         if (body) {
             body.textContent = view.body;
             body.dir = RENEW_LANG === 'fa' ? 'rtl' : 'ltr';
+            // Live "checking…" indicator for non-green states
+            var liveEl = document.getElementById('renew-live-indicator');
+            if (!liveEl) {
+                liveEl = document.createElement('div');
+                liveEl.id = 'renew-live-indicator';
+                liveEl.style.cssText = 'font-size:0.75rem;color:var(--text-secondary);margin-top:6px;opacity:0.8;';
+                body.parentNode.insertBefore(liveEl, body.nextSibling);
+            }
+            if (view.tone !== 'green') {
+                window._renewLastCheckTs = Date.now();
+                liveEl.textContent = RENEW_LANG === 'fa' ? 'بررسی خودکار فعال است…' : 'Auto-checking…';
+                liveEl.classList.remove('hidden');
+            } else {
+                liveEl.classList.add('hidden');
+            }
         }
         if (diag) {
             diag.textContent = view.diagnostic || '';
@@ -4214,19 +4232,27 @@
     function observeRenewalOperation() {
         const generation = (window._renewObserverGeneration || 0) + 1;
         window._renewObserverGeneration = generation;
-        const cadence = [500, 1000, 2000, 3000, 5000, 5000, 5000, 5000];
+        const cadence = [500, 1000, 2000, 3000, 5000, 5000, 5000, 8000, 10000, 10000];
         const startedAt = Date.now();
         let attempt = 0;
         const tick = async () => {
             if (generation !== window._renewObserverGeneration || !lastRenewContext) return;
             const modal = document.getElementById('renew-success-modal');
-            if (!modal || modal.classList.contains('hidden') || Date.now() - startedAt > 60000) return;
+            if (!modal || modal.classList.contains('hidden') || Date.now() - startedAt > 300000) return;
             if (document.hidden) {
                 setTimeout(tick, 5000);
                 return;
             }
             const ctx = lastRenewContext;
             try {
+                // Update live indicator before the fetch
+                var _li = document.getElementById('renew-live-indicator');
+                if (_li && !_li.classList.contains('hidden')) {
+                    var _sec = Math.round((Date.now() - startedAt) / 1000);
+                    _li.textContent = (RENEW_LANG === 'fa'
+                        ? ('بررسی خودکار · ' + _sec + ' ثانیه · تلاش ' + (attempt + 1))
+                        : ('Auto-checking · ' + _sec + 's · attempt ' + (attempt + 1)));
+                }
                 const response = await fetch(`/api/client/${ctx.serverId}/${ctx.inboundId}/${encodeURIComponent(ctx.email)}/renew/verify`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -4291,8 +4317,8 @@
         const originalText = btn.innerText;
         const renewProgressIsFa = RENEW_LANG === 'fa';
         const renewProgressSteps = renewProgressIsFa
-            ? ['در حال انجام…', 'در حال انجام…', 'در حال انجام…']
-            : ['Working…', 'Working…', 'Working…'];
+            ? ['اتصال به پنل…', 'اعمال تمدید…', 'بررسی نتیجه…']
+            : ['Connecting to panel…', 'Applying renewal…', 'Verifying result…'];
         const renewProgressTimers = [];
         btn.disabled = true;
         btn.innerText = renewProgressSteps[0];

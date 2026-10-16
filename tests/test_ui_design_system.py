@@ -21,6 +21,7 @@ FLAGS_DIR = os.path.join(REPO_ROOT, "static", "flags", "4x3")
 BASE_HTML = os.path.join(REPO_ROOT, "templates", "base.html")
 SUBSCRIPTION_HTML = os.path.join(REPO_ROOT, "templates", "subscription.html")
 DASHBOARD_HTML = os.path.join(REPO_ROOT, "templates", "dashboard.html")
+DASHBOARD_JS = os.path.join(REPO_ROOT, "static", "dashboard.js")
 AGENT_RULE_FILES = (
     "AGENTS.md", "CLAUDE.md", "GEMINI.md", "QWEN.md",
     ".github/copilot-instructions.md", ".cursor/rules/codebase-memory.mdc",
@@ -320,6 +321,8 @@ class CountryFlagTests(unittest.TestCase):
         self.base = _read(BASE_HTML)
         self.subscription = _read(SUBSCRIPTION_HTML)
         self.dashboard = _read(DASHBOARD_HTML)
+        self.dashboard_js = _read(DASHBOARD_JS) if os.path.isfile(DASHBOARD_JS) else ""
+        self.dashboard_all = self.dashboard + "\n" + self.dashboard_js
 
     def test_the_component_is_loaded_wherever_panel_names_appear(self):
         self.assertIn("name-flags.js", self.base, "base.html must load it before page scripts")
@@ -343,14 +346,14 @@ class CountryFlagTests(unittest.TestCase):
     def test_the_emoji_is_never_the_rendered_fallback(self):
         # The old markup kept the emoji in the DOM and swapped to it whenever the
         # image was hidden or failed, which is exactly how "DE" reached the screen.
-        self.assertNotIn("ib-country-flag-native", self.dashboard)
+        self.assertNotIn("ib-country-flag-native", self.dashboard_all)
         self.assertNotIn("country-flag-missing img", self.css)
         self.assertIn("country-flag-missing", self.css, "a missing asset hides the badge")
         self.assertNotIn("flag-fallback", self.script)
 
     def test_the_dashboard_uses_the_shared_component(self):
-        self.assertIn("EveFlags.html(", self.dashboard)
-        self.assertNotIn("_regionalFlagCode", self.dashboard)
+        self.assertIn("EveFlags.html(", self.dashboard_all)
+        self.assertNotIn("_regionalFlagCode", self.dashboard_all)
 
     def test_the_reported_country_flags_exist(self):
         # The codes from the report: Iran, US, Turkey, Latvia, UAE, Netherlands, Sweden.
@@ -422,7 +425,9 @@ class MutationResponseWiringTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.dashboard = _read(DASHBOARD_HTML)
-        match = re.search(r"function applyClientMutation\(.*?\n    \}", cls.dashboard, re.S)
+        cls.dashboard_js = _read(DASHBOARD_JS) if os.path.isfile(DASHBOARD_JS) else ""
+        cls.dashboard_all = cls.dashboard + "\n" + cls.dashboard_js
+        match = re.search(r"function applyClientMutation\(.*?\n    \}", cls.dashboard_all, re.S)
         cls.helper = match.group(0) if match else ""
 
     def test_the_adoption_helper_exists(self):
@@ -443,7 +448,7 @@ class MutationResponseWiringTests(unittest.TestCase):
 
     def test_both_renew_paths_adopt_the_response(self):
         # The renew success path and the re-check path.
-        self.assertGreaterEqual(self.dashboard.count("applyClientMutation(data,"), 2)
+        self.assertGreaterEqual(self.dashboard_all.count("applyClientMutation(data,"), 2)
 
     def test_the_sse_client_event_reconciles_without_skipping_revisions(self):
         """A partial client event invalidates cache without acknowledging the full snapshot."""
@@ -472,9 +477,11 @@ class ClientStoreFunnelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.dashboard = _read(DASHBOARD_HTML)
+        cls.dashboard_js = _read(DASHBOARD_JS) if os.path.isfile(DASHBOARD_JS) else ""
+        cls.dashboard_all = cls.dashboard + "\n" + cls.dashboard_js
 
     def _body(self, name):
-        match = re.search(r"function %s\(.*?\n    \}" % name, self.dashboard, re.S)
+        match = re.search(r"function %s\(.*?\n    \}" % name, self.dashboard_all, re.S)
         self.assertIsNotNone(match, "missing from the dashboard: %s()" % name)
         return match.group(0)
 
