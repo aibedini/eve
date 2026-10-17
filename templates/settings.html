@@ -10138,8 +10138,10 @@
             const data = await res.json();
             if (data.success) {
                 showToast(_t('Session settings saved'));
+            } else if (data.code === 'step_up_required') {
+                showToast(_t('Re-authenticate to change these settings'), 'error');
             } else {
-                showToast(data.message || 'Error saving settings', 'error');
+                showToast(data.error || data.message || 'Error saving settings', 'error');
             }
         } catch (e) {
             showToast(_t('Network error'), 'error');

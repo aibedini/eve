@@ -183,7 +183,7 @@ def step_up_required(scope: str | None = None):
                 session.clear()
                 return jsonify({"success": False, "error": "Unauthorized"}), 401
             token = session.get(SESSION_TOKEN_KEY)
-            if token:
+            if token and mfa_global_enabled():
                 row = current_session()
                 if not step_up_fresh(row):
                     return jsonify({
