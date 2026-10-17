@@ -1431,6 +1431,7 @@
                         <a class="btn btn-outline" href="{{ url_for('pages.sms_center_page') }}#overview">{{ _('Open SMS Center') }}</a>
                         <button id="sms-test-connection" class="btn btn-secondary" onclick="testSmsConnectionSettings()">{{ _('Test Connection') }}</button>
                         <button id="sms-test-send" class="btn btn-primary" onclick="sendTestSms()">{{ _('Send Test SMS') }}</button>
+                        <span id="sms-quick-probe-badge" class="hidden" style="font-size:0.78rem;padding:4px 10px;border-radius:6px;font-weight:500;white-space:nowrap;"></span>
                     </div>
                 </div>
 
@@ -4196,6 +4197,8 @@
         } else if (tabName === 'templates') {
             loadTemplates();
             loadAccountMessageTemplates();
+        } else if (tabName === 'sms') {
+            smsQuickProbe();
         } else if (tabName === 'health_logs') {
             loadHealthLogs();
             loadTlsReport();
@@ -6538,6 +6541,8 @@
         contract_version_mismatch: ['نسخهٔ قرارداد ناسازگار', 'Contract version mismatch'],
         auth_failed: ['احراز هویت ناموفق', 'Authentication failed'],
         scope_denied: ['دسترسی transport:read موجود نیست', 'Missing transport:read scope'],
+        rate_limited: ['محدودیت نرخ (429)', 'Rate limited (429)'],
+        server_error: ['خطای سرور GMweb', 'GMweb server error'],
         invalid_response: ['پاسخ نامعتبر', 'Invalid response']
     };
     // A failed probe names its own failure. A generic "unknown" hid a missing
@@ -6972,22 +6977,19 @@
 
     async function testSmsConnectionSettings() {
         const btn = document.getElementById('sms-test-connection');
-        // Persist current form values first so the test uses what's on screen.
         const saved = await saveSmsSettings(true);
         if (!saved) { showToast(_t('Could not save SMS settings before testing'), 'error'); return; }
         const prev = btn ? btn.textContent : '';
         if (btn) { btn.disabled = true; btn.textContent = _t('Testing…'); }
+        _clearSmsTestChecks();
         try {
             let res;
             try {
                 res = await fetch('/api/sms/test-connection', { method: 'POST', headers: { 'Accept': 'application/json' } });
             } catch (netErr) {
-                // fetch only throws for a real transport failure (offline, DNS, TLS, panel down).
                 showToast(_t('Cannot reach the Eve server (network/connection problem). Check your internet, or that the panel is up.'), 'error');
                 return;
             }
-            // Read as text first so a non-JSON error page (500/404 HTML) doesn't crash JSON.parse
-            // and turn into a meaningless "Network error".
             const raw = await res.text();
             let data = null;
             try { data = raw ? JSON.parse(raw) : null; } catch (_) { data = null; }
@@ -7004,15 +7006,94 @@
                 return;
             }
 
+            if (data.checks && data.checks.length) _renderSmsTestChecks(data.checks);
+
             if (data.success) {
                 showToast(data.message || 'SMS gateway is reachable', data.ready === false ? 'warning' : 'success');
             } else {
-                showToast((data.error || data.message || 'Gateway test failed')
-                    + (data.status_code ? _t(' (gateway HTTP {v1})', {v1: data.status_code}) : ''), 'error');
+                showToast(data.error || data.message || 'Gateway test failed', 'error');
             }
         } finally {
             if (btn) { btn.disabled = false; btn.textContent = prev || 'Test Connection'; }
         }
+    }
+
+    async function smsQuickProbe() {
+        var badge = document.getElementById('sms-quick-probe-badge');
+        if (!badge) return;
+        badge.classList.add('hidden');
+        try {
+            var res = await fetch('/api/sms/transport-health', {cache: 'no-store'});
+            var data = await res.json().catch(function() { return null; });
+            if (!data) { badge.classList.add('hidden'); return; }
+            if (data.success) {
+                var h = data.health || {};
+                var ready = h.gmweb && h.gmweb.ready === true;
+                badge.textContent = ready
+                    ? (PANEL_LANG === 'fa' ? 'درگاه آماده' : 'Gateway ready')
+                    : (PANEL_LANG === 'fa' ? 'درگاه آماده نیست' : 'Gateway not ready');
+                badge.style.background = ready ? 'rgba(34,197,94,.12)' : 'rgba(245,158,11,.12)';
+                badge.style.color = ready ? 'var(--status-active,#22c55e)' : 'var(--status-warning,#f59e0b)';
+            } else {
+                var state = data.probe_state || '';
+                var labels = SMS_PROBE_LABELS[state];
+                var label = labels ? (PANEL_LANG === 'fa' ? labels[0] : labels[1]) : state;
+                var diag = data.diagnostic || '';
+                badge.textContent = label + (diag ? ' — ' + diag : '');
+                badge.style.background = 'rgba(239,68,68,.12)';
+                badge.style.color = 'var(--status-error,#ef4444)';
+            }
+            badge.classList.remove('hidden');
+        } catch (_) { badge.classList.add('hidden'); }
+    }
+
+    var _SMS_CHECK_LABELS = {
+        config: ['پیکربندی', 'Configuration'],
+        dns: ['DNS', 'DNS'],
+        tcp: ['اتصال TCP', 'TCP Connection'],
+        health: ['سلامت (/health)', 'Health (/health)'],
+        ready: ['آمادگی (/ready)', 'Ready (/ready)']
+    };
+    function _clearSmsTestChecks() {
+        var el = document.getElementById('sms-test-checks');
+        if (el) el.remove();
+    }
+    function _renderSmsTestChecks(checks) {
+        _clearSmsTestChecks();
+        var container = document.createElement('div');
+        container.id = 'sms-test-checks';
+        container.style.cssText = 'margin-top:12px;padding:12px 16px;border-radius:8px;background:var(--bg-elevated,#1a1d23);border:1px solid var(--border-color,#2a2d35);';
+        var title = document.createElement('div');
+        title.style.cssText = 'font-size:0.8rem;font-weight:600;margin-bottom:8px;color:var(--text-secondary);';
+        title.textContent = PANEL_LANG === 'fa' ? 'نتیجه بررسی اتصال' : 'Connection Diagnostics';
+        container.appendChild(title);
+        checks.forEach(function(c) {
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:0.82rem;';
+            var icon = document.createElement('span');
+            icon.style.cssText = 'flex-shrink:0;width:18px;text-align:center;';
+            var dot = document.createElement('span');
+            dot.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;';
+            dot.style.background = c.ok ? 'var(--status-active,#22c55e)' : 'var(--status-error,#ef4444)';
+            icon.appendChild(dot);
+            var label = _SMS_CHECK_LABELS[c.name] || [c.name, c.name];
+            var text = document.createElement('div');
+            var nameSpan = document.createElement('span');
+            nameSpan.style.fontWeight = '500';
+            nameSpan.textContent = (PANEL_LANG === 'fa' ? label[0] : label[1]);
+            text.appendChild(nameSpan);
+            if (c.detail) {
+                var detail = document.createElement('div');
+                detail.style.cssText = 'color:var(--text-secondary);font-size:0.78rem;margin-top:2px;';
+                detail.textContent = c.detail;
+                text.appendChild(detail);
+            }
+            row.appendChild(icon);
+            row.appendChild(text);
+            container.appendChild(row);
+        });
+        var anchor = document.getElementById('sms-test-connection');
+        if (anchor && anchor.parentNode) anchor.parentNode.insertAdjacentElement('afterend', container);
     }
 
     async function sendTestSms() {

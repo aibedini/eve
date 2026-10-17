@@ -22,6 +22,8 @@ PROBE_CONTRACT_MISSING = 'contract_missing'
 PROBE_VERSION_MISMATCH = 'contract_version_mismatch'
 PROBE_AUTH_FAILED = 'auth_failed'
 PROBE_SCOPE_DENIED = 'scope_denied'
+PROBE_RATE_LIMITED = 'rate_limited'
+PROBE_SERVER_ERROR = 'server_error'
 PROBE_INVALID = 'invalid_response'
 
 # What an operator should DO about each verdict. A generic "unknown" told them
@@ -34,6 +36,9 @@ PROBE_DIAGNOSTICS = {
     PROBE_VERSION_MISMATCH: 'GMweb answers a different transport-health contract version.',
     PROBE_AUTH_FAILED: 'GMweb rejected the configured API key.',
     PROBE_SCOPE_DENIED: 'The configured project key is missing the transport:read scope.',
+    PROBE_RATE_LIMITED: ('GMweb is reachable but rate-limiting this project (HTTP 429). '
+                         'Too many requests in a short window — wait a minute and retry.'),
+    PROBE_SERVER_ERROR: 'GMweb is reachable but returned a server error; the gateway may be overloaded or restarting.',
     PROBE_INVALID: 'GMweb answered, but not with a usable transport-health contract.',
 }
 
@@ -93,7 +98,8 @@ def probe_states():
     declared = gmweb_contract.transport_health_probe_states()
     return declared or sorted({
         PROBE_CONNECTED, PROBE_NOT_CONFIGURED, PROBE_UNREACHABLE, PROBE_CONTRACT_MISSING,
-        PROBE_VERSION_MISMATCH, PROBE_AUTH_FAILED, PROBE_SCOPE_DENIED, PROBE_INVALID,
+        PROBE_VERSION_MISMATCH, PROBE_AUTH_FAILED, PROBE_SCOPE_DENIED, PROBE_RATE_LIMITED,
+        PROBE_SERVER_ERROR, PROBE_INVALID,
     })
 
 
@@ -112,10 +118,12 @@ def probe_state_for_status(status_code):
         return PROBE_AUTH_FAILED
     if code == 403:
         return PROBE_SCOPE_DENIED
+    if code == 429:
+        return PROBE_RATE_LIMITED
     if code in (404, 405, 501):
         return PROBE_CONTRACT_MISSING
     if code >= 500:
-        return PROBE_UNREACHABLE
+        return PROBE_SERVER_ERROR
     return PROBE_INVALID
 
 

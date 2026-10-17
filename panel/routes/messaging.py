@@ -22,8 +22,8 @@ from panel.security import outbound_tls_verify
 from panel.services import gmweb_contract
 from panel.services.gmweb_transport_probe import (
     PROBE_AUTH_FAILED, PROBE_CONNECTED, PROBE_CONTRACT_MISSING, PROBE_DIAGNOSTICS,
-    PROBE_INVALID, PROBE_NOT_CONFIGURED, PROBE_SCOPE_DENIED, PROBE_UNREACHABLE,
-    PROBE_VERSION_MISMATCH,
+    PROBE_INVALID, PROBE_NOT_CONFIGURED, PROBE_RATE_LIMITED, PROBE_SCOPE_DENIED,
+    PROBE_SERVER_ERROR, PROBE_UNREACHABLE, PROBE_VERSION_MISMATCH,
 )
 from panel.services.gmweb_transport_probe import PROBE_TIMEOUT_SECONDS as _PROBE_TIMEOUT_SECONDS
 from panel.services.gmweb_transport_probe import (
@@ -179,41 +179,121 @@ def _sms_scan_cancel_set():
 @bp.route('/api/sms/test-connection', methods=['POST'])
 @permission_required('secrets.manage')
 def test_sms_connection():
-    """Verify the selected SMS gateway: /health then authenticated /ready."""
+    """Verify the selected SMS gateway with step-by-step diagnostics.
+
+    Returns a ``checks`` array so the UI can show each step (DNS, TCP, /health,
+    /ready) as pass/fail with an actionable explanation when something breaks.
+    """
     from app import (  # deferred: app-level helper, avoids circular import
         _get_sms_runtime_settings, app,
     )
+    import socket
+    from urllib.parse import urlparse
+
     cfg = _get_sms_runtime_settings()
     base = (cfg.get('base_url') or '').strip().rstrip('/')
     api_key = (cfg.get('api_key') or '').strip()
-    if not base:
-        return jsonify({'success': False, 'error': 'Selected SMS gateway Base URL is not configured.'}), 400
-    if not api_key:
-        return jsonify({'success': False, 'error': 'Selected SMS gateway API key is not configured.'}), 400
     timeout = int(cfg.get('timeout_seconds') or 15)
     provider_label = 'Custom HTTP' if cfg.get('provider') == 'custom_http' else 'GMweb'
+    checks = []
+
+    def check(name, ok, detail=None):
+        checks.append({'name': name, 'ok': ok, 'detail': detail})
+        return ok
+
+    # ── Step 1: configuration ──
+    if not base:
+        check('config', False, 'Base URL is empty — set it in the SMS Automation settings.')
+        return jsonify({'success': False, 'error': 'Base URL is not configured.', 'checks': checks}), 400
+    if not api_key:
+        check('config', False, 'API key is empty — set it in the SMS Automation settings.')
+        return jsonify({'success': False, 'error': 'API key is not configured.', 'checks': checks}), 400
+    check('config', True, f'{provider_label} — {base}')
+
+    # ── Step 2: DNS ──
+    parsed = urlparse(base)
+    host = parsed.hostname or ''
+    port = parsed.port or (443 if parsed.scheme == 'https' else 80)
     try:
-        h = requests.get(f"{base}/health", timeout=timeout)
-        if h.status_code != 200:
-            return jsonify({'success': False, 'error': f'Gateway /health returned HTTP {h.status_code}.'}), 400
-    except Exception as e:
-        return jsonify({'success': False, 'error': f'Cannot reach gateway: {e}'}), 400
-    # /ready also validates the token (401 → bad key, 503 → not paired yet).
+        addrs = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        resolved_ip = addrs[0][4][0] if addrs else 'unknown'
+        check('dns', True, f'{host} → {resolved_ip}')
+    except socket.gaierror as e:
+        check('dns', False, f'Cannot resolve "{host}" — check the URL for typos or DNS settings. ({e})')
+        return jsonify({'success': False, 'error': f'DNS lookup failed for "{host}".', 'checks': checks}), 400
+
+    # ── Step 3: TCP connectivity ──
     try:
-        r = requests.get(f"{base}/ready", headers={'Authorization': f'Bearer {api_key}'}, timeout=timeout)
+        sock = socket.create_connection((host, port), timeout=min(timeout, 5))
+        sock.close()
+        check('tcp', True, f'Port {port} is open on {host}.')
+    except OSError as e:
+        check('tcp', False, f'Cannot connect to {host}:{port} — firewall, wrong port, or server down. ({e})')
+        return jsonify({'success': False, 'error': f'TCP connection to {host}:{port} failed.', 'checks': checks}), 400
+
+    # ── Step 4: /health (unauthenticated) ──
+    try:
+        h = requests.get(f"{base}/health", timeout=timeout, verify=outbound_tls_verify())
+    except requests.exceptions.SSLError as e:
+        check('health', False, f'TLS/SSL error — certificate problem or HTTPS misconfiguration. ({e})')
+        return jsonify({'success': False, 'error': 'TLS/SSL error connecting to gateway.', 'checks': checks}), 400
     except Exception as e:
-        return jsonify({'success': False, 'error': f'Gateway reachable but /ready failed: {e}'}), 400
-    if r.status_code == 401:
-        return jsonify({'success': False, 'error': 'Invalid API key (gateway returned 401).'}), 400
-    if r.status_code == 503:
-        return jsonify({'success': True, 'ready': False,
-                        'provider': cfg.get('provider', 'gmweb'),
-                        'message': 'Gateway reachable and key valid, but it is not ready to send yet (503).'})
+        check('health', False, f'HTTP request failed: {e}')
+        return jsonify({'success': False, 'error': f'Cannot reach gateway /health: {e}', 'checks': checks}), 400
+    if h.status_code != 200:
+        detail = _http_status_detail(h.status_code, '/health')
+        check('health', False, detail)
+        return jsonify({'success': False, 'error': detail, 'checks': checks}), 400
+    check('health', True, 'Gateway process is alive.')
+
+    # ── Step 5: /ready (authenticated) ──
+    try:
+        r = requests.get(f"{base}/ready", headers={'Authorization': f'Bearer {api_key}'},
+                         timeout=timeout, verify=outbound_tls_verify())
+    except Exception as e:
+        check('ready', False, f'HTTP request to /ready failed: {e}')
+        return jsonify({'success': False, 'error': f'Gateway reachable but /ready failed: {e}', 'checks': checks}), 400
+
     if r.status_code == 200:
-        return jsonify({'success': True, 'ready': True,
-                        'provider': cfg.get('provider', 'gmweb'),
-                        'message': f'{provider_label} gateway reachable, key valid, and ready to send.'})
-    return jsonify({'success': False, 'error': f'Gateway /ready returned HTTP {r.status_code}.'}), 400
+        check('ready', True, 'Key accepted, gateway ready to send.')
+        return jsonify({'success': True, 'ready': True, 'provider': cfg.get('provider', 'gmweb'),
+                        'message': f'{provider_label} gateway reachable, key valid, and ready to send.',
+                        'checks': checks})
+    if r.status_code == 401:
+        check('ready', False, 'API key rejected (HTTP 401) — check the key in GMweb → API Keys.')
+        return jsonify({'success': False, 'error': 'Invalid API key.', 'checks': checks}), 400
+    if r.status_code == 503:
+        check('ready', True, 'Key accepted but gateway not ready yet (HTTP 503) — device may not be paired.')
+        return jsonify({'success': True, 'ready': False, 'provider': cfg.get('provider', 'gmweb'),
+                        'message': 'Gateway reachable and key valid, but it is not ready to send yet (503).',
+                        'checks': checks})
+    detail = _http_status_detail(r.status_code, '/ready')
+    check('ready', False, detail)
+    return jsonify({'success': False, 'error': detail, 'checks': checks}), 400
+
+
+def _http_status_detail(status_code, path):
+    """Human-readable explanation of an unexpected HTTP status code."""
+    explanations = {
+        400: f'{path} returned HTTP 400 (Bad Request) — the gateway rejected the request format.',
+        403: f'{path} returned HTTP 403 (Forbidden) — the API key scope may be too narrow.',
+        404: f'{path} returned HTTP 404 (Not Found) — the URL may be wrong or GMweb needs an upgrade.',
+        405: f'{path} returned HTTP 405 — the endpoint exists but does not accept this method.',
+        408: f'{path} returned HTTP 408 (Timeout) — the gateway took too long to respond.',
+        429: (f'{path} returned HTTP 429 (Too Many Requests) — the gateway is rate-limiting this project. '
+              'Wait a minute and try again.'),
+        500: f'{path} returned HTTP 500 (Internal Server Error) — the gateway process crashed or has a bug.',
+        502: f'{path} returned HTTP 502 (Bad Gateway) — a reverse proxy cannot reach the gateway process.',
+        503: f'{path} returned HTTP 503 (Service Unavailable) — the gateway is starting up or overloaded.',
+        504: f'{path} returned HTTP 504 (Gateway Timeout) — a reverse proxy timed out waiting for the gateway.',
+    }
+    if status_code in explanations:
+        return explanations[status_code]
+    if 400 <= status_code < 500:
+        return f'{path} returned HTTP {status_code} (client error) — check the URL and API key.'
+    if status_code >= 500:
+        return f'{path} returned HTTP {status_code} (server error) — the gateway may be down or overloaded.'
+    return f'{path} returned unexpected HTTP {status_code}.'
 
 
 @bp.route('/api/sms/test-send', methods=['POST'])
