@@ -937,7 +937,7 @@ def get_session_settings():
     return jsonify({
         'success': True,
         'timeout_hours': int(setting.value) if setting else 168,
-        'mfa_global_enabled': str(mfa_global.value).strip().lower() not in ('0', 'false', 'off', 'no', '') if mfa_global else True,
+        'mfa_global_enabled': str(mfa_global.value).strip().lower() in ('1', 'true', 'on', 'yes') if mfa_global else False,
         'mfa_trust_hours': int(mfa_trust.value) if mfa_trust and mfa_trust.value else 72,
     })
 

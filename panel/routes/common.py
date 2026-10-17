@@ -56,12 +56,12 @@ def admin_is_superadmin(admin) -> bool:
 
 
 def mfa_global_enabled() -> bool:
-    """True unless the site-wide 2FA toggle is explicitly off."""
+    """True only when the site-wide 2FA toggle is explicitly on."""
     from panel.models import SystemSetting
     row = db.session.get(SystemSetting, 'mfa_global_enabled')
     if row is None:
-        return True
-    return str(row.value).strip().lower() not in ('0', 'false', 'off', 'no', '')
+        return False
+    return str(row.value).strip().lower() in ('1', 'true', 'on', 'yes')
 
 
 def mfa_required_for(admin) -> bool:
