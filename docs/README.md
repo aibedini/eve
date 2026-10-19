@@ -69,6 +69,7 @@ relative link does not resolve.
 
 - [Usage intelligence: telemetry, business events and derived analytics](architecture/USAGE_INTELLIGENCE.md) - architecture/USAGE_INTELLIGENCE.md
 - [ADR-0011: Renewal events are business facts, not inferred usage-counter resets](architecture/adr/0011-renewal-events-are-business-facts.md) - architecture/adr/0011-renewal-events-are-business-facts.md
+- [3x-ui endpoint registry: panel APIs, client record shape and version-aware routing](XUI_ENDPOINT_REGISTRY.md) - XUI_ENDPOINT_REGISTRY.md
 
 ## Operations
 

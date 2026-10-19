@@ -1,3 +1,21 @@
+# Eve - Xui Manager v2.16.0
+
+## [2.16.0] - 2026-10-19
+
+This release fixes the renewal that charged the customer and left the account inactive.
+
+**The expiry was compared in the wrong representation.** When a renewal starts the account on first use, EVE asks the panel for a negative expiry ("31 days after first use"). A 3x-ui v3 panel answers by converting that into an absolute deadline, anchored on the moment it applied the write. The two numbers can never be equal, so EVE reported `EXPIRY_MISMATCH` with a difference of about 20,807 days for a renewal the panel had accepted perfectly, marked the configuration "not applied" and withheld the customer message. Expiry is now compared representation-aware: two values in the same form must agree within 60 seconds, and a converted deadline is accepted only when it equals the recorded write instant plus the requested duration. Because the write instant is stored with the renewal, a Re-check minutes or hours later still compares against the renewal itself rather than against a "now" that keeps moving. A genuinely wrong deadline is still a mismatch.
+
+**The per-inbound enable was never repaired.** A 3x-ui v3 client has two independent enable flags: the global record and the copy of the client inside every attached inbound. The repair only ever set the first one, which is exactly the reported "Global enable: false / Membership enabled: false, disabled inbound IDs: 5, 10, 11, 12, 13, 14, 15, 17" - the customer stays offline while the panel shows the client enabled. Both layers are repaired now, in the renewal request, in Re-check and in the background reconciler, and only the inbounds whose membership is actually disabled are written, so a retry never restarts a node for nothing.
+
+**The confirmation message no longer depends on the browser.** The SMS used to be sent about a second after the panel write. If activation had not converged by then the send was skipped and never retried, so a customer whose renewal WAS applied never received the message purely because the operator closed the result modal too early. The message now belongs to the renewal operation: the first path that observes real activation sends it - the request, Re-check, Force Enable or the background reconciler - and it is sent at most once, guarded by a durable marker rather than a time window. A node that is merely synchronising is allowed through after two consecutive positive reads, and a refused send stays retryable.
+
+**Clear failures and a Force Enable action.** Instead of the vague "Partial", the renewal result now names the step that did not converge, including the inbound ids, and says whether an enable repair can still fix it. The new Force Enable action re-runs only those enable steps - never days, volume, a gift or a traffic reset, and never for an account that is still depleted - and explains why it refused when a repair cannot help.
+
+**Testing.** Four test harnesses had been silently red since the dashboard JavaScript moved to `static/dashboard.js`: they were still searching `templates/dashboard.html` for code that now lives in the bundle. They are repaired, together with the i18n scan's source list and the design baseline for an already existing flag selector. New suites cover expiry normalisation, per-inbound membership enable, the once-per-operation confirmation, and two end-to-end renewals against a panel that converts the delayed-start expiry.
+
+**Upgrade notes.** No schema migration and no new dependency. Renewals recorded before this release carry no stored write instant; their Re-check falls back to the operation's last update, which can only report a mismatch - never a false match.
+
 # Eve - Xui Manager v2.15.0
 
 ## [2.15.0] - 2026-10-16

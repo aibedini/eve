@@ -1,5 +1,23 @@
 ﻿# Changelog - Eve
 
+## [2.16.0] - 2026-10-19
+
+### Fixed
+- **A renewed client stayed inactive while the panel already held the renewal.** Three independent defects, each fixed and covered by tests.
+  - **A converted expiry was reported as `EXPIRY_MISMATCH`.** A delayed-start renewal asks for a negative `expiryTime` ("31 days after first use"); 3x-ui v3 converts it into an absolute deadline when it applies the write, so the two values can never be equal numerically. For a 31-day renewal the panel returned the SAME 31 days and EVE reported a ~20,807-day mismatch, marked the config "not applied" and withheld the customer message. Expiry is now compared representation-aware: same-sign values within 60 s, and a conversion is accepted only when the deadline equals the recorded write instant plus the requested duration. The write instant is stored with the operation, so a Re-check hours later still compares against the renewal instead of a drifting "now".
+  - **Membership enable was never repaired.** `bulkEnable` / `clients/update` only set the global client flag; the client row inside each inbound (`settings.clients[].enable`) stayed disabled ("Global enable: false / Membership enabled: false - disabled inbound IDs: 5, 10, 11, 12, 13, 14, 15, 17"). Both layers are repaired now - in the request, in Re-check and in the background reconciler - and only the inbounds whose membership is actually disabled are written, so a retry never rewrites a correct inbound.
+  - **The confirmation SMS was tied to the request.** It was sent about a second after the panel write; when activation had not converged yet the send was skipped and never retried, so a customer whose renewal WAS applied never got the message because the modal had been closed too early. The message now follows the operation through a durable marker: whichever path observes convergence first sends it exactly once - request, Re-check, Force Enable or the background reconciler - and a node that is merely synchronising is allowed through after two positive reads.
+
+### Added
+- **`failed_steps` and a Force Enable action.** A renewal result now names the layer that did not converge, with inbound ids, and says whether an enable repair can still fix it - instead of the vague "Partial". "Force Enable" re-runs only the enable steps (never days, volume, a gift or a traffic reset, and never for a depleted account) and explains why it refused when a repair cannot help.
+
+### Testing
+- New suites: expiry normalisation (17 tests), per-inbound membership enable (9), operation-scoped confirmation (12), plus two end-to-end cases driving the real renew route against a panel that converts the delayed-start expiry.
+- Repaired four test harnesses that had been silently red since the dashboard JS moved to `static/dashboard.js` (`test_renew_ui_state`, `test_renewal_evidence`, `test_p0_renewal_recovery_contract`, the `dashboard_live` fixture), the i18n scan's source list, and the design baseline for an existing `.country-flag svg` selector.
+
+### Upgrade notes
+- No schema migration and no new dependency. Operations recorded before this release carry no stored write instant; their Re-check falls back to the operation's last update, which can only report a mismatch, never a false match.
+
 ## [2.15.0] - 2026-10-16
 
 ### Improved
