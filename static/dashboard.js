@@ -3922,6 +3922,61 @@
         return rows;
     }
 
+    // ── Which enable step is still failing ──────────────────────────────────
+    // The backend sends machine codes (`failed_steps`) so nothing here parses
+    // backend prose: the modal names the layer that did not converge instead of
+    // saying "Partial", which told an operator nothing about what to fix.
+    function renewFailedStepText(failure, isFa) {
+        const item = (failure && typeof failure === 'object') ? failure : {};
+        const ids = function (list) {
+            return (Array.isArray(list) && list.length) ? list.join(', ') : '—';
+        };
+        if (item.code === 'GLOBAL_DISABLED') {
+            return isFa ? 'فعال‌سازی کلی حساب هنوز خاموش است'
+                : 'the global client is still disabled';
+        }
+        if (item.code === 'MEMBERSHIP_DISABLED') {
+            return (isFa ? 'عضویت در ورودی‌های ' : 'membership still disabled in inbound ') + ids(item.inbound_ids);
+        }
+        if (item.code === 'MEMBERSHIP_MISSING') {
+            return (isFa ? 'عضویت در ورودی‌های ' : 'membership missing from inbound ') + ids(item.inbound_ids)
+                + (isFa ? ' پیدا نشد' : '');
+        }
+        if (item.code === 'TRAFFIC_DISABLED') {
+            return isFa ? 'وضعیت ترافیک هنوز غیرفعال است' : 'the traffic row still says disabled';
+        }
+        if (item.code === 'EXPIRY_MISMATCH') {
+            return isFa ? 'انقضای پنل با مقدار درخواستی مطابق نیست'
+                : 'the panel expiry does not match the requested value';
+        }
+        if (item.code === 'QUOTA_MISMATCH') {
+            return isFa ? 'حجم پنل با مقدار درخواستی مطابق نیست'
+                : 'the panel quota does not match the requested value';
+        }
+        if (item.code === 'NODE_SYNC_PENDING') {
+            return isFa ? 'نود پنل هنوز همگام نشده است' : 'the panel node has not synchronised yet';
+        }
+        return isFa ? 'یک مرحله از فعال‌سازی تکمیل نشد' : 'an activation step is still incomplete';
+    }
+
+    function renewFailureSummary(failures, isFa) {
+        return (Array.isArray(failures) ? failures : []).filter(Boolean)
+            .map(function (item) { return renewFailedStepText(item, isFa); })
+            .filter(function (text) { return Boolean(text); }).join('; ');
+    }
+
+    // An enable repair can only fix the layers it owns. Showing "Force Enable" for an
+    // expiry the panel never applied would be a button that cannot work.
+    function renewForceEnableVisible(src, verify, state) {
+        if (state === 'APPLIED_ACTIVE') return false;
+        if (src && src.repairable === true) return true;
+        const codes = (verify && verify.reason_codes) || [];
+        return codes.some(function (code) {
+            return ['GLOBAL_DISABLED', 'MEMBERSHIP_DISABLED', 'MEMBERSHIP_MISSING',
+                'TRAFFIC_DISABLED'].indexOf(code) !== -1;
+        });
+    }
+
     function renewOutcomeViewModel(data, opts) {
         const options = (opts && typeof opts === 'object') ? opts : {};
         const src = (data && typeof data === 'object') ? data : {};
@@ -3962,8 +4017,13 @@
             state: state,
             tone: RENEW_STATE_TONE[state] || 'neutral',
             title: title,
-            body: text.body,
+            body: text.body + (function () {
+                const summary = renewFailureSummary(src.failed_steps, RENEW_LANG === 'fa');
+                return summary ? ' — ' + summary + '.' : '';
+            })(),
             pill: text.pill,
+            failedSteps: Array.isArray(src.failed_steps) ? src.failed_steps : [],
+            forceEnableVisible: renewForceEnableVisible(src, verify, state),
             diagnostic: _renewDiagnostic(src),
             evidenceRows: renewEvidenceRows(verify),
             copyText: copyText,
@@ -3987,6 +4047,7 @@
         const copyBtn = document.getElementById('renew-copy-btn');
         const sendBtn = document.getElementById('renew-send-btn');
         const recheckBtn = document.getElementById('renew-recheck-btn');
+        const forceBtn = document.getElementById('renew-force-btn');
 
         if (modal) {
             ['green', 'amber', 'orange', 'red', 'neutral'].forEach(function (tone) {
@@ -4074,6 +4135,13 @@
         }
         if (copyBtn) copyBtn.disabled = !view.copyEnabled;
         if (sendBtn) sendBtn.disabled = !view.copyEnabled;
+        if (forceBtn) {
+            forceBtn.classList.toggle('hidden', !view.forceEnableVisible);
+            const actions = forceBtn.parentNode;
+            if (actions && actions.classList) {
+                actions.classList.toggle('is-four', Boolean(view.forceEnableVisible));
+            }
+        }
         if (recheckBtn) recheckBtn.classList.toggle('renew-success-action-primary', Boolean(view.recheckPrimary));
         if (sendBtn) sendBtn.classList.toggle('renew-success-action-primary', !view.recheckPrimary);
         if (view.copyEnabled && view.copyText) {
@@ -4172,12 +4240,13 @@
         if (modal) modal.classList.remove('hidden');
     }
 
-    async function recheckRenewal() {
+    async function runRenewVerify(options) {
+        const opts = (options && typeof options === 'object') ? options : {};
         if (!lastRenewContext) {
             showToast(_t('Nothing to re-check'), 'error');
             return;
         }
-        const btn = document.getElementById('renew-recheck-btn');
+        const btn = document.getElementById(opts.buttonId || 'renew-recheck-btn');
         const old = btn ? btn.innerText : '';
         if (btn) {
             btn.disabled = true;
@@ -4191,12 +4260,15 @@
                 headers: { 'Content-Type': 'application/json' },
                 // The operation id identifies THIS renewal on any worker; the expected
                 // values stay in the body for older cached responses that only keyed the
-                // result by (server, account).
+                // result by (server, account). `force_enable` re-runs ONLY the enable
+                // steps (never days, volume or a traffic reset) and reports which one
+                // is still failing.
                 body: JSON.stringify({
                     operation_id: ctx.operationId,
                     expected_expiryTime: ctx.expectedExpiryTime,
                     expected_totalGB: ctx.expectedTotalGB,
                     expected_enable: ctx.expectedEnable,
+                    force_enable: Boolean(opts.forceEnable),
                     awaiting_result: Boolean(ctx.awaitingOriginalRequest)
                 })
             });
@@ -4227,6 +4299,17 @@
                 btn.innerText = old || 'Re-check';
             }
         }
+    }
+
+    async function recheckRenewal() {
+        return runRenewVerify();
+    }
+
+    // "Force Enable": the operator asks the backend to run the enable steps again
+    // (global client AND every inbound membership). It cannot renew again, charge
+    // again or reset traffic - the route only repairs enable flags.
+    async function forceEnableRenewal() {
+        return runRenewVerify({ forceEnable: true, buttonId: 'renew-force-btn' });
     }
 
     function observeRenewalOperation() {

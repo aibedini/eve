@@ -30,6 +30,7 @@ import copy
 import json
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
@@ -197,6 +198,11 @@ class RenewConsistencyTests(unittest.TestCase):
         #: flag, so a test can model an older v3 panel or a node that is still syncing.
         self.capabilities_override = None
         self.node_pending = False
+        #: A v3 panel may convert a delayed-start expiry (negative = "N days after the
+        #: first connection") into an absolute deadline when it applies the write. That
+        #: is a REAL panel behaviour, and comparing the two forms numerically is what
+        #: reported a correctly applied renewal as an expiry mismatch.
+        self.convert_pending_expiry = False
         #: Membership modelling for the multi-inbound divergence tests: the panel's own
         #: inboundIds, plus a per-inbound enable flag for the extra inbounds.
         self.membership_ids = [INBOUND_ID]
@@ -278,7 +284,13 @@ class RenewConsistencyTests(unittest.TestCase):
 
     def _panel_write(self, _server, _session, _email, client):
         """The v3 update by email: the panel applied the config it was sent."""
-        self.panel.applied = copy.deepcopy(client)
+        written = copy.deepcopy(client)
+        if self.convert_pending_expiry and int(written.get('expiryTime') or 0) < 0:
+            # The panel turned "31 days after first use" into a real deadline, anchored
+            # on the moment it applied the write.
+            written['expiryTime'] = (int(time.time() * 1000)
+                                     + abs(int(written['expiryTime'])))
+        self.panel.applied = written
         return True, {}, None
 
     def _capabilities(self, *_args, **_kwargs):
@@ -1006,6 +1018,48 @@ class RenewConsistencyTests(unittest.TestCase):
                          (writes, resets, sms))
         self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 0)
         self.assertEqual(RenewalEvent.query.filter_by(operation_id='renew-evidence-recovery').count(), 0)
+
+    def test_o_a_delayed_start_the_panel_converted_verifies_as_applied(self):
+        """A 31-day "after first use" renewal the panel turned into a deadline.
+
+        The production report was ``EXPIRY_MISMATCH`` with expected ``-2678400000`` and
+        observed ``1795080448277`` - the SAME 31 days, in the other representation. The
+        comparison must recognise the conversion and confirm the renewal, otherwise a
+        healthy renewal looks unverified and the customer message is withheld.
+        """
+        self.convert_pending_expiry = True
+        payload = self._renew(days=31, start_after_first_use=True, volume=0)
+
+        verify = payload['verify']
+        self.assertTrue(verify['ok'], verify)
+        self.assertEqual(payload['final_state'], 'APPLIED_ACTIVE')
+        self.assertNotIn('EXPIRY_MISMATCH', verify['reason_codes'])
+        expiry = verify['evidence']['expiry']
+        self.assertEqual(expiry['mode'], 'converted')
+        self.assertTrue(expiry['matched'])
+        self.assertEqual(expiry['expected_ms'], -31 * 86400000)
+        self.assertGreater(expiry['observed_ms'], 0)
+        # What the operator reads is the deadline the panel really holds.
+        self.assertEqual(verify['observed']['expiryTime'], expiry['observed_ms'])
+        # Activation converged, so the confirmation is no longer withheld.
+        self.assertTrue(self.sms_fired())
+
+    def test_o2_the_same_renewal_is_still_unconfirmed_when_the_deadline_is_wrong(self):
+        """The conversion tolerance must not turn a wrong expiry into a success."""
+        self.convert_pending_expiry = True
+        payload = self._renew(days=31, start_after_first_use=True, volume=0)
+        self.assertEqual(payload['final_state'], 'APPLIED_ACTIVE')
+
+        # Move the panel's deadline a week out from what the renewal asked for: a new
+        # Re-check must report the mismatch instead of trusting the earlier verdict.
+        self.panel.applied['expiryTime'] = int(self.panel.applied['expiryTime']) - 7 * 86400000
+        self.panel.direct = dict(self.panel.applied)
+        response = self.http.post(
+            '/api/client/%d/%d/%s/renew/verify' % (self.server.id, INBOUND_ID, EMAIL),
+            json={'operation_id': payload['operation_id']})
+        verify = response.get_json()['verify']
+        self.assertIn('EXPIRY_MISMATCH', verify['reason_codes'])
+        self.assertNotEqual(verify.get('final_state'), 'APPLIED_ACTIVE')
 
     def test_n_recheck_picks_the_operation_id_it_was_given(self):
         """Two renewals of the same account: the id decides, not (server, email)."""

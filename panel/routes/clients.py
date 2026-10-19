@@ -36,6 +36,7 @@ from panel.services.client_operations import (
 from panel.services.client_state import verified_state_from_panel
 from panel.services import lifecycle as lifecycle_service
 from panel.services import panel_capabilities, renew_activation, renew_finalization
+from panel.services import renew_notifications
 from panel.services.usage_intelligence import record_verified_renewal
 
 bp = Blueprint('clients', __name__)
@@ -2139,6 +2140,11 @@ def renew_client(server_id, inbound_id, email):
             'expiryTime': new_expiry,
             'totalGB': new_volume,
             'enable': True,
+            # The instant the write is sent. A delayed-start expiry (negative) may be
+            # converted by the panel into an absolute deadline anchored on THIS moment,
+            # so verification must compare against it instead of a "now" that drifts
+            # with every later Re-check.
+            'anchor_ms': int(time.time() * 1000),
         }
         _intent_context = {
             'server_id': server.id,
@@ -2518,6 +2524,7 @@ def renew_client(server_id, inbound_id, email):
                                 expected={"expiryTime": new_expiry,
                                           "totalGB": new_volume,
                                           "inbound_id": inbound_id,
+                                          "anchor_ms": _expected_intent.get('anchor_ms'),
                                           "now_ms": int(time.time() * 1000)},
                                 caps=caps if _is_v3 else None,
                                 server=server, session_obj=session_obj,
@@ -2588,15 +2595,26 @@ def renew_client(server_id, inbound_id, email):
                      "now_ms": int(time.time() * 1000)})
                 _repair_calls = {"count": 0}
 
+                _membership_ids = (list(_layers.expected_inbound_ids)
+                                   if _layers is not None else None)
+
                 def _activation_repair():
                     _repair_calls["count"] += 1
                     target_client["enable"] = True
                     if _is_v3:
+                        # BOTH enable layers: the global client record AND every
+                        # attached inbound's copy of this client. Repairing one and
+                        # reporting success is how the customer stayed offline.
                         _ok, _resp, _err = v3_enable_client(
                             server, session_obj, email, target_client,
                             capabilities=caps)
-                        return {'transport_ok': bool(_ok), 'panel_success': bool(_ok),
-                                'error': _err}
+                        _members = xui_adapter.v3_enable_client_memberships(
+                            server, session_obj, email, _membership_ids)
+                        return {'transport_ok': bool(_ok) or _members.get('attempted', False),
+                                'panel_success': bool(_ok) and bool(_members.get('ok')),
+                                'global_error': _err,
+                                'memberships': _members,
+                                'error': _err or _members.get('error')}
                     try:
                         _resp = session_obj.post(
                             full_url, json=update_payload,
@@ -2613,13 +2631,15 @@ def renew_client(server_id, inbound_id, email):
                     if _ferr or not _fresh:
                         return renew_activation.analyze_activation(
                             expected={"expiryTime": new_expiry, "totalGB": new_volume,
-                                      "inbound_id": inbound_id},
+                                      "inbound_id": inbound_id,
+                                      "anchor_ms": _expected_intent.get('anchor_ms')},
                             global_client=None, inbound_ids=[],
                             memberships={}, traffic=None)
                     return _read_activation_layers(
                         email=email,
                         expected={"expiryTime": new_expiry, "totalGB": new_volume,
                                   "inbound_id": inbound_id,
+                                  "anchor_ms": _expected_intent.get('anchor_ms'),
                                   "now_ms": int(time.time() * 1000)},
                         caps=caps if _is_v3 else None,
                         server=server, session_obj=session_obj,
@@ -3046,9 +3066,11 @@ def renew_client(server_id, inbound_id, email):
                     correlation_id=renewal_trace_id,
                 )
                 if _activation_ready:
-                    _fire_automation_sms('renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
-                                         DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,
-                                         server_name=getattr(server, 'name', '') or '')
+                    # The SMS itself is fired further below, once the durable business
+                    # payload exists: the confirmation belongs to the OPERATION, so it
+                    # must survive this request dying and be sendable later by the
+                    # background reconciler if activation converges after the browser
+                    # has gone. Telegram is not operation-scoped, so it stays here.
                     # Telegram confirmation for bot-linked customers — reseller-owned
                     # accounts are messaged through the reseller's own bot.
                     try:
@@ -3085,6 +3107,7 @@ def renew_client(server_id, inbound_id, email):
                 if whatsapp_scheduled and _activation_ready:
                     _fire_renew_whatsapp(server.id, email, _wa_text, _client_comment)
 
+                _failed_steps = renew_activation.activation_failures(_layers)
                 completed_payload = {
                     "success": True,
                     "copy_text": copy_text,
@@ -3106,6 +3129,10 @@ def renew_client(server_id, inbound_id, email):
                     # worker must be able to render deterministic badges without the
                     # Redis cache.
                     "expected": dict(_expected_intent),
+                    # Why activation did not converge, per step, so the modal can name
+                    # the failing layer instead of saying "Partial".
+                    "failed_steps": _failed_steps,
+                    "repairable": any(item.get('repairable') for item in _failed_steps),
                 }
                 if not _activation_converged:
                     # Machine-readable only: the dashboard renders localized text from
@@ -3149,6 +3176,33 @@ def renew_client(server_id, inbound_id, email):
                     app.logger.exception(
                         "Renew could not record its durable business result (trace=%s)",
                         renewal_trace_id)
+                # ── Customer confirmation ─────────────────────────────────────
+                # Fired from the OPERATION, once, only when activation is real. If
+                # activation is still catching up the reconciler (or Re-check, or
+                # Force Enable) fires it later; a request that dies before this point
+                # no longer loses the message.
+                _sms_result = {'sent': False, 'reason': 'not_attempted'}
+                try:
+                    if client_operation is not None:
+                        _sms_result = renew_notifications.send_renewal_confirmation_once(
+                            client_operation,
+                            activation_converged=bool(_activation_ready),
+                            node_pending=False)
+                    elif _activation_ready:
+                        # A renewal EVE never recorded an operation for: nothing to
+                        # deduplicate against, so send exactly what the old path did.
+                        _fire_automation_sms(
+                            'renew', server.id, email, RENEW_SMS_TEMPLATE_TYPE,
+                            DEFAULT_RENEW_SMS_TEMPLATE, _renew_tpl_vars, _client_comment,
+                            server_name=getattr(server, 'name', '') or '')
+                        _sms_result = {'sent': True, 'reason': 'no_operation'}
+                except Exception:
+                    app.logger.exception(
+                        "Renew confirmation could not be sent (trace=%s)", renewal_trace_id)
+                if _sms_result.get('sent'):
+                    completed_payload['customer_sms'] = 'sent'
+                elif _activation_ready:
+                    completed_payload['customer_sms'] = _sms_result.get('reason')
                 complete_client_operation(
                     client_operation, completed_payload, transaction_record,
                     # The operation stays resumable while activation has not converged:
@@ -3563,6 +3617,11 @@ def verify_renew_client(server_id, inbound_id, email):
     expected_total = data.get('expected_totalGB', None)
     expected_enable = data.get('expected_enable', True)
     awaiting_result = bool(data.get('awaiting_result', False))
+    # "Force Enable": the operator explicitly asked for the enable steps to run
+    # again. It never unlocks anything the automatic path refuses (a depleted
+    # account, or a config the panel never applied) - it retries the enable layers
+    # once more and reports exactly which one is still failing.
+    force_enable = bool(data.get('force_enable', False))
     requested_operation_id = str(data.get('operation_id') or '').strip()
     try:
         expected_expiry = None if expected_expiry is None else int(expected_expiry)
@@ -3588,6 +3647,7 @@ def verify_renew_client(server_id, inbound_id, email):
     # this server and this account.
     operation = None
     operation_denied = False
+    _conversion_anchor = None
     if requested_operation_id:
         try:
             operation = load_client_operation(requested_operation_id, action='renew')
@@ -3610,6 +3670,18 @@ def verify_renew_client(server_id, inbound_id, email):
         _op_expected = operation_expected(operation)
         expected_expiry = _op_expected.get('expiryTime')
         expected_total = _op_expected.get('totalGB')
+        # The instant this renewal was written. A delayed-start expiry may have been
+        # converted to an absolute deadline anchored there, so it is the reference a
+        # much later Re-check must still compare against.
+        _conversion_anchor = _op_expected.get('anchor_ms')
+        if _conversion_anchor is None:
+            # Operations recorded before the anchor existed: their last update is
+            # the closest durable timestamp to the write. A drifted anchor can only
+            # cause a mismatch, never a false match.
+            try:
+                _conversion_anchor = int(operation.updated_at.timestamp() * 1000)
+            except Exception:
+                _conversion_anchor = None
         if 'enable' in _op_expected and expected_enable is True:
             expected_enable = bool(_op_expected.get('enable', True))
         # An operation exists, so this is NOT an "unknown expectation" case: the
@@ -3692,6 +3764,7 @@ def verify_renew_client(server_id, inbound_id, email):
             email=email,
             expected={'expiryTime': expected_expiry, 'totalGB': expected_total,
                       'inbound_id': inbound_id,
+                      'anchor_ms': _conversion_anchor,
                       'now_ms': int(time.time() * 1000)},
             caps=caps if is_v3 else None,
             server=server, session_obj=session_obj, inbounds=inbounds,
@@ -3713,7 +3786,9 @@ def verify_renew_client(server_id, inbound_id, email):
             _layers = renew_activation.classify_layers(
                 _layers,
                 expected={'expiryTime': expected_expiry, 'totalGB': expected_total,
-                          'inbound_id': inbound_id})
+                          'inbound_id': inbound_id,
+                          'anchor_ms': _conversion_anchor,
+                          'now_ms': int(time.time() * 1000)})
         if not _layers.global_found:
             verify['ok'] = False
             verify['final_state'] = renew_activation.STATE_UNKNOWN
@@ -3749,7 +3824,13 @@ def verify_renew_client(server_id, inbound_id, email):
         # days, volume, a gift or a traffic reset (that would double-charge), and it
         # must not enable a client that is still depleted (the panel would disable it
         # again on its next traffic cycle).
+        if force_enable and (not is_v3 or not _layers.config_applied):
+            # Say WHY an explicit repair was refused instead of silently doing nothing.
+            verify['force_enable_refused'] = (
+                'config_not_applied' if is_v3 and not _layers.config_applied
+                else 'activation_not_repairable')
         if is_v3 and not _layers.activation_converged and _layers.config_applied:
+            verify['forced'] = bool(force_enable)
             _depleted, _depleted_reason = renew_activation.account_is_still_depleted(
                 _layers, {'expiryTime': _layers.global_expiry,
                           'totalGB': _layers.global_total,
@@ -3764,12 +3845,23 @@ def verify_renew_client(server_id, inbound_id, email):
                 repair_client['totalGB'] = _layers.global_total
                 _repair_calls = {'count': 0}
 
+                _membership_ids = list(_layers.expected_inbound_ids)
+
                 def _repair():
                     _repair_calls['count'] += 1
+                    # Both enable layers, exactly as the background reconciler does:
+                    # a Re-check that repaired only the global record left the
+                    # customer's inbounds disabled and reported the renewal pending
+                    # forever.
                     _ok, _response, _error = v3_enable_client(
                         server, session_obj, email, repair_client, capabilities=caps)
-                    return {'transport_ok': bool(_ok), 'panel_success': bool(_ok),
-                            'error': _error}
+                    _members = xui_adapter.v3_enable_client_memberships(
+                        server, session_obj, email, _membership_ids)
+                    return {'transport_ok': bool(_ok) or _members.get('attempted', False),
+                            'panel_success': bool(_ok) and bool(_members.get('ok')),
+                            'global_error': _error,
+                            'memberships': _members,
+                            'error': _error or _members.get('error')}
 
                 def _reverify():
                     _fresh, _ferr, _ = fetch_inbounds(
@@ -3780,6 +3872,7 @@ def verify_renew_client(server_id, inbound_id, email):
                         email=email,
                         expected={'expiryTime': expected_expiry, 'totalGB': expected_total,
                                   'inbound_id': inbound_id,
+                                  'anchor_ms': _conversion_anchor,
                                   'now_ms': int(time.time() * 1000)},
                         caps=caps, server=server, session_obj=session_obj,
                 inbounds=_fresh, node_pending=_node_pending,
@@ -3787,7 +3880,7 @@ def verify_renew_client(server_id, inbound_id, email):
                 mutation_evidence=operation_context(operation).get('mutation_evidence'))
 
                 _layers, _history = renew_activation.converge_activation(
-                    verify=_reverify, repair=_repair, attempts=3,
+                    verify=_reverify, repair=_repair, attempts=4 if force_enable else 3,
                     initial=_layers, sleep=lambda _n: time.sleep(0.4))
                 verify['repair_attempts'] = _repair_calls['count']
                 verify['repair_history'] = _history
@@ -3829,9 +3922,25 @@ def verify_renew_client(server_id, inbound_id, email):
             completed_expected = operation_expected(operation)
 
         def _set_check(name, expected, observed):
+            extra = {}
             if expected is None:
                 status = 'unknown'
                 matches = None
+            elif name == 'expiryTime':
+                # Expiry is compared through the representation-aware helper: a
+                # delayed-start value the panel turned into a deadline is a match,
+                # and the raw numbers of the two forms are never equal.
+                comparison = renew_activation.normalize_expiry(
+                    expected, observed, anchor_ms=_conversion_anchor,
+                    now_ms=int(time.time() * 1000))
+                # An unreadable observed value is NOT a match: leaving it None would
+                # drop the expiry out of the conjunction below and let the other two
+                # fields declare a not-verified renewal "applied".
+                matches = comparison['matched'] is True
+                status = 'applied' if matches else 'not_applied'
+                extra = {'mode': comparison['mode'],
+                         'target': comparison['target_ms'],
+                         'difference_ms': comparison['difference_ms']}
             else:
                 matches = observed == expected
                 status = 'applied' if matches else 'not_applied'
@@ -3840,6 +3949,7 @@ def verify_renew_client(server_id, inbound_id, email):
                 'observed': observed,
                 'matches': matches,
                 'status': status,
+                **extra,
             }
             return matches
 
@@ -3966,6 +4076,12 @@ def verify_renew_client(server_id, inbound_id, email):
             verify.get('activation_config_converged')
             or _state_for_ui == renew_activation.STATE_APPLIED_ACTIVE)
         payload['runtime_sync_state'] = verify.get('runtime_sync_state')
+        # WHICH step is still failing, in machine-readable form: the dashboard says
+        # "Membership is still disabled in inbounds 5, 10, 17" instead of the vague
+        # "Partial", and only offers Force Enable when an enable step can fix it.
+        payload['failed_steps'] = renew_activation.activation_failures(_layers)
+        payload['repairable'] = any(item.get('repairable')
+                                    for item in payload['failed_steps'])
         payload['message_key'] = {
             renew_activation.STATE_APPLIED_ACTIVE: 'renew_applied_active',
             renew_activation.STATE_ACTIVATION_PENDING: 'renew_activation_pending',
@@ -4005,6 +4121,21 @@ def verify_renew_client(server_id, inbound_id, email):
                                      operation.idempotency_key)
         if operation is not None and not _durable.get('business_finalized'):
             operation.state = client_operations_state.STATE_NEEDS_RECONCILIATION
+        # Re-check is a first-class observer of convergence: the operator may be
+        # pressing it precisely because the panel took longer than the request. The
+        # confirmation is operation-scoped, so it is sent here exactly once even
+        # when the original request withheld it.
+        if operation is not None:
+            try:
+                _confirm = renew_notifications.send_renewal_confirmation_once(
+                    operation,
+                    activation_converged=bool(payload['activation_config_converged']),
+                    node_pending=bool(verify.get('node_pending')))
+                payload['customer_sms'] = ('sent' if _confirm.get('sent')
+                                           else _confirm.get('reason'))
+            except Exception:
+                app.logger.exception("Re-check could not send the confirmation for %s",
+                                     operation.idempotency_key)
         client_operations_state.record_client_operation_verification(operation, payload)
         return _finish(payload)
     except Exception as exc:

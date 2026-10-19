@@ -689,6 +689,7 @@ FA = {
     'Reading existing v3 client assignments…': 'در حال خواندن اختصاص\u200cهای موجود کلاینت v3…',
     'Reads existing v3 client assignments, groups identical inbound combinations, ignores disabled/listener-only inbounds, and selects a recurring group using its real client frequency.': 'اختصاص\u200cهای موجود کلاینت v3 را می\u200cخواند، ترکیب\u200cهای یکسان اینباند را گروه\u200cبندی می\u200cکند، اینباندهای غیرفعال/فقط\u200cشنونده را نادیده می\u200cگیرد و یک گروه تکرارشونده را بر اساس فراوانی واقعی کلاینت\u200cها انتخاب می\u200cکند.',
     'Reason code': 'کد دلیل',
+    'Re-authenticate to change these settings': 'برای تغییر این تنظیمات دوباره احراز هویت کنید',
     'Recommended default': 'پیش\u200cفرض توصیه\u200cشده',
     'Recommended for forum groups. Eve creates and closes a dedicated topic for every support ticket.': 'برای گروه\u200cهای فروم توصیه می\u200cشود. Eve برای هر تیکت پشتیبانی یک موضوع اختصاصی می\u200cسازد و می\u200cبندد.',
     'Reconnecting to backup job... ({v1}/{v2})': 'اتصال مجدد به کار پشتیبان‌گیری... ({v1}/{v2})',

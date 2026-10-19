@@ -114,6 +114,93 @@ def _as_int(value, default=None):
         return default
 
 
+# ── expiry normalisation ─────────────────────────────────────────────────────
+#: Tolerance for comparing two absolute expiry timestamps (or two pending
+#: durations). The panel writes what it was sent, so the slack is only for a
+#: value it rounded or recomputed on its own clock.
+EXPIRY_TOLERANCE_MS = 60_000
+#: Tolerance for accepting a delayed-start expiry the panel converted into an
+#: absolute deadline at write time. A slow v3.4 panel can take 10-20 s to apply a
+#: write, and the anchor is recorded just before the request is sent.
+EXPIRY_CONVERSION_TOLERANCE_MS = 120_000
+
+MODE_ABSOLUTE = 'absolute'
+MODE_PENDING = 'pending'
+MODE_CONVERTED = 'converted'
+MODE_MISMATCH = 'mismatch'
+MODE_UNKNOWN = 'unknown'
+
+
+def normalize_expiry(expected, observed, *, anchor_ms=None, now_ms=None,
+                     tolerance_ms=None,
+                     conversion_tolerance_ms=None) -> dict:
+    """Compare the expiry a renewal asked for with the one the panel reports back.
+
+    3x-ui stores a NEGATIVE ``expiryTime`` as "this many milliseconds after first
+    use" (delayed start) and a positive one as an absolute deadline. A v3 panel
+    that receives the negative form can convert it to an absolute deadline at
+    write time; after that the two numbers can never be equal, and comparing them
+    directly (the old behaviour) reported a correctly applied 31-day renewal as
+    ``EXPIRY_MISMATCH`` with a difference of ~20807 days.
+
+    Four cases are distinguished, and only two of them are "unknown":
+
+    * both absolute (or both zero) -> must agree within ``tolerance_ms``;
+    * both negative -> the pending duration must agree within ``tolerance_ms``;
+    * expected negative, observed positive -> CONVERTED: the deadline must equal
+      the conversion anchor plus the requested duration (``anchor_ms`` is the
+      moment the write was sent, so a Re-check minutes or hours later still
+      compares against the same instant instead of a drifting "now");
+    * expected positive, observed negative -> the reverse conversion: the
+      remaining pending duration must equal what was left of the deadline.
+
+    Returns ``{'matched', 'mode', 'target_ms', 'anchor_ms', 'difference_ms',
+    'tolerance_ms'}``; ``matched`` is None only when a comparison is impossible.
+    """
+    tolerance = _as_int(tolerance_ms, EXPIRY_TOLERANCE_MS)
+    conversion_tolerance = _as_int(conversion_tolerance_ms,
+                                   EXPIRY_CONVERSION_TOLERANCE_MS)
+    want = _as_int(expected)
+    got = _as_int(observed)
+    anchor = _as_int(anchor_ms)
+    now = _as_int(now_ms)
+    result = {'matched': None, 'mode': MODE_UNKNOWN, 'target_ms': None,
+              'anchor_ms': anchor, 'difference_ms': None,
+              'tolerance_ms': tolerance}
+    if want is None or got is None:
+        return result
+    if want == 0 and got == 0:
+        result.update(matched=True, mode=MODE_ABSOLUTE, target_ms=0,
+                      difference_ms=0)
+        return result
+    if (want >= 0) == (got >= 0):
+        # Same representation: a plain numeric comparison is the whole rule.
+        delta = got - want
+        result.update(matched=abs(delta) <= tolerance,
+                      mode=MODE_ABSOLUTE if want >= 0 else MODE_PENDING,
+                      target_ms=want, difference_ms=delta)
+        return result
+    # Opposite signs: the panel converted one representation into the other.
+    # Anchor the conversion on when the write was sent, never on "now", which
+    # drifts by however long it has been since.
+    base = anchor if anchor is not None else now
+    if base is None:
+        result['mode'] = MODE_UNKNOWN
+        return result
+    if want < 0:
+        target = base + abs(want)
+    else:
+        # The panel kept a pending duration for an absolute request: what it
+        # stored is the time that was left of the requested deadline.
+        target = -(want - base)
+    delta = got - target
+    result.update(matched=abs(delta) <= conversion_tolerance,
+                  mode=MODE_CONVERTED, target_ms=target, difference_ms=delta)
+    if not result['matched']:
+        result['mode'] = MODE_MISMATCH
+    return result
+
+
 def _clients_of(inbound) -> list:
     """The client rows inside one inbound, tolerating a JSON-string settings field."""
     import json
@@ -198,9 +285,22 @@ def classify_layers(layers: ActivationLayers, *, expected: dict,
                           remaining_quota='unlimited' if want_total == 0 else '>0')
     if mutation.get('traffic_reset', {}).get('requested'):
         field_expected.update(up=0, down=0)
+    # The expiry is compared through the representation-aware helper, never by
+    # number equality: a delayed-start expiry the panel converted into a deadline
+    # is a MATCH, and the raw numbers of the two forms are never equal.
+    expiry_cmp = normalize_expiry(want_expiry, layers.global_expiry,
+                                  anchor_ms=expected.get('anchor_ms'),
+                                  now_ms=expected.get('now_ms'))
     for name, value in observed.items():
         known = value is not None and (name != 'memberships' or bool(layers.expected_inbound_ids))
-        matched = known and name in field_expected and value == field_expected[name]
+        if name == 'expiryTime':
+            matched = expiry_cmp['matched'] is True
+            if expiry_cmp['mode'] == MODE_CONVERTED:
+                # The comparison that decided this field, kept beside it: the raw
+                # expected/observed pair no longer shows how they were related.
+                field_expected[name] = expiry_cmp['target_ms']
+        else:
+            matched = known and name in field_expected and value == field_expected[name]
         changed = (known and before.get('status', 'ok') == 'ok'
                    and name in before and before[name] is not None and value != before[name])
         source_layer = ('traffic' if name in ('traffic_enable', 'up', 'down', 'remaining_quota')
@@ -219,7 +319,13 @@ def classify_layers(layers: ActivationLayers, *, expected: dict,
                        'expiry': {'expected_ms': want_expiry, 'observed_ms': layers.global_expiry,
                                   'difference_ms': delta,
                                   'difference_seconds': delta / 1000 if delta is not None else None,
-                                  'difference_days': delta / 86400000 if delta is not None else None}}
+                                  'difference_days': delta / 86400000 if delta is not None else None,
+                                  'mode': expiry_cmp['mode'],
+                                  'matched': expiry_cmp['matched'],
+                                  'target_ms': expiry_cmp['target_ms'],
+                                  'anchor_ms': expiry_cmp['anchor_ms'],
+                                  'conversion_difference_ms': expiry_cmp['difference_ms'],
+                                  'tolerance_ms': expiry_cmp['tolerance_ms']}}
     reasons = []
     if auth_degraded:
         reasons.append('AUTH_FAILED')
@@ -256,7 +362,8 @@ def classify_layers(layers: ActivationLayers, *, expected: dict,
         return layers
 
     config_expiry_ok = (want_expiry is None
-                        or (layers.global_found and layers.global_expiry == want_expiry))
+                        or (layers.global_found
+                            and expiry_cmp['matched'] is True))
     config_total_ok = (want_total is None
                        or (layers.global_found and layers.global_total == want_total))
     layers.config_applied = bool(layers.global_found and config_expiry_ok and config_total_ok
@@ -425,8 +532,59 @@ def account_is_still_depleted(layers: ActivationLayers, expected: dict) -> tuple
     return False, None
 
 
-def converge_activation(*, verify, repair, attempts: int = 3,
-                        sleep=None, should_repair=None, initial=None):
+#: What an operator can DO about each failure, and whether an enable repair can
+#: still fix it. Anything not listed here is a config/read problem: retrying an
+#: enable would be noise on top of a renewal that needs a human.
+FAILURE_SCOPES = {
+    'GLOBAL_DISABLED': ('enable', True),
+    'MEMBERSHIP_DISABLED': ('membership', True),
+    'MEMBERSHIP_MISSING': ('membership', True),
+    'MEMBERSHIP_UNKNOWN': ('membership', False),
+    'TRAFFIC_DISABLED': ('traffic', True),
+    'EXPIRY_MISMATCH': ('config', False),
+    'QUOTA_MISMATCH': ('config', False),
+    'TRAFFIC_DEPLETED': ('traffic', False),
+    'TRAFFIC_RESET_FAILED': ('traffic', False),
+    'NODE_SYNC_PENDING': ('runtime', False),
+    'PANEL_READ_FAILED': ('read', False),
+    'AUTH_FAILED': ('auth', False),
+    'MUTATION_REJECTED': ('write', False),
+    'MUTATION_OUTCOME_UNKNOWN': ('write', False),
+}
+
+
+def activation_failures(layers) -> list:
+    """The specific steps that kept this renewal from being active.
+
+    The dashboard used to show one vague word ("Partial") for every one of these,
+    so an operator could not tell a disabled membership in inbound 17 from an
+    expiry the panel never applied. Each entry names the layer, the inbound ids
+    when there are any, and whether an enable repair can still fix it.
+
+    ``repairable`` is what "Force Enable" acts on: it re-runs the enable steps and
+    nothing else - never days, volume, a gift or a traffic reset.
+    """
+    failures = []
+    for code in (getattr(layers, 'reason_codes', None) or []):
+        scope, repairable = FAILURE_SCOPES.get(code, (None, False))
+        if scope is None:
+            continue
+        item = {'code': code, 'scope': scope, 'repairable': bool(repairable)}
+        if code == 'MEMBERSHIP_DISABLED':
+            item['inbound_ids'] = list(getattr(layers, 'disabled_inbound_ids', []) or [])
+        elif code in ('MEMBERSHIP_MISSING', 'MEMBERSHIP_UNKNOWN'):
+            item['inbound_ids'] = list(getattr(layers, 'missing_inbound_ids', []) or [])
+        elif code == 'EXPIRY_MISMATCH':
+            expiry = (getattr(layers, 'evidence', None) or {}).get('expiry') or {}
+            item.update(expected_ms=expiry.get('expected_ms'),
+                        observed_ms=expiry.get('observed_ms'),
+                        difference_days=expiry.get('difference_days'),
+                        mode=expiry.get('mode'))
+        failures.append(item)
+    return failures
+
+
+def converge_activation(*, verify, repair, attempts: int = 3,                        sleep=None, should_repair=None, initial=None):
     """Repair activation only, bounded, and never by repeating the renewal.
 
     ``initial`` is the layer measurement the caller has ALREADY made; the loop starts

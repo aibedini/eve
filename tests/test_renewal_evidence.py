@@ -128,7 +128,7 @@ class RenewalEvidenceTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which('node'), 'Node is needed for the actual modal helpers')
 class RenewalEvidenceUiTests(unittest.TestCase):
     def run_ui(self, expression, calendar='gregorian'):
-        template = (Path(__file__).resolve().parents[1] / 'templates/dashboard.html').read_text(encoding='utf-8')
+        template = (Path(__file__).resolve().parents[1] / 'static/dashboard.js').read_text(encoding='utf-8')
         region = template.split('// renew-result-modal:start', 1)[1].split('// renew-result-modal:end', 1)[0]
         region = re.sub(r'const RENEW_LANG = .*?;', "const RENEW_LANG = 'en';", region)
         code = ('const EveDate = {format: d => ' + json.dumps(calendar + ':')

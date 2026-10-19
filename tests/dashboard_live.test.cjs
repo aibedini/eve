@@ -32,13 +32,22 @@ function fixture(sseEnabled = true) {
         console, URL, URLSearchParams, AbortController, EventSource: Source,
         setTimeout: (callback, ms) => { const id = ++sequence; timers.set(id, { callback, ms }); return id; },
         clearTimeout: id => timers.delete(id), setInterval: () => 0,
+        fetch: async () => ({ ok: true, json: async () => ({}) }),
+        // The values base.html's boot script writes, read at module scope by the
+        // extracted dashboard bundle.
+        EVE_DASHBOARD: { IS_SUPERADMIN: false, USER_ROLE: 'superadmin', ALLOW_FREE: true,
+            BASE_COST_DAY: 0, BASE_COST_GB: 0, BASE_COST_DAY_UNLIMITED: 0,
+            SSE_ENABLED: false, DASHBOARD_CACHE_SCOPE: 'scope',
+            DASHBOARD_VIEW_IS_SNAPSHOT: false, PANEL_LANG: 'en' },
         document: { hidden: false, documentElement: { lang: 'en' },
             addEventListener: (name, callback) => { events[name] = callback; },
             querySelector: () => null, querySelectorAll: () => [],
+            body: {},
             getElementById: id => id === 'refresh-interval' ? { value: '10' } : null },
         addEventListener: (name, callback) => { events[name] = callback; },
         localStorage: { getItem: () => null, setItem: () => {} },
         location: { origin: 'https://eve.test' },
+        navigator: {},
         // base.html's panel-language helper: English text is returned unchanged.
         _t: (text, vars) => (vars ? text.replace(/\{(\w+)\}/g, (m, k) => (vars[k] == null ? m : vars[k])) : text),
     };
@@ -51,7 +60,13 @@ function fixture(sseEnabled = true) {
         reconcile: () => { reconciles++; } });
     const template = fs.readFileSync(path.join(root, 'templates/dashboard.html'), 'utf8');
     const scripts = [...template.matchAll(/<script nonce="\{\{ csp_nonce \}\}">([\s\S]*?)<\/script>/g)];
-    const main = scripts.find(match => match[1].includes('function applySnapshotDelta'))[1];
+    // The dashboard's main script was extracted out of the template into a cacheable
+    // bundle. Reading only the template's inline blocks found nothing to evaluate, so
+    // every test in this file errored on `undefined[1]` while the real code drifted
+    // untested.
+    const inline = scripts.find(match => match[1].includes('function applySnapshotDelta'));
+    const main = inline ? inline[1]
+        : fs.readFileSync(path.join(root, 'static/dashboard.js'), 'utf8');
     vm.runInContext(main.replace(/\{\{[\s\S]*?\}\}/g, 'false').replace(/\{%[\s\S]*?%\}/g, '') + `
         applyFilters = () => { globalThis.renderCount = (globalThis.renderCount || 0) + 1; };
         updateStats = () => {};
@@ -64,7 +79,7 @@ function fixture(sseEnabled = true) {
             setSseTime: value => { serversSyncCapturedAt = value; } };
     `, sandbox);
     return { live, sandbox, dashboard: sandbox.dashboard, Source, timers, events, template,
-        hidden: value => { hidden = value; }, reconciles: () => reconciles };
+        source: main, hidden: value => { hidden = value; }, reconciles: () => reconciles };
 }
 const inbound = (server_id, id, remark = 'inbound', clients = []) => ({ server_id, id, remark,
     protocol: 'vless', enable: true, clients });
@@ -75,7 +90,8 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 test('dashboard defaults to live sync and starts cache-only synchronization', () => {
     const f = fixture();
     assert.match(f.template, /id="auto-refresh-toggle" checked/);
-    assert.match(f.template, /refreshData\(true, \{ mode: 'cache', poll: false \}\)\.finally/);
+    // The call site lives in the extracted bundle, not in the template's markup.
+    assert.match(f.source, /refreshData\(true, \{ mode: 'cache', poll: false \}\)\.finally/);
     f.live.start();
     assert.equal(f.Source.instances.length, 1);
     assert.equal(f.timers.get(f.live.timer).ms, 10000);

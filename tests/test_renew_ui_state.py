@@ -29,6 +29,11 @@ import unittest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DASHBOARD = os.path.join(REPO_ROOT, "templates", "dashboard.html")
+#: The dashboard's JS was extracted out of the template into a cacheable bundle, so
+#: the renewal helpers are read from there and only the CSS side still lives in the
+#: template. Keeping both paths explicit stops a future move from silently turning
+#: these assertions into no-ops.
+DASHBOARD_JS = os.path.join(REPO_ROOT, "static", "dashboard.js")
 
 REGION_START = "// renew-result-modal:start"
 REGION_END = "// renew-result-modal:end"
@@ -54,9 +59,9 @@ REQUIRED_TEXT = {
     },
     "CONFIG_APPLIED_ACTIVATION_PENDING": {
         "fa": ("تمدید ثبت شد — فعال‌سازی در حال تکمیل است",
-               "تمدید را دوباره انجام ندهید. EVE در حال تکمیل فعال‌سازی حساب است."),
+               "تمدید نکنید. EVE به‌صورت خودکار فعال‌سازی را تکمیل می‌کند."),
         "en": ("Renewal applied — activation is still synchronizing",
-               "Do not renew again. EVE is still completing account activation."),
+               "Do not renew again. EVE is automatically completing activation."),
     },
     "PARTIALLY_APPLIED": {
         "fa": ("تمدید ناقص اعمال شده", "دوباره تمدید نکنید؛ وضعیت نیاز به تطبیق دارد."),
@@ -209,7 +214,7 @@ class RenewContextBuilderTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.template = _Template(_read(DASHBOARD))
+        cls.template = _Template(_read(DASHBOARD_JS))
         # Fails loudly (not silently) when the function was renamed or removed.
         cls.builder = cls.template.function("buildRenewContext")
 
@@ -292,7 +297,7 @@ class RenewTranslationTableTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.template = _Template(_read(DASHBOARD))
+        cls.template = _Template(_read(DASHBOARD_JS))
         cls.table = _run_node(cls.template.literal("const RENEW_STATE_TEXT = "),
                               "RENEW_STATE_TEXT")
         cls.legacy = _run_node(cls.template.literal("const RENEW_LEGACY_STATE = "),
@@ -347,7 +352,7 @@ class RenewModalCopyTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.template = _Template(_read(DASHBOARD))
+        cls.template = _Template(_read(DASHBOARD_JS))
         cls.region = cls.template.region()
         cls.diagnostic = cls.template.function("_renewDiagnostic")
 
@@ -407,7 +412,7 @@ class RenewLanguageTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.template = _Template(_read(DASHBOARD))
+        cls.template = _Template(_read(DASHBOARD_JS))
         cls.table = _run_node(cls.template.literal("const RENEW_STATE_TEXT = "),
                               "RENEW_STATE_TEXT")
 
@@ -428,7 +433,8 @@ class RenewLanguageTests(unittest.TestCase):
                                   "%s/en carries Persian text: %r" % (state, value))
 
     def test_the_template_language_is_panel_lang_not_document_lang(self):
-        for needle in ("const RENEW_LANG = {{", "const renewProgressIsFa = RENEW_LANG",
+        for needle in ("const RENEW_LANG = EVE_DASHBOARD.PANEL_LANG;",
+                       "const renewProgressIsFa = RENEW_LANG",
                        "body.dir = RENEW_LANG === 'fa'"):
             self.assertIn(needle, self.template.text, needle)
 
@@ -438,10 +444,11 @@ class RenewToneTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.template = _Template(_read(DASHBOARD))
+        cls.template = _Template(_read(DASHBOARD_JS))
         cls.tones = _run_node(cls.template.literal("const RENEW_STATE_TONE = "),
                               "RENEW_STATE_TONE")
-        cls.style = cls.template.text
+        # The colour classes are CSS and never left the template.
+        cls.style = _read(DASHBOARD)
 
     def test_the_state_to_colour_mapping(self):
         self.assertEqual(self.tones["APPLIED_ACTIVE"], "green")

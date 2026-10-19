@@ -927,6 +927,119 @@ def v3_enable_client(server, session_obj, email, client: dict, *,
                                  preserved_client=preserved_client)
 
 
+def _inbound_client_rows(inbound) -> tuple:
+    """(settings dict, clients list) for one inbound, tolerating a JSON-string field.
+
+    Deliberately local: the membership repair must be testable without importing the
+    app module, which ``_json_field`` would pull in.
+    """
+    settings = (inbound or {}).get('settings')
+    if isinstance(settings, str):
+        try:
+            settings = json.loads(settings)
+        except (TypeError, ValueError):
+            return {}, []
+    if not isinstance(settings, dict):
+        return {}, []
+    clients = settings.get('clients')
+    return settings, (clients if isinstance(clients, list) else [])
+
+
+def v3_enable_client_memberships(server, session_obj, email, inbound_ids=None, *,
+                                 inbounds=None):
+    """Force the client's row inside every attached inbound to ``enable``.
+
+    A v3 client has TWO independent enable flags: the global record that
+    ``/clients/get/{email}`` returns, and the copy of the client inside each
+    inbound's ``settings.clients[]``. ``bulkEnable`` and the client update only
+    speak for the first one, which is exactly the production state
+    "Global enable: true / Membership enabled: false (inbounds 5,10,11,...)":
+    the account stays offline while EVE reports that it enabled the client.
+
+    Inbounds are written one at a time, and only when their membership is
+    actually disabled, so a retry never rewrites an inbound that is already
+    correct (and never restarts a node for nothing). Returns a summary dict:
+    ``{'ok', 'enabled_ids', 'already_enabled_ids', 'not_member_ids', 'failed',
+    'attempted', 'error'}``.
+    """
+    target = str(email or '').strip().lower()
+    wanted = None
+    if inbound_ids is not None:
+        wanted = {value for value in (_as_panel_int(raw) for raw in inbound_ids)
+                  if value is not None}
+    if inbounds is None:
+        inbounds, _err, _detected = fetch_inbounds(
+            session_obj, server.host, server.panel_type, force_fresh=True)
+    enabled_ids, already_ids, not_member_ids, failed = [], [], [], []
+    for inbound in (inbounds or []):
+        if not isinstance(inbound, dict):
+            continue
+        inbound_id = _as_panel_int(inbound.get('id'))
+        if inbound_id is None:
+            continue
+        if wanted is not None and inbound_id not in wanted:
+            continue
+        settings, clients = _inbound_client_rows(inbound)
+        if not clients:
+            continue
+        row = None
+        for client in clients:
+            if isinstance(client, dict) and \
+                    str(client.get('email') or '').strip().lower() == target:
+                row = client
+                break
+        if row is None:
+            not_member_ids.append(inbound_id)
+            continue
+        if row.get('enable') is True:
+            already_ids.append(inbound_id)
+            continue
+        row['enable'] = True
+        ok, error = _push_full_inbound(server, session_obj, inbound, settings)
+        if ok:
+            enabled_ids.append(inbound_id)
+        else:
+            failed.append({'inbound_id': inbound_id, 'error': error})
+    return {
+        'ok': not failed,
+        'enabled_ids': enabled_ids,
+        'already_enabled_ids': already_ids,
+        'not_member_ids': not_member_ids,
+        'failed': failed,
+        'attempted': bool(enabled_ids or failed),
+        'error': ('; '.join('inbound %s: %s' % (item['inbound_id'], item['error'])
+                            for item in failed) or None),
+    }
+
+
+def v3_enable_client_everywhere(server, session_obj, email, client: dict, *,
+                                capabilities=None, preserved_client=None,
+                                inbound_ids=None):
+    """Enable the global client AND every per-inbound membership, reporting both.
+
+    This is the repair a renewal needs: enabling only one of the two layers is
+    how a renewed customer stays offline while the panel shows the client as
+    enabled. Neither half aborts the other - an operator must see which one
+    failed instead of a single collapsed boolean.
+    """
+    enabled_client = dict(client or {})
+    enabled_client['enable'] = True
+    ok, _response, error = v3_enable_client(
+        server, session_obj, email, enabled_client,
+        capabilities=capabilities, preserved_client=preserved_client)
+    memberships = v3_enable_client_memberships(
+        server, session_obj, email, inbound_ids)
+    panel_ok = bool(ok) and bool(memberships.get('ok'))
+    return panel_ok, {
+        'global_ok': bool(ok),
+        'global_error': error,
+        'memberships': memberships,
+        'transport_ok': bool(ok) or bool(memberships.get('attempted')),
+        'panel_success': panel_ok,
+        'error': error or memberships.get('error'),
+    }, (error or memberships.get('error'))
+
+
 def _looks_like_missing_route(error) -> bool:
     """True only for the transport-level answers that mean "this route is absent"."""
     text = str(error or '').strip().lower()

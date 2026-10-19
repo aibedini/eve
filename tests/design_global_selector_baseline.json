@@ -45,6 +45,10 @@
   },
   {
     "file": "static/style.css",
+    "selector": ".country-flag img, .country-flag svg"
+  },
+  {
+    "file": "static/style.css",
     "selector": ".eve-icon-outline, .action-btn svg"
   },
   {

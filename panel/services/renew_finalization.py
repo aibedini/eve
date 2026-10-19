@@ -39,6 +39,11 @@ BUSINESS_PAYLOAD_KEYS = (
     # Set when the reconciler had to finish the record the request never wrote: the
     # operator must be able to see that the exact templated text was not available.
     'rebuilt_after_restart', 'transaction_error', 'renewal_event_error',
+    # The customer confirmation is tied to the OPERATION, not to the request that
+    # happened to observe the activation: a durable marker makes it exactly-once
+    # across the request, Re-check, Force Enable and the background reconciler, and
+    # `node_sync_confirms` counts the reads taken while only the node was behind.
+    'renew_sms_sent_at', 'node_sync_confirms',
 )
 
 

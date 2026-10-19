@@ -69,7 +69,7 @@ def pending_operations(*, limit: int = BATCH, now=None) -> list:
 
 
 def reconcile_operation(operation, *, read_layers=None, repair=None,
-                        finalize=None, limits=None) -> dict:
+                        finalize=None, limits=None, notify=None) -> dict:
     """One activation-only reconciliation attempt for one renewal operation.
 
     Everything that touches the panel is injected, so the state machine is testable
@@ -118,10 +118,16 @@ def reconcile_operation(operation, *, read_layers=None, repair=None,
         result['business_rebuilt'] = not already
 
     result['final_state'] = layers.final_state
+    send_confirmation = notify or _send_confirmation
 
     if layers.final_state == renew_activation.STATE_APPLIED_ACTIVE:
         renew_finalization.mark_activation_converged(
             operation, payload={'runtime_sync_state': layers.runtime_sync_state})
+        # The customer message belongs to the operation, so the path that observes
+        # convergence FIRST is the one that sends it - even when the browser that
+        # started the renewal is long gone.
+        result['confirmation'] = send_confirmation(
+            operation, activation_converged=True, node_pending=False)
         result['action'] = 'completed'
         return result
 
@@ -137,7 +143,11 @@ def reconcile_operation(operation, *, read_layers=None, repair=None,
 
     if layers.node_pending is True:
         # The panel itself says its node is still synchronising: writing again would
-        # not help and could restart the wait.
+        # not help and could restart the wait. The message is still allowed through
+        # after enough consecutive reads prove every enable layer is active.
+        result['confirmation'] = send_confirmation(
+            operation, activation_converged=bool(layers.activation_converged),
+            node_pending=True)
         result['action'] = 'waiting_for_node'
         operation.updated_at = datetime.utcnow()
         db.session.commit()
@@ -170,6 +180,14 @@ def reconcile_operation(operation, *, read_layers=None, repair=None,
     operation.updated_at = datetime.utcnow()
     db.session.commit()
     return result
+
+
+def _send_confirmation(operation, *, activation_converged, node_pending=None):
+    """The real customer confirmation, injected so tests never touch a gateway."""
+    from panel.services import renew_notifications  # deferred: keeps the job light
+    return renew_notifications.send_renewal_confirmation_once(
+        operation, activation_converged=activation_converged,
+        node_pending=node_pending)
 
 
 def _default_read_layers(operation):
@@ -230,15 +248,18 @@ def _default_repair(operation, expected):
     def _repair():
         # Activation only: the client object is re-read so nothing else is zeroed by
         # the full-replacement update, and no amount, expiry or traffic value is sent.
+        # BOTH enable layers are repaired: the global client record and the copy of
+        # the client inside every attached inbound. Enabling only the global one is
+        # how an operation stayed in activation_pending for a customer who never
+        # came back online.
         ok, snapshot = xui_adapter.read_authoritative_client_settings(
             server, session_obj, email)
         client = dict(snapshot) if ok and isinstance(snapshot, dict) else {'email': email}
         client['enable'] = True
-        result_ok, response, err = xui_adapter.v3_enable_client(
+        _ok, summary, _err = xui_adapter.v3_enable_client_everywhere(
             server, session_obj, email, client, capabilities=caps,
             preserved_client=(snapshot if ok else None))
-        return xui_adapter.classify_mutation_result(result_ok, response, err,
-                                                    may_be_partial=not result_ok)
+        return summary
     return _repair
 
 

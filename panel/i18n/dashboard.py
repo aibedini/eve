@@ -166,6 +166,7 @@ FA = {
     'Failed to copy message': 'کپی پیام ناموفق بود',
     'Failed to fetch inbounds from panel': 'دریافت اینباندها از پنل ناموفق بود',
     'Failed to poll refresh job': 'پیگیری کار تازه\u200cسازی ناموفق بود',
+    'Force Enable': 'فعال\u200cسازی دستی',
     'Found {shownUnique} client(s) matching "{query}"': '{shownUnique} کلاینت مطابق «{query}» پیدا شد',
     'Found {totalUnique} client(s), but all hidden by filters.': '{totalUnique} کلاینت پیدا شد، اما همه با فیلترها پنهان شده\u200cاند.',
     'Free': 'رایگان',

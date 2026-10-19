@@ -9,7 +9,9 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DASHBOARD = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+#: The dashboard JS was extracted into its own cacheable bundle; the contract these
+#: tests protect is JavaScript, so it is read from there.
+DASHBOARD = (ROOT / "static" / "dashboard.js").read_text(encoding="utf-8")
 PACKAGES = (ROOT / "panel" / "routes" / "packages.py").read_text(encoding="utf-8")
 
 

@@ -756,6 +756,9 @@
                 <button class="btn btn-secondary renew-success-action" onclick="recheckRenewal()" id="renew-recheck-btn">
                     {{ _('Re-check') }}
                 </button>
+                <button class="btn btn-outline renew-success-action hidden" onclick="forceEnableRenewal()" id="renew-force-btn">
+                    {{ _('Force Enable') }}
+                </button>
                 <button class="btn btn-primary renew-success-action" onclick="copyRenewSuccessText()" id="renew-copy-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     {{ _('Copy Info') }}
@@ -1445,6 +1448,13 @@
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 10px;
         width: 100%;
+    }
+
+    /* "Force Enable" only appears when an enable step can still be repaired, so the
+       row becomes four actions; 2x2 keeps the primary action on the same row instead
+       of orphaning a lone button under three others. */
+    .renew-success-actions.is-four {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .renew-success-action {

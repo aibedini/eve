@@ -41,6 +41,14 @@ PAGES = {
     'royalty': ('/royalty', ['templates/royalty.html']),
 }
 
+#: A page's JavaScript may live in its own cacheable bundle after being extracted from
+#: the template. Those files own TRANSLATED STRINGS (``_t('…')``) but are not markup,
+#: so they are scanned for the keys they use and never for "hardcoded text" - running
+#: the markup scanner over JS reports every string literal and comment as an offender.
+EXTRA_SOURCE_FILES = {
+    'dashboard': ['static/dashboard.js'],
+}
+
 _spec = importlib.util.spec_from_file_location('i18n_scan', ROOT / 'scripts' / 'i18n_scan.py')
 scan = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(scan)
@@ -58,7 +66,7 @@ class I18nPageCatalogTests(unittest.TestCase):
             module = importlib.import_module('panel.i18n.' + page)
             owned = set(i18n.modules()[page])
             used = set()
-            for name in files:
+            for name in list(files) + EXTRA_SOURCE_FILES.get(page, []):
                 used |= scan.used_keys(_source(name))
             dynamic = set(getattr(module, 'DYNAMIC', ()))
             self.assertEqual(sorted(used - owned - common), [], '%s: untranslated' % page)

@@ -101,7 +101,7 @@ MAPPING = (
         ['tests.test_regression_matrix'],
     )),
     ('panel/routes/clients.py', (
-        ['tests.test_renew_consistency'],
+        ['tests.test_renew_consistency', 'tests.test_renew_expiry_normalization'],
         ['tests.test_renew_enable', 'tests.test_regression_matrix',
          'tests.test_client_rotate', 'tests.test_config_vs_telemetry'],
     )),
@@ -125,7 +125,8 @@ MAPPING = (
         ['tests.test_subscription_scope', 'tests.test_static_deploy_contract'],
     )),
     ('panel/adapters/xui.py', (
-        ['tests.test_3xui_compat', 'tests.test_panel_capabilities'],
+        ['tests.test_3xui_compat', 'tests.test_panel_capabilities',
+         'tests.test_renew_membership_enable'],
         ['tests.test_regression_matrix', 'tests.test_renew_enable',
          'tests.test_renew_activation_layers'],
     )),
@@ -138,13 +139,21 @@ MAPPING = (
          'tests.test_renew_enable'],
     )),
     ('panel/services/renew_activation.py', (
-        ['tests.test_renew_activation_layers'],
-        ['tests.test_renew_consistency', 'tests.test_renew_enable'],
+        ['tests.test_renew_activation_layers', 'tests.test_renew_expiry_normalization'],
+        ['tests.test_renew_consistency', 'tests.test_renew_enable',
+         'tests.test_renew_notifications'],
+    )),
+    ('panel/services/renew_notifications.py', (
+        # The once-per-operation customer confirmation. Its whole point is that it is
+        # sent by a path that is NOT the request, so both the sender and the reconciler
+        # that calls it are in Tier 1.
+        ['tests.test_renew_notifications'],
+        ['tests.test_renew_consistency', 'tests.test_renew_activation_job'],
     )),
     ('panel/services/renew_finalization.py', (
         # The business finalizer: exactly-once transaction/renewal-event recording for
         # a renewal whose activation has not converged.
-        ['tests.test_renew_consistency'],
+        ['tests.test_renew_consistency', 'tests.test_renew_notifications'],
         ['tests.test_renew_activation_job', 'tests.test_renew_enable',
          'tests.test_usage_intelligence_events'],
     )),
@@ -155,7 +164,7 @@ MAPPING = (
     )),
     ('panel/jobs/renew_activation.py', (
         # Activation-only reconciliation after the request has answered.
-        ['tests.test_renew_activation_job'],
+        ['tests.test_renew_activation_job', 'tests.test_renew_notifications'],
         ['tests.test_renew_consistency', 'tests.test_renew_enable'],
     )),
     ('panel/services/client_state.py', (
@@ -249,8 +258,18 @@ MAPPING = (
         ['tests.test_dashboard_live'],
         ['tests.test_ui_design_system', 'tests.test_static_caching'],
     )),
+    ('static/dashboard.js', (
+        # The dashboard's renewal modal and recovery contract used to be inline in
+        # templates/dashboard.html, so moving the JS silently stopped this bundle from
+        # being tested when it changed. Longest prefix wins over the generic static/.
+        ['tests.test_renew_ui_state', 'tests.test_renewal_evidence',
+         'tests.test_p0_renewal_recovery_contract'],
+        ['tests.test_ui_design_system', 'tests.test_dashboard_live',
+         'tests.test_static_caching'],
+    )),
     ('templates/dashboard.html', (
-        ['tests.test_dashboard_live', 'tests.test_i18n_pages', 'tests.test_renew_ui_state'],
+        ['tests.test_dashboard_live', 'tests.test_i18n_pages',
+         'tests.test_renew_ui_state'],
         ['tests.test_ui_design_system', 'tests.test_subscription_scope',
          'tests.test_static_deploy_contract'],
     )),
