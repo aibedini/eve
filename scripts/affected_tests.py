@@ -105,6 +105,24 @@ MAPPING = (
         ['tests.test_renew_enable', 'tests.test_regression_matrix',
          'tests.test_client_rotate', 'tests.test_config_vs_telemetry'],
     )),
+    ('panel/routes/subscription_pages.py', (
+        # The public subscription page: expiry countdown, statistics line and the
+        # "when did it run out" notice. This route had no mapping at all, so editing
+        # the page a customer reads ran no test.
+        ['tests.test_subscription_expiry_countdown',
+         'tests.test_subscription_ended_notice'],
+        ['tests.test_subscription_cache', 'tests.test_custom_subscriptions',
+         'tests.test_ui_design_system'],
+    )),
+    ('panel/services/subscription_ended.py', (
+        ['tests.test_subscription_ended_notice'],
+        ['tests.test_subscription_cache'],
+    )),
+    ('panel/core/digits.py', (
+        ['tests.test_subscription_expiry_countdown',
+         'tests.test_subscription_ended_notice'],
+        ['tests.test_ui_design_system'],
+    )),
     ('panel/routes/dashboard.py', (
         ['tests.test_sse_updates'],
         ['tests.test_client_events', 'tests.test_server_polling',
@@ -221,6 +239,14 @@ MAPPING = (
     ('templates/settings.html', (
         ['tests.test_i18n_pages'],
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
+    )),
+    ('templates/subscription.html', (
+        # The customer-facing page: countdown script, statistics line and the
+        # "ended at" sentence all live here.
+        ['tests.test_subscription_expiry_countdown',
+         'tests.test_subscription_ended_notice', 'tests.test_ui_design_system'],
+        ['tests.test_subscription_scope', 'tests.test_static_deploy_contract',
+         'tests.test_subscription_visual_harness'],
     )),
     ('templates/sub_manager.html', (
         ['tests.test_i18n_pages'],

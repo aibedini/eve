@@ -601,30 +601,19 @@
                     <div class="text-xs text-muted mb-1">{{ 'اعتبار' if is_fa else 'Validity' }}</div>
                     <div class="text-sm font-medium text-white flex items-center gap-1.5">
                         <svg class="w-3.5 h-3.5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                        {% if is_fa %}
-                            {% if client.expiry_type == 'expired' %}
-                                منقضی شده
-                            {% elif client.expiry_type == 'today' %}
-                                امروز
-                            {% elif client.expiry_type == 'unlimited' %}
-                                نامحدود
-                            {% elif client.expiry_type == 'start_after_use' %}
-                                {% if client.expiry_days and client.expiry_days > 0 %}
-                                    {{ client.expiry_days }} روز بعد از اولین اتصال
-                                {% else %}
-                                    بعد از اولین اتصال
-                                {% endif %}
-                            {% elif client.expiry_type == 'soon' %}
-                                {{ client.expiry }}
-                            {% elif client.expiry_type == 'normal' %}
-                                {{ client.expiry if client.expiry else ((client.expiry_days|string) ~ ' روز مانده') }}
-                            {% else %}
-                                {{ client.expiry if client.expiry else 'نامشخص' }}
-                            {% endif %}
+                        <span id="sub-expiry-text">
+                        {% if client.expiry_type == 'expired' %}
+                            {{ 'منقضی شده' if is_fa else client.expiry }}
+                        {% elif client.expiry_type == 'unlimited' %}
+                            {{ 'نامحدود' if is_fa else client.expiry }}
                         {% else %}
-                            {{ client.expiry }}
+                            {{ client.expiry if client.expiry else ('نامشخص' if is_fa else '') }}
                         {% endif %}
+                        </span>
                     </div>
+                    {% if client.ended_at_text %}
+                    <div class="text-xs text-muted mt-1" id="sub-ended-at">{{ client.ended_at_text }}</div>
+                    {% endif %}
                 </div>
                 <div class="bg-bg/50 p-3 rounded-xl border border-white/5">
                     <div class="text-xs text-muted mb-1">{{ 'حجم باقی‌مانده' if is_fa else 'Remaining' }}</div>
@@ -971,6 +960,61 @@
         const SUPPORT_SMS = {{ (support.sms or '')|tojson }};
         const CLIENT_EMAIL = {{ (client.email or '')|tojson }};
         const SERVER_NAME = {{ (client.server_name or '')|tojson }};
+        // Live validity countdown: absolute milliseconds only. `SERVER_NOW_MS` is the
+        // server's clock when this page was rendered, so the browser can measure the
+        // offset between the two clocks once instead of trusting the device clock
+        // (which can be hours off and would show a wrong "time left").
+        const SUB_EXPIRY_MS = {{ (client.expiry_ms or 0)|tojson }};
+        const SUB_SERVER_NOW_MS = {{ (client.server_now_ms or 0)|tojson }};
+        const SUB_LOAD_WALL_MS = Date.now();
+        // subscription-expiry-clock:start
+        // These two functions are the browser mirror of `format_remaining_span` in
+        // app.py and are pinned to it by tests/test_subscription_expiry_countdown.py.
+        function subPersianDigits(text) {
+            const digits = '۰۱۲۳۴۵۶۷۸۹';
+            return String(text === null || text === undefined ? '' : text)
+                .replace(/[0-9]/g, function (digit) { return digits[Number(digit)]; });
+        }
+
+        function subCountdownText(deltaMs, isFa) {
+            let ms = Number(deltaMs);
+            if (!isFinite(ms) || ms < 0) ms = 0;
+            const days = Math.floor(ms / 86400000);
+            const hours = Math.floor((ms % 86400000) / 3600000);
+            const minutes = Math.floor((ms % 3600000) / 60000);
+            if (isFa) {
+                const parts = [];
+                if (days > 0) parts.push(days + ' روز');
+                if (hours > 0) parts.push(hours + ' ساعت');
+                // Minutes belong beside hours; only a day-scale span may omit them.
+                if (minutes > 0 && days === 0) parts.push(minutes + ' دقیقه');
+                if (!parts.length) return 'کمتر از یک دقیقه';
+                return parts.join(' و ') + ' باقی مانده';
+            }
+            if (days > 0) return hours > 0 ? days + 'd ' + hours + 'h left' : days + 'd left';
+            if (hours > 0) return minutes > 0 ? hours + 'h ' + minutes + 'm left' : hours + 'h left';
+            if (minutes > 0) return minutes + 'm left';
+            return '<1m left';
+        }
+        // subscription-expiry-clock:end
+
+        function refreshSubscriptionExpiryText() {
+            // 0 = unlimited, negative = "after first connection": both keep the
+            // server-rendered text, which says exactly that.
+            if (!SUB_EXPIRY_MS || SUB_EXPIRY_MS <= 0 || !SUB_SERVER_NOW_MS) return;
+            const target = document.getElementById('sub-expiry-text');
+            if (!target) return;
+            const serverNow = Date.now() + (SUB_SERVER_NOW_MS - SUB_LOAD_WALL_MS);
+            const remaining = SUB_EXPIRY_MS - serverNow;
+            // Once it has run out while the page is open, the static copy ("expired")
+            // is the honest one; a countdown must never tick below zero.
+            if (remaining <= 0) return;
+            try {
+                const text = subCountdownText(remaining, IS_FA);
+                target.textContent = IS_FA ? subPersianDigits(text) : text;
+            } catch (_) {}
+        }
+
         const I18N = IS_FA ? {
             noApps: 'برای این پلتفرم چیزی پیدا نشد.',
             noFaqs: 'فعلاً سوالی برای این پلتفرم نداریم.',
@@ -997,7 +1041,11 @@
             renderApps('android');
             renderFAQs();
             loadUsageHistory();
+            refreshSubscriptionExpiryText();
         });
+        // The page can stay open for hours on a customer's phone; a 30 s tick keeps the
+        // validity line honest without a reload.
+        setInterval(refreshSubscriptionExpiryText, 30000);
 
         function initializeTabs() {
             // This function is called by the DOMContentLoaded listener above via renderApps/renderFAQs

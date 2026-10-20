@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.16.0"
+APP_VERSION = "2.16.1"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2632,31 +2632,64 @@ def format_bytes_gb_tb(size):
     else:
         return f"{gb_val:.2f} GB"
 
+def format_remaining_span(delta_ms, lang: str = 'en') -> str:
+    """Format a POSITIVE time span as "how much is left", for humans.
+
+    Pure on purpose: the subscription page renders the same string in the browser
+    every 30 s (``subCountdownText`` in ``templates/subscription.html``), so the two
+    implementations are pinned together by a shared set of test vectors.
+
+    Precision follows what a reader needs, not what is available:
+
+    * a day or more -> days and hours ("2 روز و 5 ساعت" / "2d 5h");
+    * under a day   -> hours AND minutes ("23 ساعت و 45 دقیقه" / "23h 45m"), because
+      dropping the minutes there is what made a renewal look like it ended sooner;
+    * under an hour -> minutes ("45 دقیقه" / "45m");
+    * under a minute -> "کمتر از یک دقیقه" / "<1m", never "0 دقیقه".
+
+    A zero part is never printed ("2 روز" not "2 روز و 0 ساعت"). The span is clamped
+    at zero: callers decide what "already past" means.
+    """
+    is_fa = _normalize_ui_lang(lang, default='en') == 'fa'
+    try:
+        delta_ms = int(delta_ms or 0)
+    except (TypeError, ValueError):
+        delta_ms = 0
+    delta_ms = max(0, delta_ms)
+    days = delta_ms // 86400000
+    hours = (delta_ms % 86400000) // 3600000
+    minutes = (delta_ms % 3600000) // 60000
+
+    if is_fa:
+        parts = []
+        if days > 0:
+            parts.append(f"{days} روز")
+        if hours > 0:
+            parts.append(f"{hours} ساعت")
+        # Minutes belong beside hours; only a day-scale span may omit them.
+        if minutes > 0 and days == 0:
+            parts.append(f"{minutes} دقیقه")
+        if not parts:
+            return "کمتر از یک دقیقه"
+        return f"{' و '.join(parts)} باقی مانده"
+
+    if days > 0:
+        return f"{days}d {hours}h left" if hours > 0 else f"{days}d left"
+    if hours > 0:
+        return f"{hours}h {minutes}m left" if minutes > 0 else f"{hours}h left"
+    if minutes > 0:
+        return f"{minutes}m left"
+    return "<1m left"
+
+
 def format_remaining_days(timestamp, lang: str = 'en'):
     is_fa = _normalize_ui_lang(lang, default='en') == 'fa'
 
     def _fmt_future(days: int, hours: int, minutes: int) -> str:
-        if is_fa:
-            parts = []
-            if days > 0:
-                parts.append(f"{days} روز")
-            if hours > 0:
-                parts.append(f"{hours} ساعت")
-            if minutes > 0 and not parts:
-                parts.append(f"{minutes} دقیقه")
-            if not parts:
-                return "امروز"
-            return f"{' و '.join(parts)} باقی مانده"
-
-        if days > 0 and hours > 0:
-            return f"{days}d {hours}h left"
-        if days > 0:
-            return f"{days}d left"
-        if hours > 0:
-            return f"{hours}h left"
-        if minutes > 0:
-            return f"{minutes}m left"
-        return "Today"
+        # Kept as the one implementation of the future copy: the three parts are
+        # turned back into a span so there is a single place that decides wording.
+        return format_remaining_span(
+            days * 86400000 + hours * 3600000 + minutes * 60000, lang)
 
     def _fmt_expired(days_ago: int, hours_ago: int) -> str:
         if is_fa:

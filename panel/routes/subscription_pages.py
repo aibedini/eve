@@ -3,6 +3,7 @@ import base64
 import json
 import re
 import threading
+import time
 from datetime import datetime, timedelta
 
 from flask import (
@@ -13,13 +14,16 @@ from sqlalchemy import func, or_
 
 from panel.adapters.xui import fetch_inbounds, get_xui_session, persist_detected_panel_type
 from panel.core import subscription_cache
+from panel.core.digits import to_persian_digits
 from panel.extensions import db, limiter
 from panel.models import (
     Admin, Announcement, BackupConfig, ClientOwnership, FAQ, OnlineChatScript,
-    RenewalEvent, Server, SubAppConfig, SystemConfig, UsageCounterState,
-    UsageDaily,
+    RenewalEvent, Server, ServiceObservedState, SubAppConfig, SystemConfig,
+    UsageCounterState, UsageDaily,
 )
 from panel.routes.common import login_required
+from panel.services import lifecycle as lifecycle_service
+from panel.services import subscription_ended
 from panel.services.backup import _parse_int
 from panel.services.billing import (
     _build_sub_page_packages, _build_subscription_package_recommendation,
@@ -369,7 +373,13 @@ def _build_subscription_statistics_values(
         expiry_type_key, 'تاریخ ثابت' if fa else 'Fixed date',
     )
     raw_days = (expiry_info or {}).get('days')
-    if isinstance(raw_days, (int, float)) and raw_days >= 0:
+    if expiry_type_key == 'today':
+        # "0 روز" is what a same-day expiry used to produce here: the renewal is
+        # still hours away, so the countdown sentence is the truth, not a rounded
+        # day count.
+        days = str((expiry_info or {}).get('text') or '').strip() or (
+            'امروز' if fa else 'Today')
+    elif isinstance(raw_days, (int, float)) and raw_days >= 0:
         days = f"{int(raw_days)} روز" if fa else f"{int(raw_days)} days"
     else:
         days = 'نامحدود' if fa else 'Unlimited'
@@ -399,6 +409,41 @@ def _build_subscription_statistics_values(
         'expiry_type': expiry_type,
         'email': str(client_email or ''),
     }
+
+
+def _subscription_ended_notice(*, server_id, client_email, client, state_key,
+                               expiry_ms, lang):
+    """The "when did it run out" sentence for the public page, or None.
+
+    The STATE is the live panel read; only the MOMENT comes from the observed-state
+    ledger, and only when its quality can support it. A missing ledger row is not an
+    error: an expired subscription still knows its own expiry timestamp.
+
+    Never raises: a display line must not be able to break a customer's page.
+    """
+    if str(state_key or '') not in subscription_ended.ENDED_STATES:
+        return None
+    try:
+        from app import format_app_datetime  # deferred: app-level helper
+        row = None
+        try:
+            service_key = lifecycle_service.resolve_canonical_service_key(
+                server_id, email=client_email, client=client)
+            if service_key:
+                row = ServiceObservedState.query.filter_by(
+                    service_key=service_key).first()
+        except Exception:
+            row = None
+        return subscription_ended.build_notice(
+            state_key=state_key,
+            state_entered_at=getattr(row, 'state_entered_at', None),
+            quality=getattr(row, 'state_entered_at_quality', None),
+            expiry_ms=expiry_ms,
+            lang=lang,
+            formatter=format_app_datetime,
+        )
+    except Exception:
+        return None
 
 
 def _spawn_subscription_refresh(server_id, sub_id, cache_key, variant):
@@ -572,6 +617,12 @@ def client_subscription(server_id, sub_id):
 
     expiry_raw_ms = target_client.get('expiryTime', 0)
     expiry_info = format_remaining_days(expiry_raw_ms, lang=page_lang)
+    # Customer-facing page: Persian copy reads with Persian digits. The conversion is
+    # applied HERE (not inside format_remaining_days) because operator screens render
+    # the same helper and must keep the digits their tables already use.
+    if page_lang == 'fa':
+        expiry_info = dict(expiry_info)
+        expiry_info['text'] = to_persian_digits(expiry_info.get('text'))
 
     try:
         expiry_ts_norm = int(expiry_raw_ms or 0)
@@ -588,6 +639,20 @@ def client_subscription(server_id, sub_id):
         lang=page_lang,
     )
 
+    # "Your data ran out at ..." — only from an evidenced ledger moment.
+    ended_notice = _subscription_ended_notice(
+        server_id=server.id,
+        client_email=client_email,
+        client=target_client,
+        state_key=subscription_state.get('key'),
+        expiry_ms=expiry_ts_norm,
+        lang=page_lang,
+    )
+    ended_at_text = ''
+    if ended_notice:
+        ended_at_text = (to_persian_digits(ended_notice['text'])
+                         if page_lang == 'fa' else ended_notice['text'])
+
     # Prepare fallback headers for client apps (used for both upstream-proxy and manual generation)
     expiry_time_ms = expiry_raw_ms or 0
     expiry_time_sec = int(expiry_time_ms / 1000) if expiry_time_ms and expiry_time_ms > 0 else 0
@@ -595,8 +660,7 @@ def client_subscription(server_id, sub_id):
     # Fix: If expire is 0 (unlimited), set to far future to prevent v2rayNG from hanging/looping
     # v2rayNG interprets expire=0 incorrectly, causing subscription loading issues
     if expiry_time_sec == 0:
-        import time as _time
-        expiry_time_sec = int(_time.time()) + 315360000  # 10 years in the future
+        expiry_time_sec = int(time.time()) + 315360000  # 10 years in the future
     
     user_info_header = f"upload={up}; download={down}; total={total_limit}; expire={expiry_time_sec}"
     profile_metadata = fetch_subscription_profile_metadata(
@@ -727,6 +791,16 @@ def client_subscription(server_id, sub_id):
         "expiry": expiry_info['text'],
         "expiry_days": expiry_info.get('days', 0),
         "expiry_type": expiry_info.get('type', 'normal'),
+        # The live countdown works on absolute milliseconds, never on the rendered
+        # sentence: the browser rebases both clocks once (see the page script) and
+        # then recomputes from the difference every 30 s. `server_now_ms` is a
+        # reference clock; `expiry_ms` is 0 for unlimited AND for a delayed start,
+        # where a countdown would be meaningless and the static text is correct.
+        "expiry_ms": int(expiry_ts_norm) if expiry_ts_norm and expiry_ts_norm > 0 else 0,
+        "server_now_ms": int(time.time() * 1000),
+        # When the subscription actually ran out, or '' when the ledger cannot prove
+        # it (or the account is active again after a renewal).
+        "ended_at_text": ended_at_text,
         "remaining": format_bytes(remaining) if remaining is not None else None,
         "subscription_url": build_public_subscription_url(
             server.id, normalized_sub_id, request.url_root,
