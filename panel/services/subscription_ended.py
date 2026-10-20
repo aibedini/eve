@@ -14,6 +14,11 @@ The two facts are kept apart on purpose:
   account that was already ended - has no evidence for "when", and printing the
   observation time would claim the customer ran out on the day EVE started looking.
 
+The two can also DISAGREE: the page reads the panel now, the ledger was last written
+by an earlier poll. `state_entered_at` then describes the beginning of a different
+state (after a renewal it is the moment the account became ``active``), so it is used
+only when the ledger's own state matches the one being displayed.
+
 Quality vocabulary (written by ``panel.services.telemetry_state``):
 
 * ``observed_transition`` - EVE saw the account active, then saw it ended;
@@ -57,7 +62,7 @@ def _from_expiry_ms(expiry_ms, now):
     return moment
 
 
-def ended_moment(*, state_key, state_entered_at=None, quality=None,
+def ended_moment(*, state_key, ledger_state=None, state_entered_at=None, quality=None,
                  expiry_ms=None, now=None) -> tuple:
     """Return ``(moment, quality)`` for a subscription that ended, else ``(None,
     'unknown_baseline')``.
@@ -67,11 +72,22 @@ def ended_moment(*, state_key, state_entered_at=None, quality=None,
     ``state_entered_at`` from an ``observed_transition`` stand in for it.
     ``volume_ended`` has no such timestamp upstream, so it needs an observed
     transition; anything else is honestly unknown.
+
+    ``ledger_state`` is the state the LEDGER believes this account is in. It is a
+    different fact from the live ``state_key`` and the two can disagree: the page
+    reads the panel now, while the ledger was last written by an earlier poll. When
+    they disagree, ``state_entered_at`` describes the beginning of some OTHER state
+    (for example the moment the account became ``active`` after a renewal), and
+    presenting it as "when your data ran out" is a false claim. The timestamp is
+    therefore only used when the ledger is in the same state being displayed.
     """
     state_key = str(state_key or '').strip().lower()
     quality = str(quality or '').strip().lower()
+    ledger_state = str(ledger_state or '').strip().lower()
     entered = _as_utc(state_entered_at) if isinstance(state_entered_at, datetime) else None
-    observed = entered if (entered is not None and quality == QUALITY_OBSERVED) else None
+    same_state = bool(ledger_state) and ledger_state == state_key
+    observed = (entered if (entered is not None and same_state
+                            and quality == QUALITY_OBSERVED) else None)
     now = _as_utc(now) if isinstance(now, datetime) else None
 
     if state_key not in ENDED_STATES:
@@ -120,16 +136,18 @@ def notice_text(*, state_key, moment, lang, formatter) -> str | None:
             else "Your subscription expired %s" % when)
 
 
-def build_notice(*, state_key, state_entered_at=None, quality=None,
+def build_notice(*, state_key, ledger_state=None, state_entered_at=None, quality=None,
                  expiry_ms=None, lang='en', formatter=None, now=None):
     """One call for the subscription page: ``{'text', 'moment', 'quality'}`` or None.
 
     Returns None whenever a customer should not read a time: the subscription is not
     in an ended state (a successful renewal is back to ``active``, which is exactly
-    how the notice disappears), or the ledger cannot prove when it ended.
+    how the notice disappears), the ledger cannot prove when it ended, or the ledger
+    is describing a DIFFERENT state than the one on screen (see ``ended_moment``).
     """
     moment, resolved_quality = ended_moment(
-        state_key=state_key, state_entered_at=state_entered_at, quality=quality,
+        state_key=state_key, ledger_state=ledger_state,
+        state_entered_at=state_entered_at, quality=quality,
         expiry_ms=expiry_ms, now=now)
     text = notice_text(state_key=state_key, moment=moment, lang=lang,
                        formatter=formatter)

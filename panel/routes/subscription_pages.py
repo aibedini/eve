@@ -436,6 +436,11 @@ def _subscription_ended_notice(*, server_id, client_email, client, state_key,
             row = None
         return subscription_ended.build_notice(
             state_key=state_key,
+            # The ledger can be a poll behind the live read. Its state_entered_at is
+            # only the moment THIS state began when both agree; otherwise it is the
+            # moment some earlier state began (e.g. `active` after a renewal) and
+            # must never be printed as "when your data ran out".
+            ledger_state=getattr(row, 'last_state', None),
             state_entered_at=getattr(row, 'state_entered_at', None),
             quality=getattr(row, 'state_entered_at_quality', None),
             expiry_ms=expiry_ms,

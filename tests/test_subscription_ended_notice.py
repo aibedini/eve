@@ -56,15 +56,15 @@ def _formatter(dt):
 class EndedMomentTests(unittest.TestCase):
     def test_an_observed_volume_end_has_a_real_moment(self):
         moment, quality = ended.ended_moment(
-            state_key='volume_ended', state_entered_at=ENTERED,
-            quality=ended.QUALITY_OBSERVED, now=NOW)
+            state_key='volume_ended', ledger_state='volume_ended',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED, now=NOW)
         self.assertEqual(moment, ENTERED)
         self.assertEqual(quality, ended.QUALITY_OBSERVED)
 
     def test_a_baseline_volume_end_has_no_moment(self):
         moment, quality = ended.ended_moment(
-            state_key='volume_ended', state_entered_at=ENTERED,
-            quality=ended.QUALITY_UNKNOWN, now=NOW)
+            state_key='volume_ended', ledger_state='volume_ended',
+            state_entered_at=ENTERED, quality=ended.QUALITY_UNKNOWN, now=NOW)
         self.assertIsNone(moment)
         self.assertEqual(quality, ended.QUALITY_UNKNOWN)
 
@@ -72,37 +72,100 @@ class EndedMomentTests(unittest.TestCase):
         # An account can hit its volume cap days before its expiry: using the expiry
         # here would tell the customer the wrong moment with full confidence.
         moment, quality = ended.ended_moment(
-            state_key='volume_ended', state_entered_at=None,
-            quality=ended.QUALITY_INFERRED, expiry_ms=EXPIRY_MS, now=NOW)
+            state_key='volume_ended', ledger_state='volume_ended',
+            state_entered_at=None, quality=ended.QUALITY_INFERRED,
+            expiry_ms=EXPIRY_MS, now=NOW)
         self.assertIsNone(moment)
 
     def test_an_expiry_is_its_own_moment(self):
         moment, quality = ended.ended_moment(
-            state_key='expired', state_entered_at=ENTERED,
-            quality=ended.QUALITY_UNKNOWN, expiry_ms=EXPIRY_MS, now=NOW)
+            state_key='expired', ledger_state='expired',
+            state_entered_at=ENTERED, quality=ended.QUALITY_UNKNOWN,
+            expiry_ms=EXPIRY_MS, now=NOW)
         self.assertEqual(quality, ended.QUALITY_INFERRED)
         self.assertEqual(_ms(moment), EXPIRY_MS)
 
     def test_an_expiry_without_a_timestamp_falls_back_to_the_transition(self):
         moment, quality = ended.ended_moment(
-            state_key='expired', state_entered_at=ENTERED,
-            quality=ended.QUALITY_OBSERVED, expiry_ms=0, now=NOW)
+            state_key='expired', ledger_state='expired',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED,
+            expiry_ms=0, now=NOW)
         self.assertEqual(moment, ENTERED)
         self.assertEqual(quality, ended.QUALITY_OBSERVED)
 
     def test_an_expiry_in_the_future_cannot_explain_an_ended_account(self):
         future = _ms(NOW + timedelta(days=3))
         moment, quality = ended.ended_moment(
-            state_key='expired', quality=ended.QUALITY_INFERRED,
-            expiry_ms=future, now=NOW)
+            state_key='expired', ledger_state='expired',
+            quality=ended.QUALITY_INFERRED, expiry_ms=future, now=NOW)
         self.assertIsNone(moment)
 
     def test_an_active_subscription_has_no_moment(self):
         for state_key in ('active', 'expiring_soon', 'volume_low', 'inactive', None):
             moment, _quality = ended.ended_moment(
-                state_key=state_key, state_entered_at=ENTERED,
-                quality=ended.QUALITY_OBSERVED, expiry_ms=EXPIRY_MS, now=NOW)
+                state_key=state_key, ledger_state='volume_ended',
+                state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED,
+                expiry_ms=EXPIRY_MS, now=NOW)
             self.assertIsNone(moment, state_key)
+
+
+class LedgerLagTests(unittest.TestCase):
+    """The live state and the ledger's last written state are different facts.
+
+    The page reads the panel now; the ledger was written by an earlier poll. When
+    they disagree, ``state_entered_at`` is the moment a DIFFERENT state began - and
+    printing it as "your data ran out at ..." invents a fact the evidence does not
+    support. This is the reported bug: after a renewal the ledger still says
+    ``active`` (with an observed transition, because the renewal itself was one),
+    while the panel already shows ``volume_ended`` again.
+    """
+
+    def test_a_lagging_active_ledger_shows_no_volume_end_time(self):
+        moment, quality = ended.ended_moment(
+            state_key='volume_ended', ledger_state='active',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED, now=NOW)
+        self.assertIsNone(moment)
+        self.assertEqual(quality, ended.QUALITY_UNKNOWN)
+
+    def test_a_lagging_expired_ledger_shows_no_volume_end_time(self):
+        moment, _quality = ended.ended_moment(
+            state_key='volume_ended', ledger_state='expired',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED, now=NOW)
+        self.assertIsNone(moment)
+
+    def test_a_matching_ledger_is_trusted(self):
+        moment, quality = ended.ended_moment(
+            state_key='volume_ended', ledger_state='volume_ended',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED, now=NOW)
+        self.assertEqual(moment, ENTERED)
+        self.assertEqual(quality, ended.QUALITY_OBSERVED)
+
+    def test_a_missing_ledger_state_is_not_a_match(self):
+        # A row written before the state was recorded at all, or no row: the empty
+        # string must never be treated as "same state".
+        for ledger_state in (None, '', 'unknown', 'active'):
+            moment, _quality = ended.ended_moment(
+                state_key='volume_ended', ledger_state=ledger_state,
+                state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED, now=NOW)
+            self.assertIsNone(moment, ledger_state)
+
+    def test_an_expired_account_does_not_need_the_ledger(self):
+        # The expiry timestamp is the moment itself, so a lagging ledger cannot make
+        # it wrong: the notice still appears.
+        moment, quality = ended.ended_moment(
+            state_key='expired', ledger_state='active',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED,
+            expiry_ms=EXPIRY_MS, now=NOW)
+        self.assertEqual(quality, ended.QUALITY_INFERRED)
+        self.assertEqual(_ms(moment), EXPIRY_MS)
+
+    def test_a_lagging_ledger_cannot_rescue_an_expiry_without_a_timestamp(self):
+        # No usable expiry AND a ledger describing another state: nothing is evidenced.
+        moment, _quality = ended.ended_moment(
+            state_key='expired', ledger_state='active',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED,
+            expiry_ms=0, now=NOW)
+        self.assertIsNone(moment)
 
 
 class NoticeTextTests(unittest.TestCase):
@@ -139,8 +202,9 @@ class NoticeTextTests(unittest.TestCase):
 class BuildNoticeTests(unittest.TestCase):
     def test_the_three_qualities(self):
         observed = ended.build_notice(
-            state_key='volume_ended', state_entered_at=ENTERED,
-            quality=ended.QUALITY_OBSERVED, lang='fa', formatter=_formatter, now=NOW)
+            state_key='volume_ended', ledger_state='volume_ended',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED,
+            lang='fa', formatter=_formatter, now=NOW)
         self.assertIsNotNone(observed)
         self.assertEqual(observed['quality'], ended.QUALITY_OBSERVED)
         self.assertIn('حجم شما', observed['text'])
@@ -152,9 +216,16 @@ class BuildNoticeTests(unittest.TestCase):
         self.assertEqual(inferred['quality'], ended.QUALITY_INFERRED)
 
         unknown = ended.build_notice(
-            state_key='volume_ended', state_entered_at=ENTERED,
-            quality=ended.QUALITY_UNKNOWN, lang='fa', formatter=_formatter, now=NOW)
+            state_key='volume_ended', ledger_state='volume_ended',
+            state_entered_at=ENTERED, quality=ended.QUALITY_UNKNOWN,
+            lang='fa', formatter=_formatter, now=NOW)
         self.assertIsNone(unknown)
+
+    def test_a_lagging_ledger_produces_no_notice_at_all(self):
+        self.assertIsNone(ended.build_notice(
+            state_key='volume_ended', ledger_state='active',
+            state_entered_at=ENTERED, quality=ended.QUALITY_OBSERVED,
+            lang='fa', formatter=_formatter, now=NOW))
 
     def test_persian_digits_do_not_touch_punctuation(self):
         self.assertEqual(to_persian_digits('2026/10/19 11:00'), '۲۰۲۶/۱۰/۱۹ ۱۱:۰۰')
@@ -199,13 +270,30 @@ class RouteLookupTests(unittest.TestCase):
                 state_key=state_key, expiry_ms=expiry_ms, lang=lang)
 
     def test_an_observed_transition_is_rendered_in_the_application_timezone(self):
-        self._row(quality=ended.QUALITY_OBSERVED)
+        self._row(quality=ended.QUALITY_OBSERVED, state='volume_ended')
         notice = self._notice(state_key='volume_ended')
         self.assertIsNotNone(notice)
         self.assertEqual(notice['quality'], ended.QUALITY_OBSERVED)
         # 11:00 UTC is 14:30 in Asia/Tehran (the default application timezone).
         self.assertIn('14:30', notice['text'])
         self.assertIn('ran out', notice['text'])
+
+    def test_a_lagging_active_ledger_renders_no_time(self):
+        # The reported bug: the panel says volume_ended, the ledger still says active
+        # because the last transition it recorded was the renewal.
+        self._row(quality=ended.QUALITY_OBSERVED, state='active')
+        self.assertIsNone(self._notice(state_key='volume_ended'))
+
+    def test_a_lagging_expired_ledger_renders_no_time_for_a_volume_end(self):
+        self._row(quality=ended.QUALITY_OBSERVED, state='expired')
+        self.assertIsNone(self._notice(state_key='volume_ended'))
+
+    def test_an_expired_account_with_a_lagging_ledger_still_shows_its_expiry(self):
+        self._row(quality=ended.QUALITY_OBSERVED, state='active')
+        notice = self._notice(state_key='expired', expiry_ms=EXPIRY_MS)
+        self.assertIsNotNone(notice)
+        self.assertEqual(notice['quality'], ended.QUALITY_INFERRED)
+        self.assertIn('23:30', notice['text'])
 
     def test_a_baseline_row_renders_no_time(self):
         self._row(quality=ended.QUALITY_UNKNOWN)
@@ -244,6 +332,10 @@ class RenderedPageTests(unittest.TestCase):
     def tearDownClass(cls):
         db.session.remove()
         cls.ctx.pop()
+
+    def setUp(self):
+        ServiceObservedState.query.delete()
+        db.session.commit()
 
     def _client(self, **overrides):
         payload = {
@@ -304,6 +396,30 @@ class RenderedPageTests(unittest.TestCase):
                                          server_now_ms=1792402048277))
         self.assertIn('const SUB_EXPIRY_MS = 1795080448277;', html)
         self.assertIn('const SUB_SERVER_NOW_MS = 1792402048277;', html)
+
+    def test_a_lagging_ledger_leaves_the_page_without_an_ended_line(self):
+        # The reported bug, end to end: the panel says volume_ended while the ledger
+        # still says active. The helper must return nothing, and the rendered page
+        # must therefore have no "ended at" line at all.
+        db.session.add(ServiceObservedState(
+            service_key='eve:7:uuid-abc', server_id=7, client_uuid='uuid-abc',
+            client_email='someone@example.com', last_state='active',
+            state_entered_at=ENTERED,
+            state_entered_at_quality=ended.QUALITY_OBSERVED,
+            last_observed_at=NOW))
+        db.session.commit()
+        with mock.patch.object(
+                subscription_pages.lifecycle_service,
+                'resolve_canonical_service_key', return_value='eve:7:uuid-abc'):
+            notice = subscription_pages._subscription_ended_notice(
+                server_id=7, client_email='someone@example.com',
+                client={'id': 'uuid-abc'}, state_key='volume_ended',
+                expiry_ms=0, lang='fa')
+        self.assertIsNone(notice)
+        html = self._render(self._client(
+            service_state='volume_ended', expiry_type='expired',
+            expiry='منقضی شده', ended_at_text=''))
+        self.assertNotIn('id="sub-ended-at"', html)
 
 
 if __name__ == '__main__':
