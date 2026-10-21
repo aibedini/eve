@@ -1295,3 +1295,27 @@ def activate_online_chat_script(item_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bp.route('/api/online-chat-scripts/<int:item_id>/deactivate', methods=['POST'])
+@permission_required('content.manage')
+def deactivate_online_chat_script(item_id):
+    """Turn the active widget off without switching to another one.
+
+    Exactly one script (or none) is active for the whole panel, so clearing this
+    row's flag is the complete state change: /activate already clears every other
+    row, and nothing else can inherit the flag. There was no counterpart to
+    /activate, so an operator who wanted the widget gone from the subscription page
+    had to delete the snippet and paste it back later.
+    """
+    item = db.session.get(OnlineChatScript, item_id)
+    if not item:
+        return jsonify({'success': False, 'error': 'Script not found'}), 404
+
+    try:
+        item.is_active = False
+        db.session.commit()
+        return jsonify({'success': True, 'item': item.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500

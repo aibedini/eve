@@ -1078,6 +1078,19 @@
         transition: opacity .15s;
         pointer-events: none;
     }
+
+    /* Online chat script cards: the Activate/Disable control is compact, and it used
+       to carry its padding inline on every re-render. One scoped class keeps the two
+       states consistent without adding to the template's inline-style count. */
+    .online-chat-action {
+        padding: 6px 10px;
+    }
+
+    /* Disabling is not the primary action of the edit modal: park it on the far side
+       of the Cancel/Save pair so it cannot be mistaken for "save". */
+    #online-chat-deactivate-btn {
+        margin-right: auto;
+    }
 </style>
 
 <datalist id="phosphor-icon-suggestions">
@@ -1665,6 +1678,7 @@
             </div>
 
             <div class="form-actions">
+                <button class="btn btn-secondary hidden" id="online-chat-deactivate-btn" onclick="deactivateOnlineChatScriptFromModal()">{{ _('Disable') }}</button>
                 <button class="btn btn-secondary" onclick="closeOnlineChatModal()">{{ _('Cancel') }}</button>
                 <button class="btn btn-primary" onclick="saveOnlineChatScript()">{{ _('Save') }}</button>
             </div>
@@ -3435,8 +3449,8 @@
 
                 <div class="server-actions" style="gap: 8px; flex-wrap: wrap;">
                     ${item.is_active
-                        ? '<button class="btn btn-success" style="padding: 6px 10px;" disabled>' + _t('Active') + '</button>'
-                        : `<button class="btn btn-primary" style="padding: 6px 10px;" onclick="activateOnlineChatScript(${item.id})">${_t('Activate')}</button>`
+                        ? `<button class="btn btn-secondary online-chat-action" onclick="deactivateOnlineChatScript(${item.id})">${_t('Disable')}</button>`
+                        : `<button class="btn btn-primary online-chat-action" onclick="activateOnlineChatScript(${item.id})">${_t('Activate')}</button>`
                     }
                     <button class="action-btn" onclick="openEditOnlineChatModal(${item.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
@@ -3458,6 +3472,7 @@
         document.getElementById('online-chat-modal-title').textContent = _t('Add Online Chat Script');
         document.getElementById('online-chat-name').value = '';
         document.getElementById('online-chat-code').value = '';
+        document.getElementById('online-chat-deactivate-btn').classList.add('hidden');
         document.getElementById('online-chat-modal').classList.remove('hidden');
     }
 
@@ -3468,6 +3483,10 @@
         document.getElementById('online-chat-modal-title').textContent = _t('Edit Online Chat Script');
         document.getElementById('online-chat-name').value = item.name || '';
         document.getElementById('online-chat-code').value = item.script_code || '';
+        // An already-active script is the only one that can be disabled; an inactive
+        // one shows Activate on its card instead.
+        document.getElementById('online-chat-deactivate-btn')
+            .classList.toggle('hidden', !item.is_active);
         document.getElementById('online-chat-modal').classList.remove('hidden');
     }
 
@@ -3519,6 +3538,28 @@
         } catch (e) {
             showToast(_t('Error activating script'), 'error');
         }
+    }
+
+    async function deactivateOnlineChatScript(id) {
+        try {
+            const resp = await fetch(`/api/online-chat-scripts/${id}/deactivate`, { method: 'POST' });
+            const result = await resp.json();
+            if (result.success) {
+                showToast(_t('Online chat script disabled'));
+                closeOnlineChatModal();
+                loadOnlineChatScripts();
+            } else {
+                showToast(_t('Error:') + (result.error || 'Unknown'), 'error');
+            }
+        } catch (e) {
+            showToast(_t('Error disabling script'), 'error');
+        }
+    }
+
+    function deactivateOnlineChatScriptFromModal() {
+        const id = (document.getElementById('online-chat-id').value || '').trim();
+        if (!id) return;
+        deactivateOnlineChatScript(id);
     }
 
     async function deleteOnlineChatScript(id) {

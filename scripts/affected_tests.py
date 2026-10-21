@@ -105,6 +105,12 @@ MAPPING = (
         ['tests.test_renew_enable', 'tests.test_regression_matrix',
          'tests.test_client_rotate', 'tests.test_config_vs_telemetry'],
     )),
+    ('panel/routes/content.py', (
+        # Content management: FAQs, apps, announcements and the online chat scripts
+        # (including their activate/deactivate pair).
+        ['tests.test_online_chat_scripts'],
+        ['tests.test_i18n_pages', 'tests.test_ui_design_system'],
+    )),
     ('panel/routes/subscription_pages.py', (
         # The public subscription page: expiry countdown, statistics line and the
         # "when did it run out" notice. This route had no mapping at all, so editing
@@ -249,7 +255,7 @@ MAPPING = (
          'tests.test_subscription_visual_harness'],
     )),
     ('templates/sub_manager.html', (
-        ['tests.test_i18n_pages'],
+        ['tests.test_i18n_pages', 'tests.test_online_chat_scripts'],
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
     )),
     ('templates/monitor.html', (
