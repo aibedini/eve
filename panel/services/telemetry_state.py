@@ -487,6 +487,9 @@ MAX_ATTEMPTS = len(NOTIFICATION_BACKOFF_SECONDS) + 1
 #: kind ("low volume") describes a moment that a later state supersedes, so a message
 #: nobody could deliver is retired rather than kept in the backlog for ever.
 DURABLE_KINDS = ('volume_ended', 'expired')
+#: How long a notification that exhausted the retry ladder still counts as a current
+#: fault for the doctor page. Older ones are history, not a reason to stay amber.
+RETRY_EXHAUSTED_WINDOW_HOURS = 24
 #: A leased row older than this belongs to a crashed worker, not to work in
 #: progress; reclaiming it is what makes the outbox crash-safe.
 LEASE_TIMEOUT_SECONDS = 900
@@ -800,7 +803,19 @@ def backlog(*, limit=50):
 
 
 def metrics(*, now=None) -> dict:
-    """PII-free counters for the doctor page: never a phone number or a message."""
+    """PII-free counters for the doctor page: never a phone number or a message.
+
+    Two of these counters are deliberately NARROWER than a raw status count, because
+    a doctor page that can never go green is a doctor page nobody reads:
+
+    * the backlog age measures only rows whose next attempt is DUE. A durable notice
+      waiting out its one-hour retry is a queue doing its job, not a stuck queue.
+    * ``retry_exhausted`` counts notifications given up on in the last day. History
+      matters, but "16 messages were dropped three weeks ago" is not a current fault -
+      and after the retirement sweep closed a month-old backlog it would otherwise
+      have pinned the panel amber for ever. ``failed_terminal`` still carries the
+      all-time number.
+    """
     moment = now or datetime.utcnow()
     try:
         rows = (db.session.query(ServiceNotificationEvent.status,
@@ -808,8 +823,10 @@ def metrics(*, now=None) -> dict:
                 .group_by(ServiceNotificationEvent.status).all())
         by_status = {str(status): int(count) for status, count in rows}
         oldest = (db.session.query(func.min(ServiceNotificationEvent.created_at))
-             .filter(ServiceNotificationEvent.status.in_(
-                 CLAIMABLE_STATUSES + (LEASE_STATUS, 'gateway_accepted')))
+                  .filter(ServiceNotificationEvent.status.in_(
+                      CLAIMABLE_STATUSES + (LEASE_STATUS, 'gateway_accepted')))
+                  .filter(or_(ServiceNotificationEvent.next_attempt_at.is_(None),
+                              ServiceNotificationEvent.next_attempt_at <= moment))
                   .scalar())
         observed = db.session.query(func.count(ServiceObservedState.id)).scalar() or 0
         overdue = (db.session.query(func.count(ServiceNotificationEvent.id))
@@ -817,6 +834,11 @@ def metrics(*, now=None) -> dict:
                    .filter(or_(ServiceNotificationEvent.next_attempt_at.is_(None),
                                ServiceNotificationEvent.next_attempt_at <= moment))
                    .scalar() or 0)
+        exhausted_recent = (db.session.query(func.count(ServiceNotificationEvent.id))
+                            .filter(ServiceNotificationEvent.status == 'failed_terminal')
+                            .filter(ServiceNotificationEvent.updated_at >= (
+                                moment - timedelta(hours=RETRY_EXHAUSTED_WINDOW_HOURS)))
+                            .scalar() or 0)
     except Exception:
         _safe_rollback()
         return {'available': False}
@@ -841,7 +863,7 @@ def metrics(*, now=None) -> dict:
         'failed_terminal': int(by_status.get('failed_terminal', 0)),
         'oldest_pending_age_seconds': (round(age, 1) if age is not None else None),
         'overdue': int(overdue),
-        'retry_exhausted': int(by_status.get('failed_terminal', 0)),
+        'retry_exhausted': int(exhausted_recent),
         'last_detected_at': _iso(_scalar(
             db.session.query(func.max(ServiceNotificationEvent.created_at)))),
         'last_sent_at': _iso(_scalar(

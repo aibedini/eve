@@ -560,6 +560,52 @@ class TelemetryTransitionTests(unittest.TestCase):
         self.assertEqual(row.status, 'failed_terminal')
         self.assertIsNone(row.next_attempt_at)
 
+    def test_a_queue_waiting_out_its_retry_is_not_a_backlog(self):
+        # A durable notice scheduled an hour ahead keeps the queue honest but is not
+        # stuck; counting it made the doctor warn about a healthy queue for 18 hours.
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_ended', remaining_gb=0))
+        event = ServiceNotificationEvent.query.one()
+        event.status = 'retry'
+        event.created_at = datetime.utcnow() - timedelta(days=3)
+        event.next_attempt_at = datetime.utcnow() + timedelta(hours=1)
+        db.session.commit()
+        metrics = telemetry_state.metrics()
+        self.assertEqual(metrics['overdue'], 0)
+        self.assertIsNone(metrics['oldest_pending_age_seconds'])
+        self.assertEqual(metrics['retry'], 1)
+
+    def test_only_a_recent_exhaustion_counts_as_a_current_fault(self):
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_low', remaining_gb=1))
+        recent = ServiceNotificationEvent.query.one()
+        recent.status = 'failed_terminal'
+        recent.updated_at = datetime.utcnow() - timedelta(hours=2)
+        db.session.commit()
+        old = ServiceNotificationEvent(
+            event_id='old-exhausted', service_key=self.key, server_id=4,
+            client_email='user@example.com', state='volume_low',
+            notification_kind='volume_low', state_version=1, lifecycle_generation=0,
+            status='failed_terminal',
+            created_at=datetime.utcnow() - timedelta(days=20),
+            updated_at=datetime.utcnow() - timedelta(days=20))
+        db.session.add(old)
+        db.session.commit()
+        metrics = telemetry_state.metrics()
+        self.assertEqual(metrics['failed_terminal'], 2, 'the all-time count is unchanged')
+        self.assertEqual(metrics['retry_exhausted'], 1, 'only the last day is actionable')
+
+    def test_reclaiming_a_dead_lease_still_requeues_an_early_attempt(self):
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_ended', remaining_gb=0))
+        event = ServiceNotificationEvent.query.one()
+        event.status = 'sending'
+        event.claimed_at = datetime.utcnow() - timedelta(hours=2)
+        db.session.commit()
+        self.assertEqual(telemetry_state.reclaim_expired_leases(), 1)
+        db.session.expire_all()
+        self.assertEqual(db.session.get(ServiceNotificationEvent, event.id).status, 'retry')
+
     def test_renewal_retires_queued_reminders(self):
         self._record(_state('active', remaining_gb=2))
         self._record(_state('volume_ended', remaining_gb=0))
