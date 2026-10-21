@@ -15,6 +15,19 @@ from panel.routes.common import login_required
 
 bp = Blueprint('dashboard', __name__)
 
+#: The dashboard is a POLLING surface, not a page you visit: one visible tab asks
+#: ``/api/refresh`` every ~10 s, i.e. 350-430 requests per hour and 9-14k per day.
+#: The limiter's global default (``5000 per day / 500 per hour``) is right for the
+#: rest of the panel but below that design rate, so a single admin who left the
+#: dashboard open for half a day exhausted the daily budget and every later poll got
+#: 429 - which the UI showed as "Connection Error / Failed to load data from
+#: servers", indistinguishable from a panel outage, for up to 24 hours.
+#:
+#: These polling endpoints are authenticated reads of a cache this server owns, so
+#: they get their own budget: enough for several tabs and reloads, still bounded
+#: against a runaway loop. Every other endpoint keeps the global default.
+DASHBOARD_POLL_LIMIT = '6000 per hour; 40000 per day'
+
 SSE_ENABLED_ENV = 'EVE_SSE_ENABLED'
 SSE_MAX_STREAMS_ENV = 'EVE_SSE_MAX_STREAMS'
 SSE_MAX_SECONDS_ENV = 'EVE_SSE_MAX_SECONDS'
@@ -134,6 +147,7 @@ def _stamp_age_seconds(stamp, now):
 
 
 @bp.route('/api/refresh/stream')
+@limiter.limit(DASHBOARD_POLL_LIMIT)
 @login_required
 def api_refresh_stream():
     """Server-sent events: tell the client the moment the snapshot changes.
@@ -240,6 +254,7 @@ def api_refresh_stream():
 
 
 @bp.route('/api/refresh')
+@limiter.limit(DASHBOARD_POLL_LIMIT)
 @login_required
 def api_refresh():
     from app import (  # deferred: app-level helper, avoids circular import

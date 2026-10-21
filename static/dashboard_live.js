@@ -19,6 +19,15 @@
             this.lastFetchError = null;
             this.lastEventServerIds = [];
             this.lastUpdatedInboundCount = 0;
+            // Epoch ms until which the endpoint's rate-limit window is spent. While
+            // this is in the future the poller stays quiet: retrying a 429 only keeps
+            // the window pinned at zero and is how a five-minute block turned into a
+            // 24-hour outage (594 rejected requests per hour, all night).
+            this.rateLimitedUntil = 0;
+            // Consecutive 429s. The server does not send Retry-After, so the wait has
+            // to grow on its own: a minute, two, four... instead of a fixed one minute
+            // that would retry all day against a daily window.
+            this.rateLimitStreak = 0;
             this.enabled = true;
             this.generation = 0;
             this.source = null;
@@ -30,8 +39,30 @@
         diagnostics() {
             const keys = ['lastAppliedRevision', 'provisional', 'pendingTargetRevision', 'lastSseEventAt',
                 'lastDashboardRefreshAt', 'lastDeltaAppliedAt', 'lastSnapshotPublishedAt', 'sseStatus', 'pollingFallback',
-                'reconnectAttempts', 'lastFetchError', 'lastEventServerIds', 'lastUpdatedInboundCount'];
+                'reconnectAttempts', 'lastFetchError', 'lastEventServerIds', 'lastUpdatedInboundCount',
+                'rateLimitedUntil', 'rateLimitStreak'];
             return Object.fromEntries(keys.map(key => [key, this[key]]));
+        }
+        isRateLimited() {
+            return this.rateLimitedUntil > Date.now();
+        }
+        // Pause polling for `seconds` (the server's Retry-After, or a growing default
+        // when it did not send one). Bounded so a bogus header cannot park the
+        // dashboard for a day.
+        noteRateLimited(seconds) {
+            this.rateLimitStreak = (this.rateLimitStreak || 0) + 1;
+            const backoff = 60 * Math.pow(2, Math.min(this.rateLimitStreak - 1, 6));
+            const wait = Math.min(3600, Math.max(30, Number(seconds) || backoff));
+            this.rateLimitedUntil = Date.now() + wait * 1000;
+            this.lastFetchError = 'rate limited';
+            this.schedulePoll();
+            if (this.options && typeof this.options.status === 'function') this.options.status();
+        }
+        clearRateLimit() {
+            if (!this.rateLimitedUntil && !this.rateLimitStreak) return;
+            this.rateLimitedUntil = 0;
+            this.rateLimitStreak = 0;
+            this.schedulePoll();
         }
         notify(event = {}) {
             this.lastSseEventAt = Date.now();
@@ -86,10 +117,13 @@
             const hidden = this.options.hidden();
             const interval = hidden ? Math.max(45000, this.options.interval()) :
                 (this.pollingFallback ? this.options.interval() : Math.max(30000, this.options.interval()));
+            // A spent rate-limit window outranks the cadence: the next request waits
+            // for it to clear instead of adding more rejections to it.
+            const blocked = this.rateLimitedUntil - Date.now();
             this.timer = setTimeout(async () => {
                 try { await this.options.reconcile(); }
                 finally { this.schedulePoll(); }
-            }, interval);
+            }, blocked > 0 ? blocked : interval);
         }
         connect() {
             if (!this.enabled || this.source || !this.options.sseEnabled || !root.EventSource) return;

@@ -1738,6 +1738,15 @@
         const poll = (options && options.poll !== undefined) ? Boolean(options.poll) : true;
         const mode = (options && options.mode) ? String(options.mode) : (isSilent ? 'cache' : 'full');
         const enqueue = (options && options.enqueue !== undefined) ? Boolean(options.enqueue) : (mode !== 'cache');
+
+        // The endpoint's rate-limit window is spent: every extra request only keeps
+        // it spent. The poller already holds its next tick until the window clears,
+        // so a silent poll that lands here is a no-op - and a manual click gets the
+        // reason instead of a button that looks broken.
+        if (!force && dashboardLive.isRateLimited()) {
+            if (!isSilent) showToast(_t('Too many requests'), 'error');
+            return;
+        }
         
         const signal = request.controller.signal;
 
@@ -1775,7 +1784,16 @@
             if (isSilent && !options.recovery && dashboardLive.lastAppliedRevision !== null) params.set('since', String(dashboardLive.lastAppliedRevision));
             const qs = params.toString() ? `?${params.toString()}` : '';
             const response = await fetch(`/api/refresh${qs}`, { signal, cache: 'no-store' });
+            if (response.status === 429) {
+                // Per-IP request budget for this endpoint is spent. Pausing for the
+                // server's Retry-After is the only way out: the old behaviour kept
+                // polling (594 rejected requests/hour for nine hours) and turned a
+                // short block into an outage until the daily window rolled over.
+                dashboardLive.noteRateLimited(Number(response.headers.get('Retry-After')) || 0);
+                throw new Error(_t('Rate limit reached'));
+            }
             if (response.ok === false) throw new Error(_t('Cache HTTP {v1}', {v1: response.status}));
+            dashboardLive.clearRateLimit();
             const data = EveDashboardCache.expand(await response.json());
             // The servers list decides v3 vs legacy cards; it is fetched in parallel
             // with this read, so only the first render ever waits for it here.
@@ -1888,6 +1906,25 @@
             // If we have cached inbounds, render them instead of a hard error.
             if (allInboundsData && allInboundsData.length > 0) {
                 applyFilters();
+                return;
+            }
+
+            // A spent request budget is not a connection problem: say what it is and
+            // when the panel will answer again, instead of asking the operator to
+            // "check your connection" and press Try Again (which cannot help).
+            if (dashboardLive.isRateLimited()) {
+                const secondsLeft = Math.max(0, Math.ceil((dashboardLive.rateLimitedUntil - Date.now()) / 1000));
+                const minutesLeft = Math.max(1, Math.ceil(secondsLeft / 60));
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                        <h3>${_t('Too many requests')}</h3>
+                        <p>${_t('The dashboard reached its request budget for this address. It will load by itself in about {v1} minute(s); closing extra panel tabs helps.', {v1: minutesLeft})}</p>
+                    </div>`;
+                if (typeof updateDashboardLiveStatus === 'function') updateDashboardLiveStatus();
                 return;
             }
 

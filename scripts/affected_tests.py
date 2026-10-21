@@ -124,7 +124,7 @@ MAPPING = (
         ['tests.test_ui_design_system'],
     )),
     ('panel/routes/dashboard.py', (
-        ['tests.test_sse_updates'],
+        ['tests.test_sse_updates', 'tests.test_dashboard_rate_limit'],
         ['tests.test_client_events', 'tests.test_server_polling',
          'tests.test_subscription_scope', 'tests.test_refresh_policy'],
     )),
@@ -277,7 +277,7 @@ MAPPING = (
     )),
     ('static/dashboard_live.js', (
         # Node regressions for the dashboard sync coordinator and boot cache.
-        ['tests.test_dashboard_live'],
+        ['tests.test_dashboard_live', 'tests.test_dashboard_rate_limit'],
         ['tests.test_ui_design_system', 'tests.test_static_caching'],
     )),
     ('static/dashboard_boot_cache.js', (
@@ -289,7 +289,7 @@ MAPPING = (
         # templates/dashboard.html, so moving the JS silently stopped this bundle from
         # being tested when it changed. Longest prefix wins over the generic static/.
         ['tests.test_renew_ui_state', 'tests.test_renewal_evidence',
-         'tests.test_p0_renewal_recovery_contract'],
+         'tests.test_p0_renewal_recovery_contract', 'tests.test_dashboard_rate_limit'],
         ['tests.test_ui_design_system', 'tests.test_dashboard_live',
          'tests.test_static_caching'],
     )),
