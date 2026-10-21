@@ -166,6 +166,7 @@ def settings_page():
         DEFAULT_WHATSAPP_BOT_TPL_INFO, DEFAULT_WHATSAPP_BOT_TPL_RENEW,
         DEFAULT_WHATSAPP_TEMPLATE_PRE_EXPIRY, DEFAULT_WHATSAPP_TEMPLATE_RENEW,
         DEFAULT_WHATSAPP_TEMPLATE_WELCOME,
+        _get_dashboard_status_thresholds,
         _get_sms_runtime_settings, _get_telegram_depletion_settings,
         _get_whatsapp_runtime_settings,
     )  # deferred: app-level helper, avoids circular import
@@ -198,6 +199,11 @@ def settings_page():
                          sms_trigger_ended=sms_cfg.get('trigger_ended', False),
                          sms_depletion_expiry_days=sms_cfg.get('depletion_expiry_days', 3),
                          sms_depletion_volume_gb=sms_cfg.get('depletion_volume_gb', 2.0),
+                         # The threshold the transition detector actually uses. Shown
+                         # beside the SMS field because the two disagree by default and
+                         # the SMS one is ignored while the pipeline delivers.
+                         low_volume_state_gb=(
+                             _get_dashboard_status_thresholds().get('low_volume_gb')),
                          sms_depletion_cooldown_days=sms_cfg.get('depletion_cooldown_days', 7),
                          sms_cooldown_hours_near_expiry=(sms_cfg.get('cooldown_hours') or {}).get('near_expiry', 24),
                          sms_cooldown_hours_low_volume=(sms_cfg.get('cooldown_hours') or {}).get('low_volume', 24),

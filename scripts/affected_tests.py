@@ -145,7 +145,10 @@ MAPPING = (
         ['tests.test_system_update', 'tests.test_security_headers'],
     )),
     ('panel/routes/pages.py', (
-        ['tests.test_ui_design_system'],
+        # Page routes carry the settings context (including the low-volume threshold
+        # the notification pipeline actually uses), so the i18n catalog scan belongs
+        # here: a new _() string on this page must exist in its catalog.
+        ['tests.test_ui_design_system', 'tests.test_i18n_pages'],
         ['tests.test_subscription_scope', 'tests.test_static_deploy_contract'],
     )),
     ('panel/adapters/xui.py', (

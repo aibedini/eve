@@ -4277,6 +4277,13 @@ def run_depletion_event_outbox(limit: int = 10, *, job_id: str | None = None,
         reclaimed = telemetry_state.reclaim_expired_leases()
         if reclaimed:
             _log_warning('[sms-events] reclaimed %s expired lease(s)', reclaimed)
+        # Rows that spent their last allowed attempt without a live worker to retire
+        # them can never be leased again (the claim filter stops at MAX_ATTEMPTS), so
+        # they would sit in "due" for ever and keep the operator's backlog warning
+        # red. Closing them here is the missing half of the retry ladder.
+        retired = telemetry_state.retire_exhausted_notifications()
+        if retired:
+            _log_warning('[sms-events] retired %s exhausted notification(s)', retired)
         cfg = _get_sms_runtime_settings()
         if not depletion_pipeline.shadow_mode():
             _reconcile_accepted_depletion_events(cfg, limit=limit)

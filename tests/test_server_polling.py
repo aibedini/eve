@@ -1141,6 +1141,51 @@ class CadenceBandTests(OfflinePolicyTests):
                          refresh_policy.server_active_seconds())
 
 
+class SchedulerFairnessTests(OfflinePolicyTests):
+    """A busy install must not be able to starve one panel for ever.
+
+    Field case this pins: seven panels, each read taking 20-30 s, five workers. One
+    panel whose single read timed out sat in the backoff band - the lowest rank - while
+    the HOT panels kept taking every slot. It stayed unread for two hours although
+    ``server_due`` reported it due on every tick, so its telemetry (and every
+    notification derived from it) was hours behind.
+    """
+
+    def test_a_panel_past_the_staleness_ceiling_outranks_a_hot_panel(self):
+        refresh_policy.note_server_activity(901, now=BASE)                    # hot
+        refresh_policy.note_server_result(901, True, now=BASE)                # due BASE+2
+        refresh_policy.note_fetch_started(902, now=BASE - 3600)                # read 1 h ago
+        refresh_policy.note_server_result(902, False, now=BASE - 3600)         # backoff band
+        now = BASE + 2.5
+        self.assertEqual(refresh_policy.server_mode(901, now=now), "hot")
+        self.assertEqual(refresh_policy.server_mode(902, now=now), "backoff")
+        self.assertTrue(refresh_policy.server_due(901, now=now))
+        self.assertTrue(refresh_policy.server_due(902, now=now))
+        # One free worker: the panel nobody has read for an hour must win.
+        self.assertEqual(
+            refresh_policy.scheduler_plan([{"id": 901}, {"id": 902}], now=now, limit=1),
+            [902])
+
+    def test_the_promotion_does_not_displace_a_healthy_schedule(self):
+        # A recently-read panel keeps its band order: the ceiling is a floor on
+        # fairness, not a new priority that outranks a HOT panel on every tick.
+        refresh_policy.note_server_activity(903, now=BASE)
+        refresh_policy.note_server_result(903, True, now=BASE)
+        refresh_policy.note_fetch_started(904, now=BASE)
+        refresh_policy.note_server_result(904, False, now=BASE)
+        now = BASE + 6
+        self.assertEqual(refresh_policy.server_mode(904, now=now), "backoff")
+        self.assertEqual(
+            refresh_policy.scheduler_plan([{"id": 903}, {"id": 904}], now=now, limit=1),
+            [903])
+
+    def test_an_inflight_panel_is_never_promoted_into_a_second_read(self):
+        refresh_policy.note_fetch_started(905, now=BASE - 3600)
+        self.assertTrue(refresh_policy.inflight(905))
+        self.assertEqual(
+            refresh_policy.scheduler_plan([{"id": 905}], now=BASE, limit=1), [])
+
+
 class ClientFenceTests(OfflinePolicyTests):
     """The read-your-writes fence, with and without a shared backend."""
 

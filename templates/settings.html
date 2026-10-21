@@ -1553,6 +1553,13 @@
                         <div>
                             <small class="text-secondary">{{ _('Remaining volume (GB) <') }}</small>
                             <input type="number" id="sms-depletion-volume-gb" class="form-control" min="0" max="1000" step="0.1" value="{{ sms_depletion_volume_gb }}">
+                            {% if low_volume_state_gb is defined and low_volume_state_gb %}
+                                {% if (low_volume_state_gb|float) != (sms_depletion_volume_gb|float) %}
+                            <small class="field-note field-note-warn">{{ _('Reminders fire at the dashboard low-volume threshold ({v1} GB); this value only applies to the legacy scanner.', v1=low_volume_state_gb) }}</small>
+                                {% else %}
+                            <small class="field-note">{{ _('Reminders fire at the dashboard low-volume threshold ({v1} GB).', v1=low_volume_state_gb) }}</small>
+                                {% endif %}
+                            {% endif %}
                         </div>
                     </div>
                     <input type="hidden" id="sms-depletion-cooldown-days" value="{{ sms_depletion_cooldown_days }}">

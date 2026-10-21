@@ -20,7 +20,10 @@ import panel.jobs.refresh as refresh_jobs  # noqa: E402
 from app import Admin, Server, db  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DASHBOARD = os.path.join(REPO_ROOT, 'templates', 'dashboard.html')
+#: The dashboard's JS lives in its own cacheable bundle since the v2.14 extraction;
+#: ``templates/dashboard.html`` only carries the markup. Reading the template here
+#: found none of the wiring and left four assertions failing silently.
+DASHBOARD = os.path.join(REPO_ROOT, 'static', 'dashboard.js')
 
 
 class RefreshJobEndpointTests(unittest.TestCase):

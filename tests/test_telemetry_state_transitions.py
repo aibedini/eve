@@ -511,6 +511,55 @@ class TelemetryTransitionTests(unittest.TestCase):
         self.assertEqual(delays[-1], 3600)
         self.assertEqual(len(delays), telemetry_state.MAX_ATTEMPTS + 2)
 
+    def test_a_warning_that_spent_its_last_attempt_is_retired(self):
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_low', remaining_gb=1))
+        event = ServiceNotificationEvent.query.one()
+        event.attempt_count = telemetry_state.MAX_ATTEMPTS
+        event.status = 'retry'
+        event.next_attempt_at = datetime.utcnow() - timedelta(days=30)
+        db.session.commit()
+        # The claim filter stops at MAX_ATTEMPTS, so no worker can ever close it: it is
+        # due (and counted in the operator's backlog) but permanently unreachable.
+        self.assertEqual(telemetry_state.claim_events(limit=5, owner='w'), [])
+        self.assertEqual(telemetry_state.retire_exhausted_notifications(), 1)
+        db.session.expire_all()
+        row = db.session.get(ServiceNotificationEvent, event.id)
+        self.assertEqual(row.status, 'failed_terminal')
+        self.assertIsNone(row.next_attempt_at)
+        self.assertEqual(row.last_error, 'retry_exhausted')
+        self.assertEqual(telemetry_state.metrics().get('overdue'), 0)
+
+    def test_a_durable_notice_is_not_retired_by_the_sweep(self):
+        # "You ran out" stays true, so it keeps retrying at a low frequency instead of
+        # being retired: only the moment-shaped warnings are retired.
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_ended', remaining_gb=0))
+        event = ServiceNotificationEvent.query.one()
+        event.attempt_count = telemetry_state.MAX_ATTEMPTS
+        event.status = 'retry'
+        event.next_attempt_at = datetime.utcnow() + timedelta(hours=1)
+        db.session.commit()
+        self.assertEqual(telemetry_state.retire_exhausted_notifications(), 0)
+        db.session.expire_all()
+        self.assertEqual(db.session.get(ServiceNotificationEvent, event.id).status, 'retry')
+
+    def test_a_lease_lost_on_its_last_attempt_is_retired_not_requeued(self):
+        self._record(_state('active', remaining_gb=2))
+        self._record(_state('volume_low', remaining_gb=1))
+        event = ServiceNotificationEvent.query.one()
+        event.status = 'sending'
+        event.claimed_at = datetime.utcnow() - timedelta(hours=2)
+        event.attempt_count = telemetry_state.MAX_ATTEMPTS
+        db.session.commit()
+        # Requeueing this one as 'retry' is what created the 34-day backlog: the claim
+        # filter refuses it at the ceiling, so it was due for ever and never sent.
+        self.assertEqual(telemetry_state.reclaim_expired_leases(), 1)
+        db.session.expire_all()
+        row = db.session.get(ServiceNotificationEvent, event.id)
+        self.assertEqual(row.status, 'failed_terminal')
+        self.assertIsNone(row.next_attempt_at)
+
     def test_renewal_retires_queued_reminders(self):
         self._record(_state('active', remaining_gb=2))
         self._record(_state('volume_ended', remaining_gb=0))
@@ -581,6 +630,74 @@ class TelemetryTransitionTests(unittest.TestCase):
                     self.assertEqual(actual, expected)
                 finally:
                     os.environ.pop('EVE_DEPLETION_EVENT_PIPELINE', None)
+
+
+class LowVolumeThresholdWarningTests(unittest.TestCase):
+    """The SMS threshold and the state threshold must not disagree in silence.
+
+    In pipeline mode the detector classifies ``volume_low`` with the dashboard
+    threshold; the per-channel ``sms_depletion_volume_gb`` is only read by the legacy
+    scan that this mode disables. An install had 2 GB in the SMS settings, 0.2 GB as
+    the state threshold, and a customer at 419 MB who therefore received nothing -
+    with no warning anywhere to explain it.
+    """
+
+    COVERAGE = {'enabled': 1, 'covered': 1, 'uncovered': 0, 'refused_transport': 0,
+                'unreachable': 0, 'stale': 0, 'fresh_seconds_limit': 300}
+    OUTBOX = {'available': True}
+
+    def _codes(self, sms, state_gb, mode='on'):
+        env = mock.patch.dict(os.environ, {'EVE_DEPLETION_EVENT_PIPELINE': mode})
+        with env, \
+                mock.patch.object(app_module, '_get_sms_runtime_settings',
+                                  return_value=sms), \
+                mock.patch.object(app_module, '_get_dashboard_status_thresholds',
+                                  return_value={'low_volume_gb': state_gb}):
+            report = depletion_pipeline.warnings(
+                coverage=self.COVERAGE, outbox=self.OUTBOX, marks={})
+        return {item['code']: item['detail'] for item in report}
+
+    def test_a_higher_sms_threshold_that_can_never_fire_is_reported(self):
+        codes = self._codes({'enabled': True, 'trigger_low_volume': True,
+                             'depletion_volume_gb': 2.0}, 0.2)
+        self.assertIn('low_volume_threshold_mismatch', codes)
+        detail = codes['low_volume_threshold_mismatch']
+        self.assertIn('2', detail)
+        self.assertIn('0.2', detail)
+
+    def test_matching_thresholds_are_not_reported(self):
+        codes = self._codes({'enabled': True, 'trigger_low_volume': True,
+                             'depletion_volume_gb': 2.0}, 2.0)
+        self.assertNotIn('low_volume_threshold_mismatch', codes)
+
+    def test_a_disabled_trigger_or_feature_is_not_reported(self):
+        for sms in ({'enabled': False, 'trigger_low_volume': True, 'depletion_volume_gb': 2.0},
+                    {'enabled': True, 'trigger_low_volume': False, 'depletion_volume_gb': 2.0},
+                    {'enabled': True, 'trigger_low_volume': True, 'depletion_volume_gb': 0}):
+            with self.subTest(sms=sms):
+                self.assertNotIn('low_volume_threshold_mismatch',
+                                 self._codes(sms, 0.2))
+
+    def test_the_legacy_scanner_owns_its_own_threshold(self):
+        # In 'shadow'/'off' the scan that reads the SMS value is the sender, so the two
+        # numbers are two real settings rather than one dead one.
+        for mode in ('shadow', 'off'):
+            with self.subTest(mode=mode):
+                self.assertNotIn('low_volume_threshold_mismatch', self._codes(
+                    {'enabled': True, 'trigger_low_volume': True, 'depletion_volume_gb': 2.0},
+                    0.2, mode=mode))
+
+    def test_the_settings_page_names_the_threshold_in_use(self):
+        # The warning is only useful if the operator can see, at the field itself, which
+        # number is the one that fires.
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        route = open(os.path.join(root, 'panel', 'routes', 'pages.py'),
+                     encoding='utf-8').read()
+        template = open(os.path.join(root, 'templates', 'settings.html'),
+                        encoding='utf-8').read()
+        self.assertIn('low_volume_state_gb=', route)
+        self.assertIn('low_volume_state_gb is defined', template)
+        self.assertIn('Reminders fire at the dashboard low-volume threshold', template)
 
 
 class FetchPipelineWiringTests(unittest.TestCase):

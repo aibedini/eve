@@ -1438,8 +1438,16 @@ def scheduler_plan(rows, *, now=None, limit=None) -> list:
     long each panel has been waiting, so a HOT panel that is overdue outranks an idle
     panel that just came due. ``limit`` caps the result to the free workers; when it is
     None every due server is returned (the caller decides how many it can start).
+
+    A panel that has waited past ``EVE_REFRESH_MAX_STALENESS_SECONDS`` outranks the
+    band entirely. Band-first ordering is right while the pool keeps up, but a busy
+    install can keep every worker slot on HOT panels for hours: the field case was an
+    install whose seven panels each take 20-30 s to read, where one panel sat unread
+    for two hours while ``server_due`` reported it due every tick - it was simply last
+    in every plan. Staleness is the one thing that must not lose to "more popular".
     """
     moment = time.time() if now is None else float(now)
+    ceiling = max_staleness()
     candidates = []
     for row in rows or ():
         sid = _coerce_server_id((row or {}).get('id') if isinstance(row, dict) else row)
@@ -1451,7 +1459,13 @@ def scheduler_plan(rows, *, now=None, limit=None) -> list:
         if not server_due(sid, now=moment):
             continue
         due_since = float(state.get('due_since') or state.get('next_due') or moment)
-        candidates.append((server_poll_rank(sid, now=moment), due_since, sid))
+        rank = server_poll_rank(sid, now=moment)
+        if ceiling > 0:
+            last_read = state.get('last_fetch_started_at') or state.get('last_fetch_success_at')
+            waited_since = float(last_read) if last_read else due_since
+            if (moment - waited_since) >= ceiling:
+                rank = -1
+        candidates.append((rank, due_since, sid))
     candidates.sort()
     ordered = [sid for _rank, _due, sid in candidates]
     if limit is not None:

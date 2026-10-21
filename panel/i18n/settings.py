@@ -700,6 +700,8 @@ FA = {
     'Remaining volume (GB)': 'حجم باقیمانده (گیگابایت)',
     'Remaining volume (GB) <': 'حجم باقیمانده (گیگابایت) <',
     'Reminder thresholds': 'آستانه\u200cهای یادآوری',
+    'Reminders fire at the dashboard low-volume threshold ({v1} GB).': 'یادآوری\u200cها بر اساس آستانهٔ کم\u200cحجمی داشبورد ({v1} گیگابایت) ارسال می\u200cشوند.',
+    'Reminders fire at the dashboard low-volume threshold ({v1} GB); this value only applies to the legacy scanner.': 'یادآوری\u200cها بر اساس آستانهٔ کم\u200cحجمی داشبورد ({v1} گیگابایت) ارسال می\u200cشوند؛ این مقدار فقط برای اسکنر قدیمی اعمال می\u200cشود.',
     'Remove': 'حذف',
     'Remove {identity} from the Telegram test allowlist?': '{identity} از فهرست مجاز آزمایش تلگرام حذف شود؟',
     'Renew': 'تمدید',

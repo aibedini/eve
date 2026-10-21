@@ -482,6 +482,11 @@ def _open_event(*, service_key, server_id, identity, state, previous_state,
 CLAIMABLE_STATUSES = ('pending', 'retry')
 LEASE_STATUS = 'sending'
 MAX_ATTEMPTS = len(NOTIFICATION_BACKOFF_SECONDS) + 1
+#: Kinds whose fact stays true after the retry ladder is spent ("you ran out", "you
+#: expired"), so they keep retrying at one hour instead of being retired. Every other
+#: kind ("low volume") describes a moment that a later state supersedes, so a message
+#: nobody could deliver is retired rather than kept in the backlog for ever.
+DURABLE_KINDS = ('volume_ended', 'expired')
 #: A leased row older than this belongs to a crashed worker, not to work in
 #: progress; reclaiming it is what makes the outbox crash-safe.
 LEASE_TIMEOUT_SECONDS = 900
@@ -525,7 +530,7 @@ def claim_events(limit: int = 5, *, owner=None, now=None) -> list:
                      .filter(ServiceNotificationEvent.status.in_(CLAIMABLE_STATUSES))
                      .filter(or_(ServiceNotificationEvent.attempt_count < MAX_ATTEMPTS,
                                  ServiceNotificationEvent.notification_kind.in_(
-                                     ('volume_ended', 'expired'))))
+                                     DURABLE_KINDS)))
                      .filter(or_(ServiceNotificationEvent.next_attempt_at.is_(None),
                                  ServiceNotificationEvent.next_attempt_at <= moment))
                      .order_by(ServiceNotificationEvent.next_attempt_at,
@@ -570,7 +575,14 @@ def claim_events(limit: int = 5, *, owner=None, now=None) -> list:
 
 
 def reclaim_expired_leases(*, now=None) -> int:
-    """Return a crashed worker's leases to the queue as retries."""
+    """Return a crashed worker's leases to the queue as retries.
+
+    A lease that died on its LAST allowed attempt cannot be reclaimed: ``claim_events``
+    never leases a non-durable row at ``attempt_count >= MAX_ATTEMPTS``, so putting it
+    back as ``retry`` would leave a row that is due, claimable in the metrics, and
+    unreachable for ever. Those are retired instead, which is what ``mark_retry``
+    would have done had the worker lived.
+    """
     moment = now or datetime.utcnow()
     cutoff = moment - timedelta(seconds=LEASE_TIMEOUT_SECONDS)
     try:
@@ -579,10 +591,18 @@ def reclaim_expired_leases(*, now=None) -> int:
                 .filter(or_(ServiceNotificationEvent.claimed_at.is_(None),
                             ServiceNotificationEvent.claimed_at <= cutoff))
                 .all())
+        retired = 0
         for row in rows:
-            row.status = 'retry'
-            row.next_attempt_at = moment
-            row.last_error = 'lease_expired'
+            if (int(row.attempt_count or 0) >= MAX_ATTEMPTS
+                    and str(row.notification_kind or '') not in DURABLE_KINDS):
+                row.status = 'failed_terminal'
+                row.next_attempt_at = None
+                row.last_error = 'retry_exhausted'
+                retired += 1
+            else:
+                row.status = 'retry'
+                row.next_attempt_at = moment
+                row.last_error = 'lease_expired'
             row.updated_at = moment
             row.claimed_by = None
             row.claimed_at = None
@@ -591,6 +611,41 @@ def reclaim_expired_leases(*, now=None) -> int:
         return len(rows)
     except Exception:
         _safe_rollback()
+        return 0
+
+
+def retire_exhausted_notifications(*, now=None) -> int:
+    """Close non-durable notifications that exhausted the retry ladder.
+
+    ``claim_events`` deliberately refuses to lease a ``volume_low``/``expiring_soon``
+    row once ``attempt_count`` reached ``MAX_ATTEMPTS``, and the terminal transition
+    normally happens inside ``mark_retry`` - i.e. only for a row that was leased
+    again. A worker that died after the last claim, or any historical row left in
+    ``retry`` at the ceiling, therefore becomes unreachable while still counting as
+    "due" in the operator's backlog (17 such rows sat for 34 days on one install).
+
+    One indexed UPDATE finishes what the ladder intended. Durable kinds
+    (``volume_ended``/``expired``) are exempt by design: they keep being retried at a
+    low frequency because the fact stays true.
+    """
+    moment = now or datetime.utcnow()
+    try:
+        count = (ServiceNotificationEvent.query
+                 .filter(ServiceNotificationEvent.status.in_(CLAIMABLE_STATUSES))
+                 .filter(ServiceNotificationEvent.attempt_count >= MAX_ATTEMPTS)
+                 .filter(~ServiceNotificationEvent.notification_kind.in_(DURABLE_KINDS))
+                 .update({'status': 'failed_terminal',
+                          'next_attempt_at': None,
+                          'last_error': 'retry_exhausted',
+                          'updated_at': moment,
+                          'claimed_by': None,
+                          'claimed_at': None},
+                         synchronize_session=False))
+        db.session.commit()
+        return int(count or 0)
+    except Exception:
+        _safe_rollback()
+        logger.warning("[telemetry] retire sweep failed", exc_info=True)
         return 0
 
 
@@ -651,7 +706,7 @@ def mark_retry(event, reason, *, now=None) -> int:
     """Retry terminal notices indefinitely at a low frequency; bound warnings."""
     moment = now or datetime.utcnow()
     attempt = int(event.attempt_count or 1)
-    durable = event.notification_kind in ('volume_ended', 'expired')
+    durable = event.notification_kind in DURABLE_KINDS
     if attempt >= MAX_ATTEMPTS and not durable:
         event.status = 'failed_terminal'
         event.next_attempt_at = None

@@ -363,6 +363,35 @@ def panel_coverage(*, now=None, max_age_seconds=None) -> dict:
     }
 
 
+def _low_volume_threshold_mismatch() -> dict | None:
+    """The SMS warning threshold vs the threshold that opens a ``volume_low`` event.
+
+    In pipeline mode the transition detector classifies with the DASHBOARD threshold
+    (``general_low_volume_warning_gb``). The per-channel ``sms_depletion_volume_gb``
+    is only read by the legacy scanner, which this mode disables - so an operator who
+    raises the SMS value sees no change at all, and nothing in the UI says so. That is
+    exactly how a customer sat at 419 MB with the SMS setting at 2 GB and received
+    nothing.
+
+    Returns ``{'sms_gb', 'state_gb'}`` when the two are both configured, both apply,
+    and they disagree; otherwise None.
+    """
+    try:
+        from app import _get_dashboard_status_thresholds, _get_sms_runtime_settings
+        sms = _get_sms_runtime_settings()
+        if not sms.get('enabled') or sms.get('trigger_low_volume') is False:
+            return None
+        sms_gb = float(sms.get('depletion_volume_gb') or 0.0)
+        state_gb = float(_get_dashboard_status_thresholds().get('low_volume_gb') or 0.0)
+        if sms_gb <= 0 or state_gb <= 0:
+            return None
+        if abs(sms_gb - state_gb) < 1e-9:
+            return None
+        return {'sms_gb': sms_gb, 'state_gb': state_gb}
+    except Exception:
+        return None
+
+
 def warnings(*, coverage=None, outbox=None, now=None, marks=None) -> list:
     """Operator-facing warnings. Each one is a named condition, never a guess."""
     coverage = coverage if coverage is not None else panel_coverage(now=now)
@@ -373,6 +402,15 @@ def warnings(*, coverage=None, outbox=None, now=None, marks=None) -> list:
         warning_list.append({
             'code': 'pipeline_off',
             'detail': 'the transition detector is disabled; only the periodic scan sends'})
+    if mode() == 'on':
+        mismatch = _low_volume_threshold_mismatch()
+        if mismatch:
+            warning_list.append({
+                'code': 'low_volume_threshold_mismatch',
+                'detail': ('the SMS low-volume warning is set to %g GB but the low-volume '
+                           'state starts at %g GB; the detector uses the state threshold, '
+                           'so the SMS value has no effect in this mode'
+                           % (mismatch['sms_gb'], mismatch['state_gb']))})
     heartbeat_age = _age_seconds(marks.get(HEARTBEAT_PREFIX + 'delivery_worker'), now=now)
     if heartbeat_age is None or heartbeat_age > HEARTBEAT_TTL_SECONDS * 2:
         warning_list.append({
