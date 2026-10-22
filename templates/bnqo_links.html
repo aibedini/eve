@@ -1,21 +1,33 @@
 {% extends "base.html" %}
 {% set bnqo_copy = {
 'en': {
-  'title': 'Network Links', 'back_to_pulse': 'Pulse',
-  'agents': 'Agents', 'agents_help': 'Small scripts installed on your servers (one in Iran, one abroad) that continuously ping each other and report the results here. Create an agent, copy the install command, and run it on the server.',
-  'new_token': 'New enroll token', 'name': 'Name', 'role': 'Role', 'address': 'Address',
+  'title': 'Network monitoring', 'back_to_pulse': 'Back to config tests',
+  'agents': 'Server monitors', 'agents_help': 'Install a small monitor on each server. They check the path between the servers and report results here. Get an install command, copy it, and run it on the matching server.',
+  'new_token': 'Get install command', 'name': 'Name', 'role': 'Role', 'address': 'Address',
   'enabled_col': 'Enabled', 'version': 'Version', 'last_seen': 'Last seen', 'last_ip': 'Last IP',
   'actions': 'Actions', 'revoke': 'Revoke', 'confirm_revoke': 'Revoke this agent? It will be disabled immediately.',
   'enabled': 'Enabled', 'disabled': 'Disabled', 'never': 'Never',
   'token_title': 'Install command', 'token_warning': 'This command is shown only once. Store it somewhere safe before closing.',
   'copy': 'Copy', 'copied': 'Copied.', 'close': 'Close', 'create': 'Create',
-  'token_role': 'Agent role', 'token_ttl': 'Token TTL (minutes)',
-  'links': 'Links', 'links_help': 'A link connects two agents (e.g. Iran and Germany) and measures the network quality between them in both directions: packet loss, round-trip time, and jitter. Click a row for charts.',
-  'create_link': 'Create link', 'link_col': 'Link', 'endpoints': 'A ⇄ B',
-  'dir_ab': 'A → B', 'dir_ba': 'B → A', 'status': 'Status', 'last_data': 'Last data',
+  'token_role': 'Server location', 'token_ttl': 'Install command expires after (minutes)',
+  'iran_role': 'Iran', 'outside_role': 'Outside Iran', 'relay_role': 'Relay',
+  'links': 'Monitored server pairs', 'links_help': 'Each pair measures the connection in both directions. Open a row to see its history and charts.',
+  'create_link': 'Add server pair', 'link_col': 'Pair name', 'endpoints': 'Servers',
+  'dir_ab': 'A → B', 'dir_ba': 'B → A', 'status': 'Overall status', 'last_data': 'Last reading',
+  'status_labels': {'healthy': 'Healthy', 'degraded': 'Degraded', 'critical': 'Critical', 'unreachable': 'Unreachable', 'control-plane-unavailable': 'Monitor unavailable', 'probe-blocked': 'Probe blocked', 'service-failed': 'Service failed', 'agent-unhealthy': 'Monitor unhealthy', 'telemetry-delayed': 'Data delayed', 'clock-unsynchronized': 'Clock mismatch', 'unknown': 'No data yet', 'maintenance': 'Maintenance'},
   'diagnose': 'Diagnose', 'enable': 'Enable', 'disable': 'Disable', 'delete': 'Delete',
   'confirm_delete': 'Delete this link and its history?',
-  'page_intro': 'This page monitors the raw network path between your servers — independent of VPN configs. Install a small agent on a server in Iran and another abroad; they continuously ping each other and report packet loss, latency and jitter so you can tell whether a problem is the network itself or your VPN setup.',
+  'page_intro': 'Find out whether trouble starts on the connection between your servers. This page measures that path continuously; Pulse config tests show whether an individual VPN config works.',
+  'setup_title': 'Start monitoring in three steps',
+  'setup_agent': 'Install monitors', 'setup_agent_help': 'Create an install command for each server and run it once in Iran and once abroad.',
+  'setup_pair': 'Pair the servers', 'setup_pair_help': 'Select the two installed monitors and give their connection a name.',
+  'setup_review': 'Read the results', 'setup_review_help': 'Check each direction separately, then open a pair for charts and history.',
+  'metrics_title': 'What the measurements mean',
+  'loss_help': 'Packet loss: the percentage of probes that did not arrive. Higher means a less reliable path.',
+  'rtt_help': 'RTT: the round-trip time for a probe. Higher means more delay.',
+  'jitter_help': 'Jitter: how much delay varies from one probe to the next. Higher means a less stable connection.',
+  'directions_help': 'A → B and B → A are shown separately because one direction may be worse than the other.',
+  'need_agents': 'Register two enabled monitors before creating a server pair.',
   'empty_links': 'No links yet. Create one to start monitoring.', 'empty_agents': 'No agents enrolled yet.',
   'link_name': 'Link name', 'agent_a': 'Agent A (e.g. Iran)', 'agent_b': 'Agent B (e.g. outside)',
   'profile': 'Profile (JSON, optional)', 'profile_help': 'Leave the default or edit; invalid JSON is rejected.',
@@ -27,21 +39,33 @@
   'request_error': 'The request failed.', 'loading': 'Loading…'
 },
 'fa': {
-  'title': 'لینک‌های شبکه', 'back_to_pulse': 'Pulse',
-  'agents': 'ایجنت‌ها', 'agents_help': 'اسکریپت‌های کوچکی که روی سرورهای شما نصب می‌شوند (یکی در ایران، یکی خارج) و مدام همدیگر را پینگ می‌کنند و نتیجه را اینجا گزارش می‌دهند. ایجنت بسازید، دستور نصب را کپی کنید و روی سرور اجرا کنید.',
-  'new_token': 'توکن ثبت‌نام جدید', 'name': 'نام', 'role': 'نقش', 'address': 'آدرس',
+  'title': 'پایش ارتباط سرورها', 'back_to_pulse': 'بازگشت به تست کانفیگ',
+  'agents': 'ابزارهای پایش سرور', 'agents_help': 'روی هر سرور یک ابزار کوچک نصب کنید. این ابزارها ارتباط بین سرورها را بررسی می‌کنند و نتیجه را اینجا نشان می‌دهند. دستور نصب را بگیرید، کپی کنید و روی سرور مربوط اجرا کنید.',
+  'new_token': 'دریافت دستور نصب', 'name': 'نام', 'role': 'نقش', 'address': 'آدرس',
   'enabled_col': 'فعال', 'version': 'نسخه', 'last_seen': 'آخرین اتصال', 'last_ip': 'آخرین IP',
   'actions': 'عملیات', 'revoke': 'لغو', 'confirm_revoke': 'این ایجنت لغو شود؟ بلافاصله غیرفعال می‌شود.',
   'enabled': 'فعال', 'disabled': 'غیرفعال', 'never': 'هرگز',
   'token_title': 'دستور نصب', 'token_warning': 'این دستور فقط یک‌بار نمایش داده می‌شود؛ قبل از بستن آن را ذخیره کنید.',
   'copy': 'کپی', 'copied': 'کپی شد.', 'close': 'بستن', 'create': 'ساخت',
-  'token_role': 'نقش ایجنت', 'token_ttl': 'اعتبار توکن (دقیقه)',
-  'links': 'لینک‌ها', 'links_help': 'هر لینک دو ایجنت (مثلا ایران و آلمان) را به هم وصل می‌کند و کیفیت شبکه بین آن‌ها را در هر دو جهت اندازه‌گیری می‌کند: افت بسته، زمان رفت‌وبرگشت و لرزش. برای نمودارها روی ردیف کلیک کنید.',
-  'create_link': 'ساخت لینک', 'link_col': 'لینک', 'endpoints': 'الف ⇄ ب',
-  'dir_ab': 'الف → ب', 'dir_ba': 'ب → الف', 'status': 'وضعیت', 'last_data': 'آخرین داده',
+  'token_role': 'محل سرور', 'token_ttl': 'اعتبار دستور نصب (دقیقه)',
+  'iran_role': 'ایران', 'outside_role': 'خارج از ایران', 'relay_role': 'سرور واسط',
+  'links': 'جفت‌سرورهای تحت پایش', 'links_help': 'هر جفت، کیفیت ارتباط را در هر دو جهت می‌سنجد. برای دیدن تاریخچه و نمودار، ردیف آن را باز کنید.',
+  'create_link': 'افزودن جفت‌سرور', 'link_col': 'نام جفت', 'endpoints': 'سرورها',
+  'dir_ab': 'از الف به ب', 'dir_ba': 'از ب به الف', 'status': 'وضعیت کلی', 'last_data': 'آخرین اندازه‌گیری',
+  'status_labels': {'healthy': 'سالم', 'degraded': 'افت کیفیت', 'critical': 'بحرانی', 'unreachable': 'بدون دسترسی', 'control-plane-unavailable': 'ابزار پایش در دسترس نیست', 'probe-blocked': 'بررسی مسدود است', 'service-failed': 'سرویس ناموفق', 'agent-unhealthy': 'ابزار پایش ناسالم', 'telemetry-delayed': 'داده با تأخیر', 'clock-unsynchronized': 'اختلاف ساعت', 'unknown': 'هنوز داده‌ای نیست', 'maintenance': 'در حال نگهداری'},
   'diagnose': 'تشخیص', 'enable': 'فعال‌سازی', 'disable': 'غیرفعال', 'delete': 'حذف',
   'confirm_delete': 'این لینک و تاریخچه‌اش حذف شود؟',
-  'page_intro': 'این صفحه مسیر شبکه خام بین سرورها را بررسی می‌کند — مستقل از کانفیگ‌های VPN. یک ایجنت کوچک روی سرور ایران و یکی روی سرور خارج نصب کنید؛ مدام همدیگر را پینگ می‌کنند و افت بسته، تاخیر و لرزش را گزارش می‌دهند تا بفهمید مشکل خود شبکه است یا تنظیمات VPN.',
+  'page_intro': 'اینجا می‌بینید مشکل از ارتباط بین سرورهاست یا نه. این صفحه مسیر شبکه را به‌صورت مداوم می‌سنجد؛ تست کانفیگ در Pulse نشان می‌دهد خود کانفیگ VPN کار می‌کند یا نه.',
+  'setup_title': 'شروع پایش در سه مرحله',
+  'setup_agent': 'نصب ابزار پایش', 'setup_agent_help': 'برای هر سرور دستور نصب بسازید و آن را یک‌بار روی سرور ایران و یک‌بار روی سرور خارج اجرا کنید.',
+  'setup_pair': 'جفت‌کردن سرورها', 'setup_pair_help': 'دو ابزار نصب‌شده را انتخاب کنید و برای ارتباطشان نام بگذارید.',
+  'setup_review': 'دیدن نتیجه', 'setup_review_help': 'وضعیت هر جهت را جداگانه ببینید و برای نمودار و تاریخچه، جفت‌سرور را باز کنید.',
+  'metrics_title': 'معنی شاخص‌ها',
+  'loss_help': 'افت بسته: درصد بسته‌هایی که به مقصد نرسیده‌اند. عدد بیشتر یعنی مسیر نامطمئن‌تر است.',
+  'rtt_help': 'تأخیر رفت‌وبرگشت (RTT): زمان رفتن بسته و برگشت پاسخ. عدد بیشتر یعنی ارتباط کندتر است.',
+  'jitter_help': 'نوسان تأخیر (Jitter): میزان تغییر تأخیر بین بسته‌ها. عدد بیشتر یعنی ارتباط ناپایدارتر است.',
+  'directions_help': 'مسیر از سرور الف به ب و مسیر برگشت جدا نمایش داده می‌شوند، چون ممکن است مشکل فقط در یک جهت باشد.',
+  'need_agents': 'برای ساخت جفت‌سرور، ابتدا دو ابزار پایش فعال ثبت کنید.',
   'empty_links': 'هنوز لینکی نیست؛ برای شروع یکی بسازید.', 'empty_agents': 'هنوز ایجنتی ثبت نشده است.',
   'link_name': 'نام لینک', 'agent_a': 'ایجنت الف (مثلاً ایران)', 'agent_b': 'ایجنت ب (مثلاً خارج)',
   'profile': 'پروفایل (JSON، اختیاری)', 'profile_help': 'پیش‌فرض را نگه دارید یا ویرایش کنید؛ JSON نامعتبر رد می‌شود.',
@@ -57,8 +81,7 @@
 {% block page_title %}{{ t.title }}{% endblock %}
 
 {% block header_actions %}
-<a class="btn btn-secondary" href="{{ url_for('pages.pulse_page') }}" style="text-decoration:none">← {{ t.back_to_pulse }}</a>
-<button type="button" class="btn btn-primary" id="bnqo-open-create">{{ t.create_link }}</button>
+<a class="btn btn-secondary" href="{{ url_for('pages.pulse_page') }}">{{ t.back_to_pulse }}</a>
 {% endblock %}
 
 {% block content %}
@@ -106,25 +129,35 @@
 @media(max-width:720px){.bnqo-how-it-works{grid-template-columns:1fr}}
 </style>
 
-<p class="bnqo-intro">{{ t.page_intro }}</p>
+<section class="bnqo-card bnqo-overview" aria-labelledby="bnqo-setup-title">
+  <p class="bnqo-intro">{{ t.page_intro }}</p>
+  <h2 id="bnqo-setup-title">{{ t.setup_title }}</h2>
+  <ol class="bnqo-how-it-works">
+    <li class="bnqo-how-step"><strong>{{ t.setup_agent }}</strong><span>{{ t.setup_agent_help }}</span><a href="#bnqo-agents">{{ t.agents }} ↓</a></li>
+    <li class="bnqo-how-step"><strong>{{ t.setup_pair }}</strong><span>{{ t.setup_pair_help }}</span><a href="#bnqo-links">{{ t.links }} ↓</a></li>
+    <li class="bnqo-how-step"><strong>{{ t.setup_review }}</strong><span>{{ t.setup_review_help }}</span><a href="#bnqo-incidents">{{ t.incidents }} ↓</a></li>
+  </ol>
+  <details class="bnqo-metrics" open><summary>{{ t.metrics_title }}</summary><ul><li>{{ t.loss_help }}</li><li>{{ t.rtt_help }}</li><li>{{ t.jitter_help }}</li><li>{{ t.directions_help }}</li></ul></details>
+</section>
 
-<section class="bnqo-card">
-  <div class="bnqo-card-head"><h3>{{ t.agents }}</h3><button type="button" class="btn btn-secondary" id="bnqo-open-token">{{ t.new_token }}</button></div>
+<section class="bnqo-card" id="bnqo-agents">
+  <div class="bnqo-card-head"><h3>{{ t.agents }}</h3><button type="button" class="btn btn-primary" id="bnqo-open-token">{{ t.new_token }}</button></div>
   <p class="bnqo-help">{{ t.agents_help }}</p>
   <div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr>
     <th>{{ t.name }}</th><th>{{ t.role }}</th><th>{{ t.address }}</th><th>{{ t.enabled_col }}</th><th>{{ t.version }}</th><th>{{ t.last_seen }}</th><th>{{ t.last_ip }}</th><th>{{ t.actions }}</th>
   </tr></thead><tbody id="bnqo-agents-body"><tr><td colspan="8" class="bnqo-empty">{{ t.loading }}</td></tr></tbody></table></div>
 </section>
 
-<section class="bnqo-card">
-  <div class="bnqo-card-head"><h3>{{ t.links }}</h3></div>
+<section class="bnqo-card" id="bnqo-links">
+  <div class="bnqo-card-head"><h3>{{ t.links }}</h3><button type="button" class="btn btn-primary" id="bnqo-open-create" disabled title="{{ t.need_agents }}">{{ t.create_link }}</button></div>
   <p class="bnqo-help">{{ t.links_help }}</p>
+  <p class="bnqo-help" id="bnqo-pair-hint">{{ t.need_agents }}</p>
   <div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr>
     <th>{{ t.link_col }}</th><th>{{ t.endpoints }}</th><th>{{ t.dir_ab }}</th><th>{{ t.dir_ba }}</th><th>{{ t.status }}</th><th>{{ t.last_data }}</th><th>{{ t.actions }}</th>
   </tr></thead><tbody id="bnqo-links-body"><tr><td colspan="7" class="bnqo-empty">{{ t.loading }}</td></tr></tbody></table></div>
 </section>
 
-<section class="bnqo-card">
+<section class="bnqo-card" id="bnqo-incidents">
   <div class="bnqo-card-head"><h3>{{ t.incidents }}</h3></div>
   <p class="bnqo-help">{{ t.incidents_help }}</p>
   <div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr>
@@ -137,7 +170,7 @@
     <div id="bnqo-token-form">
       <h3>{{ t.new_token }}</h3>
       <div class="bnqo-field"><label for="bnqo-token-role">{{ t.token_role }}</label>
-        <select id="bnqo-token-role"><option value="iran">iran</option><option value="outside" selected>outside</option><option value="relay">relay</option></select></div>
+        <select id="bnqo-token-role"><option value="iran">{{ t.iran_role }}</option><option value="outside">{{ t.outside_role }}</option><option value="relay">{{ t.relay_role }}</option></select></div>
       <div class="bnqo-field"><label for="bnqo-token-ttl">{{ t.token_ttl }}</label>
         <input id="bnqo-token-ttl" type="number" value="30" min="5" max="1440"></div>
       <div class="bnqo-modal-actions">
@@ -163,9 +196,11 @@
     <div class="bnqo-field"><label for="bnqo-link-name">{{ t.link_name }}</label><input id="bnqo-link-name" maxlength="120" dir="ltr" placeholder="IR-DE"></div>
     <div class="bnqo-field"><label for="bnqo-agent-a">{{ t.agent_a }}</label><select id="bnqo-agent-a"></select></div>
     <div class="bnqo-field"><label for="bnqo-agent-b">{{ t.agent_b }}</label><select id="bnqo-agent-b"></select></div>
-    <div class="bnqo-field"><label for="bnqo-link-profile">{{ t.profile }}</label>
-      <textarea id="bnqo-link-profile" spellcheck="false"></textarea>
-      <p class="bnqo-help" style="margin:6px 0 0">{{ t.profile_help }}</p></div>
+    <details class="bnqo-metrics"><summary>{{ t.profile }}</summary>
+      <div class="bnqo-field"><label for="bnqo-link-profile">{{ t.profile }}</label>
+        <textarea id="bnqo-link-profile" spellcheck="false"></textarea>
+        <p class="bnqo-help">{{ t.profile_help }}</p></div>
+    </details>
     <div class="bnqo-modal-actions">
       <button type="button" class="btn btn-secondary bnqo-modal-close">{{ t.close }}</button>
       <button type="button" class="btn btn-primary" id="bnqo-link-create">{{ t.create }}</button>
@@ -180,7 +215,7 @@ const T={{ t|tojson }};
 const esc=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const rel=v=>v?(window.EveDate?EveDate.relative(v):v):T.never;
 const STATUS_CLASS={'healthy':'ok','degraded':'warn','critical':'bad','unreachable':'bad','control-plane-unavailable':'bad','probe-blocked':'orange','service-failed':'orange','agent-unhealthy':'muted','telemetry-delayed':'muted','clock-unsynchronized':'purple','unknown':'grey','maintenance':'grey'};
-function statusBadge(status){const s=String(status||'unknown');return '<span class="bnqo-badge '+(STATUS_CLASS[s]||'grey')+'">'+esc(s)+'</span>'}
+function statusBadge(status){const s=String(status||'unknown');return '<span class="bnqo-badge '+(STATUS_CLASS[s]||'grey')+'">'+esc(T.status_labels[s]||s)+'</span>'}
 function apiFetch(url,options){options=options||{};options.headers=Object.assign({'X-Requested-With':'XMLHttpRequest'},options.headers||{});return fetch(url,options).then(async r=>{let d=null;try{d=await r.json()}catch(_){ }if(!r.ok){let msg=T.request_error+' ('+r.status+')';if(d&&d.error)msg=(typeof d.error==='object'?(d.error.message||d.error.code):d.error)||msg;throw new Error(msg)}return d})}
 function jsonOptions(method,body){return{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}}
 function toast(msg,ok){if(window.showToast)showToast(msg,ok?'success':'error');else alert(msg)}
@@ -244,7 +279,7 @@ function fetchAllPages(path,key,pageSize){
   }
   return step(0,[]);
 }
-function refreshAgents(){return fetchAllPages('/api/bnqo/agents','agents').then(list=>{agents=list;renderAgents()}).catch(()=>{})}
+function refreshAgents(){return fetchAllPages('/api/bnqo/agents','agents').then(list=>{agents=list;renderAgents();const ready=agents.filter(a=>a.enabled).length>=2;document.getElementById('bnqo-open-create').disabled=!ready;document.getElementById('bnqo-pair-hint').classList.toggle('hidden',ready)}).catch(()=>{})}
 function refreshLinks(){return fetchAllPages('/api/bnqo/links','links').then(list=>{links=list;renderLinks()}).catch(()=>{})}
 function refreshIncidents(){return apiFetch('/api/bnqo/incidents?status=open').then(d=>renderIncidents(d.incidents||[])).catch(()=>{})}
 function refreshAll(){refreshAgents();refreshLinks();refreshIncidents()}
@@ -278,6 +313,7 @@ document.querySelectorAll('.bnqo-modal-close').forEach(b=>b.addEventListener('cl
 document.querySelectorAll('.bnqo-modal').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)closeModals()}));
 
 document.getElementById('bnqo-open-token').addEventListener('click',()=>{
+  document.getElementById('bnqo-token-role').value=agents.some(a=>a.enabled&&a.role==='iran')?'outside':'iran';
   document.getElementById('bnqo-token-form').hidden=false;
   document.getElementById('bnqo-token-result').hidden=true;
   openModal('bnqo-token-modal');
@@ -304,7 +340,7 @@ const DEFAULT_PROFILE={
   service_targets:[{name:'panel', host:'example.com', port:443, tls:true, interval_sec:30}]
 };
 function fillAgentSelects(){
-  const opts=agents.map(a=>'<option value="'+esc(a.id)+'">'+esc(a.name)+' ('+esc(a.role||'?')+')</option>').join('');
+  const opts=agents.filter(a=>a.enabled).map(a=>'<option value="'+esc(a.id)+'">'+esc(a.name)+' ('+esc(a.role||'?')+')</option>').join('');
   const selA=document.getElementById('bnqo-agent-a'), selB=document.getElementById('bnqo-agent-b');
   selA.innerHTML=opts; selB.innerHTML=opts;
   if(agents.length>1)selB.selectedIndex=1;

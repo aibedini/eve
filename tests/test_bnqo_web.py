@@ -344,6 +344,16 @@ class BnqoReportTest(BnqoTestBase):
 
 
 class BnqoAdminApiTest(BnqoTestBase):
+    def test_links_page_explains_setup_and_metrics(self):
+        resp = self.client.get('/pulse/links')
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn('id="bnqo-agents"', html)
+        self.assertIn('id="bnqo-links"', html)
+        self.assertIn('id="bnqo-open-create" disabled', html)
+        self.assertIn('bnqo-metrics', html)
+        self.assertTrue('Packet loss' in html or 'افت بسته' in html)
+
     def test_admin_endpoints_require_login(self):
         anon = app.test_client()
         self.assertIn(anon.get('/api/bnqo/agents').status_code, (302, 401))

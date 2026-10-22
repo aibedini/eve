@@ -169,7 +169,9 @@ class PulsePageTest(PulseWebTestBase):
         self.assertIn('action-icon danger plan-remove', html)
         self.assertIn('pulse-edit-template', html)
         self.assertIn('action-icon danger pulse-delete-template', html)
-        self.assertIn('Choose the server, inbound, and exact configs', html)
+        self.assertIn('What do you want to check?', html)
+        self.assertIn('Monitor the path between servers', html)
+        self.assertIn('href="/pulse/links"', html)
 
     def test_page_requires_login(self):
         anon = app.test_client()
@@ -188,7 +190,8 @@ class PulsePageTest(PulseWebTestBase):
     def test_page_copy_follows_panel_language(self):
         with mock.patch.object(app_module, '_get_panel_ui_lang', return_value='fa'):
             html = self.client.get('/pulse').get_data(as_text=True)
-        self.assertIn('ساخت برنامه تست', html)
+        self.assertIn('تنظیم تست کانفیگ', html)
+        self.assertIn('پایش مسیر بین دو سرور', html)
         self.assertIn('صف زنده', html)
         self.assertNotIn('Create a test plan</h3>', html)
 

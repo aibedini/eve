@@ -6531,3 +6531,50 @@ html[dir="rtl"] .royalty-table .royalty-cell-select .checkbox-label { padding-ri
         -webkit-box-orient: vertical;
     }
 }
+.pulse-overview h2,
+.bnqo-overview h2 {
+    margin: 0 0 8px;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.pulse-mode-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.pulse-mode-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 20px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-card);
+}
+
+.pulse-mode-card h3,
+.pulse-mode-card p { margin: 0; }
+.pulse-mode-card h3 { font-size: 1rem; }
+.pulse-mode-card p { flex: 1; color: var(--text-secondary); font-size: .8rem; line-height: 1.65; }
+.pulse-mode-card .btn { text-decoration: none; }
+.pulse-options-title { margin: 20px 0 12px; font-size: .9rem; }
+#pulse-build, #bnqo-agents, #bnqo-links, #bnqo-incidents { scroll-margin-top: calc(var(--header-height) + 16px); }
+
+.bnqo-overview .bnqo-intro { margin: 0 0 16px; }
+.bnqo-overview .bnqo-how-it-works { list-style: none; padding: 0; }
+.bnqo-how-step { display: flex; flex-direction: column; gap: 5px; }
+.bnqo-how-step a { color: var(--primary); text-decoration: none; font-weight: 600; }
+.bnqo-how-step a:hover { text-decoration: underline; }
+.bnqo-metrics { margin-top: 16px; color: var(--text-secondary); font-size: .8rem; line-height: 1.65; }
+.bnqo-metrics summary { color: var(--text-primary); cursor: pointer; font-weight: 600; }
+.bnqo-metrics ul { margin: 10px 0 0; padding-inline-start: 20px; }
+.bnqo-metrics li + li { margin-top: 5px; }
+.bnqo-metrics .bnqo-field { margin-top: 12px; }
+
+@media (max-width: 720px) {
+    .pulse-mode-grid { grid-template-columns: 1fr; }
+}

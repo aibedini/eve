@@ -12,14 +12,24 @@
 </style>
 <style nonce="{{ csp_nonce }}">
 .pulse-xray-warning{margin:0 0 18px;padding:14px 16px;border:1px solid rgba(239,68,68,.45);border-radius:12px;background:rgba(239,68,68,.1);color:var(--text-primary);line-height:1.65}.pulse-xray-warning strong{display:block;color:#f87171;margin-bottom:3px}
-.pulse-links-banner{display:flex;align-items:center;gap:10px;margin:0 0 18px;padding:12px 16px;border:1px solid rgba(99,102,241,.4);border-radius:12px;background:rgba(99,102,241,.1);color:var(--text-primary);text-decoration:none;font-size:.86rem;line-height:1.6}.pulse-links-banner:hover{background:rgba(99,102,241,.18)}.pulse-links-banner svg{flex:none;color:#818cf8}
 </style>
 
-<p class="pulse-intro">{{ t.subtitle }}</p>
-<a class="pulse-links-banner" href="{{ url_for('bnqo.bnqo_links_page') }}">
-  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-  <span>{% if panel_lang == 'fa' %}پایش مداوم کیفیت شبکه: ببینید مسیر ایران ← خارج و خارج ← ایران چقدر افت بسته، تاخیر و لرزش دارد ←{% else %}Continuous network quality monitor: see how much packet loss, latency and jitter the Iran ↔ outside path has in each direction →{% endif %}</span>
-</a>
+<section class="pulse-overview" aria-labelledby="pulse-overview-title">
+  <h2 id="pulse-overview-title">{{ t.overview_title }}</h2>
+  <p class="pulse-intro">{{ t.subtitle }}</p>
+  <div class="pulse-mode-grid">
+    <article class="pulse-mode-card">
+      <h3>{{ t.config_test_title }}</h3>
+      <p>{{ t.config_test_help }}</p>
+      <a class="btn btn-primary" href="#pulse-build">{{ t.config_test_action }}</a>
+    </article>
+    <article class="pulse-mode-card">
+      <h3>{{ t.network_links_title }}</h3>
+      <p>{{ t.network_links_help }}</p>
+      <a class="btn btn-secondary" href="{{ url_for('bnqo.bnqo_links_page') }}">{{ t.network_links_action }}</a>
+    </article>
+  </div>
+</section>
 {% if not xray_installed %}
 <div class="pulse-xray-warning" role="alert">
   <strong>⚠️ {{ t.xray_missing_title }}</strong>
@@ -27,16 +37,9 @@
 </div>
 {% endif %}
 
-<section class="pulse-card" aria-labelledby="pulse-queue-title">
-  <h3 id="pulse-queue-title">{{ t.queue }}</h3><p class="pulse-help">{{ t.queue_help }}</p><div id="pulse-queue-message" class="pulse-message"></div>
-  <div class="pulse-table-wrap"><table class="pulse-queue-table"><thead><tr><th>{{ t.position }}</th><th>{{ t.job }}</th><th>{{ t.target }}</th><th>{{ t.configs }}</th><th>{{ t.status }}</th><th>{{ t.source }}</th></tr></thead><tbody id="pulse-queue-body">
-  {% for run in queue_runs %}{% set p = run.params() %}<tr><td>{{ run.queue_position or '—' }}</td><td>#{{ run.id }}</td><td>{{ run.server_name }} · {{ run.inbound_label or p.get('inbound_id') or '—' }}</td><td>{{ (p.get('manual_configs', [])|length) if p.get('config_source') == 'manual' else ((p.get('config_ids', [])|length) * ((p.get('inbound_ids', [])|length) if p.get('v3_mode') else 1)) }}</td><td><span class="pulse-badge {{ run.status }}">{{ t.get(run.status, run.status) }}</span></td><td>{{ p.get('template_name') or (t.schedule_source if run.triggered_by == 'schedule' else t.get(run.triggered_by, run.triggered_by)) }}</td></tr>{% else %}<tr><td colspan="6" class="pulse-empty">{{ t.empty_queue }}</td></tr>{% endfor %}
-  </tbody></table></div>
-</section>
-
 <div class="pulse-grid">
 <main>
-  <section class="pulse-card">
+  <section class="pulse-card" id="pulse-build">
     <h3>{{ t.wizard }}</h3><p class="pulse-help">{{ t.wizard_help }}</p>
     <div class="pulse-server-row pulse-field"><label for="pulse-server">{{ t.step1 }}</label><select id="pulse-server"><option value="">{{ t.choose_server }}</option>{% for server in servers %}<option value="{{ server.id }}" data-name="{{ server.name }}">{{ server.name }}</option>{% endfor %}</select></div>
     <div class="pulse-picker-grid">
@@ -46,6 +49,7 @@
     <div class="pulse-selection-summary" id="pulse-selection-summary" aria-live="polite">{{ t.selection_empty }}</div>
     <div class="pulse-actions"><button type="button" class="btn btn-primary" id="pulse-add-step">{{ t.add_step }}</button><button type="button" class="btn btn-secondary" id="pulse-cancel-step-edit" hidden>{{ t.cancel_edit }}</button></div>
     <div class="pulse-plan"><span class="pulse-label">{{ t.plan }}</span><div class="pulse-plan-list" id="pulse-plan"><div class="pulse-config-empty">{{ t.plan_empty }}</div></div></div>
+    <h4 class="pulse-options-title">{{ t.options }}</h4>
     <div class="pulse-options">
       <div class="pulse-field"><label for="pulse-profile">{{ t.profile }}</label><select id="pulse-profile"><option value="quick">{{ t.quick }}</option><option value="full">{{ t.full }}</option></select></div>
       <div class="pulse-field"><label for="pulse-vantage">{{ t.vantage }}</label><select id="pulse-vantage"><option value="local">{{ t.local }}</option>{% for agent in agents if agent.enabled %}<option value="agent:{{ agent.name }}">{{ t.agent }}: {{ agent.name }}</option>{% endfor %}</select></div>
@@ -74,6 +78,13 @@
   <section class="pulse-card"><h3>{{ t.agents }}</h3><p class="pulse-help">{{ t.agents_help }}</p>{% for agent in agents %}<div class="pulse-agent-row"><div><strong dir="ltr">{{ agent.name }}</strong><div class="pulse-muted">{{ t.last_seen }}: {{ format_app_datetime(agent.last_seen_at) if agent.last_seen_at else t.never }} · {{ t.enabled if agent.enabled else t.disabled }}</div></div><button type="button" class="btn btn-sm pulse-delete-agent" data-agent-id="{{ agent.id }}">{{ t.delete }}</button></div>{% endfor %}<div class="pulse-inline-input" style="margin-top:12px"><input id="pulse-agent-name" dir="ltr" placeholder="de-fra-1"><button type="button" class="btn btn-primary" id="pulse-create-agent">{{ t.create_agent }}</button></div><div id="pulse-agent-message" class="pulse-message"></div><textarea id="pulse-agent-token" class="pulse-token" readonly rows="4"></textarea></section>
 </aside>
 </div>
+
+<section class="pulse-card" aria-labelledby="pulse-queue-title">
+  <h3 id="pulse-queue-title">{{ t.queue }}</h3><p class="pulse-help">{{ t.queue_help }}</p><div id="pulse-queue-message" class="pulse-message"></div>
+  <div class="pulse-table-wrap"><table class="pulse-queue-table"><thead><tr><th>{{ t.position }}</th><th>{{ t.job }}</th><th>{{ t.target }}</th><th>{{ t.configs }}</th><th>{{ t.status }}</th><th>{{ t.source }}</th></tr></thead><tbody id="pulse-queue-body">
+  {% for run in queue_runs %}{% set p = run.params() %}<tr><td>{{ run.queue_position or '—' }}</td><td>#{{ run.id }}</td><td>{{ run.server_name }} · {{ run.inbound_label or p.get('inbound_id') or '—' }}</td><td>{{ (p.get('manual_configs', [])|length) if p.get('config_source') == 'manual' else ((p.get('config_ids', [])|length) * ((p.get('inbound_ids', [])|length) if p.get('v3_mode') else 1)) }}</td><td><span class="pulse-badge {{ run.status }}">{{ t.get(run.status, run.status) }}</span></td><td>{{ p.get('template_name') or (t.schedule_source if run.triggered_by == 'schedule' else t.get(run.triggered_by, run.triggered_by)) }}</td></tr>{% else %}<tr><td colspan="6" class="pulse-empty">{{ t.empty_queue }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
 
 <section class="pulse-card"><h3>{{ t.recent }}</h3><p class="pulse-help">{{ t.details }}</p><div class="pulse-table-wrap"><table class="pulse-table" id="pulse-runs-table"><thead><tr><th>{{ t.time }}</th><th>{{ t.server }}</th><th>{{ t.scope }}</th><th>{{ t.status }}</th><th>{{ t.healthy }}</th><th>{{ t.degraded }}</th><th>{{ t.down }}</th><th>{{ t.duration }}</th><th>{{ t.source }}</th></tr></thead><tbody>{% for run in runs %}{% set s=run.summary() %}{% set p=run.params() %}{% set config_count = (p.get('manual_configs', [])|length) if p.get('config_source') == 'manual' else ((p.get('config_ids', [])|length) * ((p.get('inbound_ids', [])|length) if p.get('v3_mode') else 1)) %}<tr class="pulse-run-row" data-run-id="{{ run.id }}"><td>{{ format_app_datetime(run.created_at) }}</td><td>{{ run.server_name or '—' }}</td><td>{{ run.inbound_label or '—' }}{% if config_count %} · {{ config_count }} {{ t.configs }}{% endif %}</td><td><span class="pulse-badge {{ run.status }}">{{ t.get(run.status,run.status) }}</span></td><td><span class="pulse-badge healthy">{{ s.get('healthy',0) }}</span></td><td><span class="pulse-badge degraded">{{ s.get('degraded',0) }}</span></td><td><span class="pulse-badge down">{{ s.get('down',0) }}</span></td><td>{% if run.finished_at %}{{ '%.1f'|format((run.finished_at-run.created_at).total_seconds()) }} {{ t.seconds }}{% else %}—{% endif %}</td><td>{{ p.get('template_name') or (t.schedule_source if run.triggered_by == 'schedule' else t.get(run.triggered_by,run.triggered_by)) }}</td></tr>{% else %}<tr><td colspan="9" class="pulse-empty">—</td></tr>{% endfor %}</tbody></table></div></section>
 {% endblock %}
