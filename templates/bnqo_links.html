@@ -2,7 +2,7 @@
 {% set bnqo_copy = {
 'en': {
   'title': 'Network Links', 'back_to_pulse': 'Pulse',
-  'agents': 'Agents', 'agents_help': 'Probe agents enrolled with this panel. The install command is shown only once.',
+  'agents': 'Agents', 'agents_help': 'Small scripts installed on your servers (one in Iran, one abroad) that continuously ping each other and report the results here. Create an agent, copy the install command, and run it on the server.',
   'new_token': 'New enroll token', 'name': 'Name', 'role': 'Role', 'address': 'Address',
   'enabled_col': 'Enabled', 'version': 'Version', 'last_seen': 'Last seen', 'last_ip': 'Last IP',
   'actions': 'Actions', 'revoke': 'Revoke', 'confirm_revoke': 'Revoke this agent? It will be disabled immediately.',
@@ -10,24 +10,25 @@
   'token_title': 'Install command', 'token_warning': 'This command is shown only once. Store it somewhere safe before closing.',
   'copy': 'Copy', 'copied': 'Copied.', 'close': 'Close', 'create': 'Create',
   'token_role': 'Agent role', 'token_ttl': 'Token TTL (minutes)',
-  'links': 'Links', 'links_help': 'Bidirectional monitoring between an Iran-side and an outside agent. Click a row for details.',
+  'links': 'Links', 'links_help': 'A link connects two agents (e.g. Iran and Germany) and measures the network quality between them in both directions: packet loss, round-trip time, and jitter. Click a row for charts.',
   'create_link': 'Create link', 'link_col': 'Link', 'endpoints': 'A ⇄ B',
   'dir_ab': 'A → B', 'dir_ba': 'B → A', 'status': 'Status', 'last_data': 'Last data',
   'diagnose': 'Diagnose', 'enable': 'Enable', 'disable': 'Disable', 'delete': 'Delete',
   'confirm_delete': 'Delete this link and its history?',
+  'page_intro': 'This page monitors the raw network path between your servers — independent of VPN configs. Install a small agent on a server in Iran and another abroad; they continuously ping each other and report packet loss, latency and jitter so you can tell whether a problem is the network itself or your VPN setup.',
   'empty_links': 'No links yet. Create one to start monitoring.', 'empty_agents': 'No agents enrolled yet.',
   'link_name': 'Link name', 'agent_a': 'Agent A (e.g. Iran)', 'agent_b': 'Agent B (e.g. outside)',
   'profile': 'Profile (JSON, optional)', 'profile_help': 'Leave the default or edit; invalid JSON is rejected.',
   'invalid_json': 'The profile is not valid JSON.', 'same_agent': 'Agents A and B must be different.',
   'created': 'Link created.', 'diagnose_queued': 'Diagnose jobs queued.', 'updated': 'Updated.', 'deleted': 'Deleted.', 'revoked': 'Agent revoked.',
-  'incidents': 'Open incidents', 'incidents_help': 'Unresolved incidents across all links.',
+  'incidents': 'Open incidents', 'incidents_help': 'Alerts triggered when a link\'s loss or latency exceeds its threshold. Acknowledge to silence, resolve when the issue is fixed.',
   'kind': 'Kind', 'link': 'Link', 'direction': 'Direction', 'age': 'Age', 'evidence': 'Evidence',
   'ack': 'Ack', 'resolve': 'Resolve', 'no_incidents': 'No open incidents.',
   'request_error': 'The request failed.', 'loading': 'Loading…'
 },
 'fa': {
   'title': 'لینک‌های شبکه', 'back_to_pulse': 'Pulse',
-  'agents': 'ایجنت‌ها', 'agents_help': 'ایجنت‌های پروب ثبت‌شده در این پنل. دستور نصب فقط یک‌بار نمایش داده می‌شود.',
+  'agents': 'ایجنت‌ها', 'agents_help': 'اسکریپت‌های کوچکی که روی سرورهای شما نصب می‌شوند (یکی در ایران، یکی خارج) و مدام همدیگر را پینگ می‌کنند و نتیجه را اینجا گزارش می‌دهند. ایجنت بسازید، دستور نصب را کپی کنید و روی سرور اجرا کنید.',
   'new_token': 'توکن ثبت‌نام جدید', 'name': 'نام', 'role': 'نقش', 'address': 'آدرس',
   'enabled_col': 'فعال', 'version': 'نسخه', 'last_seen': 'آخرین اتصال', 'last_ip': 'آخرین IP',
   'actions': 'عملیات', 'revoke': 'لغو', 'confirm_revoke': 'این ایجنت لغو شود؟ بلافاصله غیرفعال می‌شود.',
@@ -35,17 +36,18 @@
   'token_title': 'دستور نصب', 'token_warning': 'این دستور فقط یک‌بار نمایش داده می‌شود؛ قبل از بستن آن را ذخیره کنید.',
   'copy': 'کپی', 'copied': 'کپی شد.', 'close': 'بستن', 'create': 'ساخت',
   'token_role': 'نقش ایجنت', 'token_ttl': 'اعتبار توکن (دقیقه)',
-  'links': 'لینک‌ها', 'links_help': 'پایش دوطرفه بین ایجنت ایران و خارج. برای جزئیات روی ردیف کلیک کنید.',
+  'links': 'لینک‌ها', 'links_help': 'هر لینک دو ایجنت (مثلا ایران و آلمان) را به هم وصل می‌کند و کیفیت شبکه بین آن‌ها را در هر دو جهت اندازه‌گیری می‌کند: افت بسته، زمان رفت‌وبرگشت و لرزش. برای نمودارها روی ردیف کلیک کنید.',
   'create_link': 'ساخت لینک', 'link_col': 'لینک', 'endpoints': 'الف ⇄ ب',
   'dir_ab': 'الف → ب', 'dir_ba': 'ب → الف', 'status': 'وضعیت', 'last_data': 'آخرین داده',
   'diagnose': 'تشخیص', 'enable': 'فعال‌سازی', 'disable': 'غیرفعال', 'delete': 'حذف',
   'confirm_delete': 'این لینک و تاریخچه‌اش حذف شود؟',
+  'page_intro': 'این صفحه مسیر شبکه خام بین سرورها را بررسی می‌کند — مستقل از کانفیگ‌های VPN. یک ایجنت کوچک روی سرور ایران و یکی روی سرور خارج نصب کنید؛ مدام همدیگر را پینگ می‌کنند و افت بسته، تاخیر و لرزش را گزارش می‌دهند تا بفهمید مشکل خود شبکه است یا تنظیمات VPN.',
   'empty_links': 'هنوز لینکی نیست؛ برای شروع یکی بسازید.', 'empty_agents': 'هنوز ایجنتی ثبت نشده است.',
   'link_name': 'نام لینک', 'agent_a': 'ایجنت الف (مثلاً ایران)', 'agent_b': 'ایجنت ب (مثلاً خارج)',
   'profile': 'پروفایل (JSON، اختیاری)', 'profile_help': 'پیش‌فرض را نگه دارید یا ویرایش کنید؛ JSON نامعتبر رد می‌شود.',
   'invalid_json': 'پروفایل JSON معتبر نیست.', 'same_agent': 'ایجنت الف و ب باید متفاوت باشند.',
   'created': 'لینک ساخته شد.', 'diagnose_queued': 'کارهای تشخیص در صف قرار گرفت.', 'updated': 'به‌روز شد.', 'deleted': 'حذف شد.', 'revoked': 'ایجنت لغو شد.',
-  'incidents': 'رویدادهای باز', 'incidents_help': 'رویدادهای حل‌نشده در همه لینک‌ها.',
+  'incidents': 'رویدادهای باز', 'incidents_help': 'هشدارهایی که وقتی افت یا تاخیر یک لینک از حد مجاز بیشتر شود فعال می‌شوند. تایید کنید تا ساکت شود، حل‌شده بزنید وقتی مشکل رفع شد.',
   'kind': 'نوع', 'link': 'لینک', 'direction': 'جهت', 'age': 'قدمت', 'evidence': 'شواهد',
   'ack': 'تأیید', 'resolve': 'حل‌شده', 'no_incidents': 'رویداد بازی نیست.',
   'request_error': 'انجام درخواست ناموفق بود.', 'loading': 'در حال دریافت…'
@@ -97,7 +99,14 @@
 .bnqo-token-warning{margin:0 0 12px;padding:10px 12px;border:1px solid rgba(245,158,11,.45);border-radius:10px;background:rgba(245,158,11,.12);color:var(--text-primary);font-size:.78rem;line-height:1.6}
 .bnqo-install-cmd{width:100%;box-sizing:border-box;min-height:110px;background:var(--bg-dark);border:1px solid var(--border-color);border-radius:9px;color:var(--text-primary);padding:10px;font-family:monospace;font-size:.74rem;direction:ltr;text-align:left;resize:vertical}
 .bnqo-evidence{max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary);font-size:.74rem}
+.bnqo-intro{margin:-6px 0 18px;color:var(--text-secondary);font-size:.86rem;line-height:1.7}
+.bnqo-how-it-works{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:14px 0 0}
+.bnqo-how-step{padding:14px;background:rgba(99,102,241,.06);border:1px solid rgba(99,102,241,.18);border-radius:12px;font-size:.78rem;line-height:1.6}
+.bnqo-how-step strong{display:block;color:var(--text-primary);margin-bottom:4px;font-size:.82rem}
+@media(max-width:720px){.bnqo-how-it-works{grid-template-columns:1fr}}
 </style>
+
+<p class="bnqo-intro">{{ t.page_intro }}</p>
 
 <section class="bnqo-card">
   <div class="bnqo-card-head"><h3>{{ t.agents }}</h3><button type="button" class="btn btn-secondary" id="bnqo-open-token">{{ t.new_token }}</button></div>
