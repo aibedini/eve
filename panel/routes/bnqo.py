@@ -8,10 +8,12 @@ Wire contract: docs/bnqo/EVE_API_CONTRACT.md (Phase 1, normative).
 import json
 import re
 import secrets
+import shlex
 from datetime import datetime, timedelta
 from functools import wraps
+from pathlib import Path
 
-from flask import Blueprint, abort, jsonify, render_template, request
+from flask import Blueprint, abort, current_app, jsonify, render_template, request, session
 from sqlalchemy import or_, update
 from sqlalchemy.orm import joinedload
 
@@ -43,6 +45,23 @@ from panel.services.bnqo_crypto import (
 )
 
 bp = Blueprint('bnqo', __name__)
+
+
+def _agent_binary_ready():
+    """The install command can work only after Eve serves the built agent."""
+    binary = Path(current_app.static_folder) / 'app-files' / 'bnqo' / 'bnqo-agent'
+    try:
+        return binary.is_file() and binary.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _page_shell_context():
+    return {
+        'admin_username': session.get('admin_username'),
+        'is_superadmin': session.get('is_superadmin', False),
+        'role': session.get('role', 'admin'),
+    }
 
 _AGENT_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 _ROUTE_HASH_RE = re.compile(r'^[0-9a-fA-F]{16}$')
@@ -603,6 +622,10 @@ def bnqo_admin_agents():
 @bp.route('/api/bnqo/enroll-tokens', methods=['POST'])
 @login_required
 def bnqo_admin_enroll_token_create():
+    if not _agent_binary_ready():
+        return _err('agent_binary_missing',
+                    'BNQO agent binary is missing on the Eve server. Build it in bnqo/ and install it under static/app-files/bnqo/bnqo-agent before creating an install command.',
+                    503)
     data = request.get_json(silent=True) or {}
     role = data.get('role', 'outside')
     if role not in BNQO_AGENT_ROLES:
@@ -921,7 +944,10 @@ def bnqo_admin_incident_resolve(incident_id):
 @bp.route('/pulse/links')
 @login_required
 def bnqo_links_page():
-    return render_template('bnqo_links.html')
+    return render_template('bnqo_links.html',
+                           agent_binary_ready=_agent_binary_ready(),
+                           agent_build_command=f'cd {shlex.quote(current_app.root_path)} && bash scripts/build_bnqo_agent.sh',
+                           **_page_shell_context())
 
 
 @bp.route('/pulse/links/<int:link_id>')
@@ -930,4 +956,5 @@ def bnqo_link_detail_page(link_id):
     link = db.session.get(BnqoLink, link_id)
     if link is None:
         abort(404)
-    return render_template('bnqo_link_detail.html', link_id=link_id)
+    return render_template('bnqo_link_detail.html', link_id=link_id,
+                           **_page_shell_context())

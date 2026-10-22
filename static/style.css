@@ -6574,6 +6574,27 @@ html[dir="rtl"] .royalty-table .royalty-cell-select .checkbox-label { padding-ri
 .bnqo-metrics ul { margin: 10px 0 0; padding-inline-start: 20px; }
 .bnqo-metrics li + li { margin-top: 5px; }
 .bnqo-metrics .bnqo-field { margin-top: 12px; }
+.bnqo-binary-warning {
+    margin: 0 0 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--warning);
+    border-radius: 12px;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    font-size: .8rem;
+    line-height: 1.65;
+}
+.bnqo-binary-warning p { margin: 6px 0 10px; }
+.bnqo-binary-warning code {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg-card);
+    direction: ltr;
+    text-align: left;
+}
 
 @media (max-width: 720px) {
     .pulse-mode-grid { grid-template-columns: 1fr; }

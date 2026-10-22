@@ -28,6 +28,8 @@
   'jitter_help': 'Jitter: how much delay varies from one probe to the next. Higher means a less stable connection.',
   'directions_help': 'A → B and B → A are shown separately because one direction may be worse than the other.',
   'need_agents': 'Register two enabled monitors before creating a server pair.',
+  'binary_missing_title': 'The agent file is missing on Eve',
+  'binary_missing_help': 'Build the agent on the Eve panel server, not on either monitored server. Install Rust and musl-tools there first, then run this command and reload the page.',
   'empty_links': 'No links yet. Create one to start monitoring.', 'empty_agents': 'No agents enrolled yet.',
   'link_name': 'Link name', 'agent_a': 'Agent A (e.g. Iran)', 'agent_b': 'Agent B (e.g. outside)',
   'profile': 'Profile (JSON, optional)', 'profile_help': 'Leave the default or edit; invalid JSON is rejected.',
@@ -66,6 +68,8 @@
   'jitter_help': 'نوسان تأخیر (Jitter): میزان تغییر تأخیر بین بسته‌ها. عدد بیشتر یعنی ارتباط ناپایدارتر است.',
   'directions_help': 'مسیر از سرور الف به ب و مسیر برگشت جدا نمایش داده می‌شوند، چون ممکن است مشکل فقط در یک جهت باشد.',
   'need_agents': 'برای ساخت جفت‌سرور، ابتدا دو ابزار پایش فعال ثبت کنید.',
+  'binary_missing_title': 'فایل ابزار پایش روی سرور Eve موجود نیست',
+  'binary_missing_help': 'ابزار را روی سرور پنل Eve بسازید، نه روی سرورهایی که قرار است پایش شوند. ابتدا Rust و musl-tools را آنجا نصب کنید، سپس این دستور را اجرا و صفحه را دوباره بارگذاری کنید.',
   'empty_links': 'هنوز لینکی نیست؛ برای شروع یکی بسازید.', 'empty_agents': 'هنوز ایجنتی ثبت نشده است.',
   'link_name': 'نام لینک', 'agent_a': 'ایجنت الف (مثلاً ایران)', 'agent_b': 'ایجنت ب (مثلاً خارج)',
   'profile': 'پروفایل (JSON، اختیاری)', 'profile_help': 'پیش‌فرض را نگه دارید یا ویرایش کنید؛ JSON نامعتبر رد می‌شود.',
@@ -141,8 +145,9 @@
 </section>
 
 <section class="bnqo-card" id="bnqo-agents">
-  <div class="bnqo-card-head"><h3>{{ t.agents }}</h3><button type="button" class="btn btn-primary" id="bnqo-open-token">{{ t.new_token }}</button></div>
+  <div class="bnqo-card-head"><h3>{{ t.agents }}</h3><button type="button" class="btn btn-primary" id="bnqo-open-token" {% if not agent_binary_ready %}disabled{% endif %}>{{ t.new_token }}</button></div>
   <p class="bnqo-help">{{ t.agents_help }}</p>
+  {% if not agent_binary_ready %}<div class="bnqo-binary-warning" role="alert"><strong>{{ t.binary_missing_title }}</strong><p>{{ t.binary_missing_help }}</p><code dir="ltr">{{ agent_build_command }}</code></div>{% endif %}
   <div class="bnqo-table-wrap"><table class="bnqo-table"><thead><tr>
     <th>{{ t.name }}</th><th>{{ t.role }}</th><th>{{ t.address }}</th><th>{{ t.enabled_col }}</th><th>{{ t.version }}</th><th>{{ t.last_seen }}</th><th>{{ t.last_ip }}</th><th>{{ t.actions }}</th>
   </tr></thead><tbody id="bnqo-agents-body"><tr><td colspan="8" class="bnqo-empty">{{ t.loading }}</td></tr></tbody></table></div>

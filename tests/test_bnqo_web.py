@@ -11,6 +11,7 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta
+from unittest import mock
 
 _DB_FILE = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 _DB_FILE.close()
@@ -81,6 +82,9 @@ class BnqoTestBase(unittest.TestCase):
         cls.ctx.pop()
 
     def setUp(self):
+        self.binary_ready_patcher = mock.patch('panel.routes.bnqo._agent_binary_ready', return_value=True)
+        self.binary_ready_patcher.start()
+        self.addCleanup(self.binary_ready_patcher.stop)
         for model in (BnqoMeasurement, BnqoIncident, BnqoJob, BnqoLink,
                       BnqoAgent, BnqoEnrollToken):
             model.query.delete()
@@ -345,7 +349,12 @@ class BnqoReportTest(BnqoTestBase):
 
 class BnqoAdminApiTest(BnqoTestBase):
     def test_links_page_explains_setup_and_metrics(self):
-        resp = self.client.get('/pulse/links')
+        with self.client.session_transaction() as sess:
+            sess['admin_username'] = 'owner'
+            sess['is_superadmin'] = True
+            sess['role'] = 'superadmin'
+        with mock.patch('panel.routes.bnqo._agent_binary_ready', return_value=False):
+            resp = self.client.get('/pulse/links')
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
         self.assertIn('id="bnqo-agents"', html)
@@ -353,6 +362,35 @@ class BnqoAdminApiTest(BnqoTestBase):
         self.assertIn('id="bnqo-open-create" disabled', html)
         self.assertIn('bnqo-metrics', html)
         self.assertTrue('Packet loss' in html or 'افت بسته' in html)
+        self.assertIn('class="user-name">owner</span>', html)
+        self.assertIn('href="/servers"', html)
+        self.assertIn('bnqo-binary-warning', html)
+        self.assertIn('id="bnqo-open-token" disabled', html)
+
+    def test_links_page_keeps_admin_name(self):
+        with self.client.session_transaction() as sess:
+            sess['admin_username'] = 'operator'
+            sess['is_superadmin'] = False
+            sess['role'] = 'admin'
+        html = self.client.get('/pulse/links').get_data(as_text=True)
+        self.assertIn('class="user-name">operator</span>', html)
+
+    def test_link_detail_keeps_admin_shell(self):
+        _, _, link = self._two_agents_with_link()
+        with self.client.session_transaction() as sess:
+            sess['admin_username'] = 'owner'
+            sess['is_superadmin'] = True
+            sess['role'] = 'superadmin'
+        html = self.client.get(f'/pulse/links/{link.id}').get_data(as_text=True)
+        self.assertIn('class="user-name">owner</span>', html)
+        self.assertIn('href="/servers"', html)
+
+    def test_missing_agent_binary_prevents_install_command(self):
+        with mock.patch('panel.routes.bnqo._agent_binary_ready', return_value=False):
+            resp = self.client.post('/api/bnqo/enroll-tokens', json={'role': 'outside'})
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.get_json()['error']['code'], 'agent_binary_missing')
+        self.assertEqual(BnqoEnrollToken.query.count(), 0)
 
     def test_admin_endpoints_require_login(self):
         anon = app.test_client()
@@ -361,8 +399,9 @@ class BnqoAdminApiTest(BnqoTestBase):
         self.assertIn(anon.get('/pulse/links').status_code, (302, 401))
 
     def test_enroll_token_creation_returns_install_command(self):
-        resp = self.client.post('/api/bnqo/enroll-tokens',
-                                json={'role': 'relay', 'ttl_minutes': 30})
+        with mock.patch('panel.routes.bnqo._agent_binary_ready', return_value=True):
+            resp = self.client.post('/api/bnqo/enroll-tokens',
+                                    json={'role': 'relay', 'ttl_minutes': 30})
         self.assertEqual(resp.status_code, 200)
         payload = resp.get_json()
         self.assertIn('token', payload)

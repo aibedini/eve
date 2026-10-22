@@ -56,23 +56,25 @@ The normative wire contract for the integrated system is
 
 ### 1. Build the agent binary
 
-The binary is **not** committed to git (`.gitignore`). Build on any Linux
-host (or WSL) with Rust ≥ 1.75:
+The binary is **not** committed to git (`.gitignore`). Build it on the Eve
+panel server before issuing an install command for a remote server. The
+standard installation uses `/opt/eve-xui-manager`:
 
 ```sh
-rustup target add x86_64-unknown-linux-musl
-cd bnqo && cargo build --release --target x86_64-unknown-linux-musl
-cp target/x86_64-unknown-linux-musl/release/bnqo-agent \
-   ../static/app-files/bnqo/bnqo-agent
+sudo apt-get install musl-tools
+# Install Rust with rustup if cargo/rustup are not already available.
+cd /opt/eve-xui-manager
+bash scripts/build_bnqo_agent.sh
 ```
 
-The dependency set is pure Rust (rustls, no OpenSSL), so a plain musl
-target works without a cross C toolchain. See `bnqo/README.md` for details
-and the systemd unit reference.
+`musl-tools` supplies the C linker needed by the Rust crypto provider. The
+build script checks prerequisites and installs the resulting binary into
+`static/app-files/bnqo/`. Verify that the agent URL on your Eve host returns
+HTTP 200 before generating an install command. See `bnqo/README.md` for details.
 
 ### 2. Install an agent on a server (Iran / outside / relay)
 
-Web UI: `/pulse/links` → "New enroll token" → pick role + TTL → copy the
+Web UI: `/pulse/links` → "Get install command" → pick server location + TTL → copy the
 one-time install command. Or CLI: `eve` → `[n]` → `[1]` (SSH install;
 paste the token from the web UI) or `[2]` (manual command for servers
 without SSH):
