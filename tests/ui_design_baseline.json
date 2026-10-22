@@ -12,8 +12,8 @@
       "bare_checkbox": 0,
       "emoji": 0,
       "hardcoded_colors": 2,
-      "inline_styles": 41,
-      "inline_text_ink": 15,
+      "inline_styles": 40,
+      "inline_text_ink": 14,
       "style_display": 3
     },
     "bank_cards.html": {
@@ -44,7 +44,7 @@
       "bare_checkbox": 0,
       "emoji": 1,
       "hardcoded_colors": 0,
-      "inline_styles": 2,
+      "inline_styles": 0,
       "inline_text_ink": 0,
       "style_display": 0
     },
@@ -73,12 +73,12 @@
       "style_display": 0
     },
     "dashboard.html": {
-      "bare_checkbox": 3,
-      "emoji": 37,
-      "hardcoded_colors": 55,
-      "inline_styles": 448,
-      "inline_text_ink": 183,
-      "style_display": 66
+      "bare_checkbox": 2,
+      "emoji": 3,
+      "hardcoded_colors": 26,
+      "inline_styles": 272,
+      "inline_text_ink": 106,
+      "style_display": 0
     },
     "error.html": {
       "bare_checkbox": 0,
@@ -176,14 +176,6 @@
       "inline_text_ink": 7,
       "style_display": 11
     },
-    "royalty.html": {
-      "bare_checkbox": 1,
-      "emoji": 1,
-      "hardcoded_colors": 3,
-      "inline_styles": 81,
-      "inline_text_ink": 30,
-      "style_display": 13
-    },
     "security.html": {
       "bare_checkbox": 0,
       "emoji": 0,
@@ -203,16 +195,16 @@
     "settings.html": {
       "bare_checkbox": 17,
       "emoji": 39,
-      "hardcoded_colors": 16,
-      "inline_styles": 385,
-      "inline_text_ink": 121,
+      "hardcoded_colors": 14,
+      "inline_styles": 358,
+      "inline_text_ink": 111,
       "style_display": 96
     },
     "sub_manager.html": {
       "bare_checkbox": 12,
       "emoji": 17,
       "hardcoded_colors": 14,
-      "inline_styles": 194,
+      "inline_styles": 182,
       "inline_text_ink": 74,
       "style_display": 25
     },
