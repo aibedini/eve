@@ -5,16 +5,38 @@ set -euo pipefail
 APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TARGET="x86_64-unknown-linux-musl"
 DEST="$APP_ROOT/static/app-files/bnqo/bnqo-agent"
+BUILD_HOME="/var/cache/eve/bnqo-rust"
+export CARGO_HOME="$BUILD_HOME/cargo"
+export RUSTUP_HOME="$BUILD_HOME/rustup"
+export PATH="$CARGO_HOME/bin:$PATH"
 
-for tool in cargo rustup musl-gcc; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "Missing $tool on the Eve server. Install Rust (rustup) and musl-tools, then retry." >&2
+if (( EUID != 0 )); then
+    echo "Run this build script as root on the Eve server." >&2
+    exit 1
+fi
+
+if ! command -v curl >/dev/null 2>&1 || ! command -v musl-gcc >/dev/null 2>&1; then
+    if ! command -v apt-get >/dev/null 2>&1; then
+        echo "Automatic dependency installation requires apt-get on the Eve server." >&2
         exit 1
     fi
-done
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl musl-tools
+fi
 
-rustup target add "$TARGET"
-(cd "$APP_ROOT/bnqo" && cargo build --locked --release --target "$TARGET")
+install -d -m 0700 "$CARGO_HOME" "$RUSTUP_HOME"
+if [[ ! -x "$CARGO_HOME/bin/cargo" || ! -x "$CARGO_HOME/bin/rustup" ]]; then
+    installer="$(mktemp)"
+    trap 'rm -f "$installer"' EXIT
+    curl -fsSL --retry 3 --proto '=https' --tlsv1.2 https://sh.rustup.rs -o "$installer"
+    sh "$installer" -y --profile minimal --default-toolchain stable --no-modify-path
+    rm -f "$installer"
+    trap - EXIT
+fi
+
+"$CARGO_HOME/bin/rustup" target add "$TARGET"
+(cd "$APP_ROOT/bnqo" && "$CARGO_HOME/bin/cargo" build --locked --release --target "$TARGET")
 
 SOURCE="$APP_ROOT/bnqo/target/$TARGET/release/bnqo-agent"
 TMP="$(mktemp "$DEST.tmp.XXXXXX")"

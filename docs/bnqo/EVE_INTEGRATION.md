@@ -61,14 +61,13 @@ panel server before issuing an install command for a remote server. The
 standard installation uses `/opt/eve-xui-manager`:
 
 ```sh
-sudo apt-get install musl-tools
-# Install Rust with rustup if cargo/rustup are not already available.
 cd /opt/eve-xui-manager
 bash scripts/build_bnqo_agent.sh
 ```
 
-`musl-tools` supplies the C linker needed by the Rust crypto provider. The
-build script checks prerequisites and installs the resulting binary into
+The build script installs `musl-tools` and an isolated Rust toolchain under
+`/var/cache/eve/bnqo-rust` when needed. Run it as root on the Eve server; it
+installs the resulting binary into
 `static/app-files/bnqo/`. Verify that the agent URL on your Eve host returns
 HTTP 200 before generating an install command. See `bnqo/README.md` for details.
 

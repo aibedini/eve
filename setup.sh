@@ -3859,7 +3859,7 @@ bnqo_binary_info() {
         echo -e "  ${DIM}Served to agents at: <panel-origin>/static/app-files/bnqo/bnqo-agent${NC}"
     else
         print_warning "Agent binary not built yet: ${bin}"
-        echo -e "  ${DIM}On the Eve server, install Rust and musl-tools, then run:${NC}"
+        echo -e "  ${DIM}On the Eve server, run this as root (dependencies install automatically):${NC}"
         echo -e "  ${DIM}cd ${APP_DIR} && bash scripts/build_bnqo_agent.sh${NC}"
     fi
 }
