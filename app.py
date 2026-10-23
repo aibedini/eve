@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.17.9"
+APP_VERSION = "2.17.10"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -1165,13 +1165,15 @@ def add_security_headers(response):
             "frame-ancestors 'self'",
             "form-action 'self'",
             "img-src 'self' data:",
-            "font-src 'self' data:",
+            "font-src 'self' data: https:" if allow_external_chat else "font-src 'self' data:",
             "manifest-src 'self'",
         ]
         if allow_external_chat:
             directives.append("frame-src 'self' https:")
         directives.extend([
-            f"style-src 'self' 'nonce-{nonce}'",
+            # External chat widgets such as EveChat create <style> elements at
+            # runtime (including inside shadow roots), which cannot carry our nonce.
+            "style-src 'self' 'unsafe-inline'" if allow_external_chat else f"style-src 'self' 'nonce-{nonce}'",
             "style-src-attr 'unsafe-inline'",
             f"script-src 'self' 'nonce-{nonce}'{script_src_extra}",
             "script-src-attr 'unsafe-inline'",

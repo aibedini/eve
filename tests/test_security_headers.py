@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from flask import g
+
 _DB_FILE = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _DB_FILE.close()
 os.environ.setdefault("DATABASE_URL", "sqlite:///" + _DB_FILE.name.replace(os.sep, "/"))
@@ -56,6 +58,21 @@ class SecurityHeaderTests(unittest.TestCase):
         match = re.search(r"'nonce-([A-Za-z0-9_\-]+)'", csp)
         self.assertIsNotNone(match, csp)
         self.assertIn('nonce="' + match.group(1) + '"', response.get_data(as_text=True))
+
+    def test_chat_widget_styles_are_allowed_only_on_chat_enabled_pages(self):
+        with app.test_request_context('/subscription/example', base_url='https://panel.example.com'):
+            g.csp_nonce = 'test-nonce'
+            g.allow_external_chat_widget = True
+            response = app.process_response(app.response_class('ok', mimetype='text/html'))
+
+        csp = response.headers.get('Content-Security-Policy') or ''
+        self.assertIn("style-src 'self' 'unsafe-inline'", csp)
+        self.assertIn("font-src 'self' data: https:", csp)
+        self.assertIn("script-src 'self' 'nonce-test-nonce' https:", csp)
+
+        login_csp = self.client.get('/login').headers.get('Content-Security-Policy') or ''
+        self.assertNotIn("style-src 'self' 'unsafe-inline'", login_csp)
+        self.assertNotIn("font-src 'self' data: https:", login_csp)
 
     def test_json_responses_have_no_csp_but_keep_nosniff(self):
         response = self.client.get("/api/me/permissions")
