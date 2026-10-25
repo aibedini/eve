@@ -133,6 +133,7 @@ EOF
 # ------------------------- Config --------------------------
 APP_NAME="Eve X-UI Manager"
 SERVICE_NAME="eve-manager"
+NGINX_SITE_FILE="${EVE_NGINX_SITE_FILE:-/etc/nginx/sites-enabled/${SERVICE_NAME}}"
 APP_USER="evemgr"
 APP_DIR="/opt/eve-xui-manager"
 REPO_URL="${EVE_REPO_URL:-https://github.com/aibedini/eve.git}"
@@ -2960,6 +2961,200 @@ get_db_type() {
     fi
 }
 
+probe_web_http() {
+    command -v curl >/dev/null 2>&1 || return 1
+    curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
+        --connect-timeout 1 --max-time 3 \
+        -H 'Host: localhost' "http://127.0.0.1:${APP_PORT}/" 2>/dev/null
+}
+
+web_http_is_healthy() {
+    [[ "$1" =~ ^[23][0-9][0-9]$ ]]
+}
+
+get_web_status() {
+    local code
+    if ! systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+        echo -e "${RED}● Web service stopped${NC}"
+    elif code="$(probe_web_http)" && web_http_is_healthy "$code"; then
+        echo -e "${GREEN}● Responding (HTTP ${code})${NC}"
+    elif [[ "${code:-}" =~ ^[0-9][0-9][0-9]$ ]] && [ "$code" != 000 ]; then
+        echo -e "${RED}● HTTP ${code}${NC}"
+    else
+        echo -e "${RED}● Not responding${NC}"
+    fi
+}
+
+health_unit() {
+    local label="$1" unit="$2" state
+    if ! systemctl cat "$unit" >/dev/null 2>&1; then
+        printf '  %-21s : not installed\n' "$label"
+        return 2
+    elif systemctl is-active --quiet "$unit"; then
+        printf '  %-21s : running\n' "$label"
+        return 0
+    else
+        state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+        printf '  %-21s : %s\n' "$label" "${state:-stopped}"
+        return 1
+    fi
+}
+
+health_report() {
+    require_root
+    print_header "Eve Health Check"
+    local failures=0 code domain nginx_code usage unit
+    echo "Services"
+    health_unit "Web" "${SERVICE_NAME}.service" || failures=$((failures + 1))
+    health_unit "Background" "${SERVICE_NAME}-background.service" || failures=$((failures + 1))
+    health_unit "Nginx" "nginx.service" || failures=$((failures + 1))
+    health_unit "Redis" "redis-server.service" || failures=$((failures + 1))
+    if grep -q '^DATABASE_URL=postgresql' "$ENV_FILE" 2>/dev/null; then
+        if command -v pg_isready >/dev/null 2>&1 && pg_isready -q; then
+            printf '  %-21s : accepting connections\n' "PostgreSQL"
+        else
+            printf '  %-21s : unavailable\n' "PostgreSQL"
+            failures=$((failures + 1))
+        fi
+    fi
+    for unit in "${SERVICE_NAME}-telegram-egress.service" "${SERVICE_NAME}-telegram-bot.service"; do
+        health_unit "$unit" "$unit" || true
+    done
+
+    echo
+    echo "Requests"
+    code="$(probe_web_http)" || code="000"
+    if web_http_is_healthy "$code"; then
+        printf '  %-21s : HTTP %s (OK)\n' "App on port ${APP_PORT}" "$code"
+    else
+        printf '  %-21s : HTTP %s (FAILED)\n' "App on port ${APP_PORT}" "$code"
+        echo "    The web process may be running while its workers cannot answer requests."
+        failures=$((failures + 1))
+    fi
+    if nginx -t >/dev/null 2>&1; then
+        printf '  %-21s : valid\n' "Nginx config"
+    else
+        printf '  %-21s : invalid (run: nginx -t)\n' "Nginx config"
+        failures=$((failures + 1))
+    fi
+    if [ ! -f "$NGINX_SITE_FILE" ]; then
+        printf '  %-21s : missing (%s)\n' "Nginx site" "$NGINX_SITE_FILE"
+        failures=$((failures + 1))
+    fi
+    domain="$(awk '$1 == "server_name" {gsub(";", "", $2); print $2; exit}' "$NGINX_SITE_FILE" 2>/dev/null)" || domain=""
+    if [ -f "$NGINX_SITE_FILE" ] && [ -z "$domain" ]; then
+        printf '  %-21s : no server_name configured\n' "Nginx site"
+        failures=$((failures + 1))
+    fi
+    if [ -n "$domain" ] && grep -Eq '^[[:space:]]*listen[[:space:]]+[^;]*443' "$NGINX_SITE_FILE" 2>/dev/null \
+        && command -v curl >/dev/null 2>&1; then
+        nginx_code="$(curl --noproxy '*' --insecure --silent --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 1 --max-time 4 --resolve "${domain}:443:127.0.0.1" "https://${domain}/" 2>/dev/null)" || nginx_code="000"
+        if web_http_is_healthy "$nginx_code"; then
+            printf '  %-21s : HTTP %s (OK)\n' "Local HTTPS" "$nginx_code"
+        else
+            printf '  %-21s : HTTP %s (FAILED)\n' "Local HTTPS" "$nginx_code"
+            failures=$((failures + 1))
+        fi
+    elif [ -n "$domain" ] && command -v curl >/dev/null 2>&1; then
+        nginx_code="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 1 --max-time 4 -H "Host: ${domain}" http://127.0.0.1/ 2>/dev/null)" || nginx_code="000"
+        if web_http_is_healthy "$nginx_code"; then
+            printf '  %-21s : HTTP %s (OK)\n' "Local Nginx" "$nginx_code"
+        else
+            printf '  %-21s : HTTP %s (FAILED)\n' "Local Nginx" "$nginx_code"
+            failures=$((failures + 1))
+        fi
+    fi
+    usage="$(df -P "$APP_DIR" 2>/dev/null | awk 'NR == 2 {gsub("%", "", $5); print $5}')"
+    if [[ "$usage" =~ ^[0-9]+$ ]]; then
+        printf '  %-21s : %s%% used\n' "Disk" "$usage"
+        if [ "$usage" -ge 90 ]; then failures=$((failures + 1)); fi
+    fi
+    echo
+    if [ "$failures" -eq 0 ]; then
+        print_success "Core checks passed. If the site is still unavailable externally, check DNS, firewall, and TLS."
+    else
+        print_error "${failures} required check(s) failed. Open recent logs below for details."
+    fi
+    return "$((failures > 0))"
+}
+
+restart_web_service() {
+    require_root
+    print_header "Restart Eve Web"
+    if ! systemctl restart "${SERVICE_NAME}.service"; then
+        print_error "Web service restart failed. Check: journalctl -u ${SERVICE_NAME} -n 50"
+        return 1
+    fi
+    local attempt code
+    for ((attempt = 1; attempt <= 20; attempt++)); do
+        code="$(probe_web_http)" || code="000"
+        if web_http_is_healthy "$code"; then
+            print_success "Web is responding (HTTP ${code})."
+            return 0
+        fi
+        sleep 1
+    done
+    print_error "Service started, but the web app is not answering requests."
+    journalctl -u "${SERVICE_NAME}.service" -n 20 --no-pager
+    return 1
+}
+
+restart_eve_workers() {
+    require_root
+    print_header "Restart Eve Workers"
+    local unit failed=0
+    for unit in "${SERVICE_NAME}-background.service" "${SERVICE_NAME}-telegram-egress.service" "${SERVICE_NAME}-telegram-bot.service"; do
+        if systemctl cat "$unit" >/dev/null 2>&1; then
+            if systemctl restart "$unit" && systemctl is-active --quiet "$unit"; then
+                print_success "$unit running"
+            else
+                print_error "$unit failed; check journalctl -u $unit -n 50"
+                failed=1
+            fi
+        else
+            print_warning "$unit is not installed"
+        fi
+    done
+    return "$failed"
+}
+
+reload_nginx_checked() {
+    require_root
+    print_header "Check and Reload Nginx"
+    nginx -t || return 1
+    systemctl reload nginx.service || return 1
+    print_success "Nginx configuration is valid and has been reloaded."
+}
+
+operations_menu() {
+    while true; do
+        print_header "Health & Recovery"
+        echo "  [1] Check services, app response, HTTPS, and disk"
+        echo "  [2] Restart Eve web and verify response"
+        echo "  [3] Restart Eve background and Telegram workers"
+        echo "  [4] Test Nginx config and reload"
+        echo "  [5] Recent web logs"
+        echo "  [6] Recent Nginx errors"
+        echo "  [0] Back"
+        echo
+        local choice
+        read -rp "  Select option: " choice
+        case "$choice" in
+            1) health_report || true ;;
+            2) restart_web_service || true ;;
+            3) restart_eve_workers || true ;;
+            4) reload_nginx_checked || true ;;
+            5) journalctl -u "${SERVICE_NAME}.service" -n 60 --no-pager || true ;;
+            6) tail -n 60 /var/log/nginx/error.log 2>/dev/null || true ;;
+            0|b|B|q|Q) return 0 ;;
+            *) print_error "Invalid option: $choice" ;;
+        esac
+        read -rp "  Press Enter to continue..." _dummy
+    done
+}
+
 show_banner() {
     clear
     echo -e "${CYAN}${BOLD}"
@@ -2973,7 +3168,8 @@ show_banner() {
     echo -e "  ${DIM}  github.com/aibedini/eve   by aibedini${NC}"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     printf "  %-12s : %s\n"  "Version"  "$(get_app_version)"
-    printf "  %-12s : " "Status";   echo -e "$(get_service_status)"
+    printf "  %-12s : " "Web process"; echo -e "$(get_service_status)"
+    printf "  %-12s : " "Website";     echo -e "$(get_web_status)"
     printf "  %-12s : %s\n"  "Port"     "${APP_PORT}"
     printf "  %-12s : %s\n"  "Database" "$(get_db_type)"
     printf "  %-12s : " "Xray";     echo -e "$(get_xray_status)"
@@ -3920,6 +4116,9 @@ show_menu() {
         echo -e "   ${MAGENTA}[p]${NC}  Pulse — Config Health Monitor"
         echo -e "   ${MAGENTA}[n]${NC}  BNQO — Network Link Monitor"
         echo
+        echo -e "  ${BOLD}Health & Recovery${NC}"
+        echo -e "   ${CYAN}[h]${NC}  Check services / website, view logs, restart"
+        echo
         echo -e "  ${BOLD}System${NC}"
         echo -e "   ${DIM}[s]${NC}  Update this Script (Online — GitHub)"
         echo -e "   ${RED}[u]${NC}  Uninstall"
@@ -4027,6 +4226,9 @@ show_menu() {
             n|N)
                 bnqo_menu
                 ;;
+            h|H)
+                operations_menu
+                ;;
             s|S)
                 update_self
                 ;;
@@ -4098,6 +4300,12 @@ if [ "${1:-}" = "--install-xray" ]; then
 elif [ "${1:-}" = "--xray-status" ]; then
     get_xray_status
     exit 0
+elif [ "${1:-}" = "--health" ]; then
+    health_report
+    exit $?
+elif [ "${1:-}" = "--restart-web" ]; then
+    restart_web_service
+    exit $?
 elif [ "${1:-}" = "--restart-telegram-egress" ]; then
     require_root
     restart_telegram_egress_service
