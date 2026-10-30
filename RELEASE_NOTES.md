@@ -1,3 +1,17 @@
+# Eve - Xui Manager v2.19.0
+
+## [2.19.0] - 2026-10-30
+
+This release makes the SMS delivery pipeline tell you where a carrier receipt got lost.
+
+**Stages show their own evidence.** The SMS Center pipeline used to derive its last three stages from one fact, so a missing receipt showed three identical "Waiting" rows. Now "GMweb delivery report received" is confirmed whenever EVE holds a receipt from GMweb, even if GMweb did not send its optional receive time. A receipt for one part of a multi-part message shows GMweb and EVE as confirmed while the carrier stage keeps waiting for the remaining parts (`segments_pending`). When the delivery was learned only from GMweb's status endpoint, the pipeline says so: carrier and GMweb confirmed, EVE ingestion `not_reported` with `resolved_by_status_poll` - the signal that GMweb has the receipt but its signed callback never reached EVE.
+
+**Rejections are diagnosable.** A signed GMweb callback that EVE rejects now gets a `reason` naming the field (for example `invalid_segment_index`) next to `invalid_event`, and the rejection is logged with its event id. GMweb stores that answer as the outbox `last_error`, so a dead-lettered receipt points straight at the cause.
+
+**Retries no longer conflict.** If GMweb replays an event with a refreshed attempt counter or attempt time, EVE treats it as the duplicate it is instead of answering `409 event_id_conflict`.
+
+**Upgrade notes.** No schema migration and no new dependency. If receipts were dead-lettered by an EVE older than 2.10.1, requeue them with GMweb's `POST /admin/eve-callbacks/requeue` after updating (see `docs/SMS_GATEWAY_DELIVERY_SPEC.md` §8.3-8.4).
+
 # Eve - Xui Manager v2.18.0
 
 ## [2.18.0] - 2026-10-30

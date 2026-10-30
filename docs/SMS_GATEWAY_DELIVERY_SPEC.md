@@ -297,3 +297,26 @@ SELECT send_id, event_id, event_type, state, attempt_count, last_http_status, la
 Verify afterwards that those rows reached `state='delivered'`,
 `last_http_status=200` and that `carrier_delivery_reports` rows for the same
 `send_id` are reflected in `sms_gateway_events` on the Eve side.
+
+### 8.4 Diagnosing rejected callbacks and reading the receipt stages
+
+A signed callback Eve rejects answers `400 {"error": "invalid_event",
+"reason": "<code>"}` (for example `invalid_segment_index`, `invalid_json`) and
+logs `GMweb SMS event <event_id> rejected: <code>`, so GMweb's
+`eve_sms_outbox.last_error` names the field instead of a bare `invalid_event`.
+
+A replay of the same `event_id` that differs only in relay bookkeeping
+(`eve_dispatch_attempts`, `eve_last_attempt_at`, `eve_ack_at`) is a duplicate,
+not a `409 event_id_conflict`; the first stored copy stays unchanged.
+
+The three receipt stages read their own evidence:
+
+| situation | Carrier DELIVERY callback | GMweb delivery report received | EVE delivery receipt ingested |
+|---|---|---|---|
+| terminal receipt ingested | `confirmed` / `failed` | `confirmed` (`at` only when GMweb sent `gmweb_delivery_received_at`) | `confirmed` |
+| per-segment receipt (`all_segments_delivered=false`) | `waiting` / `unconfirmed`, reason `segments_pending` | `confirmed` | `confirmed` |
+| carrier truth only from the GMweb status poll | `confirmed` / `failed` | `confirmed`, evidence `gmweb_status_poll` | `not_reported`, reason `resolved_by_status_poll` |
+| no receipt anywhere | `waiting` / `unconfirmed` | same | same |
+
+`resolved_by_status_poll` means GMweb holds the receipt but its signed callback
+never reached Eve: check the GMweb outbox for a dead-lettered `sms.*` row.

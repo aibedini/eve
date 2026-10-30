@@ -1,5 +1,21 @@
 ﻿# Changelog - Eve
 
+## [2.19.0] - 2026-10-30
+
+### Fixed
+- **SMS delivery pipeline stages read their own evidence.** "GMweb delivery report received" no longer depends on the optional `gmweb_delivery_received_at` diagnostic, so it cannot read "not reported" between two confirmed stages. A per-segment receipt (`all_segments_delivered=false`) keeps the carrier pending but now shows the GMweb report and EVE ingestion as confirmed (carrier stage reason `segments_pending`). Carrier truth that came only from the GMweb status poll shows the carrier and GMweb stages confirmed and EVE ingestion `not_reported` with reason `resolved_by_status_poll`, instead of three "Waiting" rows under a "delivered" card.
+- **Rejected GMweb callbacks name the field.** `POST /internal/gmweb/sms/events` answers `400 {"error": "invalid_event", "reason": "<code>"}` and logs the rejection with the event id, so a dead-lettered receipt in GMweb's outbox is diagnosable.
+- **Relay retries are duplicates, not conflicts.** A replay of the same `event_id` that differs only in `eve_dispatch_attempts`, `eve_last_attempt_at` or `eve_ack_at` is accepted as a duplicate instead of `409 event_id_conflict`; the stored evidence is unchanged.
+
+### Testing
+- Five new cases in `tests/test_sms_gateway_events.py` (partial-segment receipt, GMweb stage without the optional diagnostic, polled delivery without a callback, named rejection reason, relay-bookkeeping replay). `scripts/affected_tests.py` now maps `panel/routes/sms_gateway_events.py`.
+
+### Upgrade notes
+- No schema migration and no new dependency. `docs/SMS_GATEWAY_DELIVERY_SPEC.md` §8.4 documents the reason codes and the stage table.
+
+### Also included (2.18.1)
+- SMS settings tab: stuck loading and empty boxes fixed; clearer layout.
+
 ## [2.18.0] - 2026-10-30
 
 ### Added

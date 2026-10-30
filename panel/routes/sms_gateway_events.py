@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import time
@@ -18,6 +19,7 @@ from panel.routes.common import permission_required
 
 
 bp = Blueprint('sms_gateway_events', __name__)
+logger = logging.getLogger(__name__)
 _TOKEN = re.compile(r'^[A-Za-z0-9:_-]+$')
 _NOTIFICATION_ID = re.compile(r'^[A-Za-z][A-Za-z0-9_-]{0,119}$')
 _CODE = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,63}$')
@@ -36,6 +38,12 @@ _MAX_DIAGNOSTIC = 1000000
 # dead_letter and the carrier state stayed pending for ever even though the phone
 # held a real receipt.
 _MIN_CARRIER_RESULT_CODE = -1000000
+
+# Relay bookkeeping GMweb may refresh when it replays the same immutable event
+# (its outbox attempt counter and timestamps). They are not delivery evidence,
+# so a replay that differs only here is a duplicate, not an event_id conflict.
+_RELAY_DIAGNOSTICS = ('eve_dispatch_attempts', 'eve_last_attempt_at', 'eve_ack_at')
+_RECEIPT_TYPES = ('sms.delivered', 'sms.delivery_failed')
 
 # Display-only projection window: after this many seconds a message that was
 # definitely submitted and still has no terminal carrier receipt stops reading as
@@ -181,6 +189,22 @@ def _parse_event(data):
     )
 
 
+def _evidence_diagnostics(raw):
+    diagnostics = json.loads(raw) if raw else {}
+    for name in _RELAY_DIAGNOSTICS:
+        diagnostics.pop(name, None)
+    return diagnostics
+
+
+def _same_event(existing, values):
+    """True when a replay carries the stored evidence (relay bookkeeping aside)."""
+    if any(getattr(existing, key) != value for key, value in values.items()
+           if key != 'diagnostics_json'):
+        return False
+    return (_evidence_diagnostics(existing.diagnostics_json)
+            == _evidence_diagnostics(values['diagnostics_json']))
+
+
 def _event_dict(row):
     return dict(
         event_id=row.event_id, trace_id=row.trace_id, message_id=row.message_id,
@@ -318,12 +342,29 @@ def _delivery_pipeline(log, rows, submission, carrier):
     sent = next((row for row in reversed(rows) if row.event_type in ('send.sent', 'send.completed')), None)
     receipt = next((row for row in reversed(rows)
                     if row.event_id == carrier.get('event_id')), None)
-    diagnostics = carrier.get('diagnostics') or {}
+    # Any ingested receipt row, terminal or not: a per-segment receipt
+    # (all_segments_delivered=false) keeps the carrier pending, but GMweb did
+    # report it and EVE did ingest it, so those two stages must not read waiting.
+    ingested = receipt or max(
+        (row for row in rows if row.event_type in _RECEIPT_TYPES),
+        key=lambda row: (row.occurred_at, row.event_id), default=None)
+    if receipt is not None:
+        diagnostics = carrier.get('diagnostics') or {}
+    elif ingested is not None:
+        raw_diagnostics = getattr(ingested, 'diagnostics_json', None)
+        diagnostics = json.loads(raw_diagnostics) if raw_diagnostics else {}
+    else:
+        diagnostics = {}
+    # Carrier truth that came from GMweb's status endpoint instead of a signed
+    # callback: the receipt exists in GMweb but its callback never reached EVE.
+    polled = (receipt is None and carrier.get('confirmed')
+              and carrier['state'] in ('delivered', 'failed'))
     waiting = carrier['state'] == 'pending'
     # The same missing-evidence fact, read one window apart: still inside the
     # carrier wait window ("waiting") or past it ("unconfirmed").
     awaiting = 'unconfirmed' if carrier['state'] == 'unconfirmed' else (
         'waiting' if waiting else 'not_reported')
+    awaiting_reason = 'carrier_receipt_timeout' if carrier['state'] == 'unconfirmed' else None
     accepted = next((row for row in rows if row.event_type == 'gateway.accepted'), None)
     queued = [row for row in rows if row.event_type == 'send.queued']
     job_created = min(([accepted] if accepted is not None else []) + queued,
@@ -348,6 +389,35 @@ def _delivery_pipeline(log, rows, submission, carrier):
         return {'name': name, 'state': state, 'at': at, 'evidence': evidence,
                 'reason': reason}
 
+    carrier_state = 'failed' if carrier['state'] == 'failed' else 'confirmed'
+    if receipt is not None:
+        carrier_stage = stage('Carrier DELIVERY callback', carrier_state,
+                              diagnostics.get('android_delivery_received_at')
+                              or carrier.get('occurred_at'),
+                              carrier.get('evidence'), carrier.get('reason_code'))
+    elif polled:
+        carrier_stage = stage('Carrier DELIVERY callback', carrier_state,
+                              carrier.get('occurred_at'), carrier.get('evidence'))
+    elif ingested is not None:
+        carrier_stage = stage('Carrier DELIVERY callback', awaiting,
+                              evidence=ingested.event_id, reason='segments_pending')
+    else:
+        carrier_stage = stage('Carrier DELIVERY callback', awaiting, reason=awaiting_reason)
+    if ingested is not None:
+        gmweb_stage = stage('GMweb delivery report received', 'confirmed',
+                            diagnostics.get('gmweb_delivery_received_at'), ingested.event_id)
+        eve_stage = stage('EVE delivery receipt ingested', 'confirmed',
+                          getattr(ingested, 'received_at', ingested.occurred_at).isoformat() + 'Z',
+                          ingested.event_id)
+    elif polled:
+        gmweb_stage = stage('GMweb delivery report received', 'confirmed',
+                            evidence='gmweb_status_poll')
+        eve_stage = stage('EVE delivery receipt ingested', 'not_reported',
+                          reason='resolved_by_status_poll')
+    else:
+        gmweb_stage = stage('GMweb delivery report received', awaiting)
+        eve_stage = stage('EVE delivery receipt ingested', awaiting)
+
     return [
         stage('EVE request created', 'confirmed',
               log.created_at.isoformat() + 'Z' if log.created_at else None, 'sms_send_log'),
@@ -361,19 +431,9 @@ def _delivery_pipeline(log, rows, submission, carrier):
         stage('SENT callback ingested', 'confirmed' if sent else 'waiting' if log.request_id else 'not_reported',
               sent.received_at.isoformat() + 'Z' if sent else None,
               sent.event_id if sent else None),
-        stage('Carrier DELIVERY callback', 'failed' if receipt and carrier['state'] == 'failed' else
-              'confirmed' if receipt else awaiting,
-              diagnostics.get('android_delivery_received_at') or carrier.get('occurred_at') if receipt else None,
-              carrier.get('evidence') if receipt else None,
-              carrier.get('reason_code') or
-              ('carrier_receipt_timeout' if carrier['state'] == 'unconfirmed' else None)),
-        stage('GMweb delivery report received',
-              'confirmed' if diagnostics.get('gmweb_delivery_received_at') else awaiting,
-              diagnostics.get('gmweb_delivery_received_at'),
-              carrier.get('event_id') if diagnostics.get('gmweb_delivery_received_at') else None),
-        stage('EVE delivery receipt ingested', 'confirmed' if receipt else awaiting,
-              carrier.get('received_at') if receipt else None,
-              carrier.get('event_id') if receipt else None),
+        carrier_stage,
+        gmweb_stage,
+        eve_stage,
     ]
 
 
@@ -406,15 +466,30 @@ def ingest_sms_event():
                       hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, f'sha256={digest}'):
         return jsonify({'error': 'invalid_signature'}), 401
+    # The signature is valid, so the sender is GMweb: name the rejected field in
+    # the response (GMweb keeps it as the outbox last_error) and in the log.
+    # A bare invalid_event left a dead-lettered receipt impossible to diagnose.
     try:
-        values = _parse_event(json.loads(raw))
+        data = json.loads(raw)
     except (ValueError, UnicodeDecodeError):
-        return jsonify({'error': 'invalid_event'}), 400
+        reason = 'invalid_json'
+    else:
+        try:
+            values = _parse_event(data)
+            reason = None
+        except ValueError as exc:
+            reason = str(exc)
+    if reason:
+        event_type = data.get('type') if reason != 'invalid_json' and isinstance(data, dict) else None
+        logger.warning('GMweb SMS event %s rejected: %s (type=%s)', delivery_id, reason,
+                       event_type if _valid_text(event_type, 64, _EVENT_TYPE) else 'unknown')
+        return jsonify({'error': 'invalid_event', 'reason': reason}), 400
     if delivery_id != values['event_id']:
         return jsonify({'error': 'delivery_id_mismatch'}), 400
     existing = db.session.get(SmsGatewayEvent, values['event_id'])
     if existing:
-        if any(getattr(existing, key) != value for key, value in values.items()):
+        if not _same_event(existing, values):
+            logger.warning('GMweb SMS event %s conflicts with the stored evidence', delivery_id)
             return jsonify({'error': 'event_id_conflict'}), 409
         return jsonify({'accepted': True, 'duplicate': True})
     try:
@@ -423,7 +498,7 @@ def ingest_sms_event():
     except IntegrityError:
         db.session.rollback()
         existing = db.session.get(SmsGatewayEvent, values['event_id'])
-        if existing and all(getattr(existing, key) == value for key, value in values.items()):
+        if existing and _same_event(existing, values):
             return jsonify({'accepted': True, 'duplicate': True})
         return jsonify({'error': 'event_id_conflict'}), 409
     return jsonify({'accepted': True, 'duplicate': False})

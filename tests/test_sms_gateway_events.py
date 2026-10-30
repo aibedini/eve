@@ -335,6 +335,77 @@ class GatewayEventTests(unittest.TestCase):
         part.diagnostics_json = json.dumps({'all_segments_delivered': True})
         self.assertEqual(_project_evidence([sent, part], now=now)[1]['state'], 'delivered')
 
+    def _pipeline_steps(self, rows, log, now=datetime(2026, 9, 27, 6, 5)):
+        submission, carrier = _project_evidence(rows, log, now=now)
+        return {step['name']: step for step in
+                _delivery_pipeline(log, rows, submission, carrier)}
+
+    def test_partial_segment_receipt_is_ingested_but_carrier_stays_waiting(self):
+        sent = self._sent_event()
+        part = SimpleNamespace(event_id='evt_part', event_type='sms.delivered',
+                               occurred_at=datetime(2026, 9, 27, 6, 1),
+                               received_at=datetime(2026, 9, 27, 6, 1, 2),
+                               carrier_status='delivered', evidence='android_dlr',
+                               diagnostics_json=json.dumps({'all_segments_delivered': False}))
+        steps = self._pipeline_steps([sent, part], self._waiting_log())
+        self.assertEqual(steps['Carrier DELIVERY callback']['state'], 'waiting')
+        self.assertEqual(steps['Carrier DELIVERY callback']['reason'], 'segments_pending')
+        self.assertEqual(steps['GMweb delivery report received']['state'], 'confirmed')
+        self.assertEqual(steps['EVE delivery receipt ingested']['state'], 'confirmed')
+        self.assertEqual(steps['EVE delivery receipt ingested']['at'], '2026-09-27T06:01:02Z')
+        self.assertEqual(steps['EVE delivery receipt ingested']['evidence'], 'evt_part')
+
+    def test_gmweb_report_stage_does_not_depend_on_optional_diagnostic(self):
+        sent = self._sent_event()
+        receipt = SimpleNamespace(event_id='evt_delivered', event_type='sms.delivered',
+                                  occurred_at=datetime(2026, 9, 27, 6, 2),
+                                  received_at=datetime(2026, 9, 27, 6, 2),
+                                  carrier_status='delivered', evidence='android_dlr')
+        steps = self._pipeline_steps([sent, receipt], self._waiting_log())
+        states = [steps[name]['state'] for name in (
+            'Carrier DELIVERY callback', 'GMweb delivery report received',
+            'EVE delivery receipt ingested')]
+        self.assertEqual(states, ['confirmed', 'confirmed', 'confirmed'])
+        self.assertIsNone(steps['GMweb delivery report received']['at'])
+        self.assertEqual(steps['GMweb delivery report received']['evidence'], 'evt_delivered')
+
+    def test_polled_delivery_without_callback_is_shown_as_such(self):
+        sent = self._sent_event()
+        log = self._waiting_log()
+        log.carrier_state, log.carrier_evidence = 'delivered', 'carrier_dlr'
+        log.carrier_occurred_at = '2026-09-27T06:03:00Z'
+        steps = self._pipeline_steps([sent], log, now=datetime(2030, 1, 1))
+        self.assertEqual(steps['Carrier DELIVERY callback']['state'], 'confirmed')
+        self.assertEqual(steps['Carrier DELIVERY callback']['at'], '2026-09-27T06:03:00Z')
+        self.assertEqual(steps['GMweb delivery report received']['state'], 'confirmed')
+        self.assertEqual(steps['GMweb delivery report received']['evidence'], 'gmweb_status_poll')
+        self.assertEqual(steps['EVE delivery receipt ingested']['state'], 'not_reported')
+        self.assertEqual(steps['EVE delivery receipt ingested']['reason'],
+                         'resolved_by_status_poll')
+
+    def test_rejected_event_names_the_offending_field(self):
+        body = self._delivered_payload(event_id='evt_bad_segment', segment_index=-1)
+        with self.assertLogs('panel.routes.sms_gateway_events', level='WARNING') as logs:
+            response = self._post(body=body)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json, {'error': 'invalid_event',
+                                         'reason': 'invalid_segment_index'})
+        self.assertIn('evt_bad_segment rejected: invalid_segment_index (type=sms.delivered)',
+                      logs.output[0])
+
+    def test_replay_with_refreshed_relay_bookkeeping_is_a_duplicate(self):
+        first = self._delivered_payload(carrier_result_code=-1, eve_dispatch_attempts=1,
+                                        eve_last_attempt_at='2026-09-27T06:00:11Z')
+        self.assertEqual(self._post(body=first).json, {'accepted': True, 'duplicate': False})
+        retry = dict(first, eve_dispatch_attempts=2,
+                     eve_last_attempt_at='2026-09-27T06:01:11Z')
+        self.assertEqual(self._post(body=retry).json, {'accepted': True, 'duplicate': True})
+        # The stored evidence is immutable: the first copy's bookkeeping stays.
+        row = db.session.get(SmsGatewayEvent, 'evt_delivery_1')
+        self.assertEqual(json.loads(row.diagnostics_json)['eve_dispatch_attempts'], 1)
+        changed = dict(first, carrier_result_code=0)
+        self.assertEqual(self._post(body=changed).status_code, 409)
+
     # ── signed Android carrier result code (GMweb/Android contract) ─────────
     #
     # Android passes the raw PendingIntent callback result code through

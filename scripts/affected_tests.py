@@ -285,6 +285,11 @@ MAPPING = (
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state',
          'tests.test_static_deploy_contract'],
     )),
+    ('panel/routes/sms_gateway_events.py', (
+        # Signed GMweb SMS evidence ingestion and the delivery pipeline projection.
+        ['tests.test_sms_gateway_events'],
+        ['tests.test_alembic_sms_gateway_events', 'tests.test_alembic_gmweb_contract_v5'],
+    )),
     ('panel/core/sms_center_copy.py', (
         # Every visible SMS Center string, in both panel languages.
         ['tests.test_sms_center_copy'],
