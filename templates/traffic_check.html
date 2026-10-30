@@ -3,7 +3,7 @@
 {% block page_title %}Traffic Check{% endblock %}
 
 {% block header_actions %}
-<button class="btn btn-secondary" onclick="loadTrafficCheck()" id="tc-run-btn">
+<button class="btn btn-secondary" data-onclick="loadTrafficCheck()" id="tc-run-btn">
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="23 4 23 10 17 10"></polyline>
         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
@@ -356,11 +356,11 @@ jdp-container .jdp-year select {
         <p>Traffic delta from usage snapshots — compare usage across periods by server and inbound.</p>
         <div class="tc-hero-actions">
             <div class="tc-period-btns">
-                <button class="tc-period-btn active" data-period="today"     onclick="setPeriod('today')">Today</button>
-                <button class="tc-period-btn"        data-period="yesterday" onclick="setPeriod('yesterday')">Yesterday</button>
-                <button class="tc-period-btn"        data-period="7d"        onclick="setPeriod('7d')">7 Days</button>
-                <button class="tc-period-btn"        data-period="30d"       onclick="setPeriod('30d')">30 Days</button>
-                <button class="tc-period-btn"        data-period="custom"    onclick="setPeriod('custom')">Custom…</button>
+                <button class="tc-period-btn active" data-period="today"     data-onclick="setPeriod('today')">Today</button>
+                <button class="tc-period-btn"        data-period="yesterday" data-onclick="setPeriod('yesterday')">Yesterday</button>
+                <button class="tc-period-btn"        data-period="7d"        data-onclick="setPeriod('7d')">7 Days</button>
+                <button class="tc-period-btn"        data-period="30d"       data-onclick="setPeriod('30d')">30 Days</button>
+                <button class="tc-period-btn"        data-period="custom"    data-onclick="setPeriod('custom')">Custom…</button>
             </div>
         </div>
     </div>
@@ -392,7 +392,7 @@ jdp-container .jdp-year select {
                     <svg class="tc-search-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
                     </svg>
-                    <input type="text" id="tc-search" placeholder="Filter servers / inbounds…" oninput="tcRender()">
+                    <input type="text" id="tc-search" placeholder="Filter servers / inbounds…" data-oninput="tcRender()">
                 </div>
             </div>
             <div class="tc-filter-field">
@@ -402,7 +402,7 @@ jdp-container .jdp-year select {
                         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
                     </svg>
                     <input type="text" id="tc-email-input" placeholder="Filter by account email…"
-                           onkeydown="if(event.key==='Enter') loadTrafficCheck()">
+                           data-onkeydown="loadTrafficCheckOnEnter(event)">
                 </div>
             </div>
         </div>
@@ -410,7 +410,7 @@ jdp-container .jdp-year select {
         <!-- Server dropdown -->
         <div class="tc-filter-field">
             <label for="tc-server-filter">Server</label>
-            <select id="tc-server-filter" class="tc-select" onchange="tcRender()">
+            <select id="tc-server-filter" class="tc-select" data-onchange="tcRender()">
                 <option value="">All Servers</option>
             </select>
         </div>
@@ -428,7 +428,7 @@ jdp-container .jdp-year select {
                     <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="picker-to" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="tc-select tc-picker-input"
                            placeholder="{{ '1405/01/31 23:59' if app_calendar == 'jalali' else '2026-04-20 23:59' }}">
                 </div>
-                <button class="btn btn-primary" onclick="loadTrafficCheck()" style="align-self:end;">
+                <button class="btn btn-primary" data-onclick="loadTrafficCheck()" style="align-self:end;">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg>
                     {{ 'بارگذاری بازه' if panel_lang == 'fa' else 'Load Range' }}
                 </button>
@@ -568,6 +568,10 @@ const _iconSpin   = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="
 // ── Main data load ──────────────────────────────────────────────
 let _tcData = null;
 
+function loadTrafficCheckOnEnter(event) {
+    if (event.key === 'Enter') loadTrafficCheck();
+}
+
 async function loadTrafficCheck() {
     const results = document.getElementById('tc-results');
     const runBtn  = document.getElementById('tc-run-btn');
@@ -702,7 +706,7 @@ function tcRender() {
             const clients = ib.client_list || [];
             const hasClients = clients.length > 0;
             const toggleBtn = hasClients ? `
-                <button class="tc-inbound-toggle" id="${ibId}-toggle" onclick="tcToggleClients('${ibId}')" title="${tcT('Show/hide clients', 'نمایش/پنهان‌کردن کاربران')}">
+                <button class="tc-inbound-toggle" id="${ibId}-toggle" data-onclick="tcToggleClients('${ibId}')" title="${tcT('Show/hide clients', 'نمایش/پنهان‌کردن کاربران')}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                     ${ib.clients} ${tcT('clients', 'کاربر')}
                 </button>` : `<span style="color:var(--text-secondary);font-size:0.78rem;">${ib.clients} ${tcT('clients', 'کاربر')}</span>`;
@@ -744,7 +748,7 @@ function tcRender() {
         }).join('');
 
         return `<div class="tc-server-card">
-            <div class="tc-server-header" onclick="tcToggle(${si})">
+            <div class="tc-server-header" data-onclick="tcToggle(${si})">
                 <div class="tc-server-left">
                     <div class="tc-server-icon">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>

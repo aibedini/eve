@@ -10,7 +10,7 @@
                 <h2>My Packages</h2>
                 <p class="text-secondary">{{ 'پکیج‌های خودتان را بسازید و انتخاب کنید کدام پکیج‌ها در صفحه اشتراک مشتری نمایش داده شوند.' if panel_lang == 'fa' else 'Create your own packages and choose which ones appear on customer subscription pages.' }}</p>
             </div>
-            <button class="btn btn-success" onclick="openMyPkgModal()">
+            <button class="btn btn-success" data-onclick="openMyPkgModal()">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                 New Package
             </button>
@@ -26,7 +26,7 @@
     <div class="modal modal-sm">
         <div class="modal-header">
             <h2 id="my-pkg-title">New Package</h2>
-            <button class="modal-close" type="button" onclick="closeMyPkgModal()">&times;</button>
+            <button class="modal-close" type="button" data-onclick="closeMyPkgModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="my-pkg-id">
@@ -37,16 +37,16 @@
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                     <label>Duration (Days) <span style="font-size:0.75rem; color:var(--text-secondary);">(0 = ∞)</span></label>
-                    <input type="text" id="my-pkg-days" class="form-input" placeholder="30" inputmode="numeric" oninput="formatNum(this); refreshMyMinPrice()">
+                    <input type="text" id="my-pkg-days" class="form-input" placeholder="30" inputmode="numeric" data-oninput="formatNum(this); refreshMyMinPrice()">
                 </div>
                 <div class="form-group">
                     <label>Volume (GB) <span style="font-size:0.75rem; color:var(--text-secondary);">(0 = ∞)</span></label>
-                    <input type="text" id="my-pkg-vol" class="form-input" placeholder="50" inputmode="numeric" oninput="formatNum(this); refreshMyMinPrice()">
+                    <input type="text" id="my-pkg-vol" class="form-input" placeholder="50" inputmode="numeric" data-oninput="formatNum(this); refreshMyMinPrice()">
                 </div>
             </div>
             <div class="form-group">
                 <label>Price (Toman)</label>
-                <input type="text" id="my-pkg-price" class="form-input" placeholder="150,000" inputmode="numeric" oninput="formatNum(this); checkMyPriceWarn()">
+                <input type="text" id="my-pkg-price" class="form-input" placeholder="150,000" inputmode="numeric" data-oninput="formatNum(this); checkMyPriceWarn()">
                 <div id="my-pkg-price-hint" style="margin-top:6px; font-size:0.82rem; color:var(--text-secondary); display:none;"></div>
                 <div id="my-pkg-price-warn" class="alert alert-warning" style="margin-top:6px; display:none; padding:8px 12px; font-size:0.84rem; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3); border-radius:8px; color:#fbbf24;">
                     {{ '⚠️ قیمت پایین‌تر از حداقل تعرفه سیستم است و ذخیره نمی‌شود.' if panel_lang == 'fa' else '⚠️ The price is below the system minimum and cannot be saved.' }}
@@ -74,8 +74,8 @@
                 <span>{{ 'نمایش هنگام تمدید' if panel_lang == 'fa' else 'Show on Renew' }}</span>
             </label>
             <div class="form-actions">
-                <button class="btn btn-secondary" type="button" onclick="closeMyPkgModal()">Cancel</button>
-                <button class="btn btn-primary" id="my-pkg-save-btn" type="button" onclick="saveMyPkg()">Save</button>
+                <button class="btn btn-secondary" type="button" data-onclick="closeMyPkgModal()">Cancel</button>
+                <button class="btn btn-primary" id="my-pkg-save-btn" type="button" data-onclick="saveMyPkg()">Save</button>
             </div>
         </div>
     </div>
@@ -172,8 +172,8 @@
                 ? `<span class="scope-badge scope-sub" title="${myPkgT('Visible on customer subscription pages', 'در صفحه اشتراک مشتری دیده می‌شود')}">🌐 ${myPkgT('On subscription page', 'در اشتراک')}</span>`
                 : '';
             const ownActions = p.is_own
-                ? `<button class="action-icon" title="Edit" onclick="editMyPkg(${p.id})">${EDIT_ICON}</button>
-                   <button class="action-icon danger" title="Delete" onclick="deleteMyPkg(${p.id})">${DEL_ICON}</button>`
+                ? `<button class="action-icon" title="Edit" data-onclick="editMyPkg(${p.id})">${EDIT_ICON}</button>
+                   <button class="action-icon danger" title="Delete" data-onclick="deleteMyPkg(${p.id})">${DEL_ICON}</button>`
                 : '';
             return `
             <div class="pkg-item">
@@ -187,7 +187,7 @@
                     <div class="pkg-price">${Number(p.price).toLocaleString()} T</div>
                     <label class="sub-toggle" title="${myPkgT('Show on customer subscription page', 'نمایش در صفحه اشتراک مشتری')}">
                         <div class="toggle-switch">
-                            <input type="checkbox" ${p.sub_shown ? 'checked' : ''} onchange="toggleSub(${p.id}, this.checked, this)">
+                            <input type="checkbox" ${p.sub_shown ? 'checked' : ''} data-onchange="toggleSub(${p.id}, this.checked, this)">
                             <span class="slider"></span>
                         </div>
                     </label>

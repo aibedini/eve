@@ -8,32 +8,32 @@
 {% block content %}
 <div class="settings-layout" id="sub-manager-layout">
     <div class="settings-sidebar">
-        <button class="settings-tab active" onclick="switchTab('apps')">
+        <button class="settings-tab active" data-onclick="switchTab('apps')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
             {{ _('Applications') }}
         </button>
-        <button class="settings-tab" onclick="switchTab('statistics')">
+        <button class="settings-tab" data-onclick="switchTab('statistics')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16V5"/></svg>
             {{ _('Statistics') }}
         </button>
-        <button class="settings-tab" onclick="switchTab('faq')">
+        <button class="settings-tab" data-onclick="switchTab('faq')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
             FAQ
         </button>
-        <button class="settings-tab" onclick="switchTab('contact')">
+        <button class="settings-tab" data-onclick="switchTab('contact')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
             {{ _('Contact Info') }}
         </button>
 
-        <button class="settings-tab" onclick="switchTab('announcements')">
+        <button class="settings-tab" data-onclick="switchTab('announcements')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v11a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V4z"/><path d="M8 22h8"/><path d="M12 15v-3"/><path d="M12 6h.01"/></svg>
             {{ _('Announcement') }}
         </button>
-        <button class="settings-tab" onclick="switchTab('online_chat')">
+        <button class="settings-tab" data-onclick="switchTab('online_chat')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             {{ _('Online Chat') }}
         </button>
-        <button class="settings-tab" onclick="switchTab('backup_config')">
+        <button class="settings-tab" data-onclick="switchTab('backup_config')">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             {{ _('Backup Config') }}
         </button>
@@ -47,7 +47,7 @@
                         <h2>{{ _('Applications') }}</h2>
                         <p class="text-secondary">{{ _('Manage client applications shown on the subscription page.') }}</p>
                     </div>
-                    <button class="btn btn-success" onclick="openAddModal()">
+                    <button class="btn btn-success" data-onclick="openAddModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add New App') }}
                     </button>
@@ -72,7 +72,7 @@
 
                 <label class="form-group form-toggle-item" style="cursor:pointer;">
                     <div class="toggle-switch">
-                        <input type="checkbox" id="statistics-enabled" {% if statistics_enabled %}checked{% endif %} onchange="updateStatisticsPreview()">
+                        <input type="checkbox" id="statistics-enabled" {% if statistics_enabled %}checked{% endif %} data-onchange="updateStatisticsPreview()">
                         <span class="slider"></span>
                     </div>
                     <span>{{ _('Show statistics config in subscription apps') }}</span>
@@ -80,12 +80,12 @@
 
                 <div class="form-group">
                     <label>{{ _('Persian name template') }}</label>
-                    <textarea id="statistics-template-fa" class="form-input" rows="3" maxlength="500" dir="rtl" onfocus="setStatisticsTemplateTarget('statistics-template-fa')" oninput="updateStatisticsPreview()">{{ statistics_template_fa }}</textarea>
+                    <textarea id="statistics-template-fa" class="form-input" rows="3" maxlength="500" dir="rtl" data-onfocus="setStatisticsTemplateTarget('statistics-template-fa')" data-oninput="updateStatisticsPreview()">{{ statistics_template_fa }}</textarea>
                 </div>
 
                 <div class="form-group">
                     <label>{{ _('English name template') }}</label>
-                    <textarea id="statistics-template-en" class="form-input" rows="3" maxlength="500" dir="ltr" onfocus="setStatisticsTemplateTarget('statistics-template-en')" oninput="updateStatisticsPreview()">{{ statistics_template_en }}</textarea>
+                    <textarea id="statistics-template-en" class="form-input" rows="3" maxlength="500" dir="ltr" data-onfocus="setStatisticsTemplateTarget('statistics-template-en')" data-oninput="updateStatisticsPreview()">{{ statistics_template_en }}</textarea>
                     <small style="color:var(--text-secondary);">{{ _('The active subscription-page language selects which template is used.') }}</small>
                 </div>
 
@@ -93,7 +93,7 @@
                     <label>{{ _('Available variables') }}</label>
                     <div class="statistics-tokens">
                         {% for token in ['emoji', 'status', 'renewal', 'days', 'volume', 'remaining_volume', 'total_volume', 'used_volume', 'expiry', 'expiry_type', 'email'] %}
-                        <button type="button" class="statistics-token" onclick="insertStatisticsToken('{{ token }}')">&#123;{{ token }}&#125;</button>
+                        <button type="button" class="statistics-token" data-onclick="insertStatisticsToken('{{ token }}')">&#123;{{ token }}&#125;</button>
                         {% endfor %}
                     </div>
                     <small style="color:var(--text-secondary);">{{ _('Examples:') }} <code>{expiry}</code> {{ _('can become “31 days after first connection”;') }} <code>{renewal}</code> {{ _('shows whether renewal is required.') }}</small>
@@ -105,7 +105,7 @@
                 </div>
 
                 <div class="form-actions" style="display:flex;justify-content:flex-end;">
-                    <button type="button" class="btn btn-primary" onclick="saveSubscriptionStatistics()">{{ _('Save Statistics') }}</button>
+                    <button type="button" class="btn btn-primary" data-onclick="saveSubscriptionStatistics()">{{ _('Save Statistics') }}</button>
                 </div>
             </div>
         </div>
@@ -117,7 +117,7 @@
                         <h2>{{ _('FAQ Management') }}</h2>
                         <p class="text-secondary">{{ _('Manage frequently asked questions.') }}</p>
                     </div>
-                    <button class="btn btn-success" onclick="openAddFAQModal()">
+                    <button class="btn btn-success" data-onclick="openAddFAQModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add New FAQ') }}
                     </button>
@@ -178,7 +178,7 @@
 
                     <div class="form-group">
                         <label>{{ _('Deployment Region') }}</label>
-                        <select id="whatsapp-deployment-region" class="form-input" onchange="applyWhatsappRegionState()">
+                        <select id="whatsapp-deployment-region" class="form-input" data-onchange="applyWhatsappRegionState()">
                             <option value="outside" {% if whatsapp_deployment_region != 'iran' %}selected{% endif %}>{{ _('Outside Iran') }}</option>
                             <option value="iran" {% if whatsapp_deployment_region == 'iran' %}selected{% endif %}>{{ _('Iran') }}</option>
                         </select>
@@ -209,7 +209,7 @@
                     </div>
 
                     <div class="form-group" style="margin-top: -8px; display: flex; justify-content: flex-end;">
-                        <button id="whatsapp-test-connection" class="btn btn-secondary" type="button" onclick="testWhatsappConnection()">{{ _('Test WhatsApp Connection') }}</button>
+                        <button id="whatsapp-test-connection" class="btn btn-secondary" type="button" data-onclick="testWhatsappConnection()">{{ _('Test WhatsApp Connection') }}</button>
                     </div>
 
                     <label class="form-group form-toggle-item" style="cursor: pointer;">
@@ -222,17 +222,17 @@
 
                     <div class="form-group" style="margin-top: -10px;">
                         <label style="margin-bottom: 8px;">{{ _('Triggers') }}</label>
-                        <label class="checkbox-label" style="margin-bottom: 8px !important;" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" style="margin-bottom: 8px !important;" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="whatsapp-trigger-renew" {% if whatsapp_trigger_renew_success %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('After successful renewal') }}</span>
                         </label>
-                        <label class="checkbox-label" style="margin-bottom: 8px !important;" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" style="margin-bottom: 8px !important;" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="whatsapp-trigger-welcome" {% if whatsapp_trigger_welcome %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('Welcome message (new activation)') }}</span>
                         </label>
-                        <label class="checkbox-label" style="margin-bottom: 0 !important;" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" style="margin-bottom: 0 !important;" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="whatsapp-trigger-pre-expiry" {% if whatsapp_trigger_pre_expiry %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('Pre-expiry reminder') }}</span>
@@ -283,7 +283,7 @@
                         <textarea id="whatsapp-template-pre-expiry" class="form-input" rows="2" placeholder="{{ _('Hello {user}, your subscription expires in {time_left}.') }}">{{ whatsapp_template_pre_expiry }}</textarea>
                     </div>
                     <div class="form-actions" style="display: flex; justify-content: flex-end;">
-                        <button class="btn btn-primary" onclick="saveContactInfo()">{{ _('Save Contact & WhatsApp Settings') }}</button>
+                        <button class="btn btn-primary" data-onclick="saveContactInfo()">{{ _('Save Contact & WhatsApp Settings') }}</button>
                     </div>
                 </div>
             </div>
@@ -296,7 +296,7 @@
                         <h2>{{ _('Announcements') }}</h2>
                         <p class="text-secondary">{{ _('Create server-scoped announcements shown on the subscription page.') }}</p>
                     </div>
-                    <button class="btn btn-success" onclick="openAddAnnouncementModal()">
+                    <button class="btn btn-success" data-onclick="openAddAnnouncementModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Announcement') }}
                     </button>
@@ -312,7 +312,7 @@
                         <h2>{{ _('Online Chat Scripts') }}</h2>
                         <p class="text-secondary">{{ _('Add/edit chat widget snippets. Activate one script to load on subscription page.') }}</p>
                     </div>
-                    <button class="btn btn-success" onclick="openAddOnlineChatModal()">
+                    <button class="btn btn-success" data-onclick="openAddOnlineChatModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Chat Script') }}
                     </button>
@@ -328,7 +328,7 @@
                         <h2>{{ _('Backup Config') }}</h2>
                         <p class="text-secondary">{{ _('Backup configurations shown below the client profile on the subscription page and available for copying.') }}</p>
                     </div>
-                    <button class="btn btn-success" onclick="openBackupConfigModal()">
+                    <button class="btn btn-success" data-onclick="openBackupConfigModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Config') }}
                     </button>
@@ -344,7 +344,7 @@
     <div class="modal modal-md">
         <div class="modal-header">
             <h2 id="bc-modal-title">{{ _('Add Backup Config') }}</h2>
-            <button class="modal-close" onclick="closeBackupConfigModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeBackupConfigModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="bc-id">
@@ -370,7 +370,7 @@
                 <label>{{ _('Description') }} <small style="color:var(--text-secondary); font-weight:normal;">{{ _('(shown as info text to users)') }}</small></label>
                 <textarea id="bc-description" class="form-input" rows="5" placeholder="{{ _('Describe when and how to use this backup config...') }}" style="resize:vertical;"></textarea>
                 <small style="color:var(--text-secondary); display:block; margin-top:6px;">
-                    <a href="#" onclick="event.preventDefault(); document.getElementById('bc-description').value = window._bcDefaultDesc || ''" style="color:var(--primary);">{{ _('Reset to default text') }}</a>
+                    <a href="#" data-onclick="event.preventDefault(); resetBackupDescription()" style="color:var(--primary);">{{ _('Reset to default text') }}</a>
                 </small>
             </div>
 
@@ -391,8 +391,8 @@
         <div class="modal-footer">
             <span></span>
             <div style="display:flex; gap:10px;">
-                <button class="btn btn-secondary" onclick="closeBackupConfigModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveBackupConfig()">{{ _('Save') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeBackupConfigModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveBackupConfig()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -1115,7 +1115,7 @@
     <div class="modal modal-lg">
         <div class="modal-header">
             <h2 id="modal-title">{{ _('Edit App') }}</h2>
-            <button class="modal-close" onclick="closeEditModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeEditModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-app-id">
@@ -1174,14 +1174,14 @@
                     <h4 style="color:#fbbf24;margin:0 0 3px;">{{ _('Action Buttons') }}</h4>
                     <small style="color:var(--text-secondary);">{{ _('Add any number of titled links. Their order here is their order on the subscription page.') }}</small>
                 </div>
-                <button type="button" class="btn btn-secondary" onclick="addAppActionButton()">{{ _('+ Add Button') }}</button>
+                <button type="button" class="btn btn-secondary" data-onclick="addAppActionButton()">{{ _('+ Add Button') }}</button>
             </div>
             <div id="edit-action-buttons" class="app-action-editor"></div>
             <div class="form-group">
                 <label>{{ _('App Icon URL') }}</label>
                 <div class="link-input-row">
                     <input type="text" id="edit-icon-url" class="form-input" placeholder="{{ _('https://... or upload via Browse') }}">
-                    <button type="button" class="btn-browse" onclick="openFilePicker('edit-icon-url', ['image'])">
+                    <button type="button" class="btn-browse" data-onclick="openFilePicker('edit-icon-url', ['image'])">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                         {{ _('Browse') }}
                     </button>
@@ -1196,25 +1196,25 @@
             </label>
 
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeEditModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveApp()">{{ _('Save Changes') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeEditModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveApp()">{{ _('Save Changes') }}</button>
             </div>
         </div>
     </div>
 </div>
 
 <!-- ══ Image Lightbox ══════════════════════════════════════════════════ -->
-<div class="fm-lightbox" id="fm-lightbox" onclick="closeFmLightbox()">
-    <div class="fm-lightbox-inner" onclick="event.stopPropagation()">
-        <button class="fm-lightbox-close" onclick="closeFmLightbox()">✕</button>
+<div class="fm-lightbox" id="fm-lightbox" data-onclick="closeFmLightbox()">
+    <div class="fm-lightbox-inner" data-onclick="event.stopPropagation()">
+        <button class="fm-lightbox-close" data-onclick="closeFmLightbox()">✕</button>
         <img id="fm-lightbox-img" src="" alt="" style="max-width:100%;max-height:85vh;border-radius:8px;display:block;">
     </div>
 </div>
 
 <!-- ══ Video Player Modal ══════════════════════════════════════════════ -->
-<div class="fm-lightbox" id="fm-video-modal" onclick="closeFmVideoPlayer()">
-    <div class="fm-lightbox-inner" style="width:min(820px,90vw);" onclick="event.stopPropagation()">
-        <button class="fm-lightbox-close" onclick="closeFmVideoPlayer()">✕</button>
+<div class="fm-lightbox" id="fm-video-modal" data-onclick="closeFmVideoPlayer()">
+    <div class="fm-lightbox-inner" style="width:min(820px,90vw);" data-onclick="event.stopPropagation()">
+        <button class="fm-lightbox-close" data-onclick="closeFmVideoPlayer()">✕</button>
         <video id="fm-lightbox-video" controls style="width:100%;max-height:80vh;border-radius:8px;background:#000;display:block;"></video>
     </div>
 </div>
@@ -1227,16 +1227,16 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                 {{ _('File Manager') }}
             </h2>
-            <button class="modal-close" onclick="closeFileManager()">&times;</button>
+            <button class="modal-close" data-onclick="closeFileManager()">&times;</button>
         </div>
 
         <!-- Upload zone -->
         <div id="fm-dropzone" style="flex-shrink:0;margin:16px 20px 0;border:2px dashed var(--border-color);border-radius:10px;padding:20px;text-align:center;cursor:pointer;transition:all .2s;position:relative;"
-             onclick="document.getElementById('fm-file-input').click()"
-             ondragover="event.preventDefault();this.style.borderColor='var(--primary)';this.style.background='rgba(99,102,241,.07)'"
-             ondragleave="this.style.borderColor='';this.style.background=''"
-             ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleFileDrop(event)">
-            <input type="file" id="fm-file-input" style="display:none" multiple onchange="handleFileSelect(this)">
+             data-onclick="clickElementById('fm-file-input')"
+             data-ondragover="fmDropZoneOver(event, this)"
+             data-ondragleave="fmDropZoneReset(this)"
+             data-ondrop="event.preventDefault(); fmDropZoneReset(this); handleFileDrop(event)">
+            <input type="file" id="fm-file-input" style="display:none" multiple data-onchange="handleFileSelect(this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary);margin-bottom:8px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             <p style="margin:0;font-size:.9rem;color:var(--text-secondary);">{{ _('Drag & drop or') }} <strong style="color:var(--primary);">{{ _('click to upload') }}</strong></p>
             <p style="margin:4px 0 0;font-size:.75rem;color:var(--text-secondary);opacity:.7;">{{ _('APK · EXE · DMG · DEB · RPM · ZIP · MP4 · WebM · PNG — max 500 MB') }}</p>
@@ -1247,7 +1247,7 @@
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                 <strong style="color: var(--danger);">{{ _('Upload directory error') }}</strong>
-                <button onclick="runFmSetup()" style="margin-left:auto;padding:4px 10px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:6px;color: var(--danger);cursor:pointer;font-size:.78rem;font-family:inherit;">{{ _('Fix Setup') }}</button>
+                <button data-onclick="runFmSetup()" style="margin-left:auto;padding:4px 10px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:6px;color: var(--danger);cursor:pointer;font-size:.78rem;font-family:inherit;">{{ _('Fix Setup') }}</button>
             </div>
             <div id="fm-setup-error-text" style="color:#fca5a5;white-space:pre-wrap;word-break:break-all;line-height:1.5;"></div>
         </div>
@@ -1265,18 +1265,18 @@
 
         <!-- Filter tabs -->
         <div id="fm-filters" style="flex-shrink:0;display:flex;gap:8px;padding:14px 20px 0;flex-wrap:wrap;">
-            <button class="fm-filter active" data-cat="all" onclick="setFmFilter('all',this)">{{ _('All') }}</button>
-            <button class="fm-filter" data-cat="android" onclick="setFmFilter('android',this)">Android</button>
-            <button class="fm-filter" data-cat="windows" onclick="setFmFilter('windows',this)">Windows</button>
-            <button class="fm-filter" data-cat="macos" onclick="setFmFilter('macos',this)">macOS</button>
-            <button class="fm-filter" data-cat="linux" onclick="setFmFilter('linux',this)">Linux</button>
-            <button class="fm-filter" data-cat="video" onclick="setFmFilter('video',this)">{{ _('Video') }}</button>
-            <button class="fm-filter" data-cat="archive" onclick="setFmFilter('archive',this)">{{ _('Archive') }}</button>
-            <button class="fm-filter" data-cat="image" onclick="setFmFilter('image',this)">{{ _('Image') }}</button>
+            <button class="fm-filter active" data-cat="all" data-onclick="setFmFilter('all',this)">{{ _('All') }}</button>
+            <button class="fm-filter" data-cat="android" data-onclick="setFmFilter('android',this)">Android</button>
+            <button class="fm-filter" data-cat="windows" data-onclick="setFmFilter('windows',this)">Windows</button>
+            <button class="fm-filter" data-cat="macos" data-onclick="setFmFilter('macos',this)">macOS</button>
+            <button class="fm-filter" data-cat="linux" data-onclick="setFmFilter('linux',this)">Linux</button>
+            <button class="fm-filter" data-cat="video" data-onclick="setFmFilter('video',this)">{{ _('Video') }}</button>
+            <button class="fm-filter" data-cat="archive" data-onclick="setFmFilter('archive',this)">{{ _('Archive') }}</button>
+            <button class="fm-filter" data-cat="image" data-onclick="setFmFilter('image',this)">{{ _('Image') }}</button>
             <div class="fm-search-wrap">
                 <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-                <input type="search" id="fm-search" class="fm-search" placeholder="{{ _('Search files...') }}" autocomplete="off" oninput="setFmSearch(this.value)">
-                <button type="button" class="fm-search-clear" title="{{ _('Clear search') }}" onclick="clearFmSearch()">&times;</button>
+                <input type="search" id="fm-search" class="fm-search" placeholder="{{ _('Search files...') }}" autocomplete="off" data-oninput="setFmSearch(this.value)">
+                <button type="button" class="fm-search-clear" title="{{ _('Clear search') }}" data-onclick="clearFmSearch()">&times;</button>
             </div>
         </div>
 
@@ -1360,7 +1360,7 @@
     <div class="modal modal-lg">
         <div class="modal-header">
             <h2 id="faq-modal-title">{{ _('Edit FAQ') }}</h2>
-            <button class="modal-close" onclick="closeFAQModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeFAQModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-faq-id">
@@ -1401,7 +1401,7 @@
                         </span>
                     </div>
                     <div class="file-upload-text" id="faq-file-name">{{ _('No file chosen') }}</div>
-                    <input type="file" id="faq-image-upload" class="file-upload-input" accept="image/*" onchange="uploadFAQImage(this)">
+                    <input type="file" id="faq-image-upload" class="file-upload-input" accept="image/*" data-onchange="uploadFAQImage(this)">
                 </div>
                 <p style="margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary);">{{ _('SVG, PNG, JPG or GIF (MAX. 800x400px).') }}</p>
             </div>
@@ -1422,7 +1422,7 @@
                         </span>
                     </div>
                     <div class="file-upload-text" id="faq-video-file-name">{{ _('No file chosen') }}</div>
-                    <input type="file" id="faq-video-upload" class="file-upload-input" accept="video/mp4,video/webm,video/x-matroska,video/quicktime,.mp4,.webm,.mkv,.mov" onchange="uploadFAQVideo(this)">
+                    <input type="file" id="faq-video-upload" class="file-upload-input" accept="video/mp4,video/webm,video/x-matroska,video/quicktime,.mp4,.webm,.mkv,.mov" data-onchange="uploadFAQVideo(this)">
                 </div>
                 <div id="faq-video-progress" style="display:none; margin-top:8px;">
                     <div style="height:6px;border-radius:99px;background:var(--bg-card-hover);overflow:hidden;">
@@ -1442,8 +1442,8 @@
             </label>
 
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeFAQModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveFAQ()">{{ _('Save Changes') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeFAQModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveFAQ()">{{ _('Save Changes') }}</button>
             </div>
         </div>
     </div>
@@ -1453,14 +1453,14 @@
     <div class="modal">
         <div class="modal-header">
             <h2 id="announcement-modal-title">{{ _('Add Announcement') }}</h2>
-            <button class="modal-close" onclick="closeAnnouncementModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeAnnouncementModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="announcement-id">
 
             <div class="form-group">
                 <label>{{ _('Announcement type') }}</label>
-                <select id="announcement-channel" class="form-input" onchange="annOnChannelChange()">
+                <select id="announcement-channel" class="form-input" data-onchange="annOnChannelChange()">
                     <option value="subscription">{{ _('Subscription page') }}</option>
                     <option value="sms">{{ _('SMS campaign') }}</option>
                     <option value="whatsapp">{{ _('WhatsApp campaign') }}</option>
@@ -1479,7 +1479,7 @@
 
             <div class="form-group" id="announcement-outbound-message-wrap" style="display:none;">
                 <label>{{ _('Personalized message') }}</label>
-                <textarea id="announcement-outbound-message" class="form-input" rows="8" dir="rtl" maxlength="8000" oninput="annUpdateMessageCounter()" placeholder="{{ _('Write the message and insert customer variables below...') }}"></textarea>
+                <textarea id="announcement-outbound-message" class="form-input" rows="8" dir="rtl" maxlength="8000" data-oninput="annUpdateMessageCounter()" placeholder="{{ _('Write the message and insert customer variables below...') }}"></textarea>
                 <div id="announcement-variable-chips" style="display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;"></div>
                 <div id="announcement-message-counter" style="font-size:.8rem;color:var(--text-secondary);margin-top:8px;"></div>
             </div>
@@ -1490,7 +1490,7 @@
                     <h4 style="color:#fbbf24;margin:0 0 3px;">{{ _('Action Buttons') }}</h4>
                     <small style="color:var(--text-secondary);">{{ _('Add titled links and arrange them exactly as they should appear below the announcement.') }}</small>
                 </div>
-                <button type="button" class="btn btn-secondary" onclick="addAnnouncementActionButton()">{{ _('+ Add Button') }}</button>
+                <button type="button" class="btn btn-secondary" data-onclick="addAnnouncementActionButton()">{{ _('+ Add Button') }}</button>
             </div>
             <div id="announcement-action-buttons" class="app-action-editor"></div>
             <div class="form-group" style="max-width:260px;">
@@ -1517,7 +1517,7 @@
             <div class="sub-manager-pair-fields">
                     <div class="form-group">
                         <label>{{ _('Delivery schedule') }}</label>
-                        <select id="announcement-delivery-mode" class="form-input" onchange="annOnDeliveryModeChange()">
+                        <select id="announcement-delivery-mode" class="form-input" data-onchange="annOnDeliveryModeChange()">
                             <option value="all">{{ _('Send to everyone') }}</option>
                             <option value="daily">{{ _('Send to a daily batch') }}</option>
                         </select>
@@ -1559,7 +1559,7 @@
                             <strong id="ann-recipient-preview-title">{{ _('Recipient estimate') }}</strong>
                             <small>{{ _('Preview exactly who will receive this campaign before sending.') }}</small>
                         </div>
-                        <button id="announcement-count-recipients" type="button" class="btn btn-secondary" onclick="previewAnnouncementRecipients()">
+                        <button id="announcement-count-recipients" type="button" class="btn btn-secondary" data-onclick="previewAnnouncementRecipients()">
                             {{ _('Count recipients') }}
                         </button>
                     </div>
@@ -1579,8 +1579,8 @@
 
                 <div class="server-selection-wrapper" style="margin-top: 8px;">
                     <div class="select-all-container">
-                        <label class="checkbox-label" style="margin-bottom: 0 !important;" onclick="event.stopPropagation()">
-                            <input type="checkbox" id="announcement-targets-all" onchange="ann_toggleAllServers(this)">
+                        <label class="checkbox-label" style="margin-bottom: 0 !important;" data-onclick="event.stopPropagation()">
+                            <input type="checkbox" id="announcement-targets-all" data-onchange="ann_toggleAllServers(this)">
                             <span class="checkmark"></span>
                         </label>
                         <div class="server-list-meta">
@@ -1609,7 +1609,7 @@
 
             <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:12px; margin-bottom:0;">
                 <div class="toggle-switch">
-                    <input type="checkbox" id="announcement-is-popup" onchange="ann_togglePopupOptions(this)">
+                    <input type="checkbox" id="announcement-is-popup" data-onchange="ann_togglePopupOptions(this)">
                     <span class="slider"></span>
                 </div>
                 <span style="font-size:0.88rem;">
@@ -1626,8 +1626,8 @@
             </div>
 
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeAnnouncementModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveAnnouncement()">{{ _('Save') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeAnnouncementModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveAnnouncement()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -1637,21 +1637,21 @@
     <div class="modal">
         <div class="modal-header">
             <h2 id="announcement-failures-title">{{ _('Failed SMS deliveries') }}</h2>
-            <button class="modal-close" onclick="closeAnnouncementFailuresModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeAnnouncementFailuresModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="ann-failure-toolbar">
                 <label class="ann-failure-select-all">
-                    <input type="checkbox" id="announcement-failures-select-all" onchange="toggleAllAnnouncementFailures(this.checked)">
+                    <input type="checkbox" id="announcement-failures-select-all" data-onchange="toggleAllAnnouncementFailures(this.checked)">
                     <span>{{ _('Select all shown') }}</span>
                 </label>
                 <span id="announcement-failures-summary" class="ann-failure-summary"></span>
             </div>
             <div id="announcement-failures-list" class="ann-failure-list"></div>
             <div class="form-actions ann-failure-actions">
-                <button class="btn btn-secondary" onclick="closeAnnouncementFailuresModal()">{{ _('Close') }}</button>
-                <button class="btn btn-secondary" id="announcement-resend-selected" onclick="resendSelectedAnnouncementFailures()" disabled>{{ _('Resend selected') }}</button>
-                <button class="btn btn-primary" id="announcement-resend-all" onclick="resendAllAnnouncementFailures()">{{ _('Resend all failed') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeAnnouncementFailuresModal()">{{ _('Close') }}</button>
+                <button class="btn btn-secondary" id="announcement-resend-selected" data-onclick="resendSelectedAnnouncementFailures()" disabled>{{ _('Resend selected') }}</button>
+                <button class="btn btn-primary" id="announcement-resend-all" data-onclick="resendAllAnnouncementFailures()">{{ _('Resend all failed') }}</button>
             </div>
         </div>
     </div>
@@ -1661,7 +1661,7 @@
     <div class="modal">
         <div class="modal-header">
             <h2 id="online-chat-modal-title">{{ _('Add Online Chat Script') }}</h2>
-            <button class="modal-close" onclick="closeOnlineChatModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeOnlineChatModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="online-chat-id">
@@ -1678,9 +1678,9 @@
             </div>
 
             <div class="form-actions">
-                <button class="btn btn-secondary hidden" id="online-chat-deactivate-btn" onclick="deactivateOnlineChatScriptFromModal()">{{ _('Disable') }}</button>
-                <button class="btn btn-secondary" onclick="closeOnlineChatModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveOnlineChatScript()">{{ _('Save') }}</button>
+                <button class="btn btn-secondary hidden" id="online-chat-deactivate-btn" data-onclick="deactivateOnlineChatScriptFromModal()">{{ _('Disable') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeOnlineChatModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveOnlineChatScript()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -1725,10 +1725,10 @@
                  draggable="true"
                  data-app-id="${app.id}"
                  style="cursor:grab;"
-                 ondragstart="appDragStart(event,${app.id})"
-                 ondragover="appDragOver(event)"
-                 ondrop="appDrop(event,${app.id})"
-                 ondragend="appDragEnd(event)">
+                 data-ondragstart="appDragStart(event,${app.id})"
+                 data-ondragover="appDragOver(event)"
+                 data-ondrop="appDrop(event,${app.id})"
+                 data-ondragend="appDragEnd(event)">
                 <div class="server-header">
                     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
                         <span title="${_t('Drag to reorder')}" style="color:var(--text-secondary);cursor:grab;flex-shrink:0;padding:2px 4px;">
@@ -1736,7 +1736,7 @@
                         </span>
                         <div class="server-icon" style="overflow:hidden; border-radius: 10px; background: linear-gradient(135deg, var(--primary), #8b5cf6); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
                             ${app.icon_url
-                                ? `<img src="${app.icon_url}" alt="${app.name}" style="width:40px;height:40px;object-fit:contain;border-radius:10px;" onerror="this.style.display='none';this.parentElement.innerHTML='<span style=\\'font-size:20px;font-weight:bold;color:white;\\'>${(app.name||'?')[0].toUpperCase()}</span>'">`
+                                ? `<img src="${app.icon_url}" alt="${app.name}" style="width:40px;height:40px;object-fit:contain;border-radius:10px;" data-letter="${eveAttr((app.name||'?')[0].toUpperCase())}" data-onerror="appIconLetterFallback(this)">`
                                 : `<span style="font-size:20px;font-weight:bold;color:white;">${(app.name||'?')[0].toUpperCase()}</span>`
                             }
                         </div>
@@ -1751,10 +1751,10 @@
                     <span class="badge" style="background:rgba(99,102,241,0.10);color:var(--primary);border:1px solid rgba(99,102,241,0.2);">#${app.display_order || 0}</span>
                 </div>
                 <div class="server-actions">
-                    <button class="action-btn" onclick="openEditModal(${app.id})" title="${_t('Edit')}">
+                    <button class="action-btn" data-onclick="openEditModal(${app.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
-                    <button class="action-btn danger" onclick="deleteApp(${app.id})" title="${_t('Delete')}">
+                    <button class="action-btn danger" data-onclick="deleteApp(${app.id})" title="${_t('Delete')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                     </button>
                 </div>
@@ -2158,8 +2158,8 @@
             ${skipped ? `<div style="margin-top:.45rem;font-size:.76rem;">${_t('Skipped: {count}', {count: skipped})}</div>` : ''}
             ${blocked ? `<div style="margin-top:.35rem;font-size:.76rem;color: var(--warning);">${_t('Blocked (rate/cap):')} <strong>${blocked}</strong></div>` : ''}
             <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;">
-                ${failed && isSms ? `<button type="button" class="btn btn-secondary ann-view-failures" onclick="openAnnouncementFailuresModal(${a.id})">${failed === 1 ? _t('View 1 failed delivery') : _t('View {count} failed deliveries', {count: failed})}</button>` : ''}
-                ${blocked && isSms ? `<button type="button" class="btn btn-warning ann-send-now" onclick="sendNowAnnouncementBlocked(${a.id})" style="background: var(--warning);color:#1e1e2e;border:none;">Send Now ${blocked} blocked</button>` : ''}
+                ${failed && isSms ? `<button type="button" class="btn btn-secondary ann-view-failures" data-onclick="openAnnouncementFailuresModal(${a.id})">${failed === 1 ? _t('View 1 failed delivery') : _t('View {count} failed deliveries', {count: failed})}</button>` : ''}
+                ${blocked && isSms ? `<button type="button" class="btn btn-warning ann-send-now" data-onclick="sendNowAnnouncementBlocked(${a.id})" style="background: var(--warning);color:#1e1e2e;border:none;">Send Now ${blocked} blocked</button>` : ''}
             </div>
         </div>`;
     }
@@ -2219,7 +2219,7 @@
                     .filter(Boolean).map(value => escapeHtml(value)).join(' | ');
                 const manualReview = item.status === 'manual_review' || item.can_resend === false;
                 return `<div class="ann-failure-row">
-                    <label class="ann-failure-check-wrap"><input class="announcement-failure-check" type="checkbox" value="${item.id}" onchange="updateAnnouncementFailureSelection()" ${manualReview ? 'disabled' : ''}></label>
+                    <label class="ann-failure-check-wrap"><input class="announcement-failure-check" type="checkbox" value="${item.id}" data-onchange="updateAnnouncementFailureSelection()" ${manualReview ? 'disabled' : ''}></label>
                     <div class="ann-failure-recipient">
                         <strong>${escapeHtml(item.recipient || 'Unknown recipient')}</strong>
                         <span>${escapeHtml(item.account_name || item.email || '')}${item.server_name ? ` | ${escapeHtml(item.server_name)}` : ''}</span>
@@ -2232,7 +2232,7 @@
                     </div>
                     ${manualReview
                         ? '<button type="button" class="btn btn-secondary ann-failure-single" disabled>' + _t('Unverified') + '</button>'
-                        : `<button type="button" class="btn btn-secondary ann-failure-single" onclick="resendAnnouncementFailures([${item.id}])">${_t('Resend')}</button>`}
+                        : `<button type="button" class="btn btn-secondary ann-failure-single" data-onclick="resendAnnouncementFailures([${item.id}])">${_t('Resend')}</button>`}
                 </div>`;
             }).join('') : '<div class="ann-failure-empty">' + _t('No failed deliveries remain.') + '</div>';
             document.getElementById('announcement-resend-all').disabled = announcementFailureResendableTotal === 0;
@@ -2369,9 +2369,9 @@
             const ownerLabel = (a.audience_owner_types || []).map(value => ANNOUNCEMENT_OWNER_LABELS[value] || value).join(', ');
             const stateLabel = (a.audience_statuses || []).map(value => ANNOUNCEMENT_STATUS_LABELS[value] || value).join(', ');
             const campaignActions = isSubscription ? '' : (
-                a.status === 'draft' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'send')" title="${_t('Start sending')}">▶</button>`
-                : ['queued','sending'].includes(a.status) ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'pause')" title="${_t('Pause')}">Ⅱ</button>`
-                : a.status === 'paused' ? `<button class="action-btn" onclick="mutateAnnouncementCampaign(${a.id},'resume')" title="${_t('Resume')}">▶</button>` : ''
+                a.status === 'draft' ? `<button class="action-btn" data-onclick="mutateAnnouncementCampaign(${a.id},'send')" title="${_t('Start sending')}">▶</button>`
+                : ['queued','sending'].includes(a.status) ? `<button class="action-btn" data-onclick="mutateAnnouncementCampaign(${a.id},'pause')" title="${_t('Pause')}">Ⅱ</button>`
+                : a.status === 'paused' ? `<button class="action-btn" data-onclick="mutateAnnouncementCampaign(${a.id},'resume')" title="${_t('Resume')}">▶</button>` : ''
             );
 
             return `
@@ -2403,10 +2403,10 @@
 
                     <div class="server-actions">
                         ${campaignActions}
-                        ${(a.status === 'cancelled' || (!isSubscription && channel !== 'sms' && a.status !== 'draft')) ? '' : `<button class="action-btn" onclick="openEditAnnouncementModal(${a.id})" title="${_t('Edit')}">
+                        ${(a.status === 'cancelled' || (!isSubscription && channel !== 'sms' && a.status !== 'draft')) ? '' : `<button class="action-btn" data-onclick="openEditAnnouncementModal(${a.id})" title="${_t('Edit')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                         </button>`}
-                        <button class="action-btn danger" onclick="deleteAnnouncement(${a.id})" title="${_t('Delete')}">
+                        <button class="action-btn danger" data-onclick="deleteAnnouncement(${a.id})" title="${_t('Delete')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
                     </div>
@@ -2471,7 +2471,7 @@
             const inboundItems = inbounds.length > 0 ? inbounds.map(inb => {
                 return `
                     <label class="inbound-item checkbox-label">
-                        <input type="checkbox" class="ann-inbound-checkbox" data-server="${s.id}" value="${inb.id}" onchange="ann_updateCounts(${s.id})">
+                        <input type="checkbox" class="ann-inbound-checkbox" data-server="${s.id}" value="${inb.id}" data-onchange="ann_updateCounts(${s.id})">
                         <span class="checkmark"></span>
                         <div class="inbound-details">
                             <span class="inbound-name">${escapeHtml(inb.remark || 'Inbound')}</span>
@@ -2484,9 +2484,9 @@
 
             return `
                 <div class="server-accordion ${idx === 0 ? 'open' : ''}" data-server-id="${s.id}">
-                    <div class="server-accordion-header" onclick="ann_toggleServerAccordion(event, ${s.id})">
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
-                            <input type="checkbox" class="ann-server-checkbox" value="${s.id}" data-server="${s.id}" onchange="ann_toggleServerInbounds(${s.id}, this)">
+                    <div class="server-accordion-header" data-onclick="ann_toggleServerAccordion(event, ${s.id})">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
+                            <input type="checkbox" class="ann-server-checkbox" value="${s.id}" data-server="${s.id}" data-onchange="ann_toggleServerInbounds(${s.id}, this)">
                             <span class="checkmark"></span>
                         </label>
 
@@ -2505,7 +2505,7 @@
                     <div class="inbound-list" id="ann-inbound-list-${s.id}">
                         <div class="inbound-list-header">
                             <label class="checkbox-label">
-                                <input type="checkbox" class="ann-inbound-select-all" data-server="${s.id}" onchange="ann_toggleAllInboundsInServer(${s.id}, this)">
+                                <input type="checkbox" class="ann-inbound-select-all" data-server="${s.id}" data-onchange="ann_toggleAllInboundsInServer(${s.id}, this)">
                                 <span class="checkmark"></span>
                             </label>
                             <div class="inbound-header-text">
@@ -2836,7 +2836,7 @@
         if (smsAudience) smsAudience.style.display = channel === 'sms' ? 'grid' : 'none';
         const chips = document.getElementById('announcement-variable-chips');
         if (chips) chips.innerHTML = ANNOUNCEMENT_VARIABLES.map(([name, label]) =>
-            `<button type="button" class="btn btn-secondary" style="padding:5px 9px;font-size:.76rem;" onclick="annInsertVariable('${name}')">${escapeHtml(label)} <code>{${name}}</code></button>`
+            `<button type="button" class="btn btn-secondary" style="padding:5px 9px;font-size:.76rem;" data-onclick="annInsertVariable('${name}')">${escapeHtml(label)} <code>{${name}}</code></button>`
         ).join('');
         const textarea = document.getElementById('announcement-outbound-message');
         if (textarea) textarea.maxLength = channel === 'telegram' ? 4096 : 8000;
@@ -3229,8 +3229,8 @@
                 <input id="ann-btn-url" class="form-input" placeholder="https://..." style="margin-top:4px;">
             </div>
             <div style="display:flex;gap:8px;">
-                <button class="btn btn-primary" style="flex:1;" onclick="annConfirmButton()">${_t('Insert')}</button>
-                <button class="btn btn-secondary" onclick="document.getElementById('ann-btn-dialog').remove()">${_t('Cancel')}</button>
+                <button class="btn btn-primary" style="flex:1;" data-onclick="annConfirmButton()">${_t('Insert')}</button>
+                <button class="btn btn-secondary" data-onclick="removeElementById('ann-btn-dialog')">${_t('Cancel')}</button>
             </div>
         </div>`;
         document.body.appendChild(dlg);
@@ -3449,13 +3449,13 @@
 
                 <div class="server-actions" style="gap: 8px; flex-wrap: wrap;">
                     ${item.is_active
-                        ? `<button class="btn btn-secondary online-chat-action" onclick="deactivateOnlineChatScript(${item.id})">${_t('Disable')}</button>`
-                        : `<button class="btn btn-primary online-chat-action" onclick="activateOnlineChatScript(${item.id})">${_t('Activate')}</button>`
+                        ? `<button class="btn btn-secondary online-chat-action" data-onclick="deactivateOnlineChatScript(${item.id})">${_t('Disable')}</button>`
+                        : `<button class="btn btn-primary online-chat-action" data-onclick="activateOnlineChatScript(${item.id})">${_t('Activate')}</button>`
                     }
-                    <button class="action-btn" onclick="openEditOnlineChatModal(${item.id})" title="${_t('Edit')}">
+                    <button class="action-btn" data-onclick="openEditOnlineChatModal(${item.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>
-                    <button class="action-btn danger" onclick="deleteOnlineChatScript(${item.id})" title="${_t('Delete')}">
+                    <button class="action-btn danger" data-onclick="deleteOnlineChatScript(${item.id})" title="${_t('Delete')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                 </div>
@@ -3684,11 +3684,11 @@
                 </div>
 
                 <div class="server-actions">
-                    <button class="action-btn" onclick="openEditFAQModal(${faq.id})" title="${_t('Edit')}">
+                    <button class="action-btn" data-onclick="openEditFAQModal(${faq.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>
 
-                    <button class="action-btn danger" onclick="deleteFAQ(${faq.id})" title="${_t('Delete')}">
+                    <button class="action-btn danger" data-onclick="deleteFAQ(${faq.id})" title="${_t('Delete')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                 </div>
@@ -4121,7 +4121,7 @@
                 let topHtml = badgeHtml;
                 if (isImage) {
                     topHtml = `<div class="fm-thumb-wrap" title="${_t('Click to preview')}">
-                        <img src="${safeUrl}" class="fm-thumb" alt="${f.name}" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex')">
+                        <img src="${safeUrl}" class="fm-thumb" alt="${f.name}" data-onerror="imageFallbackToNext(this)">
                         <div class="fm-ext-badge" style="display:none;background:${color}20;color:${color};border:1px solid ${color}40;">${label}</div>
                         <div class="fm-thumb-overlay">🔍</div>
                     </div>`;
@@ -4400,6 +4400,22 @@
             }
         };
 
+        // Called from data-onclick handlers in the markup above, so they must be global.
+        window.closeFmLightbox = closeFmLightbox;
+        window.closeFmVideoPlayer = closeFmVideoPlayer;
+        window.runFmSetup = runFmSetup;
+
+        window.fmDropZoneOver = function (event, zone) {
+            event.preventDefault();
+            zone.style.borderColor = 'var(--primary)';
+            zone.style.background = 'rgba(99,102,241,.07)';
+        };
+
+        window.fmDropZoneReset = function (zone) {
+            zone.style.borderColor = '';
+            zone.style.background = '';
+        };
+
         window.handleFileDrop = function (event) {
             const files = event.dataTransfer && event.dataTransfer.files;
             if (files && files.length) uploadFiles(Array.from(files));
@@ -4415,6 +4431,18 @@
     let _backupConfigs = [];
     let _bcServers = [];
     window._bcDefaultDesc = '';
+
+    function resetBackupDescription() {
+        document.getElementById('bc-description').value = window._bcDefaultDesc || '';
+    }
+
+    // App icon failed to load: replace it with the app's initial letter.
+    function appIconLetterFallback(img) {
+        const span = document.createElement('span');
+        span.className = 'app-icon-letter';
+        span.textContent = img.dataset.letter || '?';
+        img.parentElement.replaceChildren(span);
+    }
 
     async function loadBackupConfigs() {
         try {
@@ -4452,8 +4480,8 @@
                         </div>
                     </div>
                     <div style="display:flex; gap:6px; flex-shrink:0;">
-                        <button class="btn btn-secondary" style="padding:5px 10px; font-size:0.8rem;" onclick="openBackupConfigModal(${bc.id})">${_t('Edit')}</button>
-                        <button class="btn btn-danger" style="padding:5px 10px; font-size:0.8rem;" onclick="deleteBackupConfig(${bc.id})">${_t('Delete')}</button>
+                        <button class="btn btn-secondary" style="padding:5px 10px; font-size:0.8rem;" data-onclick="openBackupConfigModal(${bc.id})">${_t('Edit')}</button>
+                        <button class="btn btn-danger" style="padding:5px 10px; font-size:0.8rem;" data-onclick="deleteBackupConfig(${bc.id})">${_t('Delete')}</button>
                     </div>
                 </div>
                 <div style="font-family:monospace; font-size:0.75rem; color:var(--text-secondary); background:var(--bg-dark); border:1px solid var(--border-color); border-radius:8px; padding:8px 12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:default;" title="${escapeHtml(bc.config_url)}">

@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.17.12"
+APP_VERSION = "2.17.13"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -1176,7 +1176,11 @@ def add_security_headers(response):
             "style-src 'self' 'unsafe-inline'" if allow_external_chat else f"style-src 'self' 'nonce-{nonce}'",
             "style-src-attr 'unsafe-inline'",
             f"script-src 'self' 'nonce-{nonce}'{script_src_extra}",
-            "script-src-attr 'unsafe-inline'",
+            # Inline on*= attributes never run: an HTML injection cannot become
+            # script. Pages use data-on*= handlers (static/eve-actions.js).
+            # Third-party chat widgets may still inject them, and that page
+            # already allows any https: script, so it keeps them.
+            "script-src-attr 'unsafe-inline'" if allow_external_chat else "script-src-attr 'none'",
             f"connect-src 'self'{connect_src_extra}",
         ])
         if not _is_dev_mode() and request.is_secure:

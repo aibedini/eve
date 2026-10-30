@@ -10,11 +10,11 @@
         <div class="panel-card-header">
             <h2>Upload Receipt</h2>
         </div>
-        <form id="receipt-form" onsubmit="submitReceipt(event)" enctype="multipart/form-data">
+        <form id="receipt-form" data-onsubmit="submitReceipt(event)" enctype="multipart/form-data">
             <div class="form-group">
                 <label>Amount *</label>
                 <div class="input-group">
-                    <input type="text" id="receipt-amount" name="amount" class="form-input" placeholder="e.g. 100,000" required oninput="formatNumberInput(this)">
+                    <input type="text" id="receipt-amount" name="amount" class="form-input" placeholder="e.g. 100,000" required data-oninput="formatNumberInput(this)">
                     <span class="input-suffix">IRT</span>
                 </div>
             </div>
@@ -28,7 +28,7 @@
                 <div class="file-upload-wrapper" id="receipt-upload-container">
                     <div class="file-upload-btn">Choose File</div>
                     <div class="file-upload-text" id="receipt-file-name">No file chosen</div>
-                    <input type="file" id="receipt-file" name="file" class="file-upload-input" accept="image/*,.pdf" required onchange="document.getElementById('receipt-file-name').textContent = this.files[0] ? this.files[0].name : 'No file chosen'">
+                    <input type="file" id="receipt-file" name="file" class="file-upload-input" accept="image/*,.pdf" required data-onchange="showChosenFileName(this, 'receipt-file-name')">
                 </div>
                 <p style="margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary);">SVG, PNG, JPG or GIF (MAX. 800x400px).</p>
             </div>
@@ -45,7 +45,7 @@
         <div class="panel-card-header">
             <h2>Auto Approval</h2>
         </div>
-        <form id="auto-window-form" onsubmit="createAutoWindow(event)">
+        <form id="auto-window-form" data-onsubmit="createAutoWindow(event)">
             <div class="form-group">
                 <label>End Date *</label>
                 <input type="{{ 'text' if app_calendar == 'jalali' else 'datetime-local' }}" id="auto-end-shamsi" {% if app_calendar == 'jalali' %}data-jdp{% endif %} class="form-input" placeholder="{{ '1405/04/23 14:30' if app_calendar == 'jalali' else '2026-07-14 14:30' }}" required>
@@ -66,16 +66,16 @@
     <div class="panel-card receipts-panel">
         <div class="panel-card-header" style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
             <h2 style="margin: 0;">{% if is_superadmin %}All Receipts{% else %}My Receipts{% endif %}</h2>
-            <button class="btn btn-icon" onclick="loadReceipts()" title="Refresh">
+            <button class="btn btn-icon" data-onclick="loadReceipts()" title="Refresh">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
             </button>
         </div>
         
         <div class="status-chips" id="receipt-filters" style="margin-bottom: 20px;">
-            <button class="chip active" data-status="" onclick="setReceiptFilter(event, '')">All</button>
-            <button class="chip" data-status="pending" onclick="setReceiptFilter(event, 'pending')">Pending</button>
-            <button class="chip" data-status="approved" onclick="setReceiptFilter(event, 'approved')">Approved</button>
-            <button class="chip" data-status="rejected" onclick="setReceiptFilter(event, 'rejected')">Rejected</button>
+            <button class="chip active" data-status="" data-onclick="setReceiptFilter(event, '')">All</button>
+            <button class="chip" data-status="pending" data-onclick="setReceiptFilter(event, 'pending')">Pending</button>
+            <button class="chip" data-status="approved" data-onclick="setReceiptFilter(event, 'approved')">Approved</button>
+            <button class="chip" data-status="rejected" data-onclick="setReceiptFilter(event, 'rejected')">Rejected</button>
         </div>
 
         <div class="table-wrapper">
@@ -570,6 +570,11 @@
 <script src="{{ url_for('static', filename='jalalidatepicker.min.js') }}"></script>
 
 <script nonce="{{ csp_nonce }}">
+    function showChosenFileName(input, labelId) {
+        const label = document.getElementById(labelId);
+        if (label) label.textContent = input.files[0] ? input.files[0].name : 'No file chosen';
+    }
+
     const isSuperadmin = JSON.parse('{{ (is_superadmin)|tojson }}');
     const currentAdminId = JSON.parse('{{ (current_admin_id)|tojson }}');
     let bankCards = [];
@@ -643,7 +648,7 @@
                         <span class="card-bank-name">${card.bank_name || card.bank || 'Bank Card'} - ${card.owner_name || card.owner || ''}</span>
                     </div>
                 </div>
-                <button class="card-copy-btn" type="button" onclick="copyCardNumber(event, '${copyableNumber}')" title="Copy Number">
+                <button class="card-copy-btn" type="button" data-onclick="copyCardNumber(event, '${copyableNumber}')" title="Copy Number">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 </button>
             `;
@@ -742,10 +747,10 @@
             // Approve/Reject Buttons (Superadmin only & Pending)
             if (isSuperadmin && (r.status === 'pending' || r.status === 'auto_pending')) {
                 actions += `
-                    <button class="action-icon success" onclick="approveReceipt(${r.id})" title="Approve">
+                    <button class="action-icon success" data-onclick="approveReceipt(${r.id})" title="Approve">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                     </button>
-                    <button class="action-icon danger" onclick="rejectReceipt(${r.id})" title="Reject">
+                    <button class="action-icon danger" data-onclick="rejectReceipt(${r.id})" title="Reject">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                 `;
@@ -908,7 +913,7 @@
             chip.className = 'chip';
             chip.innerHTML = `
                 <span>Until ${EveDate.format(w.ends_at)}</span>
-                <button onclick="deleteAutoWindow(${w.id})" style="border:none;background:none;cursor:pointer;margin-left:8px;">&times;</button>
+                <button data-onclick="deleteAutoWindow(${w.id})" style="border:none;background:none;cursor:pointer;margin-left:8px;">&times;</button>
             `;
             container.appendChild(chip);
         });

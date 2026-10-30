@@ -1097,7 +1097,7 @@
     <div class="modal modal-sm">
         <div class="modal-header">
             <h3 id="modal-title">{{ _('Edit Payment') }}</h3>
-            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeModal()">&times;</button>
         </div>
         <form id="payment-form">
             <input type="hidden" id="payment-id">
@@ -1168,7 +1168,7 @@
                 </div>
             </div>
             <div class="form-actions">
-                <button type="button" class="btn btn-secondary" onclick="closeModal()">{{ _('Cancel') }}</button>
+                <button type="button" class="btn btn-secondary" data-onclick="closeModal()">{{ _('Cancel') }}</button>
                 <button type="submit" class="btn btn-primary" id="save-payment-btn">{{ _('Save Payment') }}</button>
             </div>
         </form>
@@ -1187,7 +1187,7 @@
                 </svg>
                 {{ _('Delete Payment') }}
             </h3>
-            <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeDeleteModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
@@ -1220,8 +1220,8 @@
             </ul>
         </div>
         <div class="form-actions">
-            <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">{{ _('Cancel') }}</button>
-            <button type="button" class="btn" style="background: var(--danger); color: white;" id="confirm-delete-btn" onclick="confirmDelete()">
+            <button type="button" class="btn btn-secondary" data-onclick="closeDeleteModal()">{{ _('Cancel') }}</button>
+            <button type="button" class="btn" style="background: var(--danger); color: white;" id="confirm-delete-btn" data-onclick="confirmDelete()">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
                     <polyline points="3 6 5 6 21 6"></polyline>
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>

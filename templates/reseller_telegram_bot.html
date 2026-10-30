@@ -25,7 +25,7 @@
                     <label for="rtb-create-token">Bot token (optional)</label>
                     <input type="password" id="rtb-create-token" class="form-input" placeholder="Paste token from @BotFather" autocomplete="new-password">
                 </div>
-                <button class="btn btn-success" id="rtb-create-btn" onclick="rtbCreateBot(this)">Create my bot</button>
+                <button class="btn btn-success" id="rtb-create-btn" data-onclick="rtbCreateBot(this)">Create my bot</button>
             </div>
 
             <div id="rtb-form" style="display:none; max-width: 620px;">
@@ -78,17 +78,17 @@
                     <small class="text-secondary" style="display:block; margin-bottom: 8px;">
                         متن هر پیام یا دکمهٔ ربات را بازنویسی کنید؛ فیلد خالی یعنی متن پیش‌فرض. می‌توانید ایموجی‌های استاندارد تلگرام (یونیکد، مثل 🛒 💰) را مستقیماً در متن‌ها بگذارید. متن‌های دارای <code>{placeholder}</code> باید placeholderها را بدون تغییر نگه دارند. حداکثر ۵۰۰ کاراکتر.
                     </small>
-                    <input type="search" id="rtb-copy-search" class="form-input" placeholder="جستجو بر اساس کلید یا متن پیش‌فرض…" autocomplete="off" spellcheck="false" oninput="rtbFilterCopyRows()" style="margin-bottom: 10px;">
+                    <input type="search" id="rtb-copy-search" class="form-input" placeholder="جستجو بر اساس کلید یا متن پیش‌فرض…" autocomplete="off" spellcheck="false" data-oninput="rtbFilterCopyRows()" style="margin-bottom: 10px;">
                     <div id="rtb-copy-empty" class="text-secondary" style="display:none; font-size:0.85rem; margin-bottom: 8px;">متنی مطابق جستجو یافت نشد.</div>
                     <div id="rtb-copy-list" style="max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;"></div>
                 </div>
                 <div style="display:flex; gap:8px; margin-top: 8px;">
-                    <button class="btn btn-success" id="rtb-save" onclick="rtbSave(this)">Save settings</button>
-                    <button class="btn btn-secondary" id="rtb-verify" onclick="rtbVerify(this)">Verify token</button>
+                    <button class="btn btn-success" id="rtb-save" data-onclick="rtbSave(this)">Save settings</button>
+                    <button class="btn btn-secondary" id="rtb-verify" data-onclick="rtbVerify(this)">Verify token</button>
                 </div>
                 <div style="display:flex; gap:8px; margin-top: 8px; align-items:center;">
-                    <button class="btn btn-secondary" id="rtb-toggle-enabled" onclick="rtbRuntime(null, this)">Disable</button>
-                    <button class="btn btn-secondary" onclick="rtbRuntime('restart', this)">Restart</button>
+                    <button class="btn btn-secondary" id="rtb-toggle-enabled" data-onclick="rtbRuntime(null, this)">Disable</button>
+                    <button class="btn btn-secondary" data-onclick="rtbRuntime('restart', this)">Restart</button>
                     <span id="rtb-health" class="text-secondary" style="font-size:0.85rem;"></span>
                 </div>
                 <div id="rtb-last-error" class="alert alert-warning" style="margin-top:12px; display:none; padding:8px 12px; font-size:0.84rem;"></div>
@@ -216,7 +216,7 @@ function rtbRenderCopyRows(overrides = {}) {
                 <code style="font-size:0.8rem; direction:ltr; unicode-bidi:embed;">${rtbEscape(key)}</code>
                 <div style="display:flex; align-items:center; gap:12px;">
                     ${rtbCopyHideable.has(key) ? `<label style="display:inline-flex; align-items:center; gap:6px; font-size:0.82rem; margin:0;"><input type="checkbox" class="rtb-copy-hidden"${override.hidden ? ' checked' : ''}> مخفی</label>` : ''}
-                    <button type="button" class="btn btn-secondary" style="padding:2px 10px; font-size:0.78rem;" onclick="rtbResetCopyRow(this)">پیش‌فرض</button>
+                    <button type="button" class="btn btn-secondary" style="padding:2px 10px; font-size:0.78rem;" data-onclick="rtbResetCopyRow(this)">پیش‌فرض</button>
                 </div>
             </div>
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:8px;">

@@ -98,6 +98,8 @@ class AdminAuthTests(unittest.TestCase):
         AdminMFASetting.query.delete()
         AdminSession.query.delete()
         Admin.query.delete()
+        from panel.models import SystemSetting
+        SystemSetting.query.filter_by(key='mfa_global_enabled').delete()
         db.session.commit()
         self.admin = Admin(
             username='mfa-root', role='superadmin', is_superadmin=True, enabled=True,
@@ -121,7 +123,25 @@ class AdminAuthTests(unittest.TestCase):
             'username': 'mfa-root', 'password': 'CorrectHorseBattery1!',
         })
 
+    def _require_mfa_globally(self):
+        # 2FA is opt-in (off by default); these flows apply once it is switched on.
+        from panel.models import SystemSetting
+        row = db.session.get(SystemSetting, 'mfa_global_enabled')
+        if row is None:
+            db.session.add(SystemSetting(key='mfa_global_enabled', value='true'))
+        else:
+            row.value = 'true'
+        db.session.commit()
+
+    def test_login_without_global_mfa_grants_a_session(self):
+        response = self._login()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json().get('mfa_enrollment_required'))
+        with self.client.session_transaction() as sess:
+            self.assertIn('admin_id', sess)
+
     def test_superadmin_without_mfa_must_enrol(self):
+        self._require_mfa_globally()
         response = self._login()
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -132,6 +152,7 @@ class AdminAuthTests(unittest.TestCase):
             self.assertIn('mfa_pending', sess)
 
     def test_enrolment_confirmation_enables_mfa_and_grants_session(self):
+        self._require_mfa_globally()
         self._login()
         self.client.get('/mfa/setup')  # generates and stores the secret
         setting = AdminMFASetting.query.filter_by(admin_id=self.admin.id).one()
@@ -215,6 +236,36 @@ class AdminAuthTests(unittest.TestCase):
         revoked = sessions.revoke_other_sessions(self.admin.id, keep_token)
         db.session.commit()
         self.assertEqual(revoked, 1)
+        self.assertIsNotNone(sessions.resolve_session(keep_token))
+        self.assertIsNone(sessions.resolve_session(other_token))
+
+    def test_password_change_revokes_the_accounts_sessions(self):
+        target = Admin(username='mfa-reseller', role='reseller', enabled=True)
+        target.set_password('OldPassword123')
+        db.session.add(target)
+        db.session.commit()
+        stolen_token, _ = sessions.create_session(target, mfa_verified=False)
+        db.session.commit()
+        # Editor session seeded without a registry token, so step-up is not owed.
+        with self.client.session_transaction() as sess:
+            sess['admin_id'] = self.admin.id
+        response = self.client.put(f'/api/admins/{target.id}', json={'password': 'NewPassword456!'})
+        self.assertTrue(response.get_json().get('success'), response.get_json())
+        db.session.expire_all()
+        self.assertIsNone(sessions.resolve_session(stolen_token))
+
+    def test_own_password_change_keeps_the_current_session(self):
+        keep_token, _ = sessions.create_session(self.admin, mfa_verified=True)
+        other_token, row = sessions.create_session(self.admin, mfa_verified=True)
+        sessions.mark_step_up(row)
+        sessions.mark_step_up(sessions.resolve_session(keep_token))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess['admin_id'] = self.admin.id
+            sess[sessions.SESSION_TOKEN_KEY] = keep_token
+        response = self.client.put(f'/api/admins/{self.admin.id}', json={'password': 'NewPassword456!'})
+        self.assertTrue(response.get_json().get('success'), response.get_json())
+        db.session.expire_all()
         self.assertIsNotNone(sessions.resolve_session(keep_token))
         self.assertIsNone(sessions.resolve_session(other_token))
 

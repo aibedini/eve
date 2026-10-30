@@ -35,7 +35,7 @@ from panel.models import (
     BnqoServiceProbe,
 )
 from panel.routes.common import login_required, paginate_query
-from panel.security import client_ip, hash_bearer_token
+from panel.security import client_ip, digest_presented_token, hash_bearer_token
 from panel.services.bnqo_crypto import (
     decode_pubkey,
     get_cp_pubkey_b64,
@@ -198,12 +198,8 @@ def _bnqo_agent_required(view):
     def wrapper(*args, **kwargs):
         auth = request.headers.get('Authorization') or ''
         token = auth[7:].strip() if auth.startswith('Bearer ') else ''
-        token_hash = hash_bearer_token(token, 'bnqo-agent') if token else ''
-        agent = BnqoAgent.query.filter_by(token=token_hash).first() if token else None
-        legacy_token = False
-        if agent is None and token:
-            agent = BnqoAgent.query.filter_by(token=token).first()
-            legacy_token = agent is not None
+        token_hash = digest_presented_token(token, 'bnqo-agent')
+        agent = BnqoAgent.query.filter_by(token=token_hash).first() if token_hash else None
         if agent is None or not agent.enabled:
             return _err('invalid_agent_token', 'invalid agent token', 401)
         timestamp = request.headers.get('X-BNQO-Timestamp') or ''
@@ -221,8 +217,6 @@ def _bnqo_agent_required(view):
         body = request.get_data() or b''
         if not verify_with_signature(agent.pubkey, timestamp, signature, body):
             return _err('invalid_signature', 'invalid request signature', 401)
-        if legacy_token:
-            agent.token = token_hash
         agent.last_seen_at = datetime.utcnow()
         agent.last_ip = client_ip()
         db.session.commit()
@@ -243,10 +237,8 @@ def bnqo_agent_enroll():
     if not isinstance(token_value, str) or not token_value:
         return _err('enroll_token_invalid', 'enroll_token is required', 404)
     raw_enroll_token = token_value.strip()[:64]
-    enroll_hash = hash_bearer_token(raw_enroll_token, 'bnqo-enroll')
-    enroll = BnqoEnrollToken.query.filter_by(token=enroll_hash).first()
-    if enroll is None:
-        enroll = BnqoEnrollToken.query.filter_by(token=raw_enroll_token).first()
+    enroll_hash = digest_presented_token(raw_enroll_token, 'bnqo-enroll')
+    enroll = BnqoEnrollToken.query.filter_by(token=enroll_hash).first() if enroll_hash else None
     if enroll is None:
         return _err('enroll_token_invalid', 'unknown enroll token', 404)
     now = datetime.utcnow()

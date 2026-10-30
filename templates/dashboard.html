@@ -6,10 +6,10 @@
 {% block header_actions %}
 <div class="header-controls">
     <label class="toggle-switch" title="{{ _('Auto Refresh') }}">
-        <input type="checkbox" id="auto-refresh-toggle" checked onchange="toggleAutoRefresh()">
+        <input type="checkbox" id="auto-refresh-toggle" checked data-onchange="toggleAutoRefresh()">
         <span class="slider"></span>
     </label>
-    <select id="refresh-interval" class="interval-select" onchange="updateRefreshInterval()">
+    <select id="refresh-interval" class="interval-select" data-onchange="updateRefreshInterval()">
         <option value="5">5s</option>
         <option value="10" selected>10s</option>
         <option value="30">30s</option>
@@ -18,15 +18,15 @@
         <option value="300">{{ _('5 min') }}</option>
     </select>
     <small id="dashboard-live-status" class="field-note" role="status"></small>
-    <button class="btn btn-outline" onclick="showDashboardSyncDebug()">{{ _('Sync details') }}</button>
-    <button class="btn btn-primary" onclick="refreshData()">
+    <button class="btn btn-outline" data-onclick="showDashboardSyncDebug()">{{ _('Sync details') }}</button>
+    <button class="btn btn-primary" data-onclick="refreshData()">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"></polyline>
             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
         </svg>
         <span class="btn-label">{{ _('Refresh') }}</span>
     </button>
-    <button class="btn btn-success" onclick="openAddClientModal()">
+    <button class="btn btn-success" data-onclick="openAddClientModal()">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M5 12h14"></path>
         </svg>
@@ -37,7 +37,7 @@
 
 {% block content %}
 <div class="overview-wrapper">
-    <div class="overview-toggle" onclick="toggleOverview()">
+    <div class="overview-toggle" data-onclick="toggleOverview()">
         <h3>{{ _('Overview') }}</h3>
         <svg id="overview-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </div>
@@ -128,7 +128,7 @@
             <div class="stat-info">
                 <span class="stat-label">{{ _('Panel version') }}</span>
                 <span class="stat-value" id="system-update-version">v{{ app_version }}</span>
-                <button type="button" class="btn btn-primary system-update-open" onclick="event.stopPropagation(); openSystemUpdateModal()">
+                <button type="button" class="btn btn-primary system-update-open" data-onclick="event.stopPropagation(); openSystemUpdateModal()">
                     {{ _('Update panel') }}
                 </button>
             </div>
@@ -145,7 +145,7 @@
                 <h2 id="system-update-title">{{ _('Safe panel update') }}</h2>
                 <p class="system-update-subtitle">{{ _('The update runs independently; closing this window does not stop it.') }}</p>
             </div>
-            <button type="button" class="modal-close" onclick="closeSystemUpdateModal()">&times;</button>
+            <button type="button" class="modal-close" data-onclick="closeSystemUpdateModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="system-update-state idle" id="system-update-state">
@@ -171,8 +171,8 @@
             <pre class="system-update-log" id="system-update-log">{{ _('No update has started yet.') }}</pre>
             <div class="pulse-message" id="system-update-message"></div>
             <div class="form-actions system-update-actions">
-                <button type="button" class="btn btn-secondary" onclick="closeSystemUpdateModal()">{{ _('Close') }}</button>
-                <button type="button" class="btn btn-primary" id="system-update-start" onclick="startSystemUpdate()">{{ _('Start safe update') }}</button>
+                <button type="button" class="btn btn-secondary" data-onclick="closeSystemUpdateModal()">{{ _('Close') }}</button>
+                <button type="button" class="btn btn-primary" id="system-update-start" data-onclick="startSystemUpdate()">{{ _('Start safe update') }}</button>
             </div>
         </div>
     </div>
@@ -201,11 +201,11 @@
                    name="search_query_unique_id_123" 
                    autocomplete="off" 
                    readonly 
-                   onfocus="this.removeAttribute('readonly');"
+                   data-onfocus="removeReadonly(this)"
                    placeholder="{{ _('Search clients...') }}" 
                    class="search-input">
 
-            <button class="search-clear hidden" onclick="clearSearch()" id="clear-search-btn">
+            <button class="search-clear hidden" data-onclick="clearSearch()" id="clear-search-btn">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
         </div>
@@ -213,7 +213,7 @@
         <div class="filters-group">
             <!-- Server Filter -->
             <div class="filter-dropdown-wrapper">
-                <button class="filter-btn" onclick="toggleServerFilter()" id="server-filter-btn">
+                <button class="filter-btn" data-onclick="toggleServerFilter()" id="server-filter-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="filter-icon"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
                     <span>{{ _('Servers') }}</span>
                     <span class="badge-count hidden" id="server-filter-count">0</span>
@@ -222,7 +222,7 @@
                 <div id="server-filter-dropdown" class="filter-dropdown hidden">
                     <div class="filter-header">
                         <span>{{ _('Select Servers') }}</span>
-                        <button class="text-btn" onclick="selectAllServers()">{{ _('All') }}</button>
+                        <button class="text-btn" data-onclick="selectAllServers()">{{ _('All') }}</button>
                     </div>
                     <div id="server-filter-list" class="filter-list">
                         <!-- Populated by JS -->
@@ -232,7 +232,7 @@
 
             <!-- Expiry Filter -->
             <div class="filter-dropdown-wrapper">
-                <button class="filter-btn" onclick="toggleExpiryFilter()" id="expiry-filter-btn">
+                <button class="filter-btn" data-onclick="toggleExpiryFilter()" id="expiry-filter-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="filter-icon"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                     <span id="expiry-filter-label">{{ _('Expiry') }}</span>
                     <span class="badge-count hidden" id="expiry-filter-count">0</span>
@@ -241,52 +241,52 @@
                 <div id="expiry-filter-dropdown" class="filter-dropdown hidden">
                     <div class="filter-header">
                         <span>{{ _('Expiry') }}</span>
-                        <button class="text-btn" onclick="toggleAllExpiryFilters()">{{ _('All') }}</button>
+                        <button class="text-btn" data-onclick="toggleAllExpiryFilters()">{{ _('All') }}</button>
                     </div>
                     <div class="filter-list">
                         <div class="filter-item">
                             <label class="checkbox-label">
-                                <input type="checkbox" id="expiry-filter-not-started" onchange="toggleExpirySelection('not_started', this.checked)">
+                                <input type="checkbox" id="expiry-filter-not-started" data-onchange="toggleExpirySelection('not_started', this.checked)">
                                 <span class="checkmark"></span>
                                 <span>{{ _('Not started') }}</span>
                             </label>
                         </div>
                         <div class="filter-item">
                             <label class="checkbox-label">
-                                <input type="checkbox" id="expiry-filter-unlimited" onchange="toggleExpirySelection('unlimited', this.checked)">
+                                <input type="checkbox" id="expiry-filter-unlimited" data-onchange="toggleExpirySelection('unlimited', this.checked)">
                                 <span class="checkmark"></span>
                                 <span>{{ _('Unlimited') }}</span>
                             </label>
                         </div>
                         <div class="filter-item">
                             <label class="checkbox-label">
-                                <input type="checkbox" id="expiry-filter-expired" onchange="toggleExpirySelection('expired', this.checked)">
+                                <input type="checkbox" id="expiry-filter-expired" data-onchange="toggleExpirySelection('expired', this.checked)">
                                 <span class="checkmark"></span>
                                 <span>{{ _('Expired') }}</span>
                             </label>
                         </div>
                         <div class="filter-item">
                             <label class="checkbox-label">
-                                <input type="checkbox" id="expiry-filter-today" onchange="toggleExpirySelection('today', this.checked)">
+                                <input type="checkbox" id="expiry-filter-today" data-onchange="toggleExpirySelection('today', this.checked)">
                                 <span class="checkmark"></span>
                                 <span>{{ _('Today') }}</span>
                             </label>
                         </div>
                         <div class="filter-item">
                             <label class="checkbox-label" style="width: 100%;">
-                                <input type="checkbox" id="expiry-filter-lt-days" onchange="toggleExpirySelection('lt_days', this.checked)">
+                                <input type="checkbox" id="expiry-filter-lt-days" data-onchange="toggleExpirySelection('lt_days', this.checked)">
                                 <span class="checkmark"></span>
                                 <span>{{ _('Less than') }}</span>
-                                <input type="number" id="expiry-lt-days" class="form-input expiry-days-input" min="1" max="999" step="1" value="7" onchange="onExpiryDaysChanged()" onkeydown="onExpiryDaysKeyDown(event)" onclick="event.stopPropagation()">
+                                <input type="number" id="expiry-lt-days" class="form-input expiry-days-input" min="1" max="999" step="1" value="7" data-onchange="onExpiryDaysChanged()" data-onkeydown="onExpiryDaysKeyDown(event)" data-onclick="event.stopPropagation()">
                                 <span>{{ _('days') }}</span>
                             </label>
                         </div>
                         <div class="filter-item">
                             <label class="checkbox-label" style="width: 100%;">
-                                <input type="checkbox" id="expiry-filter-gt-days" onchange="toggleExpirySelection('gt_days', this.checked)">
+                                <input type="checkbox" id="expiry-filter-gt-days" data-onchange="toggleExpirySelection('gt_days', this.checked)">
                                 <span class="checkmark"></span>
                                 <span>{{ _('More than') }}</span>
-                                <input type="number" id="expiry-gt-days" class="form-input expiry-days-input" min="1" max="999" step="1" value="30" onchange="onExpiryGtDaysChanged()" onkeydown="onExpiryGtDaysKeyDown(event)" onclick="event.stopPropagation()">
+                                <input type="number" id="expiry-gt-days" class="form-input expiry-days-input" min="1" max="999" step="1" value="30" data-onchange="onExpiryGtDaysChanged()" data-onkeydown="onExpiryGtDaysKeyDown(event)" data-onclick="event.stopPropagation()">
                                 <span>{{ _('days') }}</span>
                             </label>
                         </div>
@@ -296,31 +296,31 @@
 
             <!-- Hide Disabled Filter -->
             <label class="filter-toggle" title="{{ _('Hide Disabled Clients') }}">
-                <input type="checkbox" id="hide-disabled-filter" checked onchange="applyDisabledVisibility()">
+                <input type="checkbox" id="hide-disabled-filter" checked data-onchange="applyDisabledVisibility()">
                 <span class="toggle-track"></span>
                 <span class="toggle-text">{{ _('Hide Disabled') }}</span>
             </label>
 
             <label class="filter-toggle" title="{{ _('Show Disabled Clients Only') }}">
-                <input type="checkbox" id="disabled-only-filter" onchange="applyDisabledVisibility()">
+                <input type="checkbox" id="disabled-only-filter" data-onchange="applyDisabledVisibility()">
                 <span class="toggle-track"></span>
                 <span class="toggle-text">{{ _('Disabled only') }}</span>
             </label>
 
-            <button class="btn btn-secondary" style="padding: 8px 12px;" onclick="selectAllVisibleClients()">{{ _('Select All') }}</button>
+            <button class="btn btn-secondary" style="padding: 8px 12px;" data-onclick="selectAllVisibleClients()">{{ _('Select All') }}</button>
         </div>
     </div>
     
     <div id="search-results" style="display: none; margin-bottom: 20px; padding: 12px 16px; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 12px; font-size: 0.9rem; color: #e0e7ff; display: none; justify-content: space-between; align-items: center; gap: 10px;">
         <span id="search-results-text"></span>
-        <button id="search-select-all-btn" class="btn btn-secondary" style="display:none; padding: 6px 10px;" onclick="selectAllSearchResults()">{{ _('Select All') }}</button>
+        <button id="search-select-all-btn" class="btn btn-secondary" style="display:none; padding: 6px 10px;" data-onclick="selectAllSearchResults()">{{ _('Select All') }}</button>
     </div>
     <div id="bulk-actions-container" style="display:none; margin-bottom: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card);">
         <strong>{{ _('Bulk Actions') }}</strong>
         <span id="bulk-selected-count" style="margin-left: 10px; font-size: 0.9em; color: var(--text-secondary);">{{ _('0 selected') }}</span>
 
         <div style="margin-top: 10px; display: flex; gap: 10px; align-items: center;">
-            <select id="bulk-action-select" class="form-select" style="max-width: 200px;" onchange="onBulkActionChanged()">
+            <select id="bulk-action-select" class="form-select" style="max-width: 200px;" data-onchange="onBulkActionChanged()">
                 <option value="">{{ _('Select Action') }}</option>
                 <option value="enable">{{ _('Enable') }}</option>
                 <option value="disable">{{ _('Disable') }}</option>
@@ -373,7 +373,7 @@
                     <option value="remove">{{ _('Remove from') }}</option>
                 </select>
                 <div class="filter-dropdown-wrapper" style="position:relative; min-width:200px;">
-                    <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" onclick="toggleBulkInboundDropdown(event)">
+                    <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" data-onclick="toggleBulkInboundDropdown(event)">
                         <span style="display:flex; align-items:center; gap:8px; overflow:hidden;">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="filter-icon" style="flex-shrink:0;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
                             <span id="bulk-inbound-label">{{ _('Select inbounds') }}</span>
@@ -386,31 +386,31 @@
                     <div id="bulk-inbound-dropdown" class="filter-dropdown hidden">
                         <div class="filter-header">
                             <span id="bulk-inbound-server-name">{{ _('Select Inbounds') }}</span>
-                            <button type="button" class="text-btn" onclick="selectAllBulkInbounds(event)">{{ _('All') }}</button>
+                            <button type="button" class="text-btn" data-onclick="selectAllBulkInbounds(event)">{{ _('All') }}</button>
                         </div>
                         <div id="bulk-inbound-list" class="filter-list"></div>
                     </div>
                 </div>
             </div>
 
-            <button class="btn btn-primary" onclick="executeBulkAction()">{{ _('Apply') }}</button>
-            <button class="btn btn-secondary" onclick="clearBulkSelection()">{{ _('Clear') }}</button>
+            <button class="btn btn-primary" data-onclick="executeBulkAction()">{{ _('Apply') }}</button>
+            <button class="btn btn-secondary" data-onclick="clearBulkSelection()">{{ _('Clear') }}</button>
         </div>
 
         <div id="bulk-volume-policy-container" style="display:none; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; flex-wrap:wrap;">
                 <strong style="font-size:0.9rem;">{{ _('Remaining Volume Rules') }}</strong>
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <button type="button" class="btn btn-secondary" style="padding:6px 10px;" onclick="addBulkVolumeRule()">{{ _('Add Rule') }}</button>
-                    <button type="button" class="btn btn-primary" style="padding:6px 10px;" onclick="saveVolumeRulePreset()">{{ _('Save Setting') }}</button>
+                    <button type="button" class="btn btn-secondary" style="padding:6px 10px;" data-onclick="addBulkVolumeRule()">{{ _('Add Rule') }}</button>
+                    <button type="button" class="btn btn-primary" style="padding:6px 10px;" data-onclick="saveVolumeRulePreset()">{{ _('Save Setting') }}</button>
                 </div>
             </div>
             <!-- Saved presets: pick to load instantly -->
             <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
-                <select id="bulk-volume-preset-select" class="form-select" style="flex:1; min-width:160px;" onchange="applyVolumeRulePreset()">
+                <select id="bulk-volume-preset-select" class="form-select" style="flex:1; min-width:160px;" data-onchange="applyVolumeRulePreset()">
                     <option value="">{{ _('— Load saved setting —') }}</option>
                 </select>
-                <button type="button" class="btn btn-secondary" style="padding:6px 10px;" onclick="deleteVolumeRulePreset()" title="{{ _('Delete selected preset') }}">{{ _('Delete') }}</button>
+                <button type="button" class="btn btn-secondary" style="padding:6px 10px;" data-onclick="deleteVolumeRulePreset()" title="{{ _('Delete selected preset') }}">{{ _('Delete') }}</button>
             </div>
             <div class="bulk-volume-rule-head" style="display:grid; grid-template-columns: minmax(86px,1fr) minmax(86px,1fr) minmax(120px,1.2fr) minmax(170px,1.6fr) auto; gap:8px; margin-bottom:6px; color:var(--text-secondary); font-size:0.78rem;">
                 <span>{{ _('From GB') }}</span>
@@ -428,11 +428,11 @@
             <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
                 <div>
                     <label style="font-size:0.78rem; color:var(--text-secondary); display:block; margin-bottom:4px;">{{ _('Factor') }} <span style="color:var(--text-secondary);">(e.g. 1.5 = +50%, 0.5 = −50%)</span></label>
-                    <input id="bulk-multiplier-factor" type="number" class="form-input" min="0.01" step="0.01" placeholder="1.0" style="max-width:120px;" oninput="refreshMultiplierPreview()">
+                    <input id="bulk-multiplier-factor" type="number" class="form-input" min="0.01" step="0.01" placeholder="1.0" style="max-width:120px;" data-oninput="refreshMultiplierPreview()">
                 </div>
                 <div>
                     <label style="font-size:0.78rem; color:var(--text-secondary); display:block; margin-bottom:4px;">{{ _('Mode') }}</label>
-                    <select id="bulk-multiplier-mode" class="form-select" style="max-width:220px;" onchange="refreshMultiplierPreview()">
+                    <select id="bulk-multiplier-mode" class="form-select" style="max-width:220px;" data-onchange="refreshMultiplierPreview()">
                         <option value="set_remaining">{{ _('Adjust cap (keep used traffic)') }}</option>
                         <option value="reset_and_set">{{ _('Reset traffic + set new cap') }}</option>
                     </select>
@@ -440,12 +440,12 @@
                 <div>
                     <label style="font-size:0.78rem; color:var(--text-secondary); display:block; margin-bottom:4px;">{{ _('Skip if remaining between (GB)') }} <span style="opacity:.6;">{{ _('— leave blank = no skip') }}</span></label>
                     <div style="display:flex; align-items:center; gap:6px;">
-                        <input id="bulk-mult-skip-min" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('From') }}" style="max-width:80px;" oninput="refreshMultiplierPreview()">
+                        <input id="bulk-mult-skip-min" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('From') }}" style="max-width:80px;" data-oninput="refreshMultiplierPreview()">
                         <span style="color:var(--text-secondary);">–</span>
-                        <input id="bulk-mult-skip-max" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('To') }}" style="max-width:80px;" oninput="refreshMultiplierPreview()">
+                        <input id="bulk-mult-skip-max" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('To') }}" style="max-width:80px;" data-oninput="refreshMultiplierPreview()">
                     </div>
                 </div>
-                <button type="button" class="btn btn-secondary" style="padding:8px 14px; align-self:flex-end;" onclick="refreshMultiplierPreview()">{{ _('Preview') }}</button>
+                <button type="button" class="btn btn-secondary" style="padding:8px 14px; align-self:flex-end;" data-onclick="refreshMultiplierPreview()">{{ _('Preview') }}</button>
             </div>
             <div id="bulk-multiplier-preview" style="margin-top:12px; display:none;"></div>
         </div>
@@ -465,7 +465,7 @@
             </svg>
             <h3>{{ _('No servers added') }}</h3>
             <p>{{ _('Add your X-UI server to see statistics.') }}</p>
-            <button class="btn btn-primary" onclick="openServerModal()">{{ _('Add Server') }}</button>
+            <button class="btn btn-primary" data-onclick="openServerModal()">{{ _('Add Server') }}</button>
         </div>
     </div>
 </div>
@@ -474,7 +474,7 @@
     <div class="modal">
         <div class="modal-header">
             <h2 id="server-modal-title">{{ _('Servers') }}</h2>
-            <button class="modal-close" onclick="closeServerModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeServerModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="server-form">
@@ -524,8 +524,8 @@
                     <small id="server-api-token-hint" style="display:none; color:#4ade80; font-size:0.78rem;">{{ _('✓ A token is already saved. Type a new one to replace it, or leave empty to keep it.') }}</small>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-secondary" onclick="testServerConnection()">{{ _('Test Connection') }}</button>
-                    <button class="btn btn-primary" onclick="saveServer()">{{ _('Save') }}</button>
+                    <button class="btn btn-secondary" data-onclick="testServerConnection()">{{ _('Test Connection') }}</button>
+                    <button class="btn btn-primary" data-onclick="saveServer()">{{ _('Save') }}</button>
                 </div>
             </div>
             
@@ -541,33 +541,33 @@
     <div class="modal modal-xl">
         <div class="modal-header">
             <h2>{{ _('QR Codes -') }} <span id="qr-email" class="qr-email" style="word-break: break-all;"></span></h2>
-            <button class="modal-close" onclick="closeQrModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeQrModal()">&times;</button>
         </div>
         <div class="modal-body qr-body" style="padding: 15px;">
             <div class="qr-grid">
                 
-                <div class="qr-item ripple" id="box-sub" onclick="copyText('input-sub', 'img-sub', 'Subscription')">
+                <div class="qr-item ripple" id="box-sub" data-onclick="copyText('input-sub', 'img-sub', 'Subscription')">
                     <div class="qr-title">{{ _('Subscription') }}</div>
                     <img id="img-sub" src="" alt="{{ _('Sub QR') }}">
                     <div class="click-hint">{{ _('Tap to Copy') }}</div>
                     <input type="hidden" id="input-sub">
                 </div>
 
-                <div class="qr-item ripple" id="box-json" onclick="copyText('input-json', 'img-json', 'Subscription JSON')">
+                <div class="qr-item ripple" id="box-json" data-onclick="copyText('input-json', 'img-json', 'Subscription JSON')">
                     <div class="qr-title">{{ _('Subscription JSON') }}</div>
                     <img id="img-json" src="" alt="{{ _('Json QR') }}">
                     <div class="click-hint">{{ _('Tap to Copy') }}</div>
                     <input type="hidden" id="input-json">
                 </div>
 
-                <div class="qr-item ripple" id="box-config" onclick="copyText('input-config', 'img-config', 'Direct Link')">
+                <div class="qr-item ripple" id="box-config" data-onclick="copyText('input-config', 'img-config', 'Direct Link')">
                     <div class="qr-title" id="title-config">{{ _('Direct Link') }}</div>
                     <img id="img-config" src="" alt="{{ _('Config QR') }}">
                     <div class="click-hint">{{ _('Tap to Copy') }}</div>
                     <input type="hidden" id="input-config">
                 </div>
 
-                <div class="qr-item ripple" id="box-dash" onclick="copyText('input-dash', 'img-dash', 'Dash Sub')">
+                <div class="qr-item ripple" id="box-dash" data-onclick="copyText('input-dash', 'img-dash', 'Dash Sub')">
                     <div class="qr-title">{{ _('Dash Sub') }}</div>
                     <img id="img-dash" src="" alt="{{ _('Dash QR') }}">
                     <div class="click-hint">{{ _('Tap to Copy') }}</div>
@@ -583,7 +583,7 @@
     <div class="modal modal-sm">
         <div class="modal-header">
             <h2 id="expanded-qr-title">{{ _('QR Code') }}</h2>
-            <button class="modal-close" onclick="closeExpandedQr()">&times;</button>
+            <button class="modal-close" data-onclick="closeExpandedQr()">&times;</button>
         </div>
         <div class="modal-body" style="text-align: center; padding: 20px;">
             <img id="expanded-qr-img" src="" alt="QR" style="max-width: 300px; width: 100%; height: auto; background: white; padding: 10px; border-radius: 8px;">
@@ -595,7 +595,7 @@
     <div class="modal modal-md">
         <div class="modal-header">
             <h2>{{ _('Renew Client') }}</h2>
-            <button class="modal-close" onclick="closeRenewModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeRenewModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="renew-server-id">
@@ -625,11 +625,11 @@
             <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 15px;">
                 <div class="form-group" style="flex:1; margin-bottom: 0;">
                     <label>{{ _('Duration (Days)') }} <small style="color: var(--text-secondary); font-weight: normal;">{{ _('(0 = Unlimited ∞)') }}</small></label>
-                    <input type="number" id="renew-custom-days" class="form-input" value="30" min="0" max="365" step="0.1" inputmode="decimal" oninput="calculateRenewCustomPrice()">
+                    <input type="number" id="renew-custom-days" class="form-input" value="30" min="0" max="365" step="0.1" inputmode="decimal" data-oninput="calculateRenewCustomPrice()">
                 </div>
                 <div class="form-group" style="flex:1; margin-bottom: 0;">
                     <label>{{ _('Volume (GB)') }} <small style="color: var(--text-secondary); font-weight: normal;">{{ _('(0 = Unlimited ∞)') }}</small></label>
-                    <input type="number" id="renew-custom-volume" class="form-input" value="10" min="0" max="10000" step="0.1" inputmode="decimal" oninput="calculateRenewCustomPrice()">
+                    <input type="number" id="renew-custom-volume" class="form-input" value="10" min="0" max="10000" step="0.1" inputmode="decimal" data-oninput="calculateRenewCustomPrice()">
                 </div>
                 <div style="flex: 1.5; background: rgba(255,255,255,0.05); padding: 0 12px; border-radius: 8px; height: 42px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-color);">
                     <span style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('Cost:') }} <strong id="renew-price-display" style="color: #fbbf24; margin-left: 4px;">0</strong> <span style="font-size: 0.75rem;">T</span></span>
@@ -639,7 +639,7 @@
             <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 10px; align-items: stretch; margin-bottom: 5px;">
                 <label class="form-group form-toggle-item free-toggle-wrap" style="cursor: pointer; margin: 0;">
                     <div class="toggle-switch">
-                        <input type="checkbox" id="renew-free-toggle" onchange="refreshRenewPriceDisplay()">
+                        <input type="checkbox" id="renew-free-toggle" data-onchange="refreshRenewPriceDisplay()">
                         <span class="slider"></span>
                     </div>
                     <span>{{ _('Free') }}</span>
@@ -680,7 +680,7 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; align-items: center;">
                 <label class="form-group form-toggle-item" style="cursor: pointer; margin: 0;">
                     <div class="toggle-switch">
-                        <input type="checkbox" id="renew-gift-toggle" onchange="onGiftVolumeToggle()">
+                        <input type="checkbox" id="renew-gift-toggle" data-onchange="onGiftVolumeToggle()">
                         <span class="slider"></span>
                     </div>
                     <span>🎁 {{ _('Gift Volume') }}</span>
@@ -727,8 +727,8 @@
                 <span style="color: #4ade80;">{{ "{:,}".format(credit if credit else 0) }} T</span>
             </div>
             <div style="display: flex; gap: 10px;">
-                <button class="btn btn-secondary" onclick="closeRenewModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="submitRenewal()">{{ _('Confirm') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeRenewModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="submitRenewal()">{{ _('Confirm') }}</button>
             </div>
         </div>
     </div>
@@ -738,7 +738,7 @@
     <div class="modal modal-sm">
         <div class="modal-header">
             <h2 id="renew-modal-title">{{ _('Renewal Successful') }}</h2>
-            <button class="modal-close" onclick="closeRenewSuccessModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeRenewSuccessModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div id="renew-api-status" class="hidden" style="margin-bottom: 10px; font-size: 0.8rem; color: var(--text-secondary); background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); display: flex; gap: 6px; flex-wrap: wrap; direction: ltr; word-break: break-word;">
@@ -753,17 +753,17 @@
             </div>
             <div id="renew-success-text" class="hidden" style="white-space: pre-wrap; word-break: break-all; margin-bottom: 20px; font-size: 0.9rem; line-height: 1.5; background: var(--bg-dark); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); direction: ltr; text-align: left;"></div>
             <div class="renew-success-actions">
-                <button class="btn btn-secondary renew-success-action" onclick="recheckRenewal()" id="renew-recheck-btn">
+                <button class="btn btn-secondary renew-success-action" data-onclick="recheckRenewal()" id="renew-recheck-btn">
                     {{ _('Re-check') }}
                 </button>
-                <button class="btn btn-outline renew-success-action hidden" onclick="forceEnableRenewal()" id="renew-force-btn">
+                <button class="btn btn-outline renew-success-action hidden" data-onclick="forceEnableRenewal()" id="renew-force-btn">
                     {{ _('Force Enable') }}
                 </button>
-                <button class="btn btn-primary renew-success-action" onclick="copyRenewSuccessText()" id="renew-copy-btn">
+                <button class="btn btn-primary renew-success-action" data-onclick="copyRenewSuccessText()" id="renew-copy-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     {{ _('Copy Info') }}
                 </button>
-                <button class="btn btn-success renew-success-action renew-success-action-primary" onclick="sendRenewToUser()" id="renew-send-btn">
+                <button class="btn btn-success renew-success-action renew-success-action-primary" data-onclick="sendRenewToUser()" id="renew-send-btn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                     {{ _('Send to Client') }}
                 </button>
@@ -776,7 +776,7 @@
             <div class="modal modal-sm">
                 <div class="modal-header">
                     <h2>{{ _('Why is this server erroring?') }}</h2>
-                    <button class="modal-close" onclick="closeServerErrorModal()">&times;</button>
+                    <button class="modal-close" data-onclick="closeServerErrorModal()">&times;</button>
                 </div>
                 <div class="modal-body" id="server-error-modal-body"></div>
             </div>
@@ -786,7 +786,7 @@
             <div class="modal modal-sm">
                 <div class="modal-header">
                     <h2>{{ _('Reset Traffic') }}</h2>
-                    <button class="modal-close" onclick="closeResetModal()">&times;</button>
+                    <button class="modal-close" data-onclick="closeResetModal()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <input type="hidden" id="reset-server-id">
@@ -798,14 +798,14 @@
 
                     <div class="form-group">
                         <label>{{ _('Billable Volume (GB)') }}</label>
-                        <input type="number" id="reset-volume" class="form-input" min="1" max="10000" value="50" oninput="updateResetCost()">
+                        <input type="number" id="reset-volume" class="form-input" min="1" max="10000" value="50" data-oninput="updateResetCost()">
                         <small style="color: var(--text-secondary);">{{ _('Adjust to charge the correct amount for this reset.') }}</small>
                     </div>
 
                     <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 10px; align-items: stretch; margin-bottom: 15px;">
                         <label class="form-group form-toggle-item free-toggle-wrap" style="cursor: pointer; margin: 0;">
                             <div class="toggle-switch">
-                                <input type="checkbox" id="reset-free-toggle" onchange="updateResetCost()">
+                                <input type="checkbox" id="reset-free-toggle" data-onchange="updateResetCost()">
                                 <span class="slider"></span>
                             </div>
                             <span>{{ _('Free') }}</span>
@@ -844,8 +844,8 @@
                     </div>
 
                     <div class="form-actions">
-                        <button class="btn btn-secondary" onclick="closeResetModal()">{{ _('Cancel') }}</button>
-                        <button class="btn btn-primary" onclick="submitResetTraffic()">{{ _('Confirm Reset') }}</button>
+                        <button class="btn btn-secondary" data-onclick="closeResetModal()">{{ _('Cancel') }}</button>
+                        <button class="btn btn-primary" data-onclick="submitResetTraffic()">{{ _('Confirm Reset') }}</button>
                     </div>
                 </div>
             </div>
@@ -855,7 +855,7 @@
     <div class="modal modal-md">
         <div class="modal-header">
             <h2>{{ _('Purchase New Service') }}</h2>
-            <button class="modal-close" onclick="closeAddClientModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeAddClientModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-group">
@@ -864,7 +864,7 @@
                     <div>
                         <label style="display:block; margin-bottom:6px;">{{ _('Server') }}</label>
                         <div class="filter-dropdown-wrapper" style="position:relative; width:100%;">
-                            <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" onclick="toggleServerPickDropdown(event)">
+                            <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" data-onclick="toggleServerPickDropdown(event)">
                                 <span style="display:flex; align-items:center; gap:8px; overflow:hidden;">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="filter-icon" style="flex-shrink:0;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
                                     <span id="server-pick-label" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ _('Select Server') }}</span>
@@ -876,7 +876,7 @@
                             </div>
                         </div>
                         <!-- hidden native select keeps the value so existing code paths still work -->
-                        <select id="add-client-server-select" onchange="onServerSelected()" style="display:none;"></select>
+                        <select id="add-client-server-select" data-onchange="onServerSelected()" style="display:none;"></select>
                     </div>
 
                     <!-- Inbound: single select (legacy) OR multi-assign dropdown (v3) -->
@@ -886,7 +886,7 @@
                         <select id="add-client-inbound-select" style="display:none;"></select>
                         <!-- custom single-select inbound dropdown (legacy panels) -->
                         <div id="add-client-inbound-single" class="filter-dropdown-wrapper" style="position:relative; width:100%;">
-                            <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" onclick="toggleInboundPickDropdown(event)">
+                            <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" data-onclick="toggleInboundPickDropdown(event)">
                                 <span style="display:flex; align-items:center; gap:8px; overflow:hidden;">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="filter-icon" style="flex-shrink:0;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
                                     <span id="inbound-pick-label" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ _('-- Select Inbound --') }}</span>
@@ -899,7 +899,7 @@
                         </div>
                         <div id="add-client-inbound-multi" style="display:none;">
                             <div class="filter-dropdown-wrapper" style="position:relative; width:100%;">
-                                <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" onclick="toggleAddInboundDropdown(event)">
+                                <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" data-onclick="toggleAddInboundDropdown(event)">
                                     <span style="display:flex; align-items:center; gap:8px; overflow:hidden;">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="filter-icon" style="flex-shrink:0;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
                                         <span id="add-inbound-multi-label">{{ _('All inbounds') }}</span>
@@ -912,7 +912,7 @@
                                 <div id="add-inbound-multi-dropdown" class="filter-dropdown hidden">
                                     <div class="filter-header">
                                         <span>{{ _('Select Inbounds') }}</span>
-                                        <button type="button" class="text-btn" onclick="selectAllAddInbounds(event)">{{ _('All') }}</button>
+                                        <button type="button" class="text-btn" data-onclick="selectAllAddInbounds(event)">{{ _('All') }}</button>
                                     </div>
                                     <div id="add-client-inbound-multi-list" class="filter-list"></div>
                                 </div>
@@ -926,7 +926,7 @@
                 <div class="modal-user-row">
                     <div>
                         <label>{{ _('Username / Email') }}</label>
-                        <input type="text" id="add-client-email" class="form-input" placeholder="user1" oninput="sanitizeEmailInput(this)">
+                        <input type="text" id="add-client-email" class="form-input" placeholder="user1" data-oninput="sanitizeEmailInput(this)">
                     </div>
                     <div>
                         <label>{{ _('Last User') }}</label>
@@ -934,10 +934,10 @@
                             <span id="last-user-display" style="flex:1; min-width:0; font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow:hidden; text-overflow:ellipsis; line-height: 1.4;">-</span>
                             <span id="last-user-nav" style="display:none; align-items:center; gap:2px; flex-shrink:0;">
                                 <span id="last-user-pos" style="font-size:0.68rem; color:var(--text-secondary); margin-right:2px;"></span>
-                                <button type="button" onclick="navLastUser(-1)" title="{{ _('Newer') }}" style="background:rgba(255,255,255,0.06); border:1px solid var(--border-color); color:var(--text-secondary); border-radius:6px; width:24px; height:24px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0;">
+                                <button type="button" data-onclick="navLastUser(-1)" title="{{ _('Newer') }}" style="background:rgba(255,255,255,0.06); border:1px solid var(--border-color); color:var(--text-secondary); border-radius:6px; width:24px; height:24px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0;">
                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
                                 </button>
-                                <button type="button" onclick="navLastUser(1)" title="{{ _('Older') }}" style="background:rgba(255,255,255,0.06); border:1px solid var(--border-color); color:var(--text-secondary); border-radius:6px; width:24px; height:24px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0;">
+                                <button type="button" data-onclick="navLastUser(1)" title="{{ _('Older') }}" style="background:rgba(255,255,255,0.06); border:1px solid var(--border-color); color:var(--text-secondary); border-radius:6px; width:24px; height:24px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0;">
                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                                 </button>
                             </span>
@@ -962,11 +962,11 @@
             <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 15px;">
                 <div class="form-group" style="flex:1; margin-bottom: 0;">
                     <label>{{ _('Duration (Days)') }} <small style="color: var(--text-secondary); font-weight: normal;">{{ _('(0 = Unlimited ∞)') }}</small></label>
-                    <input type="number" id="custom-days" class="form-input" value="30" min="0" max="365" oninput="calculateCustomPrice()">
+                    <input type="number" id="custom-days" class="form-input" value="30" min="0" max="365" data-oninput="calculateCustomPrice()">
                 </div>
                 <div class="form-group" style="flex:1; margin-bottom: 0;">
                     <label>{{ _('Volume (GB)') }} <small style="color: var(--text-secondary); font-weight: normal;">{{ _('(0 = Unlimited ∞)') }}</small></label>
-                    <input type="number" id="custom-volume" class="form-input" value="10" min="0" max="10000" oninput="calculateCustomPrice()">
+                    <input type="number" id="custom-volume" class="form-input" value="10" min="0" max="10000" data-oninput="calculateCustomPrice()">
                 </div>
                 <div style="flex: 1.5; background: rgba(255,255,255,0.05); padding: 0 12px; border-radius: 8px; height: 42px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-color);">
                     <span style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('Cost:') }} <strong id="custom-price-display" style="color: #fbbf24; margin-left: 4px;">0</strong> <span style="font-size: 0.75rem;">T</span></span>
@@ -976,7 +976,7 @@
             <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 10px; align-items: stretch; margin-bottom: 5px;">
                 <label class="form-group form-toggle-item free-toggle-wrap" style="cursor: pointer; margin: 0;">
                     <div class="toggle-switch">
-                        <input type="checkbox" id="add-client-free-toggle" onchange="updateAddPriceDisplay()">
+                        <input type="checkbox" id="add-client-free-toggle" data-onchange="updateAddPriceDisplay()">
                         <span class="slider"></span>
                     </div>
                     <span>{{ _('Free') }}</span>
@@ -1035,7 +1035,7 @@
                 </svg>
                 <span style="color: #4ade80;">{{ "{:,}".format(credit if credit else 0) }} T</span>
             </div>
-            <button class="btn btn-primary" onclick="submitAddClient()">
+            <button class="btn btn-primary" data-onclick="submitAddClient()">
                 {{ _('Pay & Create') }}
             </button>
         </div>
@@ -1046,7 +1046,7 @@
     <div class="modal modal-sm" style="overflow: visible;">
         <div class="modal-header">
             <h2>{{ _('Assign Owner') }}</h2>
-            <button class="modal-close" onclick="closeAssignModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeAssignModal()">&times;</button>
         </div>
         <div class="modal-body" style="overflow: visible;">
             <p style="color: var(--text-secondary); margin-bottom: 15px;">{{ _('Client:') }} <strong id="assign-client-email" style="color: var(--text-primary);"></strong></p>
@@ -1058,7 +1058,7 @@
             <div class="form-group">
                 <label>{{ _('Select Reseller') }}</label>
                 <div class="filter-dropdown-wrapper" style="width: 100%;">
-                    <button class="filter-btn" onclick="toggleResellerDropdown()" id="assign-reseller-btn" style="width: 100%; justify-content: space-between;">
+                    <button class="filter-btn" data-onclick="toggleResellerDropdown()" id="assign-reseller-btn" style="width: 100%; justify-content: space-between;">
                         <span id="assign-reseller-label">{{ _('Select Reseller') }}</span>
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chevron-icon"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
@@ -1072,8 +1072,8 @@
             </div>
             
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeAssignModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="submitAssignment()">{{ _('Assign') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeAssignModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="submitAssignment()">{{ _('Assign') }}</button>
             </div>
         </div>
     </div>
@@ -1083,7 +1083,7 @@
     <div class="modal modal-sm">
         <div class="modal-header">
             <h2>{{ _('Edit Client') }}</h2>
-            <button class="modal-close" onclick="closeEditClientModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeEditClientModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-client-server-id">
@@ -1105,7 +1105,7 @@
             <div class="form-group" id="edit-client-inbound-group" style="display:none;">
                 <label>{{ _('Assigned inbounds') }}</label>
                 <div class="filter-dropdown-wrapper" style="position:relative; width:100%;">
-                    <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" onclick="toggleEditInboundDropdown(event)">
+                    <button type="button" class="filter-btn" style="width:100%; justify-content:space-between;" data-onclick="toggleEditInboundDropdown(event)">
                         <span style="display:flex; align-items:center; gap:8px; overflow:hidden;">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="filter-icon" style="flex-shrink:0;"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
                             <span id="edit-inbound-multi-label">{{ _('All inbounds') }}</span>
@@ -1118,7 +1118,7 @@
                     <div id="edit-inbound-multi-dropdown" class="filter-dropdown hidden">
                         <div class="filter-header">
                             <span>{{ _('Select Inbounds') }}</span>
-                            <button type="button" class="text-btn" onclick="selectAllEditInbounds(event)">{{ _('All') }}</button>
+                            <button type="button" class="text-btn" data-onclick="selectAllEditInbounds(event)">{{ _('All') }}</button>
                         </div>
                         <div id="edit-client-inbound-multi-list" class="filter-list"></div>
                     </div>
@@ -1147,7 +1147,7 @@
                     <small class="text-secondary">{{ _('If enabled, the expiry countdown starts on the client\'s first connection.') }}</small>
                 </div>
                 <label class="toggle-switch" style="margin: 0;">
-                    <input type="checkbox" id="edit-client-start-after-first-use" onchange="updateEditClientStartAfterFirstUseUI()">
+                    <input type="checkbox" id="edit-client-start-after-first-use" data-onchange="updateEditClientStartAfterFirstUseUI()">
                     <span class="slider"></span>
                 </label>
             </div>
@@ -1160,8 +1160,8 @@
             {% endif %}
             
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeEditClientModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" id="edit-client-save-btn" onclick="submitEditClient()">{{ _('Save Changes') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeEditClientModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" id="edit-client-save-btn" data-onclick="submitEditClient()">{{ _('Save Changes') }}</button>
             </div>
         </div>
     </div>
@@ -1171,7 +1171,7 @@
     <div class="modal modal-md">
         <div class="modal-header">
             <h2 id="bulk-confirm-title">{{ _('Confirm Bulk Action') }}</h2>
-            <button class="modal-close" onclick="closeBulkConfirmModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeBulkConfirmModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p class="text-secondary" style="margin:0 0 10px 0; font-size:0.9rem;">
@@ -1198,8 +1198,8 @@
             </div>
 
             <div class="form-actions" style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;">
-                <button class="btn btn-secondary" onclick="closeBulkConfirmModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" id="bulk-confirm-proceed" onclick="confirmBulkProceed()">{{ _('No backup, proceed') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeBulkConfirmModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" id="bulk-confirm-proceed" data-onclick="confirmBulkProceed()">{{ _('No backup, proceed') }}</button>
             </div>
         </div>
     </div>
@@ -1209,7 +1209,7 @@
     <div class="modal modal-md">
         <div class="modal-header">
             <h2 id="volume-stats-title">{{ _('Remaining Volume Distribution') }}</h2>
-            <button class="modal-close" onclick="closeVolumeStatsModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeVolumeStatsModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p class="text-secondary" id="volume-stats-sub" style="margin:0 0 12px 0; font-size:0.85rem;"></p>
@@ -1227,7 +1227,7 @@
             </div>
             <textarea id="volume-stats-copytext" class="form-input" rows="10" readonly
                 style="margin-top:12px; font-family:monospace; direction:ltr; white-space:pre; line-height:1.6;"></textarea>
-            <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="copyVolumeStats()">
+            <button class="btn btn-primary btn-block" style="margin-top:8px;" data-onclick="copyVolumeStats()">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 {{ _('Copy for AI') }}
             </button>
@@ -1239,17 +1239,17 @@
     <div class="modal modal-md">
         <div class="modal-header" style="padding: 10px 14px;">
             <span style="font-size: 0.88rem; font-weight: 600; color: var(--text-primary);">{{ _('✓ Client Created') }}</span>
-            <button class="modal-close" onclick="closeNewClientModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeNewClientModal()">&times;</button>
         </div>
         <div class="modal-body" style="padding: 10px 14px;">
             <textarea id="new-client-details" class="form-input" rows="1" readonly
                 style="font-family: 'Vazirmatn', sans-serif; direction: rtl; white-space: pre-wrap; word-break: break-all; line-height: 1.7; font-size: 0.88rem; resize: none; margin-bottom: 8px; overflow: hidden;"></textarea>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
-                <button class="btn btn-secondary" style="padding: 8px; font-size: 0.82rem; justify-content: center;" onclick="copyNewClientDetails()">
+                <button class="btn btn-secondary" style="padding: 8px; font-size: 0.82rem; justify-content: center;" data-onclick="copyNewClientDetails()">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 5px; flex-shrink: 0;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     {{ _('Copy') }}
                 </button>
-                <button class="btn btn-success" style="padding: 8px; font-size: 0.82rem; justify-content: center;" onclick="sendNewClientToUser()">
+                <button class="btn btn-success" style="padding: 8px; font-size: 0.82rem; justify-content: center;" data-onclick="sendNewClientToUser()">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 5px; flex-shrink: 0;"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                     {{ _('Send') }}
                 </button>
@@ -1258,13 +1258,13 @@
             <div style="margin-top: 20px;">
                 <h3 style="font-size: 1rem; margin-bottom: 10px;">{{ _('QR Codes') }}</h3>
                 <div class="qr-grid" style="grid-template-columns: repeat(2, 1fr);">
-                    <div class="qr-item ripple" id="new-client-qr-sub" onclick="copyText('new-client-sub-link', 'new-client-img-sub', 'Subscription')">
+                    <div class="qr-item ripple" id="new-client-qr-sub" data-onclick="copyText('new-client-sub-link', 'new-client-img-sub', 'Subscription')">
                         <div class="qr-title">{{ _('Subscription') }}</div>
                         <img id="new-client-img-sub" src="" alt="{{ _('Sub QR') }}">
                         <div class="click-hint">{{ _('Tap to Copy') }}</div>
                         <input type="hidden" id="new-client-sub-link">
                     </div>
-                    <div class="qr-item ripple" id="new-client-qr-dash" onclick="copyText('new-client-dash-link', 'new-client-img-dash', 'Dashboard')">
+                    <div class="qr-item ripple" id="new-client-qr-dash" data-onclick="copyText('new-client-dash-link', 'new-client-img-dash', 'Dashboard')">
                         <div class="qr-title">{{ _('Dashboard') }}</div>
                         <img id="new-client-img-dash" src="" alt="{{ _('Dash QR') }}">
                         <div class="click-hint">{{ _('Tap to Copy') }}</div>
@@ -1655,7 +1655,7 @@
     <div class="modal modal-md">
         <div class="modal-header">
             <h2>{{ _('Delete Client') }}</h2>
-            <button class="modal-close" onclick="closeDeleteClientModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeDeleteClientModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="delete-client-server-id">
@@ -1703,8 +1703,8 @@
             </div>
 
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeDeleteClientModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-danger" onclick="submitDeleteClient()">{{ _('Delete Client') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeDeleteClientModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-danger" data-onclick="submitDeleteClient()">{{ _('Delete Client') }}</button>
             </div>
         </div>
     </div>
@@ -1712,7 +1712,7 @@
 
 <div id="dashboard-sync-debug" class="modal-overlay hidden">
     <div class="modal modal-lg">
-        <div class="modal-header"><h3>{{ _('Dashboard sync diagnostics') }}</h3><button class="modal-close" onclick="document.getElementById('dashboard-sync-debug').classList.add('hidden')">&times;</button></div>
+        <div class="modal-header"><h3>{{ _('Dashboard sync diagnostics') }}</h3><button class="modal-close" data-onclick="hideElementById('dashboard-sync-debug')">&times;</button></div>
         <div class="modal-body"><pre id="dashboard-sync-debug-data"></pre></div>
     </div>
 </div>

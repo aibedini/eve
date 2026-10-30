@@ -20,6 +20,7 @@ from panel.routes.common import (
 )
 from panel.security import InsecurePanelTransportError, enforce_panel_transport
 from panel.services.client_operations import resolve_client_operation
+from panel.services.sessions import SESSION_TOKEN_KEY, revoke_other_sessions
 
 bp = Blueprint('admin', __name__)
 
@@ -287,6 +288,10 @@ def update_admin(admin_id):
         if not is_valid:
             return jsonify({"success": False, "error": error_msg}), 400
         admin.set_password(data['password'])
+        # A new password must end every session opened with the old one; the
+        # editor keeps their own current session when changing their password.
+        keep = session.get(SESSION_TOKEN_KEY) if editor and editor.id == admin.id else None
+        revoke_other_sessions(admin.id, keep)
     if data.get('role'):
         new_role = (data.get('role') or '').strip().lower()
         if new_role:

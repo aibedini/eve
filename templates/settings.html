@@ -6,51 +6,51 @@
 {% block content %}
 <div class="settings-layout">
     <div class="settings-sidebar">
-        <button class="settings-tab active" data-settings-tab="overview" onclick="switchTab('overview', this)">
+        <button class="settings-tab active" data-settings-tab="overview" data-onclick="switchTab('overview', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
             {{ _('Overview') }}
         </button>
-        <button class="settings-tab" data-settings-tab="general" onclick="switchTab('general', this)">
+        <button class="settings-tab" data-settings-tab="general" data-onclick="switchTab('general', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             {{ _('General') }}
         </button>
-        <button class="settings-tab" data-settings-tab="templates" onclick="switchTab('templates', this)">
+        <button class="settings-tab" data-settings-tab="templates" data-onclick="switchTab('templates', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
             {{ _('Notification Templates') }}
         </button>
-        <button class="settings-tab" data-settings-tab="renew_template" onclick="switchTab('renew_template', this)">
+        <button class="settings-tab" data-settings-tab="renew_template" data-onclick="switchTab('renew_template', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><polyline points="21 3 21 9 15 9"></polyline><path d="M12 7v5l4 2"></path></svg>
             {{ _('Renew Template') }}
         </button>
-        <button class="settings-tab" data-settings-tab="backups" onclick="switchTab('backups', this)">
+        <button class="settings-tab" data-settings-tab="backups" data-onclick="switchTab('backups', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             {{ _('Backup & Restore') }}
         </button>
-        <button class="settings-tab" data-settings-tab="telegram" onclick="switchTab('telegram', this)">
+        <button class="settings-tab" data-settings-tab="telegram" data-onclick="switchTab('telegram', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path></svg>
             Telegram
         </button>
-        <button class="settings-tab" data-settings-tab="whatsapp" onclick="switchTab('whatsapp', this)">
+        <button class="settings-tab" data-settings-tab="whatsapp" data-onclick="switchTab('whatsapp', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.38 7.55L3 21l1.98-5.44A8.5 8.5 0 1 1 21 11.5z"></path></svg>
             WhatsApp
         </button>
-        <button class="settings-tab" data-settings-tab="sms" onclick="switchTab('sms', this)">
+        <button class="settings-tab" data-settings-tab="sms" data-onclick="switchTab('sms', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.17L4 17.17V4z"></path><path d="M8 9h8"></path><path d="M8 12h5"></path></svg>
             {{ _('SMS Automation') }}
         </button>
-        <button class="settings-tab" data-settings-tab="account_message" onclick="switchTab('account_message', this)">
+        <button class="settings-tab" data-settings-tab="account_message" data-onclick="switchTab('account_message', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path></svg>
             {{ _('Account Message') }}
         </button>
-        <button class="settings-tab" data-settings-tab="ssl" onclick="switchTab('ssl', this)">
+        <button class="settings-tab" data-settings-tab="ssl" data-onclick="switchTab('ssl', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
             {{ _('SSL Settings') }}
         </button>
-        <button class="settings-tab" data-settings-tab="session" onclick="switchTab('session', this)">
+        <button class="settings-tab" data-settings-tab="session" data-onclick="switchTab('session', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
             {{ _('Session Settings') }}
         </button>
-        <button class="settings-tab" data-settings-tab="health_logs" onclick="switchTab('health_logs', this)">
+        <button class="settings-tab" data-settings-tab="health_logs" data-onclick="switchTab('health_logs', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
             {{ _('System Logs') }}
         </button>
@@ -58,7 +58,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
             {{ _('Traffic Check ↗') }}
         </a>
-        <button class="settings-tab" data-settings-tab="supported_apps" onclick="switchTab('supported_apps', this)">
+        <button class="settings-tab" data-settings-tab="supported_apps" data-onclick="switchTab('supported_apps', this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
             {{ _('Supported Apps') }}
         </button>
@@ -73,7 +73,7 @@
                         <h2>{{ _('System Overview') }}</h2>
                         <p class="text-secondary">{{ _('Live snapshot of your panel\'s current state.') }}</p>
                     </div>
-                    <button class="btn btn-secondary" onclick="refreshOverview()">
+                    <button class="btn btn-secondary" data-onclick="refreshOverview()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"></path></svg>
                         {{ _('Refresh') }}
                     </button>
@@ -104,7 +104,7 @@
                         <h2>{{ _('General') }}</h2>
                         <p class="text-secondary">{{ _('General application preferences.') }}</p>
                     </div>
-                    <button class="btn btn-secondary" id="reload-panel-btn" onclick="reloadPanel()" style="display:none;">
+                    <button class="btn btn-secondary" id="reload-panel-btn" data-onclick="reloadPanel()" style="display:none;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                         {{ _('Reload Panel') }}
                     </button>
@@ -117,7 +117,7 @@
                         <div style="flex:1;min-width:220px;">
                             <input type="text" id="general-panel-domain" class="form-control"
                                    placeholder="{{ _('panel.example.com or 1.2.3.4') }}"
-                                   oninput="onDomainInput(this.value)">
+                                   data-oninput="onDomainInput(this.value)">
                         </div>
                     </div>
                     <div id="domain-hint" style="margin-top:6px;font-size:0.83rem;display:none;"></div>
@@ -130,7 +130,7 @@
                     <label>{{ _('Theme') }}</label>
                     <div class="refresh-toggle" style="gap: 10px;">
                         <label class="toggle-switch" style="margin: 0;">
-                            <input type="checkbox" id="theme-toggle" onchange="handleThemeToggleChange(this.checked)">
+                            <input type="checkbox" id="theme-toggle" data-onchange="handleThemeToggleChange(this.checked)">
                             <span class="slider"></span>
                         </label>
                         <span class="toggle-label" id="theme-toggle-text">{{ _('Light') }}</span>
@@ -149,7 +149,7 @@
 
                 <div class="form-group" style="margin-top: 18px; margin-bottom: 0;">
                     <label>{{ _('Subscription Page Language') }}</label>
-                    <select id="subscription-page-lang" class="form-select" onchange="saveSubscriptionPageSettings()">
+                    <select id="subscription-page-lang" class="form-select" data-onchange="saveSubscriptionPageSettings()">
                         <option value="en">{{ _('English') }}</option>
                         <option value="fa">{{ _('Persian') }}</option>
                     </select>
@@ -189,14 +189,14 @@
                 <div class="form-group" style="margin-top: 18px; margin-bottom: 0;">
                     <label>{{ _('Low Volume Threshold (GB)') }}</label>
                     <div style="display:flex;align-items:center;gap:10px;">
-                        <input type="number" id="general-low-volume-gb" class="form-input" min="0.01" max="1024" step="0.01" value="1" oninput="updateLowVolumeHint()" style="max-width:160px;">
+                        <input type="number" id="general-low-volume-gb" class="form-input" min="0.01" max="1024" step="0.01" value="1" data-oninput="updateLowVolumeHint()" style="max-width:160px;">
                         <span id="low-volume-hint" style="font-size:0.82rem;color: var(--text-secondary);white-space:nowrap;"></span>
                     </div>
                     <small class="text-secondary">{{ _('Clients with less remaining volume are marked as “Low Volume” — example: 0.2 = 200 MB.') }}</small>
                 </div>
 
                 <div class="form-group" style="margin-top: 16px; margin-bottom: 0;">
-                    <button class="btn btn-primary" onclick="saveGeneralSettings()">{{ _('Save') }}</button>
+                    <button class="btn btn-primary" data-onclick="saveGeneralSettings()">{{ _('Save') }}</button>
                 </div>
             </div>
         </div>
@@ -208,7 +208,7 @@
                         <h2>{{ _('Client Created Notification') }}</h2>
                         <p class="text-secondary">{{ _('Customize the message sent to clients when a new account is created.') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="openTemplateModal()">
+                    <button class="btn btn-primary" data-onclick="openTemplateModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Template') }}
                     </button>
@@ -224,7 +224,7 @@
                         <h2>{{ _('Client Created — WhatsApp / SMS') }}</h2>
                         <p class="text-secondary">{{ _('Separate WhatsApp & SMS templates sent via the gateway with the "Send" buttons shown after creating a client. Per-reseller supported.') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="openAccountMessageTemplateModal('client_created')">
+                    <button class="btn btn-primary" data-onclick="openAccountMessageTemplateModal('client_created')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Template') }}
                     </button>
@@ -240,7 +240,7 @@
                         <h2>{{ _('Renew Template') }}</h2>
                         <p class="text-secondary">{{ _('Customize the copy text shown after a successful renew. Supports variables like {email}, {days_label}, {volume_label}, {date}. Use {if_gift}...{/if_gift} to show a line only when gift volume was given (for example, 🎁 +{gift_volume} GB gift).') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="openRenewTemplateModal()">
+                    <button class="btn btn-primary" data-onclick="openRenewTemplateModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Template') }}
                     </button>
@@ -256,7 +256,7 @@
                         <h2>{{ _('Renew — WhatsApp / SMS') }}</h2>
                         <p class="text-secondary">{{ _('Separate WhatsApp & SMS templates sent via the gateway with the "Send" buttons shown after a renew. Per-reseller supported.') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="openAccountMessageTemplateModal('renew')">
+                    <button class="btn btn-primary" data-onclick="openAccountMessageTemplateModal('renew')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Template') }}
                     </button>
@@ -277,7 +277,7 @@
                 <div style="display: flex; gap: 16px; align-items: center; flex-wrap:wrap;">
                     <div class="form-group" style="margin-bottom: 0; flex: 1; max-width: 300px;">
                         <label>{{ _('Backup Frequency') }}</label>
-                        <select id="backup-frequency" class="form-select" onchange="saveBackupSettings()">
+                        <select id="backup-frequency" class="form-select" data-onchange="saveBackupSettings()">
                             <option value="disabled">{{ _('Disabled') }}</option>
                             <option value="daily">{{ _('Daily') }}</option>
                             <option value="weekly">{{ _('Weekly') }}</option>
@@ -290,15 +290,15 @@
                 <div style="display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap; margin-top:16px; padding-top:16px; border-top:1px solid var(--border-color);">
                     <div class="form-group" style="margin-bottom:0;">
                         <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                            <input type="checkbox" id="backup-retention-enabled" onchange="saveBackupSettings()">
+                            <input type="checkbox" id="backup-retention-enabled" data-onchange="saveBackupSettings()">
                             <span>{{ _('Auto-delete old backups') }}</span>
                         </label>
                     </div>
                     <div class="form-group" style="margin-bottom:0; max-width:160px;">
                         <label>{{ _('Keep for (days)') }}</label>
-                        <input type="number" id="backup-retention-days" class="form-control" min="1" max="3650" value="14" onchange="saveBackupSettings()">
+                        <input type="number" id="backup-retention-days" class="form-control" min="1" max="3650" value="14" data-onchange="saveBackupSettings()">
                     </div>
-                    <button class="btn btn-secondary" onclick="clearOldBackupsNow(this)" title="{{ _('Delete backups older than the retention window now') }}">
+                    <button class="btn btn-secondary" data-onclick="clearOldBackupsNow(this)" title="{{ _('Delete backups older than the retention window now') }}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         {{ _('Clear now') }}
                     </button>
@@ -328,13 +328,13 @@
                                 </span>
                             </div>
                             <div class="file-upload-text" id="backup-file-name">{{ _('No file chosen') }}</div>
-                            <input type="file" id="upload-backup-input" class="file-upload-input" accept=".db,.dump,.sql,.zip" onchange="handleUpload(this)">
+                            <input type="file" id="upload-backup-input" class="file-upload-input" accept=".db,.dump,.sql,.zip" data-onchange="handleUpload(this)">
                         </div>
-                        <button class="btn btn-primary" onclick="createBackup(this)">
+                        <button class="btn btn-primary" data-onclick="createBackup(this)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                             {{ _('Create Backup') }}
                         </button>
-                        <button class="btn btn-secondary" onclick="createMigrationBackup(this)" title="{{ _('Database + all uploaded files (icons, receipts, tutorials) — for moving to another server') }}">
+                        <button class="btn btn-secondary" data-onclick="createMigrationBackup(this)" title="{{ _('Database + all uploaded files (icons, receipts, tutorials) — for moving to another server') }}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
                             {{ _('Full Migration Backup') }}
                         </button>
@@ -355,7 +355,7 @@
                             <div class="upload-progress-status" id="upp-status">{{ _('Preparing…') }}</div>
                         </div>
                         <div class="upload-progress-percent" id="upp-percent">0%</div>
-                        <button type="button" class="upload-progress-close" id="upp-close" onclick="dismissUploadProgress()" title="{{ _('Close') }}" hidden>
+                        <button type="button" class="upload-progress-close" id="upp-close" data-onclick="dismissUploadProgress()" title="{{ _('Close') }}" hidden>
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
                     </div>
@@ -395,19 +395,19 @@
                 </div>
             </div>
             <div class="telegram-subtabs" role="tablist" aria-label="{{ _('Telegram settings') }}">
-                <button class="telegram-subtab active" type="button" role="tab" aria-selected="true" aria-controls="telegram-subtab-bots" onclick="switchTelegramTab('bots', this)">
+                <button class="telegram-subtab active" type="button" role="tab" aria-selected="true" aria-controls="telegram-subtab-bots" data-onclick="switchTelegramTab('bots', this)">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8M8 13h5"></path></svg>
                     {{ _('Bots') }}
                 </button>
-                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-notifications" onclick="switchTelegramTab('notifications', this)">
+                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-notifications" data-onclick="switchTelegramTab('notifications', this)">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                     {{ _('Customer Notifications') }}
                 </button>
-                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-announcements" onclick="switchTelegramTab('announcements', this)">
+                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-announcements" data-onclick="switchTelegramTab('announcements', this)">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11v2a2 2 0 0 0 2 2h2l4 4V5L7 9H5a2 2 0 0 0-2 2z"></path><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"></path></svg>
                     {{ _('Announcements') }}
                 </button>
-                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-backup" onclick="switchTelegramTab('backup', this)">
+                <button class="telegram-subtab" type="button" role="tab" aria-selected="false" aria-controls="telegram-subtab-backup" data-onclick="switchTelegramTab('backup', this)">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13"></path><path d="m22 2-7 20-4-9-9-4 20-7z"></path></svg>
                     {{ _('Backups') }}
                 </button>
@@ -421,11 +421,11 @@
                         <p class="text-secondary">{{ _('Send X-UI panel backups to Telegram on a schedule.') }}</p>
                     </div>
                     <div class="telegram-backup-header-actions">
-                        <button class="btn btn-secondary" onclick="testTelegramBackupSettings(this)">
+                        <button class="btn btn-secondary" data-onclick="testTelegramBackupSettings(this)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>
                             {{ _('Test Connection') }}
                         </button>
-                        <button class="btn btn-primary" onclick="triggerTelegramBackupNow(this)">
+                        <button class="btn btn-primary" data-onclick="triggerTelegramBackupNow(this)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"></path><path d="M22 2L15 22l-4-9-9-4 20-7z"></path></svg>
                             {{ _('Backup Now') }}
                         </button>
@@ -467,7 +467,7 @@
 
                     <div class="form-group">
                         <label>{{ _('Schedule') }}</label>
-                        <select id="telegram-backup-schedule-mode" class="form-select" onchange="onTelegramScheduleModeChange()">
+                        <select id="telegram-backup-schedule-mode" class="form-select" data-onchange="onTelegramScheduleModeChange()">
                             <option value="daily">{{ _('Once a day at a fixed time') }}</option>
                             <option value="interval">{{ _('Every N minutes (interval)') }}</option>
                         </select>
@@ -490,7 +490,7 @@
                         <label>{{ _('Bot Token') }}</label>
                         <div class="tg-backup-token-wrap">
                             <input type="password" id="telegram-backup-token" class="form-control" placeholder="123456:ABC-DEF" spellcheck="false" autocomplete="off">
-                            <button type="button" class="tg-backup-token-toggle" onclick="toggleTelegramBackupTokenVisibility(this)" aria-label="{{ _('Show or hide token') }}">
+                            <button type="button" class="tg-backup-token-toggle" data-onclick="toggleTelegramBackupTokenVisibility(this)" aria-label="{{ _('Show or hide token') }}">
                                 <svg class="tg-eye-show" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                                 <svg class="tg-eye-hide" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                             </button>
@@ -513,7 +513,7 @@
                     <label>{{ _('Use a Telegram Route') }}</label>
                     <div class="refresh-toggle" style="gap: 10px;">
                         <label class="toggle-switch" style="margin: 0;">
-                            <input type="checkbox" id="telegram-backup-use-proxy" onchange="updateTelegramProxyModeUI()">
+                            <input type="checkbox" id="telegram-backup-use-proxy" data-onchange="updateTelegramProxyModeUI()">
                             <span class="slider"></span>
                         </label>
                         <span class="toggle-label">{{ _('Route traffic through a proxy or panel account') }}</span>
@@ -524,7 +524,7 @@
                 <div id="telegram-proxy-fields" style="display:none;">
                     <div class="form-group">
                         <label for="telegram-backup-route-source">{{ _('Route Source') }}</label>
-                        <select id="telegram-backup-route-source" class="form-select" onchange="updateTelegramProxyModeUI()">
+                        <select id="telegram-backup-route-source" class="form-select" data-onchange="updateTelegramProxyModeUI()">
                             <option value="manual_proxy">{{ _('Manual SOCKS proxy') }}</option>
                             <option value="panel_account">{{ _('Existing panel account') }}</option>
                         </select>
@@ -534,7 +534,7 @@
                     <div id="telegram-backup-account-fields" style="display:none;">
                         <div class="form-group">
                             <label for="telegram-backup-server" id="telegram-backup-server-label">{{ _('Server') }}</label>
-                            <select id="telegram-backup-server" class="form-select" onchange="onTelegramBackupServerChange()">
+                            <select id="telegram-backup-server" class="form-select" data-onchange="onTelegramBackupServerChange()">
                                 <option value="">{{ _('Choose a server…') }}</option>
                             </select>
                         </div>
@@ -545,8 +545,8 @@
                                     <div class="telegram-backup-picker-tools">
                                         <span class="telegram-backup-count-label"><span class="telegram-backup-count" id="telegram-backup-inbound-selected-count">0</span> <span id="telegram-backup-inbound-count-label">{{ _('selected') }}</span></span>
                                         <span id="telegram-backup-inbound-actions" hidden>
-                                            <button type="button" class="text-btn" id="telegram-backup-inbound-select-all" onclick="telegramBackupSelectAllInbounds()">{{ _('Select all') }}</button>
-                                            <button type="button" class="text-btn" id="telegram-backup-inbound-clear" onclick="telegramBackupClearInbounds()">{{ _('Clear') }}</button>
+                                            <button type="button" class="text-btn" id="telegram-backup-inbound-select-all" data-onclick="telegramBackupSelectAllInbounds()">{{ _('Select all') }}</button>
+                                            <button type="button" class="text-btn" id="telegram-backup-inbound-clear" data-onclick="telegramBackupClearInbounds()">{{ _('Clear') }}</button>
                                         </span>
                                     </div>
                                 </div>
@@ -563,7 +563,7 @@
                                     </div>
                                 </div>
                                 <div class="form-group" style="margin-bottom:8px;">
-                                    <input id="telegram-backup-client-search" class="form-control" type="search" placeholder="{{ _('Search clients…') }}" autocomplete="off" spellcheck="false" disabled oninput="filterTelegramBackupClients()">
+                                    <input id="telegram-backup-client-search" class="form-control" type="search" placeholder="{{ _('Search clients…') }}" autocomplete="off" spellcheck="false" disabled data-oninput="filterTelegramBackupClients()">
                                 </div>
                                 <div class="telegram-backup-choice-box filter-list" id="telegram-backup-clients">
                                     <div class="telegram-backup-picker-empty">{{ _('Choose an inbound…') }}</div>
@@ -578,7 +578,7 @@
                     <div class="tg-backup-grid">
                         <div class="form-group">
                             <label>{{ _('SOCKS Proxy Mode') }}</label>
-                            <select id="telegram-backup-proxy-mode" class="form-select" onchange="updateTelegramProxyModeUI()">
+                            <select id="telegram-backup-proxy-mode" class="form-select" data-onchange="updateTelegramProxyModeUI()">
                                 <option value="url">URL</option>
                                 <option value="hostport">{{ _('Host & Port') }}</option>
                             </select>
@@ -586,7 +586,7 @@
 
                         <div class="form-group" id="tg-proxy-url-group">
                             <label>{{ _('SOCKS Proxy URL') }}</label>
-                            <input type="text" id="telegram-backup-proxy" class="form-control" placeholder="socks5h://127.0.0.1:1080" spellcheck="false" autocomplete="off" oninput="updateTelegramProxyModeUI()">
+                            <input type="text" id="telegram-backup-proxy" class="form-control" placeholder="socks5h://127.0.0.1:1080" spellcheck="false" autocomplete="off" data-oninput="updateTelegramProxyModeUI()">
                         </div>
 
                         <div class="form-group" id="tg-proxy-host-group">
@@ -614,7 +614,7 @@
                 </div>
 
                 <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
-                    <button class="btn btn-primary" onclick="saveTelegramBackupSettings()">
+                    <button class="btn btn-primary" data-onclick="saveTelegramBackupSettings()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                         {{ _('Save Settings') }}
                     </button>
@@ -626,18 +626,18 @@
             <section class="panel-card tgb-section" id="tgb-bots-card">
                 <div class="panel-card-header">
                     <div class="header-content"><h2>{{ _('Bots') }}</h2><p>{{ _('Select a bot to edit its settings below, or create a bot for a reseller.') }}</p></div>
-                    <button class="btn btn-secondary" type="button" id="tgb-bot-new-toggle" onclick="toggleTelegramBotCreate()">{{ _('New reseller bot') }}</button>
+                    <button class="btn btn-secondary" type="button" id="tgb-bot-new-toggle" data-onclick="toggleTelegramBotCreate()">{{ _('New reseller bot') }}</button>
                 </div>
                 <div id="tgb-bots-list"></div>
                 <div id="tgb-bot-actions" style="display:none; margin-top: 10px; align-items:center; gap:8px; flex-wrap:wrap;">
-                    <button class="btn btn-secondary" type="button" id="tgb-bot-toggle-enabled" onclick="telegramBotRuntimeAction(null, this)">{{ _('Disable') }}</button>
-                    <button class="btn btn-secondary" type="button" onclick="telegramBotRuntimeAction('restart', this)">{{ _('Restart') }}</button>
-                    <button class="btn btn-danger" type="button" id="tgb-bot-archive" onclick="archiveTelegramBot(this)">{{ _('Archive') }}</button>
-                    <button class="btn btn-secondary" type="button" id="tgb-bot-restore" style="display:none;" onclick="telegramBotRuntimeAction('restore', this)">{{ _('Restore') }}</button>
+                    <button class="btn btn-secondary" type="button" id="tgb-bot-toggle-enabled" data-onclick="telegramBotRuntimeAction(null, this)">{{ _('Disable') }}</button>
+                    <button class="btn btn-secondary" type="button" data-onclick="telegramBotRuntimeAction('restart', this)">{{ _('Restart') }}</button>
+                    <button class="btn btn-danger" type="button" id="tgb-bot-archive" data-onclick="archiveTelegramBot(this)">{{ _('Archive') }}</button>
+                    <button class="btn btn-secondary" type="button" id="tgb-bot-restore" style="display:none;" data-onclick="telegramBotRuntimeAction('restore', this)">{{ _('Restore') }}</button>
                     <span id="tgb-bot-health-detail" class="text-secondary" style="font-size:0.82rem;"></span>
                 </div>
                 <label style="display:inline-flex; align-items:center; gap:6px; margin-top:8px; font-size:0.85rem;">
-                    <input type="checkbox" id="tgb-show-archived" onchange="toggleTelegramArchived(this.checked)"> {{ _('Show archived bots') }}
+                    <input type="checkbox" id="tgb-show-archived" data-onchange="toggleTelegramArchived(this.checked)"> {{ _('Show archived bots') }}
                 </label>
                 <div id="tgb-bot-create" style="display:none; margin-top: 12px;">
                     <div class="tgb-form-grid">
@@ -646,8 +646,8 @@
                         <div class="form-group"><label for="tgb-bot-token">{{ _('Bot token (optional)') }}</label><input id="tgb-bot-token" type="password" class="form-control" placeholder="{{ _('Paste token from @BotFather') }}" autocomplete="new-password"></div>
                     </div>
                     <div style="display:flex; gap:8px;">
-                        <button class="btn btn-primary" type="button" id="tgb-bot-create-btn" onclick="createTelegramBot(this)">{{ _('Create bot') }}</button>
-                        <button class="btn btn-secondary" type="button" onclick="toggleTelegramBotCreate(true)">{{ _('Cancel') }}</button>
+                        <button class="btn btn-primary" type="button" id="tgb-bot-create-btn" data-onclick="createTelegramBot(this)">{{ _('Create bot') }}</button>
+                        <button class="btn btn-secondary" type="button" data-onclick="toggleTelegramBotCreate(true)">{{ _('Cancel') }}</button>
                     </div>
                 </div>
             </section>
@@ -655,7 +655,7 @@
             <section class="panel-card tgb-section" id="tgb-promos-card">
                 <div class="panel-card-header">
                     <div class="header-content"><h2>{{ _('Promotions') }}</h2><p>{{ _('Rule-based discounts for bot purchases and renewals. Codes are optional; promos without a code apply automatically.') }}</p></div>
-                    <button class="btn btn-secondary" type="button" onclick="openTelegramPromoForm()">{{ _('New promo') }}</button>
+                    <button class="btn btn-secondary" type="button" data-onclick="openTelegramPromoForm()">{{ _('New promo') }}</button>
                 </div>
                 <div id="tgb-promo-list"></div>
                 <div id="tgb-promo-empty" class="tgb-empty" style="display:none;"><strong>{{ _('No promotions yet') }}</strong><span>{{ _('Create a promo to discount purchases or renewals.') }}</span></div>
@@ -690,8 +690,8 @@
                         <label><input type="checkbox" id="tgb-promo-enabled" checked> {{ _('Enabled') }}</label>
                     </div>
                     <div style="display:flex; gap:8px;">
-                        <button class="btn btn-primary" type="button" id="tgb-promo-save" onclick="saveTelegramPromo(this)">{{ _('Save promo') }}</button>
-                        <button class="btn btn-secondary" type="button" onclick="document.getElementById('tgb-promo-form').style.display='none'">{{ _('Cancel') }}</button>
+                        <button class="btn btn-primary" type="button" id="tgb-promo-save" data-onclick="saveTelegramPromo(this)">{{ _('Save promo') }}</button>
+                        <button class="btn btn-secondary" type="button" data-onclick="hideElementDisplay('tgb-promo-form')">{{ _('Cancel') }}</button>
                     </div>
                 </div>
             </section>
@@ -738,7 +738,7 @@
                             <label>{{ _('Required channels') }}</label>
                             <small class="text-secondary">{{ _('The bot must be an admin in each channel. Channel IDs start with -100.') }}</small>
                             <div id="tgb-required-channels"></div>
-                            <button class="btn btn-secondary" type="button" onclick="addTelegramRequiredChannel()">{{ _('Add channel') }}</button>
+                            <button class="btn btn-secondary" type="button" data-onclick="addTelegramRequiredChannel()">{{ _('Add channel') }}</button>
                         </div>
                         <div class="tgb-form-span text-secondary" id="tgb-start-stats">{{ _('/start statistics: —') }}</div>
                     </div>
@@ -765,7 +765,7 @@
                     </div>
                     <div class="form-group" style="max-width: 420px;">
                         <label for="tgb-copy-search">{{ _('Search texts') }}</label>
-                        <input id="tgb-copy-search" class="form-control" type="search" placeholder="{{ _('Search by key or default text…') }}" autocomplete="off" spellcheck="false" oninput="filterTelegramCopyRows()">
+                        <input id="tgb-copy-search" class="form-control" type="search" placeholder="{{ _('Search by key or default text…') }}" autocomplete="off" spellcheck="false" data-oninput="filterTelegramCopyRows()">
                     </div>
                     <div id="tgb-copy-empty" class="tgb-empty" style="display:none;"><strong>{{ _('No text found') }}</strong><span>{{ _('Change the search term.') }}</span></div>
                     <div id="tgb-copy-list" style="max-height: 480px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;"></div>
@@ -779,7 +779,7 @@
                         </div>
                         <div class="tgb-toggle-label">
                             <label for="tgb-support-group-enabled">{{ _('Use support group') }}</label>
-                            <label class="toggle-switch" aria-label="{{ _('Route support tickets to a Telegram group') }}"><input id="tgb-support-group-enabled" type="checkbox" onchange="updateTelegramSupportGroupUI()"><span class="slider"></span></label>
+                            <label class="toggle-switch" aria-label="{{ _('Route support tickets to a Telegram group') }}"><input id="tgb-support-group-enabled" type="checkbox" data-onchange="updateTelegramSupportGroupUI()"><span class="slider"></span></label>
                         </div>
                     </div>
                     <div id="tgb-support-group-fields" class="tgb-form-grid">
@@ -904,7 +904,7 @@
                             <label>{{ _('Trial gate channels') }}</label>
                             <small class="text-secondary">{{ _('The bot must be an admin in each channel. When this list is non-empty it takes precedence over the single channel chat ID above.') }}</small>
                             <div id="tgb-trial-channels"></div>
-                            <button class="btn btn-secondary" type="button" onclick="addTelegramTrialChannel()">{{ _('Add channel') }}</button>
+                            <button class="btn btn-secondary" type="button" data-onclick="addTelegramTrialChannel()">{{ _('Add channel') }}</button>
                         </div>
                         <div class="tgb-purchase-choice">
                             <div>
@@ -939,11 +939,11 @@
                 <section class="panel-card tgb-section">
                     <div class="panel-card-header"><div class="header-content"><h2>{{ _('Connection Profile') }}</h2><p>{{ _('Choose how this server reaches Telegram. Iran servers usually need a proxy.') }}</p></div><span class="tgb-transport"><span class="tgb-status-dot is-good"></span> {{ _('Long polling') }} <small>{{ _('Webhook later') }}</small></span></div>
                     <div class="tgb-presets" role="group" aria-label="{{ _('Connection presets') }}">
-                        <button type="button" class="tgb-preset" data-preset="iran" onclick="applyTelegramBotPreset('iran')"><strong>{{ _('Iran server') }}</strong><span>{{ _('Try healthy proxies, then direct') }}</span></button>
-                        <button type="button" class="tgb-preset" data-preset="foreign" onclick="applyTelegramBotPreset('foreign')"><strong>{{ _('Foreign server') }}</strong><span>{{ _('Direct connection only') }}</span></button>
-                        <button type="button" class="tgb-preset" data-preset="custom" onclick="applyTelegramBotPreset('custom')"><strong>{{ _('Custom') }}</strong><span>{{ _('Set routing manually') }}</span></button>
+                        <button type="button" class="tgb-preset" data-preset="iran" data-onclick="applyTelegramBotPreset('iran')"><strong>{{ _('Iran server') }}</strong><span>{{ _('Try healthy proxies, then direct') }}</span></button>
+                        <button type="button" class="tgb-preset" data-preset="foreign" data-onclick="applyTelegramBotPreset('foreign')"><strong>{{ _('Foreign server') }}</strong><span>{{ _('Direct connection only') }}</span></button>
+                        <button type="button" class="tgb-preset" data-preset="custom" data-onclick="applyTelegramBotPreset('custom')"><strong>{{ _('Custom') }}</strong><span>{{ _('Set routing manually') }}</span></button>
                     </div>
-                    <div class="form-group tgb-mode-select"><label for="tgb-connection-mode">{{ _('Connection mode') }}</label><select id="tgb-connection-mode" class="form-select" onchange="markTelegramBotPresetCustom()"><option value="DIRECT_PREFERRED">{{ _('Direct preferred (proxy as backup)') }}</option><option value="DIRECT_ONLY">{{ _('Direct only') }}</option><option value="PROXY_PREFERRED">{{ _('Proxy preferred (direct fallback allowed)') }}</option><option value="PROXY_REQUIRED">{{ _('Proxy required (no direct fallback)') }}</option><option value="PANEL_ACCOUNT_REQUIRED">{{ _('Panel account required (no direct fallback)') }}</option><option value="NEVER_DIRECT">{{ _('Never direct') }}</option></select><div id="tgb-proxy-warning" class="tgb-inline-warning" style="display:none;">{{ _('This policy needs an enabled Xray route or proxy. Add or enable one before testing.') }}</div></div>
+                    <div class="form-group tgb-mode-select"><label for="tgb-connection-mode">{{ _('Connection mode') }}</label><select id="tgb-connection-mode" class="form-select" data-onchange="markTelegramBotPresetCustom()"><option value="DIRECT_PREFERRED">{{ _('Direct preferred (proxy as backup)') }}</option><option value="DIRECT_ONLY">{{ _('Direct only') }}</option><option value="PROXY_PREFERRED">{{ _('Proxy preferred (direct fallback allowed)') }}</option><option value="PROXY_REQUIRED">{{ _('Proxy required (no direct fallback)') }}</option><option value="PANEL_ACCOUNT_REQUIRED">{{ _('Panel account required (no direct fallback)') }}</option><option value="NEVER_DIRECT">{{ _('Never direct') }}</option></select><div id="tgb-proxy-warning" class="tgb-inline-warning" style="display:none;">{{ _('This policy needs an enabled Xray route or proxy. Add or enable one before testing.') }}</div></div>
                     <div id="tgb-route-order" class="tgb-route-order" aria-live="polite"><strong>{{ _('Effective failover order') }}</strong><span>{{ _('Loading routes…') }}</span></div>
                 </section>
 
@@ -969,7 +969,7 @@
                             <ol><li>{{ _('Get the tester\'s numeric Telegram user ID.') }}</li><li>{{ _('Add it to the allowlist below — usernames are never accepted.') }}</li><li>{{ _('Open the bot and press') }} <strong>{{ _('Start') }}</strong>.</li><li>{{ _('Use') }} <strong>{{ _('Send test') }}</strong> {{ _('to verify outbound delivery.') }}</li></ol>
                         </div>
                         <div class="tgb-testers">
-                            <form id="tgb-tester-form" class="tgb-tester-form" onsubmit="addTelegramTestUser(event)" novalidate>
+                            <form id="tgb-tester-form" class="tgb-tester-form" data-onsubmit="addTelegramTestUser(event)" novalidate>
                                 <div class="form-group"><label for="tgb-tester-id">{{ _('Numeric user ID') }}</label><input id="tgb-tester-id" class="form-control" type="text" inputmode="numeric" pattern="[0-9]+" placeholder="123456789" autocomplete="off" required><small id="tgb-tester-id-error" class="tgb-field-error" aria-live="polite"></small></div>
                                 <div class="form-group"><label for="tgb-tester-label">{{ _('Label') }} <span class="text-secondary">{{ _('(optional)') }}</span></label><input id="tgb-tester-label" class="form-control" type="text" maxlength="120" placeholder="{{ _('Owner phone') }}" autocomplete="off"></div>
                                 <button id="tgb-tester-add" class="btn btn-primary" type="submit">{{ _('Add tester') }}</button>
@@ -981,25 +981,25 @@
                 </section>
 
                 <section class="panel-card tgb-section">
-                    <div class="panel-card-header"><div class="header-content"><h2>{{ _('Managed Xray Routes') }}</h2><p>{{ _('Select an account, then choose one of its compatible 3x-ui inbounds for Telegram traffic.') }}</p></div><button id="tgb-add-egress" class="btn btn-secondary" type="button" onclick="openTelegramEgressForm()">{{ _('Add route') }}</button></div>
+                    <div class="panel-card-header"><div class="header-content"><h2>{{ _('Managed Xray Routes') }}</h2><p>{{ _('Select an account, then choose one of its compatible 3x-ui inbounds for Telegram traffic.') }}</p></div><button id="tgb-add-egress" class="btn btn-secondary" type="button" data-onclick="openTelegramEgressForm()">{{ _('Add route') }}</button></div>
                     <div id="tgb-xray-runtime" class="tgb-xray-runtime" data-state="loading" aria-live="polite">
                         <span class="tgb-status-dot"></span>
                         <div class="tgb-xray-runtime-copy"><strong id="tgb-xray-runtime-title">{{ _('Checking Xray runtime…') }}</strong><span id="tgb-xray-runtime-detail">{{ _('Managed routes need a local Xray runtime.') }}</span></div>
-                        <button id="tgb-xray-install" class="btn btn-primary" type="button" style="display:none;" onclick="installTelegramXray(this)">{{ _('Install Xray') }}</button>
+                        <button id="tgb-xray-install" class="btn btn-primary" type="button" style="display:none;" data-onclick="installTelegramXray(this)">{{ _('Install Xray') }}</button>
                     </div>
                     <div class="tgb-egress-note"><span class="tgb-status-dot is-warning"></span><div><strong>{{ _('Private local relay') }}</strong><span>{{ _('Xray listens only on') }} <code>127.0.0.1</code> {{ _('and requires an installed runtime configured by') }} <code>XRAY_BIN</code>{{ _('. Use customer accounts only temporarily; a dedicated system route is safer.') }}</span></div></div>
                     <div id="tgb-egress-empty" class="tgb-empty" style="display:none;"><strong>{{ _('No managed routes configured') }}</strong><span>{{ _('Select an existing account and inbound, or paste a supported URI to create a local Telegram route.') }}</span></div>
                     <div id="tgb-egress-list" class="tgb-egress-list"></div>
-                    <form id="tgb-egress-form" class="tgb-proxy-form tgb-egress-form" style="display:none;" onsubmit="saveTelegramEgress(event)">
+                    <form id="tgb-egress-form" class="tgb-proxy-form tgb-egress-form" style="display:none;" data-onsubmit="saveTelegramEgress(event)">
                         <input id="tgb-egress-id" type="hidden">
                         <div class="tgb-form-grid">
                             <div class="form-group"><label for="tgb-egress-name">{{ _('Route name') }}</label><input id="tgb-egress-name" class="form-control" required placeholder="{{ _('Telegram via Germany') }}" autocomplete="off"></div>
-                            <div class="form-group"><label for="tgb-egress-source">{{ _('Configuration source') }}</label><select id="tgb-egress-source" class="form-select" onchange="updateTelegramEgressSourceUI()"><option value="candidate">{{ _('Existing 3x-ui account') }}</option><option value="manual">{{ _('Manual configuration URI') }}</option></select></div>
+                            <div class="form-group"><label for="tgb-egress-source">{{ _('Configuration source') }}</label><select id="tgb-egress-source" class="form-select" data-onchange="updateTelegramEgressSourceUI()"><option value="candidate">{{ _('Existing 3x-ui account') }}</option><option value="manual">{{ _('Manual configuration URI') }}</option></select></div>
                             <div id="tgb-egress-candidate-group" class="form-group tgb-form-span">
                                 <label for="tgb-egress-candidate-search">{{ _('Find account') }}</label>
-                                <input id="tgb-egress-candidate-search" class="form-control" type="search" placeholder="{{ _('Search account, phone, or server…') }}" autocomplete="off" spellcheck="false" aria-controls="tgb-egress-account" oninput="filterTelegramEgressCandidates()" onkeydown="handleTelegramEgressSearchKey(event)">
+                                <input id="tgb-egress-candidate-search" class="form-control" type="search" placeholder="{{ _('Search account, phone, or server…') }}" autocomplete="off" spellcheck="false" aria-controls="tgb-egress-account" data-oninput="filterTelegramEgressCandidates()" data-onkeydown="handleTelegramEgressSearchKey(event)">
                                 <label class="sr-only" for="tgb-egress-account">{{ _('Matching accounts') }}</label>
-                                <select id="tgb-egress-account" class="form-select" size="6" aria-describedby="tgb-egress-candidate-hint" onchange="renderTelegramEgressInbounds()"></select>
+                                <select id="tgb-egress-account" class="form-select" size="6" aria-describedby="tgb-egress-candidate-hint" data-onchange="renderTelegramEgressInbounds()"></select>
                                 <small id="tgb-egress-candidate-hint" class="text-secondary" aria-live="polite">{{ _('Loading active clients…') }}</small>
                                 <label for="tgb-egress-candidate" style="margin-top:10px;">{{ _('Use inbound') }}</label>
                                 <select id="tgb-egress-candidate" class="form-select" size="5" aria-describedby="tgb-egress-inbound-hint"></select>
@@ -1010,15 +1010,15 @@
                             <div class="form-group"><label for="tgb-egress-priority">{{ _('Priority') }}</label><input id="tgb-egress-priority" class="form-control" type="number" min="0" value="100"><small class="text-secondary">{{ _('Lower number is tried earlier across both Xray routes and proxies.') }}</small></div>
                         </div>
                         <label class="tgb-check"><input id="tgb-egress-enabled" type="checkbox" checked> {{ _('Enabled') }}</label>
-                        <div class="tgb-form-actions"><button type="button" class="btn btn-secondary" onclick="closeTelegramEgressForm()">{{ _('Cancel') }}</button><button id="tgb-egress-save" type="submit" class="btn btn-primary">{{ _('Save route') }}</button></div>
+                        <div class="tgb-form-actions"><button type="button" class="btn btn-secondary" data-onclick="closeTelegramEgressForm()">{{ _('Cancel') }}</button><button id="tgb-egress-save" type="submit" class="btn btn-primary">{{ _('Save route') }}</button></div>
                     </form>
                 </section>
 
                 <section class="panel-card tgb-section">
-                    <div class="panel-card-header"><div class="header-content"><h2>{{ _('Proxy Pool') }}</h2><p>{{ _('Xray routes and proxies share one priority queue. Lower numbers are tried first; failures continue to the next route.') }}</p></div><button id="tgb-add-proxy" class="btn btn-secondary" type="button" onclick="openTelegramProxyForm()">{{ _('Add proxy') }}</button></div>
+                    <div class="panel-card-header"><div class="header-content"><h2>{{ _('Proxy Pool') }}</h2><p>{{ _('Xray routes and proxies share one priority queue. Lower numbers are tried first; failures continue to the next route.') }}</p></div><button id="tgb-add-proxy" class="btn btn-secondary" type="button" data-onclick="openTelegramProxyForm()">{{ _('Add proxy') }}</button></div>
                     <div id="tgb-proxy-empty" class="tgb-empty" style="display:none;"><strong>{{ _('No proxies configured') }}</strong><span>{{ _('Add SOCKS5 or HTTP routing for restricted networks.') }}</span></div>
                     <div id="tgb-proxy-list" class="tgb-proxy-list"></div>
-                    <form id="tgb-proxy-form" class="tgb-proxy-form" style="display:none;" onsubmit="saveTelegramProxy(event)">
+                    <form id="tgb-proxy-form" class="tgb-proxy-form" style="display:none;" data-onsubmit="saveTelegramProxy(event)">
                         <input id="tgb-proxy-id" type="hidden">
                         <div class="tgb-form-grid">
                             <div class="form-group"><label for="tgb-proxy-type">{{ _('Type') }}</label><select id="tgb-proxy-type" class="form-select"><option value="socks5">SOCKS5</option><option value="http">HTTP</option></select></div>
@@ -1029,7 +1029,7 @@
                             <div class="form-group"><label for="tgb-proxy-password">{{ _('Password') }}</label><input id="tgb-proxy-password" type="password" class="form-control" autocomplete="new-password" placeholder="{{ _('Optional; blank preserves saved') }}"></div>
                         </div>
                         <label class="tgb-check"><input id="tgb-proxy-enabled" type="checkbox" checked> {{ _('Enabled') }}</label>
-                        <div class="tgb-form-actions"><button type="button" class="btn btn-secondary" onclick="closeTelegramProxyForm()">{{ _('Cancel') }}</button><button id="tgb-proxy-save" type="submit" class="btn btn-primary">{{ _('Save proxy') }}</button></div>
+                        <div class="tgb-form-actions"><button type="button" class="btn btn-secondary" data-onclick="closeTelegramProxyForm()">{{ _('Cancel') }}</button><button id="tgb-proxy-save" type="submit" class="btn btn-primary">{{ _('Save proxy') }}</button></div>
                     </form>
                 </section>
 
@@ -1040,8 +1040,8 @@
                 </section>
 
                 <div class="tgb-footer-actions">
-                    <div><button class="btn btn-secondary" type="button" onclick="testTelegramBotRoute('direct', this)">{{ _('Test direct') }}</button><button class="btn btn-secondary" type="button" onclick="testTelegramBotRoute('configured', this)">{{ _('Test configured route') }}</button></div>
-                    <button id="tgb-save" class="btn btn-primary" type="button" onclick="saveTelegramBotSettings(this)">{{ _('Save bot settings') }}</button>
+                    <div><button class="btn btn-secondary" type="button" data-onclick="testTelegramBotRoute('direct', this)">{{ _('Test direct') }}</button><button class="btn btn-secondary" type="button" data-onclick="testTelegramBotRoute('configured', this)">{{ _('Test configured route') }}</button></div>
+                    <button id="tgb-save" class="btn btn-primary" type="button" data-onclick="saveTelegramBotSettings(this)">{{ _('Save bot settings') }}</button>
                 </div>
             </div>
         </div>
@@ -1053,7 +1053,7 @@
                         <h2>{{ _('Telegram Customer Notifications') }}</h2>
                         <p class="text-secondary">{{ _('Message customers who have started the bot and linked their account.') }}</p>
                     </div>
-                    <button class="btn btn-primary" type="button" onclick="saveTelegramNotificationSettings()">{{ _('Save Telegram Notifications') }}</button>
+                    <button class="btn btn-primary" type="button" data-onclick="saveTelegramNotificationSettings()">{{ _('Save Telegram Notifications') }}</button>
                 </div>
 
                 <div class="form-group" style="background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.3); border-radius: 10px; padding: 12px;">
@@ -1064,17 +1064,17 @@
                 <div class="form-group">
                     <label>{{ _('Triggers') }}</label>
                     <div style="display:grid; grid-template-columns:1fr; gap:8px;">
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="tg-trigger-renew" {% if tg_trigger_renew_success %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('After successful renewal') }}</span>
                         </label>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="tg-depletion-enabled" {% if tg_depletion_enabled %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('Background near-expiry and low-volume reminders') }}</span>
                         </label>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="tg-depletion-recommend" {% if tg_depletion_recommend %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('Suggest a suitable package + quick-renew button in the message') }}</span>
@@ -1116,7 +1116,7 @@
                 </div>
 
                 <div style="display:flex; justify-content:flex-end; margin-top:20px;">
-                    <button class="btn btn-primary" type="button" onclick="saveTelegramNotificationSettings()">{{ _('Save Telegram Notifications') }}</button>
+                    <button class="btn btn-primary" type="button" data-onclick="saveTelegramNotificationSettings()">{{ _('Save Telegram Notifications') }}</button>
                 </div>
             </div>
         </div>
@@ -1138,7 +1138,7 @@
                     <div class="form-group"><label>{{ _('Selected server IDs') }}</label><input id="tga-server-ids" class="form-input" placeholder="{{ _('Leave blank for all servers') }}"></div>
                     <div class="form-group"><label>{{ _('Date filter matching') }}</label><select id="tga-event-match" class="form-select"><option value="any">{{ _('Match any range') }}</option><option value="all">{{ _('Match all ranges') }}</option></select></div>
                 </div>
-                <label class="checkbox-label" onclick="event.stopPropagation()"><input id="tga-linked-only" type="checkbox"><span class="checkmark"></span><span>{{ _('Only users with a linked account') }}</span></label>
+                <label class="checkbox-label" data-onclick="event.stopPropagation()"><input id="tga-linked-only" type="checkbox"><span class="checkmark"></span><span>{{ _('Only users with a linked account') }}</span></label>
                 <div class="telegram-announcement-dates">
                     <div class="form-group"><label>{{ _('Bot started between') }}</label><div class="telegram-date-range"><input id="tga-started-from" type="datetime-local" class="form-input" aria-label="{{ _('Started from') }}"><input id="tga-started-to" type="datetime-local" class="form-input" aria-label="{{ _('Started to') }}"></div></div>
                     <div class="form-group"><label>{{ _('Successful purchase between') }}</label><div class="telegram-date-range"><input id="tga-purchased-from" type="datetime-local" class="form-input" aria-label="{{ _('Purchased from') }}"><input id="tga-purchased-to" type="datetime-local" class="form-input" aria-label="{{ _('Purchased to') }}"></div></div>
@@ -1146,11 +1146,11 @@
                 </div>
                 <div class="telegram-announcement-actions">
                     <span id="tga-preview-result" class="text-secondary"></span>
-                    <button class="btn btn-secondary" type="button" onclick="previewTelegramAnnouncement()">{{ _('Preview recipients') }}</button>
-                    <button class="btn btn-primary" type="button" onclick="createTelegramAnnouncement()">{{ _('Create draft') }}</button>
+                    <button class="btn btn-secondary" type="button" data-onclick="previewTelegramAnnouncement()">{{ _('Preview recipients') }}</button>
+                    <button class="btn btn-primary" type="button" data-onclick="createTelegramAnnouncement()">{{ _('Create draft') }}</button>
                 </div>
             </div>
-            <div class="panel-card" style="margin-top:16px"><div class="panel-card-header"><div class="header-content"><h2>{{ _('Campaigns') }}</h2><p class="text-secondary">{{ _('Monitor queued, delivered, failed, and blocked messages.') }}</p></div><button class="btn btn-secondary" onclick="loadTelegramAnnouncements()">{{ _('Refresh') }}</button></div><div id="tga-list"></div></div>
+            <div class="panel-card" style="margin-top:16px"><div class="panel-card-header"><div class="header-content"><h2>{{ _('Campaigns') }}</h2><p class="text-secondary">{{ _('Monitor queued, delivered, failed, and blocked messages.') }}</p></div><button class="btn btn-secondary" data-onclick="loadTelegramAnnouncements()">{{ _('Refresh') }}</button></div><div id="tga-list"></div></div>
         </div>
         </div>
 
@@ -1162,13 +1162,13 @@
                         <p class="text-secondary">{{ _('Configure gateway, authentication flow, triggers, and safety limits.') }}</p>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center;">
-                        <button id="wa-auto-setup" class="btn btn-secondary" onclick="autoConfigureWhatsAppGatewaySettings()">
+                        <button id="wa-auto-setup" class="btn btn-secondary" data-onclick="autoConfigureWhatsAppGatewaySettings()">
                             {{ _('Auto Setup') }}
                         </button>
-                        <button id="wa-test-connection" class="btn btn-secondary" onclick="testWhatsAppConnectionSettings()">
+                        <button id="wa-test-connection" class="btn btn-secondary" data-onclick="testWhatsAppConnectionSettings()">
                             {{ _('Test Connection') }}
                         </button>
-                        <button id="wa-open-auth" class="btn btn-primary" onclick="openWhatsAppAuthWizard()">
+                        <button id="wa-open-auth" class="btn btn-primary" data-onclick="openWhatsAppAuthWizard()">
                             {{ _('Open Auth Wizard') }}
                         </button>
                     </div>
@@ -1181,7 +1181,7 @@
 
                 <div class="form-group">
                     <label>{{ _('Deployment Region') }}</label>
-                    <select id="wa-deployment-region" class="form-select" onchange="applyWhatsAppRegionStateSettings()">
+                    <select id="wa-deployment-region" class="form-select" data-onchange="applyWhatsAppRegionStateSettings()">
                         <option value="outside" {% if whatsapp_deployment_region != 'iran' %}selected{% endif %}>{{ _('Outside Iran') }}</option>
                         <option value="iran" {% if whatsapp_deployment_region == 'iran' %}selected{% endif %}>{{ _('Iran') }}</option>
                     </select>
@@ -1189,7 +1189,7 @@
 
                 <div class="form-group">
                     <label>{{ _('Provider') }}</label>
-                    <select id="wa-provider" class="form-select" onchange="onWaProviderChange()">
+                    <select id="wa-provider" class="form-select" data-onchange="onWaProviderChange()">
                         <option value="baileys" {% if whatsapp_provider == 'baileys' %}selected{% endif %}>Baileys</option>
                         <option value="cloud" {% if whatsapp_provider == 'cloud' %}selected{% endif %}>{{ _('WhatsApp Cloud API') }}</option>
                         <option value="openwa" {% if whatsapp_provider == 'openwa' %}selected{% endif %}>{{ _('OpenWA (self-hosted)') }}</option>
@@ -1250,17 +1250,17 @@
                 <div class="form-group">
                     <label>{{ _('Triggers') }}</label>
                     <div style="display: grid; grid-template-columns: 1fr; gap: 8px;">
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="wa-trigger-renew" {% if whatsapp_trigger_renew_success %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('After successful renewal') }}</span>
                         </label>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="wa-trigger-welcome" {% if whatsapp_trigger_welcome %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('Welcome message') }}</span>
                         </label>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="wa-trigger-pre-expiry" {% if whatsapp_trigger_pre_expiry %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('Pre-expiry reminder') }}</span>
@@ -1415,7 +1415,7 @@
                 </div>
 
                 <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
-                    <button class="btn btn-primary" onclick="saveWhatsAppSettings()">{{ _('Save WhatsApp Settings') }}</button>
+                    <button class="btn btn-primary" data-onclick="saveWhatsAppSettings()">{{ _('Save WhatsApp Settings') }}</button>
                 </div>
             </div>
         </div>
@@ -1429,8 +1429,8 @@
                     </div>
                     <div class="sms-settings-actions">
                         <a class="btn btn-outline" href="{{ url_for('pages.sms_center_page') }}#overview">{{ _('Open SMS Center') }}</a>
-                        <button id="sms-test-connection" class="btn btn-secondary" onclick="testSmsConnectionSettings()">{{ _('Test Connection') }}</button>
-                        <button id="sms-test-send" class="btn btn-primary" onclick="sendTestSms()">{{ _('Send Test SMS') }}</button>
+                        <button id="sms-test-connection" class="btn btn-secondary" data-onclick="testSmsConnectionSettings()">{{ _('Test Connection') }}</button>
+                        <button id="sms-test-send" class="btn btn-primary" data-onclick="sendTestSms()">{{ _('Send Test SMS') }}</button>
                         <span id="sms-quick-probe-badge" class="hidden" style="font-size:0.78rem;padding:4px 10px;border-radius:6px;font-weight:500;white-space:nowrap;"></span>
                     </div>
                 </div>
@@ -1448,7 +1448,7 @@
 
                 <div class="form-group">
                     <label>{{ _('SMS Provider') }}</label>
-                    <select id="sms-provider" class="form-control" onchange="updateSmsProviderFields()">
+                    <select id="sms-provider" class="form-control" data-onchange="updateSmsProviderFields()">
                         <option value="gmweb" {% if sms_provider == 'gmweb' %}selected{% endif %}>{{ _('GMweb / Google Messages') }}</option>
                         <option value="custom_http" {% if sms_provider == 'custom_http' %}selected{% endif %}>{{ _('Custom HTTP Gateway') }}</option>
                     </select>
@@ -1501,12 +1501,12 @@
                 <div class="form-group">
                     <label>{{ _('Triggers') }}</label>
                     <div style="display: grid; grid-template-columns: 1fr; gap: 8px;">
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="sms-trigger-created" {% if sms_trigger_created %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('On account creation (Client Created SMS)') }}</span>
                         </label>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="sms-trigger-renew" {% if sms_trigger_renew %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('On renewal (Renew SMS)') }}</span>
@@ -1520,22 +1520,22 @@
                         {{ _('A periodic scan messages each non-reseller account once per cooldown, using the matching template from') }} <strong>{{ _('Monitor → Message Templates') }}</strong>{{ _('. Edit the wording there.') }}
                     </p>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="sms-trigger-near-expiry" {% if sms_trigger_near_expiry %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('⏳ Near expiry (Monitor “Soon”)') }}</span>
                         </label>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="sms-trigger-low-volume" {% if sms_trigger_low_volume %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('⚠️ Low volume (Monitor “Low”)') }}</span>
                         </label>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="sms-trigger-expired" {% if sms_trigger_expired %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('⛔ Expired (Monitor “Expired”)') }}</span>
                         </label>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <label class="checkbox-label" data-onclick="event.stopPropagation()">
                             <input type="checkbox" id="sms-trigger-ended" {% if sms_trigger_ended %}checked{% endif %}>
                             <span class="checkmark"></span>
                             <span>{{ _('🚫 Volume ended (Monitor “Ended”)') }}</span>
@@ -1696,7 +1696,7 @@
                 </div>
 
                 <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
-                    <button class="btn btn-primary" onclick="saveSmsSettings()">{{ _('Save SMS Settings') }}</button>
+                    <button class="btn btn-primary" data-onclick="saveSmsSettings()">{{ _('Save SMS Settings') }}</button>
                 </div>
 
                 <hr style="border:none;border-top:1px solid var(--border-color, #2a2a3a);margin:22px 0 16px;">
@@ -1706,9 +1706,9 @@
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
                         <label style="margin:0;">{{ _('Send queue & log') }}</label>
                         <div style="display:flex;gap:8px;align-items:center;">
-                            <button class="btn btn-success" id="sms-promote-high-btn" onclick="promoteDelayedHighSms()" title="{{ _('Move delayed high-priority messages to the front') }}">{{ _('High first') }}</button>
-                            <button class="btn btn-primary" id="sms-scan-run-btn" onclick="runSmsScanNow()">{{ _('Start now') }}</button>
-                            <button class="btn btn-danger" id="sms-scan-stop-btn" onclick="stopSmsScan()" style="display:none;">{{ _('Stop & disable') }}</button>
+                            <button class="btn btn-success" id="sms-promote-high-btn" data-onclick="promoteDelayedHighSms()" title="{{ _('Move delayed high-priority messages to the front') }}">{{ _('High first') }}</button>
+                            <button class="btn btn-primary" id="sms-scan-run-btn" data-onclick="runSmsScanNow()">{{ _('Start now') }}</button>
+                            <button class="btn btn-danger" id="sms-scan-stop-btn" data-onclick="stopSmsScan()" style="display:none;">{{ _('Stop & disable') }}</button>
                         </div>
                     </div>
                     <p class="text-secondary" style="margin:4px 0 10px; font-size:0.82rem;">
@@ -1723,22 +1723,22 @@
                             {{ _('Eve sends checked states in this order. Use this after pairing GMweb again to resume only the urgent buckets. Royalty is not included here.') }}
                         </div>
                         <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">
-                            <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <label class="checkbox-label" data-onclick="event.stopPropagation()">
                                 <input type="checkbox" class="sms-run-state" value="low_volume" checked>
                                 <span class="checkmark"></span>
                                 <span>{{ _('1. Low volume') }}</span>
                             </label>
-                            <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <label class="checkbox-label" data-onclick="event.stopPropagation()">
                                 <input type="checkbox" class="sms-run-state" value="ended" checked>
                                 <span class="checkmark"></span>
                                 <span>{{ _('2. Volume ended') }}</span>
                             </label>
-                            <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <label class="checkbox-label" data-onclick="event.stopPropagation()">
                                 <input type="checkbox" class="sms-run-state" value="expired" checked>
                                 <span class="checkmark"></span>
                                 <span>{{ _('3. Expired') }}</span>
                             </label>
-                            <label class="checkbox-label" onclick="event.stopPropagation()">
+                            <label class="checkbox-label" data-onclick="event.stopPropagation()">
                                 <input type="checkbox" class="sms-run-state" value="near_expiry" checked>
                                 <span class="checkmark"></span>
                                 <span>{{ _('4. Near expiry') }}</span>
@@ -1766,8 +1766,8 @@
                             </div>
                             <div class="sms-audit-actions">
                                 <small id="sms-logs-updated" class="text-secondary" aria-live="polite"></small>
-                    <button type="button" class="btn btn-secondary" id="sms-audit-auto" onclick="toggleSmsAuditAuto()" aria-pressed="true">{{ _('Auto-refresh on') }}</button>
-                                <button type="button" class="btn btn-secondary" id="sms-logs-refresh-btn" onclick="refreshSmsPanel()">{{ _('Refresh') }}</button>
+                    <button type="button" class="btn btn-secondary" id="sms-audit-auto" data-onclick="toggleSmsAuditAuto()" aria-pressed="true">{{ _('Auto-refresh on') }}</button>
+                                <button type="button" class="btn btn-secondary" id="sms-logs-refresh-btn" data-onclick="refreshSmsPanel()">{{ _('Refresh') }}</button>
                             </div>
                         </header>
                         <div id="sms-health-strip" class="sms-health-strip" aria-live="polite"></div>
@@ -1781,13 +1781,13 @@
                 </div>
                         <div id="sms-debt-kpis" class="sms-audit-kpis" aria-live="polite"></div>
                         <div class="sms-audit-filters">
-                            <div class="form-group"><label for="sms-debt-search">{{ _('Search account') }}</label><input id="sms-debt-search" class="search-input" type="search" oninput="queueSmsDebtSearch()"></div>
-                            <div class="form-group"><label for="sms-debt-state">{{ _('State') }}</label><select id="sms-debt-state" class="form-select" onchange="resetSmsDebtFilters()"><option value="">{{ _('All') }}</option><option value="volume_ended">{{ _('Volume ended') }}</option><option value="expired">{{ _('Expired') }}</option></select></div>
-                            <div class="form-group"><label for="sms-debt-server">{{ _('Server ID') }}</label><input id="sms-debt-server" type="number" min="1" onchange="resetSmsDebtFilters()"></div>
+                            <div class="form-group"><label for="sms-debt-search">{{ _('Search account') }}</label><input id="sms-debt-search" class="search-input" type="search" data-oninput="queueSmsDebtSearch()"></div>
+                            <div class="form-group"><label for="sms-debt-state">{{ _('State') }}</label><select id="sms-debt-state" class="form-select" data-onchange="resetSmsDebtFilters()"><option value="">{{ _('All') }}</option><option value="volume_ended">{{ _('Volume ended') }}</option><option value="expired">{{ _('Expired') }}</option></select></div>
+                            <div class="form-group"><label for="sms-debt-server">{{ _('Server ID') }}</label><input id="sms-debt-server" type="number" min="1" data-onchange="resetSmsDebtFilters()"></div>
                         </div>
                         <div id="sms-debt-view-label" class="field-note" role="status" aria-live="polite"></div>
                         <div id="sms-debt-rows" class="sms-audit-rows" aria-live="polite"></div>
-                        <div class="sms-audit-pager"><button type="button" class="btn btn-secondary" id="sms-debt-prev" onclick="changeSmsDebtPage(-1)" disabled>{{ _('Previous') }}</button><button type="button" class="btn btn-secondary" id="sms-debt-next" onclick="changeSmsDebtPage(1)" disabled>{{ _('Next') }}</button></div>
+                        <div class="sms-audit-pager"><button type="button" class="btn btn-secondary" id="sms-debt-prev" data-onclick="changeSmsDebtPage(-1)" disabled>{{ _('Previous') }}</button><button type="button" class="btn btn-secondary" id="sms-debt-next" data-onclick="changeSmsDebtPage(1)" disabled>{{ _('Next') }}</button></div>
                         <div class="sms-audit-filters" aria-labelledby="sms-recovery-title">
                             <div class="form-group"><label id="sms-recovery-title" for="sms-recovery-window">{{ _('Recover missed notifications') }}</label><select id="sms-recovery-window" class="form-select"><option value="24h">{{ _('Last 24 hours') }}</option><option value="3d">{{ _('Last 3 days') }}</option><option value="7d" selected>{{ _('Last 7 days') }}</option><option value="custom">{{ _('Custom range / manual review') }}</option></select></div>
                             <div class="form-group"><label for="sms-recovery-state">{{ _('State') }}</label><select id="sms-recovery-state" class="form-select"><option value="">{{ _('All') }}</option><option value="volume_ended">{{ _('Volume ended') }}</option><option value="expired">{{ _('Expired') }}</option></select></div>
@@ -1795,13 +1795,13 @@
                             <div class="form-group"><label for="sms-recovery-from">{{ _('State entered from') }}</label><input id="sms-recovery-from" type="date"></div>
                             <div class="form-group"><label for="sms-recovery-to">{{ _('State entered to') }}</label><input id="sms-recovery-to" type="date"></div>
                             <label class="checkbox-label"><input type="checkbox" id="sms-recovery-unknown"><span class="checkmark"></span><span>{{ _('Include unknown age (manual review only)') }}</span></label>
-                            <button type="button" class="btn btn-secondary" onclick="previewSmsRecovery()">{{ _('Preview without sending') }}</button>
+                            <button type="button" class="btn btn-secondary" data-onclick="previewSmsRecovery()">{{ _('Preview without sending') }}</button>
                         </div>
                         <div id="sms-recovery-summary" class="sms-audit-kpis" aria-live="polite"></div>
                         <div id="sms-recovery-status" class="field-note" role="status" aria-live="polite"></div>
                         <div id="sms-recovery-rows" class="sms-audit-rows" aria-live="polite"></div>
-                        <div class="sms-audit-pager"><button type="button" class="btn btn-secondary" id="sms-recovery-prev" onclick="previewSmsRecovery(-1)" disabled>{{ _('Previous') }}</button><button type="button" class="btn btn-secondary" id="sms-recovery-next" onclick="previewSmsRecovery(1)" disabled>{{ _('Next') }}</button></div>
-                        <div class="sms-audit-pager"><button type="button" class="btn btn-primary" id="sms-recovery-activate" onclick="activateSmsRecovery()" disabled>{{ _('Create obligations for selected') }}</button></div>
+                        <div class="sms-audit-pager"><button type="button" class="btn btn-secondary" id="sms-recovery-prev" data-onclick="previewSmsRecovery(-1)" disabled>{{ _('Previous') }}</button><button type="button" class="btn btn-secondary" id="sms-recovery-next" data-onclick="previewSmsRecovery(1)" disabled>{{ _('Next') }}</button></div>
+                        <div class="sms-audit-pager"><button type="button" class="btn btn-primary" id="sms-recovery-activate" data-onclick="activateSmsRecovery()" disabled>{{ _('Create obligations for selected') }}</button></div>
                     </section>
             <div id="sms-audit-gap" class="sms-audit-gap hidden" role="alert"></div>
                         <section class="sms-audit-stream" aria-labelledby="sms-stream-title">
@@ -1811,8 +1811,8 @@
                                     <p id="sms-stream-scope" class="text-secondary"></p>
                                 </div>
                                 <div class="sms-audit-tabs" role="group" aria-label="{{ _('Activity type') }}">
-                                    <button type="button" class="sms-audit-tab" id="sms-tab-decisions" onclick="setSmsAuditMode('decisions')">{{ _('Decisions') }}</button>
-                                    <button type="button" class="sms-audit-tab" id="sms-tab-sends" onclick="setSmsAuditMode('sends')">{{ _('Sends') }}</button>
+                                    <button type="button" class="sms-audit-tab" id="sms-tab-decisions" data-onclick="setSmsAuditMode('decisions')">{{ _('Decisions') }}</button>
+                                    <button type="button" class="sms-audit-tab" id="sms-tab-sends" data-onclick="setSmsAuditMode('sends')">{{ _('Sends') }}</button>
                                 </div>
                             </div>
                             <div class="sms-audit-filters">
@@ -1828,7 +1828,7 @@
                             <div id="sms-logs-body" class="sms-audit-rows" aria-live="polite"></div>
                             <div id="sms-logs-pager" class="sms-audit-pager hidden">
                                 <small id="sms-logs-range" class="text-secondary"></small>
-                                <div class="sms-audit-pager-actions"><button type="button" class="btn btn-secondary" id="sms-logs-prev" onclick="smsLogsGo(-1)">{{ _('Previous') }}</button><small id="sms-logs-pageinfo" class="text-secondary"></small><button type="button" class="btn btn-secondary" id="sms-logs-next" onclick="smsLogsGo(1)">{{ _('Next') }}</button></div>
+                                <div class="sms-audit-pager-actions"><button type="button" class="btn btn-secondary" id="sms-logs-prev" data-onclick="smsLogsGo(-1)">{{ _('Previous') }}</button><small id="sms-logs-pageinfo" class="text-secondary"></small><button type="button" class="btn btn-secondary" id="sms-logs-next" data-onclick="smsLogsGo(1)">{{ _('Next') }}</button></div>
                             </div>
                         </section>
                     </section>
@@ -1844,7 +1844,7 @@
                         <h2>{{ _('Account Info Message') }}</h2>
                         <p class="text-secondary">{{ _('Template sent via the dashboard\'s "Send account info" action (bubble icon on each client).') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="openAccountMessageTemplateModal('account_info')">
+                    <button class="btn btn-primary" data-onclick="openAccountMessageTemplateModal('account_info')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Template') }}
                     </button>
@@ -1861,7 +1861,7 @@
                         <h2>{{ _('Royalty Information') }}</h2>
                         <p class="text-secondary">{{ _('Template used when sending re-engagement messages from the') }} <strong>{{ _('Royalty') }}</strong> {{ _('page to idle accounts that haven\'t connected yet.') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="openAccountMessageTemplateModal('royalty')">
+                    <button class="btn btn-primary" data-onclick="openAccountMessageTemplateModal('royalty')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         {{ _('Add Template') }}
                     </button>
@@ -1881,7 +1881,7 @@
                         <h2>{{ _('SSL Certificate') }}</h2>
                         <p class="text-secondary">{{ _('Current certificate status') }}</p>
                     </div>
-                    <button class="btn btn-secondary" onclick="loadSSLSettings()">
+                    <button class="btn btn-secondary" data-onclick="loadSSLSettings()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                         {{ _('Refresh') }}
                     </button>
@@ -1900,7 +1900,7 @@
                 <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:14px;">
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
                         <strong style="font-size:0.9rem;">{{ _('Where is HTTPS coming from?') }}</strong>
-                        <button class="btn btn-secondary" style="padding:5px 10px;" onclick="diagnoseSSL()">{{ _('Diagnose') }}</button>
+                        <button class="btn btn-secondary" style="padding:5px 10px;" data-onclick="diagnoseSSL()">{{ _('Diagnose') }}</button>
                     </div>
                     <div id="ssl-diagnose-panel" style="padding:12px 14px; border-radius:8px; font-size:0.85rem; background: var(--bg-card); color: var(--text-secondary);">
                         {{ _('Click') }} <em>{{ _('Diagnose') }}</em> {{ _('to detect whether SSL is served by this server, a CDN (Cloudflare), or not at all.') }}
@@ -1916,11 +1916,11 @@
                         <p class="text-secondary">{{ _('First sync from LetsEncrypt, then download as zip to transfer to another server') }}</p>
                     </div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <button class="btn btn-secondary" onclick="syncSSL()" id="ssl-sync-btn">
+                        <button class="btn btn-secondary" data-onclick="syncSSL()" id="ssl-sync-btn">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                             {{ _('1. Sync from LetsEncrypt') }}
                         </button>
-                        <button class="btn btn-primary" onclick="exportSSL()">
+                        <button class="btn btn-primary" data-onclick="exportSSL()">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                             {{ _('2. Download zip') }}
                         </button>
@@ -1942,7 +1942,7 @@
                         <label style="font-size:0.85rem;color: var(--text-secondary);margin-bottom:4px;display:block;">eve-ssl-bundle.zip</label>
                         <input type="file" id="ssl-zip-input" accept=".zip" class="form-control" style="padding:6px;">
                     </div>
-                    <button class="btn btn-primary" onclick="uploadSSL()" style="white-space:nowrap;">
+                    <button class="btn btn-primary" data-onclick="uploadSSL()" style="white-space:nowrap;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                         {{ _('Upload & Extract') }}
                     </button>
@@ -1958,11 +1958,11 @@
                         <p class="text-secondary">{{ _('Set certificate paths and apply to nginx — panel becomes HTTPS instantly') }}</p>
                     </div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <button class="btn btn-secondary" onclick="saveSSLSettings()">
+                        <button class="btn btn-secondary" data-onclick="saveSSLSettings()">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                             {{ _('Save Paths') }}
                         </button>
-                        <button class="btn btn-primary" onclick="applySSL()">
+                        <button class="btn btn-primary" data-onclick="applySSL()">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
                             {{ _('Apply SSL to nginx') }}
                         </button>
@@ -1996,7 +1996,7 @@
                         <h2>{{ _('Session Timeout') }}</h2>
                         <p class="text-secondary">{{ _('Configure how long a user stays logged in.') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="saveSessionSettings()">
+                    <button class="btn btn-primary" data-onclick="saveSessionSettings()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                         {{ _('Save Settings') }}
                     </button>
@@ -2042,15 +2042,15 @@
                         <p class="text-secondary">{{ _('Self-healing watchdog monitors DB, servers, disk, static files every 60 s and TLS certificates every 6 h.') }}</p>
                     </div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <button class="btn btn-primary" onclick="runHealthCheckNow()">
+                        <button class="btn btn-primary" data-onclick="runHealthCheckNow()">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                             {{ _('Run Check Now') }}
                         </button>
-                        <button class="btn btn-secondary" onclick="loadHealthLogs()">
+                        <button class="btn btn-secondary" data-onclick="loadHealthLogs()">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"></path></svg>
                             {{ _('Refresh') }}
                         </button>
-                        <button class="btn btn-danger" onclick="clearHealthLogs()">
+                        <button class="btn btn-danger" data-onclick="clearHealthLogs()">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-2 14H7L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>
                             {{ _('Clear Logs') }}
                         </button>
@@ -2065,8 +2065,8 @@
                             <p class="text-secondary" style="font-size:0.8rem;margin:4px 0 0;">{{ _('Panel certificate and https panel endpoints. Checked by the watchdog every 6 hours; problems are written to the log below.') }}</p>
                         </div>
                         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                            <button class="btn btn-secondary" onclick="loadTlsReport()">{{ _('Refresh') }}</button>
-                            <button class="btn btn-primary" onclick="loadTlsReport(true)">{{ _('Check now') }}</button>
+                            <button class="btn btn-secondary" data-onclick="loadTlsReport()">{{ _('Refresh') }}</button>
+                            <button class="btn btn-primary" data-onclick="loadTlsReport(true)">{{ _('Check now') }}</button>
                         </div>
                     </div>
                     <div id="tls-report" class="text-secondary" style="margin-top:12px;font-size:0.85rem;">{{ _('Loading…') }}</div>
@@ -2074,14 +2074,14 @@
 
                 <!-- Filters -->
                 <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
-                    <select id="hl-filter-level" class="form-control" style="width:auto;min-width:120px;" onchange="loadHealthLogs()">
+                    <select id="hl-filter-level" class="form-control" style="width:auto;min-width:120px;" data-onchange="loadHealthLogs()">
                         <option value="">{{ _('All Levels') }}</option>
                         <option value="info">{{ _('Info') }}</option>
                         <option value="warning">{{ _('Warning') }}</option>
                         <option value="error">{{ _('Error') }}</option>
                         <option value="critical">{{ _('Critical') }}</option>
                     </select>
-                    <select id="hl-filter-category" class="form-control" style="width:auto;min-width:140px;" onchange="loadHealthLogs()">
+                    <select id="hl-filter-category" class="form-control" style="width:auto;min-width:140px;" data-onchange="loadHealthLogs()">
                         <option value="">{{ _('All Categories') }}</option>
                         <option value="general">{{ _('General') }}</option>
                         <option value="snapshot">{{ _('Snapshot') }}</option>
@@ -2128,7 +2128,7 @@
                         <h2>{{ _('Traffic Check') }}</h2>
                         <p class="text-secondary">{{ _('Traffic usage per server and inbound — based on compact daily rollups.') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="loadTrafficCheck()" id="tc-refresh-btn">
+                    <button class="btn btn-primary" data-onclick="loadTrafficCheck()" id="tc-refresh-btn">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg>
                         {{ _('Refresh') }}
                     </button>
@@ -2137,14 +2137,14 @@
                 <!-- Filters -->
                 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px;">
                     <div style="display:flex;gap:4px;">
-                        <button class="tc-period-btn active" data-period="today" onclick="setTcPeriod('today')">{{ _('Today') }}</button>
-                        <button class="tc-period-btn" data-period="yesterday" onclick="setTcPeriod('yesterday')">{{ _('Yesterday') }}</button>
-                        <button class="tc-period-btn" data-period="7d" onclick="setTcPeriod('7d')">{{ _('7 Days') }}</button>
-                        <button class="tc-period-btn" data-period="30d" onclick="setTcPeriod('30d')">{{ _('30 Days') }}</button>
+                        <button class="tc-period-btn active" data-period="today" data-onclick="setTcPeriod('today')">{{ _('Today') }}</button>
+                        <button class="tc-period-btn" data-period="yesterday" data-onclick="setTcPeriod('yesterday')">{{ _('Yesterday') }}</button>
+                        <button class="tc-period-btn" data-period="7d" data-onclick="setTcPeriod('7d')">{{ _('7 Days') }}</button>
+                        <button class="tc-period-btn" data-period="30d" data-onclick="setTcPeriod('30d')">{{ _('30 Days') }}</button>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;flex:1;min-width:220px;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-secondary);flex-shrink:0;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                        <input type="text" id="tc-search" placeholder="{{ _('Search server or inbound…') }}" class="form-input" style="padding:6px 10px;font-size:0.85rem;" oninput="tcRender()">
+                        <input type="text" id="tc-search" placeholder="{{ _('Search server or inbound…') }}" class="form-input" style="padding:6px 10px;font-size:0.85rem;" data-oninput="tcRender()">
                     </div>
                     <span id="tc-period-label" style="font-size:0.82rem;color:var(--text-secondary);white-space:nowrap;"></span>
                 </div>
@@ -2164,26 +2164,26 @@
                         <h2>{{ _('Supported Apps') }}</h2>
                         <p class="text-secondary">{{ _('Manage V2Ray client apps shown on the subscription page. Enable, disable, edit or add new apps.') }}</p>
                     </div>
-                    <button class="btn btn-primary" onclick="openAddAppModal()">
+                    <button class="btn btn-primary" data-onclick="openAddAppModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         {{ _('Add App') }}
                     </button>
                 </div>
                 <div style="display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;align-items:center;">
-                    <button class="sa-filter-btn active" data-os="all" onclick="filterSubApps('all')">{{ _('All') }}</button>
-                    <button class="sa-filter-btn" data-os="android" onclick="filterSubApps('android')">
+                    <button class="sa-filter-btn active" data-os="all" data-onclick="filterSubApps('all')">{{ _('All') }}</button>
+                    <button class="sa-filter-btn" data-os="android" data-onclick="filterSubApps('android')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18v-1a6 6 0 0 1 12 0v1"/><circle cx="12" cy="10" r="4"/></svg>
                         Android
                     </button>
-                    <button class="sa-filter-btn" data-os="ios" onclick="filterSubApps('ios')">
+                    <button class="sa-filter-btn" data-os="ios" data-onclick="filterSubApps('ios')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
                         iOS
                     </button>
-                    <button class="sa-filter-btn" data-os="windows" onclick="filterSubApps('windows')">
+                    <button class="sa-filter-btn" data-os="windows" data-onclick="filterSubApps('windows')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
                         Windows
                     </button>
-                    <button class="sa-filter-btn" data-os="desktop" onclick="filterSubApps('desktop')">
+                    <button class="sa-filter-btn" data-os="desktop" data-onclick="filterSubApps('desktop')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
                         {{ _('Desktop') }}
                     </button>
@@ -2202,7 +2202,7 @@
     <div class="modal modal-lg">
         <div class="modal-header">
             <h2 id="sa-modal-title">{{ _('Add App') }}</h2>
-            <button class="modal-close" onclick="closeSaModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeSaModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="sa-app-id">
@@ -2269,8 +2269,8 @@
                 </div>
             </div>
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeSaModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveSubApp()">{{ _('Save App') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeSaModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveSubApp()">{{ _('Save App') }}</button>
             </div>
         </div>
     </div>
@@ -2280,7 +2280,7 @@
     <div class="modal modal-lg">
         <div class="modal-header">
             <h2 id="template-modal-title">{{ _('Add Template') }}</h2>
-            <button class="modal-close" onclick="closeTemplateModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeTemplateModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-template-id">
@@ -2291,21 +2291,21 @@
             <div class="form-group">
                 <label>{{ _('Content') }}</label>
                 <div class="variables-chips">
-                    <span class="var-chip" onclick="insertVar('{protocol}')">{protocol}</span>
-                    <span class="var-chip" onclick="insertVar('{service_name}')">{service_name}</span>
-                    <span class="var-chip" onclick="insertVar('{volume}')">{volume}</span>
-                    <span class="var-chip" onclick="insertVar('{days}')">{days}</span>
-                    <span class="var-chip" onclick="insertVar('{sub_link}')">{sub_link}</span>
-                    <span class="var-chip" onclick="insertVar('{dashboard_link}')">{dashboard_link}</span>
-                    <span class="var-chip" onclick="insertVar('{dashboard_link_no_https}')" title="{{ _('Dashboard link without http:// or https://') }}">{dashboard_link_no_https}</span>
-                    <span class="var-chip" onclick="insertVar('{gift_volume}')">{gift_volume}</span>
-                    <span class="var-chip" onclick="insertVar('{if_gift}...{/if_gift}')" title="{{ _('Shown only when a gift volume was given') }}">{if_gift}...{/if_gift}</span>
+                    <span class="var-chip" data-onclick="insertVar('{protocol}')">{protocol}</span>
+                    <span class="var-chip" data-onclick="insertVar('{service_name}')">{service_name}</span>
+                    <span class="var-chip" data-onclick="insertVar('{volume}')">{volume}</span>
+                    <span class="var-chip" data-onclick="insertVar('{days}')">{days}</span>
+                    <span class="var-chip" data-onclick="insertVar('{sub_link}')">{sub_link}</span>
+                    <span class="var-chip" data-onclick="insertVar('{dashboard_link}')">{dashboard_link}</span>
+                    <span class="var-chip" data-onclick="insertVar('{dashboard_link_no_https}')" title="{{ _('Dashboard link without http:// or https://') }}">{dashboard_link_no_https}</span>
+                    <span class="var-chip" data-onclick="insertVar('{gift_volume}')">{gift_volume}</span>
+                    <span class="var-chip" data-onclick="insertVar('{if_gift}...{/if_gift}')" title="{{ _('Shown only when a gift volume was given') }}">{if_gift}...{/if_gift}</span>
                 </div>
                 <textarea id="template-content" class="form-input" rows="15" style="font-family: 'Vazirmatn', sans-serif; direction: rtl;"></textarea>
             </div>
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeTemplateModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveTemplate()">{{ _('Save Template') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeTemplateModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveTemplate()">{{ _('Save Template') }}</button>
             </div>
         </div>
     </div>
@@ -2315,7 +2315,7 @@
     <div class="modal modal-lg">
         <div class="modal-header">
             <h2 id="renew-template-modal-title">{{ _('Add Renew Template') }}</h2>
-            <button class="modal-close" onclick="closeRenewTemplateModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeRenewTemplateModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-renew-template-id">
@@ -2326,23 +2326,23 @@
             <div class="form-group">
                 <label>{{ _('Content') }}</label>
                 <div class="variables-chips" id="renew-modal-vars">
-                    <span class="var-chip" onclick="insertRenewVar('{email}')">{email}</span>
-                    <span class="var-chip" onclick="insertRenewVar('{days_label}')">{days_label}</span>
-                    <span class="var-chip" onclick="insertRenewVar('{volume_label}')">{volume_label}</span>
-                    <span class="var-chip" onclick="insertRenewVar('{date}')">{date}</span>
-                    <span class="var-chip" onclick="insertRenewVar('{dashboard_link}')">{dashboard_link}</span>
-                    <span class="var-chip" onclick="insertRenewVar('{dashboard_link_no_https}')" title="{{ _('Dashboard link without http:// or https://') }}">{dashboard_link_no_https}</span>
+                    <span class="var-chip" data-onclick="insertRenewVar('{email}')">{email}</span>
+                    <span class="var-chip" data-onclick="insertRenewVar('{days_label}')">{days_label}</span>
+                    <span class="var-chip" data-onclick="insertRenewVar('{volume_label}')">{volume_label}</span>
+                    <span class="var-chip" data-onclick="insertRenewVar('{date}')">{date}</span>
+                    <span class="var-chip" data-onclick="insertRenewVar('{dashboard_link}')">{dashboard_link}</span>
+                    <span class="var-chip" data-onclick="insertRenewVar('{dashboard_link_no_https}')" title="{{ _('Dashboard link without http:// or https://') }}">{dashboard_link_no_https}</span>
                 </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                    <textarea id="renew-template-content" class="form-input" rows="15" style="font-family: 'Vazirmatn', sans-serif; direction: rtl;" oninput="updateRenewModalPreview(this.value)"></textarea>
+                    <textarea id="renew-template-content" class="form-input" rows="15" style="font-family: 'Vazirmatn', sans-serif; direction: rtl;" data-oninput="updateRenewModalPreview(this.value)"></textarea>
                     <div class="renew-template-preview" id="renew-modal-preview" style="height: 100%; margin-top: 0;">
                         <span class="renew-preview-hint">{{ _('Preview appears here...') }}</span>
                     </div>
                 </div>
             </div>
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeRenewTemplateModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveRenewTemplate()">{{ _('Save Template') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeRenewTemplateModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveRenewTemplate()">{{ _('Save Template') }}</button>
             </div>
         </div>
     </div>
@@ -2352,7 +2352,7 @@
     <div class="modal modal-lg">
         <div class="modal-header">
             <h2 id="account-message-template-modal-title">{{ _('Add Account Message Template') }}</h2>
-            <button class="modal-close" onclick="closeAccountMessageTemplateModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeAccountMessageTemplateModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-account-message-template-id">
@@ -2363,7 +2363,7 @@
             <input type="hidden" id="account-message-template-group" value="account_info">
             <div class="form-group">
                 <label>{{ _('Delivery Channel') }}</label>
-                <select id="account-message-template-channel" class="form-input" onchange="handleAccountMessageChannelChange()">
+                <select id="account-message-template-channel" class="form-input" data-onchange="handleAccountMessageChannelChange()">
                     <option value="whatsapp">WhatsApp</option>
                     <option value="sms">SMS</option>
                     <option value="royalty_whatsapp">{{ _('Royalty — WhatsApp') }}</option>
@@ -2377,19 +2377,19 @@
             <div class="form-group">
                 <label>{{ _('Content') }}</label>
                 <div class="variables-chips" id="account-message-modal-vars">
-                    <span class="var-chip" onclick="insertAccountMessageVar('{email}')">{email}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{account_name}')">{account_name}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{remaining_time}')">{remaining_time}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{remaining_volume}')">{remaining_volume}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{dashboard_link}')">{dashboard_link}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{dashboard_link_no_https}')" title="{{ _('Dashboard link without http:// or https://') }}">{dashboard_link_no_https}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{sub_link}')">{sub_link}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{server_name}')">{server_name}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{telegram_channel}')" title="{{ _('Telegram channel — uses reseller\'s if reseller, otherwise panel owner\'s') }}">{telegram_channel}</span>
-                    <span class="var-chip" onclick="insertAccountMessageVar('{whatsapp_channel}')" title="{{ _('WhatsApp channel — uses reseller\'s if reseller, otherwise panel owner\'s') }}">{whatsapp_channel}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{email}')">{email}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{account_name}')">{account_name}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{remaining_time}')">{remaining_time}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{remaining_volume}')">{remaining_volume}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{dashboard_link}')">{dashboard_link}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{dashboard_link_no_https}')" title="{{ _('Dashboard link without http:// or https://') }}">{dashboard_link_no_https}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{sub_link}')">{sub_link}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{server_name}')">{server_name}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{telegram_channel}')" title="{{ _('Telegram channel — uses reseller\'s if reseller, otherwise panel owner\'s') }}">{telegram_channel}</span>
+                    <span class="var-chip" data-onclick="insertAccountMessageVar('{whatsapp_channel}')" title="{{ _('WhatsApp channel — uses reseller\'s if reseller, otherwise panel owner\'s') }}">{whatsapp_channel}</span>
                 </div>
                 <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px;">
-                    <textarea id="account-message-template-content" class="form-input" rows="15" style="font-family: 'Vazirmatn', sans-serif; direction: rtl;" oninput="updateAccountMessageModalPreview(this.value)"></textarea>
+                    <textarea id="account-message-template-content" class="form-input" rows="15" style="font-family: 'Vazirmatn', sans-serif; direction: rtl;" data-oninput="updateAccountMessageModalPreview(this.value)"></textarea>
                     <div class="renew-template-preview" id="account-message-modal-preview" style="height: 100%; margin-top: 0;">
                         <span class="renew-preview-hint">{{ _('Preview appears here...') }}</span>
                     </div>
@@ -2397,8 +2397,8 @@
                 <div id="account-message-sms-counter" class="sms-counter hidden"></div>
             </div>
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeAccountMessageTemplateModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveAccountMessageTemplate()">{{ _('Save Template') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeAccountMessageTemplateModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveAccountMessageTemplate()">{{ _('Save Template') }}</button>
             </div>
         </div>
     </div>
@@ -4219,6 +4219,14 @@
     let telegramPurchaseServers = [];
     let telegramTrialChannels = [];
     let telegramRequiredChannels = [];
+
+    // Channel rows are rendered from these lists; inputs write back by index.
+    function setTelegramChannelField(kind, index, field, input) {
+        const list = kind === 'trial' ? telegramTrialChannels : telegramRequiredChannels;
+        if (list[index] && ['chat_id', 'title', 'invite_url'].includes(field)) {
+            list[index][field] = input.value.trim();
+        }
+    }
     let telegramPurchasePackages = [];
     let telegramPurchaseInboundRoutes = [];
     let telegramPurchaseInbounds = {};
@@ -4966,7 +4974,7 @@
             return `<article class="tgb-proxy-card${promo.enabled ? '' : ' is-disabled'}">
                 <div class="tgb-proxy-title"><strong>${escapeHtml(String(promo.name))}</strong><div class="tgb-proxy-meta">${action} · ${scope} · ${promo.enabled ? 'Enabled' : 'Disabled'}</div></div>
                 <div class="tgb-proxy-health"><div class="tgb-health-line"><strong>${Number(promo.uses || 0)} uses</strong><span class="text-secondary">${Number(promo.discounted_total || 0).toLocaleString()} T discounted</span></div></div>
-                <div class="tgb-proxy-actions"><button class="btn btn-secondary" type="button" onclick="openTelegramPromoForm(${Number(promo.id)})">${_t('Edit')}</button><button class="btn btn-danger" type="button" onclick="deleteTelegramPromo(${Number(promo.id)}, this)">${_t('Delete')}</button></div>
+                <div class="tgb-proxy-actions"><button class="btn btn-secondary" type="button" data-onclick="openTelegramPromoForm(${Number(promo.id)})">${_t('Edit')}</button><button class="btn btn-danger" type="button" data-onclick="deleteTelegramPromo(${Number(promo.id)}, this)">${_t('Delete')}</button></div>
             </article>`;
         }).join('');
     }
@@ -5092,7 +5100,7 @@
             const statusKey = status.toLowerCase().replace('_', ' ');
             const statusClass = ['running', 'healthy'].includes(statusKey) ? 'is-good' : ['failed', 'error', 'stale'].includes(statusKey) ? 'is-error' : ['starting', 'cooldown', 'degraded'].includes(statusKey) ? 'is-warning' : '';
             const owner = isCentral ? 'System' : (bot.owner_username ? escapeHtml(String(bot.owner_username)) : `Reseller #${Number(bot.owner_admin_id || 0)}`);
-            return `<article class="tgb-proxy-card${bot.enabled === false && !isCentral ? ' is-disabled' : ''}" style="cursor:pointer;${selected ? ' outline: 2px solid var(--primary);' : ''}" onclick="selectTelegramBot(${isCentral ? 'null' : Number(bot.id)})">
+            return `<article class="tgb-proxy-card${bot.enabled === false && !isCentral ? ' is-disabled' : ''}" style="cursor:pointer;${selected ? ' outline: 2px solid var(--primary);' : ''}" data-onclick="selectTelegramBot(${isCentral ? 'null' : Number(bot.id)})">
                 <div class="tgb-proxy-title"><strong>${escapeHtml(String(bot.display_name || 'Unnamed bot'))}</strong><div class="tgb-proxy-meta">${owner}${bot.bot_username ? ` · @${escapeHtml(String(bot.bot_username))}` : ''} · ${bot.enabled ? 'Enabled' : 'Disabled'}${bot.archived ? ' · Archived' : ''}</div></div>
                 <div class="tgb-proxy-health"><div class="tgb-health-line"><span class="tgb-status-dot ${statusClass}"></span><strong>${escapeHtml(status)}</strong></div></div>
             </article>`;
@@ -5374,7 +5382,7 @@
                     <code style="font-size:0.8rem; direction:ltr; unicode-bidi:embed;">${escapeHtml(key)}</code>
                     <div style="display:flex; align-items:center; gap:12px;">
                         ${telegramCopyHideable.has(key) ? `<label style="display:inline-flex; align-items:center; gap:6px; font-size:0.82rem; margin:0;"><input type="checkbox" class="tgb-copy-hidden"${override.hidden ? ' checked' : ''}> ${_t('Hidden')}</label>` : ''}
-                        <button type="button" class="btn btn-secondary" style="padding:2px 10px; font-size:0.78rem;" onclick="resetTelegramCopyRow(this)">${_t('Default')}</button>
+                        <button type="button" class="btn btn-secondary" style="padding:2px 10px; font-size:0.78rem;" data-onclick="resetTelegramCopyRow(this)">${_t('Default')}</button>
                     </div>
                 </div>
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:8px;">
@@ -5688,7 +5696,7 @@
                 <div class="tgb-egress-card-head"><div><h3>${escapeHtml(String(profile.name || 'Managed route'))}</h3><div class="tgb-egress-source" title="${escapeHtml(source)}">${escapeHtml(source)}</div></div><code class="tgb-egress-address">${escapeHtml(String(profile.local_host || '127.0.0.1'))}:${Number(profile.local_port || 0)}</code></div>
                 <div class="tgb-egress-state-grid"><div class="tgb-egress-state"><small>${_t('Runtime')}</small><strong>${escapeHtml(String(runtime))}</strong></div><div class="tgb-egress-state"><small>${_t('Health')}</small><strong>${escapeHtml(String(health))}${profile.last_latency_ms != null ? ` · ${Number(profile.last_latency_ms)} ms` : ''}</strong></div></div>
                 <div class="tgb-egress-heartbeat">${escapeHtml(heartbeat)} · Priority ${Number(profile.priority || 0)} · ${Number(profile.failure_count || 0)} failure${Number(profile.failure_count || 0) === 1 ? '' : 's'} · ${profile.enabled === false ? 'Disabled' : 'Enabled'}</div>${error}
-                <div class="tgb-egress-actions"><button class="btn btn-secondary" type="button" onclick="testTelegramEgress(${Number(profile.id)}, this)">${_t('Test')}</button><button class="btn btn-secondary" type="button" onclick="openTelegramEgressForm(${Number(profile.id)})">${_t('Edit')}</button><button class="btn btn-danger" type="button" onclick="deleteTelegramEgress(${Number(profile.id)}, this)">${_t('Delete')}</button></div>
+                <div class="tgb-egress-actions"><button class="btn btn-secondary" type="button" data-onclick="testTelegramEgress(${Number(profile.id)}, this)">${_t('Test')}</button><button class="btn btn-secondary" type="button" data-onclick="openTelegramEgressForm(${Number(profile.id)})">${_t('Edit')}</button><button class="btn btn-danger" type="button" data-onclick="deleteTelegramEgress(${Number(profile.id)}, this)">${_t('Delete')}</button></div>
             </article>`;
         }).join('');
         renderTelegramRouteOrder();
@@ -5810,10 +5818,10 @@
         if (!list) return;
         list.innerHTML = telegramTrialChannels.map((channel, index) => `
             <div class="tgb-form-grid tgb-purchase-grid" style="align-items:end; margin-top:6px;">
-                <div class="form-group"><label>${_t('Chat ID')}</label><input class="form-control" type="number" step="1" placeholder="-1001234567890" value="${escapeHtml(String(channel.chat_id ?? ''))}" onchange="telegramTrialChannels[${index}].chat_id = this.value.trim()"></div>
-                <div class="form-group"><label>${_t('Title')}</label><input class="form-control" type="text" maxlength="200" placeholder="${_t('Channel name')}" value="${escapeHtml(String(channel.title || ''))}" onchange="telegramTrialChannels[${index}].title = this.value.trim()"></div>
-                <div class="form-group"><label>${_t('Invite URL (optional)')}</label><input class="form-control" type="text" maxlength="200" placeholder="https://t.me/..." value="${escapeHtml(String(channel.invite_url || ''))}" onchange="telegramTrialChannels[${index}].invite_url = this.value.trim()"></div>
-                <button class="btn btn-danger" type="button" onclick="removeTelegramTrialChannel(${index})">${_t('Remove')}</button>
+                <div class="form-group"><label>${_t('Chat ID')}</label><input class="form-control" type="number" step="1" placeholder="-1001234567890" value="${escapeHtml(String(channel.chat_id ?? ''))}" data-onchange="setTelegramChannelField('trial', ${index}, 'chat_id', this)"></div>
+                <div class="form-group"><label>${_t('Title')}</label><input class="form-control" type="text" maxlength="200" placeholder="${_t('Channel name')}" value="${escapeHtml(String(channel.title || ''))}" data-onchange="setTelegramChannelField('trial', ${index}, 'title', this)"></div>
+                <div class="form-group"><label>${_t('Invite URL (optional)')}</label><input class="form-control" type="text" maxlength="200" placeholder="https://t.me/..." value="${escapeHtml(String(channel.invite_url || ''))}" data-onchange="setTelegramChannelField('trial', ${index}, 'invite_url', this)"></div>
+                <button class="btn btn-danger" type="button" data-onclick="removeTelegramTrialChannel(${index})">${_t('Remove')}</button>
             </div>`).join('');
     }
 
@@ -5845,10 +5853,10 @@
         if (!list) return;
         list.innerHTML = telegramRequiredChannels.map((channel, index) => `
             <div class="tgb-form-grid tgb-purchase-grid" style="align-items:end; margin-top:6px;">
-                <div class="form-group"><label>${_t('Chat ID')}</label><input class="form-control" type="text" inputmode="numeric" placeholder="-1001234567890" value="${escapeHtml(String(channel.chat_id ?? ''))}" onchange="telegramRequiredChannels[${index}].chat_id = this.value.trim()"></div>
-                <div class="form-group"><label>${_t('Title')}</label><input class="form-control" type="text" maxlength="100" placeholder="${_t('Channel name')}" value="${escapeHtml(String(channel.title || ''))}" onchange="telegramRequiredChannels[${index}].title = this.value.trim()"></div>
-                <div class="form-group"><label>${_t('Join URL')}</label><input class="form-control" type="text" maxlength="200" placeholder="https://t.me/..." value="${escapeHtml(String(channel.invite_url || ''))}" onchange="telegramRequiredChannels[${index}].invite_url = this.value.trim()"></div>
-                <button class="btn btn-danger" type="button" onclick="removeTelegramRequiredChannel(${index})">${_t('Remove')}</button>
+                <div class="form-group"><label>${_t('Chat ID')}</label><input class="form-control" type="text" inputmode="numeric" placeholder="-1001234567890" value="${escapeHtml(String(channel.chat_id ?? ''))}" data-onchange="setTelegramChannelField('required', ${index}, 'chat_id', this)"></div>
+                <div class="form-group"><label>${_t('Title')}</label><input class="form-control" type="text" maxlength="100" placeholder="${_t('Channel name')}" value="${escapeHtml(String(channel.title || ''))}" data-onchange="setTelegramChannelField('required', ${index}, 'title', this)"></div>
+                <div class="form-group"><label>${_t('Join URL')}</label><input class="form-control" type="text" maxlength="200" placeholder="https://t.me/..." value="${escapeHtml(String(channel.invite_url || ''))}" data-onchange="setTelegramChannelField('required', ${index}, 'invite_url', this)"></div>
+                <button class="btn btn-danger" type="button" data-onclick="removeTelegramRequiredChannel(${index})">${_t('Remove')}</button>
             </div>`).join('');
     }
 
@@ -5887,7 +5895,7 @@
             return `<article class="tgb-proxy-card ${proxy.enabled === false ? 'is-disabled' : ''}">
                 <div class="tgb-proxy-title"><strong>${type} · ${host}:${Number(proxy.port || 0)}</strong><div class="tgb-proxy-meta">Priority ${Number(proxy.priority || 0)} · ${proxy.username_configured || proxy.password_configured ? 'Authenticated' : 'No authentication'} · ${proxy.enabled === false ? 'Disabled' : 'Enabled'}</div></div>
                 <div class="tgb-proxy-health"><div class="tgb-health-line"><span class="tgb-status-dot ${healthClass}"></span><strong>${escapeHtml(String(health))}</strong>${proxy.last_latency_ms != null ? `<span class="text-secondary">${Number(proxy.last_latency_ms)} ms</span>` : ''}</div>${error}</div>
-                <div class="tgb-proxy-actions"><button class="btn btn-secondary" type="button" onclick="testTelegramProxy(${Number(proxy.id)}, this)">${_t('Test')}</button><button class="btn btn-secondary" type="button" onclick="openTelegramProxyForm(${Number(proxy.id)})">${_t('Edit')}</button><button class="btn btn-danger" type="button" onclick="deleteTelegramProxy(${Number(proxy.id)}, this)">${_t('Delete')}</button></div>
+                <div class="tgb-proxy-actions"><button class="btn btn-secondary" type="button" data-onclick="testTelegramProxy(${Number(proxy.id)}, this)">${_t('Test')}</button><button class="btn btn-secondary" type="button" data-onclick="openTelegramProxyForm(${Number(proxy.id)})">${_t('Edit')}</button><button class="btn btn-danger" type="button" data-onclick="deleteTelegramProxy(${Number(proxy.id)}, this)">${_t('Delete')}</button></div>
             </article>`;
         }).join('');
         updateTelegramProxyWarning();
@@ -7594,7 +7602,7 @@
 
             let versionBadge;
             if (d.update_available) {
-                versionBadge = `<span class="badge badge-warning" style="cursor:pointer" onclick="window.open('${d.release_url}','_blank')">Update available → v${d.latest_version}</span>`;
+                versionBadge = `<span class="badge badge-warning" style="cursor:pointer" data-url="${eveAttr(d.release_url)}" data-onclick="openExternalUrl(this.dataset.url)">Update available → v${d.latest_version}</span>`;
             } else if (d.is_beta) {
                 versionBadge = `<span class="badge badge-info" title="${_t('Local version is ahead of latest GitHub release')}">${_t('Using beta / dev build')}</span>`;
             } else if (d.latest_version) {
@@ -8334,7 +8342,7 @@
             + '<label class="label-note" for="memory-trend-window">'
             + memEsc(memT('windowLabel')) + '</label>'
             + '<select class="form-select" id="memory-trend-window"'
-            + ' onchange="loadMemory(this.value)">' + options + '</select></div>';
+            + ' data-onchange="loadMemory(this.value)">' + options + '</select></div>';
     }
 
     function renderTrendCard(trend) {
@@ -8580,7 +8588,7 @@
         if (!MEM_CAN_ANALYZE) return '';
         return '<div class="mem-actions">'
             + '<button type="button" class="btn btn-secondary" id="memory-analyze-btn"'
-            + ' onclick="runMemoryAnalysis()">' + memEsc(memT('analyze')) + '</button>'
+            + ' data-onclick="runMemoryAnalysis()">' + memEsc(memT('analyze')) + '</button>'
             + '<small class="field-note">' + memEsc(memT('analyzeHint')) + '</small>'
             + '</div>'
             + '<div id="memory-analyze-result"></div>';
@@ -9735,10 +9743,10 @@
                         <a href="/api/backups/${b.name}/download" class="action-btn" title="${_t('Download')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         </a>
-                        <button class="action-btn warning" onclick="${b.restore_supported ? `restoreBackup('${b.name}')` : ''}" title="${b.restore_supported ? 'Restore' : 'Restore not available'}" ${b.restore_supported ? '' : 'disabled style="opacity:0.5;cursor:not-allowed"'}>
+                        <button class="action-btn warning" data-onclick="${b.restore_supported ? `restoreBackup('${b.name}')` : ''}" title="${b.restore_supported ? 'Restore' : 'Restore not available'}" ${b.restore_supported ? '' : 'disabled style="opacity:0.5;cursor:not-allowed"'}>
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><polyline points="23 20 23 14 17 14"></polyline><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path></svg>
                         </button>
-                        <button class="action-btn danger" onclick="deleteBackup('${b.name}')" title="${_t('Delete')}">
+                        <button class="action-btn danger" data-onclick="deleteBackup('${b.name}')" title="${_t('Delete')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
                     </div>
@@ -9983,13 +9991,13 @@
                     </div>
                     <div class="action-buttons">
                         ${!t.is_active ? `
-                        <button class="action-btn success" onclick="activateTemplate(${t.id})" title="${_t('Set Active')}">
+                        <button class="action-btn success" data-onclick="activateTemplate(${t.id})" title="${_t('Set Active')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
                         </button>` : ''}
-                        <button class="action-btn" onclick="editTemplate(${t.id})" title="${_t('Edit')}">
+                        <button class="action-btn" data-onclick="editTemplate(${t.id})" title="${_t('Edit')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                         </button>
-                        <button class="action-btn danger" onclick="deleteTemplate(${t.id})" title="Delete" ${t.is_active ? 'disabled style="opacity:0.5;cursor:not-allowed"' : ''}>
+                        <button class="action-btn danger" data-onclick="deleteTemplate(${t.id})" title="Delete" ${t.is_active ? 'disabled style="opacity:0.5;cursor:not-allowed"' : ''}>
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
                     </div>
@@ -10239,7 +10247,7 @@
                 const modalVarsContainer = document.getElementById('renew-modal-vars');
                 if (modalVarsContainer) {
                     modalVarsContainer.innerHTML = renewAvailableVars.map(v => `
-                        <span class="var-chip" onclick="insertRenewVar('${v.replace(/'/g, "\\'")}')">${escapeHtml(v)}</span>
+                        <span class="var-chip" data-var="${eveAttr(v)}" data-onclick="insertRenewVar(this.dataset.var)">${escapeHtml(v)}</span>
                     `).join('');
                 }
             }
@@ -10266,13 +10274,13 @@
                     </div>
                     <div class="action-buttons">
                         ${!t.is_active ? `
-                        <button class="action-btn success" onclick="activateRenewTemplate(${t.id})" title="${_t('Set Active')}">
+                        <button class="action-btn success" data-onclick="activateRenewTemplate(${t.id})" title="${_t('Set Active')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
                         </button>` : ''}
-                        <button class="action-btn" onclick="editRenewTemplate(${t.id})" title="${_t('Edit')}">
+                        <button class="action-btn" data-onclick="editRenewTemplate(${t.id})" title="${_t('Edit')}">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                         </button>
-                        <button class="action-btn danger" onclick="deleteRenewTemplate(${t.id})" title="Delete" ${t.is_active ? 'disabled style="opacity:0.5;cursor:not-allowed"' : ''}>
+                        <button class="action-btn danger" data-onclick="deleteRenewTemplate(${t.id})" title="Delete" ${t.is_active ? 'disabled style="opacity:0.5;cursor:not-allowed"' : ''}>
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
                     </div>
@@ -10544,7 +10552,7 @@
             const modalVarsContainer = document.getElementById('account-message-modal-vars');
             if (modalVarsContainer) {
                 modalVarsContainer.innerHTML = accountMessageAvailableVars.map(v => `
-                    <span class="var-chip" onclick="insertAccountMessageVar('${v.replace(/'/g, "\\'")}')">${escapeHtml(v)}</span>
+                    <span class="var-chip" data-var="${eveAttr(v)}" data-onclick="insertAccountMessageVar(this.dataset.var)">${escapeHtml(v)}</span>
                 `).join('');
             }
         } catch (e) {
@@ -10571,16 +10579,16 @@
                 </div>
                 <div class="action-buttons">
                     ${!t.is_active ? `
-                    <button class="action-btn success" onclick="activateAccountMessageTemplate(${t.id})" title="${_t('Set Active')}">
+                    <button class="action-btn success" data-onclick="activateAccountMessageTemplate(${t.id})" title="${_t('Set Active')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
                     </button>` : `
-                    <button class="action-btn warning" onclick="disableAccountMessageTemplate(${t.id})" title="${_t('Disable')}">
+                    <button class="action-btn warning" data-onclick="disableAccountMessageTemplate(${t.id})" title="${_t('Disable')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>
                     </button>`}
-                    <button class="action-btn" onclick="editAccountMessageTemplate(${t.id})" title="${_t('Edit')}">
+                    <button class="action-btn" data-onclick="editAccountMessageTemplate(${t.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>
-                    <button class="action-btn danger" onclick="deleteAccountMessageTemplate(${t.id})" title="Delete" ${t.is_active ? 'disabled style="opacity:0.5;cursor:not-allowed"' : ''}>
+                    <button class="action-btn danger" data-onclick="deleteAccountMessageTemplate(${t.id})" title="Delete" ${t.is_active ? 'disabled style="opacity:0.5;cursor:not-allowed"' : ''}>
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                 </div>
@@ -10925,7 +10933,7 @@
                 let btns = '';
                 for (let p = 1; p <= data.pages; p++) {
                     const active = p === data.page ? 'btn-primary' : 'btn-secondary';
-                    btns += `<button class="btn ${active}" style="min-width:36px;padding:4px 10px;" onclick="loadHealthLogs(${p})">${p}</button>`;
+                    btns += `<button class="btn ${active}" style="min-width:36px;padding:4px 10px;" data-onclick="loadHealthLogs(${p})">${p}</button>`;
                 }
                 pagDiv.innerHTML = btns;
             } else {
@@ -11100,7 +11108,7 @@
             }).join('');
 
             return `<div class="tc-server-card">
-                <div class="tc-server-header" onclick="tcToggle(${si})">
+                <div class="tc-server-header" data-onclick="tcToggle(${si})">
                     <div class="tc-server-name">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
                         ${escapeHtml(srv.server_name)}
@@ -11231,13 +11239,13 @@ function renderSubApps() {
             </div>
             <div class="sa-card-actions">
                 <label class="sa-toggle" title="${app.is_enabled ? 'Disable app' : 'Enable app'}">
-                    <input type="checkbox" ${app.is_enabled ? 'checked' : ''} onchange="toggleSubApp(${app.id}, this.checked)">
+                    <input type="checkbox" ${app.is_enabled ? 'checked' : ''} data-onchange="toggleSubApp(${app.id}, this.checked)">
                     <span class="sa-toggle-slider"></span>
                 </label>
-                <button class="btn-icon" onclick="openEditAppModal(${app.id})" title="${_t('Edit')}">
+                <button class="btn-icon" data-onclick="openEditAppModal(${app.id})" title="${_t('Edit')}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                 </button>
-                <button class="btn-icon btn-icon-danger" onclick="deleteSubApp(${app.id}, '${escapeHtml(app.name||'').replace(/'/g,"\\'")}' )" title="${_t('Delete')}">
+                <button class="btn-icon btn-icon-danger" data-name="${eveAttr(app.name||'')}" data-onclick="deleteSubApp(${app.id}, this.dataset.name)" title="${_t('Delete')}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
                 </button>
             </div>
@@ -11386,10 +11394,10 @@ async function loadTelegramAnnouncements(createdAnnouncement = null) {
         }
         if (!announcements.length) { list.innerHTML = '<div class="text-secondary">' + _t('No announcement campaigns yet.') + '</div>'; return; }
         list.innerHTML = announcements.map(a => {
-        const actions = a.status === 'draft' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'send')">${_t('Send')}</button>`
-            : ['queued','sending'].includes(a.status) ? `<button class="btn btn-secondary" onclick="mutateTelegramAnnouncement(${a.id},'pause')">${_t('Pause')}</button>`
-            : a.status === 'paused' ? `<button class="btn btn-primary" onclick="mutateTelegramAnnouncement(${a.id},'resume')">${_t('Resume')}</button>` : '';
-            return `<div id="tga-campaign-${a.id}" class="telegram-campaign-row"><div><strong>${escapeHtml(a.title)}</strong><div class="text-secondary" style="margin-top:5px">${escapeHtml(a.status)} · Total ${a.total_count} · Sent ${a.sent_count} · Failed ${a.failed_count} · Blocked ${a.blocked_count}</div></div><div class="telegram-campaign-actions">${actions}${!['completed','cancelled'].includes(a.status) ? `<button class="btn btn-danger" onclick="mutateTelegramAnnouncement(${a.id},'cancel')">${_t('Cancel')}</button>` : ''}</div></div>`;
+        const actions = a.status === 'draft' ? `<button class="btn btn-primary" data-onclick="mutateTelegramAnnouncement(${a.id},'send')">${_t('Send')}</button>`
+            : ['queued','sending'].includes(a.status) ? `<button class="btn btn-secondary" data-onclick="mutateTelegramAnnouncement(${a.id},'pause')">${_t('Pause')}</button>`
+            : a.status === 'paused' ? `<button class="btn btn-primary" data-onclick="mutateTelegramAnnouncement(${a.id},'resume')">${_t('Resume')}</button>` : '';
+            return `<div id="tga-campaign-${a.id}" class="telegram-campaign-row"><div><strong>${escapeHtml(a.title)}</strong><div class="text-secondary" style="margin-top:5px">${escapeHtml(a.status)} · Total ${a.total_count} · Sent ${a.sent_count} · Failed ${a.failed_count} · Blocked ${a.blocked_count}</div></div><div class="telegram-campaign-actions">${actions}${!['completed','cancelled'].includes(a.status) ? `<button class="btn btn-danger" data-onclick="mutateTelegramAnnouncement(${a.id},'cancel')">${_t('Cancel')}</button>` : ''}</div></div>`;
         }).join('');
     } catch (error) {
         if (loadSerial !== telegramAnnouncementsLoadSerial) return;
@@ -11527,7 +11535,7 @@ function telegramBackupInboundRowsMarkup(type, wanted) {
         const meta = `${label} · ${String(row.protocol || '').toUpperCase()}:${row.port || '?'}` +
             (telegramBackupIsV3 ? '' : ` · ${row.clients} ${TG_BACKUP_TEXT.clients}`);
         const checked = wanted.has(Number(row.id)) ? ' checked' : '';
-        return `<label class="telegram-backup-choice filter-item"><input type="${type}" name="telegram-backup-inbound-choice" value="${Number(row.id)}" data-label="${escapeHtml(label)}" onchange="onTelegramBackupInboundChange()"${checked}> <span>${escapeHtml(meta)}</span></label>`;
+        return `<label class="telegram-backup-choice filter-item"><input type="${type}" name="telegram-backup-inbound-choice" value="${Number(row.id)}" data-label="${escapeHtml(label)}" data-onchange="onTelegramBackupInboundChange()"${checked}> <span>${escapeHtml(meta)}</span></label>`;
     }).join('');
 }
 
@@ -11608,7 +11616,7 @@ function renderTelegramBackupClients(preselectedClientId = null) {
         els.clients.innerHTML = telegramBackupClientRows.map(row => {
             const checked = preselectedClientId != null && String(row.id) === String(preselectedClientId) ? ' checked' : '';
             return `<label class="telegram-backup-choice filter-item telegram-backup-client-row" data-search="${escapeHtml(`${row.label} ${row.id}`)}">` +
-                `<input type="radio" name="telegram-backup-client-choice" value="${escapeHtml(String(row.id))}" data-label="${escapeHtml(String(row.label))}" onchange="updateTelegramBackupSelectionSummary()"${checked}> ` +
+                `<input type="radio" name="telegram-backup-client-choice" value="${escapeHtml(String(row.id))}" data-label="${escapeHtml(String(row.label))}" data-onchange="updateTelegramBackupSelectionSummary()"${checked}> ` +
                 `<span>${escapeHtml(String(row.label))}${row.is_probe ? ' · probe' : ''}</span></label>`;
         }).join('') + `<div class="telegram-backup-picker-empty telegram-backup-search-empty" hidden>${escapeHtml(TG_BACKUP_TEXT.no_search_results)}</div>`;
         setTelegramBackupHint('');

@@ -5,7 +5,7 @@
 
 {% block header_actions %}
 {% if is_superadmin %}
-<button class="btn btn-primary btn-full-mobile" onclick="openAddServerModal()">
+<button class="btn btn-primary btn-full-mobile" data-onclick="openAddServerModal()">
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <line x1="12" y1="5" x2="12" y2="19"></line>
         <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -25,7 +25,7 @@
     <div class="modal">
         <div class="modal-header">
             <h2 id="modal-title">{{ _('Add Server') }}</h2>
-            <button class="modal-close" onclick="closeServerModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeServerModal()">&times;</button>
         </div>
         <div class="modal-body">
             <input type="hidden" id="edit-server-id">
@@ -76,7 +76,7 @@
                 <input type="password" id="server-api-token" placeholder="{{ _('Paste token for v3 panels; leave empty for older panels') }}">
                 <small id="server-api-token-hint" class="field-note field-note-ok hidden">{{ _('✓ A token is already saved. Type a new one to replace it, or leave empty to keep it.') }}</small>
                 <small id="server-api-token-clear-hint" class="field-note field-note-warn hidden">{{ _('The saved token will be removed when you save.') }}</small>
-                <button type="button" class="btn btn-secondary btn-icon hidden" id="server-api-token-clear" style="margin-top:8px;" onclick="clearServerApiToken()">{{ _('Remove saved API token') }}</button>
+                <button type="button" class="btn btn-secondary btn-icon hidden" id="server-api-token-clear" style="margin-top:8px;" data-onclick="clearServerApiToken()">{{ _('Remove saved API token') }}</button>
             </div>
 
             <div class="form-group">
@@ -97,8 +97,8 @@
                 <span>{{ _('Enabled') }}</span>
             </label>
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeServerModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" onclick="saveServer()">{{ _('Save') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeServerModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" data-onclick="saveServer()">{{ _('Save') }}</button>
             </div>
         </div>
     </div>
@@ -111,7 +111,7 @@
                 <h2>{{ _('Subscription Inbound Priority') }}</h2>
                 <p id="subscription-order-server-name" class="subscription-order-subtitle"></p>
             </div>
-            <button class="modal-close" onclick="closeSubscriptionOrderModal()">&times;</button>
+            <button class="modal-close" data-onclick="closeSubscriptionOrderModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p class="subscription-order-help">
@@ -119,8 +119,8 @@
             </p>
             <div id="subscription-order-list" class="subscription-order-list"></div>
             <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeSubscriptionOrderModal()">{{ _('Cancel') }}</button>
-                <button class="btn btn-primary" id="save-subscription-order" onclick="saveSubscriptionOrder()">{{ _('Save Priority') }}</button>
+                <button class="btn btn-secondary" data-onclick="closeSubscriptionOrderModal()">{{ _('Cancel') }}</button>
+                <button class="btn btn-primary" id="save-subscription-order" data-onclick="saveSubscriptionOrder()">{{ _('Save Priority') }}</button>
             </div>
         </div>
     </div>

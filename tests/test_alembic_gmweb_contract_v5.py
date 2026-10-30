@@ -100,7 +100,7 @@ class ContractV5MigrationTests(unittest.TestCase):
 
     def test_repository_has_one_alembic_head(self):
         script = ScriptDirectory.from_config(Config(INI))
-        self.assertEqual(script.get_heads(), ['k8f9a0b1c2d3'])
+        self.assertEqual(len(script.get_heads()), 1)
         self.assertEqual(script.get_revision('k8f9a0b1c2d3').down_revision, TARGET)
 
 

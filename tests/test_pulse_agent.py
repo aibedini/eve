@@ -23,6 +23,7 @@ import pulse  # noqa: E402
 import pulse_agent  # noqa: E402
 import pulse_runner  # noqa: E402
 import app as app_module  # noqa: E402
+from panel.security import hash_bearer_token  # noqa: E402
 from app import (  # noqa: E402
     Admin,
     PulseAgent,
@@ -228,7 +229,7 @@ class PulseAgentApiTestBase(unittest.TestCase):
         self.admin = Admin(username='owner', password_hash='x',
                            role='superadmin', is_superadmin=True)
         self.server = _server()
-        self.agent = PulseAgent(name='de-1', token='tok123')
+        self.agent = PulseAgent(name='de-1', token=hash_bearer_token('tok123', 'pulse-agent'))
         db.session.add_all([self.admin, self.server, self.agent])
         db.session.commit()
 
@@ -511,7 +512,7 @@ class PulseAgentReportEndpointTest(PulseAgentApiTestBase):
 
     def test_report_rejects_foreign_agent_and_unknown_run(self):
         run = self._claimed_run()
-        other = PulseAgent(name='fr-1', token='tok999')
+        other = PulseAgent(name='fr-1', token=hash_bearer_token('tok999', 'pulse-agent'))
         db.session.add(other)
         db.session.commit()
         resp = self.client.post(

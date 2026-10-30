@@ -15,7 +15,7 @@ from panel.models import (
     Admin, PulseAgent, PulseRun, PulseTemplate, Server, get_pulse_settings,
 )
 from panel.routes.common import login_required
-from panel.security import client_ip, hash_bearer_token
+from panel.security import client_ip, digest_presented_token, hash_bearer_token
 from panel.services.subscription import generate_client_link
 
 bp = Blueprint('pulse', __name__)
@@ -773,16 +773,10 @@ def _pulse_agent_required(view):
     def wrapper(*args, **kwargs):
         auth = request.headers.get('Authorization') or ''
         token = auth[7:].strip() if auth.startswith('Bearer ') else ''
-        token_hash = hash_bearer_token(token, 'pulse-agent') if token else ''
-        agent = PulseAgent.query.filter_by(token=token_hash).first() if token else None
-        legacy_token = False
-        if agent is None and token:
-            agent = PulseAgent.query.filter_by(token=token).first()
-            legacy_token = agent is not None
+        token_hash = digest_presented_token(token, 'pulse-agent')
+        agent = PulseAgent.query.filter_by(token=token_hash).first() if token_hash else None
         if agent is None or not agent.enabled:
             return jsonify({'ok': False, 'error': 'invalid agent token'}), 401
-        if legacy_token:
-            agent.token = token_hash
         agent.last_seen_at = datetime.utcnow()
         agent.last_ip = client_ip()
         db.session.commit()

@@ -9,7 +9,7 @@ from sqlalchemy import text
 from panel.extensions import db, limiter
 from panel.models import CustomSubscription, CustomSubscriptionConfig
 from panel.routes.common import login_required, permission_required
-from panel.security import hash_bearer_token
+from panel.security import digest_presented_token, hash_bearer_token
 
 bp = Blueprint('custom_subs', __name__)
 
@@ -57,7 +57,9 @@ def _custom_subscription_public_url(row):
 @limiter.limit('60 per minute')
 def public_custom_subscription(token):
     raw_token = str(token)
-    token_hash = hash_bearer_token(raw_token, 'custom-subscription')
+    token_hash = digest_presented_token(raw_token, 'custom-subscription')
+    if token_hash is None:
+        return 'Subscription not found', 404
     row = CustomSubscription.query.filter_by(token_hash=token_hash, enabled=True).first()
     if row is None:
         legacy_id = db.session.execute(text(

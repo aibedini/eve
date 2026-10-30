@@ -297,7 +297,7 @@
                 terminal: ['expired', 'ended'].includes(client?.service_state_tag || '')
             }));
             return `
-                <button class="action-btn success" data-client-message="${payload}" onclick="openClientAccountMessageChannel(this)" title="${_t('Send account info')}">
+                <button class="action-btn success" data-client-message="${payload}" data-onclick="openClientAccountMessageChannel(this)" title="${_t('Send account info')}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
                     </svg>
@@ -990,7 +990,7 @@
         // cards too). Build a key->el map once so this stays O(cards), not O(cards²).
         const headerByKey = new Map();
         document.querySelectorAll('.select-all-clients').forEach(sa => {
-            const m = (sa.getAttribute('onchange') || '').match(/toggleSelectAllClients\('([^']+)'/);
+            const m = (sa.getAttribute('data-onchange') || '').match(/toggleSelectAllClients\('([^']+)'/);
             if (m) headerByKey.set(m[1], sa);
         });
         _cardRowData.forEach((reg, key) => {
@@ -1946,7 +1946,7 @@
                     </svg>
                     <h3>${_t('Connection Error')}</h3>
                     <p>Failed to load data from servers. Please check your connection and try again.${errDetail}</p>
-                    <button class="btn btn-primary" onclick="refreshData()">${_t('Try Again')}</button>
+                    <button class="btn btn-primary" data-onclick="refreshData()">${_t('Try Again')}</button>
                 </div>`;
         }
     }
@@ -2034,12 +2034,12 @@
             const name = ib.remark || _t('Inbound {id}', {id: ib.id});
             return `<span class="inbound-name-line ${(ib.protocol || '').toLowerCase()}" title="${escapeHtml(proto + ' · ' + name)}"><span class="ib-proto-dot"></span><span class="ib-name-text">${renderInboundName(name)}</span></span>`;
         }).join('');
-        const assignBtn = IS_SUPERADMIN ? `<button class="action-btn" onclick="openAssignModal(${sid}, '${client.email}', '${firstIbId}', '${client.id || ''}')" title="${_t('Assign Owner')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 11h-2.5a2.5 2.5 0 0 0 0 5H22"></path></svg></button>` : '';
+        const assignBtn = IS_SUPERADMIN ? `<button class="action-btn" data-onclick="openAssignModal(${sid}, '${client.email}', '${firstIbId}', '${client.id || ''}')" title="${_t('Assign Owner')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 11h-2.5a2.5 2.5 0 0 0 0 5H22"></path></svg></button>` : '';
         const toggleIcon = client.enable
             ? '<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>'
             : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>';
         return `<tr class="${!client.enable ? 'disabled-row' : ''}">
-            <td class="select-cell"><label class="checkbox-label" style="padding-left:0;width:20px;height:20px;margin:0 auto;"><input type="checkbox" class="client-bulk-checkbox" data-inbound-key="${cardKey}" data-server-id="${sid}" data-inbound-id="${firstIbId}" data-email="${client.email}" data-client-uuid="${client.id || ''}" data-enabled="${client.enable ? '1' : '0'}" onchange="onBulkClientCheckboxChanged(this)"><span class="checkmark"></span></label></td>
+            <td class="select-cell"><label class="checkbox-label" style="padding-left:0;width:20px;height:20px;margin:0 auto;"><input type="checkbox" class="client-bulk-checkbox" data-inbound-key="${cardKey}" data-server-id="${sid}" data-inbound-id="${firstIbId}" data-email="${client.email}" data-client-uuid="${client.id || ''}" data-enabled="${client.enable ? '1' : '0'}" data-onchange="onBulkClientCheckboxChanged(this)"><span class="checkmark"></span></label></td>
             <td class="email-cell"><span class="email-with-online"><span class="email-name-row">${client.is_online ? '<span class="online-pulse" title="' + _t('Online') + '"></span>' : ''}<span class="email-text">${client.email}</span></span>${client.comment ? `<span class="client-comment">${escHtml(client.comment)}</span>` : ''}</span></td>
             <td class="inbounds-cell" data-label="Inbounds"><div class="inbound-pills">${ibPillsHtml}</div></td>
             <td class="owner-cell" data-label="Owner">${renderOwnerCell(client)}</td>
@@ -2048,14 +2048,14 @@
             <td class="traffic-cell" data-label="Traffic"><div class="traffic-combined-cell"><span class="up">↑ ${client.up_formatted}</span><span class="down">↓ ${client.down_formatted}</span></div></td>
             <td class="volume-cell" data-label="Volume"><div class="volume-info"><span class="remaining ${client.volume_status || ''}">${client.remaining_formatted}</span><span class="total ${client.totalGB_formatted === 'Unlimited' ? 'expiry-start-after' : ''}">/ ${client.totalGB_formatted}</span></div></td>
             <td class="action-cell"><div class="action-buttons">
-                <button class="action-btn" onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${sid}, '${client.subId || client.id || ''}')" title="${_t('QR Code')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
-                <button class="action-btn renew" onclick="openRenewModal(${sid}, '${firstIbId}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="${_t('Renew')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></button>
+                <button class="action-btn" data-onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${sid}, '${client.subId || client.id || ''}')" title="${_t('QR Code')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
+                <button class="action-btn renew" data-onclick="openRenewModal(${sid}, '${firstIbId}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="${_t('Renew')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></button>
                 ${renderAccountMessageButton({...client, server_id: sid})}
-                <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${sid}, '${firstIbId}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${toggleIcon}</svg></button>
-                <button class="action-btn warning" onclick="openResetModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0})" title="${_t('Reset Traffic')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg></button>
-                <button class="action-btn" onclick="openEditClientModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="${_t('Edit Client')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>
+                <button class="action-btn ${client.enable ? 'danger' : 'success'}" data-onclick="toggleClient(${sid}, '${firstIbId}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${toggleIcon}</svg></button>
+                <button class="action-btn warning" data-onclick="openResetModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0})" title="${_t('Reset Traffic')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg></button>
+                <button class="action-btn" data-onclick="openEditClientModal(${sid}, '${firstIbId}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="${_t('Edit Client')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>
                 ${assignBtn}
-                <button class="action-btn danger" onclick="openDeleteClientModal(${sid}, '${firstIbId}', '${client.email}', '${client.id}', ${client.enable}, '${client.expiryTime}', ${client.expiryTimestamp || 0}, '${client.up}', '${client.down}', '${client.totalGB_formatted}', '${client.remaining_formatted}')" title="${_t('Delete Client')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+                <button class="action-btn danger" data-onclick="openDeleteClientModal(${sid}, '${firstIbId}', '${client.email}', '${client.id}', ${client.enable}, '${client.expiryTime}', ${client.expiryTimestamp || 0}, '${client.up}', '${client.down}', '${client.totalGB_formatted}', '${client.remaining_formatted}')" title="${_t('Delete Client')}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
             </div></td>
         </tr>`;
     }
@@ -2064,7 +2064,7 @@
         return `<tr class="${!client.enable ? 'disabled-row' : ''}">
             <td class="select-cell">
                 <label class="checkbox-label" style="padding-left: 0; width: 20px; height: 20px; margin: 0 auto;">
-                    <input type="checkbox" class="client-bulk-checkbox" data-inbound-key="${inboundKey}" data-server-id="${client.server_id}" data-inbound-id="${client.inbound_id}" data-email="${client.email}" data-client-uuid="${client.id || ''}" data-enabled="${client.enable ? '1' : '0'}" onchange="onBulkClientCheckboxChanged(this)">
+                    <input type="checkbox" class="client-bulk-checkbox" data-inbound-key="${inboundKey}" data-server-id="${client.server_id}" data-inbound-id="${client.inbound_id}" data-email="${client.email}" data-client-uuid="${client.id || ''}" data-enabled="${client.enable ? '1' : '0'}" data-onchange="onBulkClientCheckboxChanged(this)">
                     <span class="checkmark"></span>
                 </label>
             </td>
@@ -2091,26 +2091,26 @@
             </td>
             <td class="action-cell">
                 <div class="action-buttons">
-                    <button class="action-btn" onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${client.server_id}, '${client.subId || client.id || ''}')" title="${_t('QR Code')}">
+                    <button class="action-btn" data-onclick="showQrCode('${encodeURIComponent(client.link || '')}', '${client.email}', '${client.sub_url || ''}', '${client.json_url || ''}', '${client.dash_sub_url || ''}', ${client.server_id}, '${client.subId || client.id || ''}')" title="${_t('QR Code')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
                     </button>
-                    <button class="action-btn renew" onclick="openRenewModal(${client.server_id}, '${client.inbound_id}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="${_t('Renew')}">
+                    <button class="action-btn renew" data-onclick="openRenewModal(${client.server_id}, '${client.inbound_id}', '${client.email}', '${client.volume_status || ''}', '${client.remaining_formatted || ''}', '${client.totalGB_formatted || ''}', '${client.expiryType || ''}', '${client.expiryTime || ''}', ${client.expiryTimestamp || 0})" title="${_t('Renew')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                     </button>
                     ${renderAccountMessageButton(client)}
-                    <button class="action-btn ${client.enable ? 'danger' : 'success'}" onclick="toggleClient(${client.server_id}, '${client.inbound_id}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}">
+                    <button class="action-btn ${client.enable ? 'danger' : 'success'}" data-onclick="toggleClient(${client.server_id}, '${client.inbound_id}', '${client.email}', ${!client.enable})" title="${client.enable ? 'Disable' : 'Enable'}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${client.enable ? '<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>' : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>'}</svg>
                     </button>
-                    <button class="action-btn warning" onclick="openResetModal(${client.server_id}, '${client.inbound_id}', '${client.email}', ${client.totalGB || 0})" title="${_t('Reset Traffic')}">
+                    <button class="action-btn warning" data-onclick="openResetModal(${client.server_id}, '${client.inbound_id}', '${client.email}', ${client.totalGB || 0})" title="${_t('Reset Traffic')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
                     </button>
-                    <button class="action-btn" onclick="openEditClientModal(${client.server_id}, '${client.inbound_id}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="${_t('Edit Client')}">
+                    <button class="action-btn" data-onclick="openEditClientModal(${client.server_id}, '${client.inbound_id}', '${client.email}', ${client.totalGB || 0}, ${client.expiryTimestamp || 0})" title="${_t('Edit Client')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>
-                    ${IS_SUPERADMIN ? `<button class="action-btn" onclick="openAssignModal(${client.server_id}, '${client.email}', '${client.inbound_id}', '${client.id || ''}')" title="${_t('Assign Owner')}">
+                    ${IS_SUPERADMIN ? `<button class="action-btn" data-onclick="openAssignModal(${client.server_id}, '${client.email}', '${client.inbound_id}', '${client.id || ''}')" title="${_t('Assign Owner')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 11h-2.5a2.5 2.5 0 0 0 0 5H22"></path></svg>
                     </button>` : ''}
-                    <button class="action-btn danger" onclick="openDeleteClientModal(${client.server_id}, '${client.inbound_id}', '${client.email}', '${client.id}', ${client.enable}, '${client.expiryTime}', ${client.expiryTimestamp || 0}, '${client.up}', '${client.down}', '${client.totalGB_formatted}', '${client.remaining_formatted}')" title="${_t('Delete Client')}">
+                    <button class="action-btn danger" data-onclick="openDeleteClientModal(${client.server_id}, '${client.inbound_id}', '${client.email}', '${client.id}', ${client.enable}, '${client.expiryTime}', ${client.expiryTimestamp || 0}, '${client.up}', '${client.down}', '${client.totalGB_formatted}', '${client.remaining_formatted}')" title="${_t('Delete Client')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                 </div>
@@ -2134,7 +2134,7 @@
         const items = reg.items || [];
         const allSelected = items.length > 0 && items.every(it => bulkSelectedClientKeys.has(reg.keyOf(it)));
         document.querySelectorAll('.select-all-clients').forEach(sa => {
-            const m = (sa.getAttribute('onchange') || '').match(/toggleSelectAllClients\('([^']+)'/);
+            const m = (sa.getAttribute('data-onchange') || '').match(/toggleSelectAllClients\('([^']+)'/);
             if (m && m[1] === key) sa.checked = allSelected;
         });
     }
@@ -2408,14 +2408,14 @@
 
         const clientsSectionHtml = totalCount > 0 ? `
         <div class="clients-section">
-            <button class="toggle-clients" data-inbound-key="${cardKey}" data-client-count="${totalCount}" onclick="toggleClients(this, event)">
+            <button class="toggle-clients" data-inbound-key="${cardKey}" data-client-count="${totalCount}" data-onclick="toggleClients(this, event)">
                 ${isExpanded ? `${SVG_HIDE} ${_t('Hide Clients ({count})', {count: totalCount})}` : `${SVG_SHOW} ${_t('Show Clients ({count})', {count: totalCount})}`}
             </button>
             <div class="clients-list ${isExpanded ? '' : 'hidden'}">
                 <div class="clients-table-wrapper">
                     <table class="clients-table">
                         <thead><tr>
-                            <th style="width:34px;"><label class="checkbox-label" style="padding-left:0;width:20px;height:20px;margin:0 auto;"><input type="checkbox" class="select-all-clients" onchange="toggleSelectAllClients('${cardKey}', this.checked)"><span class="checkmark"></span></label></th>
+                            <th style="width:34px;"><label class="checkbox-label" style="padding-left:0;width:20px;height:20px;margin:0 auto;"><input type="checkbox" class="select-all-clients" data-onchange="toggleSelectAllClients('${cardKey}', this.checked)"><span class="checkmark"></span></label></th>
                             <th>${_t('Email')}</th><th>${_t('Inbounds')}</th><th>${_t('Owner')}</th><th>${_t('Status')}</th><th>${_t('Expiry')}</th><th>${_t('Traffic')}</th><th>${_t('Volume')}</th><th>${_t('Actions')}</th>
                         </tr></thead>
                         <tbody></tbody>
@@ -2435,8 +2435,8 @@
                 </div>
                 <div class="inbound-status">
                     <span class="status-pill ${serverInbounds.some(ib => ib.enable !== false) ? 'active' : 'inactive'}">${serverInbounds.some(ib => ib.enable !== false) ? 'Active' : 'Inactive'}</span>
-                    ${totalCount > 0 ? `<button class="btn btn-secondary" style="padding:6px 10px;" title="${_t('Remaining-volume distribution')}" onclick="event.stopPropagation(); openVolumeStatsModal('${cardKey}')"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></button>` : ''}
-                    ${totalCount > 0 ? `<button class="btn btn-secondary" style="padding:6px 10px;" onclick="event.stopPropagation(); toggleSelectAllClients('${cardKey}', true)">${_t('Select All')}</button>` : ''}
+                    ${totalCount > 0 ? `<button class="btn btn-secondary" style="padding:6px 10px;" title="${_t('Remaining-volume distribution')}" data-onclick="event.stopPropagation(); openVolumeStatsModal('${cardKey}')"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></button>` : ''}
+                    ${totalCount > 0 ? `<button class="btn btn-secondary" style="padding:6px 10px;" data-onclick="event.stopPropagation(); toggleSelectAllClients('${cardKey}', true)">${_t('Select All')}</button>` : ''}
                 </div>
             </div>
             <div class="inbound-meta-compact">
@@ -2470,7 +2470,7 @@
                     </svg>
                     <h3>${_t('No servers added')}</h3>
                     <p>${_t('Add your X-UI server to see statistics.')}</p>
-                    <button class="btn btn-primary" onclick="openServerModal()">${_t('Add Server')}</button>
+                    <button class="btn btn-primary" data-onclick="openServerModal()">${_t('Add Server')}</button>
                 </div>`;
             return;
         }
@@ -2519,12 +2519,12 @@
                             ? `<span class="status-pill active">${_t('Active')}</span>`
                             : `<span class="status-pill inactive">${_t('Inactive')}</span>`}
                         ${inbound.clients.length > 0
-                            ? `<button class="btn btn-secondary" style="padding: 6px 10px;" title="${_t('Remaining-volume distribution')}" onclick="event.stopPropagation(); openVolumeStatsModal('${inboundKey}')">
+                            ? `<button class="btn btn-secondary" style="padding: 6px 10px;" title="${_t('Remaining-volume distribution')}" data-onclick="event.stopPropagation(); openVolumeStatsModal('${inboundKey}')">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
                               </button>`
                             : ''}
                         ${inbound.clients.length > 0
-                            ? `<button class="btn btn-secondary" style="padding: 6px 10px;" onclick="event.stopPropagation(); toggleSelectAllClients('${inboundKey}', true)">${_t('Select All')}</button>`
+                            ? `<button class="btn btn-secondary" style="padding: 6px 10px;" data-onclick="event.stopPropagation(); toggleSelectAllClients('${inboundKey}', true)">${_t('Select All')}</button>`
                             : ''}
                     </div>
                 </div>
@@ -2539,7 +2539,7 @@
 
                 ${inbound.clients.length > 0 ? `
                 <div class="clients-section">
-                    <button class="toggle-clients" data-inbound-key="${inboundKey}" data-client-count="${toggleCount}" onclick="toggleClients(this, event)">
+                    <button class="toggle-clients" data-inbound-key="${inboundKey}" data-client-count="${toggleCount}" data-onclick="toggleClients(this, event)">
                         ${isExpanded
                             ? `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg> ${_t('Hide Clients ({count})', {count: toggleCount})}`
                             : `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg> ${_t('Show Clients ({count})', {count: toggleCount})}`}
@@ -2551,7 +2551,7 @@
                                     <tr>
                                         <th style="width: 34px;">
                                             <label class="checkbox-label" style="padding-left: 0; width: 20px; height: 20px; margin: 0 auto;">
-                                                <input type="checkbox" class="select-all-clients" onchange="toggleSelectAllClients('${inboundKey}', this.checked)">
+                                                <input type="checkbox" class="select-all-clients" data-onchange="toggleSelectAllClients('${inboundKey}', this.checked)">
                                                 <span class="checkmark"></span>
                                             </label>
                                         </th>
@@ -2679,8 +2679,8 @@
                                     <span class="label">${escapeHtml(title)}:</span>
                                     <span class="value" style="opacity: 0.9;">${escapeHtml(String(reason))}</span>
                                 </span>
-                                <button class="btn btn-secondary" style="padding: 6px 10px;" onclick="showServerErrorDetail(${sid})">${ EVE_DASHBOARD.PANEL_LANG === 'fa' ? 'چرا؟' : 'Why?'}</button>
-                                <button class="btn btn-secondary" style="padding: 6px 10px;" onclick="refreshServerData(${sid}, { mode: 'full', force: true, poll: true, enqueue: true })">${_t('Retry')}</button>
+                                <button class="btn btn-secondary" style="padding: 6px 10px;" data-onclick="showServerErrorDetail(${sid})">${ EVE_DASHBOARD.PANEL_LANG === 'fa' ? 'چرا؟' : 'Why?'}</button>
+                                <button class="btn btn-secondary" style="padding: 6px 10px;" data-onclick="refreshServerData(${sid}, { mode: 'full', force: true, poll: true, enqueue: true })">${_t('Retry')}</button>
                             </div>
                         </div>`;
                     }).join('');
@@ -3567,8 +3567,8 @@
                 ${row(isFa ? 'متن خطا' : 'Raw error', '<span style="color:#fca5a5;">' + escapeHtml(String(rawError)) + '</span>')}
             </div>
             <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
-                <button class="btn btn-primary" style="flex:1;min-width:120px;" onclick="closeServerErrorModal(); refreshServerData(${detail.id}, { mode: 'full', force: true, poll: true, enqueue: true });">${isFa ? 'تلاش مجدد' : 'Retry now'}</button>
-                <button class="btn btn-secondary" style="flex:1;min-width:120px;" onclick="closeServerErrorModal()">${isFa ? 'بستن' : 'Close'}</button>
+                <button class="btn btn-primary" style="flex:1;min-width:120px;" data-onclick="closeServerErrorModal(); refreshServerData(${detail.id}, { mode: 'full', force: true, poll: true, enqueue: true });">${isFa ? 'تلاش مجدد' : 'Retry now'}</button>
+                <button class="btn btn-secondary" style="flex:1;min-width:120px;" data-onclick="closeServerErrorModal()">${isFa ? 'بستن' : 'Close'}</button>
             </div>`;
 
         document.getElementById('server-error-modal').classList.remove('hidden');
@@ -4720,7 +4720,7 @@
             }
 
             container.innerHTML = pkgs.map(p => `
-                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" onclick="selectPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0})"
+                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-onclick="selectPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0})"
                      style="border: 1px solid var(--border-color); padding: 8px; border-radius: 6px; cursor: pointer; transition: 0.2s; background: var(--bg-dark); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 60px;">
                     ${renderPackageTitle(p.name)}
                     <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${(Number(p.price) || 0).toLocaleString()} T</div>
@@ -4793,7 +4793,7 @@
         }
 
         container.innerHTML = pkgs.map(p => `
-                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-package-name="${escapePackageAttr(p.name || '')}" onclick="selectRenewPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0}, ${Number(p.days) || 0}, ${Number(p.volume) || 0})"
+                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-package-name="${escapePackageAttr(p.name || '')}" data-onclick="selectRenewPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0}, ${Number(p.days) || 0}, ${Number(p.volume) || 0})"
                      style="border: 1px solid var(--border-color); padding: 8px; border-radius: 6px; cursor: pointer; transition: 0.2s; background: var(--bg-dark); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 60px;">
                     ${renderPackageTitle(p.name)}
                     <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${(Number(p.price) || 0).toLocaleString()} T</div>
@@ -5070,7 +5070,7 @@
             const text = `${inbound.remark} - ${inbound.protocol} (${inbound.port}) [${active}]`;
             option.textContent = text;
             inboundSelect.appendChild(option);
-            pickHtml += `<div class="filter-item" onclick="selectInboundPick(${inbound.server_id}, ${inbound.id})">
+            pickHtml += `<div class="filter-item" data-onclick="selectInboundPick(${inbound.server_id}, ${inbound.id})">
                 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escHtml(text)}</span>
             </div>`;
         });
@@ -5131,7 +5131,7 @@
         if (!list) return;
         const servers = (allServers || []).filter(s => !s.hidden);
         list.innerHTML = servers.map(s => `
-            <div class="filter-item" onclick="selectServerPick(${s.id})">
+            <div class="filter-item" data-onclick="selectServerPick(${s.id})">
                 <span style="font-family:monospace; color:var(--text-secondary);">#${s.id}</span>
                 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escHtml(s.name)}</span>
                 ${(s.supports_v3_clients || s.has_api_token) ? '<span style="margin-left:auto; font-size:0.66rem; color:#4ade80; border:1px solid rgba(74,222,128,0.4); border-radius:6px; padding:1px 5px;">v3</span>' : ''}
@@ -5180,7 +5180,7 @@
         list.innerHTML = inbounds.map(ib => `
             <div class="filter-item">
                 <label class="checkbox-label">
-                    <input type="checkbox" class="add-inbound-cb" value="${ib.id}" checked onchange="_onAddInboundToggle()">
+                    <input type="checkbox" class="add-inbound-cb" value="${ib.id}" checked data-onchange="_onAddInboundToggle()">
                     <span class="checkmark"></span>
                     <span>${escHtml(ib.remark || _t('Inbound {id}', {id: ib.id}))} <span style="color:var(--text-secondary);">:${ib.port}</span></span>
                 </label>
@@ -5276,7 +5276,7 @@
         list.innerHTML = items.map(ib => `
             <div class="filter-item">
                 <label class="checkbox-label">
-                    <input type="checkbox" class="edit-inbound-cb" value="${ib.id}" ${assigned.has(parseInt(ib.id)) ? 'checked' : ''} onchange="_updateEditInboundMultiLabel()">
+                    <input type="checkbox" class="edit-inbound-cb" value="${ib.id}" ${assigned.has(parseInt(ib.id)) ? 'checked' : ''} data-onchange="_updateEditInboundMultiLabel()">
                     <span class="checkmark"></span>
                     <span>${escHtml(ib.remark || _t('Inbound {id}', {id: ib.id}))} <span style="color:var(--text-secondary);">:${ib.port}</span></span>
                 </label>
@@ -6254,24 +6254,24 @@ Connection links
                     <div style="display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:3px;">${meta}</div>
                 </div>
                 <div class="server-actions">
-                    <button class="action-btn" onclick="toggleServerHidden(${server.id})" title="${isHidden ? 'Show server (resume fetching)' : 'Hide server (pause fetching)'}"
+                    <button class="action-btn" data-onclick="toggleServerHidden(${server.id})" title="${isHidden ? 'Show server (resume fetching)' : 'Hide server (pause fetching)'}"
                         style="color:${isHidden ? '#94a3b8' : 'inherit'};">
                         ${eyeIcon}
                     </button>
-                    <button class="action-btn" onclick="refreshServerInfo(${server.id})" title="${_t('Refresh info')}"
+                    <button class="action-btn" data-onclick="refreshServerInfo(${server.id})" title="${_t('Refresh info')}"
                         style="font-size:11px;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.12-9.36L1 10"/></svg>
                     </button>
-                    ${USER_ROLE !== 'reseller' ? `<button class="action-btn" onclick="downloadServerBackup(${server.id}, this)" title="Backup Database" id="srv-backup-${server.id}">
+                    ${USER_ROLE !== 'reseller' ? `<button class="action-btn" data-onclick="downloadServerBackup(${server.id}, this)" title="Backup Database" id="srv-backup-${server.id}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     </button>` : ''}
-                    <button class="action-btn" onclick="editServer(${server.id})" title="${_t('Edit')}">
+                    <button class="action-btn" data-onclick="editServer(${server.id})" title="${_t('Edit')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
                         </svg>
                     </button>
-                    <button class="action-btn danger" onclick="deleteServer(${server.id})" title="${_t('Delete')}">
+                    <button class="action-btn danger" data-onclick="deleteServer(${server.id})" title="${_t('Delete')}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="3 6 5 6 21 6"></polyline>
                             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -6813,13 +6813,13 @@ Connection links
                         ? `<span class="status-pill active">${_t('Active')}</span>`
                         : `<span class="status-pill inactive">${_t('Inactive')}</span>`}
                     ${count > 0
-                        ? `<button class="btn btn-secondary" style="padding: 6px 10px;" onclick="event.stopPropagation(); toggleSelectAllClients('${inboundKey}', true)">${_t('Select All')}</button>`
+                        ? `<button class="btn btn-secondary" style="padding: 6px 10px;" data-onclick="event.stopPropagation(); toggleSelectAllClients('${inboundKey}', true)">${_t('Select All')}</button>`
                         : ''}
                 </div>
             </div>
             ${count > 0 ? `
             <div class="clients-section">
-                <button class="toggle-clients" data-inbound-key="${inboundKey}" data-client-count="${count}" onclick="toggleClients(this, event)">${SVG_HIDE} ${_t('Hide Clients ({count})', {count})}</button>
+                <button class="toggle-clients" data-inbound-key="${inboundKey}" data-client-count="${count}" data-onclick="toggleClients(this, event)">${SVG_HIDE} ${_t('Hide Clients ({count})', {count})}</button>
                 <div class="clients-list">
                     <div class="clients-table-wrapper">
                         <table class="clients-table">
@@ -6827,7 +6827,7 @@ Connection links
                                 <tr>
                                     <th style="width: 34px;">
                                         <label class="checkbox-label" style="padding-left: 0; width: 20px; height: 20px; margin: 0 auto;">
-                                            <input type="checkbox" class="select-all-clients" onchange="toggleSelectAllClients('${inboundKey}', this.checked)">
+                                            <input type="checkbox" class="select-all-clients" data-onchange="toggleSelectAllClients('${inboundKey}', this.checked)">
                                             <span class="checkmark"></span>
                                         </label>
                                     </th>
@@ -7116,7 +7116,7 @@ Connection links
                 <option value="set_remaining" ${mode === 'set_remaining' ? 'selected' : ''}>${_t('Set remaining to target')}</option>
                 <option value="reset_and_set" ${mode === 'reset_and_set' ? 'selected' : ''}>${_t('Reset traffic and set cap')}</option>
             </select>
-            <button type="button" class="btn btn-secondary" style="padding:8px 10px;" onclick="removeBulkVolumeRule(this)">${_t('Remove')}</button>
+            <button type="button" class="btn btn-secondary" style="padding:8px 10px;" data-onclick="removeBulkVolumeRule(this)">${_t('Remove')}</button>
         `;
         return row;
     }
@@ -7423,7 +7423,7 @@ Connection links
         list.innerHTML = inbounds.map(ib => `
             <div class="filter-item">
                 <label class="checkbox-label">
-                    <input type="checkbox" class="bulk-inbound-cb" value="${ib.id}" onchange="_updateBulkInboundLabel()">
+                    <input type="checkbox" class="bulk-inbound-cb" value="${ib.id}" data-onchange="_updateBulkInboundLabel()">
                     <span class="checkmark"></span>
                     <span>${escHtml(ib.remark || _t('Inbound {id}', {id: ib.id}))} <span style="color:var(--text-secondary);">:${ib.port}</span></span>
                 </label>
@@ -7724,7 +7724,7 @@ Connection links
             document.getElementById('bulk-confirm-backup').style.display = 'block';
             backupList.innerHTML = Array.from(byServer.keys()).map(sid =>
                 `<button type="button" class="btn btn-secondary" style="justify-content:flex-start; gap:8px;"
-                         onclick="downloadServerBackup('${sid}', this)">
+                         data-onclick="downloadServerBackup('${sid}', this)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                     Backup DB: ${escapeHtml(serverName(sid))}
                 </button>`
@@ -8109,14 +8109,14 @@ Connection links
             const list = document.getElementById('assign-reseller-list');
             
             const systemItem = `
-                <div class="filter-item" onclick="selectReseller(0, 'System')">
+                <div class="filter-item" data-onclick="selectReseller(0, 'System')">
                     <span style="flex: 1;">${_t('System')}</span>
                     <span style="font-size: 0.8rem; color: var(--text-secondary);">${_t('Unassign')}</span>
                 </div>
             `;
 
             const resellerItems = resellers.map(r => `
-                <div class="filter-item" onclick="selectReseller(${r.id}, '${r.username}')">
+                <div class="filter-item" data-onclick="selectReseller(${r.id}, '${r.username}')">
                     <span style="flex: 1;">${r.username}</span>
                     <span style="font-size: 0.8rem; color: #4ade80;">${r.credit.toLocaleString()} T</span>
                 </div>
@@ -8733,6 +8733,8 @@ Connection links
             if (customVersion) customVersion.disabled = false;
         }
     }
+    // Block-level async functions are not hoisted to window; the button needs it.
+    window.startSystemUpdate = startSystemUpdate;
 
     document.addEventListener('DOMContentLoaded', () => refreshSystemUpdateStatus(false));
     }

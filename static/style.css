@@ -6775,3 +6775,10 @@ html[dir="rtl"] .royalty-table .royalty-cell-select .checkbox-label { padding-ri
     margin: 0 0 12px;
     color: var(--danger);
 }
+
+/* Initial-letter fallback when an app icon fails to load (sub_manager.html). */
+.app-icon-letter {
+    font-size: 20px;
+    font-weight: bold;
+    color: white;
+}

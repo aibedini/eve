@@ -68,6 +68,8 @@ def _verify_cp_signature(payload, cp_pubkey_b64):
     pub.verify(base64.b64decode(payload['signature']), canonical_json(signed))
 
 
+from panel.security import hash_bearer_token  # noqa: E402
+
 class BnqoTestBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -104,7 +106,7 @@ class BnqoTestBase(unittest.TestCase):
     def _make_enroll_token(self, token='enroll-tok-1', role='outside',
                            expires_in_minutes=30, used=False):
         row = BnqoEnrollToken(
-            token=token, role=role,
+            token=hash_bearer_token(token, 'bnqo-enroll'), role=role,
             expires_at=datetime.utcnow() + timedelta(minutes=expires_in_minutes),
             used_at=datetime.utcnow() if used else None,
         )

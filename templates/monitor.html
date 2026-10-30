@@ -4,7 +4,7 @@
 {% block page_title %}{{ _('Renewal Monitor') }}{% endblock %}
 
 {% block header_actions %}
-<button class="btn btn-secondary" onclick="refreshAlerts()">
+<button class="btn btn-secondary" data-onclick="refreshAlerts()">
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="23 4 23 10 17 10"></polyline>
         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
@@ -21,8 +21,8 @@
             <h2>{{ _('Track expiring and low-volume clients') }}</h2>
             <p>{{ _('Filter by risk, personalize the outreach text, and message users in seconds.') }}</p>
             <div class="monitor-hero-actions">
-                <button class="btn btn-primary" id="monitor-scan-btn" onclick="scanNetworks()">{{ _('Scan Now') }}</button>
-                <button class="btn btn-ghost" onclick="saveMonitorSettings()">{{ _('Save Settings') }}</button>
+                <button class="btn btn-primary" id="monitor-scan-btn" data-onclick="scanNetworks()">{{ _('Scan Now') }}</button>
+                <button class="btn btn-ghost" data-onclick="saveMonitorSettings()">{{ _('Save Settings') }}</button>
             </div>
         </div>
         <div class="monitor-hero-stats">
@@ -135,7 +135,7 @@
                             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                         </svg>
                         <input type="text" id="monitor-search" placeholder="{{ _('Email, username, comment, or mobile') }}" class="search-input">
-                        <button class="search-clear hidden" onclick="clearMonitorSearch()" id="monitor-search-clear">
+                        <button class="search-clear hidden" data-onclick="clearMonitorSearch()" id="monitor-search-clear">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
                     </div>
@@ -144,14 +144,14 @@
 
             <div class="monitor-filter-row">
                 <div class="monitor-status-filters">
-                    <button class="chip" data-status="ended" data-label="{{ _('Ended') }}" onclick="toggleStatusFilter(this)">{{ _('Ended') }} (0)</button>
-                    <button class="chip" data-status="expired" data-label="{{ _('Expired') }}" onclick="toggleStatusFilter(this)">{{ _('Expired') }} (0)</button>
-                    <button class="chip active" data-status="low" data-label="{{ _('Low') }}" onclick="toggleStatusFilter(this)">{{ _('Low') }} (0)</button>
-                    <button class="chip active" data-status="soon" data-label="{{ _('Soon') }}" onclick="toggleStatusFilter(this)">{{ _('Soon') }} (0)</button>
-                    <button class="chip" data-status="disabled" data-label="{{ _('Disabled') }}" onclick="toggleStatusFilter(this)">{{ _('Disabled') }} (0)</button>
-                    <button class="chip" data-status="all" data-label="{{ _('All') }}" onclick="toggleStatusFilter(this)">{{ _('All') }} (0)</button>
-                    <button class="chip active" data-optout="nosms" data-label="{{ _('No SMS') }}" onclick="toggleOptoutFilter(this)">{{ _('No SMS') }} (0)</button>
-                    <button class="chip active" data-optout="nopm" data-label="{{ _('No PM') }}" onclick="toggleOptoutFilter(this)">{{ _('No PM') }} (0)</button>
+                    <button class="chip" data-status="ended" data-label="{{ _('Ended') }}" data-onclick="toggleStatusFilter(this)">{{ _('Ended') }} (0)</button>
+                    <button class="chip" data-status="expired" data-label="{{ _('Expired') }}" data-onclick="toggleStatusFilter(this)">{{ _('Expired') }} (0)</button>
+                    <button class="chip active" data-status="low" data-label="{{ _('Low') }}" data-onclick="toggleStatusFilter(this)">{{ _('Low') }} (0)</button>
+                    <button class="chip active" data-status="soon" data-label="{{ _('Soon') }}" data-onclick="toggleStatusFilter(this)">{{ _('Soon') }} (0)</button>
+                    <button class="chip" data-status="disabled" data-label="{{ _('Disabled') }}" data-onclick="toggleStatusFilter(this)">{{ _('Disabled') }} (0)</button>
+                    <button class="chip" data-status="all" data-label="{{ _('All') }}" data-onclick="toggleStatusFilter(this)">{{ _('All') }} (0)</button>
+                    <button class="chip active" data-optout="nosms" data-label="{{ _('No SMS') }}" data-onclick="toggleOptoutFilter(this)">{{ _('No SMS') }} (0)</button>
+                    <button class="chip active" data-optout="nopm" data-label="{{ _('No PM') }}" data-onclick="toggleOptoutFilter(this)">{{ _('No PM') }} (0)</button>
                 </div>
                 {% if role != 'reseller' %}
                 <label class="filter-toggle" title="{{ _('Include reseller-owned users') }}">
@@ -179,7 +179,7 @@
 
     <div id="monitor-progress-overlay" class="monitor-progress-overlay hidden">
         <div class="monitor-progress-box">
-            <button type="button" class="monitor-progress-close" onclick="hideMonitorProgress()" aria-label="{{ _('Close') }}">&times;</button>
+            <button type="button" class="monitor-progress-close" data-onclick="hideMonitorProgress()" aria-label="{{ _('Close') }}">&times;</button>
             <div class="monitor-progress-heading"><div class="monitor-spinner"></div><div id="monitor-progress-text" class="monitor-progress-text">{{ _('Scanning servers...') }}</div></div>
             <div class="monitor-progress-track"><span id="monitor-progress-bar"></span></div>
             <div id="monitor-progress-summary" class="text-secondary">{{ _('Preparing server list...') }}</div>
@@ -642,7 +642,7 @@
             ? '<span class="monitor-tag tag-zero-usage" title="' + _t('No traffic consumed — never connected') + '">' + _t('No Usage') + '</span>'
             : '';
         const royaltyBtn = alert.zero_usage
-            ? `<button class="btn btn-royalty" onclick="openRoyaltyModal(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}')" title="${_t('Add days for zero-usage client')}">
+            ? `<button class="btn btn-royalty" data-onclick="openRoyaltyModal(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}')" title="${_t('Add days for zero-usage client')}">
                 <span class="icon">${getRoyaltyIcon()}</span>
                 ${_t('Add Days')}
                </button>`
@@ -664,18 +664,18 @@
                 <span class="detail-expiry${expCls}">${escapeHtml(alert.expiry_date || '-')}</span>
             </div>
             <div class="monitor-cell monitor-actions">
-                <button class="btn btn-sms${smsBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'sms')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? _t('Messaging disabled by No SMS / No PM tag') : ''}">
+                <button class="btn btn-sms${smsBtnClass}" type="button" data-monitor-alert="${encodedAlert}" data-onclick="sendMonitorMessage(this, 'sms')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? _t('Messaging disabled by No SMS / No PM tag') : ''}">
                     <span class="icon">${getSmsIcon()}</span>
                     ${smsBtnLabel}
                 </button>
-                <button class="btn btn-whatsapp${waBtnClass}" type="button" data-monitor-alert="${encodedAlert}" onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? _t('Messaging disabled by No SMS / No PM tag') : ''}">
+                <button class="btn btn-whatsapp${waBtnClass}" type="button" data-monitor-alert="${encodedAlert}" data-onclick="sendMonitorMessage(this, 'whatsapp')" ${phones.length && !contactDisabled ? '' : 'disabled'} title="${contactDisabled ? _t('Messaging disabled by No SMS / No PM tag') : ''}">
                     <span class="icon">${getWhatsAppIcon()}</span>
                     ${waBtnLabel}
                 </button>
                 ${royaltyBtn}
-                <button class="btn ${alert.no_sms ? 'btn-optout-active' : ''}" type="button" onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nosms')">${alert.no_sms ? _t('Allow SMS') : _t('No SMS')}</button>
-                <button class="btn ${alert.no_pm ? 'btn-optout-active' : ''}" type="button" onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nopm')">${alert.no_pm ? _t('Allow PM') : _t('No PM')}</button>
-                <button class="btn ${alert.enabled ? 'btn-danger' : 'btn-success'}" onclick="toggleClientFromMonitor(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}', ${!alert.enabled})" title="${alert.enabled ? _t('Disable') : _t('Enable')}">
+                <button class="btn ${alert.no_sms ? 'btn-optout-active' : ''}" type="button" data-onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nosms')">${alert.no_sms ? _t('Allow SMS') : _t('No SMS')}</button>
+                <button class="btn ${alert.no_pm ? 'btn-optout-active' : ''}" type="button" data-onclick="toggleMonitorOptout(${alert.server_id}, ${alert.inbound_id}, '${encodeURIComponent(alert.email || '')}', 'nopm')">${alert.no_pm ? _t('Allow PM') : _t('No PM')}</button>
+                <button class="btn ${alert.enabled ? 'btn-danger' : 'btn-success'}" data-onclick="toggleClientFromMonitor(${alert.server_id}, ${alert.inbound_id}, '${escapeHtml(alert.email)}', ${!alert.enabled})" title="${alert.enabled ? _t('Disable') : _t('Enable')}">
                     <span class="icon">${alert.enabled ? getDisableIcon() : getEnableIcon()}</span>
                     ${alert.enabled ? _t('Disable') : _t('Enable')}
                 </button>
@@ -1001,7 +1001,7 @@
                             <input type="number" id="royalty-days-input" min="1" max="365" value="30" style="width:100%">
                         </div>
                         <div style="display:flex; gap:8px; margin-top:16px;">
-                            <button class="btn btn-primary" style="flex:1" onclick="applyRoyaltyFromModal()">${_t('Apply')}</button>
+                            <button class="btn btn-primary" style="flex:1" data-onclick="applyRoyaltyFromModal()">${_t('Apply')}</button>
                             <button class="btn btn-secondary" type="button" data-royalty-close>${_t('Cancel')}</button>
                         </div>
                     </div>

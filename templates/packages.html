@@ -8,15 +8,15 @@
 
     <!-- Sidebar tabs -->
     <div class="settings-sidebar">
-        <button class="settings-tab active" onclick="pkgSwitchTab('packages', event)">
+        <button class="settings-tab active" data-onclick="pkgSwitchTab('packages', event)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h5l3 3-3 3h-5"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/></svg>
             General Packages
         </button>
-        <button class="settings-tab" onclick="pkgSwitchTab('resellers', event)">
+        <button class="settings-tab" data-onclick="pkgSwitchTab('resellers', event)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             Reseller Packages
         </button>
-        <button class="settings-tab" onclick="pkgSwitchTab('tariffs', event)">
+        <button class="settings-tab" data-onclick="pkgSwitchTab('tariffs', event)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             Base Tariffs
         </button>
@@ -33,7 +33,7 @@
                         <h2>Ready Packages</h2>
                         <p class="text-secondary">Define packages for clients and resellers.</p>
                     </div>
-                    <button class="btn btn-success" onclick="openPkgModal()">
+                    <button class="btn btn-success" data-onclick="openPkgModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         Add Package
                     </button>
@@ -41,7 +41,7 @@
                 <div class="pkg-filter-bar">
                     <span class="pkg-filter-label-text">{{ 'نمایش بر اساس مالک:' if panel_lang == 'fa' else 'Filter by owner:' }}</span>
                     <div class="pkg-owner-filter">
-                        <button type="button" class="pkg-filter-trigger" onclick="togglePkgOwnerMenu(event)">
+                        <button type="button" class="pkg-filter-trigger" data-onclick="togglePkgOwnerMenu(event)">
                             <span id="pkg-owner-filter-label">{{ 'همه' if panel_lang == 'fa' else 'All' }}</span>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                         </button>
@@ -67,7 +67,7 @@
                 <div style="padding: 20px;">
                     <div class="form-group">
                         <label>Select Reseller</label>
-                        <select id="reseller-select" class="form-input" onchange="loadResellerPackages()">
+                        <select id="reseller-select" class="form-input" data-onchange="loadResellerPackages()">
                             <option value="">— Choose a reseller —</option>
                         </select>
                     </div>
@@ -85,20 +85,20 @@
                         <h2>Base Tariffs</h2>
                         <p class="text-secondary">Default pricing when no tier rule matches.</p>
                     </div>
-                    <button class="btn btn-primary" onclick="saveBaseConfig()">Save</button>
+                    <button class="btn btn-primary" data-onclick="saveBaseConfig()">Save</button>
                 </div>
                 <div style="padding: 0 20px 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
                     <div class="form-group">
                         <label>Price per GB (Toman)</label>
-                        <input type="text" id="conf-cost-gb" class="form-input" value="{{ '{:,}'.format(base_cost_gb) }}" oninput="formatNumberInput(this)">
+                        <input type="text" id="conf-cost-gb" class="form-input" value="{{ '{:,}'.format(base_cost_gb) }}" data-oninput="formatNumberInput(this)">
                     </div>
                     <div class="form-group">
                         <label>Price per Day (Toman)</label>
-                        <input type="text" id="conf-cost-day" class="form-input" value="{{ '{:,}'.format(base_cost_day) }}" oninput="formatNumberInput(this)">
+                        <input type="text" id="conf-cost-day" class="form-input" value="{{ '{:,}'.format(base_cost_day) }}" data-oninput="formatNumberInput(this)">
                     </div>
                     <div class="form-group">
                         <label>Unlimited Days — Flat Fee (Toman)</label>
-                        <input type="text" id="conf-cost-day-unlimited" class="form-input" value="{{ '{:,}'.format(base_cost_day_unlimited) }}" oninput="formatNumberInput(this)">
+                        <input type="text" id="conf-cost-day-unlimited" class="form-input" value="{{ '{:,}'.format(base_cost_day_unlimited) }}" data-oninput="formatNumberInput(this)">
                         <small style="color: var(--text-secondary);">Charged once when days = 0 (∞)</small>
                     </div>
                 </div>
@@ -111,7 +111,7 @@
                         <h2>Dynamic Pricing Tiers</h2>
                         <p class="text-secondary">Override rates based on volume/day thresholds or per reseller.</p>
                     </div>
-                    <button class="btn btn-success" onclick="openTierModal()">
+                    <button class="btn btn-success" data-onclick="openTierModal()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         Add Tier
                     </button>
@@ -135,7 +135,7 @@
     <div class="modal modal-sm">
         <div class="modal-header">
             <h2 id="pkg-modal-title">Add New Package</h2>
-            <button class="modal-close" type="button" onclick="closePkgModal()">&times;</button>
+            <button class="modal-close" type="button" data-onclick="closePkgModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-group">
@@ -145,16 +145,16 @@
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                     <label>Duration (Days) <span style="font-size:0.75rem; color:var(--text-secondary);">(0 = ∞)</span></label>
-                    <input type="text" id="pkg-days" class="form-input" placeholder="30" inputmode="numeric" oninput="formatNumberInput(this); updateMinPriceHint()">
+                    <input type="text" id="pkg-days" class="form-input" placeholder="30" inputmode="numeric" data-oninput="formatNumberInput(this); updateMinPriceHint()">
                 </div>
                 <div class="form-group">
                     <label>Volume (GB) <span style="font-size:0.75rem; color:var(--text-secondary);">(0 = ∞)</span></label>
-                    <input type="text" id="pkg-vol" class="form-input" placeholder="30" inputmode="numeric" oninput="formatNumberInput(this); updateMinPriceHint()">
+                    <input type="text" id="pkg-vol" class="form-input" placeholder="30" inputmode="numeric" data-oninput="formatNumberInput(this); updateMinPriceHint()">
                 </div>
             </div>
             <div class="form-group">
                 <label>Price (Toman)</label>
-                <input type="text" id="pkg-price" class="form-input" placeholder="100,000" oninput="formatNumberInput(this); checkPriceWarning()">
+                <input type="text" id="pkg-price" class="form-input" placeholder="100,000" data-oninput="formatNumberInput(this); checkPriceWarning()">
                 <div id="pkg-price-hint" style="margin-top:6px; font-size:0.82rem; color:var(--text-secondary); display:none;"></div>
                 <div id="pkg-price-warn" class="alert alert-warning" style="margin-top:6px; display:none; padding:8px 12px; font-size:0.84rem;">
                     {{ '⚠️ ضرر می‌کنید! قیمت پایین‌تر از حداقل هزینه محاسبه‌شده است.' if panel_lang == 'fa' else '⚠️ This price is below the calculated minimum cost.' }}
@@ -162,7 +162,7 @@
             </div>
             <div class="form-group">
                 <label>Scope</label>
-                <select id="pkg-scope" class="form-input" onchange="toggleScopeFields()">
+                <select id="pkg-scope" class="form-input" data-onchange="toggleScopeFields()">
                     <option value="global">Global — all resellers</option>
                     <option value="assigned">Assigned — specific resellers</option>
                     <option value="personal">Personal — creator only</option>
@@ -196,8 +196,8 @@
                 <span>Show on Renew <small style="color:var(--text-secondary); font-weight:normal;">(renew modal, bot renewal &amp; subscription page)</small></span>
             </label>
             <div class="form-actions">
-                <button class="btn btn-secondary" type="button" onclick="closePkgModal()">Cancel</button>
-                <button class="btn btn-primary" id="pkg-submit-btn" type="button" onclick="submitPackage()">Create Package</button>
+                <button class="btn btn-secondary" type="button" data-onclick="closePkgModal()">Cancel</button>
+                <button class="btn btn-primary" id="pkg-submit-btn" type="button" data-onclick="submitPackage()">Create Package</button>
             </div>
         </div>
     </div>
@@ -211,7 +211,7 @@
     <div class="modal modal-sm">
         <div class="modal-header">
             <h2 id="tier-modal-title">Add Price Tier</h2>
-            <button class="modal-close" type="button" onclick="closeTierModal()">&times;</button>
+            <button class="modal-close" type="button" data-onclick="closeTierModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-group">
@@ -222,30 +222,30 @@
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                     <label>Min Volume (GB)</label>
-                    <input type="text" id="tier-min-vol" class="form-input" placeholder="0" inputmode="numeric" oninput="formatNumberInput(this)">
+                    <input type="text" id="tier-min-vol" class="form-input" placeholder="0" inputmode="numeric" data-oninput="formatNumberInput(this)">
                 </div>
                 <div class="form-group">
                     <label>Max Volume (GB)</label>
-                    <input type="text" id="tier-max-vol" class="form-input" placeholder="∞" inputmode="numeric" oninput="formatNumberInput(this)">
+                    <input type="text" id="tier-max-vol" class="form-input" placeholder="∞" inputmode="numeric" data-oninput="formatNumberInput(this)">
                 </div>
                 <div class="form-group">
                     <label>Min Days</label>
-                    <input type="text" id="tier-min-days" class="form-input" placeholder="0" inputmode="numeric" oninput="formatNumberInput(this)">
+                    <input type="text" id="tier-min-days" class="form-input" placeholder="0" inputmode="numeric" data-oninput="formatNumberInput(this)">
                 </div>
                 <div class="form-group">
                     <label>Max Days</label>
-                    <input type="text" id="tier-max-days" class="form-input" placeholder="∞" inputmode="numeric" oninput="formatNumberInput(this)">
+                    <input type="text" id="tier-max-days" class="form-input" placeholder="∞" inputmode="numeric" data-oninput="formatNumberInput(this)">
                 </div>
             </div>
             <p style="font-size:0.82rem; color:var(--text-secondary); margin:4px 0 12px;">Rate overrides (leave blank = use base tariff)</p>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                     <label>Cost per GB (Toman)</label>
-                    <input type="text" id="tier-cpg" class="form-input" placeholder="inherit" oninput="formatNumberInput(this)">
+                    <input type="text" id="tier-cpg" class="form-input" placeholder="inherit" data-oninput="formatNumberInput(this)">
                 </div>
                 <div class="form-group">
                     <label>Cost per Day (Toman)</label>
-                    <input type="text" id="tier-cpd" class="form-input" placeholder="inherit" oninput="formatNumberInput(this)">
+                    <input type="text" id="tier-cpd" class="form-input" placeholder="inherit" data-oninput="formatNumberInput(this)">
                 </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
@@ -265,8 +265,8 @@
                 <label for="tier-active" style="margin:0; cursor:pointer;">Active</label>
             </div>
             <div class="form-actions">
-                <button class="btn btn-secondary" type="button" onclick="closeTierModal()">Cancel</button>
-                <button class="btn btn-primary" id="tier-submit-btn" type="button" onclick="submitTier()">Create Tier</button>
+                <button class="btn btn-secondary" type="button" data-onclick="closeTierModal()">Cancel</button>
+                <button class="btn btn-primary" id="tier-submit-btn" type="button" data-onclick="submitTier()">Create Tier</button>
             </div>
         </div>
     </div>
@@ -434,7 +434,7 @@ function buildPkgOwnerMenu() {
     });
     const row = (val, label, checked) =>
         `<label class="pkg-filter-row">
-            <input type="checkbox" value="${val}" ${checked ? 'checked' : ''} onchange="onPkgOwnerToggle('${val}', this.checked)">
+            <input type="checkbox" value="${val}" ${checked ? 'checked' : ''} data-onchange="onPkgOwnerToggle('${val}', this.checked)">
             <span>${escHtml(label)}</span>
         </label>`;
     let html = row('all', pkgT('All', 'همه'), _pkgOwnerFilter.size === 0);
@@ -581,10 +581,10 @@ function renderPackages(body) {
                 ${p.show_on_create === false ? '<span class="scope-badge" style="background:rgba(251,191,36,0.15); color:#fbbf24; border:1px solid rgba(251,191,36,0.35);" title="Hidden on creation surfaces">Renew only</span>' : ''}
                 ${p.show_on_renew === false ? '<span class="scope-badge" style="background:rgba(251,191,36,0.15); color:#fbbf24; border:1px solid rgba(251,191,36,0.35);" title="Hidden on renewal surfaces">Create only</span>' : ''}
                 <div class="pkg-price">${Number(p.price).toLocaleString()} T</div>
-                <button class="action-icon" title="Edit" onclick="startEditPackage(${p.id})">
+                <button class="action-icon" title="Edit" data-onclick="startEditPackage(${p.id})">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                 </button>
-                <button class="action-icon danger" title="Delete" onclick="deletePackage(${p.id})">
+                <button class="action-icon danger" title="Delete" data-onclick="deletePackage(${p.id})">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                 </button>
             </div>
@@ -784,7 +784,7 @@ function loadResellerPackages() {
                 <span style="font-size:0.78rem; color:var(--text-secondary);">${scopeLabel}</span>
                 ${p.scope !== 'global' ? `
                 <button class="pkg-toggle-btn ${isAssigned ? 'assigned' : ''}"
-                    onclick="toggleResellerPkg(${p.id}, ${resId}, ${isAssigned})"
+                    data-onclick="toggleResellerPkg(${p.id}, ${resId}, ${isAssigned})"
                 >${isAssigned ? 'Remove' : 'Assign'}</button>` : ''}
             </div>
         </div>`;
@@ -898,10 +898,10 @@ function renderTiers(body) {
                 <td>${escHtml(tierResellerNames(t))}</td>
                 <td>${t.priority}</td>
                 <td style="white-space:nowrap;">
-                    <button class="action-icon" title="Edit" onclick="startEditTier(${t.id})">
+                    <button class="action-icon" title="Edit" data-onclick="startEditTier(${t.id})">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                     </button>
-                    <button class="action-icon danger" title="Delete" onclick="deleteTier(${t.id})">
+                    <button class="action-icon danger" title="Delete" data-onclick="deleteTier(${t.id})">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                     </button>
                 </td>

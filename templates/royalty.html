@@ -4,7 +4,7 @@
 {% block page_title %}{{ _('Royalty') }}{% endblock %}
 
 {% block header_actions %}
-<button type="button" class="btn btn-primary btn-full-mobile" onclick="loadRoyalty()">
+<button type="button" class="btn btn-primary btn-full-mobile" data-onclick="loadRoyalty()">
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
     <span class="btn-label">{{ _('Refresh') }}</span>
 </button>
@@ -24,11 +24,11 @@
         <div class="royalty-filters">
             <div class="royalty-field royalty-field-search">
                 <label for="royalty-search">{{ _('Search') }}</label>
-                <input type="search" id="royalty-search" class="form-input" placeholder="{{ _('Email, phone or server') }}" autocomplete="off" oninput="renderRoyalty()">
+                <input type="search" id="royalty-search" class="form-input" placeholder="{{ _('Email, phone or server') }}" autocomplete="off" data-oninput="renderRoyalty()">
             </div>
             <div class="royalty-field">
                 <label for="royalty-days">{{ _('Window') }}</label>
-                <select id="royalty-days" class="form-select" onchange="loadRoyalty()">
+                <select id="royalty-days" class="form-select" data-onchange="loadRoyalty()">
                     <option value="1">{{ _('Today vs yesterday (1 day)') }}</option>
                     <option value="2">{{ _('Last 2 days') }}</option>
                     <option value="3">{{ _('Last 3 days') }}</option>
@@ -39,13 +39,13 @@
             </div>
             <div class="royalty-field">
                 <label for="royalty-server">{{ _('Server') }}</label>
-                <select id="royalty-server" class="form-select" onchange="loadRoyalty()">
+                <select id="royalty-server" class="form-select" data-onchange="loadRoyalty()">
                     <option value="all">{{ _('All Servers') }}</option>
                 </select>
             </div>
             <div class="royalty-field hidden" id="royalty-reseller-field">
                 <label for="royalty-reseller">{{ _('Reseller') }}</label>
-                <select id="royalty-reseller" class="form-select" onchange="loadRoyalty()">
+                <select id="royalty-reseller" class="form-select" data-onchange="loadRoyalty()">
                     <option value="all">{{ _('All resellers') }}</option>
                     <option value="0">{{ _('System (unassigned)') }}</option>
                 </select>
@@ -61,7 +61,7 @@
         </div>
 
         <div class="royalty-bulk-bar">
-            <select id="bulk-action-select" class="royalty-bulk-ctrl" aria-label="{{ _('Select Action') }}" onchange="onBulkActionChanged()">
+            <select id="bulk-action-select" class="royalty-bulk-ctrl" aria-label="{{ _('Select Action') }}" data-onchange="onBulkActionChanged()">
                 <option value="">{{ _('Select Action') }}</option>
                 <option value="set_start_after_use">{{ _('Set to Start After First Use') }}</option>
                 <option value="enable">{{ _('Enable') }}</option>
@@ -102,8 +102,8 @@
             {% endif %}
 
             <div class="royalty-bulk-buttons">
-                <button type="button" class="btn btn-primary royalty-bulk-btn" onclick="executeRoyaltyBulkAction()">{{ _('Apply') }}</button>
-                <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="clearRoyaltyBulkSelection()">{{ _('Clear') }}</button>
+                <button type="button" class="btn btn-primary royalty-bulk-btn" data-onclick="executeRoyaltyBulkAction()">{{ _('Apply') }}</button>
+                <button type="button" class="btn btn-secondary royalty-bulk-btn" data-onclick="clearRoyaltyBulkSelection()">{{ _('Clear') }}</button>
             </div>
         </div>
 
@@ -112,15 +112,15 @@
             <div class="royalty-bulk-panel-head">
                 <strong>{{ _('Remaining Volume Rules') }}</strong>
                 <div class="royalty-inline-actions">
-                    <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="addBulkVolumeRule()">{{ _('Add Rule') }}</button>
-                    <button type="button" class="btn btn-primary royalty-bulk-btn" onclick="saveVolumeRulePreset()">{{ _('Save Setting') }}</button>
+                    <button type="button" class="btn btn-secondary royalty-bulk-btn" data-onclick="addBulkVolumeRule()">{{ _('Add Rule') }}</button>
+                    <button type="button" class="btn btn-primary royalty-bulk-btn" data-onclick="saveVolumeRulePreset()">{{ _('Save Setting') }}</button>
                 </div>
             </div>
             <div class="royalty-inline-actions royalty-preset-row">
-                <select id="bulk-volume-preset-select" class="form-select" aria-label="{{ _('Load saved setting') }}" onchange="applyVolumeRulePreset()">
+                <select id="bulk-volume-preset-select" class="form-select" aria-label="{{ _('Load saved setting') }}" data-onchange="applyVolumeRulePreset()">
                     <option value="">{{ _('Load saved setting') }}</option>
                 </select>
-                <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="deleteVolumeRulePreset()" title="{{ _('Delete selected preset') }}">{{ _('Delete') }}</button>
+                <button type="button" class="btn btn-secondary royalty-bulk-btn" data-onclick="deleteVolumeRulePreset()" title="{{ _('Delete selected preset') }}">{{ _('Delete') }}</button>
             </div>
             <div class="royalty-rule-grid royalty-rule-head">
                 <span>{{ _('From GB') }}</span><span>{{ _('To GB') }}</span><span>{{ _('Make Left GB') }}</span><span>{{ _('Mode') }}</span><span></span>
@@ -134,11 +134,11 @@
             <div class="royalty-mult-fields">
                 <div class="royalty-field">
                     <label for="bulk-multiplier-factor">{{ _('Factor (e.g. 1.5 = +50%)') }}</label>
-                    <input id="bulk-multiplier-factor" type="number" class="form-input" min="0.01" step="0.01" placeholder="1.0" oninput="refreshMultiplierPreview()">
+                    <input id="bulk-multiplier-factor" type="number" class="form-input" min="0.01" step="0.01" placeholder="1.0" data-oninput="refreshMultiplierPreview()">
                 </div>
                 <div class="royalty-field">
                     <label for="bulk-multiplier-mode">{{ _('Mode') }}</label>
-                    <select id="bulk-multiplier-mode" class="form-select" onchange="refreshMultiplierPreview()">
+                    <select id="bulk-multiplier-mode" class="form-select" data-onchange="refreshMultiplierPreview()">
                         <option value="set_remaining">{{ _('Adjust cap (keep used traffic)') }}</option>
                         <option value="reset_and_set">{{ _('Reset traffic + set new cap') }}</option>
                     </select>
@@ -146,12 +146,12 @@
                 <div class="royalty-field">
                     <label for="bulk-mult-skip-min">{{ _('Skip if remaining between (GB)') }}</label>
                     <div class="royalty-range">
-                        <input id="bulk-mult-skip-min" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('From') }}" oninput="refreshMultiplierPreview()">
+                        <input id="bulk-mult-skip-min" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('From') }}" data-oninput="refreshMultiplierPreview()">
                         <span class="royalty-muted">-</span>
-                        <input id="bulk-mult-skip-max" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('To') }}" aria-label="{{ _('To') }}" oninput="refreshMultiplierPreview()">
+                        <input id="bulk-mult-skip-max" type="number" class="form-input" min="0" step="0.1" placeholder="{{ _('To') }}" aria-label="{{ _('To') }}" data-oninput="refreshMultiplierPreview()">
                     </div>
                 </div>
-                <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="refreshMultiplierPreview()">{{ _('Preview') }}</button>
+                <button type="button" class="btn btn-secondary royalty-bulk-btn" data-onclick="refreshMultiplierPreview()">{{ _('Preview') }}</button>
             </div>
             <div id="bulk-multiplier-preview" class="hidden"></div>
         </div>
@@ -168,14 +168,14 @@
         <div class="royalty-list-toolbar">
             <div class="royalty-list-toolbar-start">
                 <label class="checkbox-label royalty-select-all">
-                    <input type="checkbox" id="royalty-select-all" onchange="toggleSelectAllRoyalty(this.checked)">
+                    <input type="checkbox" id="royalty-select-all" data-onchange="toggleSelectAllRoyalty(this.checked)">
                     <span class="checkmark"></span>
                     <span>{{ _('Select all') }}</span>
                 </label>
                 <div class="royalty-stats" id="royalty-stats"></div>
             </div>
             <div class="royalty-list-toolbar-end">
-                <button type="button" class="btn btn-secondary royalty-bulk-btn" id="royalty-expand-all" onclick="toggleAllRoyaltyGroups()">{{ _('Expand all') }}</button>
+                <button type="button" class="btn btn-secondary royalty-bulk-btn" id="royalty-expand-all" data-onclick="toggleAllRoyaltyGroups()">{{ _('Expand all') }}</button>
             </div>
         </div>
         <div id="royalty-results" aria-live="polite"></div>
@@ -187,7 +187,7 @@
     <div class="modal modal-md">
         <div class="modal-header">
             <h2 id="bulk-confirm-title">{{ _('Confirm Bulk Action') }}</h2>
-            <button type="button" class="modal-close" aria-label="{{ _('Close') }}" onclick="closeBulkConfirmModal()">&times;</button>
+            <button type="button" class="modal-close" aria-label="{{ _('Close') }}" data-onclick="closeBulkConfirmModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p class="field-note royalty-confirm-text" id="bulk-confirm-text"></p>
@@ -204,8 +204,8 @@
                 </div>
             </div>
             <div class="form-actions royalty-confirm-actions">
-                <button type="button" class="btn btn-secondary" onclick="closeBulkConfirmModal()">{{ _('Cancel') }}</button>
-                <button type="button" class="btn btn-primary" id="bulk-confirm-proceed" onclick="confirmBulkProceed()">{{ _('No backup, proceed') }}</button>
+                <button type="button" class="btn btn-secondary" data-onclick="closeBulkConfirmModal()">{{ _('Cancel') }}</button>
+                <button type="button" class="btn btn-primary" id="bulk-confirm-proceed" data-onclick="confirmBulkProceed()">{{ _('No backup, proceed') }}</button>
             </div>
         </div>
     </div>
@@ -1005,7 +1005,7 @@
                 <option value="set_remaining" ${mode === 'set_remaining' ? 'selected' : ''}>${escapeHtml(_t('Set remaining to target'))}</option>
                 <option value="reset_and_set" ${mode === 'reset_and_set' ? 'selected' : ''}>${escapeHtml(_t('Reset traffic and set cap'))}</option>
             </select>
-            <button type="button" class="btn btn-secondary royalty-bulk-btn" onclick="removeBulkVolumeRule(this)">${escapeHtml(_t('Remove'))}</button>`;
+            <button type="button" class="btn btn-secondary royalty-bulk-btn" data-onclick="removeBulkVolumeRule(this)">${escapeHtml(_t('Remove'))}</button>`;
         return row;
     }
     function addBulkVolumeRule(rule = {}) {

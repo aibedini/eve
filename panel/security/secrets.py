@@ -111,6 +111,19 @@ def hash_bearer_token(token, purpose: str) -> str:
     return f'{TOKEN_HASH_PREFIX}{encoded}'
 
 
+def digest_presented_token(token, purpose: str) -> str | None:
+    """Digest a token a client presented, for a DB lookup.
+
+    Unlike hash_bearer_token this never passes a value through unchanged: a
+    caller that presents a stored digest ("h1:...") instead of the secret must
+    not match its own row.
+    """
+    raw = str(token or '')
+    if not raw or raw.startswith(TOKEN_HASH_PREFIX):
+        return None
+    return hash_bearer_token(raw, purpose)
+
+
 def is_hashed_bearer_token(value) -> bool:
     return str(value or '').startswith(TOKEN_HASH_PREFIX)
 

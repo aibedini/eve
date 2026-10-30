@@ -51,6 +51,8 @@ class SecurityHeaderTests(unittest.TestCase):
             self.assertIn(directive, csp)
         self.assertRegex(csp, r"script-src 'self' 'nonce-[A-Za-z0-9_\-]+'")
         self.assertNotIn("script-src 'unsafe-inline'", csp)
+        # Inline on*= attributes are blocked; pages use data-on*= (eve-actions.js).
+        self.assertIn("script-src-attr 'none'", csp)
 
     def test_csp_nonce_matches_the_rendered_document(self):
         response = self.client.get("/login")
