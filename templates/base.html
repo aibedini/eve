@@ -49,6 +49,98 @@
         };
     </script>
     <script nonce="{{ csp_nonce }}">
+        // Sensitive actions answer 403 {code: 'step_up_required'} until the admin
+        // re-authenticates (TOTP code, or password when the account has no 2FA).
+        // Prompt once, then replay the original request so the action completes.
+        (function () {
+            if (!window.fetch) return;
+            const fa = {{ (panel_lang or 'en')|tojson }} === 'fa';
+            const T = fa ? {
+                title: 'تایید هویت', password: 'رمز عبور', totp: 'کد ۶ رقمی برنامه احراز هویت',
+                hint: 'این کار حساس است. برای ادامه هویت خود را تایید کنید.',
+                ok: 'تایید', cancel: 'انصراف', bad: 'اشتباه است. دوباره تلاش کنید.'
+            } : {
+                title: 'Confirm it is you', password: 'Password', totp: '6-digit authenticator code',
+                hint: 'This is a sensitive action. Confirm your identity to continue.',
+                ok: 'Confirm', cancel: 'Cancel', bad: 'Incorrect. Try again.'
+            };
+            const nativeFetch = window.fetch.bind(window);
+            let pending = null;
+
+            function prompt(method) {
+                if (pending) return pending;
+                pending = new Promise(function (resolve) {
+                    const overlay = document.createElement('div');
+                    overlay.className = 'modal-overlay step-up-overlay';
+                    overlay.innerHTML =
+                        '<form class="modal modal-sm" autocomplete="off">' +
+                        '<div class="modal-header"><h2></h2></div>' +
+                        '<div class="modal-body"><p class="step-up-hint"></p>' +
+                        '<div class="form-group"><label for="stepUpSecret"></label>' +
+                        '<input id="stepUpSecret" class="form-input" required></div>' +
+                        '<p class="step-up-error hidden"></p>' +
+                        '<div class="form-actions"><button type="button" class="btn btn-secondary" data-act="cancel"></button>' +
+                        '<button type="submit" class="btn btn-primary"></button></div></div></form>';
+                    const form = overlay.querySelector('form');
+                    const input = overlay.querySelector('input');
+                    const error = overlay.querySelector('.step-up-error');
+                    overlay.querySelector('h2').textContent = T.title;
+                    overlay.querySelector('.step-up-hint').textContent = T.hint;
+                    overlay.querySelector('label').textContent = method === 'totp' ? T.totp : T.password;
+                    overlay.querySelector('[data-act="cancel"]').textContent = T.cancel;
+                    overlay.querySelector('[type="submit"]').textContent = T.ok;
+                    error.textContent = T.bad;
+                    if (method === 'totp') {
+                        input.type = 'text';
+                        input.inputMode = 'numeric';
+                        input.autocomplete = 'one-time-code';
+                    } else {
+                        input.type = 'password';
+                        input.autocomplete = 'current-password';
+                    }
+                    function done(ok) {
+                        overlay.remove();
+                        pending = null;
+                        resolve(ok);
+                    }
+                    overlay.querySelector('[data-act="cancel"]').addEventListener('click', function () { done(false); });
+                    form.addEventListener('submit', function (event) {
+                        event.preventDefault();
+                        const body = method === 'totp' ? { code: input.value.trim() } : { password: input.value };
+                        nativeFetch('/api/mfa/step-up', {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body)
+                        }).then(function (r) { return r.json().catch(function () { return {}; }); })
+                          .then(function (data) {
+                              if (data && data.success) { done(true); return; }
+                              error.classList.remove('hidden');
+                              input.value = '';
+                              input.focus();
+                          })
+                          .catch(function () { error.classList.remove('hidden'); });
+                    });
+                    document.body.appendChild(overlay);
+                    input.focus();
+                });
+                return pending;
+            }
+
+            window.fetch = function (input, init) {
+                return nativeFetch(input, init).then(function (response) {
+                    if (response.status !== 403) return response;
+                    return response.clone().json().then(function (data) {
+                        if (!data || data.code !== 'step_up_required') return response;
+                        return prompt(data.method === 'totp' ? 'totp' : 'password').then(function (ok) {
+                            return ok ? nativeFetch(input, init) : response;
+                        });
+                    }, function () { return response; });
+                });
+            };
+        })();
+    </script>
+    <script nonce="{{ csp_nonce }}">
         (function () {
             const calendar = {{ (app_calendar or 'jalali')|tojson }} === 'gregorian' ? 'gregorian' : 'jalali';
             const timezone = {{ (app_timezone or 'Asia/Tehran')|tojson }} || 'Asia/Tehran';

@@ -168,12 +168,24 @@ def login_required(f):
     return decorated_function
 
 
-def step_up_required(scope: str | None = None):
-    """Require a fresh MFA re-check for a sensitive mutation.
+def step_up_method(admin) -> str:
+    """How this account re-authenticates: its TOTP code, or else its password."""
+    from panel.models.ops import AdminMFASetting
+    setting = AdminMFASetting.query.filter_by(admin_id=admin.id).first() if admin else None
+    if setting and setting.enabled and setting.confirmed_at and setting.totp_secret:
+        return 'totp'
+    return 'password'
 
-    Enforced for registry-backed sessions. Legacy sessions that predate the
-    registry (no token in the cookie) are grandfathered so a rolling deploy
-    cannot lock operators out; every new login is registry-backed.
+
+def step_up_required(scope: str | None = None):
+    """Require a fresh re-authentication for a sensitive mutation.
+
+    A stolen session cookie alone must not be enough to restore a backup or
+    change secrets, so this is enforced whether or not 2FA is switched on: the
+    account re-checks with its TOTP code, or with its password when it has no
+    TOTP. The browser prompts and retries (templates/base.html). Legacy
+    sessions that predate the registry (no token in the cookie) are
+    grandfathered so a rolling deploy cannot lock operators out.
     """
     def decorator(f):
         @wraps(f)
@@ -183,7 +195,7 @@ def step_up_required(scope: str | None = None):
                 session.clear()
                 return jsonify({"success": False, "error": "Unauthorized"}), 401
             token = session.get(SESSION_TOKEN_KEY)
-            if token and mfa_global_enabled():
+            if token:
                 row = current_session()
                 if not step_up_fresh(row):
                     return jsonify({
@@ -191,6 +203,7 @@ def step_up_required(scope: str | None = None):
                         "code": "step_up_required",
                         "error": "Re-authentication required for this action",
                         "scope": scope,
+                        "method": step_up_method(admin),
                     }), 403
             _sync_session_authority(admin)
             return f(*args, **kwargs)

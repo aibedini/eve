@@ -6760,3 +6760,18 @@ html[dir="rtl"] .royalty-table .royalty-cell-select .checkbox-label { padding-ri
 @media (max-width: 720px) {
     .pulse-mode-grid { grid-template-columns: 1fr; }
 }
+
+/* Re-authentication prompt for step-up protected actions (templates/base.html). */
+.step-up-overlay {
+    z-index: 1100;
+}
+
+.step-up-hint {
+    margin: 0 0 16px;
+    color: var(--text-secondary);
+}
+
+.step-up-error {
+    margin: 0 0 12px;
+    color: var(--danger);
+}

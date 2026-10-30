@@ -393,13 +393,19 @@ def mfa_confirm():
 def mfa_step_up():
     admin = current_admin()
     payload = (request.get_json(silent=True) or {}) if request.is_json else request.form
-    code = (payload.get('code') or '').strip()
-    if not _mfa_confirmed(admin.id):
-        return jsonify({"success": False, "error": "MFA is not configured for this account"}), 400
-    if not _consume_mfa_code(admin, code):
-        _audit('auth.mfa.step_up_failed', admin)
-        db.session.commit()
-        return jsonify({"success": False, "error": "Invalid code"}), 401
+    if _mfa_confirmed(admin.id):
+        code = (payload.get('code') or '').strip()
+        if not _consume_mfa_code(admin, code):
+            _audit('auth.mfa.step_up_failed', admin)
+            db.session.commit()
+            return jsonify({"success": False, "error": "Invalid code"}), 401
+    else:
+        # No TOTP on this account: the password is the re-authentication factor.
+        password = payload.get('password') or ''
+        if not password or not admin.check_password(password):
+            _audit('auth.step_up_failed', admin, meta={'method': 'password'})
+            db.session.commit()
+            return jsonify({"success": False, "error": "Invalid password"}), 401
     mark_step_up(current_session())
     _audit('auth.mfa.step_up', admin)
     db.session.commit()

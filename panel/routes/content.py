@@ -12,7 +12,7 @@ from panel.models import (
     Admin, Announcement, AnnouncementDelivery, FAQ, OnlineChatScript, Server, SubAppConfig,
     SystemConfig,
 )
-from panel.routes.common import permission_required
+from panel.routes.common import permission_required, step_up_required
 from panel.services.subscription import (
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA,
@@ -1207,7 +1207,8 @@ def get_online_chat_scripts():
 
 
 @bp.route('/api/online-chat-scripts', methods=['POST'])
-@permission_required('content.manage')
+@permission_required('secrets.manage')
+@step_up_required('content.scripts')
 def create_online_chat_script():
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -1237,7 +1238,8 @@ def create_online_chat_script():
 
 
 @bp.route('/api/online-chat-scripts/<int:item_id>', methods=['PUT'])
-@permission_required('content.manage')
+@permission_required('secrets.manage')
+@step_up_required('content.scripts')
 def update_online_chat_script(item_id):
     from app import (  # deferred: app-level helper, avoids circular import
         app, sanitize_html,
@@ -1263,7 +1265,8 @@ def update_online_chat_script(item_id):
 
 
 @bp.route('/api/online-chat-scripts/<int:item_id>', methods=['DELETE'])
-@permission_required('content.manage')
+@permission_required('secrets.manage')
+@step_up_required('content.scripts')
 def delete_online_chat_script(item_id):
     from app import app  # deferred: app-level helper, avoids circular import
     item = db.session.get(OnlineChatScript, item_id)
@@ -1280,7 +1283,8 @@ def delete_online_chat_script(item_id):
 
 
 @bp.route('/api/online-chat-scripts/<int:item_id>/activate', methods=['POST'])
-@permission_required('content.manage')
+@permission_required('secrets.manage')
+@step_up_required('content.scripts')
 def activate_online_chat_script(item_id):
     from app import app  # deferred: app-level helper, avoids circular import
     item = db.session.get(OnlineChatScript, item_id)
@@ -1298,7 +1302,8 @@ def activate_online_chat_script(item_id):
 
 
 @bp.route('/api/online-chat-scripts/<int:item_id>/deactivate', methods=['POST'])
-@permission_required('content.manage')
+@permission_required('secrets.manage')
+@step_up_required('content.scripts')
 def deactivate_online_chat_script(item_id):
     """Turn the active widget off without switching to another one.
 

@@ -103,24 +103,69 @@ MFA_TRUST_COOKIE = 'eve_mfa_trust'
 _TRUST_SEP = '.'
 
 
-def _trust_key() -> bytes:
+def _trust_key() -> bytes | None:
+    """HMAC key for trust cookies, derived from the deployment's session secret.
+
+    There is deliberately no hardcoded fallback: a key that ships in the source
+    would let anyone who knows a password mint a cookie that skips 2FA.
+    """
     import os
-    raw = os.environ.get('SECRET_KEY') or os.environ.get('EVE_SECRET_KEY') or 'eve-fallback-key'
+    raw = ''
+    try:
+        from flask import current_app
+        raw = str(current_app.secret_key or '')
+    except Exception:
+        raw = ''
+    if not raw:
+        raw = (os.environ.get('SESSION_SECRET') or os.environ.get('SECRET_KEY')
+               or os.environ.get('EVE_SECRET_KEY') or '').strip()
+    if not raw:
+        return None
     return hashlib.sha256(('mfa-trust:' + raw).encode()).digest()
+
+
+def _trust_binding(admin_id) -> str:
+    """Fingerprint of the account's credentials.
+
+    Changing the password or re-enrolling 2FA changes it, which invalidates every
+    trust cookie issued before.
+    """
+    try:
+        from panel.extensions import db
+        from panel.models import Admin
+        from panel.models.ops import AdminMFASetting
+        admin = db.session.get(Admin, int(admin_id))
+        if admin is None:
+            return ''
+        setting = AdminMFASetting.query.filter_by(admin_id=admin.id).first()
+        material = f"{admin.password_hash or ''}|{getattr(setting, 'totp_secret', '') or ''}"
+    except Exception:
+        return ''
+    return hashlib.sha256(material.encode('utf-8')).hexdigest()
+
+
+def _trust_signature(key: bytes, payload: str, admin_id) -> str:
+    message = f'{payload}:{_trust_binding(admin_id)}'.encode()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
 
 
 def create_trust_token(admin_id: int) -> str:
     """Return a signed token that proves MFA was verified for *admin_id*."""
+    key = _trust_key()
+    if key is None:
+        return ''
     issued = int(time.time())
     payload = f'{admin_id}:{issued}'
-    sig = hmac.new(_trust_key(), payload.encode(), hashlib.sha256).hexdigest()[:32]
-    raw = f'{payload}:{sig}'
+    raw = f'{payload}:{_trust_signature(key, payload, admin_id)}'
     return base64.urlsafe_b64encode(raw.encode()).decode()
 
 
 def verify_trust_token(token: str | None, admin_id: int, *, max_age_hours: int | None = None) -> bool:
     """True when *token* is a valid, unexpired trust cookie for *admin_id*."""
     if not token:
+        return False
+    key = _trust_key()
+    if key is None:
         return False
     if max_age_hours is None:
         max_age_hours = _trust_hours_setting()
@@ -132,8 +177,7 @@ def verify_trust_token(token: str | None, admin_id: int, *, max_age_hours: int |
         tok_id, tok_ts, tok_sig = parts
         if int(tok_id) != int(admin_id):
             return False
-        payload = f'{tok_id}:{tok_ts}'
-        expected = hmac.new(_trust_key(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+        expected = _trust_signature(key, f'{tok_id}:{tok_ts}', admin_id)
         if not hmac.compare_digest(tok_sig, expected):
             return False
         age = time.time() - int(tok_ts)

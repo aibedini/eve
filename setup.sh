@@ -2080,11 +2080,8 @@ HOOK
     chmod +x "$HOOK_DIR/eve-manager.sh"
     print_success "Certbot deploy hook installed (auto-copy on renewal)"
 
-    # Also update sudoers for ssl/sync endpoint (handles manual sync from panel)
-    local SUDOERS_FILE="/etc/sudoers.d/eve-nginx"
-    if [ -f "$SUDOERS_FILE" ]; then
-        echo "${APP_USER} ALL=(root) NOPASSWD: /bin/cp, /bin/mkdir, /bin/chmod, /bin/chown" >> "$SUDOERS_FILE" 2>/dev/null || true
-    fi
+    # The certbot deploy hook above runs as root; the panel needs no extra sudo.
+    revoke_unsafe_sudoers
 }
 
 setup_self_signed_ssl() {
@@ -3225,13 +3222,12 @@ install_eve_cli() {
     print_success "/etc/ssl/eve-manager/ ready (host-managed)"
 
     # Minimal sudoers: only what the panel actually needs
-    # - sudo cat to read LetsEncrypt private keys (mode 600, root-owned)
     # - nginx reload/test/config-write for SSL apply and domain changes
+    # No wildcard arguments: sudo's * also matches spaces and "../", so a rule
+    # like "cat /etc/letsencrypt/live/*/fullchain.pem" can read any root file.
     local SUDOERS_FILE="/etc/sudoers.d/eve-ssl"
     cat > "$SUDOERS_FILE" <<EOF
 # Eve Manager — minimal sudo for SSL + nginx management
-${APP_USER} ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/live/*/fullchain.pem
-${APP_USER} ALL=(root) NOPASSWD: /bin/cat /etc/letsencrypt/archive/*/fullchain*.pem
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl reload nginx
 ${APP_USER} ALL=(root) NOPASSWD: /usr/sbin/nginx -t
 ${APP_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/nginx/sites-available/${SERVICE_NAME}
@@ -3239,6 +3235,29 @@ ${APP_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/eve-manager/domain
 EOF
     chmod 440 "$SUDOERS_FILE"
     print_success "Sudoers entry created: /etc/sudoers.d/eve-ssl"
+    revoke_unsafe_sudoers
+}
+
+# Remove sudo grants older releases installed that let the app user act as root
+# with arbitrary arguments (cp/chmod/chown/mkdir anywhere, wildcard cat).
+revoke_unsafe_sudoers() {
+    local f="/etc/sudoers.d/eve-nginx"
+    if [ -f "$f" ] && grep -q 'NOPASSWD: /bin/cp, /bin/mkdir, /bin/chmod, /bin/chown' "$f"; then
+        sed -i '\#NOPASSWD: /bin/cp, /bin/mkdir, /bin/chmod, /bin/chown#d' "$f"
+        if visudo -cf "$f" >/dev/null 2>&1; then
+            print_success "Removed unrestricted cp/chmod/chown sudo grant"
+        else
+            rm -f "$f"
+            print_warning "Removed invalid $f"
+        fi
+    fi
+    for f in /etc/sudoers.d/eve-ssl /etc/sudoers.d/eve-nginx; do
+        [ -f "$f" ] || continue
+        if grep -q 'NOPASSWD: /bin/cat ' "$f"; then
+            sed -i '\#NOPASSWD: /bin/cat #d' "$f"
+            visudo -cf "$f" >/dev/null 2>&1 || rm -f "$f"
+        fi
+    done
 }
 
 # ──────────────────────────────────────────────────────────────
