@@ -22,6 +22,7 @@ from panel.models import (
     UsageCounterState, UsageDaily,
 )
 from panel.routes.common import login_required
+from panel.services import subscription_layout
 from panel.services import lifecycle as lifecycle_service
 from panel.services import subscription_ended
 from panel.services.backup import _parse_int
@@ -1106,6 +1107,7 @@ def client_subscription(server_id, sub_id):
         page_lang=page_lang,
         server_id=server_id,
         sub_id=normalized_sub_id,
+        sub_layout=subscription_layout.page_layout(subscription_layout.load_layout()),
     )
     # The subscription page must be LIVE (status/usage/expiry) — never let a
     # browser or proxy serve a stale cached copy.

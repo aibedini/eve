@@ -47,6 +47,7 @@ PAGES = {
 #: the markup scanner over JS reports every string literal and comment as an offender.
 EXTRA_SOURCE_FILES = {
     'dashboard': ['static/dashboard.js'],
+    'sub_manager': ['static/sub-layout-editor.js'],
 }
 
 _spec = importlib.util.spec_from_file_location('i18n_scan', ROOT / 'scripts' / 'i18n_scan.py')

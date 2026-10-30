@@ -1,5 +1,27 @@
 ﻿# Changelog - Eve
 
+## [2.18.0] - 2026-10-30
+
+### Added
+- **Subscription page templates (Sub Manager -> Page Template).** Five selectable, responsive designs for the customer subscription page: **Classic** (the current dark cards), **Minimal Light** (light, flat, daylight-friendly), **Dashboard** (two columns from 720 px, three from 1280 px, horizontal status bar), **Glass** (frosted cards over an aurora background) and **Compact App** (dense AMOLED layout with sticky section shortcuts).
+- **Drag-and-drop section order.** The eight page sections (status, renewal, backup configs, usage, link & app guide, usage history, FAQ, manual config) are reordered by dragging with mouse, pen or touch, or with the arrow / Home / End keys on the handle; optional sections can be switched off (status, usage and the link/guide stay visible because the page script depends on them). Each template keeps its own order.
+- **Live preview.** The editor renders the real subscription page with sample account data (and your real apps, FAQs and support links) at mobile, tablet or desktop size, in Persian or English, updating as you drag.
+- `PUT /api/subscription-page-layout` (permission `content.manage`) validates and normalises the layout; stored as one JSON value in `SystemConfig` (`subscription_page_layout`).
+
+### Testing
+- New `tests/test_subscription_page_layout.py` (normalisation, save validation, render order, hidden sections, compact shortcuts, preview route, editor payload); the editor script is part of the i18n catalogue check.
+
+### Upgrade notes
+- No schema migration and no new dependency. Without a saved layout the page renders exactly as before (Classic, original order).
+
+### Also included (unreleased since 2.16.0)
+- Security: forgeable 2FA trust cookie and root sudo grants closed; inline event handlers blocked; sessions revoked on password change; agent tokens hashed.
+- Mobile and tablet UX pass across the panel; Sub Manager tabs and modals made responsive.
+- Eve health and recovery menu; EveChat widget CSP fix; an active online chat script can be disabled again.
+- Pulse, Links and network monitoring UX; BNQO links, agent install and isolated build tools.
+- Depletion reminders fire reliably; live queue measurement; dashboard poller budget; ledger `state_entered_at` scoping.
+- Subscription page shows the real expiry and end-of-service time.
+
 ## [2.16.0] - 2026-10-19
 
 ### Fixed

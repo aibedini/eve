@@ -13,6 +13,7 @@ from panel.models import (
     SystemConfig,
 )
 from panel.routes.common import permission_required, step_up_required
+from panel.services import subscription_layout
 from panel.services.subscription import (
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA,
@@ -302,6 +303,31 @@ def update_subscription_statistics():
                 db.session.add(SystemConfig(key=key, value=value))
         db.session.commit()
         return jsonify({'success': True})
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@bp.route('/api/subscription-page-layout', methods=['PUT'])
+@permission_required('content.manage')
+def update_subscription_page_layout():
+    """Save the subscription page template and the block order of every template."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    if data.get('template') not in subscription_layout.TEMPLATES:
+        return jsonify({'success': False, 'error': 'Unknown template'}), 400
+
+    layout = subscription_layout.normalize_layout(data)
+    try:
+        row = db.session.get(SystemConfig, subscription_layout.LAYOUT_KEY)
+        value = subscription_layout.dump_layout(layout)
+        if row:
+            row.value = value
+        else:
+            db.session.add(SystemConfig(key=subscription_layout.LAYOUT_KEY, value=value))
+        db.session.commit()
+        return jsonify({'success': True, 'layout': layout})
     except Exception as exc:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(exc)}), 500

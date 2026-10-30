@@ -1,3 +1,19 @@
+# Eve - Xui Manager v2.18.0
+
+## [2.18.0] - 2026-10-30
+
+This release lets you design the subscription page your customers see.
+
+**Five page templates.** Sub Manager has a new **Page Template** tab. Pick one of five responsive designs: **Classic** keeps today's dark cards; **Minimal Light** is a light, flat page that is easy to read in daylight; **Dashboard** spreads the page into two columns on tablets and three on wide screens, with the account status as a header bar; **Glass** puts frosted cards on a colourful aurora background; **Compact App** is a dense, black, app-like page with a sticky row of shortcuts to every visible section.
+
+**Drag-and-drop sections.** Arrange the eight page sections - status, renewal packages, backup configs, data usage, link & app guide, usage history, FAQ and manual configuration - by dragging them with a mouse or a finger, or from the keyboard (arrow keys, Home and End on the handle). Optional sections can be switched off; status, usage and the link/guide always stay because the page relies on them. Every template remembers its own order, so you can switch designs without losing your arrangement.
+
+**Live preview.** While you edit, the real subscription page is rendered next to the list with sample account data and your actual apps, FAQs and support links. Switch between mobile, tablet and desktop sizes and between Persian and English; the preview follows every change before you save.
+
+**Also included.** The changes made since 2.16.0 ship with this release: closed security gaps (forgeable 2FA trust cookie, root sudo grants, inline event handlers, session revocation on password change, hashed agent tokens), a mobile and tablet UX pass across the panel, the Eve health and recovery menu, Pulse/Links and BNQO improvements, reliable depletion reminders, and the real expiry and end-of-service time on the subscription page.
+
+**Upgrade notes.** No schema migration and no new dependency. Until a layout is saved, the subscription page looks exactly as before.
+
 # Eve - Xui Manager v2.16.0
 
 ## [2.16.0] - 2026-10-19

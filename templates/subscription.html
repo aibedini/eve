@@ -1,4 +1,8 @@
 {% set is_fa = (page_lang or 'en') == 'fa' %}
+{% set _sub_layout = sub_layout or {} %}
+{% set _sub_template = _sub_layout.template or 'classic' %}
+{% set _sub_blocks = _sub_layout.blocks or [{'id': 'status', 'visible': true}, {'id': 'renew', 'visible': true}, {'id': 'backup', 'visible': true}, {'id': 'usage', 'visible': true}, {'id': 'link', 'visible': true}, {'id': 'history', 'visible': true}, {'id': 'faq', 'visible': true}, {'id': 'config', 'visible': true}] %}
+{% set _sub_block_labels = {'status': ('وضعیت', 'Status'), 'renew': ('تمدید', 'Renew'), 'backup': ('پشتیبان', 'Backup'), 'usage': ('مصرف', 'Usage'), 'link': ('لینک و آموزش', 'Link & guide'), 'history': ('تاریخچه', 'History'), 'faq': ('سوال‌ها', 'FAQ'), 'config': ('تنظیم دستی', 'Manual config')} %}
 <!DOCTYPE html>
 <html lang="{{ 'fa' if is_fa else 'en' }}" dir="{{ 'rtl' if is_fa else 'ltr' }}">
 <head>
@@ -9,6 +13,7 @@
     <title>{{ ('اشتراک - ' ~ client.email) if is_fa else ('Subscription - ' ~ client.email) }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.generated.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='subscription-templates.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='phosphor/phosphor-regular.css') }}">
     <!-- Flag badges for panel-provided names: this page is standalone (it does not
@@ -357,12 +362,15 @@
     {{ active_online_chat_script | safe }}
     {% endif %}
 </head>
-<body class="subscription-page min-h-screen flex justify-center items-start pt-10 pb-10 px-4 bg-bg font-sans">
+<body class="subscription-page min-h-screen flex justify-center items-start pt-10 pb-10 px-4 bg-bg font-sans" data-sub-template="{{ _sub_template }}">
 
-    <div class="w-full max-w-lg space-y-6">
-        
+    {% set state_tag = client.service_state_tag or ('ok' if client.is_active else 'inactive') %}
+    {% set needs_renewal = state_tag in ('low', 'soon', 'expired', 'ended') %}
+    {% set has_support = support.whatsapp or support.telegram %}
+
+    {#- Page blocks: captured here, emitted below in the admin-defined order (Sub Manager -> Page Template). -#}
+    {% set _blk_status %}
         <div class="text-center relative pt-2">
-            {% set state_tag = client.service_state_tag or ('ok' if client.is_active else 'inactive') %}
             <div class="mb-3">
                 <span class="monitor-tag tag-{{ state_tag }}" style="font-size: 0.82rem; padding: 6px 16px;">
                     {{ (client.service_state_emoji ~ ' ' if client.service_state_emoji else '') ~ (client.service_state_label or ('فعاله' if is_fa else 'ACTIVE')) }}
@@ -415,10 +423,8 @@
             </div>
             {% endif %}
         </div>
-
-        {% set needs_renewal = state_tag in ('low', 'soon', 'expired', 'ended') %}
-
-        {% set has_support = support.whatsapp or support.telegram %}
+    {% endset %}
+    {% set _blk_renew %}
         <div id="sec-renew" class="bg-card rounded-lg border border-border shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]{% if needs_renewal %} renew-highlight{% endif %}">
             <!-- Header row — always visible, acts as toggle when collapsed -->
             <button type="button" id="renew-toggle-btn" aria-expanded="{{ 'true' if needs_renewal else 'false' }}" data-onclick="toggleRenewSection()"
@@ -529,7 +535,8 @@
                 </div>
             </div>
         </div>
-
+    {% endset %}
+    {% set _blk_backup %}
         {% if backup_configs and backup_configs|length %}
         {% for bc in backup_configs %}
         <div class="bg-card rounded-lg border border-border shadow-lg overflow-hidden transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
@@ -565,7 +572,8 @@
         </div>
         {% endfor %}
         {% endif %}
-
+    {% endset %}
+    {% set _blk_usage %}
         <div id="sec-usage" class="bg-card rounded-lg border border-border p-6 shadow-lg relative overflow-hidden transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
             <div class="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
 
@@ -679,7 +687,8 @@
             </div>
             {% endif %}
         </div>
-
+    {% endset %}
+    {% set _blk_link %}
         <div class="bg-card rounded-lg border border-border p-6 shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
             <div class="flex items-center gap-2 mb-6 text-success font-semibold">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
@@ -727,7 +736,8 @@
             <div id="app-cards-container" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px;"></div>
             <div id="app-content-container"></div>
         </div>
-
+    {% endset %}
+    {% set _blk_history %}
         <!-- Usage History Section -->
         <div id="usage-history-card" class="bg-card rounded-lg border border-border p-6 shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
             <div class="flex items-center justify-between mb-4">
@@ -767,7 +777,8 @@
                 <div id="history-pagination" class="items-center justify-center gap-2 mt-3 text-xs" style="display:none;"></div>
             </div>
         </div>
-
+    {% endset %}
+    {% set _blk_faq %}
         <!-- FAQ Section -->
         <div id="sec-faq" class="bg-card rounded-lg border border-border p-6 shadow-lg transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
             <div class="flex items-center gap-2 mb-4 text-white font-semibold">
@@ -793,7 +804,8 @@
             
             <div id="faq-container" class="space-y-3"></div>
         </div>
-
+    {% endset %}
+    {% set _blk_config %}
         <div id="sec-config" class="bg-card rounded-lg border border-border overflow-hidden transition-all duration-200 hover:border-primary hover:shadow-[0_0_20px_rgba(99,102,241,0.2)]">
             <button data-onclick="toggleConfig()" class="w-full flex items-center justify-between p-5 text-left bg-card hover:bg-bg/50 transition-colors">
                 <span class="flex items-center gap-2 font-semibold text-white">
@@ -847,6 +859,25 @@
                     {% endfor %}
                 </div>
             </div>
+        </div>
+    {% endset %}
+    {% set _blocks = {'status': _blk_status, 'renew': _blk_renew, 'backup': _blk_backup, 'usage': _blk_usage, 'link': _blk_link, 'history': _blk_history, 'faq': _blk_faq, 'config': _blk_config} %}
+
+    <div class="w-full max-w-lg space-y-6 sub-shell">
+        {% if _sub_template == 'compact' %}
+        <nav class="sub-quicknav no-scrollbar" aria-label="{{ 'بخش‌های صفحه' if is_fa else 'Page sections' }}">
+            {% for b in _sub_blocks if b.visible and _blocks[b.id]|trim %}
+            <a href="#sub-block-{{ b.id }}" class="sub-quicknav-chip">{{ _sub_block_labels[b.id][0 if is_fa else 1] }}</a>
+            {% endfor %}
+        </nav>
+        {% endif %}
+        <div class="sub-blocks space-y-6">
+            {% for b in _sub_blocks %}
+            {% set _html = _blocks[b.id] %}
+            {% if _html|trim %}
+            <section id="sub-block-{{ b.id }}" class="sub-block sub-block-{{ b.id }}" data-sub-block="{{ b.id }}"{% if not b.visible %} hidden{% endif %}>{{ _html }}</section>
+            {% endif %}
+            {% endfor %}
         </div>
 
         <div class="text-center text-xs text-muted/50 pt-6">

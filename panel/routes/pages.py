@@ -1,15 +1,16 @@
 """HTML page-render routes (extracted from app.py)."""
-from flask import Blueprint, redirect, render_template, session, url_for
+from flask import Blueprint, redirect, render_template, request, session, url_for
 
 from telegram_xray import find_xray_binary
 
 from panel.core.sms_center_copy import sms_center_copy
 from panel.extensions import db
 from panel.models import (
-    Admin, BankCard, PulseAgent, PulseRun, PulseTemplate, Server, SystemConfig,
-    get_pulse_settings,
+    FAQ, Admin, BankCard, PulseAgent, PulseRun, PulseTemplate, Server, SubAppConfig,
+    SystemConfig, get_pulse_settings,
 )
 from panel.routes.common import current_admin, login_required, permission_required
+from panel.services import subscription_layout
 from panel.services.billing import calculate_reseller_price, get_config
 from panel.services.subscription import (
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
@@ -389,7 +390,93 @@ def sub_manager_page():
                          whatsapp_bot_tpl_created=whatsapp_cfg.get('bot_tpl_created', DEFAULT_WHATSAPP_BOT_TPL_CREATED),
                          whatsapp_bot_tpl_renew=whatsapp_cfg.get('bot_tpl_renew', DEFAULT_WHATSAPP_BOT_TPL_RENEW),
                          whatsapp_bot_tpl_ended=whatsapp_cfg.get('bot_tpl_ended', DEFAULT_WHATSAPP_BOT_TPL_ENDED),
-                         whatsapp_bot_tpl_info=whatsapp_cfg.get('bot_tpl_info', DEFAULT_WHATSAPP_BOT_TPL_INFO))
+                         whatsapp_bot_tpl_info=whatsapp_cfg.get('bot_tpl_info', DEFAULT_WHATSAPP_BOT_TPL_INFO),
+                         sub_layout=subscription_layout.load_layout(),
+                         sub_layout_required=sorted(subscription_layout.REQUIRED_BLOCKS))
+
+
+def _preview_sample_client(is_fa):
+    return {
+        'email': 'preview-user',
+        'service_state_tag': 'ok',
+        'service_state_emoji': '',
+        'service_state_label': 'فعاله' if is_fa else 'ACTIVE',
+        'is_active': True,
+        'last_ip': '203.0.113.24',
+        'last_ip_operator': 'MCI',
+        'server_name': 'Germany-01',
+        'total_used': '18.6 GB',
+        'total_limit': '30 GB',
+        'percentage_used': 62,
+        'expiry_type': 'normal',
+        'expiry': '24 روز' if is_fa else '24 days',
+        'expiry_ms': 0,
+        'server_now_ms': 0,
+        'ended_at_text': '',
+        'remaining': '11.4 GB',
+        'subscription_url': request.url_root.rstrip('/') + '/s/0/preview',
+        'configs': [
+            'vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls#preview-1',
+            'vless://00000000-0000-0000-0000-000000000000@example.net:443?security=tls#preview-2',
+        ],
+    }
+
+
+@bp.route('/sub-manager/template-preview')
+@permission_required('content.manage')
+def sub_template_preview():
+    """The real subscription page with sample data, for the template editor's live preview."""
+    page_lang = 'en' if request.args.get('lang') == 'en' else 'fa'
+    is_fa = page_lang == 'fa'
+    order = [item for item in (request.args.get('order') or '').split(',') if item]
+    hidden = set((request.args.get('hidden') or '').split(','))
+    stored = subscription_layout.load_layout()
+    template = request.args.get('template')
+    if template not in subscription_layout.TEMPLATES:
+        template = stored['template']
+    blocks = (
+        subscription_layout.normalize_blocks(
+            [{'id': block, 'visible': block not in hidden} for block in order])
+        if order else stored['layouts'][template]
+    )
+    support = _get_support_preview()
+    return render_template(
+        'subscription.html',
+        client=_preview_sample_client(is_fa),
+        apps=[app.to_dict() for app in SubAppConfig.query.filter_by(is_enabled=True).all()],
+        faqs=[faq.to_dict() for faq in FAQ.query.filter_by(is_enabled=True).all()],
+        support=support,
+        channels={'telegram': '', 'whatsapp': ''},
+        announcements=[],
+        active_online_chat_script='',
+        backup_configs=[{
+            'title': 'کانفیگ پشتیبان' if is_fa else 'Backup config',
+            'description': '',
+            'config_url': 'vless://00000000-0000-0000-0000-000000000000@backup.example.com:443#backup',
+        }],
+        sub_packages=[
+            {'id': 1, 'name': 'Bronze', 'days': 30, 'volume': 20, 'price': 150000},
+            {'id': 2, 'name': 'Silver', 'days': 30, 'volume': 50, 'price': 290000,
+             'is_personalized': True},
+            {'id': 3, 'name': 'Gold', 'days': 90, 'volume': 150, 'price': 690000},
+        ],
+        renewal_recommendation=None,
+        page_lang=page_lang,
+        server_id=0,
+        sub_id='preview',
+        sub_layout={'template': template, 'blocks': blocks},
+        sub_preview=True,
+    )
+
+
+def _get_support_preview():
+    from app import _get_system_configs_batch  # deferred: app-level helper, avoids circular import
+    cfg = _get_system_configs_batch(['support_telegram', 'support_whatsapp', 'support_sms'])
+    return {
+        'telegram': cfg.get('support_telegram') or '',
+        'whatsapp': cfg.get('support_whatsapp') or '',
+        'sms': cfg.get('support_sms') or '',
+    }
 
 @bp.route('/packages')
 @permission_required('content.manage')

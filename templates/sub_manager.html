@@ -37,6 +37,10 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             {{ _('Backup Config') }}
         </button>
+        <button class="settings-tab" data-onclick="switchTab('page_layout')">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+            {{ _('Page Template') }}
+        </button>
     </div>
 
     <div class="settings-content">
@@ -336,8 +340,82 @@
                 <div id="backup-config-container" class="servers-grid"></div>
             </div>
         </div>
+
+        <div id="tab-page_layout" class="tab-pane">
+            <div class="panel-card">
+                <div class="panel-card-header">
+                    <div class="header-content">
+                        <h2>{{ _('Page Template') }}</h2>
+                        <p class="text-secondary">{{ _('Choose how the subscription page looks and drag its sections into the order your users should see.') }}</p>
+                    </div>
+                    <div class="sub-layout-actions">
+                        <button type="button" class="btn btn-secondary" id="sub-layout-reset">{{ _('Reset order') }}</button>
+                        <button type="button" class="btn btn-primary" id="sub-layout-save" disabled>{{ _('Save Template') }}</button>
+                    </div>
+                </div>
+
+                <div class="sub-layout-editor">
+                    <div class="sub-layout-controls">
+                        <h3 class="sub-layout-heading">{{ _('Template') }}</h3>
+                        <div class="sub-tpl-grid" role="radiogroup" aria-label="{{ _('Template') }}">
+                            <button type="button" class="sub-tpl-card" role="radio" aria-checked="false" data-template="classic">
+                                <span class="sub-tpl-thumb sub-tpl-thumb-classic" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+                                <span class="sub-tpl-name">{{ _('Classic') }}</span>
+                                <span class="sub-tpl-desc">{{ _('The familiar dark card layout.') }}</span>
+                            </button>
+                            <button type="button" class="sub-tpl-card" role="radio" aria-checked="false" data-template="minimal">
+                                <span class="sub-tpl-thumb sub-tpl-thumb-minimal" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+                                <span class="sub-tpl-name">{{ _('Minimal Light') }}</span>
+                                <span class="sub-tpl-desc">{{ _('Light, flat and airy; easy to read in daylight.') }}</span>
+                            </button>
+                            <button type="button" class="sub-tpl-card" role="radio" aria-checked="false" data-template="dashboard">
+                                <span class="sub-tpl-thumb sub-tpl-thumb-dashboard" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+                                <span class="sub-tpl-name">{{ _('Dashboard') }}</span>
+                                <span class="sub-tpl-desc">{{ _('Wide multi-column overview on tablets and desktops.') }}</span>
+                            </button>
+                            <button type="button" class="sub-tpl-card" role="radio" aria-checked="false" data-template="glass">
+                                <span class="sub-tpl-thumb sub-tpl-thumb-glass" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+                                <span class="sub-tpl-name">{{ _('Glass') }}</span>
+                                <span class="sub-tpl-desc">{{ _('Frosted cards over a colourful aurora background.') }}</span>
+                            </button>
+                            <button type="button" class="sub-tpl-card" role="radio" aria-checked="false" data-template="compact">
+                                <span class="sub-tpl-thumb sub-tpl-thumb-compact" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+                                <span class="sub-tpl-name">{{ _('Compact App') }}</span>
+                                <span class="sub-tpl-desc">{{ _('Dense app-style layout with sticky section shortcuts.') }}</span>
+                            </button>
+                        </div>
+
+                        <h3 class="sub-layout-heading">{{ _('Sections') }}</h3>
+                        <p class="field-note" id="sub-layout-hint">{{ _('Drag a section by its handle, or focus the handle and use the arrow keys. Each template keeps its own order.') }}</p>
+                        <ol class="sub-block-list" id="sub-block-list" aria-describedby="sub-layout-hint"></ol>
+                        <div class="sub-layout-live" id="sub-layout-live" aria-live="polite"></div>
+                    </div>
+
+                    <div class="sub-layout-preview">
+                        <div class="sub-preview-toolbar">
+                            <div class="sub-preview-seg" role="group" aria-label="{{ _('Preview size') }}">
+                                <button type="button" class="sub-preview-device active" data-device="mobile" aria-pressed="true">{{ _('Mobile') }}</button>
+                                <button type="button" class="sub-preview-device" data-device="tablet" aria-pressed="false">{{ _('Tablet') }}</button>
+                                <button type="button" class="sub-preview-device" data-device="desktop" aria-pressed="false">{{ _('Desktop') }}</button>
+                            </div>
+                            <div class="sub-preview-seg" role="group" aria-label="{{ _('Preview language') }}">
+                                <button type="button" class="sub-preview-lang active" data-lang="fa" aria-pressed="true">{{ _('Persian') }}</button>
+                                <button type="button" class="sub-preview-lang" data-lang="en" aria-pressed="false">{{ _('English') }}</button>
+                            </div>
+                        </div>
+                        <div class="sub-preview-stage" id="sub-preview-stage">
+                            <div class="sub-preview-frame" id="sub-preview-frame" data-device="mobile">
+                                <iframe id="sub-preview-iframe" title="{{ _('Subscription page preview') }}"></iframe>
+                            </div>
+                        </div>
+                        <p class="field-note">{{ _('The preview uses sample account data; apps, FAQs and support links are your real settings.') }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
+<script type="application/json" id="sub-layout-data">{{ {'layout': sub_layout, 'required': sub_layout_required, 'preview_url': url_for('pages.sub_template_preview'), 'lang': 'fa' if panel_lang == 'fa' else 'en'}|tojson }}</script>
 
 <!-- Backup Config Modal -->
 <div class="modal-overlay sub-manager-modal hidden" id="backup-config-modal">
@@ -1696,6 +1774,7 @@
 <script src="{{ url_for('static', filename='jalalidatepicker.min.js') }}"></script>
 
 <script nonce="{{ csp_nonce }}">window.EVE_I18N = {{ i18n_catalog('sub_manager')|tojson }};</script>
+<script src="{{ url_for('static', filename='sub-layout-editor.js') }}" defer></script>
 <script nonce="{{ csp_nonce }}">
     let apps = [];
     document.addEventListener('DOMContentLoaded', loadApps);
@@ -2106,6 +2185,10 @@
 
         if (tabName === 'statistics') {
             updateStatisticsPreview();
+        }
+
+        if (tabName === 'page_layout' && window.EveSubLayout) {
+            window.EveSubLayout.show();
         }
     }
 

@@ -253,12 +253,26 @@ MAPPING = (
         # The customer-facing page: countdown script, statistics line and the
         # "ended at" sentence all live here.
         ['tests.test_subscription_expiry_countdown',
-         'tests.test_subscription_ended_notice', 'tests.test_ui_design_system'],
+         'tests.test_subscription_ended_notice', 'tests.test_ui_design_system',
+         'tests.test_subscription_page_layout'],
         ['tests.test_subscription_scope', 'tests.test_static_deploy_contract',
          'tests.test_subscription_visual_harness'],
     )),
+    ('panel/services/subscription_layout.py', (
+        ['tests.test_subscription_page_layout'],
+        ['tests.test_i18n_pages'],
+    )),
+    ('static/sub-layout-editor.js', (
+        ['tests.test_i18n_pages', 'tests.test_subscription_page_layout'],
+        [],
+    )),
+    ('static/subscription-templates.css', (
+        ['tests.test_subscription_page_layout'],
+        ['tests.test_static_deploy_contract'],
+    )),
     ('templates/sub_manager.html', (
-        ['tests.test_i18n_pages', 'tests.test_online_chat_scripts'],
+        ['tests.test_i18n_pages', 'tests.test_online_chat_scripts',
+         'tests.test_subscription_page_layout'],
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state'],
     )),
     ('templates/monitor.html', (
