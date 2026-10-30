@@ -4526,12 +4526,14 @@ html[data-theme="light"] .server-icon {
 @media (max-width: 768px) {
     .sidebar {
         transform: translateX(-100%);
+        /* While closed the drawer is also `inert` (toggleSidebar in base.html),
+           so its links leave the tab order and the screen-reader tree. */
     }
 
     html[dir="rtl"] .sidebar {
         transform: translateX(100%);
     }
-    
+
     .sidebar.open {
         transform: translateX(0);
     }
@@ -4728,19 +4730,23 @@ html[data-theme="light"] .server-icon {
     }
     
     .inbound-header {
-        /* Keep title + status on one row even on narrow phones.
-           Status (Active + Select All) stays pinned top-right while the
-           title badges wrap underneath — matches the wide-screen layout. */
+        /* Title + status share a row while the title keeps ~200px; on narrow
+           phones the status group wraps below instead of squeezing the inbound
+           name into one word per line. */
         flex-direction: row;
         align-items: flex-start;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 8px;
     }
 
     .inbound-title {
-        flex: 1 1 auto;
+        flex: 1 1 200px;
         min-width: 0;
         flex-wrap: wrap;
+    }
+
+    .inbound-title h3 {
+        overflow-wrap: anywhere;
     }
 
     .inbound-status {
@@ -6774,6 +6780,41 @@ html[dir="rtl"] .royalty-table .royalty-cell-select .checkbox-label { padding-ri
 .step-up-error {
     margin: 0 0 12px;
     color: var(--danger);
+}
+
+/* ── Panel-wide interaction and accessibility baseline ─────────────────── */
+
+/* Keyboard focus is always visible; mouse/touch focus is not decorated. */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+/* Remove the double-tap-to-zoom delay on controls. */
+a,
+button,
+label,
+summary,
+select,
+[data-onclick],
+[role="button"] {
+    touch-action: manipulation;
+}
+
+/* Honour the OS "reduce motion" setting across every page. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 /* Initial-letter fallback when an app icon fails to load (sub_manager.html). */

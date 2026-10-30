@@ -769,6 +769,11 @@
         color: var(--text-primary);
         border: 1px solid var(--border-color);
     }
+    #stmt-collapse-btn {
+        min-height: 32px;
+        padding: 6px 12px;
+        border-radius: 8px;
+    }
     .range-chips {
         display: flex;
         gap: 8px;
@@ -1622,7 +1627,7 @@
         const pages = getPageNumbers(currentPage, totalPages);
         let html = '';
 
-        html += `<button class="page-btn ${currentPage <= 1 ? 'disabled' : ''}" data-page="prev" ${currentPage <= 1 ? 'disabled' : ''} style="padding: 8px 12px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; cursor: ${currentPage <= 1 ? 'not-allowed' : 'pointer'}; opacity: ${currentPage <= 1 ? '0.5' : '1'};">
+        html += `<button class="page-btn ${currentPage <= 1 ? 'disabled' : ''}" data-page="prev" aria-label="${_t('Previous page')}" ${currentPage <= 1 ? 'disabled' : ''} style="padding: 8px 12px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; cursor: ${currentPage <= 1 ? 'not-allowed' : 'pointer'}; opacity: ${currentPage <= 1 ? '0.5' : '1'};">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>`;
 
@@ -1635,7 +1640,7 @@
             }
         });
 
-        html += `<button class="page-btn ${currentPage >= totalPages ? 'disabled' : ''}" data-page="next" ${currentPage >= totalPages ? 'disabled' : ''} style="padding: 8px 12px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; cursor: ${currentPage >= totalPages ? 'not-allowed' : 'pointer'}; opacity: ${currentPage >= totalPages ? '0.5' : '1'};">
+        html += `<button class="page-btn ${currentPage >= totalPages ? 'disabled' : ''}" data-page="next" aria-label="${_t('Next page')}" ${currentPage >= totalPages ? 'disabled' : ''} style="padding: 8px 12px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; cursor: ${currentPage >= totalPages ? 'not-allowed' : 'pointer'}; opacity: ${currentPage >= totalPages ? '0.5' : '1'};">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
         </button>`;
 

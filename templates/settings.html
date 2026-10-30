@@ -2480,6 +2480,33 @@
     @media (max-width: 768px) {
         .settings-layout {
             grid-template-columns: 1fr;
+            gap: 16px;
+        }
+
+        /* Fourteen stacked tabs pushed every section below the fold, and a tap
+           changed nothing visible. On phones the menu is one swipeable row. */
+        .settings-sidebar {
+            display: flex;
+            gap: 8px;
+            padding: 8px;
+            overflow-x: auto;
+            overscroll-behavior-x: contain;
+            scroll-snap-type: x proximity;
+            scrollbar-width: none;
+        }
+
+        .settings-sidebar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .settings-sidebar .settings-tab {
+            flex: 0 0 auto;
+            width: auto;
+            min-height: 44px;
+            margin: 0;
+            padding: 10px 14px;
+            white-space: nowrap;
+            scroll-snap-align: start;
         }
     }
 
@@ -4179,6 +4206,8 @@
         tabButton.classList.add('active');
         pane.classList.add('active');
         if (updateHash) history.replaceState(null, '', `#tab-${tabName}`);
+        // Phone tab strip: keep the chosen tab in view.
+        tabButton.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
         if (tabName === 'overview') {
             loadOverview();

@@ -9,7 +9,9 @@
         h1 { font-size:1.3rem; } h2 { font-size:1rem; margin-top:28px; }
         button { padding:10px 14px; border:0; border-radius:8px; background:#6366f1; color:#fff; cursor:pointer; }
         button.secondary { background:#334155; } button.link { background:none; color:#f87171; padding:2px 6px; }
-        table { width:100%; border-collapse:collapse; font-size:.85rem; margin-top:10px; }
+        .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; margin-top:10px; }
+        table { width:100%; border-collapse:collapse; font-size:.85rem; }
+        @media (max-width:640px) { body { padding:16px; } table { min-width:560px; } }
         th, td { text-align:left; padding:8px 6px; border-bottom:1px solid #334155; }
         .muted { color:#94a3b8; font-size:.8rem; }
         .error { background:#7f1d1d; padding:10px; border-radius:8px; margin-top:10px; display:none; }
@@ -22,13 +24,13 @@
 
     <h2>Passkeys</h2>
     <button type="button" id="register-passkey">Register a passkey</button>
-    <table><thead><tr><th>Name</th><th>Added</th><th>Last used</th><th></th></tr></thead>
-    <tbody id="credential-rows"></tbody></table>
+    <div class="table-scroll"><table><thead><tr><th>Name</th><th>Added</th><th>Last used</th><th></th></tr></thead>
+    <tbody id="credential-rows"></tbody></table></div>
 
     <h2>Active sessions</h2>
     <button type="button" id="revoke-others" class="secondary">Sign out all other sessions</button>
-    <table><thead><tr><th>IP</th><th>Device</th><th>Created</th><th>Last seen</th><th>Expires</th><th></th></tr></thead>
-    <tbody id="session-rows"></tbody></table>
+    <div class="table-scroll"><table><thead><tr><th>IP</th><th>Device</th><th>Created</th><th>Last seen</th><th>Expires</th><th></th></tr></thead>
+    <tbody id="session-rows"></tbody></table></div>
 
     <script nonce="{{ csp_nonce }}">
         function b64urlToBuf(value) {

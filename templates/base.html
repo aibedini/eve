@@ -346,7 +346,7 @@
                         🚀 {{ nav_t['new_release'] }}
                     </a>
                 </div>
-                <button class="sidebar-toggle" data-onclick="toggleSidebar()">
+                <button type="button" class="sidebar-toggle" data-onclick="toggleSidebar()" aria-label="{{ _('Close menu') }}" aria-controls="sidebar">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="3" y1="12" x2="21" y2="12"></line>
                         <line x1="3" y1="6" x2="21" y2="6"></line>
@@ -523,7 +523,7 @@
                         <span class="user-role" style="text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.5px;">{{ nav_t.get('role_' ~ role, role) }}</span>
                     </div>
                 </div>
-                <a href="{{ url_for('auth.logout') }}" class="logout-btn" title="{{ nav_t['logout'] }}">
+                <a href="{{ url_for('auth.logout') }}" class="logout-btn" title="{{ nav_t['logout'] }}" aria-label="{{ nav_t['logout'] }}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
                         <polyline points="16 17 21 12 16 7"></polyline>
@@ -537,7 +537,7 @@
         
         <main class="main-content">
             <header class="top-header">
-                <button class="mobile-menu-btn" data-onclick="toggleSidebar()">
+                <button type="button" class="mobile-menu-btn" data-onclick="toggleSidebar()" aria-label="{{ _('Open menu') }}" aria-controls="sidebar" aria-expanded="false">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="3" y1="12" x2="21" y2="12"></line>
                         <line x1="3" y1="6" x2="21" y2="6"></line>
@@ -588,11 +588,39 @@
     <div class="toast hidden" id="toast"></div>
     
     <script nonce="{{ csp_nonce }}">
-        function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('open');
-            document.getElementById('sidebar-overlay').classList.toggle('show');
-            document.body.classList.toggle('sidebar-open');
+        // On phones the sidebar is an off-canvas drawer. While it is closed it is
+        // `inert`, so its links are neither tabbable nor read by screen readers.
+        const drawerQuery = window.matchMedia('(max-width: 768px)');
+
+        function syncSidebarInert() {
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar) sidebar.inert = drawerQuery.matches && !sidebar.classList.contains('open');
         }
+
+        function toggleSidebar() {
+            const open = document.getElementById('sidebar').classList.toggle('open');
+            document.getElementById('sidebar-overlay').classList.toggle('show', open);
+            document.body.classList.toggle('sidebar-open', open);
+            document.querySelectorAll('.mobile-menu-btn').forEach(function (btn) {
+                btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            });
+            syncSidebarInert();
+            // Move focus into the drawer and back, so keyboard users are not left
+            // on a control hidden behind the overlay. getClientRects, not
+            // offsetParent: the drawer is position:fixed.
+            const target = open ? document.querySelector('#sidebar .sidebar-toggle')
+                                : document.querySelector('.mobile-menu-btn');
+            if (target && target.getClientRects().length) target.focus();
+        }
+
+        syncSidebarInert();
+        drawerQuery.addEventListener('change', syncSidebarInert);
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && document.getElementById('sidebar')?.classList.contains('open')) {
+                toggleSidebar();
+            }
+        });
         
         function showToast(message, type = 'success', duration = null) {
             const toast = document.getElementById('toast');
