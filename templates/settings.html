@@ -1787,21 +1787,32 @@
                         </div>
                         <div id="sms-debt-view-label" class="field-note" role="status" aria-live="polite"></div>
                         <div id="sms-debt-rows" class="sms-audit-rows" aria-live="polite"></div>
-                        <div class="sms-audit-pager"><button type="button" class="btn btn-secondary" id="sms-debt-prev" data-onclick="changeSmsDebtPage(-1)" disabled>{{ _('Previous') }}</button><button type="button" class="btn btn-secondary" id="sms-debt-next" data-onclick="changeSmsDebtPage(1)" disabled>{{ _('Next') }}</button></div>
-                        <div class="sms-audit-filters" aria-labelledby="sms-recovery-title">
-                            <div class="form-group"><label id="sms-recovery-title" for="sms-recovery-window">{{ _('Recover missed notifications') }}</label><select id="sms-recovery-window" class="form-select"><option value="24h">{{ _('Last 24 hours') }}</option><option value="3d">{{ _('Last 3 days') }}</option><option value="7d" selected>{{ _('Last 7 days') }}</option><option value="custom">{{ _('Custom range / manual review') }}</option></select></div>
+                        <div id="sms-debt-pager" class="sms-audit-pager hidden"><button type="button" class="btn btn-secondary" id="sms-debt-prev" data-onclick="changeSmsDebtPage(-1)" disabled>{{ _('Previous') }}</button><button type="button" class="btn btn-secondary" id="sms-debt-next" data-onclick="changeSmsDebtPage(1)" disabled>{{ _('Next') }}</button></div>
+            </section>
+
+            <section class="sms-audit-stream" aria-labelledby="sms-recovery-title">
+                <div class="sms-audit-stream-head">
+                    <div>
+                        <h3 id="sms-recovery-title">{{ _('Recover missed notifications') }}</h3>
+                        <p class="text-secondary">{{ _('Find accounts that should have been notified but were not. Preview first: nothing is sent until you create obligations.') }}</p>
+                    </div>
+                </div>
+                        <div class="sms-audit-filters sms-recovery-filters">
+                            <div class="form-group"><label for="sms-recovery-window">{{ _('Time window') }}</label><select id="sms-recovery-window" class="form-select"><option value="24h">{{ _('Last 24 hours') }}</option><option value="3d">{{ _('Last 3 days') }}</option><option value="7d" selected>{{ _('Last 7 days') }}</option><option value="custom">{{ _('Custom range / manual review') }}</option></select></div>
                             <div class="form-group"><label for="sms-recovery-state">{{ _('State') }}</label><select id="sms-recovery-state" class="form-select"><option value="">{{ _('All') }}</option><option value="volume_ended">{{ _('Volume ended') }}</option><option value="expired">{{ _('Expired') }}</option></select></div>
                             <div class="form-group"><label for="sms-recovery-server">{{ _('Server ID') }}</label><input id="sms-recovery-server" type="number" min="1" placeholder="ID"></div>
-                            <div class="form-group"><label for="sms-recovery-from">{{ _('State entered from') }}</label><input id="sms-recovery-from" type="date"></div>
-                            <div class="form-group"><label for="sms-recovery-to">{{ _('State entered to') }}</label><input id="sms-recovery-to" type="date"></div>
-                            <label class="checkbox-label"><input type="checkbox" id="sms-recovery-unknown"><span class="checkmark"></span><span>{{ _('Include unknown age (manual review only)') }}</span></label>
-                            <button type="button" class="btn btn-secondary" data-onclick="previewSmsRecovery()">{{ _('Preview without sending') }}</button>
+                            <div class="form-group sms-recovery-custom hidden"><label for="sms-recovery-from">{{ _('State entered from') }}</label><input id="sms-recovery-from" type="date"></div>
+                            <div class="form-group sms-recovery-custom hidden"><label for="sms-recovery-to">{{ _('State entered to') }}</label><input id="sms-recovery-to" type="date"></div>
+                            <div class="sms-recovery-actions">
+                                <label class="checkbox-label sms-recovery-custom hidden"><input type="checkbox" id="sms-recovery-unknown"><span class="checkmark"></span><span>{{ _('Include unknown age (manual review only)') }}</span></label>
+                                <button type="button" class="btn btn-secondary" id="sms-recovery-preview" data-onclick="previewSmsRecovery()">{{ _('Preview without sending') }}</button>
+                            </div>
                         </div>
                         <div id="sms-recovery-summary" class="sms-audit-kpis" aria-live="polite"></div>
                         <div id="sms-recovery-status" class="field-note" role="status" aria-live="polite"></div>
                         <div id="sms-recovery-rows" class="sms-audit-rows" aria-live="polite"></div>
-                        <div class="sms-audit-pager"><button type="button" class="btn btn-secondary" id="sms-recovery-prev" data-onclick="previewSmsRecovery(-1)" disabled>{{ _('Previous') }}</button><button type="button" class="btn btn-secondary" id="sms-recovery-next" data-onclick="previewSmsRecovery(1)" disabled>{{ _('Next') }}</button></div>
-                        <div class="sms-audit-pager"><button type="button" class="btn btn-primary" id="sms-recovery-activate" data-onclick="activateSmsRecovery()" disabled>{{ _('Create obligations for selected') }}</button></div>
+                        <div id="sms-recovery-pager" class="sms-audit-pager hidden"><button type="button" class="btn btn-secondary" id="sms-recovery-prev" data-onclick="previewSmsRecovery(-1)" disabled>{{ _('Previous') }}</button><button type="button" class="btn btn-secondary" id="sms-recovery-next" data-onclick="previewSmsRecovery(1)" disabled>{{ _('Next') }}</button></div>
+                        <div id="sms-recovery-activate-bar" class="sms-audit-pager hidden"><small class="text-secondary">{{ _('Select up to 20 accounts, then create obligations. Delivery still goes through the normal queue.') }}</small><button type="button" class="btn btn-primary" id="sms-recovery-activate" data-onclick="activateSmsRecovery()" disabled>{{ _('Create obligations for selected') }}</button></div>
                     </section>
             <div id="sms-audit-gap" class="sms-audit-gap hidden" role="alert"></div>
                         <section class="sms-audit-stream" aria-labelledby="sms-stream-title">
@@ -2477,14 +2488,15 @@
     .settings-content { min-width: 0; }
     .settings-content .panel-card { min-width: 0; }
 
-    @media (max-width: 768px) {
+    @media (max-width: 1024px) {
         .settings-layout {
             grid-template-columns: 1fr;
             gap: 16px;
         }
 
         /* Fourteen stacked tabs pushed every section below the fold, and a tap
-           changed nothing visible. On phones the menu is one swipeable row. */
+           changed nothing visible. On phones and tablets the menu is one
+           swipeable row, so the content gets the full width. */
         .settings-sidebar {
             display: flex;
             gap: 8px;
@@ -2515,6 +2527,17 @@
         border-radius: 12px;
         padding: 12px;
         border: 1px solid var(--border-color);
+    }
+
+    /* Long tabs (SMS is several screens tall) used to scroll the menu away and
+       leave an empty column; keep it in view beside the content. */
+    @media (min-width: 1025px) {
+        .settings-sidebar {
+            position: sticky;
+            top: calc(var(--header-height) + 16px);
+            max-height: calc(100vh - var(--header-height) - 32px);
+            overflow-y: auto;
+        }
     }
 
     .settings-tab {
@@ -6655,16 +6678,22 @@
             const metrics = currentRun ? [currentRun.eligible_count, currentRun.confirmed_count, currentRun.deferred_count, currentRun.suppressed_count, currentRun.failed_count] : [null, totals.confirmed || 0, totals.deferred || 0, totals.suppressed || 0, Number(totals.failed_retryable || 0) + Number(totals.failed_terminal || 0)];
             [[smsAuditLabel('ثبت‌شده در بررسی', 'Recorded candidates'), matched, ''], [smsAuditLabel('واجد شرایط', 'Eligible'), metrics[0], ''], [smsAuditLabel('تأییدشده', 'Confirmed'), metrics[1], 'confirmed'], [smsAuditLabel('موکول‌شده', 'Deferred'), metrics[2], 'deferred'], [smsAuditLabel('ارسال‌نشده', 'Suppressed'), metrics[3], 'suppressed'], [smsAuditLabel('ناموفق', 'Failed'), metrics[4], 'failed']].forEach(([label, value, outcome]) => smsAuditCard(kpis, label, value, null, outcome));
             }
+            // The warning strip shows only when there is a message for it; an
+            // empty bordered box used to appear when a run was missing but
+            // health data was present.
             const gap = document.getElementById('sms-audit-gap');
             const probeDiagnostic = healthBody && healthBody.success === false
                 ? (healthBody.diagnostic || healthBody.error || null) : null;
-            gap.classList.toggle('hidden', !probeDiagnostic && Boolean(currentRun && health));
+            let gapMessage = '';
             if (probeDiagnostic) {
-                gap.textContent = smsAuditLabel('بررسی سلامت GMweb: ', 'GMweb health probe: ') + probeDiagnostic;
+                gapMessage = smsAuditLabel('بررسی سلامت GMweb: ', 'GMweb health probe: ') + probeDiagnostic;
+            } else if (currentRun && currentRun.audit_gap_count) {
+                gapMessage = smsAuditLabel(`هشدار: ${currentRun.audit_gap_count} تصمیم ثبت‌نشده در این اجرا.`, _t('Audit gap: {v1} candidates without a recorded decision.', {v1: currentRun.audit_gap_count}));
             } else if (!currentRun && !health) {
-                gap.textContent = smsAuditLabel('دادهٔ اجرا و سلامت GMweb در دسترس نیست؛ صفرها به معنی نبود بدهی اعلان نیستند.', 'No run or GMweb health data is available; zero scan counts do not mean there is no notification debt.');
+                gapMessage = smsAuditLabel('دادهٔ اجرا و سلامت GMweb در دسترس نیست؛ صفرها به معنی نبود بدهی اعلان نیستند.', 'No run or GMweb health data is available; zero scan counts do not mean there is no notification debt.');
             }
-            if (currentRun && !probeDiagnostic) gap.textContent = currentRun.audit_gap_count ? smsAuditLabel(`هشدار: ${currentRun.audit_gap_count} تصمیم ثبت‌نشده در این اجرا.`, _t('Audit gap: {v1} candidates without a recorded decision.', {v1: currentRun.audit_gap_count})) : smsAuditLabel('پوشش کامل این اجرا هنوز قابل تأیید نیست؛ فقط تصمیم‌های ثبت‌شده نشان داده می‌شوند.', 'Full run coverage is not yet verifiable; showing recorded decisions only.');
+            gap.textContent = gapMessage;
+            gap.classList.toggle('hidden', !gapMessage);
         } catch (_) { healthStrip.textContent = smsAuditLabel('اطلاعات سلامت در دسترس نیست.', 'Health information unavailable.'); }
     }
 
@@ -6705,6 +6734,8 @@
         smsRecoveryCandidates = [];
         activate.disabled = true;
         body.replaceChildren();
+        document.getElementById('sms-recovery-pager').classList.add('hidden');
+        document.getElementById('sms-recovery-activate-bar').classList.add('hidden');
         if (unknown && windowValue !== 'custom') {
             status.textContent = smsAuditLabel('برای سن نامعلوم، بازبینی دستی را انتخاب کنید.', 'Select manual review for unknown-age accounts.');
             return;
@@ -6743,6 +6774,8 @@
             ].forEach(([label, value]) => smsAuditCard(recoverySummary, label, value || 0, null));
             document.getElementById('sms-recovery-prev').disabled = !data.offset;
             document.getElementById('sms-recovery-next').disabled = !data.has_more;
+            document.getElementById('sms-recovery-pager').classList.toggle('hidden', !data.offset && !data.has_more);
+            document.getElementById('sms-recovery-activate-bar').classList.toggle('hidden', !smsRecoveryCandidates.some(row => row.preview_token));
             const eligible = smsRecoveryCandidates.filter(row => row.recoverable).length;
             status.textContent = smsAuditLabel(`اکانت پایان‌یافته: ${data.current_terminal_accounts} · صفحه ${Math.floor(data.offset / 200) + 1} · قابل انتخاب در این صفحه: ${eligible}`, _t('Terminal accounts: {v1} · page {v2} · selectable on this page: {eligible}', {v1: data.current_terminal_accounts, v2: Math.floor(data.offset / 200) + 1, eligible}));
             for (const [index, row] of smsRecoveryCandidates.entries()) {
@@ -6897,6 +6930,7 @@
             document.getElementById('sms-debt-view-label').textContent = smsDebtView.label || smsAuditLabel('نیازمند اطلاع‌رسانی', 'Needs notification');
             document.getElementById('sms-debt-prev').disabled = smsDebtOffset === 0;
             document.getElementById('sms-debt-next').disabled = !hasMore;
+            document.getElementById('sms-debt-pager').classList.toggle('hidden', smsDebtOffset === 0 && !hasMore);
             for (const row of rows) {
                 const detail = document.createElement('details');
                 detail.className = 'sms-audit-row';
@@ -6954,11 +6988,29 @@
         }
     }
 
-    async function loadSmsLogs() {
+    // Auto-refresh used to wipe the list to "Loading activity…" every 5 s and
+    // drop the in-flight request, so a query slower than the tick never
+    // finished and the text stuck. Background refreshes now keep the rows on
+    // screen, skip while a request is running, and only the slow panels
+    // (intelligence, debt) refresh every sixth tick.
+    let smsLogsInFlight = false;
+    let smsAuditTick = 0;
+
+    function smsAuditPlaceholder(body, text, className = 'sms-audit-empty') {
+        const el = document.createElement('div');
+        el.className = className;
+        el.textContent = text;
+        body.replaceChildren(el);
+    }
+
+    async function loadSmsLogs(options = {}) {
         const body = document.getElementById('sms-logs-body');
         if (!body) return;
+        const background = Boolean(options.background);
+        if (background && smsLogsInFlight) return;
         const requestId = ++smsAuditRequest;
-        loadSmsCapacity(); loadSmsIntelligence(); loadSmsDebt();
+        loadSmsCapacity();
+        if (!background || smsAuditTick++ % 6 === 0) { loadSmsIntelligence(); loadSmsDebt(); }
         const params = new URLSearchParams({limit: String(SMS_LOG_PAGE_SIZE), offset: String(smsLogPage * SMS_LOG_PAGE_SIZE), ...smsAuditRange()});
         const q = document.getElementById('sms-audit-search').value.trim();
         const run = document.getElementById('sms-audit-run').value;
@@ -6976,7 +7028,13 @@
             else params.set('status', outcome === 'submitted' ? 'sent' : outcome === 'suppressed' ? 'skipped' : outcome === 'inflight' ? 'queued' : outcome);
         }
         const endpoint = smsAuditMode === 'decisions' ? '/api/sms/decisions' : '/api/sms/logs';
-        body.textContent = smsAuditLabel('در حال دریافت رویدادها…', 'Loading activity…');
+        const hasRows = Boolean(body.querySelector('.sms-audit-row'));
+        if (background && hasRows) {
+            body.setAttribute('aria-busy', 'true');
+        } else {
+            smsAuditPlaceholder(body, smsAuditLabel('در حال دریافت رویدادها…', 'Loading activity…'), 'sms-audit-empty sms-audit-loading');
+        }
+        smsLogsInFlight = true;
         try {
             const response = await fetch(`${endpoint}?${params}`, {cache: 'no-store'});
             const data = await response.json();
@@ -6996,7 +7054,19 @@
             document.getElementById('sms-stream-scope').textContent = smsAuditMode === 'decisions' ? smsAuditLabel('تصمیم‌های ثبت‌شده برای اکانت‌های منطبق', 'Recorded decisions for matched accounts') : smsAuditLabel('ارسال‌های درگاه، شامل سوابق قدیمی', 'Gateway sends, including legacy history');
             document.getElementById('sms-logs-updated').textContent = smsAuditLabel('به‌روزرسانی: ', 'Updated ') + smsAuditTime(new Date().toISOString());
             _renderSmsLogPager();
-        } catch (error) { if (requestId === smsAuditRequest) body.textContent = smsAuditLabel('دریافت گزارش ناموفق بود.', 'Could not load activity.'); }
+        } catch (error) {
+            if (requestId !== smsAuditRequest) return;
+            if (background && hasRows) {
+                document.getElementById('sms-logs-updated').textContent = smsAuditLabel('به‌روزرسانی ناموفق؛ داده‌های قبلی نمایش داده می‌شود', 'Refresh failed; showing previous data');
+            } else {
+                smsAuditPlaceholder(body, smsAuditLabel('دریافت گزارش ناموفق بود.', 'Could not load activity.'));
+            }
+        } finally {
+            if (requestId === smsAuditRequest) {
+                smsLogsInFlight = false;
+                body.removeAttribute('aria-busy');
+            }
+        }
     }
 
     async function loadSmsCapacity() {
@@ -11195,6 +11265,16 @@
         });
     }
     setSmsAuditMode('sends');
+    const smsRecoveryWindow = document.getElementById('sms-recovery-window');
+    function syncSmsRecoveryWindow() {
+        const custom = smsRecoveryWindow.value === 'custom';
+        document.querySelectorAll('.sms-recovery-custom').forEach(el => el.classList.toggle('hidden', !custom));
+        if (!custom) document.getElementById('sms-recovery-unknown').checked = false;
+    }
+    if (smsRecoveryWindow) {
+        smsRecoveryWindow.addEventListener('change', syncSmsRecoveryWindow);
+        syncSmsRecoveryWindow();
+    }
     let smsAuditAutoEnabled = true;
     function toggleSmsAuditAuto() {
         smsAuditAutoEnabled = !smsAuditAutoEnabled;
@@ -11209,15 +11289,17 @@
         if (!smsAuditAutoEnabled) return;
         _smsLogAutoTimer = setInterval(() => {
             if (document.hidden) return;
+            if (!document.getElementById('tab-sms')?.classList.contains('active')) return;
             if (typeof smsLogPage === 'number' && smsLogPage !== 0) return;
-            if (typeof loadSmsLogs === 'function') loadSmsLogs();
+            if (typeof loadSmsLogs === 'function') loadSmsLogs({background: true});
         }, 5000);
     }
     function stopSmsLogAuto() {
         if (_smsLogAutoTimer) { clearInterval(_smsLogAutoTimer); _smsLogAutoTimer = null; }
     }
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && _smsLogAutoTimer && smsLogPage === 0 && typeof loadSmsLogs === 'function') loadSmsLogs();
+        if (!document.hidden && _smsLogAutoTimer && smsLogPage === 0 && typeof loadSmsLogs === 'function'
+            && document.getElementById('tab-sms')?.classList.contains('active')) loadSmsLogs({background: true});
     });
 </script>
 
