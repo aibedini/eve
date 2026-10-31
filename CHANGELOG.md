@@ -1,5 +1,15 @@
 ﻿# Changelog - Eve
 
+## [2.20.0] - 2026-10-31
+
+### Added
+- **Per-card income/expense breakdown in Finance Summary.** When viewing a monthly summary, a new card-by-card grid shows how much was deposited to and paid from each bank card. The grid is responsive (auto-fill on desktop, single-column on mobile ≤ 640 px). Data comes from the existing `/api/finance/overview` endpoint (new `by_card` field when `range=month`).
+
+### Technical
+- Backend aggregates per-card totals from `Transaction` and `Payment` rows using eager-loaded `card` relationships; respects existing direction/type/search filters and the `excluded_types` set.
+- Frontend renders inside the collapsible Summary section between the monthly totals and the daily feed. Uses design-system CSS tokens; no inline styles.
+- Two new i18n strings (`Breakdown by Card`, `Expense`) added to the finance catalogue.
+
 ## [2.19.0] - 2026-10-30
 
 ### Fixed

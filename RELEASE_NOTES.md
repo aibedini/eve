@@ -1,3 +1,15 @@
+# Eve - Xui Manager v2.20.0
+
+## [2.20.0] - 2026-10-31
+
+This release adds a per-card financial breakdown to the monthly Summary.
+
+**Card-by-card income and expense.** Open the Finance Summary for any Jalali month and a new grid appears below the monthly totals, showing each bank card with its total deposits (income) and payments (expense) for that month. Cards without activity are omitted. The breakdown respects the same filters (direction, type, search) as the rest of the Summary.
+
+**Responsive layout.** The card grid uses CSS auto-fill columns on wide screens and collapses to a single column on phones (≤ 640 px). All colours use the design-system tokens — no inline styles.
+
+**Upgrade notes.** No schema migration and no new dependency.
+
 # Eve - Xui Manager v2.19.0
 
 ## [2.19.0] - 2026-10-30
