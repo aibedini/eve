@@ -2099,6 +2099,8 @@ def get_finance_overview():
     tx_query = tx_query.filter(Transaction.type != 'audit')
     tx_query = _apply_finance_tx_filters(tx_query, finance_filters)
 
+    if requested_range == 'month':
+        tx_query = tx_query.options(joinedload(Transaction.card))
     tx_rows = tx_query.all()
 
     pay_query = Payment.query.filter(Payment.payment_date >= start_utc, Payment.payment_date < end_utc)
@@ -2110,6 +2112,8 @@ def get_finance_overview():
     if card_id:
         pay_query = pay_query.filter(Payment.card_id == card_id)
     pay_query = _apply_finance_payment_filters(pay_query, finance_filters)
+    if requested_range == 'month':
+        pay_query = pay_query.options(joinedload(Payment.card))
     pay_rows = pay_query.all()
 
     income_map = {k: 0 for k in keys}
@@ -2162,6 +2166,60 @@ def get_finance_overview():
     expense_series = [int(expense_map[k] or 0) for k in keys]
     profit_series = [int(i - e) for i, e in zip(income_series, expense_series)]
 
+    by_card = []
+    if requested_range == 'month':
+        card_income = {}
+        card_expense = {}
+        card_info = {}
+
+        for tx in tx_rows:
+            if not tx.card_id:
+                continue
+            amount = int(tx.amount or 0)
+            cid = tx.card_id
+            if cid not in card_info:
+                card = getattr(tx, 'card', None)
+                if not card:
+                    card = db.session.get(BankCard, cid)
+                card_info[cid] = {
+                    'label': card.label if card else str(cid),
+                    'bank_name': card.bank_name if card else None,
+                }
+            if amount > 0 and finance_filters.get('direction') != 'expense':
+                tx_type = (tx.type or '')
+                if tx_type and str(tx_type).upper() in excluded_types_upper:
+                    continue
+                card_income[cid] = card_income.get(cid, 0) + amount
+            elif amount < 0 and finance_filters.get('direction') != 'income':
+                card_expense[cid] = card_expense.get(cid, 0) + abs(amount)
+
+        for pay in pay_rows:
+            if not pay.card_id:
+                continue
+            cid = pay.card_id
+            amount = int(pay.amount or 0)
+            if cid not in card_info:
+                card = getattr(pay, 'card', None)
+                if not card:
+                    card = db.session.get(BankCard, cid)
+                card_info[cid] = {
+                    'label': card.label if card else str(cid),
+                    'bank_name': card.bank_name if card else None,
+                }
+            if amount > 0 and finance_filters.get('direction') != 'expense':
+                card_income[cid] = card_income.get(cid, 0) + amount
+
+        all_card_ids = set(card_income) | set(card_expense)
+        for cid in sorted(all_card_ids):
+            info = card_info.get(cid, {})
+            by_card.append({
+                'card_id': cid,
+                'label': info.get('label', str(cid)),
+                'bank_name': info.get('bank_name'),
+                'income': card_income.get(cid, 0),
+                'expense': card_expense.get(cid, 0),
+            })
+
     return jsonify({
         'success': True,
         'range': requested_range,
@@ -2172,7 +2230,8 @@ def get_finance_overview():
             'income': income_series,
             'expense': expense_series,
             'profit': profit_series
-        }
+        },
+        'by_card': by_card,
     })
 @bp.route('/api/customers/<int:customer_id>/credit', methods=['POST'])
 @limiter.limit('20 per minute')

@@ -528,6 +528,104 @@
         .overview-value { font-size: 0.98rem; }
     }
 
+    /* Card Breakdown (inside Summary) */
+    .card-breakdown {
+        padding: 0 20px 16px 20px;
+        border-bottom: 1px solid var(--border-color);
+        margin-bottom: 16px;
+    }
+    .card-breakdown-title {
+        font-size: 0.78rem;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--text-secondary);
+        margin-bottom: 10px;
+    }
+    .card-breakdown-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 10px;
+    }
+    .card-breakdown-item {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--border-color);
+        background: rgba(255, 255, 255, 0.03);
+    }
+    .card-breakdown-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+    .card-breakdown-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: rgba(99, 102, 241, 0.12);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        color: var(--primary);
+    }
+    .card-breakdown-name {
+        font-weight: 600;
+        font-size: 0.88rem;
+        color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+    }
+    .card-breakdown-bank {
+        font-size: 0.72rem;
+        color: var(--text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .card-breakdown-amounts {
+        display: flex;
+        gap: 16px;
+    }
+    .card-breakdown-col {
+        flex: 1;
+        min-width: 0;
+    }
+    .card-breakdown-col-label {
+        display: block;
+        font-size: 0.68rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--text-secondary);
+        margin-bottom: 2px;
+    }
+    .card-breakdown-col-value {
+        font-weight: 700;
+        font-size: 0.92rem;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+    .card-breakdown-col-value.income { color: var(--success); }
+    .card-breakdown-col-value.expense { color: var(--danger); }
+    .card-breakdown-name-wrap { min-width: 0; }
+    @media (max-width: 640px) {
+        .card-breakdown {
+            padding: 0 14px 12px 14px;
+        }
+        .card-breakdown-grid {
+            grid-template-columns: 1fr;
+        }
+        .card-breakdown-item {
+            flex-direction: column;
+            padding: 10px 12px;
+        }
+    }
+
     /* Monthly Summary Block */
     .overview-monthly-summary {
         display: grid;
@@ -685,6 +783,12 @@
                     <span class="summary-label">{{ _('Total Profit') }}</span>
                     <span class="summary-value profit" id="monthly-total-profit">0 T</span>
                 </div>
+            </div>
+
+            <!-- Card Breakdown -->
+            <div class="card-breakdown hidden" id="card-breakdown">
+                <div class="card-breakdown-title">{{ _('Breakdown by Card') }}</div>
+                <div class="card-breakdown-grid" id="card-breakdown-grid"></div>
             </div>
 
             <div class="overview-feed" id="overview-feed">
@@ -1472,6 +1576,50 @@
         return { year: parseInt(m[1], 10), month: parseInt(m[2], 10) };
     };
 
+    const renderCardBreakdown = (byCard) => {
+        const wrap = document.getElementById('card-breakdown');
+        const grid = document.getElementById('card-breakdown-grid');
+        if (!wrap || !grid) return;
+
+        if (!byCard || !byCard.length) {
+            wrap.classList.add('hidden');
+            grid.innerHTML = '';
+            return;
+        }
+
+        wrap.classList.remove('hidden');
+        grid.innerHTML = byCard.map(c => {
+            const inc = Number(c.income || 0);
+            const exp = Number(c.expense || 0);
+            const bankHtml = c.bank_name
+                ? `<div class="card-breakdown-bank">${escapeAttr(c.bank_name)}</div>`
+                : '';
+            return `
+                <div class="card-breakdown-item">
+                    <div class="card-breakdown-header">
+                        <div class="card-breakdown-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                        </div>
+                        <div class="card-breakdown-name-wrap">
+                            <div class="card-breakdown-name">${escapeAttr(c.label)}</div>
+                            ${bankHtml}
+                        </div>
+                    </div>
+                    <div class="card-breakdown-amounts">
+                        <div class="card-breakdown-col">
+                            <span class="card-breakdown-col-label">${_t('Income')}</span>
+                            <span class="card-breakdown-col-value income">${inc.toLocaleString()} T</span>
+                        </div>
+                        <div class="card-breakdown-col">
+                            <span class="card-breakdown-col-label">${_t('Expense')}</span>
+                            <span class="card-breakdown-col-value expense">${exp.toLocaleString()} T</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    };
+
     const renderOverview = ({ year, month, labels, series }) => {
         if (!overviewFeed) return;
         const income = (series && series.income) || [];
@@ -1558,15 +1706,19 @@
 
         const summaryBlock = document.getElementById('overview-monthly-summary');
         if (summaryBlock) summaryBlock.style.display = 'none';
+        const cardBreakdownBlock = document.getElementById('card-breakdown');
+        if (cardBreakdownBlock) cardBreakdownBlock.classList.add('hidden');
 
         const query = buildOverviewQuery({ range: 'month', year, month });
         const response = await financeFetch(`/api/finance/overview?${query}`);
         const data = await response.json();
         if (!response.ok || !data.success) {
             overviewFeed.innerHTML = `<div class="overview-empty">${_t('Failed to load overview.')}</div>`;
+            renderCardBreakdown([]);
             return;
         }
         renderOverview({ year, month, labels: data.labels, series: data.series });
+        renderCardBreakdown(data.by_card || []);
     };
 
     const loadOverviewMonths = async () => {
