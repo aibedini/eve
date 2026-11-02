@@ -8561,8 +8561,8 @@ Connection links
                 const response = await fetch('/api/system-update/versions', {cache:'no-store'});
                 const data = await response.json();
                 if (!response.ok || !data.success) throw new Error(data.error || 'Version list unavailable');
-                const currentValue = select.value || 'main';
-                const options = [{ref:'main', label:'Latest version (main)'}];
+                const currentValue = select.value || 'latest';
+                const options = [{ref:'latest', label:'Latest release'}];
                 for (const item of (data.versions || [])) {
                     if (!item || !item.version || !item.ref || item.ref === 'main') continue;
                     const suffix = item.current ? ' (current)' : '';

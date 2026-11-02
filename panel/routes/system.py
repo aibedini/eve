@@ -18,7 +18,7 @@ from panel.security import client_ip
 bp = Blueprint('system', __name__)
 
 _UPDATE_REF_RE = re.compile(
-    r'^(?:main|v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|[0-9a-fA-F]{7,40})$'
+    r'^(?:main|latest|v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|[0-9a-fA-F]{7,40})$'
 )
 
 
@@ -27,7 +27,7 @@ def _normalize_update_ref(value):
     ref = str(value or '').strip()
     if ref.lower().startswith('v.'):
         ref = 'v' + ref[2:]
-    if ref in ('', 'latest'):
+    if not ref:
         ref = 'main'
     return ref if _UPDATE_REF_RE.fullmatch(ref) else None
 

@@ -487,7 +487,17 @@ def _paginate_sms_audience_preview(result, payload):
     latest_by_key = {}
     latest_by_identity = {}
     if service_keys or identities:
-        logs = SmsSendLog.query.order_by(SmsSendLog.created_at.desc(), SmsSendLog.id.desc())
+        # The global log grows without bound. Restrict the lookup to accounts in
+        # this preview before finding each account's latest entry.
+        from sqlalchemy import or_
+        emails = {email for email, _server_id in identities}
+        matches = []
+        if emails:
+            matches.append(SmsSendLog.email.in_(emails))
+        if service_keys:
+            matches.append(SmsSendLog.service_key.in_(service_keys))
+        logs = (SmsSendLog.query.filter(or_(*matches))
+                .order_by(SmsSendLog.created_at.desc(), SmsSendLog.id.desc()))
         for log in logs.yield_per(500):
             identity = (str(log.email or '').lower(), int(log.server_id or 0))
             relevant_key = log.service_key and log.service_key in service_keys

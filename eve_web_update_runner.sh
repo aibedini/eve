@@ -100,7 +100,7 @@ if [ -r "$TARGET_REF_FILE" ]; then
 fi
 rm -f "$TARGET_REF_FILE"
 case "$requested_ref" in
-    main|v[0-9]*|[0-9]*|[0-9a-fA-F][0-9a-fA-F]*) ;;
+    main|latest|v[0-9]*|[0-9]*|[0-9a-fA-F][0-9a-fA-F]*) ;;
     *)
         write_status "failed" "Invalid requested update ref"
         echo "Invalid requested update ref: $requested_ref"

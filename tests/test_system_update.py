@@ -138,6 +138,16 @@ class SystemUpdateApiTest(unittest.TestCase):
             capture_output=True, text=True, timeout=10, check=False,
         )
 
+    def test_start_preserves_latest_release_target(self):
+        completed = mock.Mock(returncode=0, stdout='', stderr='')
+        with mock.patch.object(app_module.subprocess, 'run', return_value=completed):
+            response = self.client.post(
+                '/api/system-update/start', json={'confirm': 'UPDATE', 'ref': 'latest'})
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()['target_ref'], 'latest')
+        self.assertEqual(
+            (self.state_dir / 'requested-ref').read_text(encoding='utf-8').strip(), 'latest')
+
     def test_start_rejects_unsafe_version_ref(self):
         with mock.patch.object(app_module.subprocess, 'run') as run:
             response = self.client.post(
@@ -269,10 +279,12 @@ class SystemUpdateApiTest(unittest.TestCase):
         self.assertIn('id="system-update-version"', super_html)
         self.assertIn('id="system-update-log"', super_html)
         self.assertIn('id="system-update-version-select"', super_html)
-        self.assertIn("/api/system-update/versions", super_html)
-        self.assertIn("body: JSON.stringify({confirm:'UPDATE', ref:targetRef})", super_html)
-        self.assertIn('const currentVersion = data.current_version;', super_html)
-        self.assertIn('versionEl.textContent = `v${currentVersion}`;', super_html)
+        dashboard_js = (Path(__file__).parents[1] / 'static' / 'dashboard.js').read_text(encoding='utf-8')
+        self.assertIn('value="latest"', super_html)
+        self.assertIn('/api/system-update/versions', dashboard_js)
+        self.assertIn("body: JSON.stringify({confirm:'UPDATE', ref:targetRef})", dashboard_js)
+        self.assertIn('const currentVersion = data.current_version;', dashboard_js)
+        self.assertIn('versionEl.textContent = `v${currentVersion}`;', dashboard_js)
 
     def test_xray_status_reports_installed_version_without_exposing_path(self):
         version = mock.Mock(returncode=0, stdout='Xray 25.7.26 (Eve)\n', stderr='')
@@ -417,15 +429,15 @@ class DomainSslUpdatePersistenceTest(unittest.TestCase):
         )
 
     def test_renew_progress_copy_is_localized_and_hides_internal_cleanup(self):
-        dashboard = (Path(__file__).parents[1] / 'templates' / 'dashboard.html').read_text(
+        dashboard = (Path(__file__).parents[1] / 'static' / 'dashboard.js').read_text(
             encoding='utf-8',
         )
         renew_fn = dashboard.split('async function submitRenewal() {', 1)[1].split(
             '\n    function showCreditAwareError', 1,
         )[0]
 
-        self.assertIn('در حال انجام…', renew_fn)
-        self.assertIn('Working…', renew_fn)
+        self.assertIn('اتصال به پنل…', renew_fn)
+        self.assertIn('Connecting to panel…', renew_fn)
         self.assertIn("const renewProgressIsFa = RENEW_LANG === 'fa'", renew_fn)
         self.assertNotIn('پاک‌سازی', renew_fn)
         self.assertNotIn('cleanup', renew_fn.lower())

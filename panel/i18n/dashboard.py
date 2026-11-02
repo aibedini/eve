@@ -198,7 +198,7 @@ FA = {
     'Json Path': 'مسیر JSON',
     'Json QR': 'QR جیسون',
     'Last User': 'آخرین کاربر',
-    'Latest version (main)': 'آخرین نسخه (main)',
+    'Latest release': 'آخرین انتشار',
     'Left GB': 'گیگابایت باقیمانده',
     'Less than': 'کمتر از',
     'Link copied': 'لینک کپی شد',

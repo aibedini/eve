@@ -1,5 +1,14 @@
 ﻿# Changelog - Eve
 
+## [2.21.0] - 2026-11-02
+
+### Fixed
+- The dashboard's "Latest release" update target now selects the newest stable version tag after fetching tags, even when the release is ahead of `main`.
+- SMS audience previews batch manual-review, outstanding-notification, and cooldown checks instead of querying each candidate separately. The latest SMS lookup searches only accounts in the preview.
+
+### Testing
+- Targeted system-update and SMS tests, shell and JavaScript syntax checks, and the UI design audit pass.
+
 ## [2.20.0] - 2026-10-31
 
 ### Added

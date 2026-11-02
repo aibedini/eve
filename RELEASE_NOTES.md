@@ -1,3 +1,13 @@
+# Eve - Xui Manager v2.21.0
+
+## [2.21.0] - 2026-11-02
+
+The dashboard's **Latest release** option now installs the newest stable version tag. Previously it selected `main`, which could still be on an older version than the published release.
+
+The SMS Center audience preview now reads reminder decisions in batches and limits the SMS history lookup to accounts in the preview. This reduces database work when opening **Who gets a reminder** or changing its filters.
+
+No schema migration or new dependency is required. The panel restarts during an update and may be briefly unavailable. The speed change should be measured again against the production account and message counts after deployment.
+
 # Eve - Xui Manager v2.20.0
 
 ## [2.20.0] - 2026-10-31

@@ -4664,6 +4664,70 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
     except Exception:
         generations = {}
 
+    preview_facts = None
+    if preview and candidates:
+        # One set of reads for the entire preview. The normal send path still
+        # checks each candidate immediately before delivery.
+        from panel.models import OPEN_NOTIFICATION_STATUSES
+        emails = {item[2] for item in candidates}
+        keys = {item[8] for item in candidates if item[8]}
+        preview_facts = {'manual': set(), 'obligations': set(), 'cooldowns': {}}
+        try:
+            for email_batch in (list(emails)[i:i + 400] for i in range(0, len(emails), 400)):
+                manual_rows = (db.session.query(SmsSendLog.email, SmsSendLog.server_id, SmsSendLog.state)
+                               .filter(SmsSendLog.email.in_(email_batch),
+                                       SmsSendLog.status == 'manual_review').all())
+                preview_facts['manual'].update(manual_rows)
+            for key_batch in (list(keys)[i:i + 400] for i in range(0, len(keys), 400)):
+                pending_rows = (db.session.query(ServiceNotificationEvent.service_key,
+                                                 ServiceNotificationEvent.notification_kind)
+                                .filter(ServiceNotificationEvent.service_key.in_(key_batch),
+                                        ServiceNotificationEvent.status.in_(OPEN_NOTIFICATION_STATUSES)).all())
+                preview_facts['obligations'].update(pending_rows)
+            max_hours = max((int(cooldown_hours.get(item[4], 24) or 24)
+                             for item in candidates), default=0)
+            cooldown_events = {event for item in candidates
+                               for event in cooldown_events_for_state(item[4])}
+            now_for_preview = datetime.utcnow()
+            if max_hours > 0 and cooldown_events:
+                for email_batch in (list(emails)[i:i + 400] for i in range(0, len(emails), 400)):
+                    recent_rows = (db.session.query(WhatsappBotLog.email, WhatsappBotLog.server_id,
+                                                    WhatsappBotLog.event, WhatsappBotLog.sent_at)
+                                   .filter(WhatsappBotLog.email.in_(email_batch),
+                                           func.lower(WhatsappBotLog.event).in_(list(cooldown_events)),
+                                           WhatsappBotLog.sent_at >= now_for_preview - timedelta(hours=max_hours)).all())
+                    for log_email, log_server, log_event, sent_at in recent_rows:
+                        if sent_at is None:
+                            continue
+                        identity = (log_email, log_server, str(log_event).lower())
+                        previous = preview_facts['cooldowns'].get(identity)
+                        if previous is None or sent_at > previous:
+                            preview_facts['cooldowns'][identity] = sent_at
+        except Exception:
+            db.session.rollback()
+            preview_facts = None
+
+    def _preview_obligation(service_key, state):
+        if not service_key:
+            return False
+        try:
+            kind = lifecycle_service.sms_notification_kind(state)
+        except Exception:
+            return False
+        return bool(kind and (service_key, kind) in preview_facts['obligations'])
+
+    def _preview_cooldown(email_l, sid_norm, state, hours):
+        if hours <= 0:
+            return 0
+        latest = max(
+            (sent_at for event in cooldown_events_for_state(state)
+             if (sent_at := preview_facts['cooldowns'].get((email_l, sid_norm or 0, event))) is not None),
+            default=None,
+        )
+        if latest is None:
+            return 0
+        return max(0, int(round(hours * 3600 - (now_for_preview - latest).total_seconds())))
+
     def _facts_for(item, _lifecycle=None):
         """Resolve the facts the evaluator needs. ONE resolution, so the preview
         and the real run cannot disagree about whether a candidate is eligible.
@@ -4693,10 +4757,16 @@ def _run_sms_depletion_scan(job_id: str | None = None, triggered_by: str = 'auto
             opted_out=(_sms_comment_opted_out(queued_comment) if preview else
                        _sms_account_opted_out(sid_norm, email, queued_comment,
                                               refresh_shared=True)),
-            manual_review=_sms_has_manual_review(email_l, sid_norm, state),
-            obligation_outstanding=_sms_outstanding_obligation(service_key, state),
-            cooldown_seconds_remaining=_cooldown_remaining_seconds(
-                email_l, sid_norm, state, cd_hours),
+            manual_review=(
+                (email_l, sid_norm or 0, state) in preview_facts['manual']
+                if preview_facts is not None else _sms_has_manual_review(email_l, sid_norm, state)),
+            obligation_outstanding=(
+                _preview_obligation(service_key, state)
+                if preview_facts is not None else _sms_outstanding_obligation(service_key, state)),
+            cooldown_seconds_remaining=(
+                _preview_cooldown(email_l, sid_norm, state, cd_hours)
+                if preview_facts is not None else
+                _cooldown_remaining_seconds(email_l, sid_norm, state, cd_hours)),
             template_present=bool(tpl),
             message_empty=not text.strip()), tpl, text)
 

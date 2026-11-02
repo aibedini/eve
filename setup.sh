@@ -903,7 +903,17 @@ resolve_update_target() {
     local requested="${EVE_UPDATE_REF:-main}"
     local candidate resolved normalized pattern candidates commit
     requested="${requested//[$'\r\n ']/}"
-    [ "$requested" = "latest" ] && requested="main"
+    if [ "$requested" = "latest" ]; then
+        local release_tag
+        release_tag=$(git_for_update 0 -C "$APP_DIR" tag --list 'v[0-9]*' --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+        if [ -n "$release_tag" ]; then
+            echo "refs/tags/$release_tag"
+            return 0
+        fi
+        print_error "No release tag found in the fetched repository." >&2
+        return 1
+    fi
     [ "$requested" = "main" ] && { echo "origin/main"; return 0; }
     if [[ "$requested" == v.* ]]; then
         requested="v${requested#v.}"
@@ -2682,12 +2692,20 @@ run_latest_online_update() {
     git config --global --add safe.directory "$APP_DIR" || true
     if [ -d "$APP_DIR/.git" ] \
             && git_for_update 0 -C "$APP_DIR" remote set-url origin "$REPO_URL" \
-            && git_for_update 240 -C "$APP_DIR" fetch origin main --prune --quiet \
+            && git_for_update 240 -C "$APP_DIR" fetch origin main --tags --prune --quiet \
             && git_for_update 0 -C "$APP_DIR" show origin/main:setup.sh > "$latest_script" \
             && git_for_update 0 -C "$APP_DIR" show origin/main:eve_web_update_runner.sh > "$latest_runner" \
             && [ -s "$latest_script" ]; then
         cleanup_git_auth
         trap - EXIT
+        if [ "$requested_ref" = "latest" ]; then
+            requested_ref=$(git_for_update 0 -C "$APP_DIR" tag --list 'v[0-9]*' --sort=-version:refname \
+                | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+            if [ -z "$requested_ref" ]; then
+                print_error "No release tag found in the fetched repository."
+                return 1
+            fi
+        fi
         chmod +x "$latest_script"
         exec env EVE_UPDATE_REF="$requested_ref" \
             EVE_LATEST_SETUP_SCRIPT="$latest_script" \

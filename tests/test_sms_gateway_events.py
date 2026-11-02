@@ -722,26 +722,57 @@ class GatewayEventTests(unittest.TestCase):
 
     def test_audience_preview_reports_scanned_clients_and_detected_states(self):
         from panel.core.redis_client import GLOBAL_SERVER_DATA
-        from panel.jobs.messaging import _run_sms_depletion_scan
+        from panel.jobs.messaging import _run_sms_depletion_scan, cooldown_events_for_state
+        from panel.models import WhatsappBotLog
         original = dict(GLOBAL_SERVER_DATA)
+        manual_log = None
+        cooldown_log = None
         try:
             GLOBAL_SERVER_DATA['inbounds'] = [{
                 'server_id': 1, 'server_name': 'test',
                 'clients': [{'email': 'expired-09120000000', 'enable': True,
                              'totalGB': 1024 ** 3, 'up': 0, 'down': 0,
-                             'expiryTimestamp': 1}],
+                             'expiryTimestamp': int((datetime.utcnow() - timedelta(days=1)).timestamp() * 1000)}],
             }]
+            manual_log = SmsSendLog(email='expired-09120000000', server_id=1,
+                                    state='expired', status='manual_review')
+            db.session.add(manual_log)
+            db.session.commit()
             with patch('panel.jobs.messaging._get_sms_runtime_settings', return_value={
                     'enabled': True, 'trigger_expired': True,
+                    'base_url': 'https://gmweb.test', 'api_key': 'test-key',
                     'depletion_expiry_days': 3, 'depletion_volume_gb': 2,
-                    'cooldown_hours': {}, 'expired_max_age_days': 0,
+                    'cooldown_hours': {}, 'expired_max_age_days': 30,
                 }), patch('panel.jobs.messaging._sms_gateway_ready', return_value=(True, None, 200)), patch(
                     'panel.jobs.messaging._sms_scan_snapshot', return_value={'state': 'idle'}), patch(
-                    'app._get_monitor_settings', return_value={'filters': {}, 'templates': {}}):
+                    'app._get_monitor_settings', return_value={'filters': {}, 'templates': {}}), patch(
+                    'panel.jobs.messaging._sms_has_manual_review') as manual_lookup, patch(
+                    'panel.jobs.messaging._sms_outstanding_obligation') as obligation_lookup, patch(
+                    'panel.jobs.messaging._cooldown_remaining_seconds') as cooldown_lookup:
                 result = _run_sms_depletion_scan(preview=True)
+                self.assertEqual(result['candidates'][0]['reason_code'], 'manual_review_pending')
+                db.session.delete(manual_log)
+                db.session.commit()
+                manual_log = None
+                cooldown_log = WhatsappBotLog(email='expired-09120000000', server_id=1,
+                                              event=cooldown_events_for_state('expired')[0],
+                                              sent_at=datetime.utcnow())
+                db.session.add(cooldown_log)
+                db.session.commit()
+                cooldown_result = _run_sms_depletion_scan(preview=True)
+                self.assertEqual(cooldown_result['candidates'][0]['reason_code'], 'cooldown_active')
             self.assertEqual(result['scanned'], 1)
             self.assertEqual(result['detected_states']['expired'], 1)
+            self.assertGreaterEqual(result['matched'], 1)
+            manual_lookup.assert_not_called()
+            obligation_lookup.assert_not_called()
+            cooldown_lookup.assert_not_called()
         finally:
+            if manual_log is not None:
+                db.session.delete(manual_log)
+            if cooldown_log is not None:
+                db.session.delete(cooldown_log)
+            db.session.commit()
             GLOBAL_SERVER_DATA.clear()
             GLOBAL_SERVER_DATA.update(original)
 
