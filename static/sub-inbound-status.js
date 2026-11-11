@@ -6,7 +6,8 @@
         if (!section) return;
         const grid = document.getElementById('sub-inbound-grid');
         const checked = document.getElementById('sub-inbound-checked');
-    const counts = document.getElementById('sub-inbound-counts');
+    const activeCount = document.getElementById('sub-inbound-active-count');
+    const disabledCount = document.getElementById('sub-inbound-disabled-count');
     const toggle = document.getElementById('sub-inbound-toggle');
     const body = document.getElementById('sub-inbound-body');
     const arrow = document.getElementById('sub-inbound-arrow');
@@ -19,7 +20,8 @@
 
         function render(items, checkedAt) {
             grid.replaceChildren();
-      counts.textContent = `${items.filter((item) => item.state === 'active').length} ${labels.activeCount} · ${items.filter((item) => item.state === 'disabled').length} ${labels.disabledCount}`;
+      activeCount.textContent = items.filter((item) => item.state === 'active').length;
+      disabledCount.textContent = items.filter((item) => item.state === 'disabled').length;
             const date = checkedAt && new Date(checkedAt);
             const dateText = date && !Number.isNaN(date.getTime())
                 ? new Intl.DateTimeFormat(fa ? 'fa-IR' : 'en-US', {
@@ -97,15 +99,14 @@
         window.setInterval(() => {
             if (document.visibilityState === 'visible') refresh();
         }, 300000);
-    }
-
-    toggle.addEventListener('click', () => {
+      toggle.addEventListener('click', () => {
       const open = body.dataset.open !== 'true';
       body.dataset.open = String(open);
       toggle.setAttribute('aria-expanded', String(open));
       body.style.maxHeight = open ? `${body.scrollHeight}px` : '0px';
       arrow.classList.toggle('sub-inbound-arrow-open', open);
-    });
+      });
+    }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();

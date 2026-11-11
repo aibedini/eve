@@ -7105,7 +7105,7 @@ select,
     cursor: pointer;
     text-align: start;
 }
-.sub-inbound-toggle-main { display: grid; gap: .3rem; }
+.sub-inbound-toggle-main { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }
 .sub-inbound-toggle-main strong { font-size: .95rem; }
 .sub-inbound-toggle-main span { color: var(--text-secondary); font-size: .8rem; }
 .sub-inbound-toggle-action { display: inline-flex; align-items: center; gap: .4rem; flex-shrink: 0; color: var(--text-secondary); font-size: .8rem; }

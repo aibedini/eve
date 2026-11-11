@@ -115,6 +115,9 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertIn('data-sub-template="classic"', html)
         self.assertEqual([b for b, _ in BLOCK_RE.findall(html)],
                          [b for b in layout.BLOCKS if b != 'backup'])
+        self.assertLess(html.index('id="sub-inbound-status"'), html.index('id="sec-renew"'))
+        self.assertIn('id="sub-inbound-active-count">0</span>', html)
+        self.assertIn('id="sub-inbound-disabled-count">0</span>', html)
 
     def test_compact_template_lists_visible_sections_as_shortcuts(self):
         html = self._render_subscription({'template': 'compact', 'blocks': [

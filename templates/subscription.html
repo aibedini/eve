@@ -20,7 +20,7 @@
          extend base.html), so the shared component is loaded here as well. -->
     <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='name-flags.js') }}"
             data-flag-base="{{ url_for('static', filename='flags/4x3/') }}"></script>
-    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='sub-inbound-status.js') }}" defer></script>
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='sub-inbound-status.js', v=eve_build_sha) }}" defer></script>
     <style nonce="{{ csp_nonce }}">
         body { background-color: #0B1121; color: #e2e8f0; }
         .glass-effect {
@@ -361,6 +361,7 @@
     </style>
     {% if active_online_chat_script %}
     {{ active_online_chat_script | safe }}
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='sub-chat-position.js', v=eve_build_sha) }}" defer></script>
     {% endif %}
 </head>
 <body class="subscription-page min-h-screen flex justify-center items-start pt-10 pb-10 px-4 bg-bg font-sans" data-sub-template="{{ _sub_template }}">
@@ -880,7 +881,7 @@
                      data-checked-at="{{ inbound_checked_at|default('') }}"
                      data-lang="{{ 'fa' if is_fa else 'en' }}" aria-live="polite">
                 <button type="button" class="sub-inbound-toggle" id="sub-inbound-toggle" aria-expanded="false" aria-controls="sub-inbound-body">
-                    <span class="sub-inbound-toggle-main"><strong>{{ 'وضعیت سرورها' if is_fa else 'Server status' }}</strong><span id="sub-inbound-counts"></span></span>
+                    <span class="sub-inbound-toggle-main"><strong>{{ 'وضعیت سرورها' if is_fa else 'Server status' }}</strong><span id="sub-inbound-counts"><span id="sub-inbound-active-count">{{ inbound_statuses|default([])|selectattr('state', 'equalto', 'active')|list|length }}</span> {{ 'متصل' if is_fa else 'connected' }} · <span id="sub-inbound-disabled-count">{{ inbound_statuses|default([])|selectattr('state', 'equalto', 'disabled')|list|length }}</span> {{ 'عدم اتصال' if is_fa else 'disconnected' }}</span></span>
                     <span class="sub-inbound-toggle-action"><span>{{ 'مشاهده وضعیت' if is_fa else 'View status' }}</span><svg id="sub-inbound-arrow" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 9-7 7-7-7"/></svg></span>
                 </button>
                 <div class="sub-inbound-body" id="sub-inbound-body" data-open="false"><div class="sub-inbound-body-inner">
