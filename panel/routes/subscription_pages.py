@@ -4,7 +4,7 @@ import json
 import re
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import (
     Blueprint, after_this_request, g, jsonify, make_response, render_template, request,
@@ -75,6 +75,37 @@ def _find_live_subscription_client(inbounds, sub_id):
             ):
                 return client, inbound
     return None, None
+
+
+def _assigned_inbound_statuses(inbounds, sub_id):
+    """Expose only inbounds containing the client identified by this subscription."""
+    normalized_sub_id = str(sub_id or '').strip()
+    result = []
+    for inbound in inbounds or []:
+        for client in _subscription_inbound_clients(inbound):
+            client_sub_id = str(client.get('subId') or '').strip()
+            client_uuid = str(client.get('id') or '').strip()
+            if normalized_sub_id != client_sub_id and not (
+                not client_sub_id and normalized_sub_id == client_uuid
+            ):
+                continue
+            assigned_ids = client.get('inboundIds')
+            if assigned_ids is None:
+                assigned_ids = client.get('inbound_ids')
+            if isinstance(assigned_ids, list):
+                try:
+                    if int(inbound.get('id')) not in {int(value) for value in assigned_ids}:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            enabled = bool(inbound.get('enable', True))
+            result.append({
+                'id': inbound.get('id'),
+                'name': inbound.get('remark') or inbound.get('tag') or 'Inbound',
+                'state': 'active' if enabled else 'disabled',
+            })
+            break
+    return result
 
 
 def _fetch_live_subscription_context(server, sub_id):
@@ -486,6 +517,35 @@ def _spawn_subscription_refresh(server_id, sub_id, cache_key, variant):
 
     threading.Thread(target=_work, name='eve-subscription-refresh', daemon=True).start()
     return True
+
+
+@bp.route('/s/<int:server_id>/<sub_id>/inbound-status')
+@limiter.limit('60 per minute')
+def subscription_inbound_status(server_id, sub_id):
+    """Return the panel's latest enabled state for this subscriber's inbounds."""
+    normalized_sub_id = str(sub_id or '').strip()
+    if not normalized_sub_id or any(
+        part in normalized_sub_id for part in ('/', '\\', '?', '#', '@', ':', '..')
+    ):
+        return jsonify({'error': 'Invalid subscription ID'}), 400
+    server = db.session.get(Server, server_id)
+    if server is None:
+        return jsonify({'error': 'Subscription not found'}), 404
+    _, inbounds, client, _, error = _fetch_live_subscription_context(
+        server, normalized_sub_id
+    )
+    if error:
+        response = jsonify({'error': 'Status is temporarily unavailable'})
+        response.headers['Cache-Control'] = 'no-store'
+        return response, 503
+    if client is None:
+        return jsonify({'error': 'Subscription not found'}), 404
+    response = jsonify({
+        'checked_at': datetime.now(timezone.utc).isoformat(),
+        'inbounds': _assigned_inbound_statuses(inbounds, normalized_sub_id),
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/s/<int:server_id>/<sub_id>')
@@ -1107,6 +1167,8 @@ def client_subscription(server_id, sub_id):
         page_lang=page_lang,
         server_id=server_id,
         sub_id=normalized_sub_id,
+        inbound_statuses=_assigned_inbound_statuses(live_inbounds, normalized_sub_id),
+        inbound_checked_at=datetime.now(timezone.utc).isoformat(),
         sub_layout=subscription_layout.page_layout(subscription_layout.load_layout()),
     )
     # The subscription page must be LIVE (status/usage/expiry) — never let a

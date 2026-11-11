@@ -20,6 +20,7 @@
          extend base.html), so the shared component is loaded here as well. -->
     <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='name-flags.js') }}"
             data-flag-base="{{ url_for('static', filename='flags/4x3/') }}"></script>
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='sub-inbound-status.js') }}" defer></script>
     <style nonce="{{ csp_nonce }}">
         body { background-color: #0B1121; color: #e2e8f0; }
         .glass-effect {
@@ -872,6 +873,20 @@
         </nav>
         {% endif %}
         <div class="sub-blocks space-y-6">
+            <section class="sub-inbound-status" id="sub-inbound-status"
+                     data-status-url="{{ url_for('subscription_pages.subscription_inbound_status', server_id=server_id, sub_id=sub_id) }}"
+                     data-inbounds="{{ inbound_statuses|default([])|tojson|forceescape }}"
+                     data-checked-at="{{ inbound_checked_at|default('') }}"
+                     data-lang="{{ 'fa' if is_fa else 'en' }}" aria-live="polite">
+                <div class="sub-inbound-status-heading">
+                    <h2>{{ 'وضعیت سرورها' if is_fa else 'Server status' }}</h2>
+                    <span class="sub-inbound-checked" id="sub-inbound-checked"></span>
+                </div>
+                <p class="field-note">{{ 'وضعیت فعال بودن اینباند در پنل؛ اتصال از شبکه شما ممکن است متفاوت باشد.' if is_fa else 'Inbound state reported by the panel; connectivity from your network may differ.' }}</p>
+                <div class="sub-inbound-grid" id="sub-inbound-grid">
+                    <p class="field-note">{{ 'در حال بررسی…' if is_fa else 'Checking…' }}</p>
+                </div>
+            </section>
             {% for b in _sub_blocks %}
             {% set _html = _blocks[b.id] %}
             {% if _html|trim %}

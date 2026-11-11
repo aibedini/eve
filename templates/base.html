@@ -26,6 +26,7 @@
     <script src="{{ url_for('static', filename='flag-data.js') }}"></script>
     <script src="{{ url_for('static', filename='name-flags.js') }}"
             data-flag-base="{{ url_for('static', filename='flags/4x3/') }}"></script>
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='panel-search.js') }}" defer></script>
     <script nonce="{{ csp_nonce }}">
         function formatNumberInput(input) {
             let value = input.value.replace(/,/g, '').replace(/\D/g, '');
@@ -546,6 +547,10 @@
                 </button>
                 <h1 class="page-title">{% block page_title %}{{ _('Financial Overview') }}{% endblock %}</h1>
                 <div class="header-actions">
+                    <button type="button" class="btn btn-secondary panel-search-trigger" id="panel-search-trigger" aria-haspopup="dialog" aria-controls="panel-search-overlay">
+                        <span aria-hidden="true">⌕</span>
+                        <span>{{ 'جست‌وجو' if panel_lang == 'fa' else 'Search' }}</span>
+                    </button>
                     <div class="wallet-pill" title="{{ _('Wallet balance') }}">
                         <svg class="wallet-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="2" y="7" width="20" height="14" rx="4" ry="4"></rect>
@@ -558,6 +563,17 @@
                     {% block header_actions %}{% endblock %}
                 </div>
             </header>
+
+            <div class="panel-search-overlay hidden" id="panel-search-overlay" role="presentation">
+                <div class="panel-search-dialog" role="dialog" aria-modal="true" aria-labelledby="panel-search-title">
+                    <div class="panel-search-head">
+                        <label class="hidden" id="panel-search-title" for="panel-search-input">{{ 'جست‌وجوی بخش‌های پنل' if panel_lang == 'fa' else 'Search panel sections' }}</label>
+                        <input class="form-input" id="panel-search-input" type="search" autocomplete="off" placeholder="{{ 'نام بخش یا قابلیت…' if panel_lang == 'fa' else 'Page or feature…' }}">
+                        <button type="button" class="btn btn-secondary" id="panel-search-close" aria-label="{{ 'بستن جست‌وجو' if panel_lang == 'fa' else 'Close search' }}">×</button>
+                    </div>
+                    <div class="panel-search-results" id="panel-search-results" role="list" aria-live="polite"></div>
+                </div>
+            </div>
 
             {% if maintenance_notice %}
             <div role="status" style="margin: 14px 20px 0; padding: 12px 16px; border: 1px solid rgba(245, 158, 11, .45); border-radius: 10px; background: rgba(245, 158, 11, .12); color: var(--text-primary);">

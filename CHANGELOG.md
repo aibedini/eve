@@ -1,5 +1,14 @@
 ﻿# Changelog - Eve
 
+## [2.23.0] - 2026-11-11
+
+### Added
+- Subscription pages show a square status card for each inbound assigned to that subscriber, with its country flag, panel-reported enabled state, and check time. Missing panel data is shown as unknown.
+- A global panel search opens from the header or Ctrl/Cmd+K and finds visible navigation pages and SMS tabs, including SMS settings, with short descriptions and direct links.
+
+### Technical
+- The public inbound-status endpoint verifies the subscription on its server, returns only that account's assigned inbounds, limits request rate, and disables response caching. No schema migration or new dependency is required.
+
 ## [2.22.0] - 2026-11-11
 
 ### Added
