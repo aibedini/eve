@@ -704,7 +704,7 @@
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div class="form-group" style="margin: 0;">
                         <label style="font-size: 0.75rem;">{{ _('Sender Card') }}</label>
-                        <div class="payment-card-check-field"><input type="text" id="renew-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;"><span id="renew-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
+                        <div class="payment-card-check-field"><input type="text" id="renew-sender-card" class="form-input" maxlength="512" placeholder="{{ _('Card digits or sender reference') }}" style="font-size: 0.85rem;"><span id="renew-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
                     </div>
                     <div class="form-group" style="margin: 0;">
                         <label style="font-size: 0.75rem;">{{ _('Destination Card') }}</label>
@@ -716,7 +716,7 @@
                         </select>
                     </div>
                 </div>
-                {% if payment_duplicate_check_enabled %}<div id="renew-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% endif %}
+                {% if payment_duplicate_check_enabled %}<div id="renew-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% else %}<p class="field-note">{{ _('Duplicate payment check is off in Settings.') }}</p>{% endif %}
             </div>
         </div>
         <div class="modal-footer">
@@ -831,7 +831,7 @@
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                             <div class="form-group" style="margin: 0;">
                                 <label style="font-size: 0.75rem;">{{ _('Sender Card') }}</label>
-                                <div class="payment-card-check-field"><input type="text" id="reset-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;"><span id="reset-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
+                                <div class="payment-card-check-field"><input type="text" id="reset-sender-card" class="form-input" maxlength="512" placeholder="{{ _('Card digits or sender reference') }}" style="font-size: 0.85rem;"><span id="reset-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
                             </div>
                             <div class="form-group" style="margin: 0;">
                                 <label style="font-size: 0.75rem;">{{ _('Destination Card') }}</label>
@@ -843,7 +843,7 @@
                                 </select>
                             </div>
                         </div>
-                        {% if payment_duplicate_check_enabled %}<div id="reset-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% endif %}
+                            {% if payment_duplicate_check_enabled %}<div id="reset-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% else %}<p class="field-note">{{ _('Duplicate payment check is off in Settings.') }}</p>{% endif %}
                     </div>
 
                     <div class="form-actions">
@@ -1015,7 +1015,7 @@
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div class="form-group" style="margin: 0;">
                         <label style="font-size: 0.75rem;">{{ _('Sender Card') }}</label>
-                        <div class="payment-card-check-field"><input type="text" id="add-client-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;"><span id="add-client-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
+                        <div class="payment-card-check-field"><input type="text" id="add-client-sender-card" class="form-input" maxlength="512" placeholder="{{ _('Card digits or sender reference') }}" style="font-size: 0.85rem;"><span id="add-client-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
                     </div>
                     <div class="form-group" style="margin: 0;">
                         <label style="font-size: 0.75rem;">{{ _('Destination Card') }}</label>
@@ -1027,7 +1027,7 @@
                         </select>
                     </div>
                 </div>
-                {% if payment_duplicate_check_enabled %}<div id="add-client-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% endif %}
+                {% if payment_duplicate_check_enabled %}<div id="add-client-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% else %}<p class="field-note">{{ _('Duplicate payment check is off in Settings.') }}</p>{% endif %}
             </div>
         </div>
         <div class="modal-footer">

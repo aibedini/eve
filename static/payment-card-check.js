@@ -3,8 +3,8 @@
 
   const fa = (document.documentElement.lang || '').toLowerCase().startsWith('fa');
   const labels = fa
-    ? { warning: 'پرداخت مشابه در ۲۴ ساعت گذشته ثبت شده؛ دوباره بررسی کنید.', error: 'بررسی پرداخت انجام نشد. دوباره تلاش کنید.', amount: 'تومان' }
-    : { warning: 'Similar payment declared in the past 24 hours. Double-check it.', error: 'Payment check failed. Please try again.', amount: 'Toman' };
+    ? { warning: 'پرداخت مشابه در ۲۴ ساعت گذشته ثبت شده؛ دوباره بررسی کنید.', error: 'بررسی پرداخت انجام نشد. دوباره تلاش کنید.', checking: 'در حال بررسی پرداخت‌های ۲۴ ساعت گذشته…', amount: 'تومان' }
+    : { warning: 'Similar payment declared in the past 24 hours. Double-check it.', error: 'Payment check failed. Please try again.', checking: 'Checking payments from the past 24 hours…', amount: 'Toman' };
 
   function formatDate(value) {
     const date = new Date(value);
@@ -18,6 +18,7 @@
   function setup(prefix) {
     const sender = document.getElementById(`${prefix}-sender-card`);
     const destination = document.getElementById(`${prefix}-dest-card`);
+    const account = document.getElementById(`${prefix}-email`);
     const icon = document.getElementById(`${prefix}-card-check-icon`);
     const results = document.getElementById(`${prefix}-card-check-results`);
     if (!sender || !destination || !icon || !results) return;
@@ -28,6 +29,7 @@
     function clear() {
       icon.classList.add('hidden');
       results.classList.add('hidden');
+      results.classList.remove('is-checking');
       results.replaceChildren();
     }
     function schedule() {
@@ -35,12 +37,15 @@
       clearTimeout(timer);
       controller?.abort();
       clear();
-      const digits = sender.value.match(/\p{Nd}/gu) || [];
-      if (digits.length < 4 || !destination.value) return;
+      if (!sender.value.trim() || !destination.value) return;
+      results.textContent = labels.checking;
+      results.classList.add('is-checking');
+      results.classList.remove('hidden');
       const current = generation;
       timer = setTimeout(async () => {
         controller = new AbortController();
         const params = new URLSearchParams({ sender_card: sender.value.trim(), card_id: destination.value });
+        if (account?.value.trim()) params.set('client_email', account.value.trim());
         try {
           const response = await fetch(`/api/payments/check-sender-card?${params}`, {
             credentials: 'same-origin', signal: controller.signal, cache: 'no-store'
@@ -50,6 +55,7 @@
           if (current !== generation) return;
           const matches = Array.isArray(payload.matches) ? payload.matches : [];
           if (!matches.length) {
+            clear();
             icon.classList.remove('hidden');
             return;
           }
@@ -62,17 +68,24 @@
             item.textContent = `${match.user} · ${formatDate(match.created_at)} · ${amount} ${labels.amount}`;
             list.append(item);
           }
+          results.textContent = '';
           results.append(heading, list);
+          results.classList.remove('is-checking');
           results.classList.remove('hidden');
+          results.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
         } catch (error) {
           if (error.name === 'AbortError' || current !== generation) return;
           results.textContent = labels.error;
+          results.classList.remove('is-checking');
           results.classList.remove('hidden');
         }
       }, 250);
     }
     sender.addEventListener('input', schedule);
+    sender.addEventListener('change', schedule);
     destination.addEventListener('change', schedule);
+    account?.addEventListener('change', schedule);
+    schedule();
   }
 
   function start() {

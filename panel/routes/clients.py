@@ -39,7 +39,7 @@ from panel.services import panel_capabilities, renew_activation, renew_finalizat
 from panel.services import renew_notifications
 from panel.services.usage_intelligence import record_verified_renewal
 from panel.services.payment_duplicate import (
-    duplicate_check_enabled, last_four, recent_sender_card_matches,
+    duplicate_check_enabled, normalized_sender_code, recent_sender_card_matches,
 )
 
 bp = Blueprint('clients', __name__)
@@ -50,7 +50,7 @@ bp = Blueprint('clients', __name__)
 @permission_required('clients.write')
 @limiter.limit('60 per minute')
 def check_sender_card_payment():
-    """Warn about declarations using the same sender suffix and destination."""
+    """Warn about declarations using the same sender reference and destination."""
     from panel.routes.bank_cards import _bank_card_accessible_to
 
     if not duplicate_check_enabled():
@@ -60,13 +60,15 @@ def check_sender_card_payment():
         return jsonify({'success': False, 'error': 'User not found'}), 401
     card_id = request.args.get('card_id', type=int)
     sender_card = (request.args.get('sender_card') or '').strip()
-    if not card_id or len(sender_card) > 32 or not last_four(sender_card):
-        return jsonify({'success': False, 'error': 'Card and four sender digits required'}), 400
+    client_email = (request.args.get('client_email') or '').strip()
+    if not card_id or len(sender_card) > 512 or len(client_email) > 255 or not normalized_sender_code(sender_card):
+        return jsonify({'success': False, 'error': 'Destination card and sender code required (max 512 characters)'}), 400
     card = db.session.get(BankCard, card_id)
     if not card or not card.is_active or not _bank_card_accessible_to(card, user):
         return jsonify({'success': False, 'error': 'Card unavailable'}), 404
     admin_id = None if admin_is_superadmin(user) else user.id
-    matches = recent_sender_card_matches(card_id, sender_card, admin_id=admin_id)
+    matches = recent_sender_card_matches(card_id, sender_card, admin_id=admin_id,
+                                         exclude_client_email=client_email)
     return jsonify({
         'success': True,
         'matches': [

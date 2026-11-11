@@ -7277,6 +7277,7 @@ html[data-theme="light"] .subscription-page .sub-platform-tabs button:not(.activ
     font-size: .8rem;
 }
 .payment-card-check-results.hidden { display: none; }
+.payment-card-check-results.is-checking { border-color: var(--border-color); }
 .payment-card-check-results strong { color: var(--warning); }
 .payment-card-check-results ul { margin: .5rem 0 0; padding-inline-start: 1.25rem; }
 .payment-card-check-results li + li { margin-top: .35rem; }

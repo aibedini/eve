@@ -1,7 +1,9 @@
-"""Fast, scoped lookup for recently declared sender card digits."""
+"""Fast, scoped lookup for recently declared sender identifiers."""
 
 from datetime import datetime, timedelta
-from unicodedata import digit
+from unicodedata import digit, normalize
+
+from sqlalchemy import and_, or_
 
 from panel.extensions import db
 from panel.models import Payment, SystemSetting, Transaction
@@ -25,11 +27,32 @@ def last_four(value):
     return ''.join(digits[-4:]) if len(digits) >= 4 else None
 
 
-def recent_sender_card_matches(card_id, sender_card, *, admin_id=None, now=None):
+def normalized_sender_code(value):
+    """Normalize Unicode digits and spacing without truncating text references."""
+    chars = []
+    for char in normalize('NFKC', str(value or '')):
+        chars.append(str(digit(char)) if char.isdecimal() else char)
+    code = ' '.join(''.join(chars).split()).casefold()
+    if code and all(char.isdecimal() or char in ' -' for char in code):
+        return ''.join(char for char in code if char.isdecimal())
+    return code
+
+
+def sender_code_matches(stored, requested):
+    candidate = normalized_sender_code(stored)
+    if not candidate:
+        return False
+    if candidate == requested:
+        return True
+    return requested.isdecimal() and len(requested) == 4 and last_four(stored) == requested
+
+
+def recent_sender_card_matches(card_id, sender_card, *, admin_id=None, exclude_client_email=None, now=None):
     """Return matching declarations made in the preceding 24 hours, newest first."""
-    suffix = last_four(sender_card)
-    if not suffix:
+    requested = normalized_sender_code(sender_card)
+    if not requested:
         return []
+    excluded_email = (exclude_client_email or '').strip().casefold()
     cutoff = (now or datetime.utcnow()) - timedelta(hours=24)
     payments = Payment.query.filter(
         Payment.card_id == card_id,
@@ -38,8 +61,10 @@ def recent_sender_card_matches(card_id, sender_card, *, admin_id=None, now=None)
     transactions = Transaction.query.filter(
         Transaction.card_id == card_id,
         Transaction.created_at >= cutoff,
-        Transaction.category == 'income',
-        Transaction.amount > 0,
+        or_(
+            and_(Transaction.category == 'income', Transaction.amount > 0),
+            and_(Transaction.category == 'usage', Transaction.amount < 0),
+        ),
     )
     if admin_id is not None:
         payments = payments.filter(Payment.admin_id == admin_id)
@@ -50,7 +75,9 @@ def recent_sender_card_matches(card_id, sender_card, *, admin_id=None, now=None)
         Payment.id, Payment.sender_card, Payment.sender_name, Payment.client_email,
         Payment.amount, Payment.created_at,
     ):
-        if last_four(row.sender_card) == suffix:
+        if excluded_email and (row.client_email or '').strip().casefold() == excluded_email:
+            continue
+        if sender_code_matches(row.sender_card, requested):
             matches.append({
                 'source': 'payment', 'id': row.id,
                 'user': row.client_email or row.sender_name or '—',
@@ -60,11 +87,13 @@ def recent_sender_card_matches(card_id, sender_card, *, admin_id=None, now=None)
         Transaction.id, Transaction.sender_card, Transaction.sender_name,
         Transaction.client_email, Transaction.amount, Transaction.created_at,
     ):
-        if last_four(row.sender_card) == suffix:
+        if excluded_email and (row.client_email or '').strip().casefold() == excluded_email:
+            continue
+        if sender_code_matches(row.sender_card, requested):
             matches.append({
                 'source': 'transaction', 'id': row.id,
                 'user': row.client_email or row.sender_name or '—',
-                'amount': row.amount, 'created_at': row.created_at,
+                'amount': abs(row.amount), 'created_at': row.created_at,
             })
     matches.sort(key=lambda item: item['created_at'], reverse=True)
     return matches

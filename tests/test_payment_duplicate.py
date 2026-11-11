@@ -78,6 +78,50 @@ class PaymentDuplicateTests(unittest.TestCase):
         matches = recent_sender_card_matches(self.card.id, '3796', admin_id=self.admin.id, now=now)
         self.assertEqual([item['user'] for item in matches], ['manual@example.com', 'renew@example.com'])
 
+    def test_long_sender_reference_and_reseller_payment(self):
+        now = datetime.utcnow()
+        reference = 'ORDER-ABC-2026-9492-LONG-REFERENCE'
+        db.session.add_all([
+            Transaction(admin_id=self.admin.id, card_id=self.card.id, sender_card=reference,
+                        amount=-130000, category='usage', created_at=now,
+                        client_email='other-account@example.com'),
+            Transaction(admin_id=self.admin.id, card_id=self.card.id,
+                        sender_card='ORDER-OTHER-2026-9492-LONG-REFERENCE',
+                        amount=-50000, category='usage', created_at=now,
+                        client_email='unrelated@example.com'),
+        ])
+        db.session.commit()
+
+        matches = recent_sender_card_matches(self.card.id, '  order-abc-2026-9492-long-reference  ',
+                                             admin_id=self.admin.id, now=now)
+        self.assertEqual([(item['user'], item['amount']) for item in matches],
+                         [('other-account@example.com', 130000)])
+        self.assertEqual(recent_sender_card_matches(
+            self.card.id, reference, admin_id=self.admin.id,
+            exclude_client_email='OTHER-ACCOUNT@example.com', now=now,
+        ), [])
+
+        db.session.add(SystemSetting(key='payment_duplicate_check_enabled', value='1'))
+        db.session.commit()
+        response = self.client.get('/api/payments/check-sender-card', query_string={
+            'card_id': self.card.id, 'sender_card': reference,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['matches'][0]['user'], 'other-account@example.com')
+        self.assertEqual(response.json['matches'][0]['amount'], 130000)
+        same_account = self.client.get('/api/payments/check-sender-card', query_string={
+            'card_id': self.card.id, 'sender_card': reference,
+            'client_email': 'other-account@example.com',
+        })
+        self.assertEqual(same_account.json['matches'], [])
+
+        db.session.add(Transaction(admin_id=self.admin.id, card_id=self.card.id, sender_card='9492',
+                                   amount=-90000, category='usage', created_at=now,
+                                   client_email='numeric@example.com'))
+        db.session.commit()
+        matches = recent_sender_card_matches(self.card.id, '۹۴۹۲', admin_id=self.admin.id, now=now)
+        self.assertIn('numeric@example.com', [item['user'] for item in matches])
+
     def test_endpoint_requires_setting_and_returns_only_match_details(self):
         now = datetime.utcnow()
         db.session.add(Payment(admin_id=self.admin.id, card_id=self.card.id, sender_card='12343796',

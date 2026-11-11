@@ -338,6 +338,8 @@ FA = {
     'Send account info': 'ارسال اطلاعات اکانت',
     'Send to Client': 'ارسال به کاربر',
     'Sender Card': 'کارت فرستنده',
+    'Card digits or sender reference': 'شماره کارت یا شناسه فرستنده',
+    'Duplicate payment check is off in Settings.': 'بررسی پرداخت تکراری در تنظیمات غیرفعال است.',
     'Server #{sid}': 'سرور #{sid}',
     'Server 1': 'سرور 1',
     'Server Name': 'نام سرور',

@@ -3,7 +3,7 @@ from panel.core.i18n import register
 
 FA = {
     'Check repeated card payments': 'بررسی پرداخت تکراری کارت',
-    'Warn when the same sender card digits and destination card were declared in the past 24 hours.': 'اگر چهار رقم کارت مبدأ برای همین کارت مقصد در ۲۴ ساعت گذشته ثبت شده باشد، هشدار بده.',
+    'Warn when the same sender card digits or full reference and destination card were declared in the past 24 hours.': 'اگر رقم‌های کارت فرستنده یا شناسهٔ کامل آن برای همین کارت مقصد در ۲۴ ساعت گذشته ثبت شده باشد، هشدار بده.',
     ' (gateway HTTP {v1})': ' (HTTP درگاه {v1})',
     ' (max {v1} T)': ' (حداکثر {v1} T)',
     ' ({gatewayCount} gateway, {localCount} local)': ' ({gatewayCount} در درگاه، {localCount} محلی)',
