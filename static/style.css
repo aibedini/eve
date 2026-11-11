@@ -7166,6 +7166,11 @@ select,
 .sub-inbound-card--active .sub-inbound-state { color: var(--success); }
 .sub-inbound-card--disabled .sub-inbound-state { color: var(--danger); }
 .sub-inbound-card--unknown .sub-inbound-state { color: var(--warning); }
+@media (max-width: 639px) {
+    .sub-inbound-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+    .sub-inbound-card { padding: .5rem; gap: .3rem; }
+    .sub-inbound-flag { width: 2.5rem; height: 1.9rem; font-size: 1.6rem; }
+}
 
 .panel-search-trigger { display: inline-flex; align-items: center; gap: .4rem; }
 .panel-search-overlay {
