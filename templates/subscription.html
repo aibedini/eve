@@ -873,11 +873,17 @@
         </nav>
         {% endif %}
         <div class="sub-blocks space-y-6">
+            {% set _inbound_status_section %}
             <section class="sub-inbound-status" id="sub-inbound-status"
                      data-status-url="{{ url_for('subscription_pages.subscription_inbound_status', server_id=server_id, sub_id=sub_id) }}"
                      data-inbounds="{{ inbound_statuses|default([])|tojson|forceescape }}"
                      data-checked-at="{{ inbound_checked_at|default('') }}"
                      data-lang="{{ 'fa' if is_fa else 'en' }}" aria-live="polite">
+                <button type="button" class="sub-inbound-toggle" id="sub-inbound-toggle" aria-expanded="false" aria-controls="sub-inbound-body">
+                    <span class="sub-inbound-toggle-main"><strong>{{ 'وضعیت سرورها' if is_fa else 'Server status' }}</strong><span id="sub-inbound-counts"></span></span>
+                    <span class="sub-inbound-toggle-action"><span>{{ 'مشاهده وضعیت' if is_fa else 'View status' }}</span><svg id="sub-inbound-arrow" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 9-7 7-7-7"/></svg></span>
+                </button>
+                <div class="sub-inbound-body" id="sub-inbound-body" data-open="false"><div class="sub-inbound-body-inner">
                 <div class="sub-inbound-status-heading">
                     <h2>{{ 'وضعیت سرورها' if is_fa else 'Server status' }}</h2>
                     <span class="sub-inbound-checked" id="sub-inbound-checked"></span>
@@ -886,8 +892,11 @@
                 <div class="sub-inbound-grid" id="sub-inbound-grid">
                     <p class="field-note">{{ 'در حال بررسی…' if is_fa else 'Checking…' }}</p>
                 </div>
+                </div></div>
             </section>
+            {% endset %}
             {% for b in _sub_blocks %}
+            {% if b.id == 'renew' %}{{ _inbound_status_section }}{% endif %}
             {% set _html = _blocks[b.id] %}
             {% if _html|trim %}
             <section id="sub-block-{{ b.id }}" class="sub-block sub-block-{{ b.id }}" data-sub-block="{{ b.id }}"{% if not b.visible %} hidden{% endif %}>{{ _html }}</section>

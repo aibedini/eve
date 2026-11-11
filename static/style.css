@@ -7087,10 +7087,47 @@ select,
 }
 
 .sub-inbound-status {
-    padding: 1.25rem;
     border: 1px solid var(--border-color);
     border-radius: 1rem;
     background: var(--bg-card);
+    overflow: hidden;
+}
+.sub-inbound-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    width: 100%;
+    padding: 1rem 1.25rem;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: start;
+}
+.sub-inbound-toggle-main { display: grid; gap: .3rem; }
+.sub-inbound-toggle-main strong { font-size: .95rem; }
+.sub-inbound-toggle-main span { color: var(--text-secondary); font-size: .8rem; }
+.sub-inbound-toggle-action { display: inline-flex; align-items: center; gap: .4rem; flex-shrink: 0; color: var(--text-secondary); font-size: .8rem; }
+.sub-inbound-toggle-action svg { transition: transform .28s ease; }
+.sub-inbound-arrow-open { transform: rotate(180deg); }
+.sub-inbound-body { overflow: hidden; max-height: 0; transition: max-height .35s cubic-bezier(.4, 0, .2, 1); }
+.sub-inbound-body-inner { padding: 1rem 1.25rem 1.25rem; border-top: 1px solid var(--border-color); }
+.sub-inbound-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: -3px; }
+@media (max-width: 639px) {
+    body.subscription-page #tawkchat-container,
+    body.subscription-page #crisp-chatbox,
+    body.subscription-page #chatwoot-widget,
+    body.subscription-page #chatwoot_live_chat_widget,
+    body.subscription-page #tidio-chat,
+    body.subscription-page #intercom-container,
+    body.subscription-page #fc_frame,
+    body.subscription-page #smartsupp-widget-container,
+    body.subscription-page #online-chat-widget {
+        bottom: calc(92px + env(safe-area-inset-bottom, 0px)) !important;
+        left: 12px !important;
+        right: auto !important;
+    }
 }
 .sub-inbound-status-heading {
     display: flex;

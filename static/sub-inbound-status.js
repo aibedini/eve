@@ -6,15 +6,20 @@
         if (!section) return;
         const grid = document.getElementById('sub-inbound-grid');
         const checked = document.getElementById('sub-inbound-checked');
+    const counts = document.getElementById('sub-inbound-counts');
+    const toggle = document.getElementById('sub-inbound-toggle');
+    const body = document.getElementById('sub-inbound-body');
+    const arrow = document.getElementById('sub-inbound-arrow');
         const fa = section.dataset.lang === 'fa';
         const labels = fa
-            ? { active: 'فعال در پنل', disabled: 'غیرفعال', unknown: 'نامشخص', empty: 'اینباندی برای این اشتراک پیدا نشد.', checked: 'آخرین بررسی: ' }
-            : { active: 'Active in panel', disabled: 'Disabled', unknown: 'Unknown', empty: 'No inbounds found for this subscription.', checked: 'Last checked: ' };
+      ? { active: 'متصل', disabled: 'عدم اتصال', unknown: 'نامشخص', empty: 'اینباندی برای این اشتراک پیدا نشد.', checked: 'آخرین بررسی: ', activeCount: 'متصل', disabledCount: 'عدم اتصال', ping: 'پینگ' }
+      : { active: 'Connected', disabled: 'Disconnected', unknown: 'Unknown', empty: 'No inbounds found for this subscription.', checked: 'Last checked: ', activeCount: 'connected', disabledCount: 'disconnected', ping: 'Ping' };
         let lastItems = [];
         let lastCheckedAt = null;
 
         function render(items, checkedAt) {
             grid.replaceChildren();
+      counts.textContent = `${items.filter((item) => item.state === 'active').length} ${labels.activeCount} · ${items.filter((item) => item.state === 'disabled').length} ${labels.disabledCount}`;
             const date = checkedAt && new Date(checkedAt);
             const dateText = date && !Number.isNaN(date.getTime())
                 ? new Intl.DateTimeFormat(fa ? 'fa-IR' : 'en-US', {
@@ -51,16 +56,17 @@
                 state.className = 'sub-inbound-state';
                 state.textContent = labels[item.state] || labels.unknown;
                 card.append(flag, name, state);
-                if (dateText) {
-                    const time = document.createElement('time');
-                    time.className = 'sub-inbound-time';
-                    time.dateTime = checkedAt;
-                    time.textContent = dateText;
-                    card.append(time);
+        const ping = Number(item.ping_ms);
+        if (item.ping_ms != null && Number.isFinite(ping) && ping >= 0) {
+          const pingLabel = document.createElement('span');
+          pingLabel.className = 'sub-inbound-time';
+          pingLabel.textContent = `${labels.ping}: ${Math.round(ping)} ms`;
+          card.append(pingLabel);
                 }
                 grid.append(card);
             }
             checked.textContent = dateText ? labels.checked + dateText : '';
+      if (body.dataset.open === 'true') body.style.maxHeight = `${body.scrollHeight}px`;
         }
 
         async function refresh() {
@@ -92,6 +98,14 @@
             if (document.visibilityState === 'visible') refresh();
         }, 300000);
     }
+
+    toggle.addEventListener('click', () => {
+      const open = body.dataset.open !== 'true';
+      body.dataset.open = String(open);
+      toggle.setAttribute('aria-expanded', String(open));
+      body.style.maxHeight = open ? `${body.scrollHeight}px` : '0px';
+      arrow.classList.toggle('sub-inbound-arrow-open', open);
+    });
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();
