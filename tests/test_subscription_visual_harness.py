@@ -15,7 +15,7 @@ _SPEC = os.path.join(_REPO_ROOT, 'e2e', 'visual', 'subscription.spec.js')
 _CONFIG = os.path.join(_REPO_ROOT, 'e2e', 'visual', 'playwright.config.js')
 _DOC = os.path.join(_REPO_ROOT, 'docs', 'operations', 'VISUAL_REGRESSION.md')
 
-WIDTHS = (360, 390, 640, 768, 1024, 1280, 1440)
+WIDTHS = (320, 360, 390, 428, 640, 768, 1024, 1280, 1440)
 
 
 def _read(path):
@@ -41,7 +41,9 @@ class VisualHarnessTests(unittest.TestCase):
         self.assertIn('tobelessthanorequal', lowered)         # an upper bound, not just "exists"
         self.assertIn('scrollwidth', lowered)                 # horizontal overflow
         self.assertIn('clientwidth', lowered)
-        self.assertIn('rows', lowered)                        # column stability
+        self.assertIn('packagecolumns', lowered)              # column stability
+        self.assertIn('statusfits', lowered)                  # expanded content is not clipped
+        self.assertIn('light', lowered)                       # both themes are checked
         self.assertIn('eve-build', lowered)                   # build agreement
 
     def test_the_spec_skips_without_a_target_instead_of_failing(self):
@@ -51,7 +53,7 @@ class VisualHarnessTests(unittest.TestCase):
 
     def test_the_documentation_is_honest_about_the_run_status(self):
         doc = _read(_DOC)
-        for token in ('360, 390, 640, 768, 1024, 1280 and 1440', 'EVE_E2E_SUB_URL',
+        for token in ('320, 360, 390, 428, 640, 768, 1024, 1280 and 1440', 'EVE_E2E_SUB_URL',
                       'npx playwright install chromium',
                       'has not been executed in this development'):
             self.assertIn(token, doc, token)

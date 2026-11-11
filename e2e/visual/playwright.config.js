@@ -2,7 +2,7 @@
 // Run: npx playwright test -c e2e/visual   (after: npx playwright install chromium)
 const { defineConfig, devices } = require('@playwright/test');
 
-const WIDTHS = [360, 390, 640, 768, 1024, 1280, 1440];
+const WIDTHS = [320, 360, 390, 428, 640, 768, 1024, 1280, 1440];
 
 module.exports = defineConfig({
   testDir: __dirname,

@@ -68,7 +68,9 @@
                 grid.append(card);
             }
             checked.textContent = dateText ? labels.checked + dateText : '';
-      if (body.dataset.open === 'true') body.style.maxHeight = `${body.scrollHeight}px`;
+            if (body.dataset.open === 'true' && body.style.maxHeight !== 'none') {
+                body.style.maxHeight = `${body.scrollHeight}px`;
+            }
         }
 
         async function refresh() {
@@ -99,13 +101,31 @@
         window.setInterval(() => {
             if (document.visibilityState === 'visible') refresh();
         }, 300000);
-      toggle.addEventListener('click', () => {
-      const open = body.dataset.open !== 'true';
-      body.dataset.open = String(open);
-      toggle.setAttribute('aria-expanded', String(open));
-      body.style.maxHeight = open ? `${body.scrollHeight}px` : '0px';
-      arrow.classList.toggle('sub-inbound-arrow-open', open);
-      });
+        if (window.ResizeObserver) {
+            new window.ResizeObserver(() => {
+                if (body.dataset.open === 'true' && body.style.maxHeight !== 'none') {
+                    body.style.maxHeight = `${body.scrollHeight}px`;
+                }
+            }).observe(body.firstElementChild);
+        }
+        body.addEventListener('transitionend', (event) => {
+            if (event.propertyName === 'max-height' && body.dataset.open === 'true') {
+                body.style.maxHeight = 'none';
+            }
+        });
+        toggle.addEventListener('click', () => {
+            const open = body.dataset.open !== 'true';
+            body.dataset.open = String(open);
+            toggle.setAttribute('aria-expanded', String(open));
+            if (open) {
+                body.style.maxHeight = `${body.scrollHeight}px`;
+            } else {
+                body.style.maxHeight = `${body.scrollHeight}px`;
+                void body.offsetHeight;
+                body.style.maxHeight = '0px';
+            }
+            arrow.classList.toggle('sub-inbound-arrow-open', open);
+        });
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

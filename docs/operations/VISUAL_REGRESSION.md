@@ -9,15 +9,17 @@ that breaks the page at one width is caught rather than reported by a customer.
 
 ## What it asserts
 
-At each of **360, 390, 640, 768, 1024, 1280 and 1440 px** (`e2e/visual/playwright.config.js`
+At each of **320, 360, 390, 428, 640, 768, 1024, 1280 and 1440 px** (`e2e/visual/playwright.config.js`
 creates one project per width):
 
 1. **icon geometry** - every scoped icon rule (bottom nav, fab, renew-channel buttons, support
    sheet, toast, QR modal) stays within its declared size, and never collapses to zero;
 2. **no horizontal overflow** - `documentElement.scrollWidth` may not exceed the viewport, and the
    first offending elements are named in the failure message;
-3. **stable column layout** - the package cards keep the column count the breakpoint expects;
-4. **build agreement** - the `eve-build` meta tag equals the `X-Eve-Build` response header, which
+3. **stable column layout** - package and status cards stay within their grids;
+4. **expanded content** - status and renewal bodies remain fully visible;
+5. **both themes** - status names retain readable contrast in dark and light mode;
+6. **build agreement** - the `eve-build` meta tag equals the `X-Eve-Build` response header, which
    is the same version-skew guard the deploy contract uses.
 
 ## Running it
