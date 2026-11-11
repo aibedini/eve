@@ -16,6 +16,7 @@ from panel.routes.common import (
     login_required, permission_required, step_up_required,
 )
 from panel.services.backup import _parse_int, _set_system_setting_value
+from panel.services.payment_duplicate import SETTING_KEY as PAYMENT_DUPLICATE_CHECK_KEY, duplicate_check_enabled
 
 
 bp = Blueprint('settings', __name__)
@@ -206,6 +207,7 @@ def get_general_settings():
         'near_expiry_days': thresholds.get('near_expiry_days', 3),
         'near_expiry_hours': thresholds.get('near_expiry_hours', 0),
         'low_volume_gb': thresholds.get('low_volume_gb', 1.0),
+        'payment_duplicate_check_enabled': duplicate_check_enabled(),
         'snapshot_interval_minutes': _USAGE_ROLLUP_INTERVAL_MIN,
         'last_snapshot_at': last_snapshot_at,
         'total_snapshots': total_snapshots,
@@ -286,6 +288,11 @@ def save_general_settings():
     _set_system_setting_value(GENERAL_EXPIRY_WARNING_DAYS_KEY, str(near_expiry_days))
     _set_system_setting_value(GENERAL_EXPIRY_WARNING_HOURS_KEY, str(near_expiry_hours))
     _set_system_setting_value(GENERAL_LOW_VOLUME_WARNING_GB_KEY, str(low_volume_gb))
+    if 'payment_duplicate_check_enabled' in data:
+        _set_system_setting_value(
+            PAYMENT_DUPLICATE_CHECK_KEY,
+            '1' if data['payment_duplicate_check_enabled'] is True else '0',
+        )
     if new_domain:
         _set_system_setting_value(PANEL_DOMAIN_SETTING_KEY, new_domain)
     db.session.commit()
@@ -304,6 +311,7 @@ def save_general_settings():
         'near_expiry_days': near_expiry_days,
         'near_expiry_hours': near_expiry_hours,
         'low_volume_gb': low_volume_gb,
+        'payment_duplicate_check_enabled': duplicate_check_enabled(),
         'snapshot_interval_minutes': _USAGE_ROLLUP_INTERVAL_MIN,
         'panel_domain': new_domain or old_domain,
         'is_ip': is_ip,

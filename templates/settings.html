@@ -195,6 +195,14 @@
                     <small class="text-secondary">{{ _('Clients with less remaining volume are marked as “Low Volume” — example: 0.2 = 200 MB.') }}</small>
                 </div>
 
+                <div class="form-group payment-check-setting">
+                    <label class="checkbox-label">
+                        <span class="toggle-switch"><input type="checkbox" id="general-payment-duplicate-check"><span class="slider"></span></span>
+                        <span>{{ _('Check repeated card payments') }}</span>
+                    </label>
+                    <small class="text-secondary">{{ _('Warn when the same sender card digits and destination card were declared in the past 24 hours.') }}</small>
+                </div>
+
                 <div class="form-group" style="margin-top: 16px; margin-bottom: 0;">
                     <button class="btn btn-primary" data-onclick="saveGeneralSettings()">{{ _('Save') }}</button>
                 </div>
@@ -7416,6 +7424,8 @@
 
                 const lowVolumeInput = document.getElementById('general-low-volume-gb');
                 if (lowVolumeInput) { lowVolumeInput.value = Number(data.low_volume_gb ?? 1); updateLowVolumeHint(); }
+    const duplicateCheck = document.getElementById('general-payment-duplicate-check');
+    if (duplicateCheck) duplicateCheck.checked = data.payment_duplicate_check_enabled === true;
 
                 // Show last snapshot info
                 const lastInfo = document.getElementById('snapshot-last-info');
@@ -7553,6 +7563,7 @@
                     near_expiry_days: Number.isFinite(nearDays) ? nearDays : 3,
                     near_expiry_hours: Number.isFinite(nearHours) ? nearHours : 0,
                     low_volume_gb: Number.isFinite(lowVolumeGb) ? lowVolumeGb : 1,
+            payment_duplicate_check_enabled: document.getElementById('general-payment-duplicate-check').checked,
                     panel_domain: panelDomain,
                 })
             });

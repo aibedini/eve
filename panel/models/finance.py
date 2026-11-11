@@ -84,6 +84,7 @@ class AutoApprovalWindow(db.Model):
 class Payment(db.Model):
     """Track incoming payments from customers"""
     __tablename__ = 'payments'
+    __table_args__ = (db.Index('ix_payments_card_created', 'card_id', 'created_at'),)
     id = db.Column(db.Integer, primary_key=True)
     admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=False)
     card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id'), nullable=True)  # کارت مقصد (شما)
@@ -136,6 +137,7 @@ class Payment(db.Model):
 
 class Transaction(db.Model):
     __tablename__ = 'transactions'
+    __table_args__ = (db.Index('ix_transactions_card_created', 'card_id', 'created_at'),)
     id = db.Column(db.Integer, primary_key=True)
     admin_id = db.Column(db.Integer, db.ForeignKey('admins.id'), nullable=False)
     server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=True)

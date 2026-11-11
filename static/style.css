@@ -7172,6 +7172,27 @@ select,
     .sub-inbound-flag { width: 2.5rem; height: 1.9rem; font-size: 1.6rem; }
 }
 
+.payment-card-check-field { position: relative; }
+.payment-check-setting { margin-top: 18px; margin-bottom: 0; }
+.payment-card-check-field .form-input { width: 100%; padding-left: 2rem; }
+.payment-card-check-icon { position: absolute; left: .65rem; top: 50%; transform: translateY(-50%); color: var(--success); font-size: 1.1rem; font-weight: 700; }
+.payment-card-check-icon.hidden { display: none; }
+.payment-card-check-results {
+    margin-top: .75rem;
+    padding: .75rem;
+    max-height: 13rem;
+    overflow: auto;
+    border: 1px solid var(--warning);
+    border-radius: .6rem;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    font-size: .8rem;
+}
+.payment-card-check-results.hidden { display: none; }
+.payment-card-check-results strong { color: var(--warning); }
+.payment-card-check-results ul { margin: .5rem 0 0; padding-inline-start: 1.25rem; }
+.payment-card-check-results li + li { margin-top: .35rem; }
+
 .panel-search-trigger { display: inline-flex; align-items: center; gap: .4rem; }
 .panel-search-overlay {
     position: fixed;

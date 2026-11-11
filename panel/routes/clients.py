@@ -20,7 +20,7 @@ from sqlalchemy import func, or_
 from panel.adapters import xui as xui_adapter
 from panel.extensions import db, limiter
 from panel.models import (
-    Admin, ClientOwnership, NotificationTemplate, Package, RenewTemplate,
+    Admin, BankCard, ClientOwnership, NotificationTemplate, Package, RenewTemplate,
     Server, ServiceOwnership, Transaction, VolumeRulePreset,
 )
 from panel.routes.common import admin_is_superadmin, login_required, permission_required
@@ -38,8 +38,46 @@ from panel.services import lifecycle as lifecycle_service
 from panel.services import panel_capabilities, renew_activation, renew_finalization
 from panel.services import renew_notifications
 from panel.services.usage_intelligence import record_verified_renewal
+from panel.services.payment_duplicate import (
+    duplicate_check_enabled, last_four, recent_sender_card_matches,
+)
 
 bp = Blueprint('clients', __name__)
+
+
+@bp.route('/api/payments/check-sender-card', methods=['GET'])
+@login_required
+@permission_required('clients.write')
+@limiter.limit('60 per minute')
+def check_sender_card_payment():
+    """Warn about declarations using the same sender suffix and destination."""
+    from panel.routes.bank_cards import _bank_card_accessible_to
+
+    if not duplicate_check_enabled():
+        return jsonify({'success': False, 'error': 'Check disabled'}), 404
+    user = db.session.get(Admin, session['admin_id'])
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 401
+    card_id = request.args.get('card_id', type=int)
+    sender_card = (request.args.get('sender_card') or '').strip()
+    if not card_id or len(sender_card) > 32 or not last_four(sender_card):
+        return jsonify({'success': False, 'error': 'Card and four sender digits required'}), 400
+    card = db.session.get(BankCard, card_id)
+    if not card or not card.is_active or not _bank_card_accessible_to(card, user):
+        return jsonify({'success': False, 'error': 'Card unavailable'}), 404
+    admin_id = None if admin_is_superadmin(user) else user.id
+    matches = recent_sender_card_matches(card_id, sender_card, admin_id=admin_id)
+    return jsonify({
+        'success': True,
+        'matches': [
+            {
+                'user': item['user'],
+                'amount': item['amount'],
+                'created_at': item['created_at'].replace(tzinfo=timezone.utc).isoformat(),
+            }
+            for item in matches
+        ],
+    })
 
 # Sources the renew endpoint may declare for the business event it records. The
 # default is the explicit operator/API renewal; an automation may pass its own.

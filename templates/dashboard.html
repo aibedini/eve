@@ -704,7 +704,7 @@
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div class="form-group" style="margin: 0;">
                         <label style="font-size: 0.75rem;">{{ _('Sender Card') }}</label>
-                        <input type="text" id="renew-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;">
+                        <div class="payment-card-check-field"><input type="text" id="renew-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;"><span id="renew-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
                     </div>
                     <div class="form-group" style="margin: 0;">
                         <label style="font-size: 0.75rem;">{{ _('Destination Card') }}</label>
@@ -716,6 +716,7 @@
                         </select>
                     </div>
                 </div>
+                {% if payment_duplicate_check_enabled %}<div id="renew-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% endif %}
             </div>
         </div>
         <div class="modal-footer">
@@ -830,7 +831,7 @@
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                             <div class="form-group" style="margin: 0;">
                                 <label style="font-size: 0.75rem;">{{ _('Sender Card') }}</label>
-                                <input type="text" id="reset-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;">
+                                <div class="payment-card-check-field"><input type="text" id="reset-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;"><span id="reset-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
                             </div>
                             <div class="form-group" style="margin: 0;">
                                 <label style="font-size: 0.75rem;">{{ _('Destination Card') }}</label>
@@ -842,6 +843,7 @@
                                 </select>
                             </div>
                         </div>
+                        {% if payment_duplicate_check_enabled %}<div id="reset-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% endif %}
                     </div>
 
                     <div class="form-actions">
@@ -1013,7 +1015,7 @@
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div class="form-group" style="margin: 0;">
                         <label style="font-size: 0.75rem;">{{ _('Sender Card') }}</label>
-                        <input type="text" id="add-client-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;">
+                        <div class="payment-card-check-field"><input type="text" id="add-client-sender-card" class="form-input" placeholder="6037xxxx" style="font-size: 0.85rem;"><span id="add-client-card-check-icon" class="payment-card-check-icon hidden" aria-hidden="true">✓</span></div>
                     </div>
                     <div class="form-group" style="margin: 0;">
                         <label style="font-size: 0.75rem;">{{ _('Destination Card') }}</label>
@@ -1025,6 +1027,7 @@
                         </select>
                     </div>
                 </div>
+                {% if payment_duplicate_check_enabled %}<div id="add-client-card-check-results" class="payment-card-check-results hidden" role="status" aria-live="polite"></div>{% endif %}
             </div>
         </div>
         <div class="modal-footer">
@@ -1738,4 +1741,5 @@ window.EVE_DASHBOARD = {
 </script>
 <script src="{{ url_for('static', filename='server-network.js') }}" nonce="{{ csp_nonce }}"></script>
 <script src="{{ url_for('static', filename='dashboard.js') }}" nonce="{{ csp_nonce }}"></script>
+{% if payment_duplicate_check_enabled %}<script src="{{ url_for('static', filename='payment-card-check.js', v=eve_build_sha) }}" nonce="{{ csp_nonce }}" defer></script>{% endif %}
 {% endblock %}

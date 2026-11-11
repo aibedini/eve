@@ -12,6 +12,7 @@ from panel.models import (
 from panel.routes.common import current_admin, login_required, permission_required
 from panel.services import subscription_layout
 from panel.services.billing import calculate_reseller_price, get_config
+from panel.services.payment_duplicate import duplicate_check_enabled
 from panel.services.subscription import (
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_FA,
@@ -56,6 +57,7 @@ def dashboard():
                          base_cost_gb=user_cost_gb,
                          base_cost_day_unlimited=user_cost_day_unlimited,
                          bank_cards=bank_cards,
+                         payment_duplicate_check_enabled=duplicate_check_enabled(),
                          # Partition key of the browser's dashboard boot cache: another
                          # admin, a role change or an upgrade never reuses a snapshot.
                          dashboard_cache_scope='%s:%s:%s' % (user.id, user.role, APP_VERSION),
