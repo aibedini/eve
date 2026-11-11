@@ -80,4 +80,7 @@ FA = {
     '✓ A password is already saved. Type a new one to replace it, or leave empty to keep it.': '✓ یک گذرواژه از قبل ذخیره شده است. برای جایگزینی گذرواژهٔ جدید بنویسید یا برای حفظ آن خالی بگذارید.',
     '✓ A token is already saved. Type a new one to replace it, or leave empty to keep it.': '✓ یک توکن از قبل ذخیره شده است. برای جایگزینی توکن جدید بنویسید یا برای حفظ آن خالی بگذارید.',
 }
+FA.update({
+    'Panel details from last synchronization': 'اطلاعات پنل از آخرین همگام‌سازی',
+})
 register('servers', FA)

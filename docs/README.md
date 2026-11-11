@@ -16,6 +16,8 @@ relative link does not resolve.
 
 ## Start here
 
+- [Live server network rates](SERVER_NETWORK.md) - sampling, aggregation, freshness, and deployment checks.
+
 - [Codebase Memory workflow for all coding agents](AI_CODEBASE_MEMORY.md) - AI_CODEBASE_MEMORY.md
 
 ## Security

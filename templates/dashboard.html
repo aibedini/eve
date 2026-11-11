@@ -52,6 +52,7 @@
             <div class="stat-info">
                 <span class="stat-label">{{ _('Servers') }}</span>
                 <span class="stat-value" id="stat-servers">{{ server_count }}</span>
+                <div class="server-network-total" data-server-network-total></div>
             </div>
         </div>
         <div class="stat-card">
@@ -1735,5 +1736,6 @@ window.EVE_DASHBOARD = {
     APP_TIMEZONE: {{ app_timezone|tojson }}
 };
 </script>
+<script src="{{ url_for('static', filename='server-network.js') }}" nonce="{{ csp_nonce }}"></script>
 <script src="{{ url_for('static', filename='dashboard.js') }}" nonce="{{ csp_nonce }}"></script>
 {% endblock %}

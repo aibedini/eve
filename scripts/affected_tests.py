@@ -36,6 +36,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: path prefix -> (tier-1 modules, tier-2 extra modules). Longest prefix wins, so a more
 #: specific mapping can refine a broad one.
 MAPPING = (
+    ('panel/services/server_network.py', (
+        ['tests.test_server_network'], [],
+    )),
+    ('static/server-network.js', (
+        ['tests.test_server_network'], ['tests.test_ui_design_system'],
+    )),
     ('panel/core/refresh_policy.py', (
         # test_refresh_policy is the OLD policy suite and was missing from the first
         # version of this map: a rewrite of the fetcher loop left one of its tests driving

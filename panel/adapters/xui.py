@@ -7,6 +7,7 @@ imports to avoid a module-level cycle.
 """
 import base64
 import json
+import math
 import re
 import secrets
 import time
@@ -2034,7 +2035,19 @@ def _normalize_server_status_payload(payload: dict) -> dict:
     except Exception:
         online_count = None
 
+    net_io = payload.get('netIO')
+    def rate(key):
+        value = net_io.get(key) if isinstance(net_io, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        try:
+            return value if math.isfinite(value) and value >= 0 else None
+        except OverflowError:
+            return None
+
     return {
+        'network_up_bps': rate('up'),
+        'network_down_bps': rate('down'),
         'xui_version': xui_version,
         'xray_version': xray_version,
         'xray_state': xray_state,

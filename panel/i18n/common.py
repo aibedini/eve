@@ -39,4 +39,14 @@ FA = {
     'Settings saved': 'تنظیمات ذخیره شد',
     'Server error, please try again': 'خطای سرور، دوباره تلاش کنید',
 }
+FA.update({
+    'Upload': 'آپلود', 'Download': 'دانلود', 'Live': 'زنده',
+    'Live servers': 'سرورهای زنده',
+    'Waiting for network data': 'در انتظار اطلاعات شبکه',
+    'Network monitoring paused': 'پایش شبکه متوقف است',
+    'Network rate unavailable in panel API': 'سرعت شبکه در API پنل موجود نیست',
+    'Network data is stale': 'اطلاعات شبکه قدیمی است',
+    'Network connection unavailable': 'ارتباط شبکه در دسترس نیست',
+    'System network traffic, including non-VPN traffic': 'ترافیک شبکهٔ سیستم، شامل ترافیک غیر VPN',
+})
 register('common', FA)

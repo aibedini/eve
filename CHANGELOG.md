@@ -1,5 +1,20 @@
 ﻿# Changelog - Eve
 
+## [2.22.0] - 2026-11-11
+
+### Added
+- Live system upload/download rates in server cards and combined rates in the dashboard's Servers summary, in Mbps/Gbps with reporting coverage.
+- Five-second status-only sampling, shared Redis caching, bounded background requests, and explicit waiting, unavailable, and stale states. Totals include only fresh, accessible, enabled, visible servers.
+
+### Improved
+- Server cards have separate status rows, a dedicated network area, and larger action buttons. Both themes and Persian translations are supported.
+
+### Technical
+- Rates use `netIO.up/down` in bytes per second; cumulative traffic is never interpreted as speed. See `docs/SERVER_NETWORK.md`.
+
+### Testing
+- Network unit/access tests, affected checks, design audit, release guard, and responsive browser checks pass. An existing subscription selector-baseline failure is documented in the release notes and reproduced against the previous `main`.
+
 ## [2.21.0] - 2026-11-02
 
 ### Fixed

@@ -128,6 +128,8 @@
 {% endblock %}
 
 {% block scripts %}
+
+<script src="{{ url_for('static', filename='server-network.js') }}" nonce="{{ csp_nonce }}"></script>
 <script nonce="{{ csp_nonce }}">window.EVE_I18N = {{ i18n_catalog('servers')|tojson }};</script>
 <script nonce="{{ csp_nonce }}">
     const IS_SUPERADMIN = {{ 'true' if is_superadmin else 'false' }};
@@ -248,7 +250,8 @@
             }
 
             const statusMeta = document.createElement('div');
-            statusMeta.className = 'server-meta';
+            statusMeta.className = 'server-meta server-badges';
+            statusMeta.title = _t('Panel details from last synchronization');
 
             const onlineCount = Number.isFinite(parseInt(server?.online_count)) ? parseInt(server.online_count) : null;
             const xuiVersion = server?.xui_version || '';
@@ -342,6 +345,10 @@
             if (statusMeta.childNodes.length > 0) {
                 card.appendChild(statusMeta);
             }
+            const network = document.createElement('div');
+            network.dataset.serverNetworkId = String(server.id);
+            network.dataset.networkDisabled = String(!server.enabled || isHidden);
+            card.appendChild(network);
             card.appendChild(actions);
             return card;
         }
@@ -350,6 +357,7 @@
         servers.forEach((server) => {
             container.appendChild(createServerCard(server));
         });
+        window.EveServerNetwork?.render();
     }
 
     async function openSubscriptionOrderModal(server) {

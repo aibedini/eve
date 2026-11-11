@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request, send_file, session
 from sqlalchemy import func, or_
 from werkzeug.utils import secure_filename
 
-from panel.extensions import db
+from panel.extensions import db, limiter
 from panel.models import (
     Admin, AdminMFASetting, AuditLog, ClientOperation, ClientOwnership,
     PriceTier, PulseRun, RenewalEvent, Server, SystemConfig, Transaction,
@@ -449,6 +449,22 @@ def force_disable_admin_mfa(admin_id):
                meta={'target_id': admin_id})
     db.session.commit()
     return jsonify({'success': True})
+
+
+@bp.route('/api/servers/network', methods=['GET'])
+@limiter.limit('6000 per hour; 100000 per day')
+@login_required
+def get_servers_network():
+    from flask import current_app
+    from app import get_accessible_servers
+    from panel.services.server_network import collect_network
+
+    user = db.session.get(Admin, session['admin_id'])
+    ids = [server.id for server in get_accessible_servers(user) if not server.hidden]
+    db.session.commit()
+    response = jsonify(collect_network(ids, current_app._get_current_object()))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/api/servers', methods=['GET'])

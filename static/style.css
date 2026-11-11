@@ -4487,7 +4487,37 @@ html[data-theme="light"] .server-icon {
 
 .server-title {
     flex: 1;
+    min-width: 0;
 }
+
+/* System network rates, shared by server cards and the dashboard summary. */
+.server-network {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-dark);
+}
+.server-network-metric { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.server-network-label { font-size: 0.7rem; color: var(--text-secondary); }
+.server-network-metric strong { font-size: 1rem; font-variant-numeric: tabular-nums; text-align: start; overflow-wrap: anywhere; }
+.server-network-metric:first-child strong { color: var(--primary); }
+.server-network-metric:nth-child(2) strong { color: var(--success); }
+.server-network-state { grid-column: 1 / -1; color: var(--text-secondary); font-size: 0.65rem; }
+.server-network[data-network-fresh="true"] .server-network-state { color: var(--success); }
+.server-network-total { margin-top: 8px; }
+.server-network-total .server-network { padding: 0; gap: 4px; grid-template-columns: 1fr; border: 0; background: transparent; }
+.server-network-total .server-network-metric { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
+.server-network-total .server-network-label { font-size: 0.65rem; }
+.server-network-total .server-network-metric strong { font-size: 0.8rem; white-space: nowrap; }
+.servers-section .server-header { flex-direction: row; align-items: center; }
+.servers-section .server-meta { gap: 6px; }
+.servers-section .server-meta .badge { white-space: nowrap; }
+.servers-section .server-card { min-width: 0; }
+.servers-section .server-actions { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border-color); gap: 8px; flex-wrap: wrap; }
+.servers-section .server-actions .action-btn { width: 36px; height: 36px; }
 
 .server-title h3 {
     font-size: 1rem;

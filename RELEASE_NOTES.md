@@ -1,3 +1,17 @@
+# Eve - Xui Manager v2.22.0
+
+## [2.22.0] - 2026-11-11
+
+Server cards now show live upload/download speeds in Mbps or Gbps. The dashboard's Servers summary shows combined speed and how many servers report fresh data. Cards also have clearer status rows and larger action buttons.
+
+Visible pages check a small cache every five seconds. Bounded background requests read only the panel's server-status API without reloading users or inbounds. Redis shares samples between viewers and workers. Missing or stale measurements display a dash and are excluded from totals.
+
+Upload means data sent by the VPS; download means data received by it. These are system network rates, including traffic outside the VPN. Configuring the same VPS more than once can count its traffic more than once.
+
+No schema migration or new dependency is required. Updating restarts the panel and may briefly interrupt access. Live measurements against a deployed 3x-ui server still need production verification.
+
+Validation: network tests, affected checks, design audit, release guard, and browser checks passed. The existing subscription CSS selector-baseline test still fails for the same five selectors on the previous `main`; this release does not change those selectors.
+
 # Eve - Xui Manager v2.21.0
 
 ## [2.21.0] - 2026-11-02
