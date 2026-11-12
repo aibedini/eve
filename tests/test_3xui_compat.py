@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
@@ -139,6 +140,28 @@ class XuiCompatibilityTests(unittest.TestCase):
         self.assertTrue(url.endswith('/root/panel/api/clients/alice%40example.com/attach'))
         self.assertEqual(kwargs['json'], {'inboundIds': [7, 9]})
 
+    def test_inbound_fallback_verifies_client_list_after_success_response(self):
+        from panel.adapters.xui import _push_full_inbound
+
+        server = SimpleNamespace(id=4105, host='https://panel.example', panel_type='sanaei')
+        inbound = {'id': 7, 'settings': {'clients': [{'id': 'a', 'email': 'old'}]}}
+        desired = {'clients': [{'id': 'a', 'email': 'new'}]}
+        session = _Session(post_response=_Response(200, {'success': True}))
+        with patch('app.collect_endpoint_templates', return_value=['/panel/api/inbounds/update/:id']), \
+                patch('app.build_panel_url', return_value='https://panel.example/update'), \
+                patch('panel.adapters.xui.fetch_inbounds') as read_back:
+            read_back.return_value = ([inbound], None, 'sanaei')
+            ok, error = _push_full_inbound(server, session, inbound, desired)
+            self.assertFalse(ok)
+            self.assertIn('ignored inbound client-list', error)
+            read_back.assert_called_once_with(
+                session, server.host, server.panel_type, force_fresh=True)
+
+            read_back.return_value = ([{'id': 7, 'settings': desired}], None, 'sanaei')
+            ok, error = _push_full_inbound(server, session, inbound, desired)
+            self.assertTrue(ok)
+            self.assertIsNone(error)
+
     def test_wireguard_fallback_link_contains_generated_contract_fields(self):
         # RFC 7748-style 32-byte private material; the implementation derives
         # the server public key exactly as 3x-ui does when only secretKey exists.
@@ -273,14 +296,19 @@ class VersionNormalizationTests(unittest.TestCase):
 class ProfileSelectionTests(unittest.TestCase):
     """The gating rule: only certified families get non-baseline behaviour."""
 
-    def test_exactly_37_and_38_select_their_profiles(self):
+    def test_audited_families_select_their_profiles(self):
         self.assertIs(select_profile(normalize_version('3.7.0'))[0], PROFILE_XUI_3_7)
         self.assertIs(select_profile(normalize_version('3.7.9'))[0], PROFILE_XUI_3_7)
         self.assertIs(select_profile(normalize_version('3.8.0'))[0], PROFILE_XUI_3_8)
+        for minor in (9, 10, 11):
+            profile, certification, warnings = select_profile(normalize_version(f'3.{minor}.0'))
+            self.assertEqual(profile.name, f'xui_3_{minor}')
+            self.assertEqual(certification, 'supported')
+            self.assertEqual(warnings, [])
         self.assertIs(select_profile(normalize_version('3.8.1'))[0], PROFILE_XUI_3_8)
 
-    def test_future_versions_never_inherit_the_38_profile(self):
-        for raw in ('3.9.0', '3.9.9', '4.0.0', '5.1.0'):
+    def test_future_versions_never_inherit_the_311_profile(self):
+        for raw in ('3.12.0', '3.12.9', '4.0.0', '5.1.0'):
             profile, certification, warnings = select_profile(normalize_version(raw))
             self.assertIs(profile, PROFILE_BASELINE_V3, raw)
             self.assertNotEqual(profile.name, PROFILE_XUI_3_8.name, raw)

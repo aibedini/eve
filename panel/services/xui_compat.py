@@ -9,7 +9,7 @@ Design rules (see specs/001-3xui-37-38-compat):
 
 * A version is normalised to numbers and reduced to a family (major, minor).
   Versions are never compared as strings.
-* Only families on an explicit whitelist select a non-baseline profile. 3.9.x,
+* Only families on an explicit whitelist select a non-baseline profile. 3.12.x,
   4.x and anything newer fall back to the baseline profile and are flagged as
   uncertified - they must not inherit 3.8 semantics that were never verified.
 * A version we cannot parse is unknown, not a guess. Unknown keeps today’s
@@ -21,6 +21,7 @@ Upstream evidence used for this table (cloned tags, not release notes):
 
   v3.7.0 = f727d04f6522bb94a8fb52e8352fdcafb51c11e1
   v3.8.0 = 837addf66e945a80080273b5d2a315dea765d748
+  v3.11.0 = c621ba9014a6aa21fd7c9ecf45655e44e24ebf13
 """
 from __future__ import annotations
 
@@ -126,7 +127,8 @@ class PanelCompatibilityProfile:
 
 
 #: Profile names the doctor surface advertises as certified.
-CERTIFIED_FAMILIES_PROFILE_NAMES = ("baseline_v3", "xui_3_7", "xui_3_8")
+CERTIFIED_FAMILIES_PROFILE_NAMES = (
+    "baseline_v3", "xui_3_7", "xui_3_8", "xui_3_9", "xui_3_10", "xui_3_11")
 
 PROFILE_BASELINE_V3 = PanelCompatibilityProfile(name="baseline_v3", certified=True)
 PROFILE_XUI_3_7 = PanelCompatibilityProfile(
@@ -155,11 +157,20 @@ PROFILE_XUI_3_8 = PanelCompatibilityProfile(
     amneziawg=True,
     tuic=True,
 )
+# Audited against v3.11.0's routes and the v3.9.0–v3.11.0 release notes.
+# Client read/update, bulk-enable and token contracts used by EVE remain
+# registered. Native attach/detach handles v3.9's inbound-update change.
+PROFILE_XUI_3_9 = replace(PROFILE_XUI_3_8, name="xui_3_9")
+PROFILE_XUI_3_10 = replace(PROFILE_XUI_3_8, name="xui_3_10")
+PROFILE_XUI_3_11 = replace(PROFILE_XUI_3_8, name="xui_3_11")
 
 #: Whitelist of certified families. Anything absent resolves to the baseline.
 CERTIFIED_FAMILIES = {
     (3, 7): PROFILE_XUI_3_7,
     (3, 8): PROFILE_XUI_3_8,
+    (3, 9): PROFILE_XUI_3_9,
+    (3, 10): PROFILE_XUI_3_10,
+    (3, 11): PROFILE_XUI_3_11,
 }
 
 #: The oldest family whose behaviour this feature changed. Families below it are

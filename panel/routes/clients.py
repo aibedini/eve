@@ -4363,10 +4363,10 @@ def add_client(server_id, inbound_id):
         }
 
         # ── 3x-ui v3+ : assign one client to one OR MANY inbounds in a single call.
-        # Only taken when the client sent inbound_ids (v3 multi-assign UI); otherwise
-        # the universal single-inbound flow below runs (works on every panel version).
+        # v3.9+ inbound updates no longer mutate clients, including a single
+        # inbound assignment, so always use the first-class client endpoint.
         _req_inbound_ids = data.get('inbound_ids')
-        if server_is_v3(server) and isinstance(_req_inbound_ids, list) and _req_inbound_ids:
+        if server_is_v3(server, session_obj):
             try:
                 assign_ids = sorted({int(x) for x in _req_inbound_ids if x is not None})
             except Exception:

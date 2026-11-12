@@ -680,6 +680,7 @@ def _v3_rename_email_via_inbounds(server, session_obj, old_email, new_email):
     if clean_taken:
         return False  # a different client already owns the space-free email
     renamed_any = False
+    all_renamed = True
     for ib in inbounds:
         settings = _json_field(ib.get('settings'), {})
         clients = settings.get('clients', []) or []
@@ -691,7 +692,8 @@ def _v3_rename_email_via_inbounds(server, session_obj, old_email, new_email):
         settings['clients'] = clients
         ok_push, _perr = _push_full_inbound(server, session_obj, ib, settings)
         renamed_any = renamed_any or ok_push
-    return renamed_any
+        all_renamed = all_renamed and ok_push
+    return renamed_any and all_renamed
 
 
 def _rename_client_email_local(server, old_email, new_email):
@@ -1151,7 +1153,7 @@ def _push_full_inbound(server, session_obj, inbound_obj, settings_dict):
     re-encoded to strings, which is what the update endpoint expects.
     """
     # Deferred import: lives in app.py (module-level import would be circular)
-    from app import collect_endpoint_templates, INBOUND_UPDATE_FALLBACKS, build_panel_url
+    from app import collect_endpoint_templates, INBOUND_UPDATE_FALLBACKS, build_panel_url, _json_field
     try:
         inbound_id = int(inbound_obj.get('id'))
     except (TypeError, ValueError):
@@ -1181,6 +1183,24 @@ def _push_full_inbound(server, session_obj, inbound_obj, settings_dict):
             errors.append(err)
             continue
         if isinstance(j, dict) and j.get('success'):
+            # Since 3x-ui v3.9, inbound update accepts the request but ignores
+            # changes to settings.clients. Verify this legacy fallback before
+            # reporting a membership change or moving local ownership rows.
+            current, verify_error, _ = fetch_inbounds(
+                session_obj, server.host, server.panel_type, force_fresh=True)
+            if verify_error:
+                return False, f'could not verify inbound clients: {verify_error}'
+            matching = next((item for item in current or []
+                             if str(item.get('id')) == str(inbound_id)), None)
+            if matching is None:
+                return False, 'could not verify inbound clients: inbound missing'
+            expected = {(str(c.get('id') or ''), str(c.get('email') or ''))
+                        for c in settings_dict.get('clients', [])}
+            actual_settings = _json_field(matching.get('settings'), {}) or {}
+            actual = {(str(c.get('id') or ''), str(c.get('email') or ''))
+                      for c in actual_settings.get('clients', [])}
+            if actual != expected:
+                return False, 'panel ignored inbound client-list changes; use client attach/detach'
             return True, None
         errors.append((j.get('msg') or j.get('message')) if isinstance(j, dict) else 'update failed')
     return False, ('; '.join(str(e) for e in errors) or 'inbound update failed')

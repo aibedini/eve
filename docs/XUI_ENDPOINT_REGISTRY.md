@@ -1,6 +1,8 @@
 # 3x-ui Endpoint Registry
 
-> Comprehensive reference for all 3x-ui panel API endpoints across versions.
+> Reference for the 3x-ui panel API endpoints used by EVE, plus routes added
+> through v3.11.0. Methods below describe the v3.11.0 contract unless marked
+> legacy.
 > Used by EVE's version-aware routing (`panel/services/panel_capabilities.py`,
 > `panel/services/xui_compat.py`, `panel/adapters/xui.py`).
 
@@ -15,7 +17,10 @@
 | 3.5 | v3.5.0 – v3.6.x | `bulkEnable`/`bulkDisable`/`bulkAdjust` |
 | 3.7 | v3.7.0 – v3.7.x | Scoped/expiring API tokens, `limitHwid` |
 | 3.8 | v3.8.0 – v3.8.x | Bearer 401 rejection, random sub paths, TUIC |
-| 3.9+ | v3.9.0+ | Uncertified — EVE uses baseline + probe |
+| 3.9 | v3.9.0 – v3.9.x | Inbound update no longer mutates clients; native attach/detach required; renewal preview added |
+| 3.10 | v3.10.0 – v3.10.x | MASQUE and XDRIVE; existing panel API routes retained |
+| 3.11 | v3.11.0 – v3.11.x | Per-client host rules, subId lookup, kernel AmneziaWG readiness |
+| 3.12+ | v3.12.0+ | Uncertified — EVE uses baseline + probe |
 
 ## Authentication
 
@@ -54,36 +59,37 @@ in `internal/web/controller/api.go`). Token scope restricts which
 | Method | Path | Since | Notes |
 |--------|------|-------|-------|
 | POST | `/login` | v2.0 | Returns session cookie |
-| POST | `/panel/api/server/status` | v2.0 | CPU, memory, disk, uptime, Xray state |
-| POST | `/panel/api/server/getXrayVersion` | v2.0 | Running Xray core version |
-| POST | `/panel/api/server/installXray` | v2.0 | Install/update Xray core |
-| POST | `/panel/api/server/stopXray` | v2.0 | Stop Xray process |
-| POST | `/panel/api/server/restartXray` | v2.0 | Restart Xray process |
-| POST | `/panel/api/server/getConfig` | v3.0 | Current Xray JSON config |
-| POST | `/panel/api/server/getDb` | v3.0 | Database backup download |
-| POST | `/panel/api/server/importDb` | v3.0 | Database restore (multipart) |
-| POST | `/panel/api/server/getNewX25519Cert` | v3.0 | Generate X25519 key pair |
-| POST | `/panel/api/server/getPanelUpdateInfo` | v3.5 | Latest release info from GitHub |
+| GET | `/panel/api/server/status` | v2.0 | CPU, memory, disk, uptime, Xray state |
+| GET | `/panel/api/server/getXrayVersion` | v2.0 | Running Xray core version |
+| POST | `/panel/api/server/installXray/:version` | v2.0 | Install/update Xray core |
+| POST | `/panel/api/server/stopXrayService` | v2.0 | Stop Xray process |
+| POST | `/panel/api/server/restartXrayService` | v2.0 | Restart Xray process |
+| GET | `/panel/api/server/getConfigJson` | v3.0 | Current Xray JSON config |
+| GET | `/panel/api/server/getDb` | v3.0 | Database backup download |
+| POST | `/panel/api/server/importDB` | v3.0 | Database restore (multipart) |
+| GET | `/panel/api/server/getNewX25519Cert` | v3.0 | Generate X25519 key pair |
+| GET | `/panel/api/server/getPanelUpdateInfo` | v3.5 | Latest release info from GitHub |
 | POST | `/panel/api/server/logs/:count` | v3.0 | Service log lines |
 
-### Inbound management (all versions — legacy API)
+### Inbound management
 
 | Method | Path | Since | Notes |
 |--------|------|-------|-------|
-| POST | `/panel/api/inbounds/list` | v2.0 | All inbounds with embedded clients |
-| POST | `/panel/api/inbounds/get/:id` | v2.0 | Single inbound by ID |
+| GET | `/panel/api/inbounds/list` | v2.0 | All inbounds with embedded clients |
+| GET | `/panel/api/inbounds/get/:id` | v2.0 | Single inbound by ID |
 | POST | `/panel/api/inbounds/add` | v2.0 | Create inbound |
-| POST | `/panel/api/inbounds/update/:id` | v2.0 | Update inbound (entire settings blob) |
+| POST | `/panel/api/inbounds/update/:id` | v2.0 | Update inbound; v3.9+ ignores client-list edits |
 | POST | `/panel/api/inbounds/del/:id` | v2.0 | Delete inbound |
-| POST | `/panel/api/inbounds/onlines` | v3.0 | Online client list (EVE capability probe) |
+| POST | `/panel/api/inbounds/onlines` | legacy | Online client list on older panels |
 | POST | `/panel/api/inbounds/resetAllTraffics` | v2.0 | Zero all traffic counters |
-| POST | `/panel/api/inbounds/resetAllClientTraffics/:id` | v3.0 | Zero traffic for all clients in inbound |
-| POST | `/panel/api/inbounds/delDepletedClients/:id` | v3.0 | Remove over-quota clients from inbound |
-| POST | `/panel/api/inbounds/addClient` | v2.0 | Add client to inbound (legacy) |
-| POST | `/panel/api/inbounds/updateClient/:uuid` | v2.0 | Update client within inbound (legacy) |
-| POST | `/panel/api/inbounds/:id/resetClientTraffic/:email` | v2.0 | Reset one client's traffic (legacy) |
-| POST | `/panel/api/inbounds/:id/delClient/:uuid` | v2.0 | Delete client from inbound (legacy) |
-| GET | `/panel/api/inbounds/createbackup` | v3.0 | Trigger backup creation |
+| POST | `/panel/api/inbounds/resetAllClientTraffics/:id` | legacy | Zero traffic for all clients in inbound |
+| POST | `/panel/api/inbounds/delDepletedClients/:id` | legacy | Remove over-quota clients from inbound |
+| POST | `/panel/api/inbounds/addClient` | legacy | Add client to inbound |
+| POST | `/panel/api/inbounds/updateClient/:uuid` | legacy | Update client within inbound |
+| POST | `/panel/api/inbounds/:id/resetClientTraffic/:email` | legacy | Reset one client's traffic |
+| POST | `/panel/api/inbounds/:id/delClient/:uuid` | legacy | Delete client from inbound |
+| GET | `/panel/api/inbounds/createbackup` | legacy | Trigger backup creation |
+| POST | `/panel/api/inbounds/setEnable/:id` | ≤v3.8 | Change inbound enable state |
 
 ### Client management (v3.1+ — first-class API)
 
@@ -93,19 +99,42 @@ in `internal/web/controller/api.go`). Token scope restricts which
 
 | Method | Path | Since | Notes |
 |--------|------|-------|-------|
-| POST | `/panel/api/clients/get/:email` | v3.1 | Single client by email |
+| GET | `/panel/api/clients/get/:email` | v3.1 | Single client by email |
 | POST | `/panel/api/clients/add` | v3.1 | Add client (body: `{id, inboundIds, ...}`) |
 | POST | `/panel/api/clients/update/:email` | v3.1 | Update client fields |
 | POST | `/panel/api/clients/del/:email` | v3.1 | Delete client |
 | POST | `/panel/api/clients/resetTraffic/:email` | v3.1 | Zero client traffic counters |
-| POST | `/panel/api/clients/traffic/:email` | v3.1 | Client traffic stats |
+| GET | `/panel/api/clients/traffic/:email` | v3.1 | Client traffic stats |
 | POST | `/panel/api/clients/onlines` | v3.3 | Online client list (alternative to inbounds/onlines) |
-| GET | `/panel/api/clients/onlines` | v3.3 | Same, GET variant |
 | POST | `/panel/api/clients/:email/attach` | v3.5 | Attach client to additional inbound(s) |
 | POST | `/panel/api/clients/:email/detach` | v3.5 | Detach client from inbound(s) |
 | POST | `/panel/api/clients/bulkEnable` | v3.5 | Enable multiple clients at once |
 | POST | `/panel/api/clients/bulkDisable` | v3.5 | Disable multiple clients at once |
 | POST | `/panel/api/clients/bulkAdjust` | v3.5 | Adjust traffic/expiry for multiple clients |
+
+### Additional routes through v3.11.0
+
+These are the routes added after the v3.8.0 baseline in the tagged upstream
+controllers. No existing registered controller route was removed. EVE's client
+management uses the existing `/clients/get/:email`, `/clients/update/:email`,
+`/clients/:email/attach` and `/clients/:email/detach` contracts; these extra
+routes serve panel functions that EVE does not currently operate.
+
+| Method | Path | Since | Purpose |
+|--------|------|-------|---------|
+| POST | `/panel/api/clients/renewalPreview` | v3.9 | Preview upstream renewal schedule |
+| GET | `/panel/api/clients/get/subId/:subId` | v3.11 | Find clients by subscription ID |
+| GET | `/panel/api/hosts/raw` | v3.11 | List host rules with numeric IDs |
+| GET | `/panel/api/inbounds/amneziawgKernelReadiness` | v3.11 | Check kernel datapath readiness |
+| POST | `/panel/api/setting/tgBotCapabilities` | v3.11 | Report Telegram bot capabilities |
+| GET | `/sponsors` | v3.9 | Public sponsor listing |
+| GET | `/sponsors/logo/:name` | v3.9 | Public sponsor image |
+
+The v3.9 release changed `/panel/api/inbounds/update/:id`: it no longer edits
+an inbound's client membership or client fields. EVE uses the first-class
+client add endpoint even for a single inbound and native attach/detach
+and verifies the returned client list if an older-panel fallback runs. A
+successful HTTP response alone is not evidence that membership changed.
 
 ### Subscription (all versions)
 
@@ -170,7 +199,7 @@ EVE maps each detected panel version to a `RenewStrategy` (see
 
 ### Evidence discipline
 
-The `KNOWN_BEHAVIOUR_CEILING` in `panel_capabilities.py` is `(3, 8)`.
+The `KNOWN_BEHAVIOUR_CEILING` in `panel_capabilities.py` is `(3, 11)`.
 Versions above this ceiling **never inherit** the newest certified profile.
 They start with baseline capabilities and only gain features that the runtime
 probe proves exist. This prevents silent breakage when a new 3x-ui version
@@ -178,8 +207,8 @@ changes or removes an endpoint.
 
 ### Certified families
 
-Only `(3, 7)` and `(3, 8)` carry explicit profiles in `xui_compat.py`
-(`PROFILE_XUI_3_7`, `PROFILE_XUI_3_8`). Families `(3, 1)` through `(3, 6)`
+Families `(3, 7)` through `(3, 11)` carry explicit profiles in `xui_compat.py`.
+Families `(3, 1)` through `(3, 6)`
 use the baseline profile, which is proven-correct legacy behaviour.
 
 ## Adding support for a new version

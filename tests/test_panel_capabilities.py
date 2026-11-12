@@ -108,9 +108,16 @@ class VersionMatrixTests(unittest.TestCase):
             caps_mod.select_renew_strategy(self._caps('3.8.5', route_proven=True)),
             caps_mod.RenewStrategy.V3_CURRENT)
 
+    def test_3_9_through_3_11_use_current_renewal_contract(self):
+        for version in ('3.9.0', '3.10.0', '3.11.0'):
+            caps = self._caps(version, route_proven=True)
+            self.assertEqual(caps_mod.select_renew_strategy(caps),
+                             caps_mod.RenewStrategy.V3_CURRENT)
+            self.assertTrue(caps.bulk_enable)
+
     def test_a_future_version_inherits_nothing(self):
-        # 3.9/4.x must not silently inherit 3.8: only proven primitives are offered.
-        caps = self._caps('3.9.0', route_proven=True)
+        # 3.12/4.x must not silently inherit 3.11: only proven primitives are offered.
+        caps = self._caps('3.12.0', route_proven=True)
         self.assertEqual(caps_mod.select_renew_strategy(caps),
                          caps_mod.RenewStrategy.UNKNOWN_FUTURE)
         self.assertFalse(caps.bulk_enable)

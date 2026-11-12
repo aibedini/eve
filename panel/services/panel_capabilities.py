@@ -73,7 +73,7 @@ SCOPED_TOKENS_FAMILY = (3, 7)
 #: inherits NOTHING from it: only the primitives the route probe actually proved are
 #: offered, because "3.9 looks like 3.8" is a guess and this module exists to stop
 #: guesses from reaching a customer's renewal.
-KNOWN_BEHAVIOUR_CEILING = (3, 8)
+KNOWN_BEHAVIOUR_CEILING = (3, 11)
 
 
 class RenewStrategy(str, Enum):
@@ -212,8 +212,8 @@ def capabilities_from_version(version, *, profile=None, client_route_proven=None
         # Newer than anything audited: the proven primitives are the whole
         # first-class family's core (read, update, traffic, reset) because the route
         # probe answered on this panel; every later refinement stays OFF until it is
-        # separately proven. This is what keeps a 3.9/4.x panel from silently
-        # receiving 3.8 assumptions.
+        # separately proven. This keeps a 3.12/4.x panel from silently
+        # receiving 3.11 assumptions.
         evidence['ceiling'] = ('version above the audited ceiling %s: only proven '
                                'primitives' % (KNOWN_BEHAVIOUR_CEILING,))
         return PanelClientCapabilities(
