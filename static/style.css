@@ -3532,6 +3532,130 @@ select optgroup {
 .sub-manager-action-heading > * {
     min-width: 0;
 }
+#edit-app-modal.modal-overlay { padding: clamp(8px, 2vw, 24px); }
+#edit-app-modal .sub-app-editor-modal {
+    width: min(100%, 860px);
+    max-width: 860px;
+    max-height: calc(100dvh - 48px);
+}
+#edit-app-modal .modal-body { padding: clamp(16px, 2vw, 24px); }
+#edit-app-modal .modal-close,
+#edit-app-modal .btn-browse,
+#edit-app-modal .sub-app-editor-footer .btn { min-height: 44px; }
+#edit-app-modal .modal-close { min-width: 44px; }
+#edit-app-modal :is(.form-input, .form-select) { min-height: 44px; }
+#edit-app-modal .sub-app-editor-basics {
+    display: grid;
+    grid-template-columns: minmax(130px, 170px) minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: end;
+}
+#edit-app-modal .sub-app-editor-basics .form-group { margin: 0; }
+#edit-app-modal .sub-app-editor-basics label:not(.checkbox-label) {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+#edit-app-modal .sub-app-editor-visibility,
+#edit-app-modal .sub-app-editor-recommended {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+#edit-app-modal .sub-app-editor-visibility { white-space: nowrap; }
+#edit-app-modal .sub-app-editor-recommended { margin-top: 18px; }
+#edit-app-modal .sub-app-editor-content {
+    margin-block: 22px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+}
+#edit-app-modal .sub-app-language-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 6px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--border-color);
+    scrollbar-width: thin;
+}
+#edit-app-modal .sub-app-language-tab {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 8px 16px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+#edit-app-modal .sub-app-language-tab[aria-selected="true"] {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-card));
+    border-color: color-mix(in srgb, var(--primary) 35%, var(--border-color));
+}
+#edit-app-modal .sub-app-language-panel { padding: 18px; }
+#edit-app-modal .sub-app-language-panel.hidden { display: none; }
+#edit-app-modal .sub-app-language-panel .form-group { margin: 0; }
+#edit-app-modal .sub-app-language-panel .form-group + .form-group { margin-top: 16px; }
+#edit-app-modal .sub-app-language-panel label { display: block; margin-bottom: 6px; }
+#edit-app-modal .sub-app-language-panel textarea {
+    width: 100%;
+    min-height: 170px;
+    resize: vertical;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+#edit-app-modal .sub-app-editor-action-heading { flex-wrap: wrap; align-items: center; }
+#edit-app-modal .sub-app-editor-action-heading h4 { margin: 0 0 4px; color: var(--text-primary); }
+#edit-app-modal .sub-app-editor-action-heading small { display: block; line-height: 1.5; }
+#edit-app-modal .app-action-row {
+    grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+    gap: 12px;
+    align-items: end;
+    background: var(--bg-dark);
+}
+#edit-app-modal .app-action-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#edit-app-modal .app-action-field > span,
+#edit-app-modal .app-action-field > label { color: var(--text-secondary); font-size: .78rem; font-weight: 600; }
+#edit-app-modal .app-action-field .form-input,
+#edit-app-modal .app-action-field .form-select { width: 100%; min-width: 0; }
+#edit-app-modal .app-action-controls { grid-column: 1 / -1; justify-content: flex-end; }
+#edit-app-modal .app-action-control { width: 44px; height: 44px; }
+#edit-app-modal .sub-app-editor-footer { justify-content: flex-end; gap: 10px; }
+#edit-app-modal :is(button, input, select, textarea):focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+@media (max-width: 700px) {
+    #edit-app-modal .sub-app-editor-modal { max-height: calc(100dvh - 16px); }
+    #edit-app-modal .sub-app-editor-basics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #edit-app-modal .sub-app-editor-visibility { grid-column: 1 / -1; white-space: normal; }
+    #edit-app-modal .app-action-row { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+    #edit-app-modal .sub-app-editor-basics { grid-template-columns: minmax(0, 1fr); }
+    #edit-app-modal .sub-app-editor-visibility { grid-column: auto; }
+    #edit-app-modal .sub-app-language-tab {
+        flex: 1 0 110px;
+        padding-inline: 6px;
+        white-space: normal;
+        text-align: center;
+        line-height: 1.25;
+    }
+    #edit-app-modal .sub-app-language-panel { padding: 14px; }
+    #edit-app-modal .sub-app-editor-action-heading .btn { width: 100%; }
+    #edit-app-modal .sub-app-editor-footer > .btn { flex: 1 1 0; }
+}
 #file-manager-modal .modal { max-width: 860px; }
 #announcement-modal .modal { max-width: 720px; }
 #announcement-failures-modal .modal { max-width: 920px; }

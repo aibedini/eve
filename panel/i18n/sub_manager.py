@@ -58,6 +58,8 @@ FA = {
     'Browse Video': 'مرور ویدئو',
     'Browse uploaded files': 'مرور فایل\u200cهای آپلودشده',
     'Button color': 'رنگ دکمه',
+    'Button icon': 'آیکون دکمه',
+    'Button URL': 'نشانی دکمه',
     'Button grid': 'چیدمان دکمه\u200cها',
     'Button label': 'برچسب دکمه',
     'Button title': 'عنوان دکمه',
