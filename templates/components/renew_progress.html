@@ -23,12 +23,12 @@
         </div>
         <footer class="renew-progress-footer">
             <p class="field-note" id="renew-operation-background-note" data-renew-label="backgroundNote">You can close this window. Progress continues in recent operations.</p>
-            <div class="renew-progress-actions">
+            <div class="renew-progress-actions" id="renew-operation-actions">
+                <button type="button" class="btn btn-secondary" id="renew-operation-copy-button" data-renew-action="copy" data-renew-label="copy" disabled>Copy info</button>
+                <button type="button" class="btn btn-secondary" id="renew-operation-send" data-renew-action="send" data-renew-label="send" disabled>Send to client</button>
                 <button type="button" class="btn btn-outline" id="renew-operation-recheck" data-renew-action="recheck" data-renew-label="recheck">Re-check status</button>
-                <button type="button" class="btn btn-outline hidden" id="renew-operation-repair" data-renew-action="repair" data-renew-label="repair">Retry activation</button>
-                <button type="button" class="btn btn-secondary hidden" id="renew-operation-copy-button" data-renew-action="copy" data-renew-label="copy">Copy info</button>
-                <button type="button" class="btn btn-secondary hidden" id="renew-operation-send" data-renew-action="send" data-renew-label="send">Send to client</button>
                 <button type="button" class="btn btn-primary" id="renew-operation-done" data-renew-action="close" data-renew-label="background">Continue in background</button>
+                <button type="button" class="btn btn-outline hidden" id="renew-operation-repair" data-renew-action="repair" data-renew-label="repair">Retry activation</button>
             </div>
         </footer>
     </section>

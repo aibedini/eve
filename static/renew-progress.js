@@ -12,6 +12,9 @@
         repair: ['Retry activation', 'تلاش مجدد فعال‌سازی'],
         background: ['Continue in background', 'ادامه در پس‌زمینه'], done: ['Done', 'تمام'],
         copy: ['Copy info', 'کپی اطلاعات'], send: ['Send to client', 'ارسال به مشتری'],
+        actionsPending: ['Available after the renewal is verified.', 'پس از تأیید تمدید در دسترس قرار می‌گیرد.'],
+        actionsMissing: ['Account information is not ready. Re-check status.', 'اطلاعات حساب هنوز آماده نیست؛ وضعیت را دوباره بررسی کنید.'],
+        sendFromDashboard: ['Open the dashboard to send to the client.', 'برای ارسال به مشتری، داشبورد را باز کنید.'],
         backgroundNote: ['You can close this window. Follow progress in recent operations.', 'می‌توانید این پنجره را ببندید؛ ادامهٔ کار در عملیات اخیر قابل پیگیری است.'],
         historyNote: ['History remains available after closing a dialog or refreshing the page.', 'پس از بستن پنجره یا بارگذاری دوبارهٔ صفحه، سابقهٔ عملیات در دسترس است.'],
         historyLimit: ['Latest 50 renewals · Your operations', '۵۰ تمدید اخیر · عملیات شما'],
@@ -167,10 +170,25 @@
         text('renew-operation-sms-description', t(smsKey + 'Note'));
         toggle('renew-operation-retry-sms', Boolean(sms.retryable));
         byId('renew-operation-retry-sms').disabled = busy.has(selected);
-        const canCopy = operation.confirmed && Boolean(operation.copy_text);
+        const canCopy = operation.confirmed && Boolean(String(operation.copy_text || '').trim());
         toggle('renew-operation-copy-details', canCopy);
-        toggle('renew-operation-copy-button', canCopy);
-        toggle('renew-operation-send', canCopy && typeof window.sendRenewToUser === 'function');
+        const copyButton = byId('renew-operation-copy-button');
+        const sendButton = byId('renew-operation-send');
+        copyButton.disabled = !canCopy;
+        sendButton.disabled = !canCopy || typeof window.sendRenewToUser !== 'function';
+        copyButton.title = canCopy ? '' : t(operation.confirmed ? 'actionsMissing' : 'actionsPending');
+        sendButton.title = !canCopy ? copyButton.title : sendButton.disabled ? t('sendFromDashboard') : '';
+        const complete = operation.confirmed || operation.state === 'failed';
+        const actions = byId('renew-operation-actions');
+        const phase = complete ? 'complete' : 'pending';
+        if (actions.dataset.phase !== phase) {
+            const focused = document.activeElement;
+            const order = complete ? ['done', 'send', 'copy-button', 'recheck']
+                : ['copy-button', 'send', 'recheck', 'done'];
+            actions.append(...order.map(key => byId('renew-operation-' + key)), byId('renew-operation-repair'));
+            actions.dataset.phase = phase;
+            if (focused && actions.contains(focused)) focused.focus({preventScroll:true});
+        }
         text('renew-operation-copy', canCopy ? operation.copy_text : '');
         text('renew-operation-done', t(operation.confirmed || operation.state === 'failed' ? 'done' : 'background'));
         text('renew-operation-background-note', t(operation.confirmed || operation.state === 'failed' ? 'historyNote' : 'backgroundNote'));
@@ -243,7 +261,13 @@
     function merge(operation) {
         if (!operation || !operation.operation_id) return;
         const previous = operations.get(operation.operation_id) || {};
-        operations.set(operation.operation_id, Object.assign({}, previous, {networkError:null,localFailure:false}, operation));
+        const next = Object.assign({}, previous, {networkError:null,localFailure:false}, operation);
+        // Notification-only updates must not discard verified text for this same renewal.
+        if (next.confirmed && previous.confirmed && !next.copy_text && previous.copy_text) {
+            next.copy_text = previous.copy_text;
+            next.tpl_vars = next.tpl_vars || previous.tpl_vars;
+        }
+        operations.set(operation.operation_id, next);
     }
 
     async function request(url, options) {
@@ -266,15 +290,23 @@
             operations.forEach((op, id) => { if (!ids.has(id) && !submitting.has(id) && id !== selected) operations.delete(id); });
             data.operations.forEach(merge);
             const current = operations.get(selected);
-            if (selected && !submitting.has(selected) && !current?.localFailure
-                && (!ids.has(selected) || current?.detailUpdatedAt !== current?.updated_at)) {
+            if (selected && !current?.localFailure
+                && (ids.has(selected) ? current?.detailUpdatedAt !== current?.updated_at : !submitting.has(selected))) {
                 const detailId = selected;
                 // A direct read still finds older operations outside the latest-50 window.
                 try {
                     const detail = (await request('/api/client-operations/renewals/' + encodeURIComponent(detailId))).operation;
                     merge(Object.assign({}, detail, {detailUpdatedAt:detail.updated_at}));
                 }
-                catch (error) { const op = operations.get(detailId); if (op) { op.copy_text = null; op.networkError = error.message; } }
+                catch (error) {
+                    const op = operations.get(detailId);
+                    if (op) {
+                        if ([401, 403, 404].includes(error.status)) {
+                            op.confirmed = false; op.copy_text = null; op.tpl_vars = null;
+                        }
+                        op.networkError = error.message;
+                    }
+                }
             }
             render(); renderHistory();
         } catch (error) {
@@ -323,7 +355,14 @@
         const previous = operations.get(id) || {};
         // A late original response must not undo newer, confirmed ledger evidence.
         const confirmed = data.final_state === 'APPLIED_ACTIVE' && data.business_finalized === true;
-        if (previous.confirmed && !confirmed) { schedule(0); return; }
+        if (previous.confirmed && !confirmed) {
+            // The reconciler can confirm before the original response brings its text.
+            if (data.business_finalized === true && String(data.copy_text || '').trim()) {
+                merge({operation_id:id,copy_text:data.copy_text,tpl_vars:data.tpl_vars || previous.tpl_vars});
+                render(); renderHistory();
+            }
+            schedule(0); return;
+        }
         merge({ operation_id:id, server_id:ctx.serverId || previous.server_id,
             inbound_id:ctx.inboundId || previous.inbound_id, email:ctx.email || previous.email,
             state:data.localFailure ? 'failed' : confirmed ? 'completed' : data.code === 'renew_in_progress' ? previous.state || 'submitting' : 'panel_applied',

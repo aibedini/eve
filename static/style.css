@@ -73,8 +73,10 @@
 .renew-progress-history-link:hover { text-decoration: underline; }
 .renew-progress-footer { flex-shrink: 0; border-block-start: 1px solid var(--border-color); padding: 16px 20px; background: var(--bg-card); }
 .renew-progress-footer .field-note { margin-block: 0 12px; }
-.renew-progress-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.renew-progress-actions .btn { flex: 1 1 auto; min-height: 44px; min-width: 0; justify-content: center; white-space: normal; }
+.renew-progress-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.renew-progress-actions .btn { min-height: 44px; min-width: 0; justify-content: center; white-space: normal; }
+.renew-progress-actions .btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+#renew-operation-repair { grid-column: 1 / -1; }
 .renew-activity-trigger { position: relative; gap: 6px; min-height: 44px; min-width: 44px; }
 .renew-activity-trigger svg { flex-shrink: 0; }
 .renew-activity-trigger .badge { padding: 2px 6px; color: var(--primary); background: color-mix(in srgb, var(--primary) 16%, transparent); }
@@ -106,8 +108,6 @@
     .renew-progress-dialog .renew-progress-body { padding: 16px !important; flex: 1; }
     .renew-progress-footer { padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
     .renew-progress-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    #renew-operation-recheck, #renew-operation-done { grid-column: 1 / -1; }
-    #renew-operation-done { grid-row: 1; }
     .renew-activity-trigger { padding-inline: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -440,6 +440,110 @@ class RenewLanguageTests(unittest.TestCase):
         self.assertIn('data-renew-lang="{{ panel_lang }}"', _read(component))
 
 
+class RenewProgressActionsTests(unittest.TestCase):
+    """All four actions stay present; readiness affects enablement, not layout."""
+
+    @classmethod
+    def setUpClass(cls):
+        template = _Template(_read(os.path.join(REPO_ROOT, 'static', 'renew-progress.js')))
+        cls.code = r"""
+            const nodes = new Map();
+            function element(id) {
+                return {id, children:[], dataset:{}, textContent:'', hidden:false,
+                    replaceChildren(){this.children=[];},
+                    append(...items){for(const item of items){this.children=this.children.filter(x=>x!==item);this.children.push(item);}},
+                    appendChild(item){this.append(item);return item;},
+                    setAttribute(){}, contains(item){return this.children.includes(item);},
+                    focus(){document.activeElement=this;}};
+            }
+            const byId = id => {if(!nodes.has(id))nodes.set(id,element(id));return nodes.get(id);};
+            const document = {activeElement:null,createElement:()=>element('')};
+            const window = {sendRenewToUser(){}};
+            const operations = new Map(), busy = new Set();
+            let selected='one';
+            const fa=false;
+            const t=key=>key;
+            const text=(id,value)=>{byId(id).textContent=value;};
+            const toggle=(id,show)=>{byId(id).hidden=!show;};
+            const mark=()=>{};
+            const view=op=>({title:'Renew',body:'State',tone:'primary',phase:op.confirmed?3:0});
+            const renderHistory=()=>{};
+            const schedule=()=>{};
+            const base={operation_id:'one',email:'client@example.com',state:'prepared',
+                confirmed:false,sms:{status:'waiting'}};
+            const actions=()=>byId('renew-operation-actions').children
+                .filter(el=>el.id!=='renew-operation-repair').map(el=>el.id.replace('renew-operation-',''));
+            const buttons=()=>['copy-button','send','recheck','done'].map(key=>({
+                id:key,hidden:byId('renew-operation-'+key).hidden,
+                disabled:Boolean(byId('renew-operation-'+key).disabled)}));
+        """ + template.function('merge') + '\n' + template.function('render') + '\n' + template.function('accept')
+
+    def evaluate(self, expression):
+        return _run_node(self.code, '(()=>{' + expression + '})()')
+
+    def test_pending_actions_are_visible_before_and_during_the_server_update(self):
+        for state in ('submitting', 'prepared', 'panel_applied'):
+            result = self.evaluate("merge({...base,state:%s});render();return {order:actions(),buttons:buttons()};" % json.dumps(state))
+            self.assertEqual(result['order'], ['copy-button', 'send', 'recheck', 'done'])
+            self.assertFalse(any(button['hidden'] for button in result['buttons']))
+            self.assertTrue(result['buttons'][0]['disabled'])
+            self.assertTrue(result['buttons'][1]['disabled'])
+            self.assertFalse(result['buttons'][2]['disabled'])
+
+    def test_completion_reorders_both_keyboard_and_visual_order(self):
+        result = self.evaluate("""
+            merge(base);render();document.activeElement=byId('renew-operation-recheck');
+            merge({...base,state:'completed',confirmed:true,copy_text:'Verified account information'});
+            render();return {order:actions(),buttons:buttons(),focused:document.activeElement.id};
+        """)
+        self.assertEqual(result['order'], ['done', 'send', 'copy-button', 'recheck'])
+        self.assertFalse(any(button['hidden'] or button['disabled'] for button in result['buttons']))
+        self.assertEqual(result['focused'], 'renew-operation-recheck')
+
+    def test_sms_updates_cannot_discard_previously_verified_copy_information(self):
+        result = self.evaluate("""
+            merge({...base,state:'completed',confirmed:true,copy_text:'Verified account information',tpl_vars:{days:'30'}});
+            render();
+            merge({operation_id:'one',confirmed:true,copy_text:null,tpl_vars:null,sms:{status:'accepted'}});
+            render();return {text:operations.get('one').copy_text,vars:operations.get('one').tpl_vars,buttons:buttons()};
+        """)
+        self.assertEqual(result['text'], 'Verified account information')
+        self.assertEqual(result['vars'], {'days': '30'})
+        self.assertFalse(any(button['hidden'] or button['disabled'] for button in result['buttons']))
+
+    def test_unconfirmed_state_disables_but_never_hides_customer_actions(self):
+        result = self.evaluate("""
+            merge({...base,confirmed:true,copy_text:'Old verified text'});render();
+            merge({operation_id:'one',confirmed:false,state:'needs_reconciliation'});render();
+            return {buttons:buttons(),copy:byId('renew-operation-copy').textContent};
+        """)
+        self.assertFalse(any(button['hidden'] for button in result['buttons']))
+        self.assertTrue(result['buttons'][0]['disabled'])
+        self.assertTrue(result['buttons'][1]['disabled'])
+        self.assertEqual(result['copy'], '')
+
+    def test_late_original_response_supplies_text_without_downgrading_confirmed_state(self):
+        result = self.evaluate("""
+            merge({...base,state:'completed',final_state:'APPLIED_ACTIVE',confirmed:true});render();
+            accept({operation_id:'one',final_state:'CONFIG_APPLIED_ACTIVATION_PENDING',
+                business_finalized:true,copy_text:'Final customer text',tpl_vars:{days:'30'}}, {});
+            return {operation:operations.get('one'),buttons:buttons()};
+        """)
+        self.assertTrue(result['operation']['confirmed'])
+        self.assertEqual(result['operation']['final_state'], 'APPLIED_ACTIVE')
+        self.assertEqual(result['operation']['copy_text'], 'Final customer text')
+        self.assertFalse(any(button['hidden'] or button['disabled'] for button in result['buttons']))
+
+    def test_template_has_all_four_actions_before_javascript_runs(self):
+        template = _read(os.path.join(REPO_ROOT, 'templates', 'components', 'renew_progress.html'))
+        positions = []
+        for name in ('copy-button', 'send', 'recheck', 'done'):
+            tag = re.search(r'<button\b[^>]*id="renew-operation-%s"[^>]*>' % name, template).group(0)
+            self.assertNotIn('hidden', tag)
+            positions.append(template.index(tag))
+        self.assertEqual(positions, sorted(positions))
+
+
 class RenewToneTests(unittest.TestCase):
     """(e) Colour is a property of the state: pending is amber, failures are red."""
 
