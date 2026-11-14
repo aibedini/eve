@@ -38,7 +38,7 @@ from panel.services.client_operations import (
 logger = logging.getLogger(__name__)
 
 #: How often the reconciler looks for pending operations.
-INTERVAL_SECONDS = 30
+INTERVAL_SECONDS = 5
 #: An operation older than this is not retried: the account has almost certainly been
 #: renewed again since, and a repair on a stale intent is worse than none.
 MAX_AGE_HOURS = 48
@@ -46,7 +46,7 @@ MAX_AGE_HOURS = 48
 BATCH = 10
 #: Milliseconds of "settling" before the first reconciliation attempt, so the inline
 #: attempts inside the request get their chance first.
-MIN_AGE_SECONDS = 10
+MIN_AGE_SECONDS = 2
 
 
 def pending_operations(*, limit: int = BATCH, now=None) -> list:

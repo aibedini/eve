@@ -1,0 +1,54 @@
+<div class="modal-overlay hidden renew-progress-overlay" id="renew-operation-modal" data-renew-lang="{{ panel_lang }}">
+    <section class="modal renew-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="renew-operation-heading" tabindex="-1">
+        <header class="modal-header">
+            <h2 id="renew-operation-heading" data-renew-label="renew">Renew client</h2>
+            <button type="button" class="modal-close" data-renew-action="close" aria-label="{{ 'بستن' if panel_lang == 'fa' else 'Close' }}">&times;</button>
+        </header>
+        <div class="modal-body renew-progress-body">
+            <div class="renew-progress-account"><strong id="renew-operation-account" dir="ltr"></strong><span id="renew-operation-summary"></span></div>
+            <div class="renew-progress-heading" role="status" aria-live="polite" aria-atomic="true">
+                <span id="renew-operation-mark" class="renew-progress-mark" aria-hidden="true"></span>
+                <div><h3 id="renew-operation-title"></h3><p id="renew-operation-description"></p></div>
+            </div>
+            <ol class="renew-progress-steps" id="renew-operation-steps" aria-label="{{ 'مراحل تمدید' if panel_lang == 'fa' else 'Renewal progress' }}"></ol>
+            <div class="renew-progress-notification" role="status" aria-live="polite" aria-atomic="true">
+                <div><strong data-renew-label="notification">Client notification</strong><span id="renew-operation-sms" class="badge"></span></div>
+                <p id="renew-operation-sms-description" class="field-note"></p>
+                <button type="button" id="renew-operation-retry-sms" class="btn btn-outline hidden" data-renew-action="retry" data-renew-label="retrySms">Retry SMS</button>
+            </div>
+            <p id="renew-operation-network" class="field-note field-note-warn hidden" role="status"></p>
+            <details class="renew-progress-details"><summary data-renew-label="details">Technical details</summary><pre id="renew-operation-diagnostic"></pre></details>
+            <details id="renew-operation-copy-details" class="renew-progress-details hidden"><summary data-renew-label="accountInfo">Account information</summary><pre id="renew-operation-copy"></pre></details>
+            <button type="button" class="renew-progress-history-link" data-renew-action="history" data-renew-label="viewHistory">View in recent operations</button>
+        </div>
+        <footer class="renew-progress-footer">
+            <p class="field-note" id="renew-operation-background-note" data-renew-label="backgroundNote">You can close this window. Progress continues in recent operations.</p>
+            <div class="renew-progress-actions">
+                <button type="button" class="btn btn-outline" id="renew-operation-recheck" data-renew-action="recheck" data-renew-label="recheck">Re-check status</button>
+                <button type="button" class="btn btn-outline hidden" id="renew-operation-repair" data-renew-action="repair" data-renew-label="repair">Retry activation</button>
+                <button type="button" class="btn btn-secondary hidden" id="renew-operation-copy-button" data-renew-action="copy" data-renew-label="copy">Copy info</button>
+                <button type="button" class="btn btn-secondary hidden" id="renew-operation-send" data-renew-action="send" data-renew-label="send">Send to client</button>
+                <button type="button" class="btn btn-primary" id="renew-operation-done" data-renew-action="close" data-renew-label="background">Continue in background</button>
+            </div>
+        </footer>
+    </section>
+</div>
+<div class="modal-overlay hidden renew-progress-overlay" id="renew-activity-modal">
+    <section class="modal renew-progress-dialog renew-activity-dialog" role="dialog" aria-modal="true" aria-labelledby="renew-activity-heading" tabindex="-1">
+        <header class="modal-header"><h2 id="renew-activity-heading" data-renew-label="history">Recent operations</h2><button type="button" class="modal-close" data-renew-action="close" aria-label="{{ 'بستن' if panel_lang == 'fa' else 'Close' }}">&times;</button></header>
+        <div class="modal-body renew-progress-body">
+            <p class="field-note" data-renew-label="historyNote">Renewal history stays available after closing a dialog or refreshing the page.</p>
+            <div class="renew-activity-filters" role="group" aria-label="{{ 'فیلتر وضعیت' if panel_lang == 'fa' else 'Filter status' }}">
+                <button type="button" class="btn btn-outline" data-renew-filter="pending" aria-pressed="false" data-renew-label="inProgress">In progress</button>
+                <button type="button" class="btn btn-outline" data-renew-filter="attention" aria-pressed="false" data-renew-label="attention">Needs attention</button>
+                <button type="button" class="btn btn-outline" data-renew-filter="all" aria-pressed="true" data-renew-label="all">All</button>
+            </div>
+            <label class="field-note" for="renew-activity-search" data-renew-label="search">Search account or operation</label>
+            <input type="search" class="form-input" id="renew-activity-search" autocomplete="off">
+            <p class="field-note" id="renew-activity-status" role="status" aria-live="polite"></p>
+            <div id="renew-activity-list" class="renew-activity-list"></div>
+        </div>
+        <footer class="renew-progress-footer"><button type="button" class="btn btn-outline" data-renew-action="refresh" data-renew-label="refresh">Refresh history</button><span class="field-note" data-renew-label="historyLimit">Latest 50 renewals · Your operations</span></footer>
+    </section>
+</div>
+<script src="{{ url_for('static', filename='renew-progress.js') }}" nonce="{{ csp_nonce }}" defer></script>

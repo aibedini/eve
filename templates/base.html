@@ -547,6 +547,10 @@
                 </button>
                 <h1 class="page-title">{% block page_title %}{{ _('Financial Overview') }}{% endblock %}</h1>
                 <div class="header-actions">
+                    <button type="button" class="btn btn-secondary renew-activity-trigger" id="renew-activity-trigger" aria-haspopup="dialog" aria-controls="renew-activity-modal" aria-label="{{ 'عملیات اخیر تمدید' if panel_lang == 'fa' else 'Recent renewal operations' }}">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 5h12M9 12h12M9 19h12M3 5h.01M3 12h.01M3 19h.01" stroke-linecap="round"/></svg>
+                        <span class="renew-activity-trigger-label">{{ 'عملیات' if panel_lang == 'fa' else 'Activity' }}</span><span id="renew-activity-count" class="badge hidden"></span>
+                    </button>
                     <button type="button" class="btn btn-secondary panel-search-trigger" id="panel-search-trigger" aria-haspopup="dialog" aria-controls="panel-search-overlay">
                         <span aria-hidden="true">⌕</span>
                         <span>{{ 'جست‌وجو' if panel_lang == 'fa' else 'Search' }}</span>
@@ -682,6 +686,7 @@
                 .catch(err => console.error('Update check failed', err));
         });
     </script>
+    {% include 'components/renew_progress.html' %}
     {% block scripts %}{% endblock %}
 </body>
 </html>

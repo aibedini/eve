@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 #: The dashboard JS was extracted into its own cacheable bundle; the contract these
 #: tests protect is JavaScript, so it is read from there.
 DASHBOARD = (ROOT / "static" / "dashboard.js").read_text(encoding="utf-8")
+PROGRESS = (ROOT / "static" / "renew-progress.js").read_text(encoding="utf-8")
 PACKAGES = (ROOT / "panel" / "routes" / "packages.py").read_text(encoding="utf-8")
 
 
@@ -33,8 +34,11 @@ class RenewalRecoveryContractTests(unittest.TestCase):
         self.assertIn("observeRenewalOperation();", submit)
         observer = DASHBOARD.split("function observeRenewalOperation() {", 1)[1]
         observer = observer.split("// renew-result-modal:end", 1)[0]
-        self.assertIn("/renew/verify", observer)
-        self.assertNotIn("/renew`", observer)
+        self.assertIn("EveRenewals.refresh()", observer)
+        refresh = PROGRESS.split("async function refresh() {", 1)[1].split("function schedule", 1)[0]
+        self.assertIn("request('/api/client-operations/renewals')", refresh)
+        self.assertNotIn("/renew/verify", refresh)
+        self.assertNotIn("method: 'POST'", refresh)
 
     def test_verified_snapshot_has_no_local_expiry_or_quota_guess(self):
         submit = DASHBOARD.split("async function submitRenewal() {", 1)[1]

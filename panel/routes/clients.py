@@ -20,7 +20,7 @@ from sqlalchemy import func, or_
 from panel.adapters import xui as xui_adapter
 from panel.extensions import db, limiter
 from panel.models import (
-    Admin, BankCard, ClientOwnership, NotificationTemplate, Package, RenewTemplate,
+    Admin, BankCard, ClientOperation, ClientOwnership, NotificationTemplate, Package, RenewTemplate,
     Server, ServiceOwnership, Transaction, VolumeRulePreset,
 )
 from panel.routes.common import admin_is_superadmin, login_required, permission_required
@@ -1566,6 +1566,87 @@ def _fire_renew_whatsapp(server_id: int, email: str, text: str,
     threading.Thread(target=_worker, daemon=True).start()
 
 
+def _visible_renew_operations():
+    return ClientOperation.query.filter_by(action='renew', admin_id=session['admin_id'])
+
+
+def _renew_operation_accessible(operation):
+    from app import _has_client_access
+    user = db.session.get(Admin, session['admin_id'])
+    return bool(user and (user.role != 'reseller' or _has_client_access(
+        user, operation.server_id, operation.client_email, inbound_id=operation.inbound_id)))
+
+
+@bp.route('/api/client-operations/renewals', methods=['GET'])
+@login_required
+@permission_required('clients.read')
+def recent_renewal_operations():
+    """Poll the durable ledger, never the remote panel, for routine progress."""
+    from panel.services import renew_progress
+    rows = (_visible_renew_operations().order_by(ClientOperation.created_at.desc())
+            .limit(50).all())
+    rows = [row for row in rows if _renew_operation_accessible(row)]
+    logs = renew_progress.notification_logs(rows)
+    response = jsonify(success=True, operations=[renew_progress.snapshot(
+        row, logs.get(renew_progress.notification_id(row)), detail=False) for row in rows])
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/api/client-operations/renewals/<operation_key>', methods=['GET'])
+@login_required
+@permission_required('clients.read')
+def renewal_operation_progress(operation_key):
+    from panel.services import renew_progress
+    operation = _visible_renew_operations().filter_by(idempotency_key=operation_key).first()
+    if operation is None or not _renew_operation_accessible(operation):
+        return jsonify(success=False, code='operation_not_found'), 404
+    logs = renew_progress.notification_logs([operation])
+    response = jsonify(success=True, operation=renew_progress.snapshot(
+        operation, logs.get(renew_progress.notification_id(operation))))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/api/client-operations/renewals/<operation_key>/retry-sms', methods=['POST'])
+@login_required
+@permission_required('clients.write')
+@limiter.limit('10 per minute')
+def retry_renewal_sms(operation_key):
+    from panel.services import renew_progress
+    operation = _visible_renew_operations().filter_by(idempotency_key=operation_key).first()
+    if operation is None or not _renew_operation_accessible(operation):
+        return jsonify(success=False, code='operation_not_found'), 404
+    logs = renew_progress.notification_logs([operation])
+    view = renew_progress.snapshot(operation, logs.get(renew_progress.notification_id(operation)))
+    if not view['sms']['retryable']:
+        return jsonify(success=False, code='sms_not_retryable'), 409
+    # Historical success is not proof that the account is still active today.
+    from panel.jobs.renew_activation import _default_read_layers
+    try:
+        read = _default_read_layers(operation)
+        active_now = read is not None and read().final_state == renew_activation.STATE_APPLIED_ACTIVE
+    except Exception:
+        active_now = False
+    if not active_now:
+        return jsonify(success=False, code='sms_activation_not_confirmed'), 409
+    original = operation.response_json
+    result = operation_response(operation)
+    result['renew_sms_attempt'] = int(result.get('renew_sms_attempt') or 0) + 1
+    result.pop('renew_sms_sent_at', None)
+    # Compare-and-swap makes two clicks/workers reserve a single new attempt.
+    changed = (ClientOperation.query.filter_by(id=operation.id, response_json=original)
+               .update({'response_json': json.dumps(result, ensure_ascii=False),
+                        'updated_at': datetime.utcnow()}, synchronize_session=False))
+    db.session.commit()
+    if changed != 1:
+        return jsonify(success=False, code='sms_retry_in_progress'), 409
+    db.session.refresh(operation)
+    sent = renew_notifications.send_renewal_confirmation_once(
+        operation, activation_converged=True, node_pending=False)
+    return jsonify(success=bool(sent.get('sent')), operation=renew_progress.snapshot(operation))
+
+
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew', methods=['POST'])
 @login_required
 @permission_required('clients.write')
@@ -2698,8 +2779,7 @@ def renew_client(server_id, inbound_id, email):
                     _layers, _repair_history = renew_activation.converge_activation(
                         verify=_reverify,
                         repair=_activation_repair,
-                        attempts=3,
-                        sleep=lambda _n: time.sleep(0.4),
+                        attempts=1,
                         initial=_layers,
                         should_repair=lambda _l: (
                             (False, 'the panel reports nodePending: waiting for its '
@@ -3243,6 +3323,11 @@ def renew_client(server_id, inbound_id, email):
                     completed_payload['customer_sms'] = 'sent'
                 elif _activation_ready:
                     completed_payload['customer_sms'] = _sms_result.get('reason')
+                # Persist telemetry with the original result, never from a duplicate
+                # request whose ORM copy may predate another worker's finalization.
+                completed_payload['trace_id'] = renewal_trace_id
+                completed_payload['timing'] = dict(timing, total_ms=int(
+                    (time.perf_counter() - t0) * 1000))
                 complete_client_operation(
                     client_operation, completed_payload, transaction_record,
                     # The operation stays resumable while activation has not converged:

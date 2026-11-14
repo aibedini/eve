@@ -434,9 +434,10 @@ class RenewLanguageTests(unittest.TestCase):
 
     def test_the_template_language_is_panel_lang_not_document_lang(self):
         for needle in ("const RENEW_LANG = EVE_DASHBOARD.PANEL_LANG;",
-                       "const renewProgressIsFa = RENEW_LANG",
                        "body.dir = RENEW_LANG === 'fa'"):
             self.assertIn(needle, self.template.text, needle)
+        component = os.path.join(REPO_ROOT, 'templates', 'components', 'renew_progress.html')
+        self.assertIn('data-renew-lang="{{ panel_lang }}"', _read(component))
 
 
 class RenewToneTests(unittest.TestCase):

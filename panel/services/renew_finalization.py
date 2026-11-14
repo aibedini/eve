@@ -43,7 +43,7 @@ BUSINESS_PAYLOAD_KEYS = (
     # happened to observe the activation: a durable marker makes it exactly-once
     # across the request, Re-check, Force Enable and the background reconciler, and
     # `node_sync_confirms` counts the reads taken while only the node was behind.
-    'renew_sms_sent_at', 'node_sync_confirms',
+    'renew_sms_sent_at', 'node_sync_confirms', 'renew_sms_attempt', 'trace_id', 'timing',
 )
 
 

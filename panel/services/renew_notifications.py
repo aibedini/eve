@@ -20,6 +20,7 @@ The rule now: the message follows the OPERATION, not the request or the modal.
 from __future__ import annotations
 
 import logging
+import hashlib
 from datetime import datetime
 
 from panel.extensions import db
@@ -30,6 +31,13 @@ logger = logging.getLogger(__name__)
 #: Reads of "config applied, every layer enabled, but the node is still syncing"
 #: required before the customer is told the renewal is ready.
 NODE_SYNC_CONFIRMATIONS = 2
+
+
+def notification_key(operation):
+    """One opaque gateway identity per operation and explicit failed-SMS retry."""
+    suffix = hashlib.sha256(operation.idempotency_key.encode()).hexdigest()[:32]
+    attempt = int(_stored(operation).get('renew_sms_attempt') or 0)
+    return f'tx-renew-op-{suffix}-{attempt}'
 
 
 def _stored(operation):
@@ -121,8 +129,9 @@ def send_renewal_confirmation_once(operation, *, activation_converged,
 
     send = sender or _default_sender
     try:
+        message_vars = dict(tpl_vars, _renew_notification_key=notification_key(operation))
         send('renew', operation.server_id, operation.client_email,
-             None, None, dict(tpl_vars), stored.get('client_comment') or '',
+             None, None, message_vars, stored.get('client_comment') or '',
              _server_name(operation.server_id))
     except Exception as exc:                            # pragma: no cover - defensive
         logger.exception('[renew-notify] confirmation send failed for %s',

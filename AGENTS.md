@@ -36,6 +36,14 @@ Test-writing rules that keep Tier 1 fast and honest:
   `docs/performance/`; a test that measures wall-clock throughput is a Tier 3 test.
 - Prefer asserting a decision (order, schedule arithmetic, counters) over a duration.
 
+## Git delivery
+
+- The default delivery branch for this project is `main`.
+- When the user asks to commit or push, commit the completed changes and push to
+  `main` without asking for another confirmation. Follow the mandatory Ponytail
+  review and state-bound Git guard approval before every commit or push.
+- A commit/push request does not authorize a release or a tag.
+
 ## Versioning & Releases
 
 The project uses the `2.x.y` version scheme. `APP_VERSION` in `app.py` is the single source of truth.

@@ -15,6 +15,105 @@
     margin-block: 6px;
 }
 
+/* Durable renewal progress and activity, shared by every authenticated page. */
+.modal-overlay.renew-progress-overlay { z-index: 1100; }
+.renew-progress-overlay .renew-progress-dialog {
+    max-width: 600px;
+    max-height: min(90svh, 860px);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+.renew-progress-dialog .modal-header { flex-shrink: 0; gap: 12px; }
+.renew-progress-dialog .modal-header h2 { font-size: 1rem; }
+.renew-progress-dialog .modal-close { min-width: 44px; min-height: 44px; }
+.renew-progress-dialog .renew-progress-body { padding: 20px; min-height: 0; }
+.renew-progress-account {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 8px 16px; padding: 12px 16px; margin-block-end: 20px;
+    background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 10px;
+    overflow-wrap: anywhere;
+}
+.renew-progress-account strong { font-size: 0.875rem; }
+.renew-progress-account > span { color: var(--text-secondary); font-size: 0.8rem; }
+.renew-progress-heading { display: flex; align-items: flex-start; gap: 12px; margin-block: 16px 20px; }
+.renew-progress-heading > div { min-width: 0; }
+.renew-progress-heading h3 { margin: 0; font-size: 1rem; line-height: 1.6; overflow-wrap: anywhere; }
+.renew-progress-heading p { color: var(--text-secondary); font-size: 0.875rem; margin-block: 6px 0; }
+.renew-progress-mark {
+    display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border: 2px solid currentColor; border-radius: 50%;
+    color: var(--text-secondary);
+}
+.renew-progress-mark svg { width: 18px; height: 18px; }
+.renew-progress-mark.is-success { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.renew-progress-mark.is-warning { color: var(--warning); }
+.renew-progress-mark.is-danger { color: var(--danger); }
+.renew-progress-mark.is-primary { color: var(--primary); }
+.renew-progress-mark.is-loading { border-color: var(--border-color); border-block-start-color: var(--primary); animation: spin 0.8s linear infinite; }
+.renew-progress-mark.is-muted { color: var(--border-color); }
+.renew-progress-mark.is-muted svg { visibility: hidden; }
+.renew-progress-steps { padding: 0; margin: 0 0 20px; list-style: none; }
+.renew-progress-step { display: flex; gap: 12px; align-items: center; position: relative; padding-block: 10px; font-size: 0.875rem; }
+.renew-progress-step:not(:last-child)::after { content: ''; position: absolute; inset-inline-start: 13px; inset-block-start: 38px; height: 20px; border-inline-start: 1px solid var(--border-color); }
+.renew-progress-step.is-complete:not(:last-child)::after { border-color: var(--success); }
+.renew-progress-notification { padding-block: 16px; border-block: 1px solid var(--border-color); }
+.renew-progress-notification > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.renew-progress-notification strong { font-size: 0.875rem; }
+.renew-progress-notification .badge { white-space: normal; overflow-wrap: anywhere; text-align: start; background: color-mix(in srgb, currentColor 12%, transparent); }
+.renew-progress-notification .field-note { margin-block: 8px 0; }
+.renew-progress-notification .btn { margin-block-start: 12px; min-height: 44px; }
+.renew-progress-notification .renew-notification-accepted, .renew-progress-notification .renew-notification-delivered { color: var(--success); }
+.renew-progress-notification .renew-notification-failed, .renew-progress-notification .renew-notification-skipped { color: var(--warning); }
+.renew-progress-notification .renew-notification-waiting, .renew-progress-notification .renew-notification-unknown { color: var(--text-secondary); }
+.renew-progress-notification .renew-notification-sending { color: var(--primary); }
+.renew-progress-details { margin-block: 16px; font-size: 0.8rem; }
+.renew-progress-details summary { cursor: pointer; padding-block: 10px; min-height: 44px; }
+.renew-progress-details pre { white-space: pre-wrap; overflow-wrap: anywhere; direction: ltr; text-align: start; padding: 12px; background: var(--bg-dark); border-radius: 8px; font: inherit; color: var(--text-secondary); }
+.renew-progress-history-link { padding: 8px 0; min-height: 44px; background: none; border: 0; color: var(--primary); font: inherit; font-size: 0.875rem; cursor: pointer; text-align: start; }
+.renew-progress-history-link:hover { text-decoration: underline; }
+.renew-progress-footer { flex-shrink: 0; border-block-start: 1px solid var(--border-color); padding: 16px 20px; background: var(--bg-card); }
+.renew-progress-footer .field-note { margin-block: 0 12px; }
+.renew-progress-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.renew-progress-actions .btn { flex: 1 1 auto; min-height: 44px; min-width: 0; justify-content: center; white-space: normal; }
+.renew-activity-trigger { position: relative; gap: 6px; min-height: 44px; min-width: 44px; }
+.renew-activity-trigger svg { flex-shrink: 0; }
+.renew-activity-trigger .badge { padding: 2px 6px; color: var(--primary); background: color-mix(in srgb, var(--primary) 16%, transparent); }
+.renew-activity-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 16px; }
+.renew-activity-filters .btn { flex: 1; min-height: 44px; padding-inline: 10px; white-space: normal; }
+.renew-activity-filters .btn[aria-pressed="true"] { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 16%, transparent); }
+.renew-activity-list { display: flex; flex-direction: column; }
+.renew-activity-row {
+    display: flex; align-items: center; gap: 12px; padding: 16px 8px; width: 100%;
+    background: none; border: 0; border-block-end: 1px solid var(--border-color);
+    color: var(--text-primary); cursor: pointer; text-align: start; font: inherit;
+}
+.renew-activity-row:hover { background: var(--bg-card-hover); }
+.renew-activity-row-content { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+.renew-activity-row-content strong { font-size: 0.875rem; text-align: start; overflow-wrap: anywhere; }
+.renew-activity-row-content > span { font-size: 0.875rem; }
+.renew-activity-row-content small, .renew-activity-row-content time { color: var(--text-secondary); font-size: 0.78rem; }
+.renew-activity-dialog .form-input { width: 100%; min-width: 0; min-height: 44px; }
+@media (max-width: 768px) {
+    .renew-activity-trigger-label { display: none; }
+}
+@media (max-width: 480px) {
+    .modal-overlay.renew-progress-overlay { padding: 0; }
+    .renew-progress-overlay .renew-progress-dialog.modal {
+        width: 100%; max-width: 100% !important; height: 100dvh; max-height: 100dvh !important;
+        border-radius: 0; margin: 0;
+    }
+    .renew-progress-dialog .modal-header { padding: 12px 16px; padding-block-start: max(12px, env(safe-area-inset-top)); }
+    .renew-progress-dialog .renew-progress-body { padding: 16px !important; flex: 1; }
+    .renew-progress-footer { padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
+    .renew-progress-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #renew-operation-recheck, #renew-operation-done { grid-column: 1 / -1; }
+    #renew-operation-done { grid-row: 1; }
+    .renew-activity-trigger { padding-inline: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .renew-progress-mark.is-loading { animation: none; border-style: dashed; }
+}
+
 :root {
     --primary: #6366f1;
     --primary-dark: #4f46e5;

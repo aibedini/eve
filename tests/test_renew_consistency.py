@@ -825,6 +825,35 @@ class RenewConsistencyTests(unittest.TestCase):
         # No internal code is the operator copy.
         self.assertNotIn('error', {k: v for k, v in payload.items() if k == 'error'})
 
+    def test_duplicate_request_does_not_overwrite_the_running_operations_result(self):
+        self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        key = 'renew-duplicate-readonly'
+        self._renew(volume=20, operation_id=key)
+        operation = ClientOperation.query.filter_by(idempotency_key=key).one()
+        operation.state = 'prepared'
+        db.session.commit()
+        original = operation.response_json
+        status, payload = self._renew_response(volume=20, operation_id=key)
+        self.assertEqual(payload['code'], 'renew_in_progress')
+        db.session.refresh(operation)
+        self.assertEqual(operation.response_json, original)
+        self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
+
+    def test_inline_activation_repairs_once_without_blocking_sleep(self):
+        self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        self.membership_ids = [INBOUND_ID, 24]
+        self.membership_enable = {INBOUND_ID: True, 24: False}
+        with mock.patch('panel.routes.clients.time.sleep', side_effect=AssertionError('inline sleep')):
+            status, payload = self._renew_response(
+                volume=20, reset_traffic=False, operation_id='renew-fast-pending')
+        self.assertTrue(payload.get('config_applied'), payload)
+        self.assertEqual(payload['final_state'], 'CONFIG_APPLIED_ACTIVATION_PENDING')
+        self.assertEqual(payload['verify']['repair_attempts'], 1)
+        self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
+        self.assertFalse(self.sms_fired())
+
     def test_g_node_pending_keeps_the_renewal_applied_and_waits(self):
         """nodePending: the panel committed the config, its node has not caught up."""
         _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)

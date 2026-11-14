@@ -4095,21 +4095,6 @@
         if (body) {
             body.textContent = view.body;
             body.dir = RENEW_LANG === 'fa' ? 'rtl' : 'ltr';
-            // Live "checking…" indicator for non-green states
-            var liveEl = document.getElementById('renew-live-indicator');
-            if (!liveEl) {
-                liveEl = document.createElement('div');
-                liveEl.id = 'renew-live-indicator';
-                liveEl.style.cssText = 'font-size:0.75rem;color:var(--text-secondary);margin-top:6px;opacity:0.8;';
-                body.parentNode.insertBefore(liveEl, body.nextSibling);
-            }
-            if (view.tone !== 'green') {
-                window._renewLastCheckTs = Date.now();
-                liveEl.textContent = RENEW_LANG === 'fa' ? 'بررسی خودکار فعال است…' : 'Auto-checking…';
-                liveEl.classList.remove('hidden');
-            } else {
-                liveEl.classList.add('hidden');
-            }
         }
         if (diag) {
             diag.textContent = view.diagnostic || '';
@@ -4217,6 +4202,7 @@
                 context: context,
             });
             _applyRenewOutcomeView(view);
+            if (window.EveRenewals) window.EveRenewals.accept(payload, context);
             return view;
         } catch (e) {
             return null;
@@ -4240,7 +4226,6 @@
     // diagnostic string, and the context is assembled by buildRenewContext() so the
     // expected values the UI already knows survive the duplicate.
     function showRenewInProgress(serverId, inboundId, email, noteOrData) {
-        try { closeRenewModal(); } catch (e) {}
         // Never leave the previous successful renewal wired to this modal. It
         // could otherwise send both the old account text and old phone number.
         _sendCtxRenew = null;
@@ -4255,8 +4240,6 @@
         lastRenewContext = buildRenewContext(payload, lastRenewContext);
         _renderRenewPrevState(email);
         renderRenewApiStatus(payload, { forceState: 'IN_PROGRESS' });
-        const modal = document.getElementById('renew-success-modal');
-        if (modal) modal.classList.remove('hidden');
     }
 
     // A renewal the panel accepted (`renew_not_verified` / `renew_activation_pending`):
@@ -4265,7 +4248,6 @@
     // wording and colour, and the operation id + `verify.expected` the backend just
     // returned are kept as facts for Re-check.
     function showRenewPending(serverId, inboundId, email, data) {
-        try { closeRenewModal(); } catch (e) {}
         _sendCtxRenew = null;
         const payload = Object.assign({}, data || {}, {
             serverId: String(serverId), inboundId: String(inboundId), email: String(email),
@@ -4273,8 +4255,6 @@
         lastRenewContext = buildRenewContext(payload, lastRenewContext);
         _renderRenewPrevState(email);
         renderRenewApiStatus(payload);
-        const modal = document.getElementById('renew-success-modal');
-        if (modal) modal.classList.remove('hidden');
     }
 
     async function runRenewVerify(options) {
@@ -4350,48 +4330,8 @@
     }
 
     function observeRenewalOperation() {
-        const generation = (window._renewObserverGeneration || 0) + 1;
-        window._renewObserverGeneration = generation;
-        const cadence = [500, 1000, 2000, 3000, 5000, 5000, 5000, 8000, 10000, 10000];
-        const startedAt = Date.now();
-        let attempt = 0;
-        const tick = async () => {
-            if (generation !== window._renewObserverGeneration || !lastRenewContext) return;
-            const modal = document.getElementById('renew-success-modal');
-            if (!modal || modal.classList.contains('hidden') || Date.now() - startedAt > 300000) return;
-            if (document.hidden) {
-                setTimeout(tick, 5000);
-                return;
-            }
-            const ctx = lastRenewContext;
-            try {
-                // Update live indicator before the fetch
-                var _li = document.getElementById('renew-live-indicator');
-                if (_li && !_li.classList.contains('hidden')) {
-                    var _sec = Math.round((Date.now() - startedAt) / 1000);
-                    _li.textContent = (RENEW_LANG === 'fa'
-                        ? ('بررسی خودکار · ' + _sec + ' ثانیه · تلاش ' + (attempt + 1))
-                        : ('Auto-checking · ' + _sec + 's · attempt ' + (attempt + 1)));
-                }
-                const response = await fetch(`/api/client/${ctx.serverId}/${ctx.inboundId}/${encodeURIComponent(ctx.email)}/renew/verify`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ operation_id: ctx.operationId, awaiting_result: true })
-                });
-                const data = await response.json();
-                if (generation !== window._renewObserverGeneration || !lastRenewContext
-                    || ctx.operationId !== lastRenewContext.operationId
-                    || ctx.email !== lastRenewContext.email || ctx.serverId !== lastRenewContext.serverId) return;
-                renderRenewApiStatus(data);
-                applyClientMutation(data, ctx);
-                const state = String(data.final_state || data.state || '').toUpperCase();
-                if (['VERIFIED', 'APPLIED_ACTIVE'].includes(state) && data.business_finalized === true) return;
-            } catch (_) {
-                // Transport remains unknown; the durable operation is polled again.
-            }
-            setTimeout(tick, cadence[Math.min(attempt++, cadence.length - 1)]);
-        };
-        setTimeout(tick, cadence[0]);
+        // Lightweight ledger reads continue independently of the visible modal.
+        if (window.EveRenewals) window.EveRenewals.refresh();
     }
     // renew-result-modal:end
 
@@ -4435,26 +4375,17 @@
 
         const btn = document.querySelector('#renew-modal .btn-primary');
         const originalText = btn.innerText;
-        const renewProgressIsFa = RENEW_LANG === 'fa';
-        const renewProgressSteps = renewProgressIsFa
-            ? ['اتصال به پنل…', 'اعمال تمدید…', 'بررسی نتیجه…']
-            : ['Connecting to panel…', 'Applying renewal…', 'Verifying result…'];
-        const renewProgressTimers = [];
+        const finalDays = usePackage ? selectedRenewPackageDays : payload.days;
+        const finalVolume = usePackage ? selectedRenewPackageVolume
+            : Object.prototype.hasOwnProperty.call(payload, 'volume') ? payload.volume : null;
+        const operationId = payload.operation_id;
         btn.disabled = true;
-        btn.innerText = renewProgressSteps[0];
-        renewProgressTimers.push(setTimeout(() => {
-            if (btn.disabled) btn.innerText = renewProgressSteps[1];
-        }, 700));
-        renewProgressTimers.push(setTimeout(() => {
-            if (btn.disabled) btn.innerText = renewProgressSteps[2];
-        }, 3500));
-
-        const previousClient = getLocalClientRef(serverId, inboundId, email);
-        const previousExpiryTs = Number(previousClient?.expiryTimestamp || 0);
-        const previousTotalBytes = Number(previousClient?.totalGB || 0);
+        closeRenewModal();
+        window.EveRenewals.begin({operation_id:operationId, server_id:serverId,
+            inbound_id:inboundId, email, days:finalDays, volume_gb:finalVolume});
 
         try {
-            const response = await fetch(`/api/client/${serverId}/${inboundId}/${email}/renew`, {
+            const response = await fetch(`/api/client/${serverId}/${inboundId}/${encodeURIComponent(email)}/renew`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -4471,19 +4402,7 @@
             }
             if (data.success) {
                 window._resetOperationId = null;
-                window._renewOperationId = null;
-                closeRenewModal();
-                
-                let finalDays = 0;
-                let finalVolume = null;
-                if (usePackage) {
-                    finalDays = selectedRenewPackageDays;
-                    finalVolume = selectedRenewPackageVolume;
-                } else {
-                    finalDays = parseFloat(document.getElementById('renew-custom-days').value) || 0;
-                    const rawVol2 = (document.getElementById('renew-custom-volume').value || '').trim();
-                    finalVolume = rawVol2 === '' ? null : (parseFloat(rawVol2) || 0);
-                }
+                if (window._renewOperationId === operationId) window._renewOperationId = null;
 
                 _renderRenewPrevState(email);
                 const beforeExpiry = document.createElement('span');
@@ -4507,8 +4426,8 @@
                     ? data.copy_text : '';
                 document.getElementById('renew-success-text').innerText = successText;
                 const _renewClientData = _lookupClientVolume(
-                    document.getElementById('renew-server-id')?.value,
-                    document.getElementById('renew-inbound-id')?.value,
+                    serverId,
+                    inboundId,
                     email
                 );
                 _sendCtxRenew = {
@@ -4536,7 +4455,6 @@
                 // (amber when the config is applied but activation still synchronizes),
                 // with the customer text this response - or its local fallback - produced.
                 renderRenewApiStatus(data, { copyText: successText });
-                document.getElementById('renew-success-modal').classList.remove('hidden');
                 if (data.final_state !== 'APPLIED_ACTIVE' || data.business_finalized !== true) {
                     observeRenewalOperation();
                 }
@@ -4601,6 +4519,10 @@
                 // CDN doesn't swallow the JSON); the real code is in X-Eve-Status.
                 const realStatus = Number(response.headers.get('X-Eve-Status')) || response.status;
                 showCreditAwareError(data.error || 'Error renewing', realStatus);
+                window.EveRenewals.accept(Object.assign({}, data, {operation_id:operationId,
+                    localFailure: !data.final_state && !data.verify,
+                    final_state: data.final_state || (data.verify ? undefined : 'NOT_APPLIED')}),
+                    {serverId, inboundId, email, operationId});
             }
         } catch (error) {
             // The POST may have reached EVE and the panel even though its response was
@@ -4613,7 +4535,7 @@
             showToast(_t('Checking renewal…'));
             observeRenewalOperation();
         } finally {
-            renewProgressTimers.forEach(timerId => clearTimeout(timerId));
+            window.EveRenewals.finish(operationId);
             btn.disabled = false;
             btn.innerText = originalText;
         }

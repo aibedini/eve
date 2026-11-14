@@ -275,6 +275,9 @@ def complete_client_operation(operation, response, transaction=None, *, state=No
     if operation is None:
         return None
     operation.state = state or STATE_COMPLETED
+    if operation.action == 'renew':
+        # The notification worker may have persisted its marker after finalization.
+        response = dict(operation_response(operation), **(response or {}))
     operation.response_json = json.dumps(response or {}, ensure_ascii=False, default=str)
     operation.error = None
     if operation.state == STATE_COMPLETED:

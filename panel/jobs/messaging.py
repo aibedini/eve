@@ -3216,6 +3216,10 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 email_l = (email or '').strip().lower()
 
                 def _log(recipient, status, reason, gateway_result=None, lifecycle=None):
+                    if tpl_vars.get('_renew_notification_key'):
+                        lifecycle = dict(lifecycle or {})
+                        lifecycle['eveNotificationId'] = _eve_notification_id(
+                            tpl_vars['_renew_notification_key'])
                     _sms_log_row(None, email_l, sid_norm, server_name, event_name,
                                  recipient, status, reason, gateway_result, lifecycle)
 
@@ -3268,7 +3272,7 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 # 4-5 times. Skip if the SAME transactional SMS was already sent to
                 # this account in the last few minutes.
                 try:
-                    _dup = SmsSendLog.query.filter(
+                    _dup = None if tpl_vars.get('_renew_notification_key') else SmsSendLog.query.filter(
                         SmsSendLog.email == email_l,
                         SmsSendLog.state == event_name,
                         SmsSendLog.status == 'sent',
@@ -3307,7 +3311,8 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 # Transactional create/renew: CRITICAL so the customer who just
                 # paid gets their confirmation next, ahead of any running bulk scan.
                 # Stable idempotency key per fire so a network-retry can't double-send.
-                idem = f"tx-{event_name}-{sid_norm}-{email_l}-{int(time.time())}"
+                idem = (tpl_vars.get('_renew_notification_key')
+                        or f"tx-{event_name}-{sid_norm}-{email_l}-{int(time.time())}")
                 # requiresValidation=False: a create/renew confirmation is
                 # transactional and is NEVER revoked by a lifecycle invalidation.
                 tx_meta = _transactional_notification_meta(

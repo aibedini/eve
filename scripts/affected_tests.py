@@ -176,6 +176,18 @@ MAPPING = (
         ['tests.test_renew_consistency', 'tests.test_renew_enable',
          'tests.test_renew_notifications'],
     )),
+    ('panel/services/renew_progress.py', (
+        ['tests.test_renew_progress'],
+        ['tests.test_renew_consistency', 'tests.test_renew_notifications'],
+    )),
+    ('static/renew-progress.js', (
+        ['tests.test_renew_progress', 'tests.test_ui_design_system'],
+        ['tests.test_renew_ui_state', 'tests.test_static_deploy_contract'],
+    )),
+    ('templates/components/renew_progress.html', (
+        ['tests.test_renew_progress', 'tests.test_ui_design_system'],
+        ['tests.test_renew_ui_state'],
+    )),
     ('panel/services/renew_notifications.py', (
         # The once-per-operation customer confirmation. Its whole point is that it is
         # sent by a path that is NOT the request, so both the sender and the reconciler
