@@ -311,7 +311,12 @@ def fail_client_operation(operation, error, response=None, *, uncertain=False):
         operation.state = 'failed'
         operation.completed_at = datetime.utcnow()
     operation.error = str(error or '')[:2000]
-    operation.response_json = json.dumps(response or {'success': False, 'error': str(error or '')},
+    result = dict(response or {'success': False, 'error': str(error or '')})
+    if operation.action == 'renew':
+        scheduled = operation_response(operation).get('renew_sms_sent_at')
+        if scheduled:
+            result['renew_sms_sent_at'] = scheduled
+    operation.response_json = json.dumps(result,
                                          ensure_ascii=False, default=str)
     db.session.commit()
 

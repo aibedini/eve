@@ -35,7 +35,7 @@ class RenewalRecoveryContractTests(unittest.TestCase):
         observer = DASHBOARD.split("function observeRenewalOperation() {", 1)[1]
         observer = observer.split("// renew-result-modal:end", 1)[0]
         self.assertIn("EveRenewals.refresh()", observer)
-        refresh = PROGRESS.split("async function refresh() {", 1)[1].split("function schedule", 1)[0]
+        refresh = PROGRESS.split("async function refresh(", 1)[1].split("function schedule", 1)[0]
         self.assertIn("request('/api/client-operations/renewals')", refresh)
         self.assertNotIn("/renew/verify", refresh)
         self.assertNotIn("method: 'POST'", refresh)

@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import requests
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
 try:
     from zoneinfo import ZoneInfo
@@ -3152,6 +3152,10 @@ def _sms_accepted_status(send_result: dict) -> str:
     """A new gateway acceptance is queued; old gateways had no status API."""
     if send_result.get('manual_review'):
         return 'manual_review'
+    status = str(send_result.get('status') or '').strip().lower()
+    if send_result.get('request_id') and status in ('queued', 'deferred', 'pending', 'accepted'):
+        # An explicit queue state cannot be promoted by generic success flags.
+        return 'queued'
     if send_result.get('terminal') and send_result.get('successful'):
         return 'sent'
     if send_result.get('request_id'):
@@ -5570,6 +5574,14 @@ def _sync_sms_scan_decision_from_log(decision, row):
     decision.updated_at = datetime.utcnow()
 
 
+def _sms_status_poll_filter():
+    # Gateway completion ends submission, not the later carrier receipt.
+    return or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None),
+               and_(SmsSendLog.terminal.is_(True), SmsSendLog.successful.is_(True),
+                    or_(SmsSendLog.carrier_state.is_(None),
+                        SmsSendLog.carrier_state == 'pending')))
+
+
 def _refresh_pending_sms_statuses(limit: int = 100, *, log_id=None) -> int:
     """Poll accepted gateway tasks using the provider recorded for each send.
 
@@ -5587,7 +5599,7 @@ def _refresh_pending_sms_statuses(limit: int = 100, *, log_id=None) -> int:
         # Explicit rechecks also read carrier receipts after gateway acceptance.
         query = query.filter(SmsSendLog.id == int(log_id))
     else:
-        query = query.filter(or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)))
+        query = query.filter(_sms_status_poll_filter())
     rows = query.order_by(SmsSendLog.created_at.desc()).limit(max(1, min(int(limit), 500))).all()
     if not rows:
         return 0
@@ -5604,6 +5616,13 @@ def _refresh_pending_sms_statuses(limit: int = 100, *, log_id=None) -> int:
     status_expiry_cutoff = datetime.utcnow() - SMS_STATUS_UNRESOLVABLE_AFTER
     for row in rows:
         try:
+            if (log_id is None and row.terminal is True and row.successful is True
+                    and (row.created_at or datetime.utcnow()) < status_expiry_cutoff):
+                row.carrier_state = 'unavailable'
+                row.carrier_evidence = 'no_carrier_receipt_within_window'
+                row.updated_at = datetime.utcnow()
+                changed += 1
+                continue
             row_cfg = _get_sms_provider_settings(row.gateway_provider, cfg)
             base = (row_cfg.get('base_url') or '').strip().rstrip('/')
             api_key = (row_cfg.get('api_key') or '').strip()
@@ -5617,6 +5636,13 @@ def _refresh_pending_sms_statuses(limit: int = 100, *, log_id=None) -> int:
                 timeout = min(timeout, 8)
             resp = requests.get(_sms_status_endpoint(base, row), headers=headers, timeout=timeout)
             if resp.status_code == 404 and (row.created_at or datetime.utcnow()) < status_expiry_cutoff:
+                if row.terminal is True and row.successful is True:
+                    # Losing the receipt endpoint cannot undo a confirmed send.
+                    row.carrier_state = 'unavailable'
+                    row.carrier_evidence = 'no_carrier_receipt_within_window'
+                    row.updated_at = datetime.utcnow()
+                    changed += 1
+                    continue
                 row.terminal = True
                 row.successful = False
                 row.reason = 'gateway_status_expired'
@@ -5686,8 +5712,9 @@ def _refresh_pending_sms_statuses(limit: int = 100, *, log_id=None) -> int:
                 if re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,119}', notification_id):
                     row.eve_notification_id = notification_id
             carrier = data.get('carrierStatus')
-            if isinstance(carrier, dict) and carrier.get('status') in (
-                    'unavailable', 'pending', 'delivered', 'failed'):
+            if (isinstance(carrier, dict) and carrier.get('status') in (
+                    'unavailable', 'pending', 'delivered', 'failed')
+                    and (row.carrier_state != 'delivered' or carrier.get('status') == 'delivered')):
                 row.carrier_state = str(carrier['status'])[:16]
                 row.carrier_occurred_at = (
                     str(carrier.get('occurredAt'))[:64]
@@ -5845,7 +5872,7 @@ def sms_status_worker():
                 flush_invalidation_outbox(limit=10)
                 pending = SmsSendLog.query.filter(
                     SmsSendLog.request_id.isnot(None),
-                    or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
+                    _sms_status_poll_filter(),
                 ).first() is not None
                 if pending:
                     _refresh_pending_sms_statuses()

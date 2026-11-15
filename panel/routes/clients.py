@@ -1633,6 +1633,8 @@ def recheck_renewal_sms(operation_key):
         try:
             _refresh_pending_sms_statuses(log_id=row.id)
             db.session.refresh(row)
+            row = renew_progress.notification_logs([operation]).get(
+                renew_progress.notification_id(operation))
         except Exception:
             db.session.rollback()
             return jsonify(success=False, code='sms_gateway_status_unavailable'), 502
@@ -2513,9 +2515,8 @@ def renew_client(server_id, inbound_id, email):
                             pass
                     timing["reset_traffic_ms"] = int((time.perf_counter() - t_reset0) * 1000)
 
-                # Read the account back from 3x-ui before charging, notifying, or
-                # updating EVE's cache.  A successful POST only acknowledges the
-                # request; it does not prove the client is active on the panel.
+                # Account read-back still gates charging and EVE's cache update.
+                # Notification dispatch is independent of activation verification.
                 _mutation_evidence = {
                     'accepted': bool(_mutation_result.ok) if _mutation_result is not None else True,
                     'rejected': False,
@@ -2529,6 +2530,110 @@ def renew_client(server_id, inbound_id, email):
                 _intent_context['mutation_evidence'] = _mutation_evidence
                 prepare_client_operation_expected(client_operation, _expected_intent,
                                                   context=_intent_context)
+                # Build copyable success text (dynamic template)
+                now_utc = datetime.utcnow()
+
+                # Message values:
+                # - If start_after_first_use: show the package/custom amount (days_to_add)
+                # - If reset_traffic: show the package/custom amount (volume_gb_to_add)
+                # - Otherwise: show remaining_before + added (days/GB)
+                if days_to_add <= 0:
+                    msg_days = '♾️'
+                    days_label = "♾️"
+                elif start_after_first_use:
+                    msg_days = days_to_add
+                    days_label = f"{msg_days} Days"
+                else:
+                    msg_days = int(remaining_days_before) + days_to_add
+                    days_label = f"{msg_days} Days"
+
+                if not volume_provided:
+                    # No volume change: show remaining (or unlimited)
+                    if not has_limited_volume:
+                        msg_volume = '♾️'
+                        volume_label = "♾️"
+                    else:
+                        msg_volume = int(remaining_gb_before)
+                        volume_label = f"{remaining_gb_before_exact:.2f}GB"
+                elif volume_gb_to_add == 0:
+                    msg_volume = '♾️'
+                    volume_label = "♾️"
+                elif reset_traffic:
+                    msg_volume = volume_gb_to_add
+                    volume_label = f"{msg_volume}GB"
+                else:
+                    if not has_limited_volume:
+                        msg_volume = '♾️'
+                        volume_label = "♾️"
+                    else:
+                        msg_volume = int(remaining_gb_before) + volume_gb_to_add
+                        volume_label = f"{(remaining_gb_before_exact + float(volume_gb_to_add)):.2f}GB"
+
+                # `{date}` should represent the new expiry, not "now".
+                # - Finite expiry (>0): show Jalali Tehran date+time
+                # - Unlimited (0): Persian label
+                # - Not started (<0): show "N days after first use"
+                if new_expiry == 0:
+                    date_label = "نامحدود" if panel_is_fa else "Unlimited"
+                elif new_expiry < 0:
+                    date_label = (f"{msg_days} روز بعد از اولین اتصال" if panel_is_fa
+                                  else f"{msg_days} days after first connection")
+                else:
+                    try:
+                        expiry_dt_utc = datetime.utcfromtimestamp(int(new_expiry) / 1000)
+                    except Exception:
+                        expiry_dt_utc = now_utc
+                    date_label = format_jalali(expiry_dt_utc) or ''
+
+                # Dashboard link
+                app_base = request.url_root.rstrip('/')
+                final_id = target_client.get('subId') or target_client.get('id') or ''
+                dashboard_link = f"{app_base}/s/{server.id}/{final_id}" if final_id else ""
+
+                active_tpl = RenewTemplate.query.filter_by(is_active=True).first()
+                tpl_content = active_tpl.content if active_tpl else DEFAULT_RENEW_TEMPLATE
+                _ch_links = _account_info_channel_links(db.session.get(Admin, session.get('admin_id'))) \
+                    if session.get('admin_id') else {'telegram_channel': '', 'whatsapp_channel': ''}
+                _renew_tpl_vars = {
+                    'email': email,
+                    'days': msg_days,
+                    'days_label': days_label,
+                    'volume': msg_volume,
+                    'volume_label': volume_label,
+                    'date': date_label,
+                    'server_name': getattr(server, 'name', '') or '',
+                    'mode': mode,
+                    'dashboard_link': dashboard_link,
+                    # Account-Info-style aliases so a template written with the
+                    # account-info placeholders ({service_name}/{remaining_time}/
+                    # {remaining_volume}/{account_name}/{sub_link}) also renders.
+                    'service_name': email,
+                    'account_name': email,
+                    'remaining_time': days_label,
+                    'remaining_volume': volume_label,
+                    'sub_link': dashboard_link,
+                    # Gift: {gift_volume} holds the amount; {gift_given} drives the
+                    # {if_gift}...{/if_gift} conditional block in the template.
+                    'gift_volume': str(gift_volume_gb) if gift_volume_gb > 0 else '',
+                    'gift_given': gift_volume_gb > 0,
+                    # Channel links resolved by role (superadmin→global, reseller→own).
+                    'telegram_channel': _ch_links.get('telegram_channel', ''),
+                    'whatsapp_channel': _ch_links.get('whatsapp_channel', ''),
+                    '_sub_id': final_id,
+                }
+                _renew_tpl_vars.update(_recommendation_template_vars(
+                    server.id, final_id, email, terminal=False,
+                ))
+                copy_text = _render_text_template(tpl_content, _renew_tpl_vars)
+
+                # Dispatch independently while the account read-back runs.
+                try:
+                    renew_notifications.start_renewal_notification(
+                        client_operation, _renew_tpl_vars,
+                        (target_client.get('comment') or '') if target_client else '')
+                except Exception:
+                    app.logger.exception('Renew SMS dispatch could not start (trace=%s)',
+                                         renewal_trace_id)
                 verify = {
                     "attempted": True,
                     "ok": None,
@@ -2967,101 +3072,6 @@ def renew_client(server_id, inbound_id, email):
                     else:
                         transaction_record = log_transaction(user.id, price, 'renew', f"User Renewal (Income) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
 
-                # Build copyable success text (dynamic template)
-                now_utc = datetime.utcnow()
-
-                # Message values:
-                # - If start_after_first_use: show the package/custom amount (days_to_add)
-                # - If reset_traffic: show the package/custom amount (volume_gb_to_add)
-                # - Otherwise: show remaining_before + added (days/GB)
-                if days_to_add <= 0:
-                    msg_days = '♾️'
-                    days_label = "♾️"
-                elif start_after_first_use:
-                    msg_days = days_to_add
-                    days_label = f"{msg_days} Days"
-                else:
-                    msg_days = int(remaining_days_before) + days_to_add
-                    days_label = f"{msg_days} Days"
-
-                if not volume_provided:
-                    # No volume change: show remaining (or unlimited)
-                    if not has_limited_volume:
-                        msg_volume = '♾️'
-                        volume_label = "♾️"
-                    else:
-                        msg_volume = int(remaining_gb_before)
-                        volume_label = f"{remaining_gb_before_exact:.2f}GB"
-                elif volume_gb_to_add == 0:
-                    msg_volume = '♾️'
-                    volume_label = "♾️"
-                elif reset_traffic:
-                    msg_volume = volume_gb_to_add
-                    volume_label = f"{msg_volume}GB"
-                else:
-                    if not has_limited_volume:
-                        msg_volume = '♾️'
-                        volume_label = "♾️"
-                    else:
-                        msg_volume = int(remaining_gb_before) + volume_gb_to_add
-                        volume_label = f"{(remaining_gb_before_exact + float(volume_gb_to_add)):.2f}GB"
-
-                # `{date}` should represent the new expiry, not "now".
-                # - Finite expiry (>0): show Jalali Tehran date+time
-                # - Unlimited (0): Persian label
-                # - Not started (<0): show "N days after first use"
-                if new_expiry == 0:
-                    date_label = "نامحدود" if panel_is_fa else "Unlimited"
-                elif new_expiry < 0:
-                    date_label = (f"{msg_days} روز بعد از اولین اتصال" if panel_is_fa
-                                  else f"{msg_days} days after first connection")
-                else:
-                    try:
-                        expiry_dt_utc = datetime.utcfromtimestamp(int(new_expiry) / 1000)
-                    except Exception:
-                        expiry_dt_utc = now_utc
-                    date_label = format_jalali(expiry_dt_utc) or ''
-
-                # Dashboard link
-                app_base = request.url_root.rstrip('/')
-                final_id = target_client.get('subId') or target_client.get('id') or ''
-                dashboard_link = f"{app_base}/s/{server.id}/{final_id}" if final_id else ""
-
-                active_tpl = RenewTemplate.query.filter_by(is_active=True).first()
-                tpl_content = active_tpl.content if active_tpl else DEFAULT_RENEW_TEMPLATE
-                _ch_links = _account_info_channel_links(db.session.get(Admin, session.get('admin_id'))) \
-                    if session.get('admin_id') else {'telegram_channel': '', 'whatsapp_channel': ''}
-                _renew_tpl_vars = {
-                    'email': email,
-                    'days': msg_days,
-                    'days_label': days_label,
-                    'volume': msg_volume,
-                    'volume_label': volume_label,
-                    'date': date_label,
-                    'server_name': getattr(server, 'name', '') or '',
-                    'mode': mode,
-                    'dashboard_link': dashboard_link,
-                    # Account-Info-style aliases so a template written with the
-                    # account-info placeholders ({service_name}/{remaining_time}/
-                    # {remaining_volume}/{account_name}/{sub_link}) also renders.
-                    'service_name': email,
-                    'account_name': email,
-                    'remaining_time': days_label,
-                    'remaining_volume': volume_label,
-                    'sub_link': dashboard_link,
-                    # Gift: {gift_volume} holds the amount; {gift_given} drives the
-                    # {if_gift}...{/if_gift} conditional block in the template.
-                    'gift_volume': str(gift_volume_gb) if gift_volume_gb > 0 else '',
-                    'gift_given': gift_volume_gb > 0,
-                    # Channel links resolved by role (superadmin→global, reseller→own).
-                    'telegram_channel': _ch_links.get('telegram_channel', ''),
-                    'whatsapp_channel': _ch_links.get('whatsapp_channel', ''),
-                    '_sub_id': final_id,
-                }
-                _renew_tpl_vars.update(_recommendation_template_vars(
-                    server.id, final_id, email, terminal=False,
-                ))
-                copy_text = _render_text_template(tpl_content, _renew_tpl_vars)
 
                 whatsapp_runtime = _get_whatsapp_runtime_settings()
                 _client_comment = (target_client.get('comment') or '') if target_client else ''
@@ -3332,10 +3342,8 @@ def renew_client(server_id, inbound_id, email):
                         "Renew could not record its durable business result (trace=%s)",
                         renewal_trace_id)
                 # ── Customer confirmation ─────────────────────────────────────
-                # Fired from the OPERATION, once, only when activation is real. If
-                # activation is still catching up the reconciler (or Re-check, or
-                # Force Enable) fires it later; a request that dies before this point
-                # no longer loses the message.
+                # New requests already dispatched alongside verification. This is
+                # the recovery path for older operations that have not scheduled it.
                 _sms_result = {'sent': False, 'reason': 'not_attempted'}
                 try:
                     if client_operation is not None:

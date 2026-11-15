@@ -95,6 +95,44 @@ class ConfirmationSenderTests(unittest.TestCase):
     def _sender(self, *args, **kwargs):
         self.sent.append((args, kwargs))
 
+    def test_accepted_write_starts_sms_before_business_or_activation_finalization(self):
+        operation = self._operation(response=None)
+        state = operation.state
+        first = renew_notifications.start_renewal_notification(
+            operation, {'email': operation.client_email}, sender=self._sender)
+        self.assertTrue(first['sent'])
+        self.assertEqual(len(self.sent), 1)
+        db.session.expire_all()
+        self.assertTrue(renew_notifications.renewal_sms_was_sent(operation))
+        self.assertEqual(operation.state, state)
+        self.assertFalse(client_operations.operation_response(operation).get('business_finalized'))
+        renew_notifications.start_renewal_notification(
+            operation, {'email': operation.client_email}, sender=self._sender)
+        self.assertEqual(len(self.sent), 1)
+        client_operations.fail_client_operation(operation, 'verification interrupted',
+            {'success': False, 'final_state': 'UNKNOWN'}, uncertain=True)
+        self.assertTrue(renew_notifications.renewal_sms_was_sent(operation))
+        self.assertFalse(client_operations.operation_response(operation).get('business_finalized'))
+        from panel.services import renew_finalization
+        renew_finalization.record_business_result(operation, _business_payload(),
+            final_state='APPLIED_ACTIVE', activation_converged=True)
+        result = renew_notifications.send_renewal_confirmation_once(
+            operation, activation_converged=True, sender=self._sender)
+        self.assertEqual(result['reason'], 'already_sent')
+        self.assertEqual(len(self.sent), 1)
+
+    def test_early_dispatch_refusal_keeps_the_same_gateway_identity_for_recovery(self):
+        operation = self._operation(response=None)
+        identities = []
+        def refuse(*args):
+            identities.append(args[5]['_renew_notification_key'])
+            raise RuntimeError('not scheduled')
+        with self.assertRaises(RuntimeError):
+            renew_notifications.start_renewal_notification(operation, {'email': 'account'}, sender=refuse)
+        self.assertFalse(renew_notifications.renewal_sms_was_sent(operation))
+        renew_notifications.start_renewal_notification(operation, {'email': 'account'}, sender=self._sender)
+        self.assertEqual(identities, [self.sent[0][0][5]['_renew_notification_key']])
+
     def test_a_converged_operation_is_messaged_exactly_once(self):
         operation = self._operation(response=_business_payload())
         first = renew_notifications.send_renewal_confirmation_once(

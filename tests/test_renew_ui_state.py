@@ -563,6 +563,9 @@ class RenewNotificationProgressTests(unittest.TestCase):
         self.assertEqual(result['stages'], ['complete', 'waiting', 'pending', 'pending'])
 
     def test_gateway_queue_and_carrier_delivery_are_different_steps(self):
+        preparing = self.notification('sending')
+        self.assertEqual(preparing['stages'], ['complete', 'active', 'pending', 'pending'])
+        self.assertEqual(preparing['key'], 'preparingSms')
         queued = self.notification('queued', request_id='request-1')
         self.assertEqual(queued['stages'], ['complete', 'complete', 'active', 'pending'])
         accepted = self.notification('accepted', delivery_state='pending')
@@ -591,7 +594,7 @@ class RenewNotificationProgressTests(unittest.TestCase):
         now = 1794700860000
         result = _run_node(self.code, 'notificationView(%s,%s)' % (json.dumps(value), now))
         self.assertEqual(result['key'], 'dispatchStalled')
-        self.assertEqual(result['stages'], ['complete','complete','warning','pending'])
+        self.assertEqual(result['stages'], ['complete','warning','pending','pending'])
 
 
 class RenewToneTests(unittest.TestCase):

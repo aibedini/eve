@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 
 from panel.models import SmsSendLog
 from panel.services.client_operations import operation_context, operation_response
-from panel.services.renew_notifications import notification_key
+from panel.services.renew_notifications import notification_key, renewal_sms_scheduled_at
+from panel.services.sms_delivery import _events_for_logs, _project_evidence
 
 
 def notification_id(operation):
@@ -20,27 +21,36 @@ def notification_logs(operations):
     for row in (SmsSendLog.query.filter(SmsSendLog.eve_notification_id.in_(keys))
                 .order_by(SmsSendLog.id.desc()).all()):
         latest.setdefault(row.eve_notification_id, row)
+    logs = list(latest.values())
+    events = _events_for_logs(logs)
+    for row in logs:
+        row._renew_submission, row._renew_carrier = _project_evidence(events[row.id], row)
     return latest
 
 
 def sms_status(operation, row=None):
     result = operation_response(operation)
     if row is not None:
-        if row.carrier_state == 'delivered':
+        carrier = getattr(row, '_renew_carrier', {}).get('state', row.carrier_state)
+        submission = getattr(row, '_renew_submission', {})
+        if carrier == 'delivered':
             return 'delivered'
-        if row.status == 'skipped':
+        if row.status == 'skipped' or submission.get('state') in ('cancelled', 'superseded'):
             return 'skipped'
         if row.status == 'manual_review' or getattr(row, 'verification_status', None) == 'manual_review_required':
             return 'manual_review'
-        if row.status == 'failed' or row.carrier_state in ('failed', 'undelivered') \
+        if row.status == 'failed' or submission.get('state') == 'failed' or carrier in ('failed', 'undelivered') \
                 or (row.terminal is True and row.successful is False):
             return 'failed'
-        if row.successful is True or row.status == 'sent':
+        if submission.get('confirmed') and submission.get('state') == 'sent':
             return 'accepted'
         if row.status in ('queued', 'deferred', 'pending', 'accepted'):
             return 'queued'
+        if row.status == 'sent' or (row.successful is True and
+                getattr(row, 'verification_status', None) == 'confirmed'):
+            return 'accepted'
         return 'sending'
-    if result.get('renew_sms_sent_at'):
+    if renewal_sms_scheduled_at(operation):
         # This marker means the background worker was scheduled, not delivery.
         return 'sending'
     if operation.state == 'completed':
@@ -53,7 +63,7 @@ def sms_status(operation, row=None):
 def sms_progress(operation, row=None):
     status = sms_status(operation, row)
     result = operation_response(operation)
-    scheduled = result.get('renew_sms_sent_at')
+    scheduled = renewal_sms_scheduled_at(operation)
     if scheduled:
         try:
             scheduled = datetime.fromisoformat(scheduled).replace(tzinfo=timezone.utc).isoformat()
@@ -64,7 +74,8 @@ def sms_progress(operation, row=None):
         'request_id': getattr(row, 'request_id', None),
         'gateway_state': getattr(row, 'gateway_state', None),
         'gateway_stage': getattr(row, 'stage', None),
-        'delivery_state': getattr(row, 'carrier_state', None),
+        'delivery_state': getattr(row, '_renew_carrier', {}).get('state', getattr(row, 'carrier_state', None)),
+        'delivery_evidence': getattr(row, '_renew_carrier', {}).get('evidence', getattr(row, 'carrier_evidence', None)),
         'reason': getattr(row, 'reason', None) or (
             'missing_content' if result.get('rebuilt_after_restart') and not result.get('tpl_vars') else None),
         'scheduled_at': scheduled,
@@ -88,7 +99,8 @@ def snapshot(operation, sms_log=None, *, detail=True):
                      and sms_log.terminal is True and sms_log.successful is False)
     attention = (operation.state in ('failed', 'needs_reconciliation')
                  or final_state in ('UNKNOWN', 'PARTIALLY_APPLIED', 'AUTH_DEGRADED', 'NOT_APPLIED')
-                 or sms in ('failed', 'skipped', 'unknown', 'manual_review', 'dispatch_pending'))
+                 or sms in ('failed', 'skipped', 'unknown', 'manual_review', 'dispatch_pending')
+                 or notification['delivery_state'] in ('unconfirmed', 'unavailable'))
     notification['retryable'] = retryable
     view = {
         'operation_id': operation.idempotency_key,
@@ -108,7 +120,9 @@ def snapshot(operation, sms_log=None, *, detail=True):
                               for code in (verify.get('reason_codes') or []))),
         'attention': attention,
         'pending': operation.state in ('reserved', 'prepared', 'panel_applied', 'activation_pending')
-                   or sms in ('sending', 'queued'),
+                   or sms in ('sending', 'queued')
+                   or (sms == 'accepted' and bool(notification['request_id'])
+                       and notification['delivery_state'] in (None, 'unknown', 'pending')),
         'days': context.get('days'),
         'volume_gb': context.get('volume_gb'),
         'amount': operation.amount,

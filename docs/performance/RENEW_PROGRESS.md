@@ -1,5 +1,25 @@
 # Renewal progress and request budget
 
+## Parallel dispatch and carrier truth (2.23.12)
+
+New renewal requests start the SMS worker immediately after the panel accepts
+the write, before the first verification read. SMS dispatch no longer waits for
+activation or a manual re-check. Its durable marker survives business finalization
+and verification errors; recovery uses the same gateway idempotency key.
+Validation still determines account status, charging and the business record.
+
+Without a gateway request ID the timeline stays on preparation. Queue acceptance,
+Android submission and carrier delivery are distinct. Renewal history and detail
+now use the same signed evidence projection as SMS Center, including multipart
+receipts and the unconfirmed receipt window. Evidence is read for all visible
+logs in one bounded query; callbacks can update the modal without a gateway poll.
+
+Background polling continues after terminal successful gateway submission while
+the carrier receipt is pending. It stops on delivery or an explicitly unavailable
+receipt, and bounds missing receipt polling to six hours. Expired receipt lookup
+cannot undo a confirmed send, and stale pending responses cannot undo delivered.
+No production gateway delivery latency has been measured locally.
+
 ## History and gateway status fixes (2.23.11)
 
 History contains the current operator's latest 50 renewals across all time,

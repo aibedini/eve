@@ -1,21 +1,10 @@
-"""Send the renewal confirmation exactly once, as soon as activation is real.
+"""Operation-scoped renewal notification dispatch.
 
-The production complaint this exists for: the confirmation SMS was fired from
-inside the renewal request, immediately after a verification that ran a second
-after the panel write. A v3 panel that had not finished activating yet produced a
-"pending" result, the send was skipped, and nothing ever retried it - so a
-customer whose renewal had in fact been applied never received the message,
-purely because the operator closed the modal before the account turned green.
-
-The rule now: the message follows the OPERATION, not the request or the modal.
-
-* it is sent after activation has converged, from whatever path observes that
-  first - the request, Re-check, Force Enable, or the background reconciler;
-* a node that is still synchronising is not a failure: after two consecutive
-  reads that show every enable layer active, the message is allowed through;
-* it is sent at most once per operation, guarded by a durable marker on the
-  operation row (``renew_sms_sent_at``), never by a time window or a cache;
-* the sender is injected so tests never touch a gateway.
+New requests start the gateway worker after the panel accepts its write, in
+parallel with activation verification. Scheduling never finalizes the business
+record or implies gateway acceptance/delivery. The durable marker and stable
+gateway identity prevent a later verification/recheck from dispatching twice.
+Legacy operations without an early dispatch keep their existing recovery path.
 """
 from __future__ import annotations
 
@@ -47,7 +36,42 @@ def _stored(operation):
 def renewal_sms_was_sent(operation) -> bool:
     if operation is None:
         return False
-    return bool(_stored(operation).get('renew_sms_sent_at'))
+    return bool(renewal_sms_scheduled_at(operation))
+
+
+def renewal_sms_scheduled_at(operation):
+    if operation is None:
+        return None
+    return client_operations.operation_response(operation).get('renew_sms_sent_at')
+
+
+def start_renewal_notification(operation, tpl_vars, comment='', *, sender=None):
+    """Dispatch after an accepted panel write, independently of activation reads.
+
+    Only the scheduling marker is written: starting an SMS must never finalize
+    a charge or claim that the account has been verified.
+    The gateway receives the same operation identity on every recovery path.
+    """
+    if operation is None or renewal_sms_was_sent(operation):
+        return {'sent': False, 'reason': 'already_sent' if operation else 'no_operation'}
+    key = notification_key(operation)
+    result = client_operations.operation_response(operation)
+    result['renew_sms_sent_at'] = datetime.utcnow().isoformat()
+    # Commit before starting the independent worker so other processes see it.
+    operation.response_json = client_operations._dumps(result)
+    db.session.commit()
+    try:
+        (sender or _default_sender)(
+            'renew', operation.server_id, operation.client_email, None, None,
+            dict(tpl_vars, _renew_notification_key=key), comment,
+            _server_name(operation.server_id))
+    except Exception:
+        result = client_operations.operation_response(operation)
+        result.pop('renew_sms_sent_at', None)
+        operation.response_json = client_operations._dumps(result)
+        db.session.commit()
+        raise
+    return {'sent': True, 'reason': 'scheduled'}
 
 
 def _persist(operation, updates: dict) -> None:

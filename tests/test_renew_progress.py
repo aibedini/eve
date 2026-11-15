@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,7 +19,7 @@ os.environ['FLASK_ENV'] = 'development'
 
 import app as app_module
 from panel.extensions import db, limiter
-from panel.models import Admin, ClientOperation, SmsSendLog
+from panel.models import Admin, ClientOperation, SmsSendLog, SmsGatewayEvent
 from panel.services import renew_progress, renew_notifications, client_operations
 
 
@@ -40,6 +40,11 @@ class ProgressContractTests(unittest.TestCase):
         self.assertTrue(view['confirmed'])
         self.assertFalse(view['sms']['retryable'])
         self.assertTrue(view['created_at'].endswith('+00:00'))
+
+    def test_explicit_gateway_queue_is_never_promoted_by_generic_success_flags(self):
+        from panel.jobs.messaging import _sms_accepted_status
+        self.assertEqual(_sms_accepted_status({'status':'queued', 'request_id':'gateway-one',
+            'terminal':True, 'successful':True}), 'queued')
 
     def test_list_summary_does_not_repeat_customer_text_or_template_variables(self):
         view = renew_progress.snapshot(self.operation(), detail=False)
@@ -85,6 +90,8 @@ class ProgressContractTests(unittest.TestCase):
         self.assertEqual(view['sms']['status'], 'queued')
         self.assertEqual(view['sms']['request_id'], 'gateway-1')
         self.assertTrue(view['pending'])
+        row.successful = True
+        self.assertEqual(renew_progress.snapshot(self.operation(), row)['sms']['status'], 'queued')
 
     def test_verified_unscheduled_sms_does_not_claim_to_be_waiting_for_account_verification(self):
         view = renew_progress.snapshot(self.operation(response_json=json.dumps({
@@ -117,6 +124,7 @@ class ProgressRouteTests(unittest.TestCase):
         db.session.remove()
         ClientOperation.query.delete()
         SmsSendLog.query.delete()
+        SmsGatewayEvent.query.delete()
         Admin.query.delete()
         self.admin = Admin(username='progress-owner', password_hash='x', role='superadmin', is_superadmin=True)
         self.other = Admin(username='progress-other', password_hash='x', role='superadmin', is_superadmin=True)
@@ -221,6 +229,99 @@ class ProgressRouteTests(unittest.TestCase):
         with patch('panel.routes.clients._renew_operation_accessible', return_value=False):
             self.assertEqual(self.client.get('/api/client-operations/renewals').json['operations'], [])
             self.assertEqual(self.client.get('/api/client-operations/renewals/mine').status_code, 404)
+
+    def test_background_poll_reads_carrier_delivery_after_terminal_gateway_send(self):
+        from panel.jobs import messaging
+        op = self.operation()
+        row = SmsSendLog(email=op.client_email, server_id=0, state='renew', status='sent',
+            request_id='accepted-one', terminal=True, successful=True, carrier_state='pending',
+            eve_notification_id=renew_progress.notification_id(op))
+        delivered = SmsSendLog(email='done', server_id=0, state='renew', status='sent',
+            request_id='already-delivered', terminal=True, successful=True, carrier_state='delivered')
+        db.session.add_all([row, delivered]); db.session.commit()
+        result = SimpleNamespace(status_code=200, json=lambda: {'status':'sent', 'terminal':True,
+            'successful':True, 'verificationStatus':'confirmed', 'carrierStatus':{'status':'delivered'}})
+        with patch.object(messaging, '_get_sms_runtime_settings', return_value={}), \
+                patch.object(messaging, '_get_sms_provider_settings', return_value={
+                    'base_url':'https://gateway.invalid', 'api_key':'test'}), \
+                patch.object(messaging.requests, 'get', return_value=result) as read:
+            messaging._refresh_pending_sms_statuses()
+            self.assertEqual(read.call_count, 1)
+            self.assertIn('accepted-one', read.call_args.args[0])
+            self.assertEqual(renew_progress.snapshot(op, row)['sms']['status'], 'delivered')
+            messaging._refresh_pending_sms_statuses()
+            self.assertEqual(read.call_count, 1, 'completed delivery must stop polling')
+
+    def test_missing_old_delivery_report_cannot_turn_a_confirmed_send_into_failure(self):
+        from panel.jobs import messaging
+        op = self.operation()
+        row = SmsSendLog(email=op.client_email, server_id=0, state='renew', status='sent',
+            request_id='old-confirmed', terminal=True, successful=True,
+            created_at=datetime.utcnow() - timedelta(hours=7))
+        db.session.add(row); db.session.commit()
+        with patch.object(messaging, '_get_sms_runtime_settings', return_value={}), \
+                patch.object(messaging.requests, 'get') as read:
+            messaging._refresh_pending_sms_statuses()
+            read.assert_not_called()
+        self.assertTrue(row.successful)
+        self.assertEqual(row.carrier_state, 'unavailable')
+        self.assertEqual(renew_progress.snapshot(op, row)['sms']['status'], 'accepted')
+        self.assertFalse(renew_progress.snapshot(op, row)['sms']['retryable'])
+
+    def test_renewal_reads_the_signed_receipt_used_by_sms_center(self):
+        op = self.operation()
+        row = SmsSendLog(email=op.client_email, server_id=0, state='renew', status='queued',
+            request_id='signed-message', terminal=False,
+            eve_notification_id=renew_progress.notification_id(op))
+        event = SmsGatewayEvent(event_id='receipt-one', trace_id='trace-one',
+            message_id='signed-message', eve_notification_id=renew_progress.notification_id(op),
+            event_type='sms.delivered', carrier_status='delivered', evidence='android_dlr',
+            occurred_at=datetime.utcnow(), attempt=1)
+        db.session.add_all([row, event]); db.session.commit()
+        response = self.client.get('/api/client-operations/renewals/mine')
+        self.assertEqual(response.json['operation']['sms']['status'], 'delivered')
+        self.assertEqual(response.json['operation']['sms']['delivery_evidence'], 'android_dlr')
+        history = self.client.get('/api/client-operations/renewals').json['operations'][0]
+        self.assertEqual(history['sms']['status'], 'delivered')
+        event.diagnostics_json = json.dumps({'all_segments_delivered': False})
+        db.session.commit()
+        response = self.client.get('/api/client-operations/renewals/mine')
+        self.assertNotEqual(response.json['operation']['sms']['status'], 'delivered')
+
+    def test_delivered_receipt_cannot_be_reverted_by_a_stale_gateway_poll(self):
+        from panel.jobs import messaging
+        row = SmsSendLog(email='done', server_id=0, state='renew', status='sent',
+            request_id='confirmed-delivery', terminal=True, successful=True, carrier_state='delivered')
+        db.session.add(row); db.session.commit()
+        result = SimpleNamespace(status_code=200, json=lambda: {'status':'sent', 'terminal':True,
+            'successful':True, 'carrierStatus':{'status':'pending'}})
+        with patch.object(messaging, '_get_sms_runtime_settings', return_value={}), \
+                patch.object(messaging, '_get_sms_provider_settings', return_value={
+                    'base_url':'https://gateway.invalid', 'api_key':'test'}), \
+                patch.object(messaging.requests, 'get', return_value=result):
+            messaging._refresh_pending_sms_statuses(log_id=row.id)
+        self.assertEqual(row.carrier_state, 'delivered')
+
+    def test_batched_evidence_keeps_each_message_and_older_terminal_receipts(self):
+        from panel.services.sms_delivery import _events_for_logs, _project_evidence
+        busy = SmsSendLog(email='busy', server_id=0, state='renew', status='queued', request_id='busy')
+        quiet = SmsSendLog(email='quiet', server_id=0, state='renew', status='queued', correlation_id='quiet-trace')
+        db.session.add_all([busy, quiet]); db.session.flush()
+        now = datetime.utcnow()
+        rows = [SmsGatewayEvent(event_id='queue-%s' % index, trace_id='busy-trace', message_id='busy',
+            event_type='gateway.accepted', occurred_at=now + timedelta(seconds=index), attempt=1)
+            for index in range(600)]
+        rows.extend([
+            SmsGatewayEvent(event_id='old-receipt', trace_id='busy-trace', message_id='busy',
+                event_type='sms.delivered', carrier_status='delivered', occurred_at=now - timedelta(days=1), attempt=1),
+            SmsGatewayEvent(event_id='quiet-failure', trace_id='quiet-trace', message_id='quiet-message',
+                event_type='send.failed', occurred_at=now, attempt=1)])
+        db.session.add_all(rows); db.session.commit()
+        events = _events_for_logs([busy, quiet])
+        self.assertEqual(len(events[busy.id]), 501)
+        self.assertEqual([item.event_id for item in events[quiet.id]], ['quiet-failure'])
+        self.assertEqual(_project_evidence(events[busy.id], busy)[1]['state'], 'delivered')
+        renew_progress.notification_logs([])  # Empty history has no evidence work.
 
     def test_retry_is_blocked_for_unknown_or_inflight_sms(self):
         self.operation()

@@ -97,6 +97,10 @@ def finalize_renewal_business_once(operation, build, *, final_state=None,
         return existing, True
 
     payload = dict(build() or {})
+    # An accepted write may already have started its independent notification.
+    scheduled = client_operations.operation_response(operation).get('renew_sms_sent_at')
+    if scheduled:
+        payload['renew_sms_sent_at'] = scheduled
     payload['business_finalized'] = True
     payload['business_finalized_at'] = _now_iso()
     payload['durable'] = True
@@ -166,6 +170,9 @@ def record_business_result(operation, payload, *, final_state=None,
     if existing is not None:
         return existing, True
     payload = dict(payload or {})
+    scheduled = client_operations.operation_response(operation).get('renew_sms_sent_at')
+    if scheduled:
+        payload['renew_sms_sent_at'] = scheduled
     payload['business_finalized'] = True
     payload.setdefault('business_finalized_at', _now_iso())
     payload['durable'] = True

@@ -64,7 +64,7 @@
         notFound: ['This operation is not available yet or you no longer have access. No new renewal was submitted.', 'این عملیات هنوز در دسترس نیست یا دسترسی شما تغییر کرده است. تمدید جدیدی ثبت نشد.'],
         retryBlocked: ['SMS retry is unavailable. Refresh to check its latest status.', 'تلاش مجدد پیامک ممکن نیست؛ آخرین وضعیت را به‌روز کنید.'],
         copied: ['Account information copied', 'اطلاعات حساب کپی شد'],
-        smsAccount: ['Account', 'تأیید حساب'], smsPrepare: ['Prepare', 'آماده‌سازی'],
+        smsAccount: ['Request accepted', 'پذیرش درخواست'], smsPrepare: ['Prepare', 'آماده‌سازی'],
         smsGateway: ['Gateway', 'درگاه پیامک'], smsDelivery: ['Delivery', 'تحویل'],
         dispatchPending: ['Not queued yet', 'هنوز در صف ارسال نیست'],
         dispatchPendingNote: ['The account is verified, but no SMS submission is recorded yet. Re-check this operation.', 'حساب تأیید شده، اما هنوز ثبت ارسال پیامک موجود نیست؛ همین عملیات را دوباره بررسی کنید.'],
@@ -73,6 +73,10 @@
         queued: ['Queued at gateway', 'در صف درگاه پیامک'],
         queuedNote: ['The gateway has the request. Sending and delivery are still pending.', 'درگاه درخواست را دریافت کرده است؛ ارسال و تحویل هنوز در انتظارند.'],
         gatewayProcessing: ['Gateway is processing', 'درگاه در حال پردازش است'],
+        preparingSms: ['Preparing SMS submission', 'در حال آماده‌سازی ارسال پیامک'],
+        deliveryUnconfirmed: ['Delivery not confirmed', 'تحویل هنوز تأیید نشده'],
+        deliveryUnconfirmedNote: ['The SMS was submitted, but its carrier receipt has not arrived. Re-check reads the same message.', 'پیامک ارسال شده، اما رسید تحویل اپراتور نرسیده است. بررسی مجدد وضعیت همین پیامک را می‌خواند.'],
+        preparingSmsNote: ['EVE is preparing the SMS. No gateway receipt is recorded yet.', 'پیامک در حال آماده‌سازی است؛ هنوز رسید ثبت درخواست در درگاه موجود نیست.'],
         gatewayProcessingNote: ['The SMS request is registered at the gateway and is being processed.', 'درخواست پیامک در درگاه ثبت شده و در حال پردازش است.'],
         deliveryUnavailable: ['Delivery report unavailable', 'گزارش تحویل در دسترس نیست'],
         deliveryUnavailableNote: ['The gateway accepted the SMS, but no carrier delivery report is available.', 'درگاه پیامک را پذیرفته، اما گزارش تحویل اپراتور در دسترس نیست.'],
@@ -162,13 +166,15 @@
             : status === 'dispatch_pending' ? 'dispatchPending' : status === 'manual_review' ? 'manualReview' : status;
         if (operation.confirmed) stages[0] = 'complete';
         if (status === 'dispatch_pending') { phase = 1; state = 'waiting'; }
-        else if (status === 'stalled') { phase = 2; state = 'warning'; }
+        else if (status === 'stalled') { phase = 1; state = 'warning'; }
         else if (status === 'sending' || status === 'queued') {
-            phase = 2; state = 'active';
+            phase = sms.request_id ? 2 : 1; state = 'active';
+            if (!sms.request_id) key = 'preparingSms';
             if (status === 'sending' && sms.request_id) key = 'gatewayProcessing';
         } else if (status === 'accepted') {
             phase = 3;
             if (sms.delivery_state === 'unavailable') { key = 'deliveryUnavailable'; state = 'warning'; }
+            if (sms.delivery_state === 'unconfirmed') { key = 'deliveryUnconfirmed'; state = 'warning'; }
         } else if (status === 'delivered') { phase = 4; }
         else if (['failed','skipped','manual_review','unknown'].includes(status)) {
             phase = ['failed','undelivered'].includes(sms.delivery_state) ? 3 : sms.request_id ? 2 : operation.confirmed ? 1 : 0;
@@ -517,7 +523,9 @@
             const key = errors.length === 2 ? 'checkFailed' : errors.length ? 'checkPartial' : changed ? 'checkUpdated' : 'checkUnchanged';
             checkFeedback.set(id,{message:t(key,{time:formatCheckTime(new Date()),status,error:errors.join(' ')}),
                 tone:errors.length === 2 ? 'error' : errors.length || !current.confirmed
-                    || ['failed','skipped','unknown','manual_review','dispatch_pending','stalled'].includes(notificationView(current).status) ? 'warning' : 'success'});
+                    || ['failed','skipped','unknown','manual_review','dispatch_pending','stalled'].includes(notificationView(current).status)
+                    || ['unconfirmed','unavailable'].includes(current.sms?.delivery_state) ? 'warning'
+                    : current.sms?.status === 'delivered' ? 'success' : 'checking'});
         } catch (error) {
             checkFeedback.set(id,{message:t('checkFailed',{time:formatCheckTime(new Date()),error:explainError(error,operations.get(id),false)}),tone:'error'});
         }

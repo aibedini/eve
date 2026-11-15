@@ -784,7 +784,7 @@ class RenewConsistencyTests(unittest.TestCase):
         The corrected behaviour is NOT "fail everything": the panel really does hold
         the new expiry and quota, so the renewal's business facts are recorded (one
         transaction, one renewal event, a customer text) - but the final state is
-        ACTIVATION_PENDING, the customer success message is withheld, and the
+        ACTIVATION_PENDING, SMS dispatch runs independently, and the
         operation stays resumable by the activation reconciler.
         """
         _row, _revision = self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
@@ -803,11 +803,9 @@ class RenewConsistencyTests(unittest.TestCase):
         self.assertTrue(payload.get('config_applied'))
         self.assertFalse(payload.get('activation_config_converged'))
         self.assertTrue(payload.get('business_finalized'))
-        # The customer text IS durable (the operator may still need it), but the
-        # customer message itself must not have gone out for an inactive account.
+        # Text is durable and dispatch does not wait for activation convergence.
         self.assertTrue(payload.get('copy_text'))
-        self.assertFalse(self.sms_fired(), 'a renewal SMS was sent while activation '
-                                           'had not converged')
+        self.assertTrue(self.sms_fired(), 'SMS dispatch must run independently of activation')
         # Business facts recorded exactly once, activation pending on the operation.
         self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
         self.assertEqual(RenewalEvent.query.filter_by(
@@ -852,7 +850,22 @@ class RenewConsistencyTests(unittest.TestCase):
         self.assertEqual(payload['final_state'], 'CONFIG_APPLIED_ACTIVATION_PENDING')
         self.assertEqual(payload['verify']['repair_attempts'], 1)
         self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
-        self.assertFalse(self.sms_fired())
+        self.assertTrue(self.sms_fired())
+
+    def test_initial_dispatch_has_started_before_the_first_verification_read(self):
+        self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
+        self.panel.cap = 5 * GB
+        original = self.panel.aggregate_inbounds
+        observed = []
+        def read(*args, **kwargs):
+            if self.panel.applied is not None:
+                observed.append(self.sms_fire.call_count)
+            return original(*args, **kwargs)
+        with mock.patch.object(self.panel, 'aggregate_inbounds', side_effect=read):
+            self._renew(volume=20, operation_id='renew-sms-parallel')
+        self.assertTrue(observed)
+        self.assertTrue(all(count == 1 for count in observed), observed)
+        self.assertEqual(self.sms_fire.call_count, 1)
 
     def test_g_node_pending_keeps_the_renewal_applied_and_waits(self):
         """nodePending: the panel committed the config, its node has not caught up."""
@@ -870,7 +883,7 @@ class RenewConsistencyTests(unittest.TestCase):
         self.assertEqual(payload.get('runtime_sync_state'), 'pending')
         self.assertTrue(payload.get('config_applied'))
         self.assertEqual(Transaction.query.filter_by(client_email=EMAIL).count(), 1)
-        self.assertFalse(self.sms_fired(), 'a renewal SMS was sent for a node-pending write')
+        self.assertTrue(self.sms_fired(), 'node synchronization must not delay dispatch')
 
     def test_h_a_fully_converged_renewal_still_succeeds(self):
         """The control: every layer agreeing must still renew, charge and return 200."""
@@ -1025,7 +1038,7 @@ class RenewConsistencyTests(unittest.TestCase):
         operation = ClientOperation.query.filter_by(
             idempotency_key='renew-op-unapplied').one()
         self.assertIn(operation.state, ('needs_reconciliation', 'failed', 'panel_applied'))
-        self.assertEqual(self.sms_fire.call_count, 0)
+        self.assertEqual(self.sms_fire.call_count, 1)
 
     def test_recheck_recovery_does_not_repeat_business_or_panel_mutations(self):
         self._seed_cache(cap=5 * GB, up=0, down=0, age_seconds=0)
