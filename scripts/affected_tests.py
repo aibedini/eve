@@ -304,9 +304,11 @@ MAPPING = (
          'tests.test_static_deploy_contract'],
     )),
     ('panel/routes/machine_api.py', (
-        # Read-only Context API v1: auth/scopes, masked projections, event signing.
-        ['tests.test_machine_api'],
-        ['tests.test_alembic_machine_api_keys', 'tests.test_security_headers'],
+        # Read-only Context API v1: auth/scopes, masked projections, event signing,
+        # plus the XR-GA-019 proposal submission/listing endpoints.
+        ['tests.test_machine_api', 'tests.test_proposals'],
+        ['tests.test_alembic_machine_api_keys', 'tests.test_alembic_proposals',
+         'tests.test_security_headers'],
     )),
     ('panel/services/machine_api.py', (
         ['tests.test_machine_api'],
@@ -319,6 +321,35 @@ MAPPING = (
     ('panel/models/machine.py', (
         ['tests.test_machine_api'],
         ['tests.test_alembic_machine_api_keys'],
+    )),
+    ('panel/routes/proposals.py', (
+        # The operator review queue and its accept/reject decisions (XR-GA-019).
+        ['tests.test_proposals'],
+        ['tests.test_ui_design_system'],
+    )),
+    ('panel/services/proposals.py', (
+        # Proposal submission/idempotency, generation revalidation and decisions.
+        ['tests.test_proposals'],
+        ['tests.test_rbac'],
+    )),
+    ('panel/models/proposals.py', (
+        ['tests.test_proposals'],
+        ['tests.test_alembic_proposals'],
+    )),
+    ('panel/services/permissions.py', (
+        # The permission catalog and role defaults: every gated route reads it.
+        ['tests.test_rbac'],
+        [],
+    )),
+    ('templates/proposals.html', (
+        ['tests.test_proposals', 'tests.test_ui_design_system'],
+        ['tests.test_i18n_pages'],
+    )),
+    ('alembic/versions/', (
+        # A schema revision: prove both the upgrade path and the create_all
+        # self-healing path still hold for the machine API tables.
+        ['tests.test_alembic_machine_api_keys', 'tests.test_alembic_proposals'],
+        [],
     )),
     ('panel/routes/sms_gateway_events.py', (
         # Signed GMweb SMS evidence ingestion and the delivery pipeline projection.

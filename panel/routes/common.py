@@ -249,6 +249,20 @@ def permission_required(permission: str):
     return decorator
 
 
+def inject_permissions():
+    """Jinja context: permission flags used only to show or hide navigation.
+
+    This is a convenience, never the enforcement point: each route re-checks the
+    permission with ``permission_required``. Kept defensive so a template render
+    during a database outage cannot fail on a context processor.
+    """
+    try:
+        granted = current_permissions()
+    except Exception:
+        granted = frozenset()
+    return {'can_review_proposals': 'proposals.review' in granted}
+
+
 def client_portal_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):

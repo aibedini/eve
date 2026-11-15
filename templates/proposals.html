@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% set proposal_copy = {
+ 'en': {
+   'title': 'Proposals',
+   'intro': 'Suggestions submitted by GOD AI over the machine API. Accepting records the decision for the operator audit trail; it does not send a message or change a client.',
+   'pending': 'pending',
+   'customer': 'Customer', 'service': 'Service', 'generation': 'Generation',
+   'created': 'Created', 'none': 'not set',
+   'accept': 'Accept', 'reject': 'Reject',
+   'reason': 'Rejection reason',
+   'reason_placeholder': 'Why are you rejecting this proposal?',
+   'types': {'reminder_text': 'Reminder text', 'duplicate_receipt_flag': 'Duplicate receipt flag', 'telegram_reply_draft': 'Telegram reply draft'},
+   'empty_title': 'No pending proposals',
+   'empty_help': 'GOD AI has not submitted a proposal that is waiting for review.',
+   'accepted': 'Proposal accepted. The decision was recorded; nothing was sent and no client changed.',
+   'expired': 'The service changed after this proposal was created (generation mismatch), so it was marked expired and nothing was sent or changed.',
+   'rejected': 'Proposal rejected. The reason was recorded.',
+   'reason_required': 'A rejection reason is required.',
+   'reason_too_long': 'The rejection reason is too long (maximum 500 characters).',
+   'already_decided': 'This proposal was already decided by another reviewer.'
+ },
+ 'fa': {
+   'title': 'پیشنهادها',
+   'intro': 'پیشنهادهایی که GOD AI از طریق API ماشین ثبت می‌کند. تأیید فقط تصمیم را برای ردگیری ممیزی ثبت می‌کند؛ هیچ پیامی ارسال نمی‌شود و هیچ کلاینتی تغییر نمی‌کند.',
+   'pending': 'در انتظار',
+   'customer': 'مشتری', 'service': 'سرویس', 'generation': 'نسل',
+   'created': 'زمان ایجاد', 'none': 'ثبت نشده',
+   'accept': 'تأیید', 'reject': 'رد',
+   'reason': 'دلیل رد',
+   'reason_placeholder': 'چرا این پیشنهاد را رد می‌کنید؟',
+   'types': {'reminder_text': 'متن یادآوری', 'duplicate_receipt_flag': 'علامت رسید تکراری', 'telegram_reply_draft': 'پیش‌نویس پاسخ تلگرام'},
+   'empty_title': 'پیشنهاد در انتظاری نیست',
+   'empty_help': 'GOD AI پیشنهادی که در انتظار بررسی باشد ثبت نکرده است.',
+   'accepted': 'پیشنهاد تأیید شد. تصمیم ثبت شد؛ هیچ پیامی ارسال نشد و هیچ کلاینتی تغییر نکرد.',
+   'expired': 'سرویس پس از ساخت این پیشنهاد تغییر کرده است (ناسازگاری نسل)؛ بنابراین منقضی علامت خورد و هیچ پیامی ارسال یا هیچ چیزی تغییر نکرد.',
+   'rejected': 'پیشنهاد رد شد. دلیل ثبت شد.',
+   'reason_required': 'وارد کردن دلیل رد الزامی است.',
+   'reason_too_long': 'دلیل رد بیش از حد بلند است (حداکثر ۵۰۰ کاراکتر).',
+   'already_decided': 'این پیشنهاد پیش‌تر توسط بررسی‌کننده دیگری تعیین تکلیف شده است.'
+ }} %}
+{% set t = proposal_copy[panel_lang] if panel_lang in proposal_copy else proposal_copy['en'] %}
+{% block title %}{{ t.title }}{% endblock %}
+{% block page_title %}{{ t.title }}{% endblock %}
+
+{% block content %}
+<section class="proposal-inbox">
+    <header class="proposal-inbox-header">
+        <p class="field-note">{{ t.intro }}</p>
+        <span class="badge">{{ proposals|length }} {{ t.pending }}</span>
+    </header>
+
+    {% if notice == 'accepted' %}
+    <div class="proposal-banner proposal-banner-ok" role="status">{{ t.accepted }}</div>
+    {% elif notice == 'expired' %}
+    <div class="proposal-banner proposal-banner-warn" role="status">
+        {{ t.expired }}
+        {% if conflict_proposal %}<span class="proposal-id">{{ conflict_proposal }}</span>{% endif %}
+    </div>
+    {% elif notice == 'rejected' %}
+    <div class="proposal-banner proposal-banner-ok" role="status">{{ t.rejected }}</div>
+    {% endif %}
+
+    {% if error %}
+    <div class="proposal-banner proposal-banner-error" role="alert">{{ t[error] }}</div>
+    {% endif %}
+
+    {% if proposals %}
+    <ul class="proposal-list">
+        {% for proposal in proposals %}
+        <li class="proposal-card">
+            <div class="proposal-card-head">
+                <div>
+                    <h3 class="proposal-title">{{ t.types.get(proposal.type, proposal.type) }}</h3>
+                    <p class="proposal-meta">
+                        <span>{{ t.customer }}:
+                            {% if proposal.customer_id %}
+                            {% set customer = customers.get(proposal.customer_id) %}
+                            {{ customer.display_name if customer else t.none }}
+                            <span class="proposal-id">#{{ proposal.customer_id }}</span>
+                            {% else %}{{ t.none }}{% endif %}
+                        </span>
+                        <span>{{ t.service }}: <span class="proposal-id">{{ proposal.service_key or t.none }}</span></span>
+                        <span>{{ t.generation }}:
+                            {{ proposal.generation if proposal.generation is not none else t.none }}
+                        </span>
+                        <span>{{ t.created }}: {{ format_app_datetime(proposal.created_at) }}</span>
+                    </p>
+                </div>
+                <span class="badge proposal-id">{{ proposal.proposal_id }}</span>
+            </div>
+
+            <p class="proposal-payload">{{ payload_preview(proposal) }}</p>
+
+            <div class="proposal-actions">
+                <form method="post" action="{{ url_for('proposals.accept_proposal', proposal_pk=proposal.id) }}">
+                    <button class="btn btn-success" type="submit">{{ t.accept }}</button>
+                </form>
+                <form class="proposal-reject-form" method="post" action="{{ url_for('proposals.reject_proposal', proposal_pk=proposal.id) }}">
+                    <div class="form-group">
+                        <label for="proposal-reason-{{ proposal.id }}">{{ t.reason }}</label>
+                        <input id="proposal-reason-{{ proposal.id }}" name="reason" type="text"
+                               maxlength="500" required placeholder="{{ t.reason_placeholder }}">
+                    </div>
+                    <button class="btn btn-danger" type="submit">{{ t.reject }}</button>
+                </form>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-state">
+        <h3>{{ t.empty_title }}</h3>
+        <p class="field-note">{{ t.empty_help }}</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

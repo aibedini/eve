@@ -328,8 +328,8 @@
 </head>
 <body class="{{ panel_dir or 'ltr' }}">
 {% set nav_copy = {
-    'en': {'dashboard': 'Dashboard', 'monitor': 'Monitor', 'pulse': 'Pulse', 'links': 'Links', 'royalty': 'Royalty', 'transactions': 'Transactions', 'receipts': 'Receipts', 'telegram_inbox': 'Telegram Inbox', 'finance': 'Finance', 'servers': 'Servers', 'custom_subscriptions': 'Custom Subscriptions', 'packages': 'Packages', 'bank_cards': 'Bank Cards', 'sub_manager': 'Sub Manager', 'merger': 'Merger', 'users': 'Users', 'traffic': 'Traffic', 'sms_center': 'SMS Center', 'settings': 'Settings', 'telegram_bot': 'Telegram Bot', 'logout': 'Logout', 'new_release': 'New Release', 'role_superadmin': 'superadmin', 'role_admin': 'admin', 'role_reseller': 'reseller'},
-    'fa': {'dashboard': 'داشبورد', 'monitor': 'مانیتور', 'pulse': 'پالس', 'links': 'لینک‌ها', 'royalty': 'حق‌امتیاز', 'transactions': 'تراکنش‌ها', 'receipts': 'رسیدها', 'telegram_inbox': 'صندوق تلگرام', 'finance': 'مالی', 'servers': 'سرورها', 'custom_subscriptions': 'اشتراک‌های سفارشی', 'packages': 'پکیج‌ها', 'bank_cards': 'کارت‌های بانکی', 'sub_manager': 'مدیریت اشتراک', 'merger': 'ادغام‌کننده', 'users': 'کاربران', 'traffic': 'ترافیک', 'sms_center': 'مرکز پیامک', 'settings': 'تنظیمات', 'telegram_bot': 'ربات تلگرام', 'logout': 'خروج', 'new_release': 'نسخهٔ جدید', 'role_superadmin': 'سوپرادمین', 'role_admin': 'ادمین', 'role_reseller': 'نماینده'},
+    'en': {'dashboard': 'Dashboard', 'monitor': 'Monitor', 'pulse': 'Pulse', 'links': 'Links', 'royalty': 'Royalty', 'transactions': 'Transactions', 'receipts': 'Receipts', 'telegram_inbox': 'Telegram Inbox', 'proposals': 'Proposals', 'finance': 'Finance', 'servers': 'Servers', 'custom_subscriptions': 'Custom Subscriptions', 'packages': 'Packages', 'bank_cards': 'Bank Cards', 'sub_manager': 'Sub Manager', 'merger': 'Merger', 'users': 'Users', 'traffic': 'Traffic', 'sms_center': 'SMS Center', 'settings': 'Settings', 'telegram_bot': 'Telegram Bot', 'logout': 'Logout', 'new_release': 'New Release', 'role_superadmin': 'superadmin', 'role_admin': 'admin', 'role_reseller': 'reseller'},
+    'fa': {'dashboard': 'داشبورد', 'monitor': 'مانیتور', 'pulse': 'پالس', 'links': 'لینک‌ها', 'royalty': 'حق‌امتیاز', 'transactions': 'تراکنش‌ها', 'receipts': 'رسیدها', 'telegram_inbox': 'صندوق تلگرام', 'proposals': 'پیشنهادها', 'finance': 'مالی', 'servers': 'سرورها', 'custom_subscriptions': 'اشتراک‌های سفارشی', 'packages': 'پکیج‌ها', 'bank_cards': 'کارت‌های بانکی', 'sub_manager': 'مدیریت اشتراک', 'merger': 'ادغام‌کننده', 'users': 'کاربران', 'traffic': 'ترافیک', 'sms_center': 'مرکز پیامک', 'settings': 'تنظیمات', 'telegram_bot': 'ربات تلگرام', 'logout': 'خروج', 'new_release': 'نسخهٔ جدید', 'role_superadmin': 'سوپرادمین', 'role_admin': 'ادمین', 'role_reseller': 'نماینده'},
 } %}
 {% set nav_t = nav_copy['fa' if panel_lang == 'fa' else 'en'] %}
     <div class="app-layout">
@@ -419,6 +419,16 @@
                     </svg>
                     <span>{{ nav_t['telegram_inbox'] }}</span>
                 </a>
+
+                {% if can_review_proposals %}
+                <a href="{{ url_for('proposals.proposals_page') }}" class="nav-item {% if request.endpoint == 'proposals.proposals_page' %}active{% endif %}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 11l3 3L22 4"></path>
+                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                    </svg>
+                    <span>{{ nav_t['proposals'] }}</span>
+                </a>
+                {% endif %}
                 
                 <a href="{{ url_for('pages.finance_page') }}" class="nav-item {% if request.endpoint == 'pages.finance_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>

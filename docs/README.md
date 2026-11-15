@@ -20,6 +20,8 @@ relative link does not resolve.
 
 - [Codebase Memory workflow for all coding agents](AI_CODEBASE_MEMORY.md) - AI_CODEBASE_MEMORY.md
 
+- [EVE Context API v1 (machine API: auth, scopes, proposals)](MACHINE_API.md) - MACHINE_API.md
+
 ## Security
 
 - [Security Architecture](security/ARCHITECTURE.md) - security/ARCHITECTURE.md
@@ -62,6 +64,7 @@ relative link does not resolve.
 - [Per-server scheduling benchmark and HOT capacity](performance/SCHEDULING_BENCHMARK.md) - performance/SCHEDULING_BENCHMARK.md
 - [Reseller refresh projection](performance/SERIALIZATION.md) - performance/SERIALIZATION.md
 - [Per-server adaptive polling](performance/SERVER_POLLING.md) - performance/SERVER_POLLING.md
+- [Renewal progress and request budget](performance/RENEW_PROGRESS.md) - performance/RENEW_PROGRESS.md
 - [Live updates over server-sent events](performance/SSE.md) - performance/SSE.md
 - [Static asset delivery](performance/STATIC_ASSETS.md) - performance/STATIC_ASSETS.md
 - [Subscription response cache](performance/SUBSCRIPTION_CACHE.md) - performance/SUBSCRIPTION_CACHE.md

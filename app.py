@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.23.13"
+APP_VERSION = "2.23.14"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -2074,11 +2074,14 @@ if os.environ.get('EVE_SKIP_IMPORT_MIGRATIONS') != '1':
 
 # Auth guards extracted to panel.routes.common (re-exported for compatibility).
 from panel.routes.common import (  # noqa: F401
+    inject_permissions,
     login_required,
     client_portal_required,
     superadmin_required,
     user_management_required,
 )
+# Navigation visibility only (the proposals routes still enforce the permission).
+app.context_processor(inject_permissions)
 
 
 def _normalize_username(raw: str | None) -> str:
@@ -3105,6 +3108,7 @@ from panel.routes.monitor import bp as monitor_bp
 from panel.routes.packages import _calculate_minimum_price  # noqa: F401
 from panel.routes.packages import bp as packages_bp
 from panel.routes.pages import bp as pages_bp
+from panel.routes.proposals import bp as proposals_bp
 from panel.routes.pulse import PULSE_COPY, _pulse_queue_snapshot  # noqa: F401
 from panel.routes.pulse import bp as pulse_bp
 from panel.routes.receipts import bp as receipts_bp
@@ -3126,6 +3130,7 @@ from panel.routes.templates_api import bp as templates_api_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(pages_bp)
+app.register_blueprint(proposals_bp)
 app.register_blueprint(system_bp)
 app.register_blueprint(pulse_bp)
 app.register_blueprint(bnqo_bp)

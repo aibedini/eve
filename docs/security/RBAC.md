@@ -27,15 +27,16 @@ owner out.
 | secrets.manage | TLS keys and other secret material |
 | telegram.read / telegram.write | Telegram routing and notifications |
 | content.manage | announcements, templates, FAQ and other content |
+| proposals.review | review (accept/reject) the GOD AI proposals submitted over the machine API |
 
 ## Role defaults
 
 - **superadmin** (or is_superadmin): every permission.
 - **admin**: the historical "user management" surface - all reads/writes except
-  secrets.manage, backups.restore and admins.manage.
+  secrets.manage, backups.restore and admins.manage - plus proposals.review.
 - **reseller**: servers.read, clients.read, clients.write, finance.read,
-  finance.write, telegram.read. No settings, backups, admin management, secret
-  or bank-reveal access.
+  finance.write, telegram.read. No settings, backups, admin management, secret,
+  bank-reveal or proposal-review access.
 - Unknown roles fall back to the reseller set.
 
 ## Enforcement

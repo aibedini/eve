@@ -69,6 +69,10 @@ SCOPE_PAYMENT_READ_MASKED = 'context.payment.read_masked'
 SCOPE_SUPPORT_READ = 'context.support.read'
 SCOPE_KNOWLEDGE_READ = 'context.knowledge.read'
 SCOPE_EVENTS_SUBSCRIBE = 'events.subscribe'
+# GOD AI submits proposals (XR-GA-019): `proposals.write` may only create a
+# pending proposal, never act on EVE; `proposals.read` reads the queue back.
+SCOPE_PROPOSALS_READ = 'proposals.read'
+SCOPE_PROPOSALS_WRITE = 'proposals.write'
 
 KNOWN_SCOPES = frozenset({
     SCOPE_CUSTOMER_READ,
@@ -78,6 +82,8 @@ KNOWN_SCOPES = frozenset({
     SCOPE_SUPPORT_READ,
     SCOPE_KNOWLEDGE_READ,
     SCOPE_EVENTS_SUBSCRIBE,
+    SCOPE_PROPOSALS_READ,
+    SCOPE_PROPOSALS_WRITE,
 })
 
 SCHEMA_HEALTH = 'eve.context.health.v1'
@@ -91,6 +97,7 @@ SCHEMA_SUPPORT = 'eve.context.support_requests.v1'
 SCHEMA_CLAIMS = 'eve.context.ownership_claims.v1'
 SCHEMA_KNOWLEDGE = 'eve.context.knowledge.v1'
 SCHEMA_SMS = 'eve.context.sms_notifications.v1'
+SCHEMA_PROPOSALS = 'eve.context.proposals.v1'
 
 TOKEN_PREFIX = 'eve_mk_'
 TOKEN_HASH_PURPOSE = 'machine-api-key'

@@ -50,6 +50,20 @@ from panel.models.finance import (
     WalletLedger,
 )
 from panel.models.machine import MachineApiKey
+from panel.models.proposals import (
+    Proposal,
+    PROPOSAL_TYPES,
+    PROPOSAL_STATUSES,
+    PROPOSAL_TYPE_REMINDER_TEXT,
+    PROPOSAL_TYPE_DUPLICATE_RECEIPT_FLAG,
+    PROPOSAL_TYPE_TELEGRAM_REPLY_DRAFT,
+    PROPOSAL_STATUS_PENDING,
+    PROPOSAL_STATUS_ACCEPTED,
+    PROPOSAL_STATUS_REJECTED,
+    PROPOSAL_STATUS_EXPIRED,
+    PROPOSAL_EXPIRED_SERVICE_MISSING,
+    PROPOSAL_EXPIRED_GENERATION_STALE,
+)
 from panel.models.telegram import (
     TelegramBotInstance,
     TelegramBotRuntime,

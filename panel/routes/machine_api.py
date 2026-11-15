@@ -1,9 +1,12 @@
-"""Read-only machine API (EVE Context API v1) mounted at ``/machine/v1``.
+"""Machine API (EVE Context API v1) mounted at ``/machine/v1``.
 
 This is the only non-session data surface in EVE: GOD AI consumes versioned,
-masked projections over a bearer machine key. Every route is ``GET`` and the
-only database write on the whole blueprint is ``machine_api_keys.last_used_at``
-(see :func:`panel.services.machine_api.touch_machine_key`).
+masked projections over a bearer machine key. Every read is ``GET``; the one
+write is ``POST /machine/v1/proposals`` (XR-GA-019), which stores a *pending*
+proposal and nothing else -- it never sends an SMS or mutates a customer or
+service. The only other database write on the blueprint is
+``machine_api_keys.last_used_at`` (see
+:func:`panel.services.machine_api.touch_machine_key`).
 
 Auth (contract section 2)::
 
@@ -27,6 +30,7 @@ from sqlalchemy import text
 
 from panel.extensions import db, limiter
 from panel.services import machine_api
+from panel.services import proposals as proposals_service
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +151,7 @@ def _guard(view):
     def wrapper(*args, **kwargs):
         try:
             return view(*args, **kwargs)
-        except machine_api.MachineApiError as exc:
+        except (machine_api.MachineApiError, proposals_service.ProposalError) as exc:
             return _error(exc.message, exc.status, exc.code, **exc.extra)
         except Exception:
             logger.exception('machine API request failed (request_id=%s)', _request_id())
@@ -287,3 +291,60 @@ def machine_knowledge_faqs():
 def machine_sms_notifications(service_key):
     return _ok(machine_api.sms_notifications_context(
         service_key, limit=machine_api.parse_limit(request.args.get('limit'))))
+
+
+# ---------------------------------------------------------------------------
+# Proposals (XR-GA-019, contract section 6)
+#
+# GOD AI submits a *proposal*; EVE's operator accepts or rejects it in the panel.
+# This POST therefore only stores a pending row: it has no side effect on a
+# customer, a service or the SMS outbox.
+# ---------------------------------------------------------------------------
+#: Room for the JSON envelope around the payload when rejecting a huge body
+#: before it is parsed (the service still enforces the exact 8 KB payload limit).
+PROPOSAL_REQUEST_OVERHEAD_BYTES = 4 * 1024
+
+
+@bp.route('/machine/v1/proposals', methods=['POST'])
+@machine_rate_limit
+@machine_scope_required(machine_api.SCOPE_PROPOSALS_WRITE)
+@_guard
+def machine_create_proposal():
+    declared_length = request.content_length
+    if (declared_length is not None
+            and declared_length > proposals_service.MAX_PAYLOAD_BYTES
+            + PROPOSAL_REQUEST_OVERHEAD_BYTES):
+        return _error(
+            'payload exceeds the %d byte limit' % proposals_service.MAX_PAYLOAD_BYTES,
+            400, 'payload_too_large')
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _error('A JSON object body is required', 400, 'invalid_request')
+    row, created = proposals_service.create_proposal(
+        body.get('proposal_id'),
+        body.get('type'),
+        body.get('payload'),
+        customer_id=body.get('customer_id'),
+        service_key=body.get('service_key'),
+        generation=body.get('generation'),
+        created_by_key_id=getattr(getattr(g, 'machine_api_key', None), 'id', None),
+    )
+    # 201 on a new proposal, 200 on an idempotent retry of the same proposal_id.
+    return _ok({'proposal_id': row.proposal_id, 'status': row.status},
+               201 if created else 200)
+
+
+@bp.route('/machine/v1/proposals', methods=['GET'])
+@machine_rate_limit
+@machine_scope_required(machine_api.SCOPE_PROPOSALS_READ)
+@_guard
+def machine_proposals():
+    requested_status = (request.args.get('status') or 'pending').strip().lower()
+    rows = proposals_service.list_proposals(
+        status=requested_status, limit=request.args.get('limit'))
+    return _ok(machine_api.envelope(
+        machine_api.SCHEMA_PROPOSALS,
+        status=requested_status,
+        proposals=[proposals_service.machine_projection(row) for row in rows],
+        count=len(rows),
+    ))

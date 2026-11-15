@@ -13,6 +13,11 @@ Examples::
         --scope context.support.read --scope context.knowledge.read \
         --created-by operator
 
+    # Optional proposal submission (XR-GA-019): proposals.write submits, while
+    # proposals.read reads the queue back. They are separate on purpose.
+    python scripts/create_machine_api_key.py --name god-ai-phase6 \
+        --scope proposals.write --created-by operator
+
     # Optional expiry (UTC ISO-8601)
     python scripts/create_machine_api_key.py --name god-ai --scope context.customer.read \
         --expires-at 2027-01-01T00:00:00Z

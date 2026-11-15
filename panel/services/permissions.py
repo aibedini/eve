@@ -20,6 +20,7 @@ PERMISSIONS = frozenset({
     'secrets.manage',
     'telegram.read', 'telegram.write',
     'content.manage',
+    'proposals.review',
 })
 
 # Role defaults. admin mirrors the historical "user management" surface
@@ -35,6 +36,7 @@ ROLE_DEFAULTS = {
         'admins.read', 'admins.write',
         'telegram.read', 'telegram.write',
         'content.manage',
+        'proposals.review',
     }),
     'reseller': frozenset({
         'servers.read', 'clients.read', 'clients.write',
