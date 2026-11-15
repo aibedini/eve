@@ -17,7 +17,7 @@
         sendFromDashboard: ['Open the dashboard to send to the client.', 'برای ارسال به مشتری، داشبورد را باز کنید.'],
         backgroundNote: ['You can close this window. Follow progress in recent operations.', 'می‌توانید این پنجره را ببندید؛ ادامهٔ کار در عملیات اخیر قابل پیگیری است.'],
         historyNote: ['History remains available after closing a dialog or refreshing the page.', 'پس از بستن پنجره یا بارگذاری دوبارهٔ صفحه، سابقهٔ عملیات در دسترس است.'],
-        historyLimit: ['Latest 50 renewals · Your operations', '۵۰ تمدید اخیر · عملیات شما'],
+        historyLimit: ['Latest 50 renewals · All time · Started by you', '۵۰ تمدید اخیر · تمام زمان‌ها · ثبت‌شده توسط شما'],
         inProgress: ['In progress', 'در حال انجام'], attention: ['Needs attention', 'نیاز به بررسی'], all: ['All', 'همه'],
         search: ['Search account or operation', 'جست‌وجوی حساب یا عملیات'], refresh: ['Refresh history', 'به‌روزرسانی سابقه'],
         saved: ['Request saved', 'درخواست ثبت شد'], updating: ['Applying renewal', 'در حال اعمال تمدید'],
@@ -64,8 +64,49 @@
         notFound: ['This operation is not available yet or you no longer have access. No new renewal was submitted.', 'این عملیات هنوز در دسترس نیست یا دسترسی شما تغییر کرده است. تمدید جدیدی ثبت نشد.'],
         retryBlocked: ['SMS retry is unavailable. Refresh to check its latest status.', 'تلاش مجدد پیامک ممکن نیست؛ آخرین وضعیت را به‌روز کنید.'],
         copied: ['Account information copied', 'اطلاعات حساب کپی شد'],
+        smsAccount: ['Account', 'تأیید حساب'], smsPrepare: ['Prepare', 'آماده‌سازی'],
+        smsGateway: ['Gateway', 'درگاه پیامک'], smsDelivery: ['Delivery', 'تحویل'],
+        dispatchPending: ['Not queued yet', 'هنوز در صف ارسال نیست'],
+        dispatchPendingNote: ['The account is verified, but no SMS submission is recorded yet. Re-check this operation.', 'حساب تأیید شده، اما هنوز ثبت ارسال پیامک موجود نیست؛ همین عملیات را دوباره بررسی کنید.'],
+        dispatchStalled: ['Gateway registration not confirmed', 'ثبت درخواست در درگاه تأیید نشده'],
+        dispatchStalledNote: ['EVE scheduled the notification, but no gateway receipt has been recorded yet. Re-check; do not renew again.', 'EVE ارسال را زمان‌بندی کرده، اما رسید ثبت در درگاه هنوز موجود نیست. بررسی مجدد کنید؛ حساب را دوباره تمدید نکنید.'],
+        queued: ['Queued at gateway', 'در صف درگاه پیامک'],
+        queuedNote: ['The gateway has the request. Sending and delivery are still pending.', 'درگاه درخواست را دریافت کرده است؛ ارسال و تحویل هنوز در انتظارند.'],
+        gatewayProcessing: ['Gateway is processing', 'درگاه در حال پردازش است'],
+        gatewayProcessingNote: ['The SMS request is registered at the gateway and is being processed.', 'درخواست پیامک در درگاه ثبت شده و در حال پردازش است.'],
+        deliveryUnavailable: ['Delivery report unavailable', 'گزارش تحویل در دسترس نیست'],
+        deliveryUnavailableNote: ['The gateway accepted the SMS, but no carrier delivery report is available.', 'درگاه پیامک را پذیرفته، اما گزارش تحویل اپراتور در دسترس نیست.'],
+        manualReview: ['Manual review required', 'نیاز به بررسی دستی'],
+        manualReviewNote: ['The gateway outcome is ambiguous. Review it in SMS center before any resend.', 'نتیجهٔ درگاه مبهم است؛ پیش از ارسال دوباره، آن را در مرکز پیامک بررسی کنید.'],
+        smsDisabled: ['SMS automation is disabled.', 'ارسال خودکار پیامک خاموش است.'],
+        smsTriggerDisabled: ['Renewal SMS notifications are disabled.', 'پیامک تمدید در تنظیمات غیرفعال است.'],
+        smsNotConfigured: ['The SMS gateway connection is not configured.', 'اتصال درگاه پیامک تنظیم نشده است.'],
+        smsReseller: ['System SMS is disabled for reseller-owned accounts.', 'پیامک سیستمی برای حساب متعلق به نماینده ارسال نمی‌شود.'],
+        smsOptedOut: ['This account has opted out of notifications.', 'اطلاع‌رسانی برای این حساب غیرفعال شده است.'],
+        smsNoRecipient: ['No valid recipient phone number was found.', 'شمارهٔ معتبر گیرنده پیدا نشد.'],
+        smsNoContent: ['No message text is available for this operation.', 'متن پیام برای این عملیات در دسترس نیست.'],
+        smsQuota: ['The SMS sending budget or rate limit was reached.', 'سقف یا محدودیت سرعت ارسال پیامک پر شده است.'],
+        smsDuplicate: ['An existing message prevented a duplicate send.', 'به‌دلیل وجود پیام قبلی، از ارسال تکراری جلوگیری شد.'],
+        smsVerificationFailed: ['The gateway could not verify the send. Review its record before retrying.', 'درگاه نتوانست ارسال را تأیید کند؛ پیش از تلاش مجدد، سابقهٔ آن را بررسی کنید.'],
+        statusUpdated: ['Last recorded update: {time}', 'آخرین وضعیت ثبت‌شده: {time}'],
+        historyChecked: ['{count} renewals · Last refreshed {time}', '{count} تمدید · آخرین به‌روزرسانی {time}'],
+        checkingBoth: ['Checking account and SMS gateway…', 'در حال بررسی حساب و درگاه پیامک…'],
+        checkUpdated: ['Checked {time} · Status updated: {status}', 'بررسی در {time} · وضعیت به‌روز شد: {status}'],
+        checkUnchanged: ['Checked {time} · No change: {status}', 'بررسی در {time} · بدون تغییر: {status}'],
+        checkPartial: ['Checked {time} · {status} · {error}', 'بررسی در {time} · {status} · {error}'],
+        checkFailed: ['Re-check failed at {time}: {error}', 'بررسی مجدد در {time} ناموفق بود: {error}'],
+        ratePaused: ['Live updates paused by the request limit. Next retry: {time}.', 'به‌روزرسانی زنده به محدودیت درخواست رسیده است؛ تلاش بعدی: {time}.'],
+        historyRatePaused: ['History updates paused by the request limit. Next retry: {time}.', 'به‌روزرسانی سابقه به محدودیت درخواست رسیده است؛ تلاش بعدی: {time}.'],
+        verifiedRefreshFailed: ['Renewal is confirmed. The latest notification status could not be refreshed.', 'تمدید تأیید شده است؛ دریافت آخرین وضعیت اطلاع‌رسانی ممکن نشد.'],
+        verifiedHistoryRefreshFailed: ['Renewal is confirmed. Activity history could not be refreshed; this does not change the renewal result.', 'تمدید تأیید شده است؛ سابقهٔ فعالیت‌ها به‌روز نشد. این خطا نتیجهٔ تمدید را تغییر نمی‌دهد.'],
+        historyServerError: ['EVE could not load history. Your renewals are not shown as failed; try refreshing history.', 'دریافت سابقه از EVE ممکن نشد؛ این خطا به معنی شکست تمدیدها نیست. سابقه را دوباره به‌روز کنید.'],
+        gatewayCheckFailed: ['The SMS gateway could not be checked. Renewal status is separate.', 'بررسی درگاه پیامک ممکن نشد؛ وضعیت تمدید مستقل است.'],
+        sessionExpired: ['Your session has expired. Sign in again to refresh status.', 'نشست شما تمام شده است؛ برای دریافت وضعیت دوباره وارد شوید.'],
+        accessLost: ['You no longer have access to this operation.', 'دیگر به این عملیات دسترسی ندارید.'],
+        invalidResponse: ['EVE returned an unreadable response. Re-check this operation.', 'پاسخ EVE قابل خواندن نبود؛ همین عملیات را دوباره بررسی کنید.'],
     };
-    const t = key => (labels[key] || labels.unknown)[fa ? 1 : 0];
+    const t = (key, values = {}) => (labels[key] || labels.unknown)[fa ? 1 : 0]
+        .replace(/\{(\w+)\}/g, (match, name) => values[name] == null ? match : String(values[name]));
     const reasons = {
         GLOBAL_DISABLED:['The global account is disabled.', 'حساب در سطح کلی غیرفعال است.'],
         MEMBERSHIP_DISABLED:['An inbound membership is disabled.', 'حساب در یکی از ورودی‌ها غیرفعال است.'],
@@ -88,12 +129,107 @@
     const busy = new Set();
     const submitting = new Set();
     const inerted = new Map();
+    const checkFeedback = new Map();
+    const historyState = {loaded:false,loading:false,error:null,checkedAt:null,retryAt:0,failures:0};
     let selected = null, filter = 'all', timer = null, polling = false, opener = null;
     let permitted = true;
     const activity = byId('renew-activity-modal');
     const visible = el => !el.classList.contains('hidden');
     const text = (id, value) => { byId(id).textContent = value == null ? '' : String(value); };
     const toggle = (id, show) => byId(id).classList.toggle('hidden', !show);
+
+    function formatCheckTime(value) {
+        return new Date(value).toLocaleTimeString(fa ? 'fa-IR' : 'en-GB', {
+            timeZone:root.dataset.renewTimezone || 'Asia/Tehran', hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    }
+
+    function retryDelay(value, now = Date.now()) {
+        const seconds = Number(value);
+        if (value && Number.isFinite(seconds)) return Math.max(1000, seconds * 1000);
+        const deadline = Date.parse(value || '');
+        return Number.isFinite(deadline) ? Math.max(1000, deadline - now) : 30000;
+    }
+
+    function notificationView(operation, now = Date.now()) {
+        const sms = operation.sms || {};
+        let status = sms.status || 'waiting';
+        if (status === 'waiting' && operation.confirmed) status = 'dispatch_pending';
+        if (status === 'sending' && !sms.request_id && Number.isFinite(Date.parse(sms.scheduled_at))
+            && now - Date.parse(sms.scheduled_at) > 30000) status = 'stalled';
+        const stages = ['pending', 'pending', 'pending', 'pending'];
+        let phase = 0, state = 'waiting';
+        let key = status === 'stalled' ? 'dispatchStalled' : status === 'failed' ? 'smsFailed' : status === 'unknown' ? 'smsUnknown'
+            : status === 'dispatch_pending' ? 'dispatchPending' : status === 'manual_review' ? 'manualReview' : status;
+        if (operation.confirmed) stages[0] = 'complete';
+        if (status === 'dispatch_pending') { phase = 1; state = 'waiting'; }
+        else if (status === 'stalled') { phase = 2; state = 'warning'; }
+        else if (status === 'sending' || status === 'queued') {
+            phase = 2; state = 'active';
+            if (status === 'sending' && sms.request_id) key = 'gatewayProcessing';
+        } else if (status === 'accepted') {
+            phase = 3;
+            if (sms.delivery_state === 'unavailable') { key = 'deliveryUnavailable'; state = 'warning'; }
+        } else if (status === 'delivered') { phase = 4; }
+        else if (['failed','skipped','manual_review','unknown'].includes(status)) {
+            phase = ['failed','undelivered'].includes(sms.delivery_state) ? 3 : sms.request_id ? 2 : operation.confirmed ? 1 : 0;
+            state = status === 'failed' ? 'failed' : 'warning';
+        }
+        for (let index = 0; index < phase; index++) stages[index] = 'complete';
+        if (phase < stages.length) stages[phase] = state;
+        const reasonCode = String(sms.reason || '').split(':')[0];
+        const reasonKey = {
+            feature_disabled:'smsDisabled',trigger_disabled:'smsTriggerDisabled',gateway_not_configured:'smsNotConfigured',
+            reseller_owned:'smsReseller',opted_out:'smsOptedOut',opted_out_recheck:'smsOptedOut',
+            no_recipient:'smsNoRecipient',empty_message:'smsNoContent',missing_content:'smsNoContent',
+            duplicate_suppressed:'smsDuplicate',manual_review_pending:'manualReviewNote',
+            unverified_manual_review:'manualReviewNote',gateway_status_expired:'smsVerificationFailed',
+            daily_limit:'smsQuota',rate_limited:'smsQuota',daily_segment_limit:'smsQuota',
+            recipient_rate_limited:'smsQuota',hourly_limit_reached:'smsQuota',daily_limit_reached:'smsQuota',
+        }[reasonCode];
+        return {status,key,descriptionKey:key + 'Note',stages,reasonKey};
+    }
+
+    function renderStepList(id, titles, states) {
+        const list = byId(id);
+        list.replaceChildren();
+        titles.forEach((title, index) => {
+            const state = states[index];
+            const item = document.createElement('li');
+            item.className = 'renew-progress-step' + (state === 'complete' ? ' is-complete' : '');
+            item.dataset.stepState = state;
+            if (!['complete','pending'].includes(state)) item.setAttribute('aria-current','step');
+            const icon = document.createElement('span'); icon.setAttribute('aria-hidden','true');
+            mark(icon, {complete:'success',active:'primary',warning:'warning',failed:'danger',waiting:'muted',pending:'muted'}[state], state === 'active');
+            const label = document.createElement('span'); label.textContent = title;
+            item.append(icon,label);list.appendChild(item);
+        });
+    }
+
+    function renderNotification(operation) {
+        const sms = operation.sms || {};
+        const vm = notificationView(operation);
+        const badge = byId('renew-operation-sms');
+        if (badge.textContent !== t(vm.key)) badge.textContent = t(vm.key);
+        badge.className = 'badge renew-notification-' + vm.status;
+        renderStepList('renew-operation-sms-steps', ['smsAccount','smsPrepare','smsGateway','smsDelivery'].map(key => t(key)), vm.stages);
+        text('renew-operation-sms-description', t(vm.descriptionKey));
+        toggle('renew-operation-sms-reason', Boolean(vm.reasonKey));
+        text('renew-operation-sms-reason', vm.reasonKey ? t(vm.reasonKey) : '');
+        const updated = sms.updated_at || sms.scheduled_at;
+        toggle('renew-operation-sms-time', Boolean(updated));
+        text('renew-operation-sms-time', updated ? t('statusUpdated',{time:formatCheckTime(updated)}) : '');
+        toggle('renew-operation-retry-sms', Boolean(sms.retryable));
+        byId('renew-operation-retry-sms').disabled = busy.has(selected);
+    }
+
+    function renderCheckFeedback() {
+        const entry = checkFeedback.get(selected);
+        toggle('renew-operation-check-result', Boolean(entry));
+        if (!entry) return;
+        const element = byId('renew-operation-check-result');
+        if (element.textContent !== entry.message) element.textContent = entry.message;
+        element.dataset.tone = entry.tone;
+    }
 
     function view(operation, now) {
         const state = operation.final_state;
@@ -144,32 +280,14 @@
         }
         if (byId('renew-operation-description').textContent !== vm.body) text('renew-operation-description', vm.body);
         mark(byId('renew-operation-mark'), vm.tone, vm.tone === 'primary');
-        const steps = byId('renew-operation-steps');
-        steps.replaceChildren();
-        ['saved', 'applied', 'verify'].forEach((key, index) => {
-            const item = document.createElement('li');
-            const complete = index < vm.phase;
-            item.className = 'renew-progress-step' + (complete ? ' is-complete' : '');
-            if (!complete && index === vm.phase) item.setAttribute('aria-current', 'step');
-            const icon = document.createElement('span');
-            icon.setAttribute('aria-hidden', 'true');
-            mark(icon, complete ? 'success' : index === vm.phase ? vm.tone : 'muted', !complete && index === vm.phase && vm.tone === 'primary');
-            const label = document.createElement('span');
-            const stepKey = index === 0 ? (complete ? 'saved' : 'recordRequest')
-                : index === 1 ? (complete ? (operation.config_applied || operation.confirmed
-                    || operation.final_state === 'CONFIG_APPLIED_ACTIVATION_PENDING' ? 'applied' : 'acceptedUpdate') : 'apply')
-                    : complete ? 'accountVerified' : 'verify';
-            label.textContent = t(stepKey);
-            item.append(icon, label); steps.appendChild(item);
-        });
-        const sms = operation.sms || { status: 'waiting' };
-        const smsKey = sms.status === 'failed' ? 'smsFailed' : sms.status === 'unknown' ? 'smsUnknown' : sms.status;
-        const status = byId('renew-operation-sms');
-        if (status.textContent !== t(smsKey)) status.textContent = t(smsKey);
-        status.className = 'badge renew-notification-' + sms.status;
-        text('renew-operation-sms-description', t(smsKey + 'Note'));
-        toggle('renew-operation-retry-sms', Boolean(sms.retryable));
-        byId('renew-operation-retry-sms').disabled = busy.has(selected);
+        const stepTitles = [t(vm.phase > 0 ? 'saved' : 'recordRequest'),
+            t(vm.phase > 1 ? operation.config_applied || operation.confirmed || operation.final_state === 'CONFIG_APPLIED_ACTIVATION_PENDING' ? 'applied' : 'acceptedUpdate' : 'apply'),
+            t(vm.phase === 3 ? 'accountVerified' : 'verify')];
+        const stepStates = [0,1,2].map(index => index < vm.phase ? 'complete' : index > vm.phase ? 'pending'
+            : vm.tone === 'primary' ? 'active' : vm.tone === 'danger' ? 'failed' : 'warning');
+        renderStepList('renew-operation-steps',stepTitles,stepStates);
+        renderNotification(operation);
+        renderCheckFeedback();
         const canCopy = operation.confirmed && Boolean(String(operation.copy_text || '').trim());
         toggle('renew-operation-copy-details', canCopy);
         const copyButton = byId('renew-operation-copy-button');
@@ -198,7 +316,7 @@
         text('renew-operation-recheck', t(busy.has(selected) ? 'checking' : 'recheck'));
         text('renew-operation-diagnostic', JSON.stringify({ operation_id: operation.operation_id,
             state: operation.state, final_state: operation.final_state, updated_at: operation.updated_at,
-            trace_id: operation.trace_id, timing: operation.timing, error: operation.error }, null, 2));
+            trace_id: operation.trace_id, timing: operation.timing, sms:operation.sms, error: operation.error }, null, 2));
         toggle('renew-operation-network', Boolean(operation.networkError));
         text('renew-operation-network', operation.networkError || '');
     }
@@ -222,14 +340,18 @@
                 const content = document.createElement('span'); content.className = 'renew-activity-row-content';
                 const name = document.createElement('strong'); name.dir = 'ltr'; name.textContent = op.email;
                 const summary = document.createElement('span'); summary.textContent = vm.title;
-                const sms = document.createElement('small'); sms.textContent = t(op.sms?.status === 'failed' ? 'smsFailed' : op.sms?.status === 'unknown' ? 'smsUnknown' : op.sms?.status || 'waiting');
+                const sms = document.createElement('small'); sms.textContent = t(notificationView(op).key);
                 const date = document.createElement('time'); date.dateTime = op.created_at || '';
                 date.textContent = op.created_at ? new Date(op.created_at).toLocaleString(fa ? 'fa-IR' : 'en-GB', {timeZone:'Asia/Tehran', dateStyle:'short', timeStyle:'short'}) : '';
                 content.append(name, summary, sms, date); button.append(icon, content); list.appendChild(button);
             });
             if (focusedId) [...list.children].find(el => el.dataset.renewOperation === focusedId)?.focus();
         }
-        text('renew-activity-status', rows.length ? '' : t('empty'));
+        const message = historyState.error ? explainError(historyState.error,null,true)
+            : historyState.loading && !historyState.loaded ? t('loading')
+                : !historyState.loaded ? t('loading') : !rows.length ? t('empty')
+                    : t('historyChecked',{count:rows.length,time:formatCheckTime(historyState.checkedAt)});
+        text('renew-activity-status', message);
         const count = [...operations.values()].filter(op => op.pending || op.attention).length;
         text('renew-activity-count', count > 50 ? '50+' : count);
         toggle('renew-activity-count', count > 0);
@@ -270,22 +392,55 @@
         operations.set(operation.operation_id, next);
     }
 
-    async function request(url, options) {
+    function explainError(error, operation, history) {
+        if (error.status === 429) return t(history ? 'historyRatePaused' : 'ratePaused', {
+            time:formatCheckTime(error.retryAt || Date.now() + (error.retryAfterMs || 30000))});
+        if (error.status === 401) return t('sessionExpired');
+        if (error.status === 403) return t('accessLost');
+        if (error.status === 404) return t('notFound');
+        if (error.code === 'sms_gateway_status_unavailable') return t('gatewayCheckFailed');
+        if (history) return t('historyServerError');
+        if (operation?.confirmed) return t('verifiedRefreshFailed');
+        return t(error.code === 'invalid_response' ? 'invalidResponse' : 'network');
+    }
+
+    async function request(url, options, readOutcome = false) {
         const response = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' },
             signal: AbortSignal.timeout(15000), cache: 'no-store' }, options || {}));
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-            const error = new Error(response.status === 404 ? t('notFound') : t('network'));
-            error.status = Number(response.headers.get('X-Eve-Status')) || response.status;
+        const status = Number(response.headers.get('X-Eve-Status')) || response.status;
+        let data;
+        try { data = await response.json(); }
+        catch (_) {
+            const error = new Error(t('invalidResponse'));
+            error.status = status === 200 && response.redirected ? 401 : status;
+            error.code = 'invalid_response';
+            error.retryAfterMs = retryDelay(response.headers.get('Retry-After'));
+            throw error;
+        }
+        if (readOutcome && ![401,403,429].includes(status) && status < 500 && (data.verify || data.final_state)) return data;
+        if (!response.ok || status >= 400 || !data.success) {
+            const error = new Error(t('network'));
+            error.status = status; error.code = data.code;
+            error.retryAfterMs = retryDelay(response.headers.get('Retry-After'));
+            error.retryAt = Date.now() + error.retryAfterMs;
             throw error;
         }
         return data;
     }
-    async function refresh() {
+    async function refresh(force = false) {
         if (polling || !permitted) return;
+        if (force && historyState.error?.status !== 429) historyState.retryAt = 0;
+        if (historyState.retryAt > Date.now()) {
+            renderHistory(); schedule(historyState.retryAt - Date.now()); return;
+        }
         polling = true;
+        historyState.loading = true;
         try {
             const data = await request('/api/client-operations/renewals');
+            historyState.loaded = true; historyState.error = null;
+            historyState.failures = 0;
+            historyState.checkedAt = data.checked_at || new Date().toISOString();
+            historyState.retryAt = 0;
             const ids = new Set(data.operations.map(op => op.operation_id));
             operations.forEach((op, id) => { if (!ids.has(id) && !submitting.has(id) && id !== selected) operations.delete(id); });
             data.operations.forEach(merge);
@@ -304,7 +459,7 @@
                         if ([401, 403, 404].includes(error.status)) {
                             op.confirmed = false; op.copy_text = null; op.tpl_vars = null;
                         }
-                        op.networkError = error.message;
+                        op.networkError = explainError(error,op,false);
                     }
                 }
             }
@@ -313,13 +468,23 @@
             if ([401, 403].includes(error.status)) {
                 permitted = false; toggle('renew-activity-trigger', false);
             }
-            text('renew-activity-status', t('unavailable'));
+            historyState.error = error;
+            historyState.failures++;
+            historyState.retryAt = error.status === 429 ? error.retryAt || Date.now() + (error.retryAfterMs || 30000)
+                : Date.now() + Math.min(30000,1500 * 2 ** Math.min(historyState.failures,5));
             const op = operations.get(selected);
-            if (op) { op.networkError = t('network'); render(); }
+            if (op) {
+                op.networkError = op.confirmed && ![401,403,404,429].includes(error.status)
+                    ? t('verifiedHistoryRefreshFailed') : explainError(error,op,false);
+                render();
+            }
+            renderHistory();
         } finally {
             polling = false;
+            historyState.loading = false;
             const pending = [...operations.values()].some(op => op.pending);
-            if (permitted) schedule(document.hidden ? 30000 : visible(root) || visible(activity) ? 1500 : pending ? 4000 : 30000);
+            const cadence = document.hidden ? 30000 : visible(root) || visible(activity) ? 1500 : pending ? 4000 : 30000;
+            if (permitted) schedule(Math.max(cadence,historyState.retryAt - Date.now()));
         }
     }
     function schedule(delay) { clearTimeout(timer); timer = setTimeout(refresh, delay); }
@@ -328,14 +493,34 @@
         const op = operations.get(selected);
         if (!op || busy.has(op.operation_id)) return;
         const id = op.operation_id;
+        const before = JSON.stringify([op.final_state,op.confirmed,op.sms]);
         busy.add(id); render();
+        checkFeedback.set(id,{message:t('checkingBoth'),tone:'checking'}); renderCheckFeedback();
         try {
-            const data = await request(`/api/client/${op.server_id}/${op.inbound_id}/${encodeURIComponent(op.email)}/renew/verify`, {
-                method: 'POST', body: JSON.stringify({ operation_id: id, awaiting_result: true, force_enable:Boolean(forceEnable) }) });
-            if (typeof window.applyClientMutation === 'function') window.applyClientMutation(data, {serverId:op.server_id, inboundId:op.inbound_id, email:op.email});
-            accept(data, {serverId:op.server_id, inboundId:op.inbound_id, email:op.email, operationId:id});
+            const results = await Promise.allSettled([
+                request(`/api/client/${op.server_id}/${op.inbound_id}/${encodeURIComponent(op.email)}/renew/verify`, {
+                    method:'POST',body:JSON.stringify({operation_id:id,awaiting_result:true,force_enable:Boolean(forceEnable)})},true),
+                request('/api/client-operations/renewals/' + encodeURIComponent(id) + '/recheck-sms', {method:'POST',body:'{}'})
+            ]);
+            const errors = [];
+            if (results[1].status === 'fulfilled') merge(results[1].value.operation);
+            else errors.push(explainError(results[1].reason,operations.get(id),false));
+            if (results[0].status === 'fulfilled') {
+                const data = results[0].value;
+                if (typeof window.applyClientMutation === 'function') window.applyClientMutation(data,{serverId:op.server_id,inboundId:op.inbound_id,email:op.email});
+                accept(data,{serverId:op.server_id,inboundId:op.inbound_id,email:op.email,operationId:id});
+            } else errors.push(explainError(results[0].reason,operations.get(id),false));
             await refresh();
-        } catch (error) { const current = operations.get(id); if (current) current.networkError = error.message; }
+            const current = operations.get(id) || op;
+            const changed = before !== JSON.stringify([current.final_state,current.confirmed,current.sms]);
+            const status = view(current,Date.now()).title + ' · ' + t(notificationView(current).key);
+            const key = errors.length === 2 ? 'checkFailed' : errors.length ? 'checkPartial' : changed ? 'checkUpdated' : 'checkUnchanged';
+            checkFeedback.set(id,{message:t(key,{time:formatCheckTime(new Date()),status,error:errors.join(' ')}),
+                tone:errors.length === 2 ? 'error' : errors.length || !current.confirmed
+                    || ['failed','skipped','unknown','manual_review','dispatch_pending','stalled'].includes(notificationView(current).status) ? 'warning' : 'success'});
+        } catch (error) {
+            checkFeedback.set(id,{message:t('checkFailed',{time:formatCheckTime(new Date()),error:explainError(error,operations.get(id),false)}),tone:'error'});
+        }
         finally { busy.delete(id); render(); }
     }
     async function retrySms() {
@@ -374,6 +559,8 @@
             reason_codes:data.verify?.reason_codes || (data.failed_steps || []).map(item => item.code),
             copy_text:confirmed ? data.copy_text || previous.copy_text : null,
             tpl_vars:confirmed ? data.tpl_vars || previous.tpl_vars : null, trace_id:data.trace_id, timing:data.timing,
+            sms: confirmed && ['sent','already_sent'].includes(data.customer_sms) && (!previous.sms || ['waiting','dispatch_pending','unknown'].includes(previous.sms.status))
+                ? {status:'sending',retryable:false} : previous.sms || {status:confirmed ? 'dispatch_pending' : 'waiting',retryable:false},
             networkError:null });
         render(); renderHistory(); schedule(0);
     }
@@ -394,7 +581,7 @@
         switch (button.dataset.renewAction) {
         case 'close': close(); break;
         case 'history': renderHistory(); show(activity); break;
-        case 'refresh': await refresh(); break;
+        case 'refresh': await refresh(true); break;
         case 'recheck': await recheck(); break;
         case 'repair': await recheck(true); break;
         case 'retry': await retrySms(); break;
@@ -427,7 +614,10 @@
         }
     }, true);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(0); });
-    window.addEventListener('online', () => schedule(0));
+    window.addEventListener('online', () => {
+        if (historyState.error?.status !== 429) historyState.retryAt = 0;
+        schedule(0);
+    });
     window.EveRenewals = {
         begin(operation) {
             merge(Object.assign({state:'submitting',pending:true,confirmed:false,sms:{status:'waiting'},created_at:new Date().toISOString()}, operation));

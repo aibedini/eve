@@ -1,5 +1,30 @@
 # Renewal progress and request budget
 
+## History and gateway status fixes (2.23.11)
+
+History contains the current operator's latest 50 renewals across all time,
+subject to current account access. It is not a rolling date window. History and
+detail polling now have a dedicated 6000/hour, 40000/day limit: the default
+500/hour limit was below a visible dialog's 1.5-second polling rate. The browser
+keeps existing rows on errors, distinguishes failure from an empty history, and
+honors Retry-After with backoff instead of repeatedly hitting a blocked endpoint.
+
+Renewal and notification use separate horizontal timelines. Notification states
+distinguish preparation, gateway queue/acceptance, and carrier delivery; neither
+worker scheduling nor gateway acceptance is described as delivered. A confirmed
+renewal never reverts to an unknown renewal outcome because history polling fails.
+
+Re-check reads account verification and the operation's matching SMS gateway
+record in parallel. It displays a timestamped changed, unchanged, partial, or
+failed result. The gateway read is bounded to eight seconds and never sends a
+message, repeats a renewal, or charges again. Manual-review outcomes do not offer
+an unsafe duplicate send. Success notifications still wait for verified renewal.
+
+Browser validation covers 320, 375, 480, 768 and 1440 pixel widths, RTL/LTR,
+light/dark themes, four persistent footer actions, history reload, rate-limit
+recovery, explicit re-check feedback and late-response isolation. Gateway tests
+use mocks; no production delivery time or speedup is claimed.
+
 The progress modal and the global Activity button use the durable `ClientOperation`
 ledger. Routine progress requests read EVE's database, not the remote panel.
 History is restricted to the current operator and rechecks current reseller access.

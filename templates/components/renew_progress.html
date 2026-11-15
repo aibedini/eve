@@ -1,4 +1,4 @@
-<div class="modal-overlay hidden renew-progress-overlay" id="renew-operation-modal" data-renew-lang="{{ panel_lang }}">
+<div class="modal-overlay hidden renew-progress-overlay" id="renew-operation-modal" data-renew-lang="{{ panel_lang }}" data-renew-timezone="{{ app_timezone or 'Asia/Tehran' }}">
     <section class="modal renew-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="renew-operation-heading" tabindex="-1">
         <header class="modal-header">
             <h2 id="renew-operation-heading" data-renew-label="renew">Renew client</h2>
@@ -13,10 +13,14 @@
             <ol class="renew-progress-steps" id="renew-operation-steps" aria-label="{{ 'مراحل تمدید' if panel_lang == 'fa' else 'Renewal progress' }}"></ol>
             <div class="renew-progress-notification" role="status" aria-live="polite" aria-atomic="true">
                 <div><strong data-renew-label="notification">Client notification</strong><span id="renew-operation-sms" class="badge"></span></div>
+                <ol class="renew-progress-steps renew-notification-steps" id="renew-operation-sms-steps" aria-label="{{ 'مراحل ارسال پیامک' if panel_lang == 'fa' else 'SMS delivery progress' }}"></ol>
                 <p id="renew-operation-sms-description" class="field-note"></p>
+                <p id="renew-operation-sms-reason" class="field-note field-note-warn hidden"></p>
+                <p id="renew-operation-sms-time" class="field-note hidden"></p>
                 <button type="button" id="renew-operation-retry-sms" class="btn btn-outline hidden" data-renew-action="retry" data-renew-label="retrySms">Retry SMS</button>
             </div>
             <p id="renew-operation-network" class="field-note field-note-warn hidden" role="status"></p>
+            <p id="renew-operation-check-result" class="renew-check-result hidden" role="status" aria-live="polite" aria-atomic="true"></p>
             <details class="renew-progress-details"><summary data-renew-label="details">Technical details</summary><pre id="renew-operation-diagnostic"></pre></details>
             <details id="renew-operation-copy-details" class="renew-progress-details hidden"><summary data-renew-label="accountInfo">Account information</summary><pre id="renew-operation-copy"></pre></details>
             <button type="button" class="renew-progress-history-link" data-renew-action="history" data-renew-label="viewHistory">View in recent operations</button>
@@ -48,7 +52,7 @@
             <p class="field-note" id="renew-activity-status" role="status" aria-live="polite"></p>
             <div id="renew-activity-list" class="renew-activity-list"></div>
         </div>
-        <footer class="renew-progress-footer"><button type="button" class="btn btn-outline" data-renew-action="refresh" data-renew-label="refresh">Refresh history</button><span class="field-note" data-renew-label="historyLimit">Latest 50 renewals · Your operations</span></footer>
+        <footer class="renew-progress-footer"><button type="button" class="btn btn-outline" data-renew-action="refresh" data-renew-label="refresh">Refresh history</button><span class="field-note" data-renew-label="historyLimit">Latest 50 renewals · All time · Started by you</span></footer>
     </section>
 </div>
 <script src="{{ url_for('static', filename='renew-progress.js') }}" nonce="{{ csp_nonce }}" defer></script>

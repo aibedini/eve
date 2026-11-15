@@ -52,10 +52,14 @@
 .renew-progress-mark.is-loading { border-color: var(--border-color); border-block-start-color: var(--primary); animation: spin 0.8s linear infinite; }
 .renew-progress-mark.is-muted { color: var(--border-color); }
 .renew-progress-mark.is-muted svg { visibility: hidden; }
-.renew-progress-steps { padding: 0; margin: 0 0 20px; list-style: none; }
-.renew-progress-step { display: flex; gap: 12px; align-items: center; position: relative; padding-block: 10px; font-size: 0.875rem; }
-.renew-progress-step:not(:last-child)::after { content: ''; position: absolute; inset-inline-start: 13px; inset-block-start: 38px; height: 20px; border-inline-start: 1px solid var(--border-color); }
+.renew-progress-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0; margin: 0 0 20px; list-style: none; }
+.renew-progress-step { display: flex; flex-direction: column; gap: 8px; align-items: center; position: relative; padding: 8px 4px; min-width: 0; font-size: 0.8rem; line-height: 1.5; text-align: center; overflow-wrap: anywhere; }
+.renew-progress-step:not(:last-child)::after { content: ''; position: absolute; inset-inline-start: calc(50% + 14px); inset-block-start: 22px; inline-size: calc(100% - 28px); border-block-start: 1px solid var(--border-color); }
 .renew-progress-step.is-complete:not(:last-child)::after { border-color: var(--success); }
+.renew-progress-step[data-step-state="failed"] { color: var(--danger); }
+.renew-progress-step[data-step-state="warning"] { color: var(--warning); }
+.renew-progress-step[data-step-state="pending"], .renew-progress-step[data-step-state="waiting"] { color: var(--text-secondary); }
+.renew-notification-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-block: 12px 6px; }
 .renew-progress-notification { padding-block: 16px; border-block: 1px solid var(--border-color); }
 .renew-progress-notification > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .renew-progress-notification strong { font-size: 0.875rem; }
@@ -63,9 +67,16 @@
 .renew-progress-notification .field-note { margin-block: 8px 0; }
 .renew-progress-notification .btn { margin-block-start: 12px; min-height: 44px; }
 .renew-progress-notification .renew-notification-accepted, .renew-progress-notification .renew-notification-delivered { color: var(--success); }
-.renew-progress-notification .renew-notification-failed, .renew-progress-notification .renew-notification-skipped { color: var(--warning); }
+.renew-progress-notification .renew-notification-failed, .renew-progress-notification .renew-notification-skipped,
+.renew-progress-notification .renew-notification-manual_review, .renew-progress-notification .renew-notification-dispatch_pending,
+.renew-progress-notification .renew-notification-stalled { color: var(--warning); }
 .renew-progress-notification .renew-notification-waiting, .renew-progress-notification .renew-notification-unknown { color: var(--text-secondary); }
-.renew-progress-notification .renew-notification-sending { color: var(--primary); }
+.renew-progress-notification .renew-notification-sending, .renew-progress-notification .renew-notification-queued { color: var(--primary); }
+.renew-check-result { border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; margin-block: 16px; font-size: 0.875rem; overflow-wrap: anywhere; }
+.renew-check-result[data-tone="checking"] { color: var(--primary); }
+.renew-check-result[data-tone="success"] { color: var(--success); }
+.renew-check-result[data-tone="warning"] { color: var(--warning); }
+.renew-check-result[data-tone="error"] { color: var(--danger); }
 .renew-progress-details { margin-block: 16px; font-size: 0.8rem; }
 .renew-progress-details summary { cursor: pointer; padding-block: 10px; min-height: 44px; }
 .renew-progress-details pre { white-space: pre-wrap; overflow-wrap: anywhere; direction: ltr; text-align: start; padding: 12px; background: var(--bg-dark); border-radius: 8px; font: inherit; color: var(--text-secondary); }

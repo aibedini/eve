@@ -44,6 +44,9 @@ from panel.services.payment_duplicate import (
 
 bp = Blueprint('clients', __name__)
 
+# A visible progress dialog polls every 1.5 s; the general 500/hour budget is too low.
+RENEW_PROGRESS_POLL_LIMIT = '6000 per hour; 40000 per day'
+
 
 @bp.route('/api/payments/check-sender-card', methods=['GET'])
 @login_required
@@ -1578,6 +1581,7 @@ def _renew_operation_accessible(operation):
 
 
 @bp.route('/api/client-operations/renewals', methods=['GET'])
+@limiter.limit(RENEW_PROGRESS_POLL_LIMIT)
 @login_required
 @permission_required('clients.read')
 def recent_renewal_operations():
@@ -1588,12 +1592,15 @@ def recent_renewal_operations():
     rows = [row for row in rows if _renew_operation_accessible(row)]
     logs = renew_progress.notification_logs(rows)
     response = jsonify(success=True, operations=[renew_progress.snapshot(
-        row, logs.get(renew_progress.notification_id(row)), detail=False) for row in rows])
+        row, logs.get(renew_progress.notification_id(row)), detail=False) for row in rows],
+        history={'limit': 50, 'time_range': 'all', 'scope': 'current_user', 'count': len(rows)},
+        checked_at=datetime.now(timezone.utc).isoformat())
     response.headers['Cache-Control'] = 'no-store'
     return response
 
 
 @bp.route('/api/client-operations/renewals/<operation_key>', methods=['GET'])
+@limiter.limit(RENEW_PROGRESS_POLL_LIMIT)
 @login_required
 @permission_required('clients.read')
 def renewal_operation_progress(operation_key):
@@ -1604,6 +1611,34 @@ def renewal_operation_progress(operation_key):
     logs = renew_progress.notification_logs([operation])
     response = jsonify(success=True, operation=renew_progress.snapshot(
         operation, logs.get(renew_progress.notification_id(operation))))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/api/client-operations/renewals/<operation_key>/recheck-sms', methods=['POST'])
+@login_required
+@permission_required('clients.read')
+@limiter.limit('20 per minute')
+def recheck_renewal_sms(operation_key):
+    """Read this notification from its recorded gateway; never enqueue a message."""
+    from panel.services import renew_progress
+    from panel.jobs.messaging import _refresh_pending_sms_statuses
+    operation = _visible_renew_operations().filter_by(idempotency_key=operation_key).first()
+    if operation is None or not _renew_operation_accessible(operation):
+        return jsonify(success=False, code='operation_not_found'), 404
+    logs = renew_progress.notification_logs([operation])
+    row = logs.get(renew_progress.notification_id(operation))
+    gateway_checked = bool(row and row.request_id)
+    if gateway_checked:
+        try:
+            _refresh_pending_sms_statuses(log_id=row.id)
+            db.session.refresh(row)
+        except Exception:
+            db.session.rollback()
+            return jsonify(success=False, code='sms_gateway_status_unavailable'), 502
+    response = jsonify(success=True, gateway_checked=gateway_checked,
+        checked_at=datetime.now(timezone.utc).isoformat(),
+        operation=renew_progress.snapshot(operation, row))
     response.headers['Cache-Control'] = 'no-store'
     return response
 

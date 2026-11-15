@@ -5570,7 +5570,7 @@ def _sync_sms_scan_decision_from_log(decision, row):
     decision.updated_at = datetime.utcnow()
 
 
-def _refresh_pending_sms_statuses(limit: int = 100) -> int:
+def _refresh_pending_sms_statuses(limit: int = 100, *, log_id=None) -> int:
     """Poll accepted gateway tasks using the provider recorded for each send.
 
     Newest-first on purpose: the gateway only keeps a send in its ledger for a
@@ -5582,10 +5582,13 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
     """
     from app import app  # deferred: app-level helper, avoids circular import
     cfg = _get_sms_runtime_settings()
-    rows = SmsSendLog.query.filter(
-        SmsSendLog.request_id.isnot(None),
-        or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)),
-    ).order_by(SmsSendLog.created_at.desc()).limit(max(1, min(int(limit), 500))).all()
+    query = SmsSendLog.query.filter(SmsSendLog.request_id.isnot(None))
+    if log_id is not None:
+        # Explicit rechecks also read carrier receipts after gateway acceptance.
+        query = query.filter(SmsSendLog.id == int(log_id))
+    else:
+        query = query.filter(or_(SmsSendLog.terminal.is_(False), SmsSendLog.terminal.is_(None)))
+    rows = query.order_by(SmsSendLog.created_at.desc()).limit(max(1, min(int(limit), 500))).all()
     if not rows:
         return 0
 
@@ -5605,9 +5608,13 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
             base = (row_cfg.get('base_url') or '').strip().rstrip('/')
             api_key = (row_cfg.get('api_key') or '').strip()
             if not base or not api_key:
+                if log_id is not None:
+                    raise RuntimeError('gateway_not_configured')
                 continue
             headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
             timeout = int(row_cfg.get('timeout_seconds') or 15)
+            if log_id is not None:
+                timeout = min(timeout, 8)
             resp = requests.get(_sms_status_endpoint(base, row), headers=headers, timeout=timeout)
             if resp.status_code == 404 and (row.created_at or datetime.utcnow()) < status_expiry_cutoff:
                 row.terminal = True
@@ -5619,9 +5626,13 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                 changed += 1
                 continue
             if resp.status_code != 200:
+                if log_id is not None:
+                    raise RuntimeError('gateway_status_unavailable')
                 continue
             data = resp.json()
             if not isinstance(data, dict):
+                if log_id is not None:
+                    raise RuntimeError('invalid_gateway_status')
                 continue
 
             previous = (row.status, row.gateway_state, row.stage, row.terminal,
@@ -5797,6 +5808,9 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
                     delivery.status = row.status
                     delivery.processed_at = None
         except Exception as exc:
+            if log_id is not None:
+                db.session.rollback()
+                raise
             app.logger.debug('[sms-status] poll failed request_id=%s: %s', row.request_id, exc)
     for campaign_id in affected_campaign_ids:
         campaign = db.session.get(Announcement, campaign_id)
@@ -5810,6 +5824,8 @@ def _refresh_pending_sms_statuses(limit: int = 100) -> int:
         db.session.commit()
     except Exception:
         db.session.rollback()
+        if log_id is not None:
+            raise
         return 0
     return changed
 

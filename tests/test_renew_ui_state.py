@@ -156,7 +156,7 @@ class _Template:
         return self.text[start:end]
 
     def function(self, name):
-        match = re.search(r"(?m)^[ \t]*function\s+%s\s*\([^)]*\)\s*\{" % re.escape(name),
+        match = re.search(r"(?m)^[ \t]*function\s+%s\s*\([^\n]*\)\s*\{" % re.escape(name),
                           self.text)
         if not match:
             raise AssertionError("function %s() was not found in dashboard.html" % name)
@@ -469,6 +469,9 @@ class RenewProgressActionsTests(unittest.TestCase):
             const view=op=>({title:'Renew',body:'State',tone:'primary',phase:op.confirmed?3:0});
             const renderHistory=()=>{};
             const schedule=()=>{};
+            const renderStepList=()=>{};
+            const renderNotification=()=>{};
+            const renderCheckFeedback=()=>{};
             const base={operation_id:'one',email:'client@example.com',state:'prepared',
                 confirmed:false,sms:{status:'waiting'}};
             const actions=()=>byId('renew-operation-actions').children
@@ -542,6 +545,53 @@ class RenewProgressActionsTests(unittest.TestCase):
             self.assertNotIn('hidden', tag)
             positions.append(template.index(tag))
         self.assertEqual(positions, sorted(positions))
+
+
+class RenewNotificationProgressTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        template = _Template(_read(os.path.join(REPO_ROOT, 'static', 'renew-progress.js')))
+        cls.code = template.function('notificationView') + '\n' + template.function('retryDelay')
+
+    def notification(self, status, *, confirmed=True, **extra):
+        value = {'confirmed': confirmed, 'sms': dict(status=status, **extra)}
+        return _run_node(self.code, 'notificationView(%s)' % json.dumps(value))
+
+    def test_confirmed_account_never_waits_for_verification_again(self):
+        result = self.notification('waiting')
+        self.assertEqual(result['key'], 'dispatchPending')
+        self.assertEqual(result['stages'], ['complete', 'waiting', 'pending', 'pending'])
+
+    def test_gateway_queue_and_carrier_delivery_are_different_steps(self):
+        queued = self.notification('queued', request_id='request-1')
+        self.assertEqual(queued['stages'], ['complete', 'complete', 'active', 'pending'])
+        accepted = self.notification('accepted', delivery_state='pending')
+        self.assertEqual(accepted['stages'], ['complete', 'complete', 'complete', 'waiting'])
+        delivered = self.notification('delivered')
+        self.assertEqual(delivered['stages'], ['complete'] * 4)
+
+    def test_every_terminal_notification_state_explains_its_own_failure(self):
+        self.assertEqual(self.notification('skipped', reason='feature_disabled')['reasonKey'], 'smsDisabled')
+        self.assertEqual(self.notification('skipped', reason='no_recipient')['reasonKey'], 'smsNoRecipient')
+        self.assertEqual(self.notification('failed', request_id='r')['stages'][2], 'failed')
+        self.assertEqual(self.notification('failed', delivery_state='failed')['stages'][3], 'failed')
+        self.assertEqual(self.notification('failed', delivery_state='undelivered')['stages'][3], 'failed')
+        self.assertEqual(self.notification('manual_review', request_id='r')['stages'][2], 'warning')
+        self.assertEqual(self.notification('unknown', reason='missing_content')['reasonKey'], 'smsNoContent')
+        unavailable = self.notification('accepted', delivery_state='unavailable')
+        self.assertEqual(unavailable['key'], 'deliveryUnavailable')
+        self.assertEqual(unavailable['stages'][3], 'warning')
+
+    def test_retry_after_supports_seconds_dates_and_missing_headers_without_sleep(self):
+        result = _run_node(self.code, "[retryDelay('60',0),retryDelay('Thu, 01 Jan 1970 00:02:00 GMT',0),retryDelay(null,0)]")
+        self.assertEqual(result, [60000, 120000, 30000])
+
+    def test_missing_gateway_receipt_becomes_delayed_without_claiming_delivery_failure(self):
+        value = {'confirmed': True, 'sms': {'status': 'sending', 'scheduled_at': '2026-11-15T00:00:00+00:00'}}
+        now = 1794700860000
+        result = _run_node(self.code, 'notificationView(%s,%s)' % (json.dumps(value), now))
+        self.assertEqual(result['key'], 'dispatchStalled')
+        self.assertEqual(result['stages'], ['complete','complete','warning','pending'])
 
 
 class RenewToneTests(unittest.TestCase):
