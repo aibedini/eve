@@ -49,6 +49,7 @@ from panel.models.finance import (
     OwnershipClaimItem,
     WalletLedger,
 )
+from panel.models.machine import MachineApiKey
 from panel.models.telegram import (
     TelegramBotInstance,
     TelegramBotRuntime,

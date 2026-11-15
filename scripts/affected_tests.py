@@ -303,6 +303,23 @@ MAPPING = (
         ['tests.test_ui_design_system', 'tests.test_renew_ui_state',
          'tests.test_static_deploy_contract'],
     )),
+    ('panel/routes/machine_api.py', (
+        # Read-only Context API v1: auth/scopes, masked projections, event signing.
+        ['tests.test_machine_api'],
+        ['tests.test_alembic_machine_api_keys', 'tests.test_security_headers'],
+    )),
+    ('panel/services/machine_api.py', (
+        ['tests.test_machine_api'],
+        ['tests.test_alembic_machine_api_keys'],
+    )),
+    ('panel/services/machine_events.py', (
+        ['tests.test_machine_api'],
+        [],
+    )),
+    ('panel/models/machine.py', (
+        ['tests.test_machine_api'],
+        ['tests.test_alembic_machine_api_keys'],
+    )),
     ('panel/routes/sms_gateway_events.py', (
         # Signed GMweb SMS evidence ingestion and the delivery pipeline projection.
         ['tests.test_sms_gateway_events'],
