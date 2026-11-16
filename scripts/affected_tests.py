@@ -103,8 +103,19 @@ MAPPING = (
          'tests.test_client_mutation_result', 'tests.test_refresh_reconcile'],
     )),
     ('panel/routes/admin.py', (
-        ['tests.test_server_deletion'],
+        ['tests.test_reseller_management', 'tests.test_server_deletion'],
         ['tests.test_regression_matrix'],
+    )),
+    ('panel/services/billing.py', (
+        ['tests.test_reseller_management', 'tests.test_reseller_statement'],
+        ['tests.test_renew_consistency'],
+    )),
+    ('panel/routes/packages.py', (
+        ['tests.test_reseller_management'],
+        ['tests.test_renew_consistency'],
+    )),
+    ('panel/routes/finance.py', (
+        ['tests.test_reseller_statement'], [],
     )),
     ('panel/routes/clients.py', (
         ['tests.test_renew_consistency', 'tests.test_renew_expiry_normalization'],

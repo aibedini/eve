@@ -1669,12 +1669,22 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
     else:
         pricing_mode = 'standard'
 
+    payments = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
+        Payment.admin_id == target.id)
+    if start_dt:
+        payments = payments.filter(Payment.payment_date >= start_dt)
+    if end_dt:
+        payments = payments.filter(Payment.payment_date <= end_dt)
+    customer_revenue = int(payments.scalar() or 0)
+
     balance = deposited - spent  # negative => under-deposited (debt)
     summary = {
         'reseller': {'id': target.id, 'username': target.username,
                      'role': target.role, 'credit': target.credit or 0},
         'created': created, 'renewed': renewed, 'reset': reset_cnt,
         'spent': spent, 'deposited': deposited,
+        'customer_revenue': customer_revenue,
+        'profit': customer_revenue - spent,
         'should_deposit': spent, 'balance': balance,
         'row_count': len(rows),
         'start_jalali': format_jalali(start_dt) if start_dt else None,
@@ -1877,7 +1887,9 @@ def reseller_statement_export():
     ws.append(['Pricing mode', s['pricing']['mode']])
     ws.append(['Discount percent', s['pricing']['discount_percent']])
     ws.append(['Should pay (T)', s['should_pay']])
-    ws.append(['Revenue / deposited (T)', s['revenue']])
+    ws.append(['Paid to system (T)', s['deposited']])
+    ws.append(['Customer revenue (T)', s['customer_revenue']])
+    ws.append(['Reseller profit (T)', s['profit']])
     ws.append(['Balance (T)', s['balance']])
     if not traffic.get('usage_available', True):
         note = 'No usage snapshots in this period — Used/Remaining GB and Usage cost are understated.'

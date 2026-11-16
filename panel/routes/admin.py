@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request, send_file, session
+from flask import Blueprint, current_app, jsonify, request, send_file, session
 from sqlalchemy import func, or_
 from werkzeug.utils import secure_filename
 
@@ -118,7 +118,7 @@ def list_audit_log():
 @bp.route('/api/admins', methods=['GET'])
 @permission_required('admins.read')
 def get_admins():
-    admins = Admin.query.all()
+    admins = Admin.query.filter(or_(Admin.role.is_(None), Admin.role != 'deleted')).all()
     return jsonify([a.to_dict() for a in admins])
 
 @bp.route('/api/admins', methods=['POST'])
@@ -234,7 +234,9 @@ def update_admin(admin_id):
         _normalize_username, _validate_username, sanitize_html, serialize_allowed_servers,
         validate_password_strength,
     )
-    admin = Admin.query.get_or_404(admin_id)
+    admin = Admin.query.filter_by(id=admin_id).with_for_update().first_or_404()
+    if admin.role == 'deleted':
+        return jsonify({'success': False, 'error': 'User has been deleted'}), 410
     data = request.json
 
     editor = db.session.get(Admin, session.get('admin_id'))
@@ -333,11 +335,59 @@ def update_admin(admin_id):
 @permission_required('admins.manage')
 @step_up_required('admins.manage')
 def delete_admin(admin_id):
+    from app import ensure_reseller_allowed_for_assignment, invalidate_ownership_cache
+    from panel.models import ServiceOwnership
+
     if admin_id == session['admin_id']:
         return jsonify({"success": False, "error": "Self-delete not allowed"}), 400
-    admin = Admin.query.get_or_404(admin_id)
-    db.session.delete(admin)
-    db.session.commit()
+    admin = Admin.query.filter_by(id=admin_id).with_for_update().first_or_404()
+    editor = current_admin()
+    if (admin.is_superadmin or admin.role == 'superadmin') and not (
+            editor.is_superadmin or editor.role == 'superadmin'):
+        return jsonify({'success': False, 'error': 'Access Denied'}), 403
+    if admin.role == 'deleted':
+        return jsonify({'success': True})
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'error': 'Invalid request'}), 400
+    raw_target = data.get('reseller_id')
+    if isinstance(raw_target, bool) or (raw_target is not None and not isinstance(raw_target, (int, str))):
+        return jsonify({'success': False, 'error': 'Invalid reseller'}), 400
+    try:
+        target_id = int(raw_target or 0)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Invalid reseller'}), 400
+    target = None
+    if target_id:
+        target = Admin.query.filter_by(id=target_id).with_for_update().first()
+        if not target or target.id == admin.id or target.role != 'reseller' or not target.enabled:
+            return jsonify({'success': False, 'error': 'Invalid reseller'}), 400
+    try:
+        ownerships = ClientOwnership.query.filter_by(reseller_id=admin.id).all()
+        services = ServiceOwnership.query.filter_by(reseller_id=admin.id).all()
+        for ownership in ownerships:
+            if target:
+                ownership.reseller_id = target.id
+                ensure_reseller_allowed_for_assignment(target, ownership.server_id, ownership.inbound_id)
+            else:
+                db.session.delete(ownership)
+        for service in services:
+            service.reseller_id = target.id if target else None
+            if target and service.is_active:
+                ensure_reseller_allowed_for_assignment(target, service.server_id, None)
+        # Retain the identity for financial/audit foreign keys and prevent ID reuse.
+        admin.enabled = False
+        admin.role = 'deleted'
+        admin.is_superadmin = False
+        admin.telegram_id = None
+        admin.whatsapp_automation_enabled = False
+        revoke_other_sessions(admin.id, None)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Could not delete admin %s', admin_id)
+        return jsonify({'success': False, 'error': 'Could not delete user'}), 500
+    invalidate_ownership_cache()
     return jsonify({"success": True})
 
 

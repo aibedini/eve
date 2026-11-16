@@ -3367,7 +3367,7 @@
         selectedRenewPackageDays = 0;
         selectedRenewPackageVolume = 0;
         selectedRenewPackageName = '';
-        loadRenewPackages();
+        loadRenewPackages({ force: true });
         calculateRenewCustomPrice();
         document.getElementById('renew-modal').classList.remove('hidden');
     }
@@ -4630,10 +4630,13 @@
     async function loadPackages() {
         const container = document.getElementById('packages-list');
         if (!container) return;
+        const serverId = document.getElementById('add-client-server-select').value;
         container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('Loading packages...') + '</div>';
         try {
-            const res = await fetch(`/api/packages?purpose=create&_=${Date.now()}`, { cache: 'no-store' });
+            const params = new URLSearchParams({purpose: 'create', server_id: serverId, _: Date.now()});
+            const res = await fetch(`/api/packages?${params}`, { cache: 'no-store' });
             const pkgs = await res.json();
+            if (document.getElementById('add-client-server-select').value !== serverId) return;
             
             if (!Array.isArray(pkgs) || pkgs.length === 0) {
                 container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('No packages defined') + '</div>';
@@ -4658,6 +4661,7 @@
                 updateAddPriceDisplay();
             }
         } catch (e) {
+            if (document.getElementById('add-client-server-select').value !== serverId) return;
             container.innerHTML = '<div style="grid-column: span 2; color: var(--danger); text-align: center;">' + _t('Error loading packages') + '</div>';
             selectedPackageId = null;
         }
@@ -4703,7 +4707,7 @@
     }
 
     const RENEW_PACKAGE_TTL_MS = 90000;
-    const renewPackageCache = { items: null, etag: '', fetchedAt: 0, inflight: null };
+    const renewPackageCaches = new Map();
 
     function renderRenewPackages(pkgs, options = {}) {
         const container = document.getElementById('renew-packages-list');
@@ -4737,10 +4741,20 @@
     async function loadRenewPackages(options = {}) {
         const container = document.getElementById('renew-packages-list');
         if (!container) return;
+        const serverId = document.getElementById('renew-server-id').value;
+        if (!renewPackageCaches.has(serverId)) {
+            renewPackageCaches.set(serverId, {items: null, etag: '', fetchedAt: 0, inflight: null});
+        }
+        const renewPackageCache = renewPackageCaches.get(serverId);
+        const render = (items, settings) => {
+            if (document.getElementById('renew-server-id').value === serverId) {
+                renderRenewPackages(items, settings);
+            }
+        };
         const now = Date.now();
         const hasCache = Array.isArray(renewPackageCache.items);
         const fresh = hasCache && (now - renewPackageCache.fetchedAt) < RENEW_PACKAGE_TTL_MS;
-        if (hasCache) renderRenewPackages(renewPackageCache.items, { stale: !fresh });
+        if (hasCache) render(renewPackageCache.items, { stale: !fresh });
         if (fresh && !options.force) return renewPackageCache.items;
         if (renewPackageCache.inflight) return renewPackageCache.inflight;
         if (!hasCache) {
@@ -4749,10 +4763,11 @@
         renewPackageCache.inflight = (async () => {
             const headers = {};
             if (renewPackageCache.etag) headers['If-None-Match'] = renewPackageCache.etag;
-            const res = await fetch('/api/packages?purpose=renew', { headers, cache: 'default' });
+            const params = new URLSearchParams({purpose: 'renew', server_id: serverId});
+            const res = await fetch(`/api/packages?${params}`, { headers, cache: 'no-cache' });
             if (res.status === 304) {
                 renewPackageCache.fetchedAt = Date.now();
-                renderRenewPackages(renewPackageCache.items);
+                render(renewPackageCache.items);
                 return renewPackageCache.items;
             }
             if (!res.ok) throw new Error(_t('HTTP {v1}', {v1: res.status}));
@@ -4761,14 +4776,15 @@
             renewPackageCache.items = pkgs;
             renewPackageCache.etag = res.headers.get('ETag') || '';
             renewPackageCache.fetchedAt = Date.now();
-            renderRenewPackages(pkgs);
+            render(pkgs);
             return pkgs;
         })();
         try {
             return await renewPackageCache.inflight;
         } catch (e) {
+            if (document.getElementById('renew-server-id').value !== serverId) return null;
             if (hasCache) {
-                renderRenewPackages(renewPackageCache.items, { stale: true });
+                render(renewPackageCache.items, { stale: true });
                 showToast(_t('Package refresh failed; cached prices are shown.'), 'error');
                 return renewPackageCache.items;
             }
@@ -4925,6 +4941,7 @@
 
     async function onServerSelected() {
         const serverId = document.getElementById('add-client-server-select').value;
+        loadPackages();
         const inboundSelect = document.getElementById('add-client-inbound-select');
         inboundSelect.innerHTML = '<option value="">' + _t('-- Select Inbound --') + '</option>';
 

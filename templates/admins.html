@@ -659,6 +659,27 @@
     </div>
 </div>
 
+<div class="modal-overlay hidden" id="delete-admin-modal" role="dialog" aria-modal="true" aria-labelledby="delete-admin-title">
+    <div class="modal modal-sm">
+        <div class="modal-header">
+            <h2 id="delete-admin-title">{{ _('Delete') }}</h2>
+            <button class="modal-close" data-onclick="closeDeleteAdmin()" aria-label="{{ _('Close') }}">&times;</button>
+        </div>
+        <form id="delete-admin-form" class="modal-body">
+            <p>{{ _('Are you sure you want to delete this user?') }} <strong id="delete-admin-name"></strong></p>
+            <div class="form-group">
+                <label for="delete-admin-target">{{ _('Transfer clients to') }}</label>
+                <select id="delete-admin-target" class="form-select"></select>
+                <p class="field-note">{{ _('The user loses login access immediately. Financial history is retained.') }}</p>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" data-onclick="closeDeleteAdmin()">{{ _('Cancel') }}</button>
+                <button type="submit" class="btn btn-danger" id="delete-admin-submit">{{ _('Delete') }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <div class="modal-overlay hidden" id="charge-modal">
     <div class="modal modal-sm">
         <div class="modal-header">
@@ -1544,15 +1565,68 @@
         }
     }
     
-    async function deleteAdmin(id) {
-        if (!confirm(_t('Are you sure you want to delete this user?'))) return;
-        try {
-            const response = await fetch(`/api/admins/${id}`, { method: 'DELETE' });
-            if (response.ok) {
-                showToast(_t('User deleted'));
-                loadAdmins();
-            }
-        } catch (error) { showToast(_t('Error deleting'), 'error'); }
+    let deletingAdminId = null;
+    let deleteAdminFocus = null;
+
+    function deleteAdmin(id) {
+        const admin = admins.find(item => item.id === id);
+        if (!admin) return;
+        deletingAdminId = id;
+        deleteAdminFocus = document.activeElement;
+        document.getElementById('delete-admin-name').textContent = admin.username;
+        const target = document.getElementById('delete-admin-target');
+        target.replaceChildren(new Option(_t('System'), '0'));
+        admins.filter(item => item.id !== id && item.role === 'reseller' && item.enabled)
+            .forEach(item => target.add(new Option(item.username, String(item.id))));
+        document.getElementById('delete-admin-modal').classList.remove('hidden');
+        target.focus();
     }
+
+    function closeDeleteAdmin() {
+        if (document.getElementById('delete-admin-submit').disabled) return;
+        document.getElementById('delete-admin-modal').classList.add('hidden');
+        deletingAdminId = null;
+        if (deleteAdminFocus) deleteAdminFocus.focus();
+    }
+
+    document.getElementById('delete-admin-modal').addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeDeleteAdmin();
+        if (event.key === 'Tab') {
+            const controls = Array.from(event.currentTarget.querySelectorAll('button, select'));
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
+    });
+
+    document.getElementById('delete-admin-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        if (deletingAdminId === null) return;
+        const button = document.getElementById('delete-admin-submit');
+        button.disabled = true;
+        try {
+            const response = await fetch(`/api/admins/${deletingAdminId}`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({reseller_id: Number(document.getElementById('delete-admin-target').value)})
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) throw new Error(result.error || _t('Error deleting'));
+            button.disabled = false;
+            closeDeleteAdmin();
+            showToast(_t('User deleted'));
+            await loadAdmins();
+        } catch (error) {
+            showToast(error.message || _t('Error deleting'), 'error');
+        } finally {
+            button.disabled = false;
+        }
+    });
 </script>
 {% endblock %}

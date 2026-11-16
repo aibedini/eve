@@ -1,4 +1,5 @@
 """Billing pricing and subscription-package recommendation cluster (extracted from app.py)."""
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -11,6 +12,7 @@ from panel.models import (
     Admin,
     ClientOwnership,
     Package,
+    PriceTier,
     RenewalEvent,
     SystemConfig,
     Transaction,
@@ -21,7 +23,65 @@ from panel.models import (
 logger = logging.getLogger(__name__)
 
 
-def calculate_reseller_price(user, base_price=None, package=None, cost_type=None):
+def _tier_assigned_reseller_ids(tier):
+    ids = set()
+    if getattr(tier, 'reseller_id', None) is not None:
+        try:
+            ids.add(int(tier.reseller_id))
+        except Exception:
+            pass
+    try:
+        raw_ids = json.loads(tier.assigned_reseller_ids or '[]')
+    except Exception:
+        raw_ids = []
+    for rid in raw_ids if isinstance(raw_ids, list) else []:
+        try:
+            ids.add(int(rid))
+        except Exception:
+            continue
+    return ids
+
+
+def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None):
+    """Return the best matching active dynamic pricing tier."""
+    volume_gb = float(volume_gb or 0)
+    days = float(days or 0)
+    try:
+        reseller_id = int(reseller_id) if reseller_id not in (None, '', 0, '0') else None
+    except Exception:
+        reseller_id = None
+
+    tiers = (PriceTier.query
+             .filter_by(is_active=True)
+             .order_by(PriceTier.priority.desc(), PriceTier.id.desc())
+             .all())
+
+    best_global = None
+    for tier in tiers:
+        assigned_ids = _tier_assigned_reseller_ids(tier)
+        if assigned_ids:
+            if reseller_id is None or reseller_id not in assigned_ids:
+                continue
+        elif best_global is not None:
+            continue
+
+        if tier.server_id is not None and tier.server_id != server_id:
+            continue
+        if tier.min_volume_gb is not None and volume_gb < tier.min_volume_gb:
+            continue
+        if tier.max_volume_gb is not None and volume_gb >= tier.max_volume_gb:
+            continue
+        if tier.min_days is not None and days < tier.min_days:
+            continue
+        if tier.max_days is not None and days >= tier.max_days:
+            continue
+        if assigned_ids:
+            return tier
+        best_global = tier
+    return best_global
+
+
+def calculate_reseller_price(user, base_price=None, package=None, cost_type=None, server_id=None):
     """
     Calculate price for a reseller based on their settings.
     """
@@ -44,6 +104,18 @@ def calculate_reseller_price(user, base_price=None, package=None, cost_type=None
 
     # 2. Package Logic
     if package:
+        tier = _get_applicable_price_tier(package.volume, package.days, user.id, server_id)
+        if tier and user.id in _tier_assigned_reseller_ids(tier):
+            return int((package.volume or 0) * (tier.cost_per_gb or 0)
+                       + (package.days or 0) * (tier.cost_per_day or 0))
+        if user.custom_cost_per_gb is not None or user.custom_cost_per_day is not None:
+            cpg = calculate_reseller_price(user, base_price=int(get_config('cost_per_gb', 0)), cost_type='gb')
+            cpd = calculate_reseller_price(user, base_price=int(get_config('cost_per_day', 0)), cost_type='day')
+            day_cost = (package.days or 0) * cpd
+            if not package.days:
+                day_cost = calculate_reseller_price(
+                    user, base_price=int(get_config('cost_per_day_unlimited', 0)), cost_type='day')
+            return int((package.volume or 0) * cpg + day_cost)
         # Priority 1: Reseller Price on Package (Global Reseller Price)
         # If a specific reseller price is set on the package, use it.
         # However, if the user has a specific discount, maybe they want discount off the standard price?
@@ -60,7 +132,7 @@ def calculate_reseller_price(user, base_price=None, package=None, cost_type=None
 
     return base_price if base_price is not None else 0
 
-def _build_sub_page_packages(owner) -> list[dict]:
+def _build_sub_page_packages(owner, server_id=None) -> list[dict]:
     """Packages to surface on a customer's subscription page, based on the
     account OWNER. Only packages flagged show_on_sub are eligible.
 
@@ -121,7 +193,7 @@ def _build_sub_page_packages(owner) -> list[dict]:
                     visible = bool(getattr(p, 'show_on_sub', False))
                 if not visible:
                     continue
-                price = calculate_reseller_price(owner, package=p)
+                price = calculate_reseller_price(owner, package=p, server_id=server_id)
         else:
             # System/admin-managed account: only global packages the admin ticked.
             if scope != 'global' or not getattr(p, 'show_on_sub', False):
@@ -549,7 +621,7 @@ def _recommendation_template_vars(server_id, sub_id: str, email: str = '', *,
                 owner = ownership.reseller
 
         recommendation = _build_subscription_package_recommendation(
-            sid, account_sub_id, _build_sub_page_packages(owner), terminal=terminal,
+            sid, account_sub_id, _build_sub_page_packages(owner, server_id=sid), terminal=terminal,
         )
         if not recommendation:
             return values

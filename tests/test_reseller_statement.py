@@ -10,7 +10,7 @@ os.environ['DATABASE_URL'] = f"sqlite:///{_DB_FILE.name.replace(os.sep, '/')}"
 os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
-from app import (Admin, ClientOwnership, Server, Transaction, UsageDaily,  # noqa: E402
+from app import (Admin, ClientOwnership, Payment, Server, Transaction, UsageDaily,  # noqa: E402
                  app, db)
 
 GB = 1024 ** 3
@@ -34,7 +34,7 @@ class ResellerStatementTests(unittest.TestCase):
             pass
 
     def setUp(self):
-        for model in (UsageDaily, ClientOwnership, Transaction, Server, Admin):
+        for model in (Payment, UsageDaily, ClientOwnership, Transaction, Server, Admin):
             model.query.delete()
         db.session.commit()
 
@@ -134,6 +134,23 @@ class ResellerStatementTests(unittest.TestCase):
         self.assertEqual(ps['base'], 160_000)
         self.assertEqual(ps['debt'], 80_000)
 
+    def test_customer_revenue_and_profit_use_payment_date_and_owner(self):
+        now = datetime.utcnow()
+        db.session.add_all([
+            Payment(admin_id=self.reseller.id, amount=240_000, payment_date=now),
+            Payment(admin_id=self.reseller.id, amount=-10_000, payment_date=now),
+            Payment(admin_id=self.owner.id, amount=900_000, payment_date=now),
+            Payment(admin_id=self.reseller.id, amount=500_000,
+                    payment_date=now - timedelta(days=90)),
+        ])
+        db.session.commit()
+        from panel.routes.finance import _compute_reseller_statement
+        result = _compute_reseller_statement(self.reseller, now - timedelta(days=1), now)
+        self.assertEqual(result['summary']['customer_revenue'], 230_000)
+        self.assertEqual(result['summary']['profit'], 70_000)
+        self.assertEqual(result['summary']['deposited'], 80_000)
+        self.assertEqual(result['summary']['spent'], 160_000)
+
     def test_accounts_breakdown_per_server(self):
         self._login(self.owner.id)
         resp = self.client.get(
@@ -212,6 +229,11 @@ class ResellerStatementTests(unittest.TestCase):
         from openpyxl import load_workbook
         wb = load_workbook(BytesIO(resp.get_data()), read_only=True)
         self.assertEqual(wb.sheetnames, ['Summary', 'Daily', 'Accounts', 'Transactions'])
+        summary = dict(row for row in wb['Summary'].iter_rows(values_only=True)
+                       if len(row) == 2 and row[0])
+        self.assertEqual(summary['Paid to system (T)'], 80_000)
+        self.assertEqual(summary['Customer revenue (T)'], 0)
+        self.assertEqual(summary['Reseller profit (T)'], -160_000)
         wb.close()
 
 

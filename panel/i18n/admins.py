@@ -2,6 +2,9 @@
 from panel.core.i18n import register
 
 FA = {
+    'Transfer clients to': 'انتقال کاربران به',
+    'System': 'سیستم',
+    'The user loses login access immediately. Financial history is retained.': 'دسترسی ورود کاربر بلافاصله قطع می‌شود. سوابق مالی حفظ می‌شود.',
     '({count} already assigned)': '({count} مورد از قبل اختصاص داده شده)',
     'Add User': 'افزودن کاربر',
     'Admin': 'ادمین',

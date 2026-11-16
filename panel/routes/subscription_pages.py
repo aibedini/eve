@@ -1132,7 +1132,7 @@ def client_subscription(server_id, sub_id):
         backup_configs_payload = []
 
     # Renewal packages to show on the sub page, based on the account owner.
-    sub_packages_payload = _build_sub_page_packages(sub_owner_reseller)
+    sub_packages_payload = _build_sub_page_packages(sub_owner_reseller, server_id=server.id)
     renewal_recommendation = _build_subscription_package_recommendation(
         server.id,
         normalized_sub_id,

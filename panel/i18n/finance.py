@@ -2,6 +2,11 @@
 from panel.core.i18n import register
 
 FA = {
+    'Revenue and profit are based on recorded customer payments.': 'درآمد و سود بر اساس پرداخت‌های ثبت‌شدهٔ مشتریان محاسبه می‌شود.',
+    'Reseller cost': 'هزینهٔ رسلر',
+    'Paid to system': 'پرداخت‌شده به سیستم',
+    'Customer revenue': 'درآمد از مشتریان',
+    'Reseller profit': 'سود رسلر',
     '(click a server to load its accounts)': '(برای بارگذاری اکانت\u200cها روی یک سرور کلیک کنید)',
     '-- Select Card --': '-- انتخاب کارت --',
     '-- Select Server --': '-- انتخاب سرور --',
@@ -127,7 +132,6 @@ FA = {
     'Remaining': 'باقیمانده',
     'Reseller': 'نماینده',
     'Reset': 'بازنشانی',
-    'Revenue (deposited)': 'درآمد (واریزشده)',
     'SERVER_COST': 'هزینهٔ سرور',
     'SERVER_RENEWAL': 'تمدید سرور',
     'SERVER_TRAFFIC': 'ترافیک سرور',
@@ -142,7 +146,6 @@ FA = {
     'Server renewal': 'تمدید سرور',
     'Server traffic': 'ترافیک سرور',
     'Settlement % (optional)': 'درصد تسویه (اختیاری)',
-    'Should pay (spent)': 'باید پرداخت کند (مصرف\u200cشده)',
     'Show': 'نمایش',
     'Showing {start} to {end} of {totalItems} results': 'نمایش {start} تا {end} از {totalItems} نتیجه',
     'Smart Filters': 'فیلترهای هوشمند',

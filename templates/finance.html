@@ -1041,12 +1041,15 @@
                 <div class="stmt-card"><span class="stmt-k">{{ _('⏳ Remaining GB') }}</span><span class="stmt-v" id="stmt-remaining-gb">0</span></div>
                 <div class="stmt-card"><span class="stmt-k">{{ _('🏷️ Price / GB') }}</span><span class="stmt-v" id="stmt-price-gb">0 T</span></div>
                 <div class="stmt-card"><span class="stmt-k">{{ _('💸 Usage cost') }}</span><span class="stmt-v" id="stmt-usage-cost">0 T</span></div>
-                <div class="stmt-card stmt-spend"><span class="stmt-k">{{ _('Should pay (spent)') }}</span><span class="stmt-v" id="stmt-spent">0 T</span></div>
-                <div class="stmt-card stmt-paid"><span class="stmt-k">{{ _('Revenue (deposited)') }}</span><span class="stmt-v" id="stmt-deposited">0 T</span></div>
+                <div class="stmt-card stmt-spend"><span class="stmt-k">{{ _('Reseller cost') }}</span><span class="stmt-v" id="stmt-spent">0 T</span></div>
+                <div class="stmt-card stmt-paid"><span class="stmt-k">{{ _('Paid to system') }}</span><span class="stmt-v" id="stmt-deposited">0 T</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('Customer revenue') }}</span><span class="stmt-v" id="stmt-customer-revenue">0 T</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ _('Reseller profit') }}</span><span class="stmt-v" id="stmt-profit">0 T</span></div>
                 <div class="stmt-card" id="stmt-balance-card"><span class="stmt-k">{{ _('Balance') }}</span><span class="stmt-v" id="stmt-balance">0 T</span></div>
                 <div class="stmt-card" id="stmt-percent-card" style="display:none;"><span class="stmt-k" id="stmt-percent-k">{{ _('Debt') }}</span><span class="stmt-v" id="stmt-percent-debt">0 T</span></div>
             </div>
 
+            <p class="field-note">{{ _('Revenue and profit are based on recorded customer payments.') }}</p>
             <div class="stmt-tables">
                 <div class="stmt-tablewrap">
                     <h4 class="stmt-h">{{ _('By package') }}</h4>
@@ -2603,6 +2606,8 @@
             $('stmt-reset').textContent = s.reset;
             $('stmt-spent').textContent = money(s.spent);
             $('stmt-deposited').textContent = money(s.deposited);
+            $('stmt-customer-revenue').textContent = money(s.customer_revenue);
+            $('stmt-profit').textContent = money(s.profit);
             $('stmt-balance').textContent = (s.balance < 0 ? '-' : '') + money(Math.abs(s.balance));
             const balCard = $('stmt-balance-card');
             balCard.classList.remove('stmt-debt', 'stmt-ok');

@@ -1828,7 +1828,7 @@ def renew_client(server_id, inbound_id, email):
             days_to_add = int(package.days or 0)
             volume_gb_to_add = int(package.volume or 0)
             volume_provided = True
-            price = calculate_reseller_price(user, package=package)
+            price = calculate_reseller_price(user, package=package, server_id=server_id)
             pkg_name = package.name
             description = f"Renew Package: {package.name} - {email}"
             if days_to_add < 0:
@@ -4403,7 +4403,7 @@ def add_client(server_id, inbound_id):
         package = db.session.get(Package, pkg_id)
         if not package: return jsonify({"success": False, "error": "Invalid Package"}), 400
 
-        price = calculate_reseller_price(user, package=package)
+        price = calculate_reseller_price(user, package=package, server_id=server_id)
         days = package.days
         volume_gb = package.volume
         pkg_name = package.name
